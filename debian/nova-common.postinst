@@ -1,0 +1,34 @@
+#!/bin/sh -e
+
+if [ "$1" = "configure" ]; then
+    if ! getent group nova > /dev/null 2>&1; then
+        addgroup --system nova >/dev/null
+    fi
+    if ! getent passwd nova > /dev/null 2>&1; then
+        adduser --system --home /var/lib/nova --ingroup nova --no-create-home --shell /bin/bash nova
+    fi
+    if [ "$(id -gn nova)"  = "nogroup" ]; then
+        usermod -g nova nova
+    fi
+    chown -R nova:nova /var/log/nova/ /etc/nova/nova.conf
+    if [ -z "$2" ]; then
+        # New install - blanket permissions
+        chown -R nova:nova /var/lib/nova/
+    elif dpkg --compare-versions "$2" lt "2011.3"; then
+        # Make sure the LXC rootfs mount points are excluded
+        # during upgrades from previous versions
+        find /var/lib/nova/ -name 'rootfs' -prune -o \
+           -group root -a -user nova -exec chown nova:nova {} \;
+        find /var/lib/nova/ -name 'rootfs' -prune -o \
+           -group nogroup -a -user nova -exec chown nova:nova {} \;
+    fi
+    chmod 600 /etc/nova/nova.conf
+    chmod 0440 /etc/sudoers.d/nova_sudoers
+    chmod 0700 /var/log/nova
+    if ! grep -q sql_connection /etc/nova/nova.conf
+    then
+      su -c 'nova-manage db sync' nova
+    fi
+fi
+
+#DEBHELPER#

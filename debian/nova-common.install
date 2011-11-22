@@ -1,0 +1,3 @@
+usr/bin/nova-manage
+debian/nova_sudoers etc/sudoers.d
+debian/nova.conf    etc/nova
