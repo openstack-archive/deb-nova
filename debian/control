@@ -4,40 +4,18 @@ Priority: extra
 Maintainer: Thomas Goirand <zigo@debian.org>
 Uploaders: Ghe Rivero <ghe@debian.org>
 Build-Depends: debhelper (>= 7.0.50),
+ python-netaddr,
+ python-distutils-extra,
+ python-eventlet,
  python-m2crypto,
  python-all (>= 2.6),
  python-all-dev (>= 2.6.6-3~),
+ python-lockfile,
+ python-novaclient,
+ python-gflags
 Build-Depends-Indep:
  python-setuptools,
- python-sphinx (>> 1.0),
- python-distutils-extra,
- python-gflags,
- python-mox,
- openssl,
- python-carrot,
- python-kombu,
- python-boto,
- python-amqplib,
- openssh-client,
- python-sqlalchemy-ext | python-sqlalchemy (<< 0.6.3-2),
- python-eventlet,
- python-routes,
- python-webob,
- python-cheetah,
- python-nose,
- python-paste,
- python-pastedeploy,
- python-tempita,
- python-migrate,
- python-netaddr,
- python-glance,
- python-paramiko,
- python-novaclient,
- python-lockfile,
- python-simplejson,
- python-lxml,
- python-unittest2,
- pep8
+ python-sphinx (>> 1.0)
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.2
 Homepage: http://launchpad.net/nova
