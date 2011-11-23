@@ -19,9 +19,8 @@ Build-Depends-Indep:
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.2
 Homepage: http://launchpad.net/nova
-Vcs-Browser: http://bazaar.launchpad.net/~ubuntu-server-dev/nova/essex/debian/files
-Vcs-Bzr: http://bazaar.launchpad.net/~ubuntu-server-dev/nova/essex
-
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
+Vcs-Bzr: git://anonscm.debian.org/openstack/nova.git
 
 Package: python-nova
 Architecture: all
