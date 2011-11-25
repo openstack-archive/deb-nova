@@ -13,67 +13,81 @@ set -e
 
 DAEMON=/usr/bin/nova-volume
 DAEMON_ARGS="--flagfile=/etc/nova/nova.conf"
-PIDFILE=/var/run/nova/nova-volume.pid
+PIDFILE=/var/run/nova-volume.pid
+NAME=nova-volume
+DESC="Nova volume"
 
 ENABLED=true
+
+if [ -f /etc/default/nova-volume ] ; then
+    . /etc/default/nova-volume
+fi
+
+if ! [ -x ${DAEMON} -o "$ENABLED" = "false" ] ; then
+    exit 0
+fi
 
 # Guess the VG by getting the first one we see in "vgdisplay -c -A"
 # if nothing was set in the default file
 VGDISPLAY=/sbin/vgdisplay
-if [ -f /etc/default/nova-volume ] ; then
-	. /etc/default/nova-volume
-fi
 if [ -x "${VGDISPLAY}" -a -z "${nova_volume_group}" ] ; then
-	nova_volume_group=`vgdisplay -c -A | tail -n 1 | cut -d":" -f1 | awk '{print $1}'`
+    nova_volume_group=`vgdisplay -c -A | tail -n 1 | cut -d":" -f1 | awk '{print $1}'`
 fi
-
-mkdir -p /var/run/nova
-chown nova:root /var/run/nova/
-
-mkdir -p /var/lock/nova
-chown nova:root /var/lock/nova/
-
-uid="$(getent passwd nova | cut -f3 -d:)"
-gid="$(getent passwd nova | cut -f4 -d:)"
 
 # Adds what has been configured in /etc/default/nova-volume
 if [ -n ${nova_volume_group} ] ; then
-	DAEMON_ARGS="${DAEMON_ARGS} --volume_group=${nova_volume_group}"
+    DAEMON_ARGS="${DAEMON_ARGS} --volume_group=${nova_volume_group}"
 fi
 
 . /lib/lsb/init-functions
 
-if ! [ -x ${DAEMON} ] ; then
-	exit 0
-fi
+do_start()
+{
+    start-stop-daemon --start --chdir /var/run --chuid nova:nova -b -m --pidfile ${PIDFILE} --exec ${DAEMON} -- ${DAEMON_ARGS}
+}
+
+do_stop()
+{
+    start-stop-daemon --stop --oknodo --pidfile ${PIDFILE}
+}
 
 case "$1" in
-  start)
-    test "$ENABLED" = "true" || exit 0
-    log_daemon_msg "Starting nova volume" "nova-volume"
-    start-stop-daemon --start --chdir /var/run --chuid ${uid}:${gid} -b -m --pidfile ${PIDFILE} --exec ${DAEMON} -- ${DAEMON_ARGS}
-    log_end_msg $?
-    ;;
-  stop)
-    test "$ENABLED" = "true" || exit 0
-    log_daemon_msg "Stopping nova volume" "nova-volume"
-    start-stop-daemon --stop --oknodo --pidfile ${PIDFILE}
-    log_end_msg $?
-    ;;
-  restart|force-reload)
-    test "$ENABLED" = "true" || exit 1
-    $0 start
-    sleep 1
-    $0 stop
-    ;;
-  status)
-    test "$ENABLED" = "true" || exit 0
-    status_of_proc -p $PIDFILE $DAEMON nova-volume && exit 0 || exit $?
-    ;;
-  *)
-    log_action_msg "Usage: /etc/init.d/nova-volume {start|stop|restart|force-reload|status}"
-    exit 1
-    ;;
+    start)
+        log_daemon_msg "Starting $DESC" "$NAME"
+        do_start
+        log_end_msg $?
+        ;;
+    stop)
+        log_daemon_msg "Stopping $DESC" "$NAME"
+        do_stop
+        log_end_msg $?
+        ;;
+
+    restart|force-reload)
+	log_daemon_msg "Restarting $DESC" "$NAME"
+	do_stop
+	case "$?" in
+	    0|1)
+		do_start
+		case "$?" in
+		    0) log_end_msg 0 ;;
+		    1) log_end_msg 1 ;; # Old process is still running
+		    *) log_end_msg 1 ;; # Failed to start
+		esac
+		;;
+	    *)
+	  	# Failed to stop
+		log_end_msg 1
+		;;
+	esac
+	;;
+    status)
+        status_of_proc -p $PIDFILE $DAEMON $NAME && exit 0 || exit $?
+        ;;
+    *)
+        log_action_msg "Usage: /etc/init.d/nova-volume {start|stop|restart|force-reload|status}"
+        exit 1
+        ;;
 esac
 
 exit 0
