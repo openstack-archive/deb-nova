@@ -123,7 +123,7 @@ Description: OpenStack Compute - compute node
 
 Package: nova-compute-lxc
 Architecture: all
-Depends: nova-compute (= ${binary:Version}), python-libvirt, libvirt-bin, ${misc:Depends}
+Depends: python-libvirt, libvirt-bin, ${misc:Depends}
 Provides: nova-compute-hypervisor
 Replaces: nova-compute-hypervisor
 Conflicts: nova-compute-hypervisor
@@ -146,7 +146,7 @@ Description: OpenStack Compute - compute node (LXC)
 
 Package: nova-compute-uml
 Architecture: all
-Depends: nova-compute (= ${binary:Version}), python-libvirt, libvirt-bin, user-mode-linux, ${misc:Depends}
+Depends: python-libvirt, libvirt-bin, user-mode-linux, ${misc:Depends}
 Provides: nova-compute-hypervisor
 Replaces: nova-compute-hypervisor
 Conflicts: nova-compute-hypervisor
@@ -169,7 +169,7 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 
 Package: nova-compute-xen
 Architecture: all
-Depends: nova-compute (= ${binary:Version}), python-libvirt, libvirt-bin, xen-hypervisor-4.1-amd64 | xen-hypervisor-4.1-i386,
+Depends: python-libvirt, libvirt-bin, xen-hypervisor-4.1-amd64 | xen-hypervisor-4.1-i386,
   ${misc:Depends}
 Provides: nova-compute-hypervisor
 Replaces: nova-compute-hypervisor
@@ -193,7 +193,7 @@ Description: OpenStack Compute - compute node (Xen)
 
 Package: nova-compute-kvm
 Architecture: all
-Depends: nova-compute (= ${binary:Version}), python-libvirt, libvirt-bin, kvm, ${misc:Depends}
+Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}
 Provides: nova-compute-hypervisor
 Replaces: nova-compute-hypervisor
 Conflicts: nova-compute-hypervisor
