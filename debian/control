@@ -127,8 +127,6 @@ Package: nova-compute-lxc
 Architecture: all
 Depends: python-libvirt, libvirt-bin, ${misc:Depends}
 Provides: nova-compute-hypervisor
-Replaces: nova-compute-hypervisor
-Conflicts: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (LXC)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -150,8 +148,6 @@ Package: nova-compute-uml
 Architecture: all
 Depends: python-libvirt, libvirt-bin, user-mode-linux, ${misc:Depends}
 Provides: nova-compute-hypervisor
-Replaces: nova-compute-hypervisor
-Conflicts: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (UserModeLinux)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -174,8 +170,6 @@ Architecture: all
 Depends: python-libvirt, libvirt-bin, xen-hypervisor-4.1-amd64 | xen-hypervisor-4.1-i386,
   ${misc:Depends}
 Provides: nova-compute-hypervisor
-Replaces: nova-compute-hypervisor
-Conflicts: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (Xen)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -197,8 +191,6 @@ Package: nova-compute-kvm
 Architecture: all
 Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}
 Provides: nova-compute-hypervisor
-Replaces: nova-compute-hypervisor
-Conflicts: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (KVM)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
