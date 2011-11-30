@@ -15,7 +15,8 @@ Build-Depends: debhelper (>= 7.0.50),
  python-novaclient (>= 2.6.7-1),
  python-gflags,
  python-netaddr,
- python-gflags
+ python-gflags,
+ python-feedparser
 Build-Depends-Indep:
  python-setuptools,
  python-sphinx (>> 1.0)
