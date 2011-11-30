@@ -17,9 +17,6 @@ override_dh_auto_build:
 	python setup.py build_sphinx
 	mv doc/doc/build/man/novamanage.1 doc/doc/build/man/nova-manage.1
 
-get-orig-source:
-	uscan --verbose --force-download --rename --destdir=../build-area
-
 override_dh_install:
 	dh_install
 	chmod 440 $(CURDIR)/debian/nova-common/etc/sudoers.d/nova_sudoers
