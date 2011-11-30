@@ -14,13 +14,8 @@ override_dh_auto_clean:
 
 override_dh_auto_build:
 	dh_auto_build
-ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	python setup.py build_sphinx
-	cp $(CURDIR)/debian/nova-common.manpages.in $(CURDIR)/debian/nova-common.manpages
-	cp $(CURDIR)/doc/doc/build/man/novamanage.1 $(CURDIR)/doc/doc/build/man/nova-manage.1
-else
-	mkdir -p $(CURDIR)/doc/doc/build/html
-endif
+	mv doc/doc/build/man/novamanage.1 doc/doc/build/man/nova-manage.1
 
 get-orig-source:
 	uscan --verbose --force-download --rename --destdir=../build-area
