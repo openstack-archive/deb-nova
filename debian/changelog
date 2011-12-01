@@ -1,3 +1,36 @@
+nova (2012.1~e1-2) unstable; urgency=low
+
+  [ Julien Danjou ]
+  * Set real build-dependencies
+  * Fix Vcs URLs
+  * Fix Maintainer and Uploaders fields
+  * Fix copyright file format
+  * Enhance short description of python-nova.
+  * Remove Ubuntu related stuff
+  * Remove get-orig-source target
+  * Fix clean and build-deps for test
+  * Disabled tests on build
+  * Fix typo in nova-doc description
+  * Fix typo in copyright file
+  * Fix build-dependency on novaclient
+  * Add missing depends on adduser
+  * Use libjs-underscore in doc
+  * Stop making hypervisors packages conflicting
+  * Rewrite init scripts and add missing nova-vnc-proxy.init
+
+  [ Ghe Rivero ]
+  * Resolved circular Depends on nova-compute. (Closes: #649379)
+  * Some build-depends cleanup
+  * Fixed brctl path in sudo file. (Closes: #631830)
+
+  [ Thomas Goirand ]
+  * Added a small debian/gbp.conf
+  * Added missing python-netaddr build-depends.
+  * Added missing build-depends on python-gflags
+  * Added version (eg: >= 2.6.7-1) for build-depends on python-novaclient
+
+ -- Julien Danjou <acid@debian.org>  Thu, 01 Dec 2011 16:47:45 +0100
+
 nova (2012.1~e1-1) unstable; urgency=low
 
   * [de01249] Imported Upstream version 2012.1~e1
