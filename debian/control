@@ -102,7 +102,7 @@ Description: OpenStack Compute - common files
 
 Package: nova-compute
 Architecture: all
-Depends: lsb-base, adduser, qemu-utils, libvirt-bin, nova-common (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
+Depends: lsb-base (>= 3.0.6), adduser, qemu-utils, libvirt-bin, nova-common (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
  ${python:Depends}, ${misc:Depends}
 Recommends: ajaxterm
 Description: OpenStack Compute - compute node
@@ -210,7 +210,7 @@ Description: OpenStack Compute - compute node (KVM)
 
 Package: nova-scheduler
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - virtual machine scheduler
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -251,7 +251,7 @@ Description: OpenStack Compute - storage
 
 Package: nova-ajax-console-proxy
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - AJAX console proxy
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -273,7 +273,7 @@ Description: OpenStack Compute - AJAX console proxy
 
 Package: nova-vncproxy
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - VNC proxy
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -294,7 +294,7 @@ Description: OpenStack Compute - VNC proxy
 
 Package: nova-api
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -314,7 +314,7 @@ Description: OpenStack Compute - API frontend
 
 Package: nova-network
 Architecture: all
-Depends: lsb-base, netcat, vlan, bridge-utils, dnsmasq-base, iputils-arping, dnsmasq-utils, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0.6), netcat, vlan, bridge-utils, dnsmasq-base, iputils-arping, dnsmasq-utils, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Suggests: radvd
 Description: OpenStack Compute - Network manager
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -339,7 +339,7 @@ Description: OpenStack Compute - Network manager
 
 Package: nova-objectstore
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - object store
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -360,7 +360,7 @@ Description: OpenStack Compute - object store
 
 Package: nova-console
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - Console
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
