@@ -19,9 +19,14 @@ DAEMON=/usr/bin/nova-console
 DAEMON_ARGS="--flagfile=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
+NOVA_USER=nova
+LOCK_DIR=/var/lock/nova/
 
 # Exit if the package is not installed
 [ -x $DAEMON ] || exit 0
+
+mkdir -p ${LOCK_DIR}
+chown ${NOVA_USER} ${LOCK_DIR}
 
 # Read configuration variable file if it is present
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
