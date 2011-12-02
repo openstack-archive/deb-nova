@@ -1,3 +1,15 @@
+nova (2012.1~e1-3) unstable; urgency=low
+
+  [ Ghe Rivero ]
+  * Create lock dirs on init files
+
+  [ Julien Danjou ]
+  * Add LOCK_DIR creation on all init files
+  * Use NOVA_USER variable
+  * Create pidfile
+
+ -- Julien Danjou <acid@debian.org>  Fri, 02 Dec 2011 12:16:48 +0100
+
 nova (2012.1~e1-2) unstable; urgency=low
 
   [ Julien Danjou ]
