@@ -1,6 +1,7 @@
 # Format is:
 # <preferred e-mail> <other e-mail 1>
 # <preferred e-mail> <other e-mail 2>
+<aaron.lee@rackspace.com> <wwkeyboard@gmail.com>
 <anotherjesse@gmail.com> <jesse@dancelamb>
 <anotherjesse@gmail.com> <jesse@gigantor.local>
 <anotherjesse@gmail.com> <jesse@ubuntu>
@@ -17,6 +18,7 @@
 <dan@nicira.com> <danwent@dan-xs3-cs>
 <dan@nicira.com> <danwent@gmail.com>
 <devin.carlen@gmail.com> <devcamcar@illian.local>
+<edouard1.thuleau@orange.com> <thuleau@gmail.com>
 <ewan.mellor@citrix.com> <emellor@silver>
 <itoumsn@nttdata.co.jp> <itoumsn@shayol>
 <jake@ansolabs.com> <jake@markupisart.com>
@@ -59,3 +61,4 @@
 <kshileev@gmail.com> <kshileev@griddynamics.com>
 <nsokolov@griddynamics.com> <nsokolov@griddynamics.net>
 <troy.toman@rackspace.com> <ttcl@mac.com>
+<zulcss@ubuntu.com> <chuck.short@canonical.com>

@@ -34,7 +34,6 @@ import nose.plugins.skip
 import nova.image.fake
 import shutil
 import stubout
-from eventlet import greenthread
 
 from nova import fakerabbit
 from nova import flags
@@ -69,7 +68,7 @@ class skip_test(object):
 
 
 class skip_if(object):
-    """Decorator that skips a test if contition is true."""
+    """Decorator that skips a test if condition is true."""
     def __init__(self, condition, msg):
         self.condition = condition
         self.message = msg
@@ -152,7 +151,7 @@ class TestCase(unittest.TestCase):
             if FLAGS.image_service == 'nova.image.fake.FakeImageService':
                 nova.image.fake.FakeImageService_reset()
 
-            # Reset any overriden flags
+            # Reset any overridden flags
             self.reset_flags()
 
             # Stop any timers

@@ -69,6 +69,8 @@ class S3ImageService(object):
 
     def _translate_uuid_to_id(self, context, image):
         def _find_or_create(image_uuid):
+            if image_uuid is None:
+                return
             try:
                 return self.get_image_id(context, image_uuid)
             except exception.NotFound:
@@ -81,7 +83,7 @@ class S3ImageService(object):
         except KeyError:
             pass
         else:
-            image_copy['id'] = _find_or_create(image_copy['id'])
+            image_copy['id'] = _find_or_create(image_id)
 
         for prop in ['kernel_id', 'ramdisk_id']:
             try:
@@ -211,15 +213,16 @@ class S3ImageService(object):
         properties['project_id'] = context.project_id
         properties['architecture'] = arch
 
+        def _translate_dependent_image_id(image_key, image_id):
+            image_id = ec2utils.ec2_id_to_id(image_id)
+            image_uuid = self.get_image_uuid(context, image_id)
+            properties['image_id'] = image_uuid
+
         if kernel_id:
-            kernel_id = ec2_utils.ec2_id_to_id(kernel_id)
-            kernel_uuid = self._get_image_uuid(context, kernel_id)
-            properties['kernel_id'] = kernel_uuid
+            _translate_dependent_image_id('kernel_id', kernel_id)
 
         if ramdisk_id:
-            ramdisk_id = ec2utils.ec2_id_to_id(ramdisk_id)
-            ramdisk_uuid = self._get_image_uuid(context, ramdisk_id)
-            properties['ramdisk_id'] = ramdisk_uuid
+            _translate_dependent_image_id('ramdisk_id', ramdisk_id)
 
         if mappings:
             properties['mappings'] = mappings

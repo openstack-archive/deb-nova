@@ -60,7 +60,7 @@ def get_host_list(context):
 
 
 def get_zone_list(context):
-    """Return a list of zones assoicated with this zone."""
+    """Return a list of zones associated with this zone."""
     items = _call_scheduler('get_zone_list', context)
     for item in items:
         item['api_url'] = item['api_url'].replace('\\/', '/')
@@ -332,6 +332,12 @@ class reroute_compute(object):
            context and resource id. Derived class should override this."""
         context = kwargs.get('context', None)
         instance_id = kwargs.get('instance_id', None)
+
+        #NOTE(blamar): This is going to get worse before it gets better...
+        instance = kwargs.get('instance', None)
+        if instance is not None:
+            instance_id = instance['uuid']
+
         if len(args) > 0 and not context:
             context = args[1]
         if len(args) > 1 and not instance_id:
@@ -346,7 +352,7 @@ class reroute_compute(object):
         """
         if 'instance_id' in kwargs:
             kwargs['instance_id'] = replacement_id
-        elif len(args) > 1:
+        elif len(args) > 2:
             args.pop(2)
             args.insert(2, replacement_id)
 

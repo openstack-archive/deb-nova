@@ -17,7 +17,6 @@
 """Stubouts, mocks and fixtures for the test suite"""
 
 import eventlet
-import json
 import random
 
 from nova.virt import xenapi_conn
@@ -32,22 +31,9 @@ def stubout_instance_snapshot(stubs):
     @classmethod
     def fake_fetch_image(cls, context, session, instance, image, user,
                          project, type):
-        from nova.virt.xenapi.fake import create_vdi
-        name_label = "instance-%s" % instance.id
-        #TODO: create fake SR record
-        sr_ref = "fakesr"
-        vdi_ref = create_vdi(name_label=name_label, read_only=False,
-                             sr_ref=sr_ref, sharable=False)
-        vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
-        vdi_uuid = vdi_rec['uuid']
-        return [dict(vdi_type='os', vdi_uuid=vdi_uuid)]
+        return [dict(vdi_type='os', vdi_uuid=_make_fake_vdi())]
 
     stubs.Set(vm_utils.VMHelper, 'fetch_image', fake_fetch_image)
-
-    def fake_parse_xmlrpc_value(val):
-        return val
-
-    stubs.Set(xenapi_conn, '_parse_xmlrpc_value', fake_parse_xmlrpc_value)
 
     def fake_wait_for_vhd_coalesce(session, instance_id, sr_ref, vdi_ref,
                               original_parent_uuid):
@@ -57,8 +43,8 @@ def stubout_instance_snapshot(stubs):
     stubs.Set(vm_utils, 'wait_for_vhd_coalesce', fake_wait_for_vhd_coalesce)
 
 
-def stubout_session(stubs, cls):
-    """Stubs out two methods from XenAPISession"""
+def stubout_session(stubs, cls, product_version=None):
+    """Stubs out three methods from XenAPISession"""
     def fake_import(self):
         """Stubs out get_imported_xenapi of XenAPISession"""
         fake_module = 'nova.virt.xenapi.fake'
@@ -69,6 +55,10 @@ def stubout_session(stubs, cls):
                        lambda s, url: cls(url))
     stubs.Set(xenapi_conn.XenAPISession, 'get_imported_xenapi',
                        fake_import)
+    if product_version is None:
+        product_version = (5, 6, 2)
+    stubs.Set(xenapi_conn.XenAPISession, 'get_product_version',
+            lambda s: product_version)
 
 
 def stub_out_get_target(stubs):
@@ -142,14 +132,11 @@ def stubout_loopingcall_start(stubs):
     stubs.Set(utils.LoopingCall, 'start', fake_start)
 
 
-def stubout_loopingcall_delay(stubs):
-    def fake_start(self, interval, now=True):
-        self._running = True
-        eventlet.sleep(1)
-        self.f(*self.args, **self.kw)
-        # This would fail before parallel xenapi calls were fixed
-        assert self._running == False
-    stubs.Set(utils.LoopingCall, 'start', fake_start)
+def _make_fake_vdi():
+    sr_ref = fake.get_all('SR')[0]
+    vdi_ref = fake.create_vdi('', False, sr_ref, False)
+    vdi_rec = fake.get_record('VDI', vdi_ref)
+    return vdi_rec['uuid']
 
 
 class FakeSessionForVMTests(fake.SessionBase):
@@ -158,32 +145,22 @@ class FakeSessionForVMTests(fake.SessionBase):
         super(FakeSessionForVMTests, self).__init__(uri)
 
     def host_call_plugin(self, _1, _2, plugin, method, _5):
-        # If the call is for 'copy_kernel_vdi' return None.
-        if method == 'copy_kernel_vdi':
-            return
-        sr_ref = fake.get_all('SR')[0]
-        vdi_ref = fake.create_vdi('', False, sr_ref, False)
-        vdi_rec = fake.get_record('VDI', vdi_ref)
-        if plugin == "glance" and method == "download_vhd":
-            ret_str = json.dumps([dict(vdi_type='os',
-                    vdi_uuid=vdi_rec['uuid'])])
+        if (plugin, method) == ('glance', 'download_vhd'):
+            return fake.as_json(dict(vdi_type='os',
+                                     vdi_uuid=_make_fake_vdi()))
         else:
-            ret_str = vdi_rec['uuid']
-        return '<string>%s</string>' % ret_str
+            return (super(FakeSessionForVMTests, self).
+                    host_call_plugin(_1, _2, plugin, method, _5))
 
     def host_call_plugin_swap(self, _1, _2, plugin, method, _5):
-        sr_ref = fake.get_all('SR')[0]
-        vdi_ref = fake.create_vdi('', False, sr_ref, False)
-        vdi_rec = fake.get_record('VDI', vdi_ref)
-        if plugin == "glance" and method == "download_vhd":
-            swap_vdi_ref = fake.create_vdi('', False, sr_ref, False)
-            swap_vdi_rec = fake.get_record('VDI', swap_vdi_ref)
-            ret_str = json.dumps(
-                    [dict(vdi_type='os', vdi_uuid=vdi_rec['uuid']),
-                    dict(vdi_type='swap', vdi_uuid=swap_vdi_rec['uuid'])])
+        if (plugin, method) == ('glance', 'download_vhd'):
+            return fake.as_json(dict(vdi_type='os',
+                                     vdi_uuid=_make_fake_vdi()),
+                                dict(vdi_type='swap',
+                                     vdi_uuid=_make_fake_vdi()))
         else:
-            ret_str = vdi_rec['uuid']
-        return '<string>%s</string>' % ret_str
+            return (super(FakeSessionForVMTests, self).
+                    host_call_plugin(_1, _2, plugin, method, _5))
 
     def VM_start(self, _1, ref, _2, _3):
         vm = fake.get_record('VM', ref)
@@ -230,7 +207,7 @@ def stub_out_vm_methods(stubs):
     def fake_release_bootlock(self, vm):
         pass
 
-    def fake_spawn_rescue(self, context, inst, network_info):
+    def fake_spawn_rescue(self, context, inst, network_info, image_meta):
         inst._rescue = False
 
     stubs.Set(vmops.VMOps, "_shutdown", fake_shutdown)

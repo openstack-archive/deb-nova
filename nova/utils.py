@@ -37,6 +37,7 @@ import time
 import types
 import uuid
 import pyclbr
+import netaddr
 from xml.sax import saxutils
 
 from eventlet import event
@@ -336,6 +337,9 @@ def current_audit_period(unit=None):
 
 
 def usage_from_instance(instance_ref, **kw):
+    image_ref_url = "%s/images/%s" % (generate_glance_url(),
+            instance_ref['image_ref'])
+
     usage_info = dict(
           tenant_id=instance_ref['project_id'],
           user_id=instance_ref['user_id'],
@@ -346,7 +350,7 @@ def usage_from_instance(instance_ref, **kw):
           created_at=str(instance_ref['created_at']),
           launched_at=str(instance_ref['launched_at']) \
                       if instance_ref['launched_at'] else '',
-          image_ref=instance_ref['image_ref'],
+          image_ref_url=image_ref_url,
           state=instance_ref['vm_state'],
           state_description=instance_ref['task_state'] \
                              if instance_ref['task_state'] else '',
@@ -872,7 +876,7 @@ def gen_uuid():
 
 
 def is_uuid_like(val):
-    """For our purposes, a UUID is a string in canoical form:
+    """For our purposes, a UUID is a string in canonical form:
 
         aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
     """
@@ -908,9 +912,29 @@ def is_valid_ipv4(address):
     return True
 
 
+def is_valid_cidr(address):
+    """Check if the provided ipv4 or ipv6 address is a valid
+    CIDR address or not"""
+    try:
+        # Validate the correct CIDR Address
+        netaddr.IPNetwork(address)
+    except netaddr.core.AddrFormatError:
+        return False
+
+    # Prior validation partially verify /xx part
+    # Verify it here
+    ip_segment = address.split('/')
+
+    if (len(ip_segment) <= 1 or
+        ip_segment[1] == ''):
+        return False
+
+    return True
+
+
 def monkey_patch():
     """  If the Flags.monkey_patch set as True,
-    this functuion patches a decorator
+    this function patches a decorator
     for all functions in specified modules.
     You can set decorators for each modules
     using FLAGS.monkey_patch_modules.
@@ -1002,6 +1026,19 @@ def save_and_reraise_exception():
     raise type_, value, traceback
 
 
+@contextlib.contextmanager
+def logging_error(message):
+    """Catches exception, write message to the log, re-raise.
+    This is a common refinement of save_and_reraise that writes a specific
+    message to the log.
+    """
+    try:
+        yield
+    except Exception as error:
+        with save_and_reraise_exception():
+            LOG.exception(message)
+
+
 def make_dev_path(dev, partition=None, base='/dev'):
     """Return a path to a particular device.
 
@@ -1024,3 +1061,16 @@ def total_seconds(td):
     else:
         return ((td.days * 86400 + td.seconds) * 10 ** 6 +
                 td.microseconds) / 10.0 ** 6
+
+
+def sanitize_hostname(hostname):
+    """Return a hostname which conforms to RFC-952 and RFC-1123 specs."""
+    if isinstance(hostname, unicode):
+        hostname = hostname.encode('latin-1', 'ignore')
+
+    hostname = re.sub('[ _]', '-', hostname)
+    hostname = re.sub('[^\w.-]+', '', hostname)
+    hostname = hostname.lower()
+    hostname = hostname.strip('.-')
+
+    return hostname

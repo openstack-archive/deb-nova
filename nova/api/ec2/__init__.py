@@ -20,10 +20,7 @@ Starting point for routing EC2 requests.
 
 """
 
-from urlparse import urlparse
 
-import eventlet
-from eventlet.green import httplib
 import webob
 import webob.dec
 import webob.exc
@@ -36,6 +33,7 @@ from nova import utils
 from nova import wsgi
 from nova.api.ec2 import apirequest
 from nova.api.ec2 import ec2utils
+from nova.api.ec2 import faults
 from nova.auth import manager
 
 FLAGS = flags.FLAGS
@@ -47,6 +45,19 @@ flags.DEFINE_integer('lockout_minutes', 15,
 flags.DEFINE_integer('lockout_window', 15,
                      'Number of minutes for lockout window.')
 flags.DECLARE('use_forwarded_for', 'nova.api.auth')
+
+
+## Fault Wrapper around all EC2 requests ##
+class FaultWrapper(wsgi.Middleware):
+    """Calls the middleware stack, captures any exceptions into faults."""
+
+    @webob.dec.wsgify(RequestClass=wsgi.Request)
+    def __call__(self, req):
+        try:
+            return req.get_response(self.application)
+        except Exception as ex:
+            LOG.exception(_("FaultWrapper: %s"), unicode(ex))
+            return faults.Fault(webob.exc.HTTPInternalServerError())
 
 
 class RequestLogging(wsgi.Middleware):
@@ -95,7 +106,7 @@ class Lockout(wsgi.Middleware):
     z = lockout_attempts flag
 
     Uses memcached if lockout_memcached_servers flag is set, otherwise it
-    uses a very simple in-proccess cache. Due to the simplicity of
+    uses a very simple in-process cache. Due to the simplicity of
     the implementation, the timeout window is started with the first
     failed request, so it will block if there are x failed logins within
     that period.
@@ -245,7 +256,6 @@ class Requestify(wsgi.Middleware):
         api_request = apirequest.APIRequest(self.controller, action,
                                             req.params['Version'], args)
         req.environ['ec2.request'] = api_request
-        req.environ['ec2.action_args'] = args
         return self.application
 
 
@@ -334,9 +344,8 @@ class Executor(wsgi.Application):
 
     """Execute an EC2 API request.
 
-    Executes 'ec2.action' upon 'ec2.controller', passing 'nova.context' and
-    'ec2.action_args' (all variables in WSGI environ.)  Returns an XML
-    response, or a 400 upon failure.
+    Executes 'ec2.request', passing 'nova.context' (both variables in WSGI
+    environ.)  Returns an XML response, or a 400 upon failure.
     """
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
@@ -423,23 +432,3 @@ class Executor(wsgi.Application):
                          (utils.utf8(code), utils.utf8(message),
                          utils.utf8(context.request_id)))
         return resp
-
-
-class Versions(wsgi.Application):
-
-    @webob.dec.wsgify(RequestClass=wsgi.Request)
-    def __call__(self, req):
-        """Respond to a request for all EC2 versions."""
-        # available api versions
-        versions = [
-            '1.0',
-            '2007-01-19',
-            '2007-03-01',
-            '2007-08-29',
-            '2007-10-10',
-            '2007-12-15',
-            '2008-02-01',
-            '2008-09-01',
-            '2009-04-04',
-        ]
-        return ''.join('%s\n' % v for v in versions)

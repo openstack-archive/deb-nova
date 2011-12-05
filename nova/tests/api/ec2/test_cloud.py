@@ -24,7 +24,6 @@ import os
 from eventlet import greenthread
 from M2Crypto import BIO
 from M2Crypto import RSA
-import mox
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
@@ -37,7 +36,6 @@ from nova import flags
 from nova.image import fake
 from nova import log as logging
 from nova import manager
-from nova import network
 from nova import rpc
 from nova import test
 from nova import utils
@@ -556,11 +554,13 @@ class CloudTestCase(test.TestCase):
                                                   'image_ref': image_uuid,
                                                   'instance_type_id': 1,
                                                   'host': 'host1',
+                                                  'hostname': 'server-1234',
                                                   'vm_state': 'active'})
         inst2 = db.instance_create(self.context, {'reservation_id': 'a',
                                                   'image_ref': image_uuid,
                                                   'instance_type_id': 1,
                                                   'host': 'host2',
+                                                  'hostname': 'server-4321',
                                                   'vm_state': 'active'})
         comp1 = db.service_create(self.context, {'host': 'host1',
                                                  'availability_zone': 'zone1',
@@ -585,7 +585,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(instance['publicDnsName'], '1.2.3.4')
         self.assertEqual(instance['ipAddress'], '1.2.3.4')
         self.assertEqual(instance['dnsName'], '1.2.3.4')
-        self.assertEqual(instance['privateDnsName'], '192.168.0.3')
+        self.assertEqual(instance['privateDnsName'], 'server-4321')
         self.assertEqual(instance['privateIpAddress'], '192.168.0.3')
         self.assertEqual(instance['dnsNameV6'],
                 'fe80:b33f::a8bb:ccff:fedd:eeff')
@@ -605,6 +605,7 @@ class CloudTestCase(test.TestCase):
         inst1 = db.instance_create(self.context, {'reservation_id': 'a',
                                                   'image_ref': image_uuid,
                                                   'instance_type_id': 1,
+                                                  'hostname': 'server-1234',
                                                   'vm_state': 'active'})
         comp1 = db.service_create(self.context, {'host': 'host1',
                                                  'topic': "compute"})
@@ -617,7 +618,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(instance['publicDnsName'], '1.2.3.4')
         self.assertEqual(instance['ipAddress'], '1.2.3.4')
         self.assertEqual(instance['dnsName'], '1.2.3.4')
-        self.assertEqual(instance['privateDnsName'], '192.168.0.3')
+        self.assertEqual(instance['privateDnsName'], 'server-1234')
         self.assertEqual(instance['privateIpAddress'], '192.168.0.3')
         self.assertNotIn('dnsNameV6', instance)
         db.instance_destroy(self.context, inst1['id'])
@@ -1226,6 +1227,41 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(instance['instanceState']['name'], 'running')
         self.assertEqual(instance['instanceType'], 'm1.small')
 
+    def test_run_instances_availability_zone(self):
+        kwargs = {'image_id': 'ami-00000001',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1,
+                  'placement': {'availability_zone': 'fake'},
+                 }
+        run_instances = self.cloud.run_instances
+
+        def fake_show(self, context, id):
+            return {'id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'properties': {
+                        'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                        'type': 'machine'},
+                    'container_format': 'ami',
+                    'status': 'active'}
+
+        self.stubs.Set(fake._FakeImageService, 'show', fake_show)
+        # NOTE(comstud): Make 'cast' behave like a 'call' which will
+        # ensure that operations complete
+        self.stubs.Set(rpc, 'cast', rpc.call)
+
+        def fake_format(*args, **kwargs):
+            pass
+
+        self.stubs.Set(self.cloud, '_format_run_instances', fake_format)
+
+        def fake_create(*args, **kwargs):
+            self.assertEqual(kwargs['availability_zone'], 'fake')
+            return ({'id': 'fake-instance'}, 'fake-res-id')
+
+        self.stubs.Set(self.cloud.compute_api, 'create', fake_create)
+
+        # NOTE(vish) the assert for this call is in the fake_create method.
+        run_instances(self.context, **kwargs)
+
     def test_run_instances_image_state_none(self):
         kwargs = {'image_id': 'ami-00000001',
                   'instance_type': FLAGS.default_instance_type,
@@ -1369,7 +1405,61 @@ class CloudTestCase(test.TestCase):
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertTrue(result)
 
+    def test_start_instances(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        result = self.cloud.stop_instances(self.context, [instance_id])
+        self.assertTrue(result)
+
+        result = self.cloud.start_instances(self.context, [instance_id])
+        self.assertTrue(result)
+
+        result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertTrue(result)
         self._restart_compute_service()
+
+    def test_stop_instances(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        result = self.cloud.stop_instances(self.context, [instance_id])
+        self.assertTrue(result)
+
+        result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertTrue(result)
+        self._restart_compute_service()
+
+    def test_terminate_instances(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        # a running instance can't be started. It is just ignored.
+        result = self.cloud.start_instances(self.context, [instance_id])
+        self.assertTrue(result)
+
+        result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertTrue(result)
+        self._restart_compute_service()
+
+    def test_reboot_instances(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        # a running instance can't be started. It is just ignored.
+        result = self.cloud.start_instances(self.context, [instance_id])
+        self.assertTrue(result)
+
+        result = self.cloud.reboot_instances(self.context, [instance_id])
+        self.assertTrue(result)
 
     def _volume_create(self, volume_id=None):
         kwargs = {'status': 'available',
@@ -1450,7 +1540,6 @@ class CloudTestCase(test.TestCase):
         self.assertFalse(vol['deleted'])
         db.volume_destroy(self.context, vol1['id'])
 
-        greenthread.sleep(0.3)
         admin_ctxt = context.get_admin_context(read_deleted=True)
         vol = db.volume_get(admin_ctxt, vol2['id'])
         self.assertTrue(vol['deleted'])
@@ -1482,8 +1571,9 @@ class CloudTestCase(test.TestCase):
         vol = db.volume_get(self.context, vol2['id'])
         self._assert_volume_detached(vol)
 
+        instance = db.instance_get(self.context, instance_id)
         self.cloud.compute_api.attach_volume(self.context,
-                                             instance_id=instance_id,
+                                             instance,
                                              volume_id=vol2['id'],
                                              device='/dev/vdc')
         vol = db.volume_get(self.context, vol2['id'])
@@ -1659,33 +1749,6 @@ class CloudTestCase(test.TestCase):
                      'delete_on_termination': None,
                      'device_name': '/dev/sd3'},
                     ]
-
-    def test_get_instance_mapping(self):
-        """Make sure that _get_instance_mapping works"""
-        ctxt = None
-        instance_ref0 = {'id': 0,
-                         'root_device_name': None}
-        instance_ref1 = {'id': 0,
-                         'root_device_name': '/dev/sda1'}
-
-        self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
-                       self._fake_bdm_get)
-
-        expected = {'ami': 'sda1',
-                    'root': '/dev/sda1',
-                    'ephemeral0': '/dev/sdb',
-                    'swap': '/dev/sdc',
-                    'ephemeral1': '/dev/sdd',
-                    'ephemeral2': '/dev/sd3',
-                    'ebs0': '/dev/sdh',
-                    'ebs1': '/dev/sdi'}
-
-        self.assertEqual(self.cloud._format_instance_mapping(ctxt,
-                                                             instance_ref0),
-                         cloud._DEFAULT_MAPPINGS)
-        self.assertEqual(self.cloud._format_instance_mapping(ctxt,
-                                                             instance_ref1),
-                         expected)
 
     def test_describe_instance_attribute(self):
         """Make sure that describe_instance_attribute works"""

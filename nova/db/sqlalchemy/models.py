@@ -29,10 +29,8 @@ from sqlalchemy.schema import ForeignKeyConstraint
 
 from nova.db.sqlalchemy.session import get_session
 
-from nova import auth
 from nova import exception
 from nova import flags
-from nova import ipv6
 from nova import utils
 
 
@@ -255,7 +253,7 @@ class Instance(BASE, NovaBase):
     access_ip_v4 = Column(String(255))
     access_ip_v6 = Column(String(255))
 
-    managed_disk = Column(Boolean())
+    auto_disk_config = Column(Boolean())
     progress = Column(Integer)
 
 
@@ -305,8 +303,7 @@ class InstanceTypes(BASE, NovaBase):
     local_gb = Column(Integer)
     flavorid = Column(String(255), unique=True)
     swap = Column(Integer, nullable=False, default=0)
-    rxtx_quota = Column(Integer, nullable=False, default=0)
-    rxtx_cap = Column(Integer, nullable=False, default=0)
+    rxtx_factor = Column(Float, nullable=False, default=1)
     vcpu_weight = Column(Integer, nullable=True)
 
     instances = relationship(Instance,
@@ -633,6 +630,8 @@ class Network(BASE, NovaBase):
     vpn_private_address = Column(String(255))
     dhcp_start = Column(String(255))
 
+    rxtx_base = Column(Integer)
+
     project_id = Column(String(255))
     priority = Column(Integer)
     host = Column(String(255))  # , ForeignKey('hosts.id'))
@@ -644,23 +643,9 @@ class VirtualInterface(BASE, NovaBase):
     __tablename__ = 'virtual_interfaces'
     id = Column(Integer, primary_key=True)
     address = Column(String(255), unique=True)
-    network_id = Column(Integer, ForeignKey('networks.id'))
-    network = relationship(Network, backref=backref('virtual_interfaces'))
+    network_id = Column(Integer, nullable=False)
     instance_id = Column(Integer, nullable=False)
-
     uuid = Column(String(36))
-
-    @property
-    def fixed_ipv6(self):
-        cidr_v6 = self.network.cidr_v6
-        if cidr_v6 is None:
-            ipv6_address = None
-        else:
-            project_id = self.instance.project_id
-            mac = self.address
-            ipv6_address = ipv6.to_global(cidr_v6, mac, project_id)
-
-        return ipv6_address
 
 
 # TODO(vish): can these both come from the same baseclass?

@@ -16,10 +16,10 @@
 #    under the License.
 
 import functools
+import os
 import re
 import urlparse
 
-from lxml import etree
 import webob
 from xml.dom import minidom
 
@@ -27,11 +27,9 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import vm_states
 from nova.compute import task_states
-from nova import exception
 from nova import flags
 from nova import ipv6
 from nova import log as logging
-import nova.network
 from nova import quota
 
 
@@ -225,8 +223,14 @@ def remove_version_from_href(href):
 
     """
     parsed_url = urlparse.urlsplit(href)
-    new_path = re.sub(r'^/v[0-9]+\.[0-9]+(/|$)', r'\1', parsed_url.path,
-                      count=1)
+    url_parts = parsed_url.path.split('/', 2)
+
+    # NOTE: this should match vX.X or vX
+    expression = re.compile(r'^v([0-9]+|[0-9]+\.[0-9]+)(/.*|$)')
+    if expression.match(url_parts[1]):
+        del url_parts[1]
+
+    new_path = '/'.join(url_parts)
 
     if new_path == parsed_url.path:
         msg = _('href %s does not contain version') % href
@@ -252,15 +256,10 @@ def get_version_from_href(href):
 
     """
     try:
-        #finds the first instance that matches /v#.#/
-        version = re.findall(r'[/][v][0-9]+\.[0-9]+[/]', href)
-        #if no version was found, try finding /v#.# at the end of the string
-        if not version:
-            version = re.findall(r'[/][v][0-9]+\.[0-9]+$', href)
-        version = re.findall(r'[0-9]+\.[0-9]', version[0])[0]
+        expression = r'/v([0-9]+|[0-9]+\.[0-9]+)(/|$)'
+        return re.findall(expression, href)[0][0]
     except IndexError:
-        version = '1.0'
-    return version
+        return '2'
 
 
 def check_img_metadata_quota_limit(context, metadata):
@@ -288,7 +287,7 @@ def get_networks_for_instance(context, instance):
     """Returns a prepared nw_info list for passing into the view
     builders
 
-    We end up with a datastructure like:
+    We end up with a data structure like:
     {'public': {'ips': [{'addr': '10.0.0.1', 'version': 4},
                         {'addr': '2001::1', 'version': 6}],
                 'floating_ips': [{'addr': '172.16.0.1', 'version': 4},
@@ -428,3 +427,56 @@ def check_snapshots_enabled(f):
             raise webob.exc.HTTPBadRequest(explanation=msg)
         return f(*args, **kwargs)
     return inner
+
+
+class ViewBuilder(object):
+    """Model API responses as dictionaries."""
+
+    _collection_name = None
+
+    def _get_links(self, request, identifier):
+        return [{
+            "rel": "self",
+            "href": self._get_href_link(request, identifier),
+        },
+        {
+            "rel": "bookmark",
+            "href": self._get_bookmark_link(request, identifier),
+        }]
+
+    def _get_next_link(self, request, identifier):
+        """Return href string with proper limit and marker params."""
+        params = request.params.copy()
+        params["marker"] = identifier
+        url = os.path.join(request.application_url,
+                           request.environ["nova.context"].project_id,
+                           self._collection_name)
+        return "%s?%s" % (url, dict_to_query_str(params))
+
+    def _get_href_link(self, request, identifier):
+        """Return an href string pointing to this object."""
+        return os.path.join(request.application_url,
+                            request.environ["nova.context"].project_id,
+                            self._collection_name,
+                            str(identifier))
+
+    def _get_bookmark_link(self, request, identifier):
+        """Create a URL that refers to a specific resource."""
+        base_url = remove_version_from_href(request.application_url)
+        return os.path.join(base_url,
+                            request.environ["nova.context"].project_id,
+                            self._collection_name,
+                            str(identifier))
+
+    def _get_collection_links(self, request, items):
+        """Retrieve 'next' link, if applicable."""
+        links = []
+        limit = int(request.params.get("limit", 0))
+        if limit and limit == len(items):
+            last_item = items[-1]
+            last_item_id = last_item.get("uuid", last_item["id"])
+            links.append({
+                "rel": "next",
+                "href": self._get_next_link(request, last_item_id),
+            })
+        return links

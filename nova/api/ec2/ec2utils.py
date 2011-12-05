@@ -19,6 +19,30 @@
 import re
 
 from nova import exception
+from nova import flags
+from nova import log as logging
+from nova import ipv6
+
+
+FLAGS = flags.FLAGS
+LOG = logging.getLogger("nova.api.ec2.ec2utils")
+
+
+def image_type(image_type):
+    """Converts to a three letter image type.
+
+    aki, kernel => aki
+    ari, ramdisk => ari
+    anything else => ami
+
+    """
+    if image_type == 'kernel':
+        return 'aki'
+    if image_type == 'ramdisk':
+        return 'ari'
+    if image_type not in ['aki', 'ari']:
+        return 'ami'
+    return image_type
 
 
 def ec2_id_to_id(ec2_id):
@@ -27,6 +51,53 @@ def ec2_id_to_id(ec2_id):
         return int(ec2_id.split('-')[-1], 16)
     except ValueError:
         raise exception.InvalidEc2Id(ec2_id=ec2_id)
+
+
+def image_ec2_id(image_id, image_type='ami'):
+    """Returns image ec2_id using id and three letter type."""
+    template = image_type + '-%08x'
+    try:
+        return id_to_ec2_id(image_id, template=template)
+    except ValueError:
+        #TODO(wwolf): once we have ec2_id -> glance_id mapping
+        # in place, this wont be necessary
+        return "ami-00000000"
+
+
+def get_ip_info_for_instance(context, instance):
+    """Return a list of all fixed IPs for an instance"""
+
+    ip_info = dict(fixed_ips=[], fixed_ip6s=[], floating_ips=[])
+
+    fixed_ips = instance['fixed_ips']
+    for fixed_ip in fixed_ips:
+        fixed_addr = fixed_ip['address']
+        network = fixed_ip.get('network')
+        vif = fixed_ip.get('virtual_interface')
+        if not network or not vif:
+            name = instance['name']
+            ip = fixed_ip['address']
+            LOG.warn(_("Instance %(name)s has stale IP "
+                    "address: %(ip)s (no network or vif)") % locals())
+            continue
+        cidr_v6 = network.get('cidr_v6')
+        if FLAGS.use_ipv6 and cidr_v6:
+            ipv6_addr = ipv6.to_global(cidr_v6, vif['address'],
+                    network['project_id'])
+            if ipv6_addr not in ip_info['fixed_ip6s']:
+                ip_info['fixed_ip6s'].append(ipv6_addr)
+
+        for floating_ip in fixed_ip.get('floating_ips', []):
+            float_addr = floating_ip['address']
+            ip_info['floating_ips'].append(float_addr)
+        ip_info['fixed_ips'].append(fixed_addr)
+    return ip_info
+
+
+def get_availability_zone_by_host(services, host):
+    if len(services) > 0:
+        return services[0]['availability_zone']
+    return 'unknown zone'
 
 
 def id_to_ec2_id(instance_id, template='i-%08x'):
@@ -63,7 +134,7 @@ def _try_convert(value):
     'True'        True case insensitive
     'False'       False case insensitive
     '0', '-0'     0
-    0xN, -0xN     int from hex (postitive) (N is any number)
+    0xN, -0xN     int from hex (positive) (N is any number)
     0bN, -0bN     int from binary (positive) (N is any number)
     *             try conversion to int, float, complex, fallback value
 
@@ -108,7 +179,7 @@ def _try_convert(value):
 
 def dict_from_dotted_str(items):
     """parse multi dot-separated argument into dict.
-    EBS boot uses multi dot-separeted arguments like
+    EBS boot uses multi dot-separated arguments like
     BlockDeviceMapping.1.DeviceName=snap-id
     Convert the above into
     {'block_device_mapping': {'1': {'device_name': snap-id}}}

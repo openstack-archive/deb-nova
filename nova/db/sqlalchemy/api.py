@@ -124,7 +124,7 @@ def require_context(f):
 def require_instance_exists(f):
     """Decorator to require the specified instance to exist.
 
-    Requres the wrapped function to use context and instance_id as
+    Requires the wrapped function to use context and instance_id as
     their first two arguments.
     """
 
@@ -138,7 +138,7 @@ def require_instance_exists(f):
 def require_volume_exists(f):
     """Decorator to require the specified volume to exist.
 
-    Requres the wrapped function to use context and volume_id as
+    Requires the wrapped function to use context and volume_id as
     their first two arguments.
     """
 
@@ -637,15 +637,12 @@ def floating_ip_get_all_by_project(context, project_id):
     authorize_project_context(context, project_id)
     session = get_session()
     # TODO(tr3buchet): why do we not want auto_assigned floating IPs here?
-    floating_ip_refs = session.query(models.FloatingIp).\
-                               options(joinedload_all('fixed_ip.instance')).\
-                               filter_by(project_id=project_id).\
-                               filter_by(auto_assigned=False).\
-                               filter_by(deleted=False).\
-                               all()
-    if not floating_ip_refs:
-        raise exception.FloatingIpNotFoundForProject(project_id=project_id)
-    return floating_ip_refs
+    return session.query(models.FloatingIp).\
+                         options(joinedload_all('fixed_ip.instance')).\
+                         filter_by(project_id=project_id).\
+                         filter_by(auto_assigned=False).\
+                         filter_by(deleted=False).\
+                         all()
 
 
 @require_context
@@ -947,7 +944,7 @@ def fixed_ip_update(context, address, values):
 
 @require_context
 def virtual_interface_create(context, values):
-    """Create a new virtual interface record in teh database.
+    """Create a new virtual interface record in the database.
 
     :param values: = dict containing column values
     """
@@ -987,7 +984,6 @@ def virtual_interface_get(context, vif_id, session=None):
 
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(id=vif_id).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1002,7 +998,6 @@ def virtual_interface_get_by_address(context, address):
     session = get_session()
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(address=address).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1017,7 +1012,6 @@ def virtual_interface_get_by_uuid(context, vif_uuid):
     session = get_session()
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(uuid=vif_uuid).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1032,7 +1026,6 @@ def virtual_interface_get_by_fixed_ip(context, fixed_ip_id):
     session = get_session()
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(fixed_ip_id=fixed_ip_id).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1043,12 +1036,11 @@ def virtual_interface_get_by_fixed_ip(context, fixed_ip_id):
 def virtual_interface_get_by_instance(context, instance_id):
     """Gets all virtual interfaces for instance.
 
-    :param instance_id: = id of the instance to retreive vifs for
+    :param instance_id: = id of the instance to retrieve vifs for
     """
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
                        filter_by(instance_id=instance_id).\
-                       options(joinedload('network')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
@@ -1062,7 +1054,6 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
     vif_ref = session.query(models.VirtualInterface).\
                       filter_by(instance_id=instance_id).\
                       filter_by(network_id=network_id).\
-                      options(joinedload('network')).\
                       options(joinedload('fixed_ips')).\
                       first()
     return vif_ref
@@ -1072,12 +1063,11 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
 def virtual_interface_get_by_network(context, network_id):
     """Gets all virtual_interface on network.
 
-    :param network_id: = network to retreive vifs for
+    :param network_id: = network to retrieve vifs for
     """
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
                        filter_by(network_id=network_id).\
-                       options(joinedload('network')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
@@ -1085,7 +1075,7 @@ def virtual_interface_get_by_network(context, network_id):
 
 @require_context
 def virtual_interface_delete(context, vif_id):
-    """Delete virtual interface record from teh database.
+    """Delete virtual interface record from the database.
 
     :param vif_id: = id of vif to delete
     """
@@ -1112,7 +1102,6 @@ def virtual_interface_get_all(context):
     """Get all vifs"""
     session = get_session()
     vif_refs = session.query(models.VirtualInterface).\
-                       options(joinedload('network')).\
                        options(joinedload('fixed_ips')).\
                        all()
     return vif_refs
@@ -1439,6 +1428,7 @@ def instance_get_all_by_user(context, user_id):
 @require_admin_context
 def instance_get_all_by_host(context, host):
     session = get_session()
+    read_deleted = can_read_deleted(context)
     return session.query(models.Instance).\
                    options(joinedload_all('fixed_ips.floating_ips')).\
                    options(joinedload('security_groups')).\
@@ -1446,7 +1436,7 @@ def instance_get_all_by_host(context, host):
                    options(joinedload('metadata')).\
                    options(joinedload('instance_type')).\
                    filter_by(host=host).\
-                   filter_by(deleted=can_read_deleted(context)).\
+                   filter_by(deleted=read_deleted).\
                    all()
 
 
@@ -1571,28 +1561,32 @@ def instance_get_all_hung_in_rebooting(context, reboot_window, session=None):
 @require_context
 def instance_update(context, instance_id, values):
     session = get_session()
+
+    if utils.is_uuid_like(instance_id):
+        instance_ref = instance_get_by_uuid(context, instance_id,
+                                            session=session)
+    else:
+        instance_ref = instance_get(context, instance_id, session=session)
+
     metadata = values.get('metadata')
     if metadata is not None:
         instance_metadata_update(context,
-                                 instance_id,
+                                 instance_ref['id'],
                                  values.pop('metadata'),
                                  delete=True)
     with session.begin():
-        if utils.is_uuid_like(instance_id):
-            instance_ref = instance_get_by_uuid(context, instance_id,
-                                                session=session)
-        else:
-            instance_ref = instance_get(context, instance_id, session=session)
         instance_ref.update(values)
         instance_ref.save(session=session)
-        return instance_ref
+
+    return instance_ref
 
 
-def instance_add_security_group(context, instance_id, security_group_id):
+def instance_add_security_group(context, instance_uuid, security_group_id):
     """Associate the given security group with the given instance"""
     session = get_session()
     with session.begin():
-        instance_ref = instance_get(context, instance_id, session=session)
+        instance_ref = instance_get_by_uuid(context, instance_uuid,
+                                            session=session)
         security_group_ref = security_group_get(context,
                                                 security_group_id,
                                                 session=session)
@@ -1601,12 +1595,13 @@ def instance_add_security_group(context, instance_id, security_group_id):
 
 
 @require_context
-def instance_remove_security_group(context, instance_id, security_group_id):
+def instance_remove_security_group(context, instance_uuid, security_group_id):
     """Disassociate the given security group from the given instance"""
     session = get_session()
-
+    instance_ref = instance_get_by_uuid(context, instance_uuid,
+                                        session=session)
     session.query(models.SecurityGroupInstanceAssociation).\
-                filter_by(instance_id=instance_id).\
+                filter_by(instance_id=instance_ref['id']).\
                 filter_by(security_group_id=security_group_id).\
                 update({'deleted': True,
                         'deleted_at': utils.utcnow(),
@@ -1724,7 +1719,7 @@ def network_associate(context, project_id, force=False):
     or if force is True
 
     force solves race condition where a fresh project has multiple instance
-    builds simultaneosly picked up by multiple network hosts which attempt
+    builds simultaneously picked up by multiple network hosts which attempt
     to associate the project with multiple networks
     force should only be used as a direct consequence of user request
     all automated requests should not use force
@@ -1744,7 +1739,7 @@ def network_associate(context, project_id, force=False):
             network_ref = network_query(project_id)
 
         if force or not network_ref:
-            # in force mode or project doesn't have a network so assocaite
+            # in force mode or project doesn't have a network so associate
             # with a new network
 
             # get new network

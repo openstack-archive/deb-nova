@@ -34,6 +34,8 @@ flags.DEFINE_integer("max_gigabytes", 10000,
                      "maximum number of volume gigabytes to allow per host")
 flags.DEFINE_integer("max_networks", 1000,
                      "maximum number of networks to allow per host")
+flags.DEFINE_string('default_schedule_zone', None,
+                    'zone to use when user doesnt specify one')
 
 
 class SimpleScheduler(chance.ChanceScheduler):
@@ -45,7 +47,7 @@ class SimpleScheduler(chance.ChanceScheduler):
 
         availability_zone = instance_opts.get('availability_zone')
 
-        zone, host = None, None
+        zone, host = FLAGS.default_schedule_zone, None
         if availability_zone:
             zone, _x, host = availability_zone.partition(':')
 
@@ -78,7 +80,7 @@ class SimpleScheduler(chance.ChanceScheduler):
             instance_ref = self.create_instance_db_entry(context,
                     request_spec)
             driver.cast_to_compute_host(context, host, 'run_instance',
-                    instance_id=instance_ref['id'], **_kwargs)
+                    instance_uuid=instance_ref['uuid'], **_kwargs)
             instances.append(driver.encode_instance(instance_ref))
         return instances
 

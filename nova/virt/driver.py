@@ -87,9 +87,9 @@ class ComputeDriver(object):
     virtual network interface, and these IDs are opaque to the rest of Nova.
 
     Some methods here take an instance of nova.compute.service.Instance.  This
-    is the datastructure used by nova.compute to store details regarding an
+    is the data structure used by nova.compute to store details regarding an
     instance, and pass them into this layer.  This layer is responsible for
-    translating that generic datastructure into terms that are specific to the
+    translating that generic data structure into terms that are specific to the
     virtualization platform.
 
     """
@@ -127,7 +127,7 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def spawn(self, context, instance,
+    def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
         """
         Create a new instance/VM/domain on the virtualization platform.
@@ -143,6 +143,8 @@ class ComputeDriver(object):
         :param instance: Instance object as returned by DB layer.
                          This function should use the data there to guide
                          the creation of the new instance.
+        :param image_meta: image object returned by nova.image.glance that
+                           defines the image from which to boot this instance
         :param network_info:
            :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
         :param block_device_info: Information about block devices to be
@@ -253,11 +255,14 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, resize_instance):
+                         network_info, image_meta, resize_instance):
         """Completes a resize, turning on the migrated instance
 
         :param network_info:
            :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
+        :param image_meta: image object returned by nova.image.glance that
+                           defines the image from which this instance
+                           was created
         """
         raise NotImplementedError()
 
@@ -360,7 +365,7 @@ class ComputeDriver(object):
         This message is sent to the virtualization drivers on hosts that are
         running an instance that belongs to a security group that has a rule
         that references the security group identified by `security_group_id`.
-        It is the responsiblity of this method to make sure any rules
+        It is the responsibility of this method to make sure any rules
         that authorize traffic flow with members of the security group are
         updated and any new members can communicate, and any removed members
         cannot.

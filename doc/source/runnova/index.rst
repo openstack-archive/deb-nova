@@ -23,7 +23,7 @@ This guide describes the basics of running and managing Nova. This site is inten
 Running the Cloud
 -----------------
 
-The fastest way to get a test cloud running is by following the directions in the :doc:`../quickstart`. It relies on a nova.sh script to run on a single machine.
+The fastest way to get a test cloud running is by following the directions in the :doc:`../quickstart`.
 
 Nova's cloud works via the interaction of a series of daemon processes that reside persistently on the host machine(s).  Fortunately, the :doc:`../quickstart` process launches sample versions of all these daemons for you. Once you are familiar with basic Nova usage, you can learn more about daemons by reading :doc:`../service.architecture` and :doc:`binaries`.
 
@@ -38,7 +38,7 @@ There are two main tools that a system administrator will find useful to manage 
    nova.manage
    euca2ools
 
-The nova-manage command may only be run by users with admin priviledges.  Commands for euca2ools can be used by all users, though specific commands may be restricted by Role Based Access Control.  You can read more about creating and managing users in :doc:`managing.users`
+The nova-manage command may only be run by users with admin privileges.  Commands for euca2ools can be used by all users, though specific commands may be restricted by Role Based Access Control.  You can read more about creating and managing users in :doc:`managing.users`
 
 User and Resource Management
 ----------------------------

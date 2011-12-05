@@ -19,7 +19,6 @@
 
 import copy
 import datetime
-import random
 
 from nova import exception
 from nova import flags
@@ -110,17 +109,54 @@ class _FakeImageService(object):
                  'is_public': True,
                  'container_format': 'ami',
                  'disk_format': 'ami',
+                 'properties': {'kernel_id':
+                                    '155d900f-4e14-4e4c-a73d-069cbf4541e6',
+                                'ramdisk_id': None}}
+
+        # NOTE(sirp): was image '6'
+        image6 = {'id': 'a440c04b-79fa-479c-bed1-0b816eaec379',
+                 'name': 'fakeimage6',
+                 'created_at': timestamp,
+                 'updated_at': timestamp,
+                 'deleted_at': None,
+                 'deleted': False,
+                 'status': 'active',
+                 'is_public': False,
+                 'container_format': 'ova',
+                 'disk_format': 'vhd',
                  'properties': {'kernel_id': FLAGS.null_kernel,
-                                'ramdisk_id': FLAGS.null_kernel}}
+                                'ramdisk_id': FLAGS.null_kernel,
+                                'architecture': 'x86_64',
+                                'auto_disk_config': 'False'}}
+
+        # NOTE(sirp): was image '7'
+        image7 = {'id': '70a599e0-31e7-49b7-b260-868f441e862b',
+                 'name': 'fakeimage7',
+                 'created_at': timestamp,
+                 'updated_at': timestamp,
+                 'deleted_at': None,
+                 'deleted': False,
+                 'status': 'active',
+                 'is_public': False,
+                 'container_format': 'ova',
+                 'disk_format': 'vhd',
+                 'properties': {'kernel_id': FLAGS.null_kernel,
+                                'ramdisk_id': FLAGS.null_kernel,
+                                'architecture': 'x86_64',
+                                'auto_disk_config': 'True'}}
 
         self.create(None, image1)
         self.create(None, image2)
         self.create(None, image3)
         self.create(None, image4)
         self.create(None, image5)
+        self.create(None, image6)
+        self.create(None, image7)
+        self._imagedata = {}
         super(_FakeImageService, self).__init__()
 
-    def index(self, context, filters=None, marker=None, limit=None):
+    #TODO(bcwaldon): implement optional kwargs such as limit, sort_dir
+    def index(self, context, **kwargs):
         """Returns list of images."""
         retval = []
         for img in self.images.values():
@@ -128,9 +164,15 @@ class _FakeImageService(object):
                                                   if k in ['id', 'name']])]
         return retval
 
-    def detail(self, context, filters=None, marker=None, limit=None):
+    #TODO(bcwaldon): implement optional kwargs such as limit, sort_dir
+    def detail(self, context, **kwargs):
         """Return list of detailed image information."""
         return copy.deepcopy(self.images.values())
+
+    def get(self, context, image_id, data):
+        metadata = self.show(context, image_id)
+        data.write(self._imagedata.get(image_id, ''))
+        return metadata
 
     def show(self, context, image_id):
         """Get data about specified image.
@@ -164,6 +206,8 @@ class _FakeImageService(object):
         if image_id in self.images:
             raise exception.Duplicate()
         self.images[image_id] = copy.deepcopy(metadata)
+        if data:
+            self._imagedata[image_id] = data.read()
         return self.images[image_id]
 
     def update(self, context, image_id, metadata, data=None):

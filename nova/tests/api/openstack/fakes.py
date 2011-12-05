@@ -15,28 +15,33 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
+
 import webob
 import webob.dec
 import webob.request
 
 from glance import client as glance_client
 
-from nova import context
-from nova import exception as exc
-from nova import utils
-from nova import wsgi
-import nova.api.openstack.auth
-from nova.api import openstack
+import nova.api.openstack.v2.auth
 from nova.api import auth as api_auth
-from nova.api.openstack import auth
-from nova.api.openstack import extensions
-from nova.api.openstack import limits
-from nova.api.openstack import urlmap
-from nova.api.openstack import versions
+from nova.api.openstack import v2
+from nova.api.openstack.v2 import auth
+from nova.api.openstack.v2 import extensions
+from nova.api.openstack.v2 import limits
+from nova.api.openstack.v2 import urlmap
+from nova.api.openstack.v2 import versions
 from nova.api.openstack import wsgi as os_wsgi
 from nova.auth.manager import User, Project
+from nova.compute import instance_types
+from nova.compute import vm_states
+from nova import context
+from nova.db.sqlalchemy import models
+from nova import exception as exc
 import nova.image.fake
 from nova.tests.glance import stubs as glance_stubs
+from nova import utils
+from nova import wsgi
 
 
 class Context(object):
@@ -67,35 +72,36 @@ def fake_wsgi(self, req):
     return self.application
 
 
-def wsgi_app(inner_app11=None, fake_auth=True, fake_auth_context=None,
+def wsgi_app(inner_app_v2=None, fake_auth=True, fake_auth_context=None,
         serialization=os_wsgi.LazySerializationMiddleware,
         use_no_auth=False):
-    if not inner_app11:
-        inner_app11 = openstack.APIRouter()
+    if not inner_app_v2:
+        inner_app_v2 = v2.APIRouter()
 
     if fake_auth:
         if fake_auth_context is not None:
             ctxt = fake_auth_context
         else:
             ctxt = context.RequestContext('fake', 'fake', auth_token=True)
-        api11 = openstack.FaultWrapper(api_auth.InjectContext(ctxt,
+        api_v2 = v2.FaultWrapper(api_auth.InjectContext(ctxt,
               limits.RateLimitingMiddleware(
                   serialization(
-                      extensions.ExtensionMiddleware(inner_app11)))))
+                      extensions.ExtensionMiddleware(inner_app_v2)))))
     elif use_no_auth:
-        api11 = openstack.FaultWrapper(auth.NoAuthMiddleware(
+        api_v2 = v2.FaultWrapper(auth.NoAuthMiddleware(
               limits.RateLimitingMiddleware(
                   serialization(
-                      extensions.ExtensionMiddleware(inner_app11)))))
+                      extensions.ExtensionMiddleware(inner_app_v2)))))
     else:
-        api11 = openstack.FaultWrapper(auth.AuthMiddleware(
+        api_v2 = v2.FaultWrapper(auth.AuthMiddleware(
               limits.RateLimitingMiddleware(
                   serialization(
-                      extensions.ExtensionMiddleware(inner_app11)))))
-        Auth = auth
+                      extensions.ExtensionMiddleware(inner_app_v2)))))
+
     mapper = urlmap.URLMap()
-    mapper['/v1.1'] = api11
-    mapper['/'] = openstack.FaultWrapper(versions.Versions())
+    mapper['/v2'] = api_v2
+    mapper['/v1.1'] = api_v2
+    mapper['/'] = v2.FaultWrapper(versions.Versions())
     return mapper
 
 
@@ -131,9 +137,9 @@ def stub_out_auth(stubs):
     def fake_auth_init(self, app):
         self.application = app
 
-    stubs.Set(nova.api.openstack.auth.AuthMiddleware,
+    stubs.Set(nova.api.openstack.v2.auth.AuthMiddleware,
         '__init__', fake_auth_init)
-    stubs.Set(nova.api.openstack.auth.AuthMiddleware,
+    stubs.Set(nova.api.openstack.v2.auth.AuthMiddleware,
         '__call__', fake_wsgi)
 
 
@@ -142,10 +148,10 @@ def stub_out_rate_limiting(stubs):
         super(limits.RateLimitingMiddleware, self).__init__(app)
         self.application = app
 
-    stubs.Set(nova.api.openstack.limits.RateLimitingMiddleware,
+    stubs.Set(nova.api.openstack.v2.limits.RateLimitingMiddleware,
         '__init__', fake_rate_init)
 
-    stubs.Set(nova.api.openstack.limits.RateLimitingMiddleware,
+    stubs.Set(nova.api.openstack.v2.limits.RateLimitingMiddleware,
         '__call__', fake_wsgi)
 
 
@@ -162,11 +168,10 @@ class stub_out_compute_api_snapshot(object):
         self.extra_props_last_call = None
         stubs.Set(nova.compute.API, 'snapshot', self.snapshot)
 
-    def snapshot(self, context, instance_id, name, extra_properties=None):
+    def snapshot(self, context, instance, name, extra_properties=None):
         self.extra_props_last_call = extra_properties
-        props = dict(instance_id=instance_id, instance_ref=instance_id)
-        props.update(extra_properties or {})
-        return dict(id='123', status='ACTIVE', name=name, properties=props)
+        return dict(id='123', status='ACTIVE', name=name,
+                    properties=extra_properties)
 
 
 class stub_out_compute_api_backup(object):
@@ -176,11 +181,11 @@ class stub_out_compute_api_backup(object):
         self.extra_props_last_call = None
         stubs.Set(nova.compute.API, 'backup', self.backup)
 
-    def backup(self, context, instance_id, name, backup_type, rotation,
+    def backup(self, context, instance, name, backup_type, rotation,
                extra_properties=None):
         self.extra_props_last_call = extra_properties
-        props = dict(instance_id=instance_id, instance_ref=instance_id,
-                     backup_type=backup_type, rotation=rotation)
+        props = dict(backup_type=backup_type,
+                     rotation=rotation)
         props.update(extra_properties or {})
         return dict(id='123', status='ACTIVE', name=name, properties=props)
 
@@ -244,7 +249,7 @@ def _make_image_fixtures():
 
     # Snapshot for User 1
     uuid = 'aa640691-d1a7-4a67-9d3c-d35ee6b3cc74'
-    server_ref = 'http://localhost/v1.1/servers/' + uuid
+    server_ref = 'http://localhost/v2/servers/' + uuid
     snapshot_properties = {'instance_ref': server_ref, 'user_id': 'fake'}
     for status in ('queued', 'saving', 'active', 'killed',
                    'deleted', 'pending_delete'):
@@ -305,7 +310,7 @@ class HTTPRequest(webob.Request):
 
     @classmethod
     def blank(cls, *args, **kwargs):
-        kwargs['base_url'] = 'http://localhost/v1.1'
+        kwargs['base_url'] = 'http://localhost/v2'
         use_admin_context = kwargs.pop('use_admin_context', False)
         out = webob.Request.blank(*args, **kwargs)
         out.environ['nova.context'] = FakeRequestContext('fake_user', 'fake',
@@ -447,3 +452,114 @@ class FakeRateLimiter(object):
     @webob.dec.wsgify
     def __call__(self, req):
         return self.application
+
+
+FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+
+
+def create_fixed_ips(project_id, publics, privates, publics_are_floating):
+    if publics is None:
+        publics = []
+    if privates is None:
+        privates = []
+
+    fixed_ips = []
+    private_vif = dict(address='aa:bb:cc:dd:ee:ff')
+    private_net = dict(label='private', project_id=project_id, cidr_v6=None)
+
+    for private in privates:
+        entry = dict(address=private, network=private_net,
+                virtual_interface=private_vif, floating_ips=[])
+        if publics_are_floating:
+            for public in publics:
+                entry['floating_ips'].append(dict(address=public))
+            # Only add them once
+            publics = []
+        fixed_ips.append(entry)
+
+    if not publics_are_floating:
+        public_vif = dict(address='ff:ee:dd:cc:bb:aa')
+        public_net = dict(label='public', project_id=project_id,
+                cidr_v6='b33f::/64')
+        for public in publics:
+            entry = dict(address=public, network=public_net,
+                    virtual_interface=public_vif, floating_ips=[])
+            fixed_ips.append(entry)
+    return fixed_ips
+
+
+def stub_instance(id, user_id='fake', project_id='fake', host=None,
+                  vm_state=None, task_state=None,
+                  reservation_id="", uuid=FAKE_UUID, image_ref="10",
+                  flavor_id="1", name=None, key_name='',
+                  access_ipv4=None, access_ipv6=None, progress=0,
+                  auto_disk_config=False, public_ips=None, private_ips=None,
+                  public_ips_are_floating=False, display_name=None,
+                  include_fake_metadata=True,
+                  power_state=None):
+
+    if include_fake_metadata:
+        metadata = [models.InstanceMetadata(key='seq', value=id)]
+    else:
+        metadata = []
+
+    inst_type = instance_types.get_instance_type_by_flavor_id(int(flavor_id))
+
+    if host is not None:
+        host = str(host)
+
+    if key_name:
+        key_data = 'FAKE'
+    else:
+        key_data = ''
+
+    fixed_ips = create_fixed_ips(project_id, public_ips, private_ips,
+                                 public_ips_are_floating)
+
+    # ReservationID isn't sent back, hack it in there.
+    server_name = name or "server%s" % id
+    if reservation_id != "":
+        server_name = "reservation_%s" % (reservation_id, )
+
+    instance = {
+        "id": int(id),
+        "created_at": datetime.datetime(2010, 10, 10, 12, 0, 0),
+        "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
+        "admin_pass": "",
+        "user_id": user_id,
+        "project_id": project_id,
+        "image_ref": image_ref,
+        "kernel_id": "",
+        "ramdisk_id": "",
+        "launch_index": 0,
+        "key_name": key_name,
+        "key_data": key_data,
+        "vm_state": vm_state or vm_states.BUILDING,
+        "task_state": task_state,
+        "power_state": power_state,
+        "memory_mb": 0,
+        "vcpus": 0,
+        "local_gb": 0,
+        "hostname": "",
+        "host": host,
+        "instance_type": dict(inst_type),
+        "user_data": "",
+        "reservation_id": reservation_id,
+        "mac_address": "",
+        "scheduled_at": utils.utcnow(),
+        "launched_at": utils.utcnow(),
+        "terminated_at": utils.utcnow(),
+        "availability_zone": "",
+        "display_name": display_name or server_name,
+        "display_description": "",
+        "locked": False,
+        "metadata": metadata,
+        "access_ip_v4": access_ipv4,
+        "access_ip_v6": access_ipv6,
+        "uuid": uuid,
+        "progress": progress,
+        "auto_disk_config": auto_disk_config,
+        "name": "instance-%s" % id,
+        "fixed_ips": fixed_ips}
+
+    return instance
