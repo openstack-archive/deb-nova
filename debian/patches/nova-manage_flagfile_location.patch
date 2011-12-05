@@ -1,6 +1,6 @@
 --- a/bin/nova-manage
 +++ b/bin/nova-manage
-@@ -2274,7 +2274,11 @@
+@@ -2275,7 +2275,11 @@
  
  def main():
      """Parse options and call the appropriate class/method."""
