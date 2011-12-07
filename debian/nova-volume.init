@@ -49,9 +49,9 @@ do_start()
 		DAEMON_ARGS="${DAEMON_ARGS} --volume_group=${nova_volume_group}"
 	fi
 
-	start-stop-daemon --start --quiet --background --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
+	start-stop-daemon --start --quiet --background --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --startas $DAEMON --test > /dev/null \
 		|| return 1
-	start-stop-daemon --start --quiet --background --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --exec $DAEMON -- \
+	start-stop-daemon --start --quiet --background --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --startas $DAEMON -- \
 		$DAEMON_ARGS \
 		|| return 2
 }

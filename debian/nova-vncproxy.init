@@ -35,9 +35,9 @@ chown ${NOVA_USER} ${LOCK_DIR}
 
 do_start()
 {
-	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
+	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --startas $DAEMON --test > /dev/null \
 		|| return 1
-	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --exec $DAEMON -- \
+	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --startas $DAEMON -- \
 		$DAEMON_ARGS \
 		|| return 2
 }
