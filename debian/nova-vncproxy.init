@@ -14,8 +14,8 @@
 # PATH should only include /usr/* if it runs after the mountnfs.sh script
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute VNC Proxy"
-NAME=nova-vnc-proxy
-DAEMON=/usr/bin/nova-vnc-proxy
+NAME=nova-vncproxy
+DAEMON=/usr/bin/nova-vncproxy
 DAEMON_ARGS="--flagfile=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
