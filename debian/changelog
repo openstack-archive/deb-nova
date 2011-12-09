@@ -1,3 +1,10 @@
+nova (2012.1~e1+git332-gaa7ca15-1) experimental; urgency=low
+
+  [ Ghe Rivero ]
+  * New snapshot release
+
+ -- Ghe Rivero <ghe@debian.org>  Fri, 09 Dec 2011 14:49:10 +0100
+
 nova (2012.1~e1+git256-g022295e) experimental; urgency=low
 
   * New snapshot release
