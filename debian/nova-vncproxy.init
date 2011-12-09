@@ -35,9 +35,9 @@ chown ${NOVA_USER} ${LOCK_DIR}
 
 do_start()
 {
-	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
+	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --startas $DAEMON --test > /dev/null \
 		|| return 1
-	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --exec $DAEMON -- \
+	start-stop-daemon --start --chuid ${NOVA_USER}:nova --quiet --make-pidfile --pidfile $PIDFILE --startas $DAEMON -- \
 		$DAEMON_ARGS \
 		|| return 2
 }
@@ -47,7 +47,7 @@ do_stop()
 	start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE --name $NAME
 	RETVAL="$?"
 	[ "$RETVAL" = 2 ] && return 2
-	start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --exec $DAEMON
+	start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --name $NAME
 	[ "$?" = 2 ] && return 2
 	rm -f $PIDFILE
 	return "$RETVAL"
