@@ -12,7 +12,6 @@ override_dh_auto_clean:
 	rm -rf tests.sqlite clean.sqlite run_tests.log
 	rm -rf CA
 	rm -rf nova.egg-info
-	rm -f po/nova.pot
 
 override_dh_auto_build:
 	dh_auto_build
