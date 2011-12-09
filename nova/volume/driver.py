@@ -47,6 +47,8 @@ flags.DEFINE_string('iscsi_target_prefix', 'iqn.2010-10.org.openstack:',
                     'prefix for iscsi volumes')
 flags.DEFINE_string('iscsi_ip_address', '$my_ip',
                     'use this ip for iscsi')
+flags.DEFINE_integer('iscsi_port', 3260,
+                     'The port that the iSCSI daemon is listening on')
 flags.DEFINE_string('rbd_pool', 'rbd',
                     'the rbd pool in which volumes are stored')
 
@@ -278,6 +280,11 @@ class ISCSIDriver(VolumeDriver):
 
         self.tgtadm.new_target(iscsi_name, iscsi_target)
         self.tgtadm.new_logicalunit(iscsi_target, 0, volume_path)
+
+        model_update = {}
+        model_update['provider_location'] = _iscsi_location(
+            FLAGS.iscsi_ip_address, iscsi_target, iscsi_name)
+        return model_update
 
     def remove_export(self, context, volume):
         """Removes an export for a logical volume."""
@@ -530,8 +537,11 @@ class SheepdogDriver(VolumeDriver):
     def check_for_setup_error(self):
         """Returns an error if prerequisites aren't met"""
         try:
+            #NOTE(francois-charlier) Since 0.24 'collie cluster info -r'
+            #  gives short output, but for compatibility reason we won't
+            #  use it and just check if 'running' is in the output.
             (out, err) = self._execute('collie', 'cluster', 'info')
-            if not out.startswith('running'):
+            if not 'running' in out.split():
                 raise exception.Error(_("Sheepdog is not working: %s") % out)
         except exception.ProcessExecutionError:
             raise exception.Error(_("Sheepdog is not working"))
@@ -923,12 +933,10 @@ class ZadaraBEDriver(ISCSIDriver):
 
         sn_ip = response_node.findtext("SnIp")
         sn_iqn = response_node.findtext("IqnName")
-        iscsi_portal = sn_ip + ":3260," + ("%s" % iscsi_target)
 
         model_update = {}
-        model_update['provider_location'] = ("%s %s" %
-                                             (iscsi_portal,
-                                              sn_iqn))
+        model_update['provider_location'] = _iscsi_location(
+            sn_ip, iscsi_target, sn_iqn)
         return model_update
 
     def _get_qosgroup_summary(self):
@@ -977,3 +985,7 @@ class ZadaraBEDriver(ISCSIDriver):
 
         drive_info = self._get_qosgroup_summary()
         return {'drive_qos_info': drive_info}
+
+
+def _iscsi_location(ip, target, iqn):
+    return "%s:%s,%s %s" % (ip, FLAGS.iscsi_port, target, iqn)

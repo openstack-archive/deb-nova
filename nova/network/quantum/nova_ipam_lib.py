@@ -97,6 +97,17 @@ class QuantumNovaIPAMLib(object):
                                            network['uuid'],
                                            require_disassociated=False)
 
+    def get_global_networks(self, admin_context):
+        return db.project_get_networks(admin_context, None, False)
+
+    def get_project_networks(self, admin_context):
+        try:
+            nets = db.network_get_all(admin_context.elevated())
+        except exception.NoNetworksFound:
+            return []
+        # only return networks with a project_id set
+        return [net for net in nets if net['project_id']]
+
     def get_project_and_global_net_ids(self, context, project_id):
         """Fetches all networks associated with this project, or
            that are "global" (i.e., have no project set).
@@ -104,7 +115,7 @@ class QuantumNovaIPAMLib(object):
         """
         admin_context = context.elevated()
         networks = db.project_get_networks(admin_context, project_id, False)
-        networks.extend(db.project_get_networks(admin_context, None, False))
+        networks.extend(self.get_global_networks(admin_context))
         id_priority_map = {}
         net_list = []
         for n in networks:

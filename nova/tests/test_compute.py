@@ -222,7 +222,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEqual(instance['deleted_at'], None)
         terminate = utils.utcnow()
         self.compute.terminate_instance(self.context, instance['uuid'])
-        context = self.context.elevated(True)
+        context = self.context.elevated(read_deleted="only")
         instance = db.instance_get_by_uuid(context, instance['uuid'])
         self.assert_(instance['launched_at'] < terminate)
         self.assert_(instance['deleted_at'] > terminate)
@@ -674,7 +674,7 @@ class ComputeTestCase(BaseTestCase):
         instance_uuid = instance['uuid']
         self.compute.run_instance(self.context, instance_uuid)
 
-        non_admin_context = context.RequestContext(None, None, False, False)
+        non_admin_context = context.RequestContext(None, None, is_admin=False)
 
         # decorator should return False (fail) with locked nonadmin context
         self.compute.lock_instance(self.context, instance_uuid)
@@ -711,6 +711,31 @@ class ComputeTestCase(BaseTestCase):
             # fail to actually error out so we don't obscure anything
             self.fail()
 
+        self.compute.terminate_instance(self.context, instance['uuid'])
+
+    def test_finish_resize_handles_error(self):
+        """Make sure we don't leave the instance in RESIZE on error"""
+
+        def throw_up(*args, **kwargs):
+            raise Exception()
+
+        def fake(*args, **kwargs):
+            pass
+
+        self.stubs.Set(self.compute.driver, 'finish_migration', throw_up)
+        self.stubs.Set(self.compute.network_api, 'get_instance_nw_info', fake)
+        context = self.context.elevated()
+        instance = self._create_fake_instance()
+        self.compute.prep_resize(context, instance['uuid'], 1)
+        migration_ref = db.migration_get_by_instance_and_status(context,
+                instance['uuid'], 'pre-migrating')
+
+        self.assertRaises(Exception, self.compute.finish_resize,
+                          context, instance['uuid'],
+                          int(migration_ref['id']), {})
+
+        instance = db.instance_get_by_uuid(context, instance['uuid'])
+        self.assertEqual(instance['vm_state'], vm_states.ERROR)
         self.compute.terminate_instance(self.context, instance['uuid'])
 
     def test_resize_instance_notification(self):
@@ -813,6 +838,7 @@ class ComputeTestCase(BaseTestCase):
         instance_type_ref = db.instance_type_get(context,
                 inst_ref['instance_type_id'])
         self.assertEqual(instance_type_ref['flavorid'], '1')
+        self.assertEqual(inst_ref['host'], migration_ref['source_compute'])
 
         self.compute.terminate_instance(context, inst_ref['uuid'])
 
@@ -831,9 +857,9 @@ class ComputeTestCase(BaseTestCase):
         self.compute.terminate_instance(self.context, instance['uuid'])
 
     def test_resize_instance_handles_migration_error(self):
-        """Ensure vm_state is ERROR when MigrationError occurs"""
+        """Ensure vm_state is ERROR when error occurs"""
         def raise_migration_failure(*args):
-            raise exception.MigrationError(reason='test failure')
+            raise Exception(reason='test failure')
         self.stubs.Set(self.compute.driver,
                 'migrate_disk_and_power_off',
                 raise_migration_failure)
@@ -846,9 +872,8 @@ class ComputeTestCase(BaseTestCase):
         self.compute.prep_resize(context, inst_ref['uuid'], 1)
         migration_ref = db.migration_get_by_instance_and_status(context,
                 inst_ref['uuid'], 'pre-migrating')
-        self.compute.resize_instance(context,
-                                     inst_ref['uuid'],
-                                     migration_ref['id'])
+        self.assertRaises(Exception, self.compute.resize_instance,
+                          context, inst_ref['uuid'], migration_ref['id'])
         inst_ref = db.instance_get_by_uuid(context, inst_ref['uuid'])
         self.assertEqual(inst_ref['vm_state'], vm_states.ERROR)
         self.compute.terminate_instance(context, inst_ref['uuid'])
@@ -1030,8 +1055,8 @@ class ComputeTestCase(BaseTestCase):
         self.compute.driver.test_remove_vm(instance_name)
 
         # Force the compute manager to do its periodic poll
-        error_list = self.compute.periodic_tasks(context.get_admin_context())
-        self.assertFalse(error_list)
+        ctxt = context.get_admin_context()
+        self.compute.periodic_tasks(ctxt, raise_on_error=True)
 
         instances = db.instance_get_all(context.get_admin_context())
         LOG.info(_("After force-killing instances: %s"), instances)
@@ -1206,8 +1231,9 @@ class ComputeAPITestCase(BaseTestCase):
 
         try:
             db.security_group_destroy(self.context, group['id'])
-            group = db.security_group_get(context.get_admin_context(
-                                          read_deleted=True), group['id'])
+            admin_deleted_context = context.get_admin_context(
+                    read_deleted="only")
+            group = db.security_group_get(admin_deleted_context, group['id'])
             self.assert_(len(group.instances) == 0)
         finally:
             db.instance_destroy(self.context, ref[0]['id'])
@@ -1480,13 +1506,32 @@ class ComputeAPITestCase(BaseTestCase):
     def test_snapshot(self):
         """Can't backup an instance which is already being backed up."""
         instance = self._create_fake_instance()
-        self.compute_api.snapshot(self.context, instance, None, None)
+        image = self.compute_api.snapshot(self.context, instance, 'snap1',
+                                        {'extra_param': 'value1'})
+
+        self.assertEqual(image['name'], 'snap1')
+        properties = image['properties']
+        self.assertTrue('backup_type' not in properties)
+        self.assertEqual(properties['image_type'], 'snapshot')
+        self.assertEqual(properties['instance_uuid'], instance['uuid'])
+        self.assertEqual(properties['extra_param'], 'value1')
+
         db.instance_destroy(self.context, instance['id'])
 
     def test_backup(self):
         """Can't backup an instance which is already being backed up."""
         instance = self._create_fake_instance()
-        self.compute_api.backup(self.context, instance, None, None, None)
+        image = self.compute_api.backup(self.context, instance,
+                                        'backup1', 'DAILY', None,
+                                        {'extra_param': 'value1'})
+
+        self.assertEqual(image['name'], 'backup1')
+        properties = image['properties']
+        self.assertEqual(properties['backup_type'], 'DAILY')
+        self.assertEqual(properties['image_type'], 'backup')
+        self.assertEqual(properties['instance_uuid'], instance['uuid'])
+        self.assertEqual(properties['extra_param'], 'value1')
+
         db.instance_destroy(self.context, instance['id'])
 
     def test_backup_conflict(self):
@@ -1568,23 +1613,6 @@ class ComputeAPITestCase(BaseTestCase):
 
         self.compute.terminate_instance(context, instance['uuid'])
 
-    def test_resize_down_fails(self):
-        """Ensure resizing down raises and fails"""
-        instance = self._create_fake_instance()
-        context = self.context.elevated()
-        instance = db.instance_get_by_uuid(context, instance['uuid'])
-        self.compute.run_instance(self.context, instance['uuid'])
-
-        inst_type = instance_types.get_instance_type_by_name('m1.xlarge')
-        db.instance_update(self.context, instance['uuid'],
-                {'instance_type_id': inst_type['id']})
-
-        instance = db.instance_get_by_uuid(context, instance['uuid'])
-        self.assertRaises(exception.CannotResizeToSmallerSize,
-                          self.compute_api.resize, context, instance, 1)
-
-        self.compute.terminate_instance(context, instance['uuid'])
-
     def test_resize_same_size_fails(self):
         """Ensure invalid flavors raise"""
         context = self.context.elevated()
@@ -1643,6 +1671,57 @@ class ComputeAPITestCase(BaseTestCase):
             self.compute_api.resize(context, instance, None)
         finally:
             self.compute.terminate_instance(context, instance['uuid'])
+
+    def test_associate_floating_ip(self):
+        """Ensure we can associate a floating ip with an instance"""
+        called = {'associate': False}
+
+        def fake_associate_ip_network_api(self, ctxt, floating_address,
+                                          fixed_address):
+            called['associate'] = True
+
+        nw_info = fake_network.fake_get_instance_nw_info(self.stubs, 1)
+
+        def fake_get_nw_info(self, ctxt, instance):
+            return nw_info
+
+        self.stubs.Set(nova.network.API, 'associate_floating_ip',
+                       fake_associate_ip_network_api)
+
+        self.stubs.Set(nova.network.API, 'get_instance_nw_info',
+                       fake_get_nw_info)
+
+        instance = self._create_fake_instance()
+        instance_uuid = instance['uuid']
+        address = '0.1.2.3'
+
+        self.compute.run_instance(self.context, instance_uuid)
+        self.compute_api.associate_floating_ip(self.context,
+                                               instance,
+                                               address)
+        self.assertTrue(called['associate'])
+        self.compute.terminate_instance(self.context, instance_uuid)
+
+    def test_associate_floating_ip_no_fixed_ip(self):
+        """Should fail if instance has no fixed ip."""
+
+        def fake_get_nw_info(self, ctxt, instance):
+            return []
+
+        self.stubs.Set(nova.network.API, 'get_instance_nw_info',
+                       fake_get_nw_info)
+
+        instance = self._create_fake_instance()
+        instance_uuid = instance['uuid']
+        address = '0.1.2.3'
+
+        self.compute.run_instance(self.context, instance_uuid)
+        self.assertRaises(exception.ApiError,
+                          self.compute_api.associate_floating_ip,
+                          self.context,
+                          instance,
+                          address)
+        self.compute.terminate_instance(self.context, instance_uuid)
 
     def test_get(self):
         """Test get instance"""

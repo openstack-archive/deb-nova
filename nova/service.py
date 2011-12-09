@@ -252,13 +252,16 @@ class Service(object):
             except Exception:
                 pass
 
-    def periodic_tasks(self):
+    def periodic_tasks(self, raise_on_error=False):
         """Tasks to be run at a periodic interval."""
-        self.manager.periodic_tasks(context.get_admin_context())
+        ctxt = context.get_admin_context()
+        self.manager.periodic_tasks(ctxt, raise_on_error=raise_on_error)
 
     def report_state(self):
         """Update the state of this service in the datastore."""
         ctxt = context.get_admin_context()
+        zone = FLAGS.node_availability_zone
+        state_catalog = {}
         try:
             try:
                 service_ref = db.service_get(ctxt, self.service_id)
@@ -268,9 +271,12 @@ class Service(object):
                 self._create_service_ref(ctxt)
                 service_ref = db.service_get(ctxt, self.service_id)
 
+            state_catalog['report_count'] = service_ref['report_count'] + 1
+            if zone != service_ref['availability_zone']:
+                state_catalog['availability_zone'] = zone
+
             db.service_update(ctxt,
-                             self.service_id,
-                             {'report_count': service_ref['report_count'] + 1})
+                             self.service_id, state_catalog)
 
             # TODO(termie): make this pattern be more elegant.
             if getattr(self, 'model_disconnected', False):

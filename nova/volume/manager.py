@@ -260,7 +260,7 @@ class VolumeManager(manager.SchedulerDependentManager):
         driver_volume_type: a string to identify the type of volume.  This
                            can be used by the calling code to determine the
                            strategy for connecting to the volume. This could
-                           be 'iscsi', 'rdb', 'sheepdog', etc.
+                           be 'iscsi', 'rbd', 'sheepdog', etc.
         data: this is the data that the calling code will use to connect
               to the volume. Keep in mind that this will be serialized to
               json in various places, so it should not contain any non-json
@@ -279,21 +279,6 @@ class VolumeManager(manager.SchedulerDependentManager):
         for volume in instance_ref['volumes']:
             self.driver.check_for_export(context, volume['id'])
 
-    def periodic_tasks(self, context=None):
-        """Tasks to be run at a periodic interval."""
-
-        error_list = []
-        try:
-            self._report_driver_status()
-        except Exception as ex:
-            LOG.warning(_("Error during report_driver_status(): %s"),
-                        unicode(ex))
-            error_list.append(ex)
-
-        super(VolumeManager, self).periodic_tasks(context)
-
-        return error_list
-
     def _volume_stats_changed(self, stat1, stat2):
         if FLAGS.volume_force_update_capabilities:
             return True
@@ -304,7 +289,8 @@ class VolumeManager(manager.SchedulerDependentManager):
                 return True
         return False
 
-    def _report_driver_status(self):
+    @manager.periodic_task
+    def _report_driver_status(self, context):
         volume_stats = self.driver.get_volume_stats(refresh=True)
         if volume_stats:
             LOG.info(_("Checking volume capabilities"))

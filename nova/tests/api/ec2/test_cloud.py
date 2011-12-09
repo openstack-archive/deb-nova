@@ -106,7 +106,7 @@ class CloudTestCase(test.TestCase):
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id,
                                               self.project_id,
-                                              True)
+                                              is_admin=True)
 
         def fake_show(meh, context, id):
             return {'id': id,
@@ -1379,6 +1379,35 @@ class CloudTestCase(test.TestCase):
         else:
             self.compute = self.start_service('compute')
 
+    def test_rescue_instances(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        result = self.cloud.stop_instances(self.context, [instance_id])
+        self.assertTrue(result)
+
+        result = self.cloud.rescue_instance(self.context, instance_id)
+        self.assertTrue(result)
+
+        result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertTrue(result)
+        self._restart_compute_service()
+
+    def test_unrescue_instances(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        result = self.cloud.unrescue_instance(self.context, instance_id)
+        self.assertTrue(result)
+
+        result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertTrue(result)
+        self._restart_compute_service()
+
     def test_stop_start_instance(self):
         """Makes sure stop/start instance works"""
         # enforce periodic tasks run in short time to avoid wait for 60s.
@@ -1535,12 +1564,12 @@ class CloudTestCase(test.TestCase):
 
         self.cloud.terminate_instances(self.context, [ec2_instance_id])
 
-        admin_ctxt = context.get_admin_context(read_deleted=False)
+        admin_ctxt = context.get_admin_context(read_deleted="no")
         vol = db.volume_get(admin_ctxt, vol1['id'])
         self.assertFalse(vol['deleted'])
         db.volume_destroy(self.context, vol1['id'])
 
-        admin_ctxt = context.get_admin_context(read_deleted=True)
+        admin_ctxt = context.get_admin_context(read_deleted="only")
         vol = db.volume_get(admin_ctxt, vol2['id'])
         self.assertTrue(vol['deleted'])
 
@@ -1660,13 +1689,13 @@ class CloudTestCase(test.TestCase):
 
         self.cloud.terminate_instances(self.context, [ec2_instance_id])
 
-        admin_ctxt = context.get_admin_context(read_deleted=False)
+        admin_ctxt = context.get_admin_context(read_deleted="no")
         vol = db.volume_get(admin_ctxt, vol1_id)
         self._assert_volume_detached(vol)
         self.assertFalse(vol['deleted'])
         db.volume_destroy(self.context, vol1_id)
 
-        admin_ctxt = context.get_admin_context(read_deleted=True)
+        admin_ctxt = context.get_admin_context(read_deleted="only")
         vol = db.volume_get(admin_ctxt, vol2_id)
         self.assertTrue(vol['deleted'])
 

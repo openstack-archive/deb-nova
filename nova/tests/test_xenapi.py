@@ -803,17 +803,20 @@ class XenAPIMigrateInstance(test.TestCase):
                               product_version=(6, 0, 0))
         stubs.stubout_loopingcall_start(self.stubs)
         conn = xenapi_conn.get_connection(False)
-        conn._vmops.resize_instance(instance, '')
+        conn._vmops._resize_instance(instance, '')
         self.assertEqual(called['resize'], True)
 
     def test_migrate_disk_and_power_off(self):
         instance = db.instance_create(self.context, self.instance_values)
+        instance_type = db.instance_type_get_by_name(self.context, 'm1.large')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForMigrationTests)
         conn = xenapi_conn.get_connection(False)
-        conn.migrate_disk_and_power_off(self.context, instance, '127.0.0.1')
+        conn.migrate_disk_and_power_off(self.context, instance,
+                                        '127.0.0.1', instance_type)
 
     def test_migrate_disk_and_power_off_passes_exceptions(self):
         instance = db.instance_create(self.context, self.instance_values)
+        instance_type = db.instance_type_get_by_name(self.context, 'm1.large')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForMigrationTests)
 
         def fake_raise(*args, **kwargs):
@@ -823,7 +826,7 @@ class XenAPIMigrateInstance(test.TestCase):
         conn = xenapi_conn.get_connection(False)
         self.assertRaises(exception.MigrationError,
                           conn.migrate_disk_and_power_off,
-                          self.context, instance, '127.0.0.1')
+                          self.context, instance, '127.0.0.1', instance_type)
 
     def test_revert_migrate(self):
         instance = db.instance_create(self.context, self.instance_values)
@@ -1107,13 +1110,15 @@ class HostStateTestCase(test.TestCase):
     """Tests HostState, which holds metrics from XenServer that get
     reported back to the Schedulers."""
 
-    def _fake_safe_find_sr(self, session):
+    @classmethod
+    def _fake_safe_find_sr(cls, session):
         """None SR ref since we're ignoring it in FakeSR."""
         return None
 
     def test_host_state(self):
         self.stubs = stubout.StubOutForTesting()
-        self.stubs.Set(vm_utils, 'safe_find_sr', self._fake_safe_find_sr)
+        self.stubs.Set(vm_utils.VMHelper, 'safe_find_sr',
+                       self._fake_safe_find_sr)
         host_state = xenapi_conn.HostState(FakeSession())
         stats = host_state._stats
         self.assertEquals(stats['disk_total'], 10000)
@@ -1163,12 +1168,10 @@ class XenAPIAutoDiskConfigTestCase(test.TestCase):
     def assertIsPartitionCalled(self, called):
         marker = {"partition_called": False}
 
-        @classmethod
-        def fake_resize_partition_fs(cls, dev_path, partition_path):
+        def fake_resize_part_and_fs(dev, start, old, new):
             marker["partition_called"] = True
-
-        self.stubs.Set(vm_utils.VMHelper, "_resize_partition_and_fs",
-                       fake_resize_partition_fs)
+        self.stubs.Set(vm_utils, "_resize_part_and_fs",
+                       fake_resize_part_and_fs)
 
         instance = db.instance_create(self.context, self.instance_values)
         disk_image_type = vm_utils.ImageType.DISK_VHD
@@ -1193,12 +1196,10 @@ class XenAPIAutoDiskConfigTestCase(test.TestCase):
         """Should not partition unless fail safes pass"""
         self.instance_values['auto_disk_config'] = True
 
-        @classmethod
-        def fake_resize_partition_allowed(cls, dev_path, partition_path):
-            return False
-
-        self.stubs.Set(vm_utils.VMHelper, "_resize_partition_allowed",
-                       fake_resize_partition_allowed)
+        def fake_get_partitions(dev):
+            return [(1, 0, 100, 'ext4'), (2, 100, 200, 'ext4')]
+        self.stubs.Set(vm_utils, "_get_partitions",
+                       fake_get_partitions)
 
         self.assertIsPartitionCalled(False)
 
@@ -1209,10 +1210,9 @@ class XenAPIAutoDiskConfigTestCase(test.TestCase):
         """
         self.instance_values['auto_disk_config'] = True
 
-        @classmethod
-        def fake_resize_partition_allowed(cls, dev_path, partition_path):
-            return True
-        self.stubs.Set(vm_utils.VMHelper, "_resize_partition_allowed",
-                       fake_resize_partition_allowed)
+        def fake_get_partitions(dev):
+            return [(1, 0, 100, 'ext4')]
+        self.stubs.Set(vm_utils, "_get_partitions",
+                       fake_get_partitions)
 
         self.assertIsPartitionCalled(True)

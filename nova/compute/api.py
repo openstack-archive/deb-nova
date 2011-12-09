@@ -701,7 +701,6 @@ class API(base.Base):
                 context.project_id,
                 security_group_name)
 
-        instance_id = instance['id']
         instance_uuid = instance['uuid']
 
         #check if the security group is associated with the server
@@ -730,7 +729,6 @@ class API(base.Base):
                 context.project_id,
                 security_group_name)
 
-        instance_id = instance['id']
         instance_uuid = instance['uuid']
 
         #check if the security group is associated with the server
@@ -1015,7 +1013,6 @@ class API(base.Base):
         return instances
 
     def _get_instances_by_filters(self, context, filters):
-        ids = None
         if 'ip6' in filters or 'ip' in filters:
             res = self.network_api.get_instance_uuids_by_ip_filter(context,
                                                                    filters)
@@ -1134,11 +1131,15 @@ class API(base.Base):
         if task_state == task_states.IMAGE_SNAPSHOT:
             raise exception.InstanceSnapshotting(instance_uuid=instance_uuid)
 
-        properties = {'instance_uuid': instance_uuid,
-                      'user_id': str(context.user_id),
-                      'image_state': 'creating',
-                      'image_type': image_type,
-                      'backup_type': backup_type}
+        properties = {
+            'instance_uuid': instance_uuid,
+            'user_id': str(context.user_id),
+            'image_type': image_type,
+        }
+
+        if image_type == 'backup':
+            properties['backup_type'] = backup_type
+
         properties.update(extra_properties or {})
         sent_meta = {'name': name, 'is_public': False,
                      'status': 'creating', 'properties': properties}
@@ -1275,8 +1276,6 @@ class API(base.Base):
 
         current_memory_mb = current_instance_type['memory_mb']
         new_memory_mb = new_instance_type['memory_mb']
-        if current_memory_mb > new_memory_mb:
-            raise exception.CannotResizeToSmallerSize()
 
         if (current_memory_mb == new_memory_mb) and flavor_id:
             raise exception.CannotResizeToSameSize()
@@ -1334,7 +1333,6 @@ class API(base.Base):
     @scheduler_api.reroute_compute("pause")
     def pause(self, context, instance):
         """Pause the given instance."""
-        instance_id = instance["id"]
         instance_uuid = instance["uuid"]
         self.update(context,
                     instance,
@@ -1345,7 +1343,6 @@ class API(base.Base):
     @scheduler_api.reroute_compute("unpause")
     def unpause(self, context, instance):
         """Unpause the given instance."""
-        instance_id = instance["id"]
         instance_uuid = instance["uuid"]
         self.update(context,
                     instance,
@@ -1383,7 +1380,6 @@ class API(base.Base):
     @scheduler_api.reroute_compute("suspend")
     def suspend(self, context, instance):
         """Suspend the given instance."""
-        instance_id = instance["id"]
         instance_uuid = instance["uuid"]
         self.update(context,
                     instance,
@@ -1394,7 +1390,6 @@ class API(base.Base):
     @scheduler_api.reroute_compute("resume")
     def resume(self, context, instance):
         """Resume the given instance."""
-        instance_id = instance["id"]
         instance_uuid = instance["uuid"]
         self.update(context,
                     instance,
@@ -1538,12 +1533,12 @@ class API(base.Base):
                            "volume_id": volume_id}})
         return instance
 
-    def associate_floating_ip(self, context, instance_id, address):
+    def associate_floating_ip(self, context, instance, address):
         """Makes calls to network_api to associate_floating_ip.
 
         :param address: is a string floating ip address
         """
-        instance = self.get(context, instance_id)
+        instance_uuid = instance['uuid']
 
         # TODO(tr3buchet): currently network_info doesn't contain floating IPs
         # in its info, if this changes, the next few lines will need to
@@ -1560,7 +1555,7 @@ class API(base.Base):
         # support specifying a particular fixed_ip if multiple exist.
         if not fixed_ip_addrs:
             msg = _("instance |%s| has no fixed_ips. "
-                    "unable to associate floating ip") % instance_id
+                    "unable to associate floating ip") % instance_uuid
             raise exception.ApiError(msg)
         if len(fixed_ip_addrs) > 1:
             LOG.warning(_("multiple fixed_ips exist, using the first: %s"),

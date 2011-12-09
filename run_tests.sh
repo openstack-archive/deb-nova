@@ -42,7 +42,7 @@ function process_option {
   esac
 }
 
-venv=.nova-venv
+venv=.venv
 with_venv=tools/with_venv.sh
 always_venv=0
 never_venv=0
@@ -114,10 +114,10 @@ function run_pep8 {
   #     as well.
   ${wrapper} pep8 --repeat --show-pep8 --show-source \
     --ignore=E202,W602 \
-    --exclude=vcsversion.py ${srcfiles}
+    ${srcfiles}
 }
 
-NOSETESTS="python run_tests.py $noseopts $noseargs"
+NOSETESTS="python nova/testing/runner.py $noseopts $noseargs"
 
 if [ $never_venv -eq 0 ]
 then

@@ -68,10 +68,9 @@ class FlagValues(object):
             a = self._error_msg[self._error_msg.rindex(": --") + 2:]
             return filter(lambda i: i == a or i.startswith(a + "="), args)[0]
 
-    def __init__(self, extra_context=None):
+    def __init__(self):
         self._parser = optparse.OptionParser()
         self._parser.disable_interspersed_args()
-        self._extra_context = extra_context
         self._multistring_defaults = {}
         self.Reset()
 
@@ -138,8 +137,7 @@ class FlagValues(object):
         val = getattr(self._values, name)
         if type(val) is str:
             tmpl = string.Template(val)
-            context = [self, self._extra_context]
-            return tmpl.substitute(StrWrapper(context))
+            return tmpl.substitute(vars(self._values))
         return val
 
     def get(self, name, default):
@@ -218,24 +216,6 @@ class FlagValues(object):
         self._multistring_defaults[name] = default
 
 FLAGS = FlagValues()
-
-
-class StrWrapper(object):
-    """Wrapper around FlagValues objects.
-
-    Wraps FlagValues objects for string.Template so that we're
-    sure to return strings.
-
-    """
-    def __init__(self, context_objs):
-        self.context_objs = context_objs
-
-    def __getitem__(self, name):
-        for context in self.context_objs:
-            val = getattr(context, name, False)
-            if val:
-                return str(val)
-        raise KeyError(name)
 
 
 def DEFINE_string(name, default, help, flag_values=FLAGS):
@@ -440,7 +420,8 @@ DEFINE_string('image_service', 'nova.image.glance.GlanceImageService',
               'The service to use for retrieving and searching for images.')
 
 DEFINE_string('host', socket.gethostname(),
-              'name of this node')
+              'Name of this node.  This can be an opaque identifier.  It is '
+              'not necessarily a hostname, FQDN, or IP address.')
 
 DEFINE_string('node_availability_zone', 'nova',
               'availability zone of this node')

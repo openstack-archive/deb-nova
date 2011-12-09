@@ -139,7 +139,7 @@ flags.DEFINE_list('libvirt_volume_drivers',
                   ['iscsi=nova.virt.libvirt.volume.LibvirtISCSIVolumeDriver',
                    'local=nova.virt.libvirt.volume.LibvirtVolumeDriver',
                    'fake=nova.virt.libvirt.volume.LibvirtFakeVolumeDriver',
-                   'rdb=nova.virt.libvirt.volume.LibvirtNetVolumeDriver',
+                   'rbd=nova.virt.libvirt.volume.LibvirtNetVolumeDriver',
                    'sheepdog=nova.virt.libvirt.volume.LibvirtNetVolumeDriver'],
                   'Libvirt handlers for remote volumes.')
 flags.DEFINE_string('default_local_format',
@@ -595,7 +595,7 @@ class LibvirtConnection(driver.ComputeDriver):
         dom.create()
 
     @exception.wrap_exception()
-    def rescue(self, context, instance, network_info):
+    def rescue(self, context, instance, network_info, image_meta):
         """Loads a VM using rescue images.
 
         A rescue is normally performed when something goes wrong with the
