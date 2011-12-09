@@ -1,3 +1,9 @@
+nova (2012.1~e1-4) unstable; urgency=high
+
+  * Added security patch
+
+ -- Ghe Rivero <ghe@debian.org>  Fri, 09 Dec 2011 08:37:12 +0100
+
 nova (2012.1~e1-3) unstable; urgency=low
 
   [ Ghe Rivero ]
