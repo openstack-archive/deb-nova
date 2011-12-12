@@ -1,3 +1,9 @@
+nova (2012.1~e1+git354-g1b4a0f8-2) experimental; urgency=low
+
+  * Fix build-depends
+
+ -- Julien Danjou <acid@debian.org>  Mon, 12 Dec 2011 12:51:47 +0100
+
 nova (2012.1~e1+git354-g1b4a0f8-1) experimental; urgency=low
 
   * New snapshot-release
