@@ -1,3 +1,9 @@
+nova (2012.1~e1+git354-g1b4a0f8-1) experimental; urgency=low
+
+  * New snapshot-release
+
+ -- Julien Danjou <acid@debian.org>  Mon, 12 Dec 2011 11:38:46 +0100
+
 nova (2012.1~e1+git332-gaa7ca15-1) experimental; urgency=low
 
   [ Ghe Rivero ]
