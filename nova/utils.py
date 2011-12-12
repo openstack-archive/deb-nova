@@ -77,6 +77,29 @@ def import_object(import_str):
         return cls()
 
 
+def find_config(config_path):
+    """Find a configuration file using the given hint.
+
+    :param config_path: Full or relative path to the config.
+    :returns: Full path of the config, if it exists.
+    :raises: `nova.exception.ConfigNotFound`
+
+    """
+    possible_locations = [
+        config_path,
+        os.path.join(FLAGS.state_path, "etc", "nova", config_path),
+        os.path.join(FLAGS.state_path, "etc", config_path),
+        os.path.join(FLAGS.state_path, config_path),
+        "/etc/nova/%s" % config_path,
+    ]
+
+    for path in possible_locations:
+        if os.path.exists(path):
+            return os.path.abspath(path)
+
+    raise exception.ConfigNotFound(path=os.path.abspath(config_path))
+
+
 def vpn_ping(address, port, timeout=0.05, session_id=None):
     """Sends a vpn negotiation packet and returns the server session.
 
@@ -719,6 +742,9 @@ def synchronized(name, external=False):
                         '"%(method)s"...' % {'lock': name,
                                              'method': f.__name__}))
             with sem:
+                LOG.debug(_('Got semaphore "%(lock)s" for method '
+                            '"%(method)s"...' % {'lock': name,
+                                                 'method': f.__name__}))
                 if external:
                     LOG.debug(_('Attempting to grab file lock "%(lock)s" for '
                                 'method "%(method)s"...' %
@@ -730,6 +756,10 @@ def synchronized(name, external=False):
                     lock = _NoopContextManager()
 
                 with lock:
+                    if external:
+                        LOG.debug(_('Got file lock "%(lock)s" for '
+                                    'method "%(method)s"...' %
+                                    {'lock': name, 'method': f.__name__}))
                     retval = f(*args, **kwargs)
 
             # If no-one else is waiting for it, delete it.

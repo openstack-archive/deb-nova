@@ -323,10 +323,11 @@ class ComputeManager(manager.SchedulerDependentManager):
         except exception.InstanceNotFound:
             LOG.exception(_("Instance %s not found.") % instance_uuid)
             return  # assuming the instance was already deleted
-        except Exception:
+        except Exception as e:
             with utils.save_and_reraise_exception():
                 self._instance_update(context, instance_uuid,
                                       vm_state=vm_states.ERROR)
+                self.add_instance_fault_from_exc(context, instance_uuid, e)
 
     def _check_instance_not_already_created(self, context, instance):
         """Ensure an instance with the same name is not already present."""
@@ -358,7 +359,7 @@ class ComputeManager(manager.SchedulerDependentManager):
             # glance.
 
             # TODO(jk0): Should size be required in the image service?
-            return
+            return image_meta
 
         instance_type_id = instance['instance_type_id']
         instance_type = instance_types.get_instance_type(instance_type_id)
@@ -368,7 +369,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         # need to handle potential situations where local_gb is 0. This is
         # the default for m1.tiny.
         if allowed_size_gb == 0:
-            return
+            return image_meta
 
         allowed_size_bytes = allowed_size_gb * 1024 * 1024 * 1024
 
@@ -1917,3 +1918,29 @@ class ComputeManager(manager.SchedulerDependentManager):
                 LOG.info(_("Reclaiming deleted instance %(instance_id)s"),
                          locals())
                 self._delete_instance(context, instance)
+
+    def add_instance_fault_from_exc(self, context, instance_uuid, fault):
+        """Adds the specified fault to the database."""
+        if hasattr(fault, "code"):
+            code = fault.code
+        else:
+            code = 500
+
+        values = {
+            'instance_uuid': instance_uuid,
+            'code': code,
+            'message': fault.__class__.__name__,
+            'details': fault.message,
+        }
+        self.db.instance_fault_create(context, values)
+
+    def add_instance_fault(self, context, instance_uuid, code=500,
+                           message='', details=''):
+        """Adds a fault to the database using the specified values."""
+        values = {
+            'instance_uuid': instance_uuid,
+            'code': code,
+            'message': message,
+            'details': details,
+        }
+        self.db.instance_fault_create(context, values)

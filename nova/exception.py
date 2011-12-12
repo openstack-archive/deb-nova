@@ -317,6 +317,10 @@ class InvalidCPUInfo(Invalid):
     message = _("Unacceptable CPU info") + ": %(reason)s"
 
 
+class InvalidIpAddressError(Invalid):
+    message = _("%(address)s is not a valid IP v4/6 address.")
+
+
 class InvalidVLANTag(Invalid):
     message = _("VLAN tag is not appropriate for the port group "
                 "%(bridge)s. Expected VLAN tag is %(tag)s, "
@@ -806,8 +810,8 @@ class MalformedRequestBody(NovaException):
     message = _("Malformed message body: %(reason)s")
 
 
-class PasteConfigNotFound(NotFound):
-    message = _("Could not find paste config at %(path)s")
+class ConfigNotFound(NotFound):
+    message = _("Could not find config at %(path)s")
 
 
 class PasteAppNotFound(NotFound):

@@ -257,6 +257,27 @@ class Instance(BASE, NovaBase):
     progress = Column(Integer)
 
 
+class InstanceInfoCache(BASE, NovaBase):
+    """
+    Represents a cache of information about an instance
+    """
+    __tablename__ = 'instance_info_caches'
+    id = Column(String(36), primary_key=True)
+
+    # text column used for storing a json object of network data for api
+    network_info = Column(Text)
+
+    # this is all uuid based, we have them might as well start using them
+    instance_id = Column(String(36), ForeignKey('instances.uuid'),
+                                     nullable=False, unique=True)
+    instance = relationship(Instance,
+                            backref=backref('info_cache', uselist=False),
+                            foreign_keys=instance_id,
+                            primaryjoin='and_('
+                              'InstanceInfoCache.instance_id == Instance.uuid,'
+                              'InstanceInfoCache.deleted == False)')
+
+
 class VirtualStorageArray(BASE, NovaBase):
     """
     Represents a virtual storage array supplying block storage to instances.
@@ -891,6 +912,17 @@ class SMVolume(BASE, NovaBase):
     vdi_uuid = Column(String(255))
 
 
+class InstanceFault(BASE, NovaBase):
+    __tablename__ = 'instance_faults'
+    id = Column(Integer(), primary_key=True, autoincrement=True)
+    instance_uuid = Column(String(36),
+                           ForeignKey('instances.uuid'),
+                           nullable=False)
+    code = Column(Integer(), nullable=False)
+    message = Column(String(255))
+    details = Column(Text)
+
+
 def register_models():
     """Register Models and create metadata.
 
@@ -906,7 +938,8 @@ def register_models():
               Project, Certificate, ConsolePool, Console, Zone,
               VolumeMetadata, VolumeTypes, VolumeTypeExtraSpecs,
               AgentBuild, InstanceMetadata, InstanceTypeExtraSpecs, Migration,
-              VirtualStorageArray, SMFlavors, SMBackendConf, SMVolume)
+              VirtualStorageArray, SMFlavors, SMBackendConf, SMVolume,
+              InstanceFault)
     engine = create_engine(FLAGS.sql_connection, echo=False)
     for model in models:
         model.metadata.create_all(engine)
