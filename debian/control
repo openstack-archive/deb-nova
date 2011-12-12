@@ -16,7 +16,10 @@ Build-Depends: debhelper (>= 7.0.50),
  python-gflags,
  python-netaddr,
  python-gflags,
- python-feedparser
+ python-feedparser,
+ python-suds,
+ python-coverage,
+ python-greenlet
 Build-Depends-Indep:
  python-setuptools,
  python-sphinx (>> 1.0)
