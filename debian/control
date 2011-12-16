@@ -17,7 +17,7 @@ Build-Depends: debhelper (>= 7.0.50),
  python-netaddr,
  python-gflags,
  python-feedparser,
- python-suds,
+ python-suds (>= 0.4.0),
  python-coverage,
  python-greenlet
 Build-Depends-Indep:
