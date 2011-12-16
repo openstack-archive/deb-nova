@@ -64,7 +64,6 @@ Depends: ${python:Depends},
 Suggests: python-suds (>= 0.4.0),
 Conflicts: python-cjson
 Recommends: python-mysqldb
-Provides: ${python:Provides}
 Description: OpenStack Compute - libraries
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -85,7 +84,6 @@ Description: OpenStack Compute - libraries
 Package: nova-common
 Architecture: all
 Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends}, adduser
-Provides: ${python:Provides}
 Description: OpenStack Compute - common files
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
