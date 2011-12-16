@@ -40,7 +40,7 @@ class VMWareAPIVMTestCase(test.TestCase):
 
     def setUp(self):
         super(VMWareAPIVMTestCase, self).setUp()
-        self.context = context.RequestContext('fake', 'fake', False)
+        self.context = context.RequestContext('fake', 'fake', is_admin=False)
         self.flags(vmwareapi_host_ip='test_url',
                    vmwareapi_host_username='test_username',
                    vmwareapi_host_password='test_pass')
@@ -74,6 +74,12 @@ class VMWareAPIVMTestCase(test.TestCase):
                            'mac': 'DE:AD:BE:EF:00:00',
                            'rxtx_cap': 3})]
 
+        self.image = {
+            'id': 'c1c8ce3d-c2e0-4247-890c-ccf5cc1c004c',
+            'disk_format': 'vhd',
+            'size': 512,
+        }
+
     def tearDown(self):
         super(VMWareAPIVMTestCase, self).tearDown()
         vmwareapi_fake.cleanup()
@@ -95,7 +101,8 @@ class VMWareAPIVMTestCase(test.TestCase):
         """Create and spawn the VM."""
         self._create_instance_in_the_db()
         self.type_data = db.instance_type_get_by_name(None, 'm1.large')
-        self.conn.spawn(self.context, self.instance, self.network_info)
+        self.conn.spawn(self.context, self.instance, self.image,
+                        self.network_info)
         self._check_vm_record()
 
     def _check_vm_record(self):

@@ -126,11 +126,10 @@ class VolumeManager(manager.SchedulerDependentManager):
             if model_update:
                 self.db.volume_update(context, volume_ref['id'], model_update)
         except Exception:
-            exc_info = sys.exc_info()
-            self.db.volume_update(context,
-                                  volume_ref['id'], {'status': 'error'})
-            self._notify_vsa(context, volume_ref, 'error')
-            raise exc_info
+            with utils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_ref['id'], {'status': 'error'})
+                self._notify_vsa(context, volume_ref, 'error')
 
         now = utils.utcnow()
         self.db.volume_update(context,
@@ -182,11 +181,10 @@ class VolumeManager(manager.SchedulerDependentManager):
                                   {'status': 'available'})
             return True
         except Exception:
-            exc_info = sys.exc_info()
-            self.db.volume_update(context,
-                                  volume_ref['id'],
-                                  {'status': 'error_deleting'})
-            raise exc_info
+            with utils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_ref['id'],
+                                      {'status': 'error_deleting'})
 
         self.db.volume_destroy(context, volume_id)
         LOG.debug(_("volume %s: deleted successfully"), volume_ref['name'])
@@ -207,9 +205,10 @@ class VolumeManager(manager.SchedulerDependentManager):
                                         model_update)
 
         except Exception:
-            self.db.snapshot_update(context,
-                                    snapshot_ref['id'], {'status': 'error'})
-            raise
+            with utils.save_and_reraise_exception():
+                self.db.snapshot_update(context,
+                                        snapshot_ref['id'],
+                                        {'status': 'error'})
 
         self.db.snapshot_update(context,
                                 snapshot_ref['id'], {'status': 'available',
@@ -226,10 +225,10 @@ class VolumeManager(manager.SchedulerDependentManager):
             LOG.debug(_("snapshot %s: deleting"), snapshot_ref['name'])
             self.driver.delete_snapshot(snapshot_ref)
         except Exception:
-            self.db.snapshot_update(context,
-                                    snapshot_ref['id'],
-                                    {'status': 'error_deleting'})
-            raise
+            with utils.save_and_reraise_exception():
+                self.db.snapshot_update(context,
+                                        snapshot_ref['id'],
+                                        {'status': 'error_deleting'})
 
         self.db.snapshot_destroy(context, snapshot_id)
         LOG.debug(_("snapshot %s: deleted successfully"), snapshot_ref['name'])
@@ -261,7 +260,7 @@ class VolumeManager(manager.SchedulerDependentManager):
         driver_volume_type: a string to identify the type of volume.  This
                            can be used by the calling code to determine the
                            strategy for connecting to the volume. This could
-                           be 'iscsi', 'rdb', 'sheepdog', etc.
+                           be 'iscsi', 'rbd', 'sheepdog', etc.
         data: this is the data that the calling code will use to connect
               to the volume. Keep in mind that this will be serialized to
               json in various places, so it should not contain any non-json
@@ -280,21 +279,6 @@ class VolumeManager(manager.SchedulerDependentManager):
         for volume in instance_ref['volumes']:
             self.driver.check_for_export(context, volume['id'])
 
-    def periodic_tasks(self, context=None):
-        """Tasks to be run at a periodic interval."""
-
-        error_list = []
-        try:
-            self._report_driver_status()
-        except Exception as ex:
-            LOG.warning(_("Error during report_driver_status(): %s"),
-                        unicode(ex))
-            error_list.append(ex)
-
-        super(VolumeManager, self).periodic_tasks(context)
-
-        return error_list
-
     def _volume_stats_changed(self, stat1, stat2):
         if FLAGS.volume_force_update_capabilities:
             return True
@@ -305,7 +289,8 @@ class VolumeManager(manager.SchedulerDependentManager):
                 return True
         return False
 
-    def _report_driver_status(self):
+    @manager.periodic_task
+    def _report_driver_status(self, context):
         volume_stats = self.driver.get_volume_stats(refresh=True)
         if volume_stats:
             LOG.info(_("Checking volume capabilities"))

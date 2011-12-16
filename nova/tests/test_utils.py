@@ -79,6 +79,12 @@ exit 1
                           utils.execute,
                           '/bin/true', this_is_not_a_valid_kwarg=True)
 
+    def test_check_exit_code_boolean(self):
+        utils.execute('/bin/false', check_exit_code=False)
+        self.assertRaises(exception.ProcessExecutionError,
+                          utils.execute,
+                          '/bin/false', check_exit_code=True)
+
     def test_no_retry_on_success(self):
         fd, tmpfilename = tempfile.mkstemp()
         _, tmpfilename2 = tempfile.mkstemp()
@@ -281,6 +287,30 @@ class GenericUtilsTestCase(test.TestCase):
         # error case
         result = utils.parse_server_string('www.exa:mple.com:8443')
         self.assertEqual(('', ''), result)
+
+    def test_hostname_unicode_sanitization(self):
+        hostname = u"\u7684.test.example.com"
+        self.assertEqual("test.example.com",
+                         utils.sanitize_hostname(hostname))
+
+    def test_hostname_sanitize_periods(self):
+        hostname = "....test.example.com..."
+        self.assertEqual("test.example.com",
+                         utils.sanitize_hostname(hostname))
+
+    def test_hostname_sanitize_dashes(self):
+        hostname = "----test.example.com---"
+        self.assertEqual("test.example.com",
+                         utils.sanitize_hostname(hostname))
+
+    def test_hostname_sanitize_characters(self):
+        hostname = "(#@&$!(@*--#&91)(__=+--test-host.example!!.com-0+"
+        self.assertEqual("91----test-host.example.com-0",
+                         utils.sanitize_hostname(hostname))
+
+    def test_hostname_translate(self):
+        hostname = "<}\x1fh\x10e\x08l\x02l\x05o\x12!{>"
+        self.assertEqual("hello", utils.sanitize_hostname(hostname))
 
     def test_bool_from_str(self):
         self.assertTrue(utils.bool_from_str('1'))

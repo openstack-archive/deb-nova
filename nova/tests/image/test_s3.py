@@ -15,6 +15,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import os
+
 from nova import context
 import nova.db.api
 from nova import exception
@@ -50,6 +52,8 @@ ami_manifest_xml = """<?xml version="1.0" ?>
                                 <device>sda3</device>
                         </mapping>
                 </block_device_mapping>
+                <kernel_id>aki-00000001</kernel_id>
+                <ramdisk_id>ari-00000001</ramdisk_id>
         </machine_configuration>
 </manifest>
 """
@@ -84,7 +88,10 @@ class TestS3ImageService(test.TestCase):
                           '155d900f-4e14-4e4c-a73d-069cbf4541e6')
 
     def test_show_translates_correctly(self):
-        image = self.image_service.show(self.context, '1')
+        self.image_service.show(self.context, '1')
+
+    def test_detail(self):
+        self.image_service.detail(self.context)
 
     def test_s3_create(self):
         metadata = {'properties': {
@@ -125,3 +132,11 @@ class TestS3ImageService(test.TestCase):
             {'device_name': '/dev/sdb0',
              'no_device': True}]
         self.assertEqual(block_device_mapping, expected_bdm)
+
+    def test_s3_malicious_tarballs(self):
+        self.assertRaises(exception.Error,
+            self.image_service._test_for_malicious_tarball,
+            "/unused", os.path.join(os.path.dirname(__file__), 'abs.tar.gz'))
+        self.assertRaises(exception.Error,
+            self.image_service._test_for_malicious_tarball,
+            "/unused", os.path.join(os.path.dirname(__file__), 'rel.tar.gz'))

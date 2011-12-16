@@ -197,11 +197,11 @@ class InstanceBusy(NovaException):
 
 
 class InstanceSnapshotting(InstanceBusy):
-    message = _("Instance %(instance_id)s is currently snapshotting.")
+    message = _("Instance %(instance_uuid)s is currently snapshotting.")
 
 
 class InstanceBackingUp(InstanceBusy):
-    message = _("Instance %(instance_id)s is currently being backed up.")
+    message = _("Instance %(instance_uuid)s is currently being backed up.")
 
 
 class Invalid(NovaException):
@@ -229,7 +229,7 @@ class InvalidVolumeType(Invalid):
 
 
 class InvalidPortRange(Invalid):
-    message = _("Invalid port range %(from_port)s:%(to_port)s.")
+    message = _("Invalid port range %(from_port)s:%(to_port)s. %(msg)s")
 
 
 class InvalidIpProtocol(Invalid):
@@ -248,6 +248,11 @@ class InvalidCidr(Invalid):
 # msg needs to be constructed when raised.
 class InvalidParameterValue(Invalid):
     message = _("%(err)s")
+
+
+class InstanceInvalidState(Invalid):
+    message = _("Instance %(instance_uuid)s in %(attr)s %(state)s. Cannot "
+                "%(method)s while the instance is in this state.")
 
 
 class InstanceNotRunning(Invalid):
@@ -315,6 +320,10 @@ class InvalidDevicePath(Invalid):
 
 class InvalidCPUInfo(Invalid):
     message = _("Unacceptable CPU info") + ": %(reason)s"
+
+
+class InvalidIpAddressError(Invalid):
+    message = _("%(address)s is not a valid IP v4/6 address.")
 
 
 class InvalidVLANTag(Invalid):
@@ -396,7 +405,7 @@ class SnapshotNotFound(NotFound):
     message = _("Snapshot %(snapshot_id)s could not be found.")
 
 
-class VolumeIsBusy(Error):
+class VolumeIsBusy(NovaException):
     message = _("deleting volume %(volume_name)s that has snapshot")
 
 
@@ -511,10 +520,6 @@ class FixedIpNotFoundForSpecificInstance(FixedIpNotFound):
     message = _("Instance %(instance_id)s doesn't have fixed ip '%(ip)s'.")
 
 
-class FixedIpNotFoundForVirtualInterface(FixedIpNotFound):
-    message = _("Virtual interface %(vif_id)s has zero associated fixed ips.")
-
-
 class FixedIpNotFoundForHost(FixedIpNotFound):
     message = _("Host %(host)s has zero fixed ips.")
 
@@ -546,10 +551,6 @@ class FloatingIpNotFound(NotFound):
 
 class FloatingIpNotFoundForAddress(FloatingIpNotFound):
     message = _("Floating ip not found for address %(address)s.")
-
-
-class FloatingIpNotFoundForProject(FloatingIpNotFound):
-    message = _("Floating ip not found for project %(project_id)s.")
 
 
 class FloatingIpNotFoundForHost(FloatingIpNotFound):
@@ -810,8 +811,8 @@ class MalformedRequestBody(NovaException):
     message = _("Malformed message body: %(reason)s")
 
 
-class PasteConfigNotFound(NotFound):
-    message = _("Could not find paste config at %(path)s")
+class ConfigNotFound(NotFound):
+    message = _("Could not find config at %(path)s")
 
 
 class PasteAppNotFound(NotFound):
@@ -832,10 +833,6 @@ class VirtualStorageArrayNotFoundByName(NotFound):
 
 class CannotResizeToSameSize(NovaException):
     message = _("When resizing, instances must change size!")
-
-
-class CannotResizeToSmallerSize(NovaException):
-    message = _("Resizing to a smaller size is not supported.")
 
 
 class ImageTooLarge(NovaException):
@@ -871,3 +868,8 @@ class NoValidHost(NovaException):
 
 class WillNotSchedule(NovaException):
     message = _("Host %(host)s is not up or doesn't exist.")
+
+
+class QuotaError(ApiError):
+    """Quota Exceeded."""
+    pass

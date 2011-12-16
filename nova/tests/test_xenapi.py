@@ -423,14 +423,16 @@ class XenAPIVMTestCase(test.TestCase):
         if empty_dns:
             network_info[0][1]['dns'] = []
 
-        self.conn.spawn(self.context, instance, network_info)
+        image_meta = {'id': glance_stubs.FakeGlance.IMAGE_VHD,
+                      'disk_format': 'vhd'}
+        self.conn.spawn(self.context, instance, image_meta, network_info)
         self.create_vm_record(self.conn, os_type, instance_id)
         self.check_vm_record(self.conn, check_injection)
         self.assertTrue(instance.os_type)
         self.assertTrue(instance.architecture)
 
     def test_spawn_empty_dns(self):
-        """"Test spawning with an empty dns list"""
+        """Test spawning with an empty dns list"""
         self._test_spawn(glance_stubs.FakeGlance.IMAGE_VHD, None, None,
                          os_type="linux", architecture="x86-64",
                          empty_dns=True)
@@ -639,7 +641,7 @@ class XenAPIVMTestCase(test.TestCase):
     def test_rescue(self):
         instance = self._create_instance()
         conn = xenapi_conn.get_connection(False)
-        conn.rescue(self.context, instance, [])
+        conn.rescue(self.context, instance, [], None)
 
     def test_unrescue(self):
         instance = self._create_instance()
@@ -694,8 +696,10 @@ class XenAPIVMTestCase(test.TestCase):
                            'label': 'fake',
                            'mac': 'DE:AD:BE:EF:00:00',
                            'rxtx_cap': 3})]
+        image_meta = {'id': glance_stubs.FakeGlance.IMAGE_VHD,
+                      'disk_format': 'vhd'}
         if spawn:
-            self.conn.spawn(self.context, instance, network_info)
+            self.conn.spawn(self.context, instance, image_meta, network_info)
         return instance
 
 
@@ -785,14 +789,34 @@ class XenAPIMigrateInstance(test.TestCase):
         stubs.stubout_get_this_vm_uuid(self.stubs)
         glance_stubs.stubout_glance_client(self.stubs)
 
+    def test_resize_xenserver_6(self):
+        instance = db.instance_create(self.context, self.instance_values)
+        called = {'resize': False}
+
+        def fake_vdi_resize(*args, **kwargs):
+            called['resize'] = True
+
+        self.stubs.Set(stubs.FakeSessionForMigrationTests,
+                       "VDI_resize", fake_vdi_resize)
+        stubs.stubout_session(self.stubs,
+                              stubs.FakeSessionForMigrationTests,
+                              product_version=(6, 0, 0))
+        stubs.stubout_loopingcall_start(self.stubs)
+        conn = xenapi_conn.get_connection(False)
+        conn._vmops._resize_instance(instance, '')
+        self.assertEqual(called['resize'], True)
+
     def test_migrate_disk_and_power_off(self):
         instance = db.instance_create(self.context, self.instance_values)
+        instance_type = db.instance_type_get_by_name(self.context, 'm1.large')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForMigrationTests)
         conn = xenapi_conn.get_connection(False)
-        conn.migrate_disk_and_power_off(self.context, instance, '127.0.0.1')
+        conn.migrate_disk_and_power_off(self.context, instance,
+                                        '127.0.0.1', instance_type)
 
     def test_migrate_disk_and_power_off_passes_exceptions(self):
         instance = db.instance_create(self.context, self.instance_values)
+        instance_type = db.instance_type_get_by_name(self.context, 'm1.large')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForMigrationTests)
 
         def fake_raise(*args, **kwargs):
@@ -802,7 +826,7 @@ class XenAPIMigrateInstance(test.TestCase):
         conn = xenapi_conn.get_connection(False)
         self.assertRaises(exception.MigrationError,
                           conn.migrate_disk_and_power_off,
-                          self.context, instance, '127.0.0.1')
+                          self.context, instance, '127.0.0.1', instance_type)
 
     def test_revert_migrate(self):
         instance = db.instance_create(self.context, self.instance_values)
@@ -842,9 +866,10 @@ class XenAPIMigrateInstance(test.TestCase):
                            'label': 'fake',
                            'mac': 'DE:AD:BE:EF:00:00',
                            'rxtx_cap': 3})]
+        image_meta = {'id': instance.image_ref, 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
-                              network_info, resize_instance=True)
+                              network_info, image_meta, resize_instance=True)
         self.assertEqual(self.called, True)
         self.assertEqual(self.fake_vm_start_called, True)
 
@@ -883,9 +908,10 @@ class XenAPIMigrateInstance(test.TestCase):
                            'label': 'fake',
                            'mac': 'DE:AD:BE:EF:00:00',
                            'rxtx_cap': 3})]
+        image_meta = {'id': instance.image_ref, 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
-                              network_info, resize_instance=True)
+                              network_info, image_meta, resize_instance=True)
         self.assertEqual(self.called, True)
         self.assertEqual(self.fake_vm_start_called, True)
 
@@ -918,9 +944,10 @@ class XenAPIMigrateInstance(test.TestCase):
                            'label': 'fake',
                            'mac': 'DE:AD:BE:EF:00:00',
                            'rxtx_cap': 3})]
+        image_meta = {'id': instance.image_ref, 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
-                              network_info, resize_instance=True)
+                              network_info, image_meta, resize_instance=True)
 
     def test_finish_migrate_no_resize_vdi(self):
         instance = db.instance_create(self.context, self.instance_values)
@@ -949,9 +976,10 @@ class XenAPIMigrateInstance(test.TestCase):
                            'rxtx_cap': 3})]
 
         # Resize instance would be determined by the compute call
+        image_meta = {'id': instance.image_ref, 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
-                              network_info, resize_instance=False)
+                              network_info, image_meta, resize_instance=False)
 
 
 class XenAPIImageTypeTestCase(test.TestCase):
@@ -986,8 +1014,9 @@ class XenAPIDetermineDiskImageTestCase(test.TestCase):
 
     def assert_disk_type(self, disk_type):
         ctx = context.RequestContext('fake', 'fake')
-        dt = vm_utils.VMHelper.determine_disk_image_type(
-            self.fake_instance, ctx)
+        fake_glance = glance_stubs.FakeGlance('')
+        image_meta = fake_glance.get_image_meta(self.fake_instance.image_ref)
+        dt = vm_utils.VMHelper.determine_disk_image_type(image_meta)
         self.assertEqual(disk_type, dt)
 
     def test_instance_disk(self):
@@ -1081,13 +1110,15 @@ class HostStateTestCase(test.TestCase):
     """Tests HostState, which holds metrics from XenServer that get
     reported back to the Schedulers."""
 
-    def _fake_safe_find_sr(self, session):
+    @classmethod
+    def _fake_safe_find_sr(cls, session):
         """None SR ref since we're ignoring it in FakeSR."""
         return None
 
     def test_host_state(self):
         self.stubs = stubout.StubOutForTesting()
-        self.stubs.Set(vm_utils, 'safe_find_sr', self._fake_safe_find_sr)
+        self.stubs.Set(vm_utils.VMHelper, 'safe_find_sr',
+                       self._fake_safe_find_sr)
         host_state = xenapi_conn.HostState(FakeSession())
         stats = host_state._stats
         self.assertEquals(stats['disk_total'], 10000)
@@ -1098,9 +1129,9 @@ class HostStateTestCase(test.TestCase):
         self.assertEquals(stats['host_memory_free_computed'], 40)
 
 
-class XenAPIManagedDiskTestCase(test.TestCase):
+class XenAPIAutoDiskConfigTestCase(test.TestCase):
     def setUp(self):
-        super(XenAPIManagedDiskTestCase, self).setUp()
+        super(XenAPIAutoDiskConfigTestCase, self).setUp()
         self.stubs = stubout.StubOutForTesting()
         self.flags(target_host='127.0.0.1',
                    xenapi_connection_url='test_url',
@@ -1137,12 +1168,10 @@ class XenAPIManagedDiskTestCase(test.TestCase):
     def assertIsPartitionCalled(self, called):
         marker = {"partition_called": False}
 
-        @classmethod
-        def fake_resize_partition_fs(cls, dev_path, partition_path):
+        def fake_resize_part_and_fs(dev, start, old, new):
             marker["partition_called"] = True
-
-        self.stubs.Set(vm_utils.VMHelper, "_resize_partition_and_fs",
-                       fake_resize_partition_fs)
+        self.stubs.Set(vm_utils, "_resize_part_and_fs",
+                       fake_resize_part_and_fs)
 
         instance = db.instance_create(self.context, self.instance_values)
         disk_image_type = vm_utils.ImageType.DISK_VHD
@@ -1155,36 +1184,35 @@ class XenAPIManagedDiskTestCase(test.TestCase):
 
         self.assertEqual(marker["partition_called"], called)
 
-    def test_instance_not_managed(self):
-        """Should not partition unless instance is marked as managed_disk"""
-        self.instance_values['managed_disk'] = False
+    def test_instance_not_auto_disk_config(self):
+        """Should not partition unless instance is marked as
+        auto_disk_config.
+        """
+        self.instance_values['auto_disk_config'] = False
         self.assertIsPartitionCalled(False)
 
     @stub_vm_utils_with_vdi_attached_here
-    def test_instance_managed_doesnt_pass_fail_safes(self):
+    def test_instance_auto_disk_config_doesnt_pass_fail_safes(self):
         """Should not partition unless fail safes pass"""
-        self.instance_values['managed_disk'] = True
+        self.instance_values['auto_disk_config'] = True
 
-        @classmethod
-        def fake_resize_partition_allowed(cls, dev_path, partition_path):
-            return False
-
-        self.stubs.Set(vm_utils.VMHelper, "_resize_partition_allowed",
-                       fake_resize_partition_allowed)
+        def fake_get_partitions(dev):
+            return [(1, 0, 100, 'ext4'), (2, 100, 200, 'ext4')]
+        self.stubs.Set(vm_utils, "_get_partitions",
+                       fake_get_partitions)
 
         self.assertIsPartitionCalled(False)
 
     @stub_vm_utils_with_vdi_attached_here
-    def test_instance_managed_passes_fail_safes(self):
-        """Should partition if instance is marked as managed_disk=True and
+    def test_instance_auto_disk_config_passes_fail_safes(self):
+        """Should partition if instance is marked as auto_disk_config=True and
         virt-layer specific fail-safe checks pass.
         """
-        self.instance_values['managed_disk'] = True
+        self.instance_values['auto_disk_config'] = True
 
-        @classmethod
-        def fake_resize_partition_allowed(cls, dev_path, partition_path):
-            return True
-        self.stubs.Set(vm_utils.VMHelper, "_resize_partition_allowed",
-                       fake_resize_partition_allowed)
+        def fake_get_partitions(dev):
+            return [(1, 0, 100, 'ext4')]
+        self.stubs.Set(vm_utils, "_get_partitions",
+                       fake_get_partitions)
 
         self.assertIsPartitionCalled(True)

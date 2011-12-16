@@ -4,16 +4,15 @@ pylint==0.19
 Cheetah==2.4.4
 amqplib==0.6.1
 anyjson==0.2.4
-boto==1.9b
+boto
 carrot==0.10.5
 eventlet
 kombu==1.0.4
 lockfile==0.8
 lxml==2.3
-python-novaclient==2.6.5
 python-daemon==1.5.5
 python-gflags==1.3
-redis==2.0.0
+python-novaclient
 routes==1.12.3
 WebOb==1.0.8
 wsgiref==0.1.2
@@ -27,7 +26,6 @@ netaddr
 sphinx
 glance
 xattr>=0.6.0
-nova-adminclient
 suds==0.4
 coverage
 nosexcover

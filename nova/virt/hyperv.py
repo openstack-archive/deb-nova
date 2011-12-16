@@ -138,7 +138,7 @@ class HyperVConnection(driver.ComputeDriver):
 
         return instance_infos
 
-    def spawn(self, context, instance,
+    def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
         """ Create a new VM and start it."""
         vm = self._lookup(instance.name)
@@ -412,12 +412,12 @@ class HyperVConnection(driver.ComputeDriver):
                 LOG.debug(_("Del: disk %(vhdfile)s vm %(instance_name)s")
                         % locals())
 
-    def get_info(self, instance_id):
+    def get_info(self, instance_name):
         """Get information about the VM"""
-        vm = self._lookup(instance_id)
+        vm = self._lookup(instance_name)
         if vm is None:
-            raise exception.InstanceNotFound(instance_id=instance_id)
-        vm = self._conn.Msvm_ComputerSystem(ElementName=instance_id)[0]
+            raise exception.InstanceNotFound(instance_id=instance_name)
+        vm = self._conn.Msvm_ComputerSystem(ElementName=instance_name)[0]
         vs_man_svc = self._conn.Msvm_VirtualSystemManagementService()[0]
         vmsettings = vm.associators(
                        wmi_result_class='Msvm_VirtualSystemSettingData')
@@ -431,7 +431,7 @@ class HyperVConnection(driver.ComputeDriver):
         numprocs = str(info.NumberOfProcessors)
         uptime = str(info.UpTime)
 
-        LOG.debug(_("Got Info for vm %(instance_id)s: state=%(state)s,"
+        LOG.debug(_("Got Info for vm %(instance_name)s: state=%(state)s,"
                 " mem=%(memusage)s, num_cpu=%(numprocs)s,"
                 " cpu_time=%(uptime)s") % locals())
 
@@ -515,4 +515,12 @@ class HyperVConnection(driver.ComputeDriver):
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
+        pass
+
+    def plug_vifs(self, instance, network_info):
+        """Plug VIFs into networks."""
+        pass
+
+    def unplug_vifs(self, instance, network_info):
+        """Unplug VIFs from networks."""
         pass

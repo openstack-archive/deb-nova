@@ -113,6 +113,28 @@ class QuantumMelangeIPAMLib(object):
         network = db.network_get_by_uuid(admin_context, net_id)
         db.network_delete_safe(context, network['id'])
 
+    def get_networks_by_tenant(self, context, tenant_id):
+        nets = []
+        admin_context = context.get_admin_context()
+        blocks = self.m_conn.get_blocks(tenant_id)
+        for ip_block in blocks['ip_blocks']:
+            network_id = ip_block['network_id']
+            network = db.network_get_by_uuid(admin_context, network_id)
+            nets.append(network)
+        return nets
+
+    def get_global_networks(self, context):
+        return self.get_networks_by_tenant(context,
+            FLAGS.quantum_default_tenant_id)
+
+    def get_project_networks(self, context):
+        try:
+            nets = db.network_get_all(context.elevated())
+        except exception.NoNetworksFound:
+            return []
+        # only return networks with a project_id set
+        return [net for net in nets if net['project_id']]
+
     def get_project_and_global_net_ids(self, context, project_id):
         """Fetches all networks associated with this project, or
            that are "global" (i.e., have no project set).
@@ -128,13 +150,10 @@ class QuantumMelangeIPAMLib(object):
         # Decorate with priority
         priority_nets = []
         for tenant_id in (project_id, FLAGS.quantum_default_tenant_id):
-            blocks = self.m_conn.get_blocks(tenant_id)
-            for ip_block in blocks['ip_blocks']:
-                network_id = ip_block['network_id']
-                network = db.network_get_by_uuid(admin_context, network_id)
-                if network:
-                    priority = network['priority']
-                    priority_nets.append((priority, network_id, tenant_id))
+            nets = self.get_networks_by_tenant(context, tenant_id)
+            for network in nets:
+                priority = network['priority']
+                priority_nets.append((priority, network['uuid'], tenant_id))
 
         # Sort by priority
         priority_nets.sort()
@@ -231,3 +250,9 @@ class QuantumMelangeIPAMLib(object):
     def get_allocated_ips(self, context, subnet_id, project_id):
         ips = self.m_conn.get_allocated_ips_for_network(subnet_id, project_id)
         return [(ip['address'], ip['interface_id']) for ip in ips]
+
+    def create_vif(self, vif_id, instance_id, project_id=None):
+        """Create a new vif with the specified information.
+        """
+        tenant_id = project_id or FLAGS.quantum_default_tenant_id
+        return self.m_conn.create_vif(vif_id, instance_id, tenant_id)

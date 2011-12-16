@@ -77,6 +77,29 @@ def import_object(import_str):
         return cls()
 
 
+def find_config(config_path):
+    """Find a configuration file using the given hint.
+
+    :param config_path: Full or relative path to the config.
+    :returns: Full path of the config, if it exists.
+    :raises: `nova.exception.ConfigNotFound`
+
+    """
+    possible_locations = [
+        config_path,
+        os.path.join(FLAGS.state_path, "etc", "nova", config_path),
+        os.path.join(FLAGS.state_path, "etc", config_path),
+        os.path.join(FLAGS.state_path, config_path),
+        "/etc/nova/%s" % config_path,
+    ]
+
+    for path in possible_locations:
+        if os.path.exists(path):
+            return os.path.abspath(path)
+
+    raise exception.ConfigNotFound(path=os.path.abspath(config_path))
+
+
 def vpn_ping(address, port, timeout=0.05, session_id=None):
     """Sends a vpn negotiation packet and returns the server session.
 
@@ -134,8 +157,9 @@ def execute(*cmd, **kwargs):
 
     :cmd                Passed to subprocess.Popen.
     :process_input      Send to opened process.
-    :check_exit_code    Defaults to 0. Raise exception.ProcessExecutionError
-                        unless program exits with this code.
+    :check_exit_code    Single bool, int, or list of allowed exit codes.
+                        Defaults to [0].  Raise exception.ProcessExecutionError
+                        unless program exits with one of these code.
     :delay_on_retry     True | False. Defaults to True. If set to True, wait a
                         short amount of time before retrying.
     :attempts           How many times to retry cmd.
@@ -148,7 +172,13 @@ def execute(*cmd, **kwargs):
     """
 
     process_input = kwargs.pop('process_input', None)
-    check_exit_code = kwargs.pop('check_exit_code', 0)
+    check_exit_code = kwargs.pop('check_exit_code', [0])
+    ignore_exit_code = False
+    if type(check_exit_code) == int:
+        check_exit_code = [check_exit_code]
+    elif type(check_exit_code) == bool:
+        ignore_exit_code = not check_exit_code
+        check_exit_code = [0]
     delay_on_retry = kwargs.pop('delay_on_retry', True)
     attempts = kwargs.pop('attempts', 1)
     run_as_root = kwargs.pop('run_as_root', False)
@@ -182,8 +212,8 @@ def execute(*cmd, **kwargs):
             _returncode = obj.returncode  # pylint: disable=E1101
             if _returncode:
                 LOG.debug(_('Result was %s') % _returncode)
-                if type(check_exit_code) == types.IntType \
-                        and _returncode != check_exit_code:
+                if ignore_exit_code == False \
+                    and _returncode not in check_exit_code:
                     (stdout, stderr) = result
                     raise exception.ProcessExecutionError(
                             exit_code=_returncode,
@@ -336,6 +366,9 @@ def current_audit_period(unit=None):
 
 
 def usage_from_instance(instance_ref, **kw):
+    image_ref_url = "%s/images/%s" % (generate_glance_url(),
+            instance_ref['image_ref'])
+
     usage_info = dict(
           tenant_id=instance_ref['project_id'],
           user_id=instance_ref['user_id'],
@@ -346,7 +379,7 @@ def usage_from_instance(instance_ref, **kw):
           created_at=str(instance_ref['created_at']),
           launched_at=str(instance_ref['launched_at']) \
                       if instance_ref['launched_at'] else '',
-          image_ref=instance_ref['image_ref'],
+          image_ref_url=image_ref_url,
           state=instance_ref['vm_state'],
           state_description=instance_ref['task_state'] \
                              if instance_ref['task_state'] else '',
@@ -716,6 +749,9 @@ def synchronized(name, external=False):
                         '"%(method)s"...' % {'lock': name,
                                              'method': f.__name__}))
             with sem:
+                LOG.debug(_('Got semaphore "%(lock)s" for method '
+                            '"%(method)s"...' % {'lock': name,
+                                                 'method': f.__name__}))
                 if external:
                     LOG.debug(_('Attempting to grab file lock "%(lock)s" for '
                                 'method "%(method)s"...' %
@@ -727,6 +763,10 @@ def synchronized(name, external=False):
                     lock = _NoopContextManager()
 
                 with lock:
+                    if external:
+                        LOG.debug(_('Got file lock "%(lock)s" for '
+                                    'method "%(method)s"...' %
+                                    {'lock': name, 'method': f.__name__}))
                     retval = f(*args, **kwargs)
 
             # If no-one else is waiting for it, delete it.
@@ -872,7 +912,7 @@ def gen_uuid():
 
 
 def is_uuid_like(val):
-    """For our purposes, a UUID is a string in canoical form:
+    """For our purposes, a UUID is a string in canonical form:
 
         aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
     """
@@ -908,9 +948,29 @@ def is_valid_ipv4(address):
     return True
 
 
+def is_valid_cidr(address):
+    """Check if the provided ipv4 or ipv6 address is a valid
+    CIDR address or not"""
+    try:
+        # Validate the correct CIDR Address
+        netaddr.IPNetwork(address)
+    except netaddr.core.AddrFormatError:
+        return False
+
+    # Prior validation partially verify /xx part
+    # Verify it here
+    ip_segment = address.split('/')
+
+    if (len(ip_segment) <= 1 or
+        ip_segment[1] == ''):
+        return False
+
+    return True
+
+
 def monkey_patch():
     """  If the Flags.monkey_patch set as True,
-    this functuion patches a decorator
+    this function patches a decorator
     for all functions in specified modules.
     You can set decorators for each modules
     using FLAGS.monkey_patch_modules.
@@ -1002,6 +1062,19 @@ def save_and_reraise_exception():
     raise type_, value, traceback
 
 
+@contextlib.contextmanager
+def logging_error(message):
+    """Catches exception, write message to the log, re-raise.
+    This is a common refinement of save_and_reraise that writes a specific
+    message to the log.
+    """
+    try:
+        yield
+    except Exception as error:
+        with save_and_reraise_exception():
+            LOG.exception(message)
+
+
 def make_dev_path(dev, partition=None, base='/dev'):
     """Return a path to a particular device.
 
@@ -1024,3 +1097,16 @@ def total_seconds(td):
     else:
         return ((td.days * 86400 + td.seconds) * 10 ** 6 +
                 td.microseconds) / 10.0 ** 6
+
+
+def sanitize_hostname(hostname):
+    """Return a hostname which conforms to RFC-952 and RFC-1123 specs."""
+    if isinstance(hostname, unicode):
+        hostname = hostname.encode('latin-1', 'ignore')
+
+    hostname = re.sub('[ _]', '-', hostname)
+    hostname = re.sub('[^\w.-]+', '', hostname)
+    hostname = hostname.lower()
+    hostname = hostname.strip('.-')
+
+    return hostname

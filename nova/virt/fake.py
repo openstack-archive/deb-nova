@@ -94,10 +94,14 @@ class FakeConnection(driver.ComputeDriver):
         return info_list
 
     def plug_vifs(self, instance, network_info):
-        """Plugin VIFs into networks."""
+        """Plug VIFs into networks."""
         pass
 
-    def spawn(self, context, instance,
+    def unplug_vifs(self, instance, network_info):
+        """Unplug VIFs from networks."""
+        pass
+
+    def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
         name = instance.name
         state = power_state.RUNNING
@@ -126,7 +130,7 @@ class FakeConnection(driver.ComputeDriver):
     def agent_update(self, instance, url, md5hash):
         pass
 
-    def rescue(self, context, instance, network_info):
+    def rescue(self, context, instance, network_info, image_meta):
         pass
 
     def unrescue(self, instance, network_info):
@@ -138,7 +142,8 @@ class FakeConnection(driver.ComputeDriver):
     def poll_rescued_instances(self, timeout):
         pass
 
-    def migrate_disk_and_power_off(self, context, instance, dest):
+    def migrate_disk_and_power_off(self, context, instance, dest,
+                                   instance_type):
         pass
 
     def poll_unconfirmed_resizes(self, resize_confirm_window):
@@ -191,7 +196,7 @@ class FakeConnection(driver.ComputeDriver):
                 'cpu_time': 0}
 
     def get_diagnostics(self, instance_name):
-        return {}
+        return 'FAKE_DIAGNOSTICS'
 
     def get_all_bw_usage(self, start_time, stop_time=None):
         """Return bandwidth usage info for each interface on each

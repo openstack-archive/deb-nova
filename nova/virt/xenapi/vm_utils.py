@@ -316,11 +316,9 @@ class VMHelper(HelperBase):
                 "%(vm_ref)s") % locals())
 
     @classmethod
-    def create_snapshot(cls, session, instance_id, vm_ref, label):
+    def create_snapshot(cls, session, instance, vm_ref, label):
         """Creates Snapshot (Template) VM, Snapshot VBD, Snapshot VDI,
         Snapshot VHD"""
-        #TODO(sirp): Add quiesce and VSS locking support when Windows support
-        # is added
         LOG.debug(_("Snapshotting VM %(vm_ref)s with label '%(label)s'...")
                 % locals())
 
@@ -330,7 +328,7 @@ class VMHelper(HelperBase):
         original_parent_uuid = get_vhd_parent_uuid(session, vm_vdi_ref)
 
         task = session.call_xenapi('Async.VM.snapshot', vm_ref, label)
-        template_vm_ref = session.wait_for_task(task, instance_id)
+        template_vm_ref = session.wait_for_task(task, instance['uuid'])
         template_vdi_rec = cls.get_vdi_for_vm_safely(session,
                 template_vm_ref)[1]
         template_vdi_uuid = template_vdi_rec["uuid"]
@@ -338,8 +336,8 @@ class VMHelper(HelperBase):
         LOG.debug(_('Created snapshot %(template_vm_ref)s from'
                 ' VM %(vm_ref)s.') % locals())
 
-        parent_uuid = wait_for_vhd_coalesce(
-            session, instance_id, sr_ref, vm_vdi_ref, original_parent_uuid)
+        parent_uuid = _wait_for_vhd_coalesce(
+            session, instance, sr_ref, vm_vdi_ref, original_parent_uuid)
 
         #TODO(sirp): we need to assert only one parent, not parents two deep
         template_vdi_uuids = {'image': parent_uuid,
@@ -353,14 +351,13 @@ class VMHelper(HelperBase):
         This is used when we're dealing with VHDs directly, either by taking
         snapshots or by restoring an image in the DISK_VHD format.
         """
-        sr_ref = safe_find_sr(session)
+        sr_ref = cls.safe_find_sr(session)
         sr_rec = session.call_xenapi("SR.get_record", sr_ref)
         sr_uuid = sr_rec["uuid"]
         return os.path.join(FLAGS.xenapi_sr_base_path, sr_uuid)
 
     @classmethod
-    def upload_image(cls, context, session, instance, vdi_uuids, image_id,
-                     options=None):
+    def upload_image(cls, context, session, instance, vdi_uuids, image_id):
         """ Requests that the Glance plugin bundle the specified VDIs and
         push them into Glance using the specified human-friendly name.
         """
@@ -369,95 +366,78 @@ class VMHelper(HelperBase):
         logging.debug(_("Asking xapi to upload %(vdi_uuids)s as"
                 " ID %(image_id)s") % locals())
 
-        os_type = instance.os_type or FLAGS.default_os_type
-
         glance_host, glance_port = glance.pick_glance_api_server()
+
+        properties = {}
+        properties['auto_disk_config'] = instance.auto_disk_config
+        properties['os_type'] = instance.os_type or FLAGS.default_os_type
+
         params = {'vdi_uuids': vdi_uuids,
                   'image_id': image_id,
                   'glance_host': glance_host,
                   'glance_port': glance_port,
                   'sr_path': cls.get_sr_path(session),
-                  'os_type': os_type,
                   'auth_token': getattr(context, 'auth_token', None),
-                  'options': options}
+                  'properties': properties}
 
         kwargs = {'params': pickle.dumps(params)}
         task = session.async_call_plugin('glance', 'upload_vhd', kwargs)
-        session.wait_for_task(task, instance.id)
+        session.wait_for_task(task, instance['uuid'])
 
     @classmethod
-    def create_managed_disk(cls, session, vdi_ref):
-        """A 'managed disk' means that we'll resize the partition and fs to
-        match the size specified by instance_types.local_gb.
-        """
-        with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
-            dev_path = utils.make_dev_path(dev)
-            partition_path = utils.make_dev_path(dev, partition=1)
-            if cls._resize_partition_allowed(dev_path, partition_path):
-                cls._resize_partition_and_fs(dev_path, partition_path)
+    def resize_disk(cls, session, vdi_ref, instance_type):
+        # Copy VDI over to something we can resize
+        # NOTE(jerdfelt): Would be nice to just set vdi_ref to read/write
+        sr_ref = cls.safe_find_sr(session)
+        copy_ref = session.call_xenapi('VDI.copy', vdi_ref, sr_ref)
+        copy_uuid = session.call_xenapi('VDI.get_uuid', copy_ref)
+
+        try:
+            # Resize partition and filesystem down
+            cls.auto_configure_disk(session=session,
+                                    vdi_ref=copy_ref,
+                                    new_gb=instance_type['local_gb'])
+
+            # Create new VDI
+            new_ref = cls.fetch_blank_disk(session,
+                                           instance_type['id'])
+            new_uuid = session.call_xenapi('VDI.get_uuid', new_ref)
+
+            # Manually copy contents over
+            virtual_size = instance_type['local_gb'] * 1024 * 1024 * 1024
+            _copy_partition(session, copy_ref, new_ref, 1, virtual_size)
+
+            return new_ref, new_uuid
+        finally:
+            cls.destroy_vdi(session, copy_ref)
 
     @classmethod
-    def _resize_partition_allowed(cls, dev_path, partition_path):
-        """Determine whether we should resize the partition and the fs.
+    def auto_configure_disk(cls, session, vdi_ref, new_gb):
+        """Partition and resize FS to match the size specified by
+        instance_types.local_gb.
 
         This is a fail-safe to prevent accidentally destroying data on a disk
-        erroneously marked as managed_disk=True.
+        erroneously marked as auto_disk_config=True.
 
         The criteria for allowing resize are:
 
-            1. 'managed_disk' must be true for the instance (and image). (If
-                we've made it here, then managed_disk=True.)
+            1. 'auto_disk_config' must be true for the instance (and image).
+               (If we've made it here, then auto_disk_config=True.)
 
             2. The disk must have only one partition.
 
             3. The file-system on the one partition must be ext3 or ext4.
         """
-        out, err = utils.execute("parted", "--script", "--machine",
-                                 partition_path, "print", run_as_root=True)
-        lines = [line for line in out.split('\n') if line]
-        partitions = lines[2:]
+        with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
+            partitions = _get_partitions(dev)
 
-        num_partitions = len(partitions)
-        fs_type = partitions[0].split(':')[4]
-        LOG.debug(_("Found %(num_partitions)s partitions, the first with"
-                    " fs_type '%(fs_type)s'") % locals())
+            if len(partitions) != 1:
+                return
 
-        allowed_fs = fs_type in ('ext3', 'ext4')
-        return num_partitions == 1 and allowed_fs
-
-    @classmethod
-    def _resize_partition_and_fs(cls, dev_path, partition_path):
-        """Resize partition and fileystem.
-
-        This assumes we are dealing with a single primary partition and using
-        ext3 or ext4.
-        """
-        # 1. Delete and recreate partition to end of disk
-        root_helper = FLAGS.root_helper
-        cmd = """echo "d
-n
-p
-1
-
-
-w
-" | %(root_helper)s fdisk %(dev_path)s""" % locals()
-        utils.execute(cmd, run_as_root=False, shell=True)
-
-        # 2. Remove ext3 journal (making it ext2)
-        utils.execute("tune2fs", "-O ^has_journal", partition_path,
-                      run_as_root=True)
-
-        # 3. fsck the disk
-        # NOTE(sirp): using -p here to automatically repair filesystem, is
-        # this okay?
-        utils.execute("e2fsck", "-f", "-p", partition_path, run_as_root=True)
-
-        # 4. Resize the disk
-        utils.execute("resize2fs", partition_path, run_as_root=True)
-
-        # 5. Add back journal
-        utils.execute("tune2fs", "-j", partition_path, run_as_root=True)
+            num, start, old_sectors, ptype = partitions[0]
+            if ptype in ('ext3', 'ext4'):
+                new_sectors = new_gb * 1024 * 1024 * 1024 / SECTOR_SIZE
+                _resize_part_and_fs(dev, start, old_sectors, new_sectors)
 
     @classmethod
     def generate_swap(cls, session, instance, vm_ref, userdevice, swap_mb):
@@ -473,7 +453,7 @@ w
             4. Create VBD between instance VM and swap VDI
         """
         # 1. Create VDI
-        sr_ref = safe_find_sr(session)
+        sr_ref = cls.safe_find_sr(session)
         name_label = instance.name + "-swap"
         ONE_MEG = 1024 * 1024
         virtual_size = swap_mb * ONE_MEG
@@ -504,7 +484,7 @@ w
 
             # 4. Create VBD between instance VM and swap VDI
             volume_utils.VolumeHelper.create_vbd(
-                    session, vm_ref, vdi_ref, userdevice, bootable=False)
+                session, vm_ref, vdi_ref, userdevice, bootable=False)
         except:
             with utils.save_and_reraise_exception():
                 cls.destroy_vdi(session, vdi_ref)
@@ -521,7 +501,7 @@ w
         vdi_size = one_gig * req_size
 
         LOG.debug("ISO vm create: Looking for the SR")
-        sr_ref = safe_find_sr(session)
+        sr_ref = cls.safe_find_sr(session)
 
         vdi_ref = cls.create_vdi(session, sr_ref, 'blank HD', vdi_size, False)
         return vdi_ref
@@ -551,7 +531,7 @@ w
         instance_id = instance.id
         LOG.debug(_("Asking xapi to fetch vhd image %(image)s")
                     % locals())
-        sr_ref = safe_find_sr(session)
+        sr_ref = cls.safe_find_sr(session)
 
         # NOTE(sirp): The Glance plugin runs under Python 2.4
         # which does not have the `uuid` module. To work around this,
@@ -570,7 +550,7 @@ w
 
         kwargs = {'params': pickle.dumps(params)}
         task = session.async_call_plugin('glance', 'download_vhd', kwargs)
-        result = session.wait_for_task(task, instance_id)
+        result = session.wait_for_task(task, instance['uuid'])
         # 'download_vhd' will return a json encoded string containing
         # a list of dictionaries describing VDIs.  The dictionary will
         # contain 'vdi_type' and 'vdi_uuid' keys.  'vdi_type' can be
@@ -580,7 +560,7 @@ w
             LOG.debug(_("xapi 'download_vhd' returned VDI of "
                     "type '%(vdi_type)s' with UUID '%(vdi_uuid)s'" % vdi))
 
-        cls.scan_sr(session, instance_id, sr_ref)
+        cls.scan_sr(session, instance, sr_ref)
 
         # Pull out the UUID of the first VDI (which is the os VDI)
         os_vdi_uuid = vdis[0]['vdi_uuid']
@@ -652,10 +632,10 @@ w
         LOG.debug(_("Image Type: %s"), ImageType.to_string(image_type))
 
         if image_type == ImageType.DISK_ISO:
-            sr_ref = safe_find_iso_sr(session)
+            sr_ref = cls.safe_find_iso_sr(session)
             LOG.debug(_("ISO: Found sr possibly containing the ISO image"))
         else:
-            sr_ref = safe_find_sr(session)
+            sr_ref = cls.safe_find_sr(session)
 
         glance_client, image_id = glance.get_glance_client(context, image)
         glance_client.set_auth_token(getattr(context, 'auth_token', None))
@@ -695,7 +675,7 @@ w
                 # Let the plugin copy the correct number of bytes.
                 args['image-size'] = str(vdi_size)
                 task = session.async_call_plugin('glance', fn, args)
-                filename = session.wait_for_task(task, instance_id)
+                filename = session.wait_for_task(task, instance['uuid'])
                 # Remove the VDI as it is not needed anymore.
                 session.call_xenapi("VDI.destroy", vdi_ref)
                 LOG.debug(_("Kernel/Ramdisk VDI %s destroyed"), vdi_ref)
@@ -717,7 +697,7 @@ w
             raise e
 
     @classmethod
-    def determine_disk_image_type(cls, instance, context):
+    def determine_disk_image_type(cls, image_meta):
         """Disk Image Types are used to determine where the kernel will reside
         within an image. To figure out which type we're dealing with, we use
         the following rules:
@@ -736,12 +716,11 @@ w
                              ImageType.DISK_VHD: 'DISK_VHD',
                              ImageType.DISK_ISO: 'DISK_ISO'}
             disk_format = pretty_format[image_type]
-            image_ref = instance.image_ref
-            instance_id = instance.id
+            image_ref = image_meta['id']
             LOG.debug(_("Detected %(disk_format)s format for image "
-                        "%(image_ref)s, instance %(instance_id)s") % locals())
+                        "%(image_ref)s") % locals())
 
-        def determine_from_glance():
+        def determine_from_image_meta():
             glance_disk_format2nova_type = {
                 'ami': ImageType.DISK,
                 'aki': ImageType.KERNEL,
@@ -749,23 +728,13 @@ w
                 'raw': ImageType.DISK_RAW,
                 'vhd': ImageType.DISK_VHD,
                 'iso': ImageType.DISK_ISO}
-            image_ref = instance.image_ref
-            glance_client, image_id = glance.get_glance_client(context,
-                                                               image_ref)
-            meta = glance_client.get_image_meta(image_id)
-            disk_format = meta['disk_format']
+            disk_format = image_meta['disk_format']
             try:
                 return glance_disk_format2nova_type[disk_format]
             except KeyError:
                 raise exception.InvalidDiskFormat(disk_format=disk_format)
 
-        def determine_from_instance():
-            if instance.kernel_id:
-                return ImageType.DISK
-            else:
-                return ImageType.DISK_RAW
-
-        image_type = determine_from_glance()
+        image_type = determine_from_image_meta()
 
         log_disk_format(image_type)
         return image_type
@@ -813,6 +782,14 @@ w
     @classmethod
     def set_vm_name_label(cls, session, vm_ref, name_label):
         session.call_xenapi("VM.set_name_label", vm_ref, name_label)
+
+    @classmethod
+    def list_vms(cls, session):
+        for vm_ref, vm_rec in cls.get_all_refs_and_recs(session, 'VM'):
+            if vm_rec["is_a_template"] or vm_rec["is_control_domain"]:
+                continue
+            else:
+                yield vm_ref, vm_rec
 
     @classmethod
     def lookup(cls, session, name_label):
@@ -932,18 +909,86 @@ w
         raise exception.CouldNotFetchMetrics()
 
     @classmethod
-    def scan_sr(cls, session, instance_id=None, sr_ref=None):
+    def scan_sr(cls, session, instance=None, sr_ref=None):
         """Scans the SR specified by sr_ref"""
         if sr_ref:
             LOG.debug(_("Re-scanning SR %s"), sr_ref)
             task = session.call_xenapi('Async.SR.scan', sr_ref)
-            session.wait_for_task(task, instance_id)
+            instance_uuid = instance['uuid'] if instance else None
+            session.wait_for_task(task, instance_uuid)
 
     @classmethod
     def scan_default_sr(cls, session):
         """Looks for the system default SR and triggers a re-scan"""
-        sr_ref = find_sr(session)
+        sr_ref = cls.find_sr(session)
         session.call_xenapi('SR.scan', sr_ref)
+
+    @classmethod
+    def safe_find_sr(cls, session):
+        """Same as find_sr except raises a NotFound exception if SR cannot be
+        determined
+        """
+        sr_ref = cls.find_sr(session)
+        if sr_ref is None:
+            raise exception.StorageRepositoryNotFound()
+        return sr_ref
+
+    @classmethod
+    def find_sr(cls, session):
+        """Return the storage repository to hold VM images"""
+        host = session.get_xenapi_host()
+
+        for sr_ref, sr_rec in cls.get_all_refs_and_recs(session, 'SR'):
+            if not ('i18n-key' in sr_rec['other_config'] and
+                    sr_rec['other_config']['i18n-key'] == 'local-storage'):
+                continue
+            for pbd_ref in sr_rec['PBDs']:
+                pbd_rec = cls.get_rec(session, 'PBD', pbd_ref)
+                if pbd_rec and pbd_rec['host'] == host:
+                    return sr_ref
+        return None
+
+    @classmethod
+    def safe_find_iso_sr(cls, session):
+        """Same as find_iso_sr except raises a NotFound exception if SR
+        cannot be determined
+        """
+        sr_ref = cls.find_iso_sr(session)
+        if sr_ref is None:
+            raise exception.NotFound(_('Cannot find SR of content-type ISO'))
+        return sr_ref
+
+    @classmethod
+    def find_iso_sr(cls, session):
+        """Return the storage repository to hold ISO images"""
+        host = session.get_xenapi_host()
+        for sr_ref, sr_rec in cls.get_all_refs_and_recs(session, 'SR'):
+            LOG.debug(_("ISO: looking at SR %(sr_rec)s") % locals())
+            if not sr_rec['content_type'] == 'iso':
+                LOG.debug(_("ISO: not iso content"))
+                continue
+            if not 'i18n-key' in sr_rec['other_config']:
+                LOG.debug(_("ISO: iso content_type, no 'i18n-key' key"))
+                continue
+            if not sr_rec['other_config']['i18n-key'] == 'local-storage-iso':
+                LOG.debug(_("ISO: iso content_type, i18n-key value not "
+                            "'local-storage-iso'"))
+                continue
+
+            LOG.debug(_("ISO: SR MATCHing our criteria"))
+            for pbd_ref in sr_rec['PBDs']:
+                LOG.debug(_("ISO: ISO, looking to see if it is host local"))
+                pbd_rec = cls.get_rec(session, 'PBD', pbd_ref)
+                if not pbd_rec:
+                    LOG.debug(_("ISO: PBD %(pbd_ref)s disappeared") % locals())
+                    continue
+                pbd_rec_host = pbd_rec['host']
+                LOG.debug(_("ISO: PBD matching, want %(pbd_rec)s, " +
+                            "have %(host)s") % locals())
+                if pbd_rec_host == host:
+                    LOG.debug(_("ISO: SR with local PBD"))
+                    return sr_ref
+        return None
 
 
 def get_rrd(host, vm_uuid):
@@ -1084,8 +1129,8 @@ def walk_vdi_chain(session, vdi_uuid):
             break
 
 
-def wait_for_vhd_coalesce(session, instance_id, sr_ref, vdi_ref,
-                          original_parent_uuid):
+def _wait_for_vhd_coalesce(session, instance, sr_ref, vdi_ref,
+                           original_parent_uuid):
     """ Spin until the parent VHD is coalesced into its parent VHD
 
     Before coalesce:
@@ -1108,7 +1153,7 @@ def wait_for_vhd_coalesce(session, instance_id, sr_ref, vdi_ref,
                     " %(max_attempts)d), giving up...") % locals())
             raise exception.Error(msg)
 
-        VMHelper.scan_sr(session, instance_id, sr_ref)
+        VMHelper.scan_sr(session, instance, sr_ref)
         parent_uuid = get_vhd_parent_uuid(session, vdi_ref)
         if original_parent_uuid and (parent_uuid != original_parent_uuid):
             LOG.debug(_("Parent %(parent_uuid)s doesn't match original parent"
@@ -1122,74 +1167,6 @@ def wait_for_vhd_coalesce(session, instance_id, sr_ref, vdi_ref,
     loop.start(FLAGS.xenapi_vhd_coalesce_poll_interval, now=True)
     parent_uuid = loop.wait()
     return parent_uuid
-
-
-def safe_find_sr(session):
-    """Same as find_sr except raises a NotFound exception if SR cannot be
-    determined
-    """
-    sr_ref = find_sr(session)
-    if sr_ref is None:
-        raise exception.StorageRepositoryNotFound()
-    return sr_ref
-
-
-def find_sr(session):
-    """Return the storage repository to hold VM images"""
-    host = session.get_xenapi_host()
-    sr_refs = session.call_xenapi("SR.get_all")
-    for sr_ref in sr_refs:
-        sr_rec = session.call_xenapi("SR.get_record", sr_ref)
-        if not ('i18n-key' in sr_rec['other_config'] and
-                sr_rec['other_config']['i18n-key'] == 'local-storage'):
-            continue
-        for pbd_ref in sr_rec['PBDs']:
-            pbd_rec = session.call_xenapi("PBD.get_record", pbd_ref)
-            if pbd_rec['host'] == host:
-                return sr_ref
-    return None
-
-
-def safe_find_iso_sr(session):
-    """Same as find_iso_sr except raises a NotFound exception if SR cannot be
-    determined
-    """
-    sr_ref = find_iso_sr(session)
-    if sr_ref is None:
-        raise exception.NotFound(_('Cannot find SR of content-type ISO'))
-    return sr_ref
-
-
-def find_iso_sr(session):
-    """Return the storage repository to hold ISO images"""
-    host = session.get_xenapi_host()
-    sr_refs = session.call_xenapi("SR.get_all")
-    for sr_ref in sr_refs:
-        sr_rec = session.call_xenapi("SR.get_record", sr_ref)
-
-        LOG.debug(_("ISO: looking at SR %(sr_rec)s") % locals())
-        if not sr_rec['content_type'] == 'iso':
-            LOG.debug(_("ISO: not iso content"))
-            continue
-        if not 'i18n-key' in sr_rec['other_config']:
-            LOG.debug(_("ISO: iso content_type, no 'i18n-key' key"))
-            continue
-        if not sr_rec['other_config']['i18n-key'] == 'local-storage-iso':
-            LOG.debug(_("ISO: iso content_type, i18n-key value not "
-                        "'local-storage-iso'"))
-            continue
-
-        LOG.debug(_("ISO: SR MATCHing our criteria"))
-        for pbd_ref in sr_rec['PBDs']:
-            LOG.debug(_("ISO: ISO, looking to see if it is host local"))
-            pbd_rec = session.call_xenapi("PBD.get_record", pbd_ref)
-            pbd_rec_host = pbd_rec['host']
-            LOG.debug(_("ISO: PBD matching, want %(pbd_rec)s, have %(host)s") %
-                      locals())
-            if pbd_rec_host == host:
-                LOG.debug(_("ISO: SR with local PBD"))
-                return sr_ref
-    return None
 
 
 def remap_vbd_dev(dev):
@@ -1222,7 +1199,7 @@ def _wait_for_device(dev):
         time.sleep(1)
 
     raise volume_utils.StorageError(
-            _('Timeout waiting for device %s to be created') % dev)
+        _('Timeout waiting for device %s to be created') % dev)
 
 
 @contextlib.contextmanager
@@ -1327,6 +1304,27 @@ def _is_vdi_pv(dev):
     return False
 
 
+def _get_partitions(dev):
+    """Return partition information (num, size, type) for a device."""
+    dev_path = utils.make_dev_path(dev)
+    out, err = utils.execute('parted', '--script', '--machine',
+                             dev_path, 'unit s', 'print',
+                             run_as_root=True)
+    lines = [line for line in out.split('\n') if line]
+    partitions = []
+
+    LOG.debug(_("Partitions:"))
+    for line in lines[2:]:
+        num, start, end, size, ptype = line.split(':')[:5]
+        start = int(start.rstrip('s'))
+        end = int(end.rstrip('s'))
+        size = int(size.rstrip('s'))
+        LOG.debug(_("  %(num)s: %(ptype)s %(size)d sectors") % locals())
+        partitions.append((num, start, size, ptype))
+
+    return partitions
+
+
 def _stream_disk(dev, image_type, virtual_size, image_file):
     offset = 0
     if image_type == ImageType.DISK:
@@ -1361,6 +1359,68 @@ def _write_partition(virtual_size, dev):
             run_as_root=True)
 
     LOG.debug(_('Writing partition table %s done.'), dev_path)
+
+
+def _resize_part_and_fs(dev, start, old_sectors, new_sectors):
+    """Resize partition and fileystem.
+
+    This assumes we are dealing with a single primary partition and using
+    ext3 or ext4.
+    """
+    size = new_sectors - start
+    end = new_sectors - 1
+
+    dev_path = utils.make_dev_path(dev)
+    partition_path = utils.make_dev_path(dev, partition=1)
+
+    # Remove ext3 journal (making it ext2)
+    utils.execute('tune2fs', '-O ^has_journal', partition_path,
+                  run_as_root=True)
+
+    # fsck the disk
+    # NOTE(sirp): using -p here to automatically repair filesystem, is
+    # this okay?
+    utils.execute('e2fsck', '-f', '-p', partition_path, run_as_root=True)
+
+    if new_sectors < old_sectors:
+        # Resizing down, resize filesystem before partition resize
+        utils.execute('resize2fs', partition_path, '%ds' % size,
+                      run_as_root=True)
+
+    utils.execute('parted', '--script', dev_path, 'rm', '1',
+                  run_as_root=True)
+    utils.execute('parted', '--script', dev_path, 'mkpart',
+                  'primary',
+                  '%ds' % start,
+                  '%ds' % end,
+                  run_as_root=True)
+
+    if new_sectors > old_sectors:
+        # Resizing up, resize filesystem after partition resize
+        utils.execute('resize2fs', partition_path, run_as_root=True)
+
+    # Add back journal
+    utils.execute('tune2fs', '-j', partition_path, run_as_root=True)
+
+
+def _copy_partition(session, src_ref, dst_ref, partition, virtual_size):
+    # Part of disk taken up by MBR
+    virtual_size -= MBR_SIZE_BYTES
+
+    with vdi_attached_here(session, src_ref, read_only=True) as src:
+        src_path = utils.make_dev_path(src, partition=partition)
+
+        with vdi_attached_here(session, dst_ref, read_only=False) as dst:
+            dst_path = utils.make_dev_path(dst, partition=partition)
+
+            _write_partition(virtual_size, dst)
+
+            num_blocks = virtual_size / SECTOR_SIZE
+            utils.execute('dd',
+                          'if=%s' % src_path,
+                          'of=%s' % dst_path,
+                          'count=%d' % num_blocks,
+                          run_as_root=True)
 
 
 def _mount_filesystem(dev_path, dir):

@@ -52,7 +52,7 @@ class AdminApiTestCase(test.TestCase):
         self.project_id = 'admin'
         self.context = context.RequestContext(self.user_id,
                                               self.project_id,
-                                              True)
+                                              is_admin=True)
 
         def fake_show(meh, context, id):
             return {'id': 1, 'properties': {'kernel_id': 1, 'ramdisk_id': 1,
@@ -61,14 +61,9 @@ class AdminApiTestCase(test.TestCase):
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
         self.stubs.Set(fake._FakeImageService, 'show_by_name', fake_show)
 
-        # NOTE(vish): set up a manual wait so rpc.cast has a chance to finish
-        rpc_cast = rpc.cast
-
-        def finish_cast(*args, **kwargs):
-            rpc_cast(*args, **kwargs)
-            greenthread.sleep(0.2)
-
-        self.stubs.Set(rpc, 'cast', finish_cast)
+        # NOTE(comstud): Make 'cast' behave like a 'call' which will
+        # ensure that operations complete
+        self.stubs.Set(rpc, 'cast', rpc.call)
 
     def test_block_external_ips(self):
         """Make sure provider firewall rules are created."""

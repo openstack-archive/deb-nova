@@ -20,9 +20,9 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import log as logging
-from nova import quota
 from nova import rpc
 from nova import test
+from nova import utils
 from nova.network import manager as network_manager
 from nova.tests import fake_network
 
@@ -134,9 +134,15 @@ class FlatNetworkTestCase(test.TestCase):
     def setUp(self):
         super(FlatNetworkTestCase, self).setUp()
         self.network = network_manager.FlatManager(host=HOST)
+        temp = utils.import_object('nova.network.minidns.MiniDNS')
+        self.network.instance_dns_manager = temp
         self.network.db = db
         self.context = context.RequestContext('testuser', 'testproject',
                                               is_admin=False)
+
+    def tearDown(self):
+        super(FlatNetworkTestCase, self).tearDown()
+        self.network.instance_dns_manager.delete_dns_file()
 
     def test_get_instance_nw_info(self):
         fake_get_instance_nw_info = fake_network.fake_get_instance_nw_info
@@ -165,6 +171,7 @@ class FlatNetworkTestCase(test.TestCase):
                      'ips': 'DONTCARE',
                      'label': 'test%d' % i,
                      'mac': 'DE:AD:BE:EF:00:%02x' % i,
+                     'rxtx_cap': "%d" % i * 3,
                      'vif_uuid':
                         '00000000-0000-0000-0000-00000000000000%02d' % i,
                      'rxtx_cap': 3,
@@ -272,6 +279,8 @@ class FlatNetworkTestCase(test.TestCase):
         db.instance_get(mox.IgnoreArg(),
                         mox.IgnoreArg()).AndReturn({'security_groups':
                                                              [{'id': 0}]})
+        db.instance_get(self.context,
+                        1).AndReturn({'display_name': HOST})
         db.fixed_ip_associate_pool(mox.IgnoreArg(),
                                    mox.IgnoreArg(),
                                    mox.IgnoreArg()).AndReturn('192.168.0.101')
@@ -281,6 +290,59 @@ class FlatNetworkTestCase(test.TestCase):
         self.mox.ReplayAll()
         self.network.add_fixed_ip_to_instance(self.context, 1, HOST,
                                               networks[0]['id'])
+
+    def test_mini_dns_driver(self):
+        driver = self.network.instance_dns_manager
+        driver.create_entry("hostone", "10.0.0.1", 0, "foozone")
+        driver.create_entry("hosttwo", "10.0.0.2", 0, "foozone")
+        driver.create_entry("hostthree", "10.0.0.3", 0, "foozone")
+        driver.create_entry("hostfour", "10.0.0.4", 0, "foozone")
+        driver.delete_entry("hosttwo", "foozone")
+        driver.rename_entry("10.0.0.3", "hostone", "foozone")
+        driver.modify_address("hostfour", "10.0.0.1", "foozone")
+        names = driver.get_entries_by_address("10.0.0.1", "foozone")
+        self.assertEqual(len(names), 2)
+        self.assertIn('hostone.foozone', names)
+        self.assertIn('hostfour.foozone', names)
+        addresses = driver.get_entries_by_name("hostone", "foozone")
+        self.assertEqual(len(addresses), 2)
+        self.assertIn('10.0.0.1', addresses)
+        self.assertIn('10.0.0.3', addresses)
+
+    def test_instance_dns(self):
+        fixedip = '192.168.0.101'
+        self.mox.StubOutWithMock(db, 'network_get')
+        self.mox.StubOutWithMock(db, 'network_update')
+        self.mox.StubOutWithMock(db, 'fixed_ip_associate_pool')
+        self.mox.StubOutWithMock(db, 'instance_get')
+        self.mox.StubOutWithMock(db,
+                              'virtual_interface_get_by_instance_and_network')
+        self.mox.StubOutWithMock(db, 'fixed_ip_update')
+
+        db.fixed_ip_update(mox.IgnoreArg(),
+                           mox.IgnoreArg(),
+                           mox.IgnoreArg())
+        db.virtual_interface_get_by_instance_and_network(mox.IgnoreArg(),
+                mox.IgnoreArg(), mox.IgnoreArg()).AndReturn({'id': 0})
+
+        db.instance_get(mox.IgnoreArg(),
+                        mox.IgnoreArg()).AndReturn({'security_groups':
+                                                             [{'id': 0}]})
+
+        db.instance_get(self.context,
+                        1).AndReturn({'display_name': HOST})
+        db.fixed_ip_associate_pool(mox.IgnoreArg(),
+                                   mox.IgnoreArg(),
+                                   mox.IgnoreArg()).AndReturn(fixedip)
+        db.network_get(mox.IgnoreArg(),
+                       mox.IgnoreArg()).AndReturn(networks[0])
+        db.network_update(mox.IgnoreArg(), mox.IgnoreArg(), mox.IgnoreArg())
+        self.mox.ReplayAll()
+        self.network.add_fixed_ip_to_instance(self.context, 1, HOST,
+                                              networks[0]['id'])
+        addresses = self.network.instance_dns_manager.get_entries_by_name(HOST)
+        self.assertEqual(len(addresses), 1)
+        self.assertEqual(addresses[0], fixedip)
 
 
 class VlanNetworkTestCase(test.TestCase):
@@ -300,6 +362,7 @@ class VlanNetworkTestCase(test.TestCase):
         db.fixed_ip_associate(mox.IgnoreArg(),
                               mox.IgnoreArg(),
                               mox.IgnoreArg(),
+                              mox.IgnoreArg(),
                               reserved=True).AndReturn('192.168.0.1')
         db.fixed_ip_update(mox.IgnoreArg(),
                            mox.IgnoreArg(),
@@ -311,6 +374,19 @@ class VlanNetworkTestCase(test.TestCase):
         network = dict(networks[0])
         network['vpn_private_address'] = '192.168.0.2'
         self.network.allocate_fixed_ip(None, 0, network, vpn=True)
+
+    def test_vpn_allocate_fixed_ip_no_network_id(self):
+        network = dict(networks[0])
+        network['vpn_private_address'] = '192.168.0.2'
+        network['id'] = None
+        context_admin = context.RequestContext('testuser', 'testproject',
+                is_admin=True)
+        self.assertRaises(exception.FixedIpNotFoundForNetwork,
+                self.network.allocate_fixed_ip,
+                context_admin,
+                0,
+                network,
+                vpn=True)
 
     def test_allocate_fixed_ip(self):
         self.mox.StubOutWithMock(db, 'fixed_ip_associate_pool')
@@ -449,7 +525,7 @@ class VlanNetworkTestCase(test.TestCase):
 
         # this time should raise
         self.stubs.Set(self.network.db, 'floating_ip_count_by_project', fake2)
-        self.assertRaises(quota.QuotaError,
+        self.assertRaises(exception.QuotaError,
                           self.network.allocate_floating_ip,
                           ctxt,
                           ctxt.project_id)
@@ -875,40 +951,43 @@ class CommonNetworkTestCase(test.TestCase):
     def test_get_instance_uuids_by_ip_regex(self):
         manager = fake_network.FakeNetworkManager()
         _vifs = manager.db.virtual_interface_get_all(None)
+        fake_context = context.RequestContext('user', 'project')
 
         # Greedy get eveything
-        res = manager.get_instance_uuids_by_ip_filter(None, {'ip': '.*'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip': '.*'})
         self.assertEqual(len(res), len(_vifs))
 
         # Doesn't exist
-        res = manager.get_instance_uuids_by_ip_filter(None, {'ip': '10.0.0.1'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip': '10.0.0.1'})
         self.assertFalse(res)
 
         # Get instance 1
-        res = manager.get_instance_uuids_by_ip_filter(None,
-                                                    {'ip': '172.16.0.2'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip': '172.16.0.2'})
         self.assertTrue(res)
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]['instance_id'], _vifs[1]['instance_id'])
 
         # Get instance 2
-        res = manager.get_instance_uuids_by_ip_filter(None,
-                                                    {'ip': '173.16.0.2'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip': '173.16.0.2'})
         self.assertTrue(res)
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]['instance_id'], _vifs[2]['instance_id'])
 
         # Get instance 0 and 1
-        res = manager.get_instance_uuids_by_ip_filter(None,
-                                                    {'ip': '172.16.0.*'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip': '172.16.0.*'})
         self.assertTrue(res)
         self.assertEqual(len(res), 2)
         self.assertEqual(res[0]['instance_id'], _vifs[0]['instance_id'])
         self.assertEqual(res[1]['instance_id'], _vifs[1]['instance_id'])
 
         # Get instance 1 and 2
-        res = manager.get_instance_uuids_by_ip_filter(None,
-                                                    {'ip': '17..16.0.2'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip': '17..16.0.2'})
         self.assertTrue(res)
         self.assertEqual(len(res), 2)
         self.assertEqual(res[0]['instance_id'], _vifs[1]['instance_id'])
@@ -917,40 +996,45 @@ class CommonNetworkTestCase(test.TestCase):
     def test_get_instance_uuids_by_ipv6_regex(self):
         manager = fake_network.FakeNetworkManager()
         _vifs = manager.db.virtual_interface_get_all(None)
+        fake_context = context.RequestContext('user', 'project')
 
         # Greedy get eveything
-        res = manager.get_instance_uuids_by_ip_filter(None, {'ip6': '.*'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip6': '.*'})
         self.assertEqual(len(res), len(_vifs))
 
         # Doesn't exist
-        res = manager.get_instance_uuids_by_ip_filter(None,
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
                                                       {'ip6': '.*1034.*'})
         self.assertFalse(res)
 
         # Get instance 1
-        res = manager.get_instance_uuids_by_ip_filter(None,
-                                                    {'ip6': '2001:.*:2'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip6': '2001:.*2'})
         self.assertTrue(res)
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]['instance_id'], _vifs[1]['instance_id'])
 
         # Get instance 2
-        ip6 = '2002:db8::dcad:beff:feef:2'
-        res = manager.get_instance_uuids_by_ip_filter(None, {'ip6': ip6})
+        ip6 = '2001:db8:69:1f:dead:beff:feff:ef03'
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip6': ip6})
         self.assertTrue(res)
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]['instance_id'], _vifs[2]['instance_id'])
 
         # Get instance 0 and 1
-        res = manager.get_instance_uuids_by_ip_filter(None, {'ip6': '2001:.*'})
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip6': '.*ef0[1,2]'})
         self.assertTrue(res)
         self.assertEqual(len(res), 2)
         self.assertEqual(res[0]['instance_id'], _vifs[0]['instance_id'])
         self.assertEqual(res[1]['instance_id'], _vifs[1]['instance_id'])
 
         # Get instance 1 and 2
-        ip6 = '200.:db8::dcad:beff:feef:2'
-        res = manager.get_instance_uuids_by_ip_filter(None, {'ip6': ip6})
+        ip6 = '2001:db8:69:1.:dead:beff:feff:ef0.'
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
+                                                      {'ip6': ip6})
         self.assertTrue(res)
         self.assertEqual(len(res), 2)
         self.assertEqual(res[0]['instance_id'], _vifs[1]['instance_id'])
@@ -959,21 +1043,22 @@ class CommonNetworkTestCase(test.TestCase):
     def test_get_instance_uuids_by_ip(self):
         manager = fake_network.FakeNetworkManager()
         _vifs = manager.db.virtual_interface_get_all(None)
+        fake_context = context.RequestContext('user', 'project')
 
         # No regex for you!
-        res = manager.get_instance_uuids_by_ip_filter(None,
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
                                                       {'fixed_ip': '.*'})
         self.assertFalse(res)
 
         # Doesn't exist
         ip = '10.0.0.1'
-        res = manager.get_instance_uuids_by_ip_filter(None,
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
                                                       {'fixed_ip': ip})
         self.assertFalse(res)
 
         # Get instance 1
         ip = '172.16.0.2'
-        res = manager.get_instance_uuids_by_ip_filter(None,
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
                                                       {'fixed_ip': ip})
         self.assertTrue(res)
         self.assertEqual(len(res), 1)
@@ -981,11 +1066,44 @@ class CommonNetworkTestCase(test.TestCase):
 
         # Get instance 2
         ip = '173.16.0.2'
-        res = manager.get_instance_uuids_by_ip_filter(None,
+        res = manager.get_instance_uuids_by_ip_filter(fake_context,
                                                       {'fixed_ip': ip})
         self.assertTrue(res)
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]['instance_id'], _vifs[2]['instance_id'])
+
+
+class TestRPCFixedManager(network_manager.RPCAllocateFixedIP,
+        network_manager.NetworkManager):
+    """Dummy manager that implements RPCAllocateFixedIP"""
+
+
+class RPCAllocateTestCase(test.TestCase):
+    """Tests nova.network.manager.RPCAllocateFixedIP"""
+    def setUp(self):
+        super(RPCAllocateTestCase, self).setUp()
+        self.rpc_fixed = TestRPCFixedManager()
+        self.context = context.RequestContext('fake', 'fake')
+
+    def test_rpc_allocate(self):
+        """Test to verify bug 855030 doesn't resurface.
+
+        Mekes sure _rpc_allocate_fixed_ip returns a value so the call
+        returns properly and the greenpool completes."""
+        address = '10.10.10.10'
+
+        def fake_allocate(*args, **kwargs):
+            return address
+
+        def fake_network_get(*args, **kwargs):
+            return {}
+
+        self.stubs.Set(self.rpc_fixed, 'allocate_fixed_ip', fake_allocate)
+        self.stubs.Set(self.rpc_fixed.db, 'network_get', fake_network_get)
+        rval = self.rpc_fixed._rpc_allocate_fixed_ip(self.context,
+                                                     'fake_instance',
+                                                     'fake_network')
+        self.assertEqual(rval, address)
 
 
 class TestFloatingIPManager(network_manager.FloatingIP,

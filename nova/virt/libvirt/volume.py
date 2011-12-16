@@ -35,14 +35,19 @@ class LibvirtVolumeDriver(object):
     def __init__(self, connection):
         self.connection = connection
 
+    def _pick_volume_driver(self):
+        hypervisor_type = self.connection.get_hypervisor_type().lower()
+        return "phy" if hypervisor_type == "xen" else "qemu"
+
     def connect_volume(self, connection_info, mount_device):
         """Connect the volume. Returns xml for libvirt."""
+        driver = self._pick_volume_driver()
         device_path = connection_info['data']['device_path']
         xml = """<disk type='block'>
-                     <driver name='qemu' type='raw'/>
+                     <driver name='%s' type='raw'/>
                      <source dev='%s'/>
                      <target dev='%s' bus='virtio'/>
-                 </disk>""" % (device_path, mount_device)
+                 </disk>""" % (driver, device_path, mount_device)
         return xml
 
     def disconnect_volume(self, connection_info, mount_device):
@@ -50,12 +55,12 @@ class LibvirtVolumeDriver(object):
         pass
 
 
-class LibvirtNetVolumeDriver(LibvirtVolumeDriver):
+class LibvirtFakeVolumeDriver(LibvirtVolumeDriver):
     """Driver to attach Network volumes to libvirt."""
 
     def connect_volume(self, connection_info, mount_device):
-        protocol = connection_info['driver_volume_type']
-        name = connection_info['data']['name']
+        protocol = 'fake'
+        name = 'fake'
         xml = """<disk type='network'>
                      <driver name='qemu' type='raw'/>
                      <source protocol='%s' name='%s'/>
@@ -64,14 +69,31 @@ class LibvirtNetVolumeDriver(LibvirtVolumeDriver):
         return xml
 
 
+class LibvirtNetVolumeDriver(LibvirtVolumeDriver):
+    """Driver to attach Network volumes to libvirt."""
+
+    def connect_volume(self, connection_info, mount_device):
+        driver = self._pick_volume_driver()
+        protocol = connection_info['driver_volume_type']
+        name = connection_info['data']['name']
+        xml = """<disk type='network'>
+                     <driver name='%s' type='raw'/>
+                     <source protocol='%s' name='%s'/>
+                     <target dev='%s' bus='virtio'/>
+                 </disk>""" % (driver, protocol, name, mount_device)
+        return xml
+
+
 class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
     """Driver to attach Network volumes to libvirt."""
 
-    def _run_iscsiadm(self, iscsi_properties, iscsi_command):
+    def _run_iscsiadm(self, iscsi_properties, iscsi_command, **kwargs):
+        check_exit_code = kwargs.pop('check_exit_code', 0)
         (out, err) = utils.execute('iscsiadm', '-m', 'node', '-T',
                                    iscsi_properties['target_iqn'],
                                    '-p', iscsi_properties['target_portal'],
-                                   *iscsi_command, run_as_root=True)
+                                   *iscsi_command, run_as_root=True,
+                                   check_exit_code=check_exit_code)
         LOG.debug("iscsiadm %s: stdout=%s stderr=%s" %
                   (iscsi_command, out, err))
         return (out, err)
@@ -107,9 +129,14 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
 
         self._iscsiadm_update(iscsi_properties, "node.startup", "automatic")
 
-        host_device = ("/dev/disk/by-path/ip-%s-iscsi-%s-lun-0" %
-                        (iscsi_properties['target_portal'],
-                         iscsi_properties['target_iqn']))
+        if FLAGS.iscsi_helper == 'tgtadm':
+            host_device = ("/dev/disk/by-path/ip-%s-iscsi-%s-lun-1" %
+                            (iscsi_properties['target_portal'],
+                             iscsi_properties['target_iqn']))
+        else:
+            host_device = ("/dev/disk/by-path/ip-%s-iscsi-%s-lun-0" %
+                            (iscsi_properties['target_portal'],
+                             iscsi_properties['target_iqn']))
 
         # The /dev/disk/by-path/... node is not always present immediately
         # TODO(justinsb): This retry-with-delay is a pattern, move to utils?
@@ -145,5 +172,7 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
         sup.disconnect_volume(connection_info, mount_device)
         iscsi_properties = connection_info['data']
         self._iscsiadm_update(iscsi_properties, "node.startup", "manual")
-        self._run_iscsiadm(iscsi_properties, ("--logout",))
-        self._run_iscsiadm(iscsi_properties, ('--op', 'delete'))
+        self._run_iscsiadm(iscsi_properties, ("--logout"),
+                           check_exit_code=[0, 255])
+        self._run_iscsiadm(iscsi_properties, ('--op', 'delete'),
+                           check_exit_code=[0, 255])

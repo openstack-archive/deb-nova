@@ -218,14 +218,14 @@ class IptablesManager(object):
     intended for rules that need to live at the top of the FORWARD and OUTPUT
     chains. It's in both the ipv4 and ipv6 set of tables.
 
-    For ipv4 and ipv6, the builtin INPUT, OUTPUT, and FORWARD filter chains are
-    wrapped, meaning that the "real" INPUT chain has a rule that jumps to the
-    wrapped INPUT chain, etc. Additionally, there's a wrapped chain named
+    For ipv4 and ipv6, the built-in INPUT, OUTPUT, and FORWARD filter chains
+    are wrapped, meaning that the "real" INPUT chain has a rule that jumps to
+    the wrapped INPUT chain, etc. Additionally, there's a wrapped chain named
     "local" which is jumped to from nova-filter-top.
 
-    For ipv4, the builtin PREROUTING, OUTPUT, and POSTROUTING nat chains are
-    wrapped in the same was as the builtin filter chains. Additionally, there's
-    a snat chain that is applied after the POSTROUTING chain.
+    For ipv4, the built-in PREROUTING, OUTPUT, and POSTROUTING nat chains are
+    wrapped in the same was as the built-in filter chains. Additionally,
+    there's a snat chain that is applied after the POSTROUTING chain.
 
     """
 
@@ -253,7 +253,7 @@ class IptablesManager(object):
             tables['filter'].add_rule('nova-filter-top', '-j $local',
                                       wrap=False)
 
-        # Wrap the builtin chains
+        # Wrap the built-in chains
         builtin_chains = {4: {'filter': ['INPUT', 'OUTPUT', 'FORWARD'],
                               'nat': ['PREROUTING', 'OUTPUT', 'POSTROUTING']},
                           6: {'filter': ['INPUT', 'OUTPUT', 'FORWARD']}}
@@ -364,7 +364,7 @@ class IptablesManager(object):
                 return True
 
         # We filter duplicates, letting the *last* occurrence take
-        # precendence.
+        # precedence.
         new_filter.reverse()
         new_filter = filter(_weed_out_duplicates, new_filter)
         new_filter.reverse()
@@ -377,7 +377,8 @@ def metadata_forward():
                                           '-s 0.0.0.0/0 -d 169.254.169.254/32 '
                                           '-p tcp -m tcp --dport 80 -j DNAT '
                                           '--to-destination %s:%s' % \
-                                          (FLAGS.ec2_dmz_host, FLAGS.ec2_port))
+                                          (FLAGS.metadata_host,
+                                           FLAGS.metadata_port))
     iptables_manager.apply()
 
 
@@ -387,28 +388,36 @@ def metadata_accept():
                                              '-s 0.0.0.0/0 -d %s '
                                              '-p tcp -m tcp --dport %s '
                                              '-j ACCEPT' % \
-                                             (FLAGS.ec2_dmz_host,
-                                              FLAGS.ec2_port))
+                                             (FLAGS.metadata_host,
+                                              FLAGS.metadata_port))
     iptables_manager.apply()
 
 
-def init_host():
+def add_snat_rule(ip_range):
+    iptables_manager.ipv4['nat'].add_rule('snat',
+                                          '-s %s -j SNAT --to-source %s' % \
+                                           (ip_range,
+                                            FLAGS.routing_source_ip))
+    iptables_manager.apply()
+
+
+def init_host(ip_range=None):
     """Basic networking setup goes here."""
     # NOTE(devcamcar): Cloud public SNAT entries and the default
     # SNAT rule for outbound traffic.
-    iptables_manager.ipv4['nat'].add_rule('snat',
-                                          '-s %s -j SNAT --to-source %s' % \
-                                           (FLAGS.fixed_range,
-                                            FLAGS.routing_source_ip))
+    if not ip_range:
+        ip_range = FLAGS.fixed_range
+
+    add_snat_rule(ip_range)
 
     iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
                                           '-s %s -d %s -j ACCEPT' % \
-                                          (FLAGS.fixed_range, FLAGS.dmz_cidr))
+                                          (ip_range, FLAGS.dmz_cidr))
 
     iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
                                           '-s %(range)s -d %(range)s '
                                           '-j ACCEPT' % \
-                                          {'range': FLAGS.fixed_range})
+                                          {'range': ip_range})
     iptables_manager.apply()
 
 
@@ -599,7 +608,7 @@ def update_dhcp(context, dev, network_ref):
     conffile = _dhcp_file(dev, 'conf')
     with open(conffile, 'w') as f:
         f.write(get_dhcp_hosts(context, network_ref))
-    restart_dhcp(dev, network_ref)
+    restart_dhcp(context, dev, network_ref)
 
 
 def update_dhcp_hostfile_with_text(dev, hosts_text):
@@ -617,7 +626,7 @@ def kill_dhcp(dev):
 #           configuration options (like dchp-range, vlan, ...)
 #           aren't reloaded.
 @utils.synchronized('dnsmasq_start')
-def restart_dhcp(dev, network_ref):
+def restart_dhcp(context, dev, network_ref):
     """(Re)starts a dnsmasq server for a given network.
 
     If a dnsmasq instance is already running then send a HUP
@@ -894,6 +903,8 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                           network['bridge_interface'],
                           network, gateway)
 
+        # NOTE(vish): applying here so we don't get a lock conflict
+        iptables_manager.apply()
         return network['bridge']
 
     def unplug(self, network):
@@ -918,10 +929,9 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         interface = 'vlan%s' % vlan_num
         if not _device_exists(interface):
             LOG.debug(_('Starting VLAN inteface %s'), interface)
-            _execute('vconfig', 'set_name_type',
-                     'VLAN_PLUS_VID_NO_PAD', run_as_root=True)
-            _execute('vconfig', 'add', bridge_interface,
-                        vlan_num, run_as_root=True)
+            _execute('ip', 'link', 'add', 'link', bridge_interface,
+                     'name', interface, 'type', 'vlan',
+                     'id', vlan_num, run_as_root=True)
             # (danwent) the bridge will inherit this address, so we want to
             # make sure it is the value set from the NetworkManager
             if mac_address:
@@ -964,14 +974,14 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
 
             # NOTE(vish): This will break if there is already an ip on the
             #             interface, so we move any ips to the bridge
-            gateway = None
+            old_gateway = None
             out, err = _execute('route', '-n', run_as_root=True)
             for line in out.split('\n'):
                 fields = line.split()
                 if fields and fields[0] == '0.0.0.0' and \
                                 fields[-1] == interface:
-                    gateway = fields[1]
-                    _execute('route', 'del', 'default', 'gw', gateway,
+                    old_gateway = fields[1]
+                    _execute('route', 'del', 'default', 'gw', old_gateway,
                              'dev', interface, check_exit_code=False,
                              run_as_root=True)
             out, err = _execute('ip', 'addr', 'show', 'dev', interface,
@@ -984,8 +994,8 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                                 run_as_root=True)
                     _execute(*_ip_bridge_cmd('add', params, bridge),
                                 run_as_root=True)
-            if gateway:
-                _execute('route', 'add', 'default', 'gw', gateway,
+            if old_gateway:
+                _execute('route', 'add', 'default', 'gw', old_gateway,
                             run_as_root=True)
 
             if (err and err != "device %s is already a member of a bridge;"
@@ -1020,7 +1030,7 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
                         '--', '--may-exist', 'add-port', bridge, dev,
                         '--', 'set', 'Interface', dev, "type=internal",
                         '--', 'set', 'Interface', dev,
-                                "external-ids:iface-id=nova-%s" % dev,
+                                "external-ids:iface-id=%s" % dev,
                         '--', 'set', 'Interface', dev,
                                 "external-ids:iface-status=active",
                         '--', 'set', 'Interface', dev,
@@ -1037,6 +1047,16 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
                 _execute('ovs-ofctl', 'add-flow', bridge,
                     "udp,tp_dst=67,dl_dst=%s,priority=2,actions=normal" %
                     mac_address)
+                # .. and make sure iptbles won't forward it as well.
+                iptables_manager.ipv4['filter'].add_rule('FORWARD',
+                        '--in-interface %s -j DROP' % bridge)
+                iptables_manager.ipv4['filter'].add_rule('FORWARD',
+                        '--out-interface %s -j DROP' % bridge)
+            else:
+                iptables_manager.ipv4['filter'].add_rule('FORWARD',
+                        '--in-interface %s -j ACCEPT' % bridge)
+                iptables_manager.ipv4['filter'].add_rule('FORWARD',
+                        '--out-interface %s -j ACCEPT' % bridge)
 
         return dev
 

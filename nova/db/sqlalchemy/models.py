@@ -29,10 +29,8 @@ from sqlalchemy.schema import ForeignKeyConstraint
 
 from nova.db.sqlalchemy.session import get_session
 
-from nova import auth
 from nova import exception
 from nova import flags
-from nova import ipv6
 from nova import utils
 
 
@@ -255,8 +253,29 @@ class Instance(BASE, NovaBase):
     access_ip_v4 = Column(String(255))
     access_ip_v6 = Column(String(255))
 
-    managed_disk = Column(Boolean())
+    auto_disk_config = Column(Boolean())
     progress = Column(Integer)
+
+
+class InstanceInfoCache(BASE, NovaBase):
+    """
+    Represents a cache of information about an instance
+    """
+    __tablename__ = 'instance_info_caches'
+    id = Column(String(36), primary_key=True)
+
+    # text column used for storing a json object of network data for api
+    network_info = Column(Text)
+
+    # this is all uuid based, we have them might as well start using them
+    instance_id = Column(String(36), ForeignKey('instances.uuid'),
+                                     nullable=False, unique=True)
+    instance = relationship(Instance,
+                            backref=backref('info_cache', uselist=False),
+                            foreign_keys=instance_id,
+                            primaryjoin='and_('
+                              'InstanceInfoCache.instance_id == Instance.uuid,'
+                              'InstanceInfoCache.deleted == False)')
 
 
 class VirtualStorageArray(BASE, NovaBase):
@@ -289,8 +308,7 @@ class InstanceActions(BASE, NovaBase):
     """Represents a guest VM's actions and results"""
     __tablename__ = "instance_actions"
     id = Column(Integer, primary_key=True)
-    instance_id = Column(Integer, ForeignKey('instances.id'))
-
+    instance_uuid = Column(String(36), ForeignKey('instances.uuid'))
     action = Column(String(255))
     error = Column(Text)
 
@@ -305,8 +323,7 @@ class InstanceTypes(BASE, NovaBase):
     local_gb = Column(Integer)
     flavorid = Column(String(255), unique=True)
     swap = Column(Integer, nullable=False, default=0)
-    rxtx_quota = Column(Integer, nullable=False, default=0)
-    rxtx_cap = Column(Integer, nullable=False, default=0)
+    rxtx_factor = Column(Float, nullable=False, default=1)
     vcpu_weight = Column(Integer, nullable=True)
 
     instances = relationship(Instance,
@@ -633,6 +650,8 @@ class Network(BASE, NovaBase):
     vpn_private_address = Column(String(255))
     dhcp_start = Column(String(255))
 
+    rxtx_base = Column(Integer)
+
     project_id = Column(String(255))
     priority = Column(Integer)
     host = Column(String(255))  # , ForeignKey('hosts.id'))
@@ -644,23 +663,9 @@ class VirtualInterface(BASE, NovaBase):
     __tablename__ = 'virtual_interfaces'
     id = Column(Integer, primary_key=True)
     address = Column(String(255), unique=True)
-    network_id = Column(Integer, ForeignKey('networks.id'))
-    network = relationship(Network, backref=backref('virtual_interfaces'))
+    network_id = Column(Integer, nullable=False)
     instance_id = Column(Integer, nullable=False)
-
     uuid = Column(String(36))
-
-    @property
-    def fixed_ipv6(self):
-        cidr_v6 = self.network.cidr_v6
-        if cidr_v6 is None:
-            ipv6_address = None
-        else:
-            project_id = self.instance.project_id
-            mac = self.address
-            ipv6_address = ipv6.to_global(cidr_v6, mac, project_id)
-
-        return ipv6_address
 
 
 # TODO(vish): can these both come from the same baseclass?
@@ -906,6 +911,17 @@ class SMVolume(BASE, NovaBase):
     vdi_uuid = Column(String(255))
 
 
+class InstanceFault(BASE, NovaBase):
+    __tablename__ = 'instance_faults'
+    id = Column(Integer(), primary_key=True, autoincrement=True)
+    instance_uuid = Column(String(36),
+                           ForeignKey('instances.uuid'),
+                           nullable=False)
+    code = Column(Integer(), nullable=False)
+    message = Column(String(255))
+    details = Column(Text)
+
+
 def register_models():
     """Register Models and create metadata.
 
@@ -921,7 +937,8 @@ def register_models():
               Project, Certificate, ConsolePool, Console, Zone,
               VolumeMetadata, VolumeTypes, VolumeTypeExtraSpecs,
               AgentBuild, InstanceMetadata, InstanceTypeExtraSpecs, Migration,
-              VirtualStorageArray, SMFlavors, SMBackendConf, SMVolume)
+              VirtualStorageArray, SMFlavors, SMBackendConf, SMVolume,
+              InstanceFault)
     engine = create_engine(FLAGS.sql_connection, echo=False)
     for model in models:
         model.metadata.create_all(engine)

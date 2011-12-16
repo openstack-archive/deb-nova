@@ -1379,7 +1379,7 @@ class VsaCommands(object):
                 raise
 
         is_admin = self.manager.is_admin(user_id)
-        ctxt = context.RequestContext(user_id, project_id, is_admin)
+        ctxt = context.RequestContext(user_id, project_id, is_admin=is_admin)
         if not is_admin and \
            not self.manager.is_project_member(user_id, project_id):
             msg = _("%(user_id)s must be an admin or a "
@@ -1706,10 +1706,9 @@ class InstanceTypeCommands(object):
     def _print_instance_types(self, name, val):
         deleted = ('', ', inactive')[val["deleted"] == 1]
         print ("%s: Memory: %sMB, VCPUS: %s, Storage: %sGB, FlavorID: %s, "
-            "Swap: %sMB, RXTX Quota: %sGB, RXTX Cap: %sMB%s") % (
+            "Swap: %sMB, RXTX Factor: %s") % (
             name, val["memory_mb"], val["vcpus"], val["local_gb"],
-            val["flavorid"], val["swap"], val["rxtx_quota"],
-            val["rxtx_cap"], deleted)
+            val["flavorid"], val["swap"], val["rxtx_factor"])
 
     @args('--name', dest='name', metavar='<name>',
             help='Name of instance type/flavor')
@@ -1721,16 +1720,14 @@ class InstanceTypeCommands(object):
     @args('--flavor', dest='flavorid', metavar='<flavor  id>',
             help='Flavor ID')
     @args('--swap', dest='swap', metavar='<swap>', help='Swap')
-    @args('--rxtx_quota', dest='rxtx_quota', metavar='<rxtx_quota>',
-            help='rxtx_quota')
-    @args('--rxtx_cap', dest='rxtx_cap', metavar='<rxtx_cap>',
-            help='rxtx_cap')
+    @args('--rxtx_factor', dest='rxtx_factor', metavar='<rxtx_factor>',
+            help='rxtx_factor')
     def create(self, name, memory, vcpus, local_gb, flavorid,
-               swap=0, rxtx_quota=0, rxtx_cap=0):
+               swap=0, rxtx_factor=1):
         """Creates instance types / flavors"""
         try:
             instance_types.create(name, memory, vcpus, local_gb,
-                                  flavorid, swap, rxtx_quota, rxtx_cap)
+                                  flavorid, swap, rxtx_factor)
         except exception.InvalidInput, e:
             print "Must supply valid parameters to create instance_type"
             print e
@@ -1812,18 +1809,19 @@ class ImageCommands(object):
                                'architecture': architecture,
                                'image_location': 'local'}}
         if kernel_id:
-            meta['properties']['kernel_id'] = int(kernel_id)
+            meta['properties']['kernel_id'] = kernel_id
         if ramdisk_id:
-            meta['properties']['ramdisk_id'] = int(ramdisk_id)
+            meta['properties']['ramdisk_id'] = ramdisk_id
         elevated = context.get_admin_context()
         try:
             with open(path) as ifile:
                 image = self.image_service.create(elevated, meta, ifile)
             new = image['id']
-            print _("Image registered to %(new)s (%(new)08x).") % locals()
+            print _("Image registered to %(new)s (%(path)s).") % locals()
             return new
         except Exception as exc:
             print _("Failed to register %(path)s: %(exc)s") % locals()
+            sys.exit(1)
 
     @args('--image', dest='image', metavar='<image>', help='Image')
     @args('--kernel', dest='kernel', metavar='<kernel>', help='Kernel')

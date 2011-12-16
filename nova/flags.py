@@ -19,20 +19,20 @@
 
 """Command-line flag library.
 
-Emulates gflags by wrapping optparse.
+Emulates gflags by wrapping cfg.ConfigOpts.
 
-The idea is to move to optparse eventually, and this wrapper is a
+The idea is to move fully to cfg eventually, and this wrapper is a
 stepping stone.
 
 """
 
-import optparse
 import os
 import socket
-import string
 import sys
 
 import gflags
+
+from nova.common import cfg
 
 
 class FlagValues(object):
@@ -67,31 +67,31 @@ class FlagValues(object):
             a = self._error_msg[self._error_msg.rindex(": --") + 2:]
             return filter(lambda i: i == a or i.startswith(a + "="), args)[0]
 
-    def __init__(self, extra_context=None):
-        self._parser = optparse.OptionParser()
-        self._parser.disable_interspersed_args()
-        self._extra_context = extra_context
+    def __init__(self):
+        self._conf = cfg.ConfigOpts()
+        self._conf._oparser.disable_interspersed_args()
+        self._opts = {}
         self.Reset()
 
     def _parse(self):
-        if not self._values is None:
+        if self._extra is not None:
             return
 
         args = gflags.FlagValues().ReadFlagsFromFiles(self._args)
 
-        values = extra = None
+        extra = None
 
         #
         # This horrendous hack allows us to stop optparse
         # exiting when it encounters an unknown option
         #
-        error_catcher = self.ErrorCatcher(self._parser.error)
-        self._parser.error = error_catcher.catch
+        error_catcher = self.ErrorCatcher(self._conf._oparser.error)
+        self._conf._oparser.error = error_catcher.catch
         try:
             while True:
                 error_catcher.reset()
 
-                (values, extra) = self._parser.parse_args(args)
+                extra = self._conf(args)
 
                 unknown = error_catcher.get_unknown_arg(args)
                 if not unknown:
@@ -99,24 +99,19 @@ class FlagValues(object):
 
                 args.remove(unknown)
         finally:
-            self._parser.error = error_catcher.orig_error
+            self._conf._oparser.error = error_catcher.orig_error
 
-        (self._values, self._extra) = (values, extra)
+        self._extra = extra
 
     def __call__(self, argv):
+        self.Reset()
         self._args = argv[1:]
-        self._values = None
         self._parse()
         return [argv[0]] + self._extra
 
     def __getattr__(self, name):
         self._parse()
-        val = getattr(self._values, name)
-        if type(val) is str:
-            tmpl = string.Template(val)
-            context = [self, self._extra_context]
-            return tmpl.substitute(StrWrapper(context))
-        return val
+        return getattr(self._conf, name)
 
     def get(self, name, default):
         value = getattr(self, name)
@@ -127,11 +122,10 @@ class FlagValues(object):
 
     def __contains__(self, name):
         self._parse()
-        return hasattr(self._values, name)
+        return hasattr(self._conf, name)
 
     def _update_default(self, name, default):
-        self._parser.set_default(name, default)
-        self._values = None
+        self._conf.set_default(name, default)
 
     def __iter__(self):
         return self.FlagValuesDict().iterkeys()
@@ -143,74 +137,53 @@ class FlagValues(object):
         return self.Flag(name, getattr(self, name), self._update_default)
 
     def Reset(self):
+        self._conf.reset()
         self._args = []
-        self._values = None
         self._extra = None
 
     def ParseNewFlags(self):
         pass
 
     def FlagValuesDict(self):
+        self._parse()
         ret = {}
-        for opt in self._parser.option_list:
-            if opt.dest:
-                ret[opt.dest] = getattr(self, opt.dest)
+        for opt in self._opts.values():
+            ret[opt.dest] = getattr(self, opt.dest)
         return ret
 
-    def _add_option(self, name, default, help, prefix='--', **kwargs):
-        prefixed_name = prefix + name
-        for opt in self._parser.option_list:
-            if prefixed_name == opt.get_opt_string():
-                return
-        self._parser.add_option(prefixed_name, dest=name,
-                                default=default, help=help, **kwargs)
-        self._values = None
+    def _add_option(self, opt):
+        if opt.dest in self._opts:
+            return
+
+        self._opts[opt.dest] = opt
+
+        try:
+            self._conf.register_cli_opts(self._opts.values())
+        except cfg.ArgsAlreadyParsedError:
+            self._conf.reset()
+            self._conf.register_cli_opts(self._opts.values())
+            self._extra = None
 
     def define_string(self, name, default, help):
-        self._add_option(name, default, help)
+        self._add_option(cfg.StrOpt(name, default=default, help=help))
 
     def define_integer(self, name, default, help):
-        self._add_option(name, default, help, type='int')
+        self._add_option(cfg.IntOpt(name, default=default, help=help))
 
     def define_float(self, name, default, help):
-        self._add_option(name, default, help, type='float')
+        self._add_option(cfg.FloatOpt(name, default=default, help=help))
 
     def define_bool(self, name, default, help):
-        #
-        # FIXME(markmc): this doesn't support --boolflag=true/false/t/f/1/0
-        #
-        self._add_option(name, default, help, action='store_true')
-        self._add_option(name, default, help,
-                         prefix="--no", action='store_false')
+        self._add_option(cfg.BoolOpt(name, default=default, help=help))
 
     def define_list(self, name, default, help):
-        def parse_list(option, opt, value, parser):
-            setattr(self._parser.values, name, value.split(','))
-        self._add_option(name, default, help, type='string',
-                         action='callback', callback=parse_list)
+        self._add_option(cfg.ListOpt(name, default=default, help=help))
 
     def define_multistring(self, name, default, help):
-        self._add_option(name, default, help, action='append')
+        self._add_option(cfg.MultiStrOpt(name, default=default, help=help))
+
 
 FLAGS = FlagValues()
-
-
-class StrWrapper(object):
-    """Wrapper around FlagValues objects.
-
-    Wraps FlagValues objects for string.Template so that we're
-    sure to return strings.
-
-    """
-    def __init__(self, context_objs):
-        self.context_objs = context_objs
-
-    def __getitem__(self, name):
-        for context in self.context_objs:
-            val = getattr(context, name, False)
-            if val:
-                return str(val)
-        raise KeyError(name)
 
 
 def DEFINE_string(name, default, help, flag_values=FLAGS):
@@ -336,7 +309,7 @@ DEFINE_integer('rabbit_max_retries', 0,
         'maximum rabbit connection attempts (0=try forever)')
 DEFINE_string('control_exchange', 'nova', 'the main exchange to connect to')
 DEFINE_boolean('rabbit_durable_queues', False, 'use durable queues')
-DEFINE_list('enabled_apis', ['ec2', 'osapi'],
+DEFINE_list('enabled_apis', ['ec2', 'osapi', 'metadata'],
             'list of APIs to enable by default')
 DEFINE_string('ec2_host', '$my_ip', 'ip of api server')
 DEFINE_string('ec2_dmz_host', '$my_ip', 'internal ip of api server')
@@ -344,7 +317,7 @@ DEFINE_integer('ec2_port', 8773, 'cloud controller port')
 DEFINE_string('ec2_scheme', 'http', 'prefix for ec2')
 DEFINE_string('ec2_path', '/services/Cloud', 'suffix for ec2')
 DEFINE_multistring('osapi_extension',
-                   ['nova.api.openstack.contrib.standard_extensions'],
+                   ['nova.api.openstack.v2.contrib.standard_extensions'],
                    'osapi extension to load')
 DEFINE_string('osapi_host', '$my_ip', 'ip of api server')
 DEFINE_string('osapi_scheme', 'http', 'prefix for openstack')
@@ -352,7 +325,8 @@ DEFINE_integer('osapi_port', 8774, 'OpenStack API port')
 DEFINE_string('osapi_path', '/v1.1/', 'suffix for openstack')
 DEFINE_integer('osapi_max_limit', 1000,
                'max number of items returned in a collection response')
-
+DEFINE_string('metadata_host', '$my_ip', 'ip of metadata server')
+DEFINE_integer('metadata_port', 8775, 'Metadata API port')
 DEFINE_string('default_project', 'openstack', 'default project for openstack')
 DEFINE_string('default_image', 'ami-11111',
               'default image to use, testing only')
@@ -391,6 +365,11 @@ DEFINE_string('compute_manager', 'nova.compute.manager.ComputeManager',
               'Manager for compute')
 DEFINE_string('console_manager', 'nova.console.manager.ConsoleProxyManager',
               'Manager for console proxy')
+DEFINE_string('instance_dns_manager',
+              'nova.network.instance_dns_driver.InstanceDNSManagerDriver',
+              'DNS Manager for instance IPs')
+DEFINE_string('instance_dns_zone', '',
+              'DNS Zone for instance IPs')
 DEFINE_string('network_manager', 'nova.network.manager.VlanManager',
               'Manager for network')
 DEFINE_string('volume_manager', 'nova.volume.manager.VolumeManager',
@@ -414,7 +393,8 @@ DEFINE_string('image_service', 'nova.image.glance.GlanceImageService',
               'The service to use for retrieving and searching for images.')
 
 DEFINE_string('host', socket.gethostname(),
-              'name of this node')
+              'Name of this node.  This can be an opaque identifier.  It is '
+              'not necessarily a hostname, FQDN, or IP address.')
 
 DEFINE_string('node_availability_zone', 'nova',
               'availability zone of this node')

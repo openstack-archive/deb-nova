@@ -23,13 +23,15 @@ Scheduler Service
 
 import functools
 
+from nova.compute import vm_states
 from nova import db
+from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import manager
 from nova import rpc
-from nova import utils
 from nova.scheduler import zone_manager
+from nova import utils
 
 LOG = logging.getLogger('nova.scheduler.manager')
 FLAGS = flags.FLAGS
@@ -53,7 +55,8 @@ class SchedulerManager(manager.Manager):
         """Converts all method calls to use the schedule method"""
         return functools.partial(self._schedule, key)
 
-    def periodic_tasks(self, context=None):
+    @manager.periodic_task
+    def _poll_child_zones(self, context):
         """Poll child zones periodically to get status."""
         self.zone_manager.ping(context)
 
@@ -66,7 +69,7 @@ class SchedulerManager(manager.Manager):
         return self.zone_manager.get_zone_list()
 
     def get_zone_capabilities(self, context=None):
-        """Get the normalized set of capabilites for this zone."""
+        """Get the normalized set of capabilities for this zone."""
         return self.zone_manager.get_zone_capabilities(context)
 
     def update_service_capabilities(self, context=None, service_name=None,
@@ -97,7 +100,26 @@ class SchedulerManager(manager.Manager):
             args = (context, topic, method) + args
 
         # Scheduler methods are responsible for casting.
-        return real_meth(*args, **kwargs)
+        try:
+            return real_meth(*args, **kwargs)
+        except exception.NoValidHost as ex:
+            self._set_instance_error(method, context, ex, *args, **kwargs)
+        except Exception as ex:
+            with utils.save_and_reraise_exception():
+                self._set_instance_error(method, context, ex, *args, **kwargs)
+
+    # NOTE (David Subiros) : If the exception is raised ruing run_instance
+    #                        method, the DB record probably does not exist yet.
+    def _set_instance_error(self, method, context, ex, *args, **kwargs):
+        """Sets VM to Error state"""
+        LOG.warning(_("Failed to schedule_%(method)s: %(ex)s") % locals())
+        if method == "start_instance" or method == "run_instance":
+            instance_id = kwargs['instance_id']
+            if instance_id:
+                LOG.warning(_("Setting instance %(instance_id)s to "
+                              "ERROR state.") % locals())
+                db.instance_update(context, instance_id,
+                                    {'vm_state': vm_states.ERROR})
 
     # NOTE (masumotok) : This method should be moved to nova.api.ec2.admin.
     #                    Based on bexar design summit discussion,

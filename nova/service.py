@@ -45,16 +45,18 @@ flags.DEFINE_integer('report_interval', 10,
 flags.DEFINE_integer('periodic_interval', 60,
                      'seconds between running periodic tasks',
                      lower_bound=1)
-flags.DEFINE_string('ec2_manager', 'nova.api.manager.EC2Manager',
-                    'EC2 API service manager')
 flags.DEFINE_string('ec2_listen', "0.0.0.0",
                     'IP address for EC2 API to listen')
 flags.DEFINE_integer('ec2_listen_port', 8773, 'port for ec2 api to listen')
-flags.DEFINE_string('osapi_manager', None,
-                    'OpenStack API service manager')
 flags.DEFINE_string('osapi_listen', "0.0.0.0",
                     'IP address for OpenStack API to listen')
 flags.DEFINE_integer('osapi_listen_port', 8774, 'port for os api to listen')
+flags.DEFINE_string('metadata_manager', 'nova.api.manager.MetadataManager',
+                    'OpenStack metadata service manager')
+flags.DEFINE_string('metadata_listen', "0.0.0.0",
+                    'IP address for metadata api to listen')
+flags.DEFINE_integer('metadata_listen_port', 8775,
+                     'port for metadata api to listen')
 flags.DEFINE_string('api_paste_config', "api-paste.ini",
                     'File name for the paste.deploy config for nova-api')
 
@@ -250,13 +252,16 @@ class Service(object):
             except Exception:
                 pass
 
-    def periodic_tasks(self):
+    def periodic_tasks(self, raise_on_error=False):
         """Tasks to be run at a periodic interval."""
-        self.manager.periodic_tasks(context.get_admin_context())
+        ctxt = context.get_admin_context()
+        self.manager.periodic_tasks(ctxt, raise_on_error=raise_on_error)
 
     def report_state(self):
         """Update the state of this service in the datastore."""
         ctxt = context.get_admin_context()
+        zone = FLAGS.node_availability_zone
+        state_catalog = {}
         try:
             try:
                 service_ref = db.service_get(ctxt, self.service_id)
@@ -266,9 +271,12 @@ class Service(object):
                 self._create_service_ref(ctxt)
                 service_ref = db.service_get(ctxt, self.service_id)
 
+            state_catalog['report_count'] = service_ref['report_count'] + 1
+            if zone != service_ref['availability_zone']:
+                state_catalog['availability_zone'] = zone
+
             db.service_update(ctxt,
-                             self.service_id,
-                             {'report_count': service_ref['report_count'] + 1})
+                             self.service_id, state_catalog)
 
             # TODO(termie): make this pattern be more elegant.
             if getattr(self, 'model_disconnected', False):

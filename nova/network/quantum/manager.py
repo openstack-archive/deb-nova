@@ -19,6 +19,8 @@ import time
 
 from netaddr import IPNetwork, IPAddress
 
+from nova.compute import instance_types
+from nova import context
 from nova import db
 from nova import exception
 from nova import flags
@@ -26,6 +28,7 @@ from nova import log as logging
 from nova import manager
 from nova.network import manager
 from nova.network.quantum import quantum_connection
+from nova.network.quantum import melange_ipam_lib
 from nova import utils
 
 LOG = logging.getLogger("nova.network.quantum.manager")
@@ -35,6 +38,12 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('quantum_ipam_lib',
                     'nova.network.quantum.nova_ipam_lib',
                     "Indicates underlying IP address management library")
+# TODO(Vek): Eventually, this needs to mean more than just using
+#            Melange for assignment of MAC addresses (with an
+#            appropriate flag name change, of course), but this is all
+#            it does right now
+flags.DEFINE_bool('use_melange_mac_generation', False,
+                  "Use Melange for assignment of MAC addresses")
 
 
 flags.DEFINE_string('quantum_use_dhcp', 'False',
@@ -48,10 +57,8 @@ class QuantumManager(manager.FlatManager):
        For IP Address management, QuantumManager can be configured to
        use either Nova's local DB or the Melange IPAM service.
 
-       Currently, the QuantumManager does NOT support any of the 'gateway'
-       functionality implemented by the Nova VlanManager, including:
+       Currently, the QuantumManager does NOT support:
             * floating IPs
-            * NAT gateway
 
        Support for these capabilities are targted for future releases.
     """
@@ -72,11 +79,34 @@ class QuantumManager(manager.FlatManager):
         self.ipam = utils.import_object(ipam_lib).get_ipam_lib(self)
 
         super(QuantumManager, self).__init__(*args, **kwargs)
+
+    def init_host(self):
+        # Initialize forwarding rules for anything specified in
+        # FLAGS.fixed_range()
         self.driver.init_host()
-        # TODO(bgh): We'll need to enable these when we implement the full L3
-        # functionalities
-        # self.driver.ensure_metadata_ip()
-        # self.driver.metadata_forward()
+        # Set up all the forwarding rules for any network that has a
+        # gateway set.
+        networks = self.get_all_networks()
+        for net in networks:
+            if net['gateway']:
+                LOG.debug("Initializing NAT: %s (cidr: %s, gw: %s)" % (
+                    net['label'], net['cidr'], net['gateway']))
+                self.driver.add_snat_rule(net['cidr'])
+        self.driver.ensure_metadata_ip()
+        self.driver.metadata_forward()
+
+    def _get_nova_id(self, context):
+        # When creating the network we need to pass in an identifier for
+        # this zone.  Some Quantum plugins need this information in order
+        # to set up appropriate networking.
+        return FLAGS.node_availability_zone
+
+    def get_all_networks(self):
+        networks = []
+        admin_context = context.get_admin_context()
+        networks.extend(self.ipam.get_global_networks(admin_context))
+        networks.extend(self.ipam.get_project_networks(admin_context))
+        return networks
 
     def create_networks(self, context, label, cidr, multi_host, num_networks,
                         network_size, cidr_v6, gateway, gateway_v6, bridge,
@@ -98,14 +128,17 @@ class QuantumManager(manager.FlatManager):
                               " network is created per call"))
         q_tenant_id = kwargs["project_id"] or FLAGS.quantum_default_tenant_id
         quantum_net_id = uuid
+        # If a uuid was specified with the network it should have already been
+        # created in Quantum, so make sure.
         if quantum_net_id:
             if not self.q_conn.network_exists(q_tenant_id, quantum_net_id):
                     raise Exception(_("Unable to find existing quantum " \
                         " network for tenant '%(q_tenant_id)s' with "
                         "net-id '%(quantum_net_id)s'" % locals()))
         else:
-            # otherwise, create network from default quantum pool
-            quantum_net_id = self.q_conn.create_network(q_tenant_id, label)
+            nova_id = self._get_nova_id(context)
+            quantum_net_id = self.q_conn.create_network(q_tenant_id, label,
+                                                        nova_id=nova_id)
 
         ipam_tenant_id = kwargs.get("project_id", None)
         priority = kwargs.get("priority", 0)
@@ -113,7 +146,14 @@ class QuantumManager(manager.FlatManager):
             priority, cidr, gateway, gateway_v6,
             cidr_v6, dns1, dns2)
 
+        # Initialize forwarding if gateway is set
+        if gateway:
+            self.driver.add_snat_rule(cidr)
+
         return [{'uuid': quantum_net_id}]
+
+    def _generate_gw_dev(self, network_id):
+        return "gw-" + str(network_id[0:11])
 
     def delete_network(self, context, fixed_range, uuid):
         """Lookup network by uuid, delete both the IPAM
@@ -124,24 +164,31 @@ class QuantumManager(manager.FlatManager):
         """
         quantum_net_id = uuid
         project_id = context.project_id
-        # TODO(bgh): The project_id isn't getting populated here for some
-        # reason.. I'm not sure if it's an invalid assumption or just a bug.
-        # In order to get the right quantum_net_id we'll have to query all the
-        # project_ids for now.
-        if project_id is None:
-            projects = db.project_get_all(context)
-            for p in projects:
-                if self.q_conn.network_exists(p['id'], uuid):
-                    project_id = p['id']
-                    break
         if project_id is None:
             # If nothing was found we default to this
             project_id = FLAGS.quantum_default_tenant_id
+        q_tenant_id = project_id or FLAGS.quantum_default_tenant_id
+        # Check for any attached ports on the network and fail the deletion if
+        # there is anything but the gateway port attached.  If it is only the
+        # gateway port, unattach and delete it.
+        ports = self.q_conn.get_attached_ports(q_tenant_id, quantum_net_id)
+        if len(ports) > 1:
+            raise Exception(_("Network %s in use, cannot delete" %
+                              (quantum_net_id)))
+        LOG.debug("Ports currently on network: %s" % ports)
+        for p in ports:
+            if p["attachment"].startswith("gw-"):
+                self.q_conn.detach_and_delete_port(q_tenant_id,
+                                                   quantum_net_id,
+                                                   p['port-id'])
+        # Now we can delete the network
+        self.q_conn.delete_network(q_tenant_id, quantum_net_id)
         LOG.debug("Deleting network for tenant: %s" % project_id)
         self.ipam.delete_subnets_by_net_id(context, quantum_net_id,
                 project_id)
-        q_tenant_id = project_id or FLAGS.quantum_default_tenant_id
-        self.q_conn.delete_network(q_tenant_id, quantum_net_id)
+        # Get rid of dnsmasq
+        dev = self._generate_gw_dev(quantum_net_id)
+        self.driver.kill_dhcp(dev)
 
     def allocate_for_instance(self, context, **kwargs):
         """Called by compute when it is creating a new VM.
@@ -225,13 +272,21 @@ class QuantumManager(manager.FlatManager):
                     "id": 'NULL',
                     "label": "quantum-net-%s" % quantum_net_id}
 
-            vif_rec = manager.FlatManager.add_virtual_interface(self,
-                                  context, instance_id, network_ref['id'])
+            vif_rec = self.add_virtual_interface(context,
+                                                 instance_id,
+                                                 network_ref['id'])
 
             # talk to Quantum API to create and attach port.
+            instance = db.instance_get(context, instance_id)
+            instance_type = instance_types.get_instance_type(instance_type_id)
+            rxtx_factor = instance_type['rxtx_factor']
+            nova_id = self._get_nova_id(context)
             q_tenant_id = project_id or FLAGS.quantum_default_tenant_id
             self.q_conn.create_and_attach_port(q_tenant_id, quantum_net_id,
-                                               vif_rec['uuid'])
+                                               vif_rec['uuid'],
+                                               vm_id=instance['uuid'],
+                                               rxtx_factor=rxtx_factor,
+                                               nova_id=nova_id)
             # Tell melange to allocate an IP
             ip = self.ipam.allocate_fixed_ip(context, project_id,
                     quantum_net_id, vif_rec)
@@ -296,7 +351,33 @@ class QuantumManager(manager.FlatManager):
             hosts = self.get_dhcp_hosts_text(context,
                 subnet['network_id'], project_id)
             self.driver.update_dhcp_hostfile_with_text(dev, hosts)
-            self.driver.restart_dhcp(dev, network_ref)
+            self.driver.restart_dhcp(context, dev, network_ref)
+
+    def add_virtual_interface(self, context, instance_id, network_id):
+        # If we're not using melange, use the default means...
+        if FLAGS.use_melange_mac_generation:
+            return self._add_virtual_interface(context, instance_id,
+                                               network_id)
+
+        return super(QuantumManager, self).add_virtual_interface(context,
+                                                                 instance_id,
+                                                                 network_id)
+
+    def _add_virtual_interface(self, context, instance_id, network_id):
+        vif = {'instance_id': instance_id,
+               'network_id': network_id,
+               'uuid': str(utils.gen_uuid())}
+
+        # TODO(Vek): Ideally, we would have a VirtualInterface class
+        #            that would take care of delegating to whoever it
+        #            needs to get information from.  We'll look at
+        #            this after Trey's refactorings...
+        m_ipam = melange_ipam_lib.get_ipam_lib(self)
+        vif['address'] = m_ipam.create_vif(vif['uuid'],
+                                           vif['instance_id'],
+                                           context.project_id)
+
+        return self.db.virtual_interface_create(context, vif)
 
     def get_instance_nw_info(self, context, instance_id,
                                 instance_type_id, host):
@@ -450,23 +531,21 @@ class QuantumManager(manager.FlatManager):
             # Fill in some of the network fields that we would have
             # previously gotten from the network table (they'll be
             # passed to the linux_net functions).
-            network_ref['cidr'] = subnet['cidr']
-            n = IPNetwork(subnet['cidr'])
+            if subnet['cidr']:
+                network_ref['cidr'] = subnet['cidr']
+            n = IPNetwork(network_ref['cidr'])
             network_ref['dhcp_server'] = IPAddress(n.first + 1)
             network_ref['dhcp_start'] = IPAddress(n.first + 2)
             network_ref['broadcast'] = IPAddress(n.broadcast)
             network_ref['gateway'] = IPAddress(n.first + 1)
-            dev = "gw-" + str(network_ref['uuid'][0:11])
+            dev = self._generate_gw_dev(network_ref['uuid'])
             # And remove the dhcp mappings for the subnet
             hosts = self.get_dhcp_hosts_text(context,
                 subnet['network_id'], project_id)
             self.driver.update_dhcp_hostfile_with_text(dev, hosts)
             # Restart dnsmasq
             self.driver.kill_dhcp(dev)
-            self.driver.restart_dhcp(dev, network_ref)
-
-            # TODO(bgh): if this is the last instance for the network
-            # then we should actually just kill the dhcp server.
+            self.driver.restart_dhcp(context, dev, network_ref)
 
     def validate_networks(self, context, networks):
         """Validates that this tenant has quantum networks with the associated

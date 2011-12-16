@@ -34,14 +34,13 @@ import nose.plugins.skip
 import nova.image.fake
 import shutil
 import stubout
-from eventlet import greenthread
 
-from nova import fakerabbit
 from nova import flags
 from nova import log
 from nova import rpc
 from nova import utils
 from nova import service
+from nova.testing.fake import rabbit
 from nova.virt import fake
 
 
@@ -69,7 +68,7 @@ class skip_test(object):
 
 
 class skip_if(object):
-    """Decorator that skips a test if contition is true."""
+    """Decorator that skips a test if condition is true."""
     def __init__(self, condition, msg):
         self.condition = condition
         self.message = msg
@@ -143,7 +142,7 @@ class TestCase(unittest.TestCase):
         finally:
             # Clean out fake_rabbit's queue if we used it
             if FLAGS.fake_rabbit:
-                fakerabbit.reset_all()
+                rabbit.reset_all()
 
             if FLAGS.connection_type == 'fake':
                 if hasattr(fake.FakeConnection, '_instance'):
@@ -152,7 +151,7 @@ class TestCase(unittest.TestCase):
             if FLAGS.image_service == 'nova.image.fake.FakeImageService':
                 nova.image.fake.FakeImageService_reset()
 
-            # Reset any overriden flags
+            # Reset any overridden flags
             self.reset_flags()
 
             # Stop any timers
