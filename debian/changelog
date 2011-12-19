@@ -1,8 +1,9 @@
 nova (2012.1~e2-2) unstable; urgency=low
 
   * Do not fail postinst if the database upgrade fails (Closes: #648282)
+  * Add missing files in debian/copyright (Closes: #633600)
 
- -- Julien Danjou <acid@debian.org>  Mon, 19 Dec 2011 12:42:43 +0100
+ -- Julien Danjou <acid@debian.org>  Mon, 19 Dec 2011 12:50:08 +0100
 
 nova (2012.1~e2-1) unstable; urgency=low
 

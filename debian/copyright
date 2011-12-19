@@ -1,9 +1,11 @@
-Format: http://dep.debian.net/deps/dep5
+Format: http://dep.debian.net/deps/dep5-
 Upstream-Name: nova
 Source: https://code.launchpad.net/nova
 
 Files: *
-Copyright: 2010 United States Government as represented by the Administrator of the National Aeronautics and Space Administration.
+Copyright: 2010 United States Government as represented
+                by the Administrator of the National Aeronautics
+                and Space Administration.
 Copyright: 2010 OpenStack LLC
 Copyright: Others (See individual files for more details)
 License: Apache-2
@@ -23,8 +25,8 @@ License: Apache-2
  can be found in `/usr/share/common-licenses/Apache-2.0'.
 
 Files: contrib/boto_v6/*
-Copyright: (c) 2006-2010, Mitch Garnaat http://garnaat.org/
-       (c) 2010, Eucalyptus Systems, Inc.
+Copyright: 2006-2010, Mitch Garnaat http://garnaat.org/
+           2010, Eucalyptus Systems, Inc.
 License: BSD-Style
  Permission is hereby granted, free of charge, to any person obtaining a
  copy of this software and associated documentation files (the
@@ -44,3 +46,13 @@ License: BSD-Style
  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  DEALINGS IN THE SOFTWARE.
+
+Files: tools/ajaxterm/sarissa*
+Copyright: Manos Batsis
+License: LGPL-2.1
+ See /usr/share/common-licenses/LGPL-2.1
+
+Files: bin/nova-manage
+Copyright: 2005, the Lawrence Journal-World
+License: BSD
+ See /usr/share/common-licenses/BSD
