@@ -20,7 +20,7 @@ if [ "$1" = "configure" ]; then
     chmod 0700 /var/log/nova
     if grep -q sql_connection /etc/nova/nova.conf
     then
-      su -c 'nova-manage db sync' nova
+      su -c 'nova-manage db sync' nova || true
     fi
 fi
 
