@@ -16,28 +16,21 @@
 
 import base64
 import os
-import traceback
+from xml.dom import minidom
 
-from lxml import etree
 from webob import exc
 import webob
-from xml.dom import minidom
 
 from nova.api.openstack import common
 from nova.api.openstack.v2 import ips
-from nova.api.openstack.v2.views import addresses as views_addresses
-from nova.api.openstack.v2.views import flavors as views_flavors
-from nova.api.openstack.v2.views import images as views_images
 from nova.api.openstack.v2.views import servers as views_servers
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova.compute import instance_types
 from nova import network
-from nova import db
 from nova import exception
 from nova import flags
-from nova import image
 from nova import log as logging
 from nova.rpc import common as rpc_common
 from nova.scheduler import api as scheduler_api
@@ -92,6 +85,18 @@ class Controller(wsgi.Controller):
         """
         return None
 
+    def _add_instance_faults(self, ctxt, instances):
+        faults = self.compute_api.get_instance_faults(ctxt, instances)
+        if faults is not None:
+            for instance in instances:
+                faults_list = faults.get(instance['uuid'], [])
+                try:
+                    instance['fault'] = faults_list[0]
+                except IndexError:
+                    pass
+
+        return instances
+
     def _get_servers(self, req, is_detail):
         """Returns a list of servers, taking into account any search
         options specified.
@@ -142,6 +147,7 @@ class Controller(wsgi.Controller):
 
         limited_list = self._limit_items(instance_list, req)
         if is_detail:
+            self._add_instance_faults(context, limited_list)
             return self._view_builder.detail(req, limited_list)
         else:
             return self._view_builder.index(req, limited_list)
@@ -177,18 +183,6 @@ class Controller(wsgi.Controller):
                                                 headers={'Retry-After': 0})
         # if the original error is okay, just reraise it
         raise error
-
-    def _deserialize_create(self, request):
-        """
-        Deserialize a create request
-
-        Overrides normal behavior in the case of xml content
-        """
-        if request.content_type == "application/xml":
-            deserializer = ServerXMLDeserializer()
-            return deserializer.deserialize(request.body)
-        else:
-            return self._deserialize(request.body, request.get_content_type())
 
     def _validate_server_name(self, value):
         if not isinstance(value, basestring):
@@ -226,21 +220,6 @@ class Controller(wsgi.Controller):
                 raise exc.HTTPBadRequest(explanation=expl)
             injected_files.append((path, contents))
         return injected_files
-
-    def _get_server_admin_password_old_style(self, server):
-        """ Determine the admin password for a server on creation """
-        return utils.generate_password(FLAGS.password_length)
-
-    def _get_server_admin_password_new_style(self, server):
-        """ Determine the admin password for a server on creation """
-        password = server.get('adminPass')
-
-        if password is None:
-            return utils.generate_password(FLAGS.password_length)
-        if not isinstance(password, basestring) or password == '':
-            msg = _("Invalid adminPass")
-            raise exc.HTTPBadRequest(explanation=msg)
-        return password
 
     def _get_requested_networks(self, requested_networks):
         """
@@ -297,8 +276,9 @@ class Controller(wsgi.Controller):
     def show(self, req, id):
         """ Returns server details by server id """
         try:
-            instance = self.compute_api.routing_get(
-                req.environ['nova.context'], id)
+            context = req.environ['nova.context']
+            instance = self.compute_api.routing_get(context, id)
+            self._add_instance_faults(context, [instance])
             return self._view_builder.show(req, instance)
         except exception.NotFound:
             raise exc.HTTPNotFound()
@@ -503,6 +483,7 @@ class Controller(wsgi.Controller):
 
         instance.update(update_dict)
 
+        self._add_instance_faults(ctxt, [instance])
         return self._view_builder.show(req, instance)
 
     @exception.novaclient_converter
@@ -519,12 +500,6 @@ class Controller(wsgi.Controller):
             'createImage': self._action_create_image,
         }
 
-        if FLAGS.allow_admin_api:
-            admin_actions = {
-                'createBackup': self._action_create_backup,
-            }
-            _actions.update(admin_actions)
-
         for key in body:
             if key in _actions:
                 return _actions[key](body, req, id)
@@ -534,68 +509,6 @@ class Controller(wsgi.Controller):
 
         msg = _("Invalid request body")
         raise exc.HTTPBadRequest(explanation=msg)
-
-    def _action_create_backup(self, input_dict, req, instance_id):
-        """Backup a server instance.
-
-        Images now have an `image_type` associated with them, which can be
-        'snapshot' or the backup type, like 'daily' or 'weekly'.
-
-        If the image_type is backup-like, then the rotation factor can be
-        included and that will cause the oldest backups that exceed the
-        rotation factor to be deleted.
-
-        """
-        context = req.environ["nova.context"]
-        entity = input_dict["createBackup"]
-
-        try:
-            image_name = entity["name"]
-            backup_type = entity["backup_type"]
-            rotation = entity["rotation"]
-
-        except KeyError as missing_key:
-            msg = _("createBackup entity requires %s attribute") % missing_key
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        except TypeError:
-            msg = _("Malformed createBackup entity")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        try:
-            rotation = int(rotation)
-        except ValueError:
-            msg = _("createBackup attribute 'rotation' must be an integer")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        # preserve link to server in image properties
-        server_ref = os.path.join(req.application_url, 'servers', instance_id)
-        props = {'instance_ref': server_ref}
-
-        metadata = entity.get('metadata', {})
-        common.check_img_metadata_quota_limit(context, metadata)
-        try:
-            props.update(metadata)
-        except ValueError:
-            msg = _("Invalid metadata")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        instance = self._get_server(context, instance_id)
-
-        image = self.compute_api.backup(context,
-                                        instance,
-                                        image_name,
-                                        backup_type,
-                                        rotation,
-                                        extra_properties=props)
-
-        # build location of newly-created image entity
-        image_id = str(image['id'])
-        image_ref = os.path.join(req.application_url, 'images', image_id)
-
-        resp = webob.Response(status_int=202)
-        resp.headers['Location'] = image_ref
-        return resp
 
     def _action_confirm_resize(self, input_dict, req, id):
         context = req.environ['nova.context']
@@ -645,29 +558,6 @@ class Controller(wsgi.Controller):
             LOG.exception(_("Error in reboot %s"), e)
             raise exc.HTTPUnprocessableEntity()
         return webob.Response(status_int=202)
-
-    @exception.novaclient_converter
-    @scheduler_api.redirect_handler
-    def diagnostics(self, req, id):
-        """Permit Admins to retrieve server diagnostics."""
-        ctxt = req.environ["nova.context"]
-        instance = self._get_server(ctxt, id)
-        return self.compute_api.get_diagnostics(ctxt, instance)
-
-    def actions(self, req, id):
-        """Permit Admins to retrieve server actions."""
-        ctxt = req.environ["nova.context"]
-        instance = self._get_server(ctxt, id)
-        items = self.compute_api.get_actions(ctxt, instance)
-        actions = []
-        # TODO(jk0): Do not do pre-serialization here once the default
-        # serializer is updated
-        for item in items:
-            actions.append(dict(
-                created_at=str(item.created_at),
-                action=item.action,
-                error=item.error))
-        return dict(actions=actions)
 
     def _resize(self, req, instance_id, flavor_id):
         """Begin the resize process with given instance/flavor."""
@@ -758,45 +648,68 @@ class Controller(wsgi.Controller):
         return self._resize(req, id, flavor_ref)
 
     def _action_rebuild(self, info, request, instance_id):
+        """Rebuild an instance with the given attributes"""
+        try:
+            body = info['rebuild']
+        except (KeyError, TypeError):
+            raise exc.HTTPBadRequest(_("Invalid request body"))
+
+        try:
+            image_href = body["imageRef"]
+        except (KeyError, TypeError):
+            msg = _("Could not parse imageRef from request.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
+        try:
+            password = body['adminPass']
+        except (KeyError, TypeError):
+            password = utils.generate_password(FLAGS.password_length)
+
         context = request.environ['nova.context']
         instance = self._get_server(context, instance_id)
 
+        attr_map = {
+            'personality': 'files_to_inject',
+            'name': 'display_name',
+            'accessIPv4': 'access_ip_v4',
+            'accessIPv6': 'access_ip_v6',
+            'metadata': 'metadata',
+        }
+
+        kwargs = {}
+
+        for request_attribute, instance_attribute in attr_map.items():
+            try:
+                kwargs[instance_attribute] = body[request_attribute]
+            except (KeyError, TypeError):
+                pass
+
+        self._validate_metadata(kwargs.get('metadata', {}))
+
+        if 'files_to_inject' in kwargs:
+            personality = kwargs['files_to_inject']
+            kwargs['files_to_inject'] = self._get_injected_files(personality)
+
         try:
-            image_href = info["rebuild"]["imageRef"]
-        except (KeyError, TypeError):
-            msg = _("Could not parse imageRef from request.")
-            LOG.debug(msg)
-            raise exc.HTTPBadRequest(explanation=msg)
+            self.compute_api.rebuild(context,
+                                     instance,
+                                     image_href,
+                                     password,
+                                     **kwargs)
 
-        personality = info["rebuild"].get("personality", [])
-        injected_files = []
-        if personality:
-            injected_files = self._get_injected_files(personality)
-
-        metadata = info["rebuild"].get("metadata")
-        name = info["rebuild"].get("name")
-
-        if metadata:
-            self._validate_metadata(metadata)
-
-        if 'rebuild' in info and 'adminPass' in info['rebuild']:
-            password = info['rebuild']['adminPass']
-        else:
-            password = utils.generate_password(FLAGS.password_length)
-
-        try:
-            self.compute_api.rebuild(context, instance, image_href,
-                                     password, name=name, metadata=metadata,
-                                     files_to_inject=injected_files)
         except exception.RebuildRequiresActiveInstance:
-            msg = _("Instance %s must be active to rebuild.") % instance_id
+            msg = _("Instance must be active to rebuild.")
             raise exc.HTTPConflict(explanation=msg)
         except exception.InstanceNotFound:
-            msg = _("Instance %s could not be found") % instance_id
+            msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
 
         instance = self._get_server(context, instance_id)
+
+        self._add_instance_faults(context, [instance])
         view = self._view_builder.show(request, instance)
+
+        # Add on the adminPass attribute since the view doesn't do it
         view['server']['adminPass'] = password
 
         return view
@@ -852,12 +765,16 @@ class Controller(wsgi.Controller):
         resp.headers['Location'] = image_ref
         return resp
 
-    def get_default_xmlns(self, req):
-        return common.XML_NS_V11
-
     def _get_server_admin_password(self, server):
         """ Determine the admin password for a server on creation """
-        return self._get_server_admin_password_new_style(server)
+        password = server.get('adminPass')
+
+        if password is None:
+            return utils.generate_password(FLAGS.password_length)
+        if not isinstance(password, basestring) or password == '':
+            msg = _("Invalid adminPass")
+            raise exc.HTTPBadRequest(explanation=msg)
+        return password
 
     def _get_server_search_options(self):
         """Return server search options allowed by non-admin"""
@@ -867,19 +784,41 @@ class Controller(wsgi.Controller):
 
 class HeadersSerializer(wsgi.ResponseHeadersSerializer):
 
+    def _add_server_location(self, response, data):
+        link = filter(lambda l: l['rel'] == 'self', data['server']['links'])
+        if link:
+            response.headers['Location'] = link[0]['href']
+
     def create(self, response, data):
+        if 'server' in data:
+            self._add_server_location(response, data)
         response.status_int = 202
 
     def delete(self, response, data):
         response.status_int = 204
 
     def action(self, response, data):
+        # FIXME(jerdfelt): This is kind of a hack. Unfortunately the original
+        # action requested isn't available to us, so we need to look at the
+        # response to see if it looks like a rebuild response.
+        if data.get('server', {}).get('status') == 'REBUILD':
+            self._add_server_location(response, data)
         response.status_int = 202
 
 
 class SecurityGroupsTemplateElement(xmlutil.TemplateElement):
     def will_render(self, datum):
         return 'security_groups' in datum
+
+
+def make_fault(elem):
+    fault = xmlutil.SubTemplateElement(elem, 'fault', selector='fault')
+    fault.set('code')
+    fault.set('created')
+    msg = xmlutil.SubTemplateElement(fault, 'message')
+    msg.text = 'message'
+    det = xmlutil.SubTemplateElement(fault, 'details')
+    det.text = 'details'
 
 
 def make_server(elem, detailed=False):
@@ -906,6 +845,9 @@ def make_server(elem, detailed=False):
         flavor = xmlutil.SubTemplateElement(elem, 'flavor', selector='flavor')
         flavor.set('id')
         xmlutil.make_links(flavor, 'links')
+
+        # Attach fault node
+        make_fault(elem)
 
         # Attach metadata node
         elem.append(common.MetadataTemplate())
@@ -996,7 +938,6 @@ class ServerXMLDeserializer(wsgi.MetadataXMLDeserializer):
 
         action_deserializer = {
             'createImage': self._action_create_image,
-            'createBackup': self._action_create_backup,
             'changePassword': self._action_change_password,
             'reboot': self._action_reboot,
             'rebuild': self._action_rebuild,
@@ -1011,10 +952,6 @@ class ServerXMLDeserializer(wsgi.MetadataXMLDeserializer):
 
     def _action_create_image(self, node):
         return self._deserialize_image_action(node, ('name',))
-
-    def _action_create_backup(self, node):
-        attributes = ('name', 'backup_type', 'rotation')
-        return self._deserialize_image_action(node, attributes)
 
     def _action_change_password(self, node):
         if not node.hasAttribute("adminPass"):

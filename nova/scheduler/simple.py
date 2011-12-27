@@ -64,7 +64,7 @@ class SimpleScheduler(chance.ChanceScheduler):
         for result in results:
             (service, instance_cores) = result
             if instance_cores + instance_opts['vcpus'] > FLAGS.max_cores:
-                msg = _("All hosts have too many cores")
+                msg = _("Not enough allocatable CPU cores remaining")
                 raise exception.NoValidHost(reason=msg)
             if self.service_is_up(service):
                 return service['host']
@@ -82,6 +82,10 @@ class SimpleScheduler(chance.ChanceScheduler):
             driver.cast_to_compute_host(context, host, 'run_instance',
                     instance_uuid=instance_ref['uuid'], **_kwargs)
             instances.append(driver.encode_instance(instance_ref))
+            # So if we loop around, create_instance_db_entry will actually
+            # create a new entry, instead of assume it's been created
+            # already
+            del request_spec['instance_properties']['uuid']
         return instances
 
     def schedule_start_instance(self, context, instance_id, *_args, **_kwargs):
@@ -116,7 +120,7 @@ class SimpleScheduler(chance.ChanceScheduler):
         for result in results:
             (service, volume_gigabytes) = result
             if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
-                msg = _("All hosts have too many gigabytes")
+                msg = _("Not enough allocatable volume gigabytes remaining")
                 raise exception.NoValidHost(reason=msg)
             if self.service_is_up(service):
                 driver.cast_to_volume_host(context, service['host'],
@@ -133,7 +137,7 @@ class SimpleScheduler(chance.ChanceScheduler):
         for result in results:
             (service, instance_count) = result
             if instance_count >= FLAGS.max_networks:
-                msg = _("All hosts have too many networks")
+                msg = _("Not enough allocatable networks remaining")
                 raise exception.NoValidHost(reason=msg)
             if self.service_is_up(service):
                 driver.cast_to_network_host(context, service['host'],

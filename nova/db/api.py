@@ -172,6 +172,11 @@ def compute_node_get_all(context, session=None):
     return IMPL.compute_node_get_all(context)
 
 
+def compute_node_get_for_service(context, service_id):
+    """Get all computeNodes."""
+    return IMPL.compute_node_get_for_service(context, service_id)
+
+
 def compute_node_create(context, values):
     """Create a computeNode from the values dictionary."""
     return IMPL.compute_node_create(context, values)
@@ -416,9 +421,9 @@ def fixed_ip_get_by_network_host(context, network_id, host):
     return IMPL.fixed_ip_get_by_network_host(context, network_id, host)
 
 
-def fixed_ip_get_by_virtual_interface(context, vif_id):
+def fixed_ips_by_virtual_interface(context, vif_id):
     """Get fixed ips by virtual interface or raise if none exist."""
-    return IMPL.fixed_ip_get_by_virtual_interface(context, vif_id)
+    return IMPL.fixed_ips_by_virtual_interface(context, vif_id)
 
 
 def fixed_ip_get_network(context, address):
@@ -636,9 +641,9 @@ def instance_action_create(context, values):
     return IMPL.instance_action_create(context, values)
 
 
-def instance_get_actions(context, instance_id):
-    """Get instance actions by instance id."""
-    return IMPL.instance_get_actions(context, instance_id)
+def instance_get_actions(context, instance_uuid):
+    """Get instance actions by instance uuid."""
+    return IMPL.instance_get_actions(context, instance_uuid)
 
 
 def instance_get_id_to_uuid_mapping(context, ids):
@@ -1766,6 +1771,6 @@ def instance_fault_create(context, values):
     return IMPL.instance_fault_create(context, values)
 
 
-def instance_fault_get_by_instance(context, instance_uuid):
-    """Get first instance fault with the given instance uuid."""
-    return IMPL.instance_fault_get_by_instance(context, instance_uuid)
+def instance_fault_get_by_instance_uuids(context, instance_uuids):
+    """Get all instance faults for the provided instance_uuids."""
+    return IMPL.instance_fault_get_by_instance_uuids(context, instance_uuids)

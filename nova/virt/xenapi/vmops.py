@@ -21,14 +21,13 @@ Management class for VM-related functions (spawn, reboot, etc).
 
 import base64
 import json
-import os
 import pickle
 import random
-import subprocess
 import sys
 import time
 import uuid
 
+from eventlet import greenthread
 import M2Crypto
 
 from nova.compute import api as compute
@@ -37,7 +36,6 @@ from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import ipv6
 from nova import log as logging
 from nova import utils
 from nova.virt import driver
@@ -55,6 +53,9 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer('agent_version_timeout', 300,
                      'number of seconds to wait for agent to be fully '
                      'operational')
+flags.DEFINE_integer('xenapi_running_timeout', 60,
+                     'number of seconds to wait for instance to go to '
+                     'running state')
 flags.DEFINE_string('xenapi_vif_driver',
                     'nova.virt.xenapi.vif.XenAPIBridgeDriver',
                     'The XenAPI VIF driver using XenServer Network APIs.')
@@ -93,7 +94,8 @@ class VMOps(object):
         self._session = session
         self.poll_rescue_last_ran = None
         VMHelper.XenAPI = self.XenAPI
-        self.vif_driver = utils.import_object(FLAGS.xenapi_vif_driver)
+        vif_impl = utils.import_class(FLAGS.xenapi_vif_driver)
+        self.vif_driver = vif_impl(xenapi_session=self._session)
         self._product_version = product_version
 
     def list_instances(self):
@@ -383,6 +385,42 @@ class VMOps(object):
                     bootable=False)
             userdevice += 1
 
+    def _configure_instance(self, ctx, instance, vm_ref):
+        # Inject files, if necessary
+        injected_files = instance.injected_files
+        if injected_files:
+            # Check if this is a JSON-encoded string and convert if needed.
+            if isinstance(injected_files, basestring):
+                try:
+                    injected_files = json.loads(injected_files)
+                except ValueError:
+                    LOG.exception(
+                        _("Invalid value for injected_files: '%s'")
+                            % injected_files)
+                    injected_files = []
+            # Inject any files, if specified
+            for path, contents in instance.injected_files:
+                LOG.debug(_("Injecting file path: '%s'") % path)
+                self.inject_file(instance, path, contents)
+
+        # Set admin password, if necessary
+        admin_password = instance.admin_pass
+        if admin_password:
+            LOG.debug(_("Setting admin password"))
+            self.set_admin_password(instance, admin_password)
+
+        # Reset network config
+        LOG.debug(_("Resetting network"))
+        self.reset_network(instance, vm_ref)
+
+        # Set VCPU weight
+        inst_type = db.instance_type_get(ctx, instance.instance_type_id)
+        vcpu_weight = inst_type["vcpu_weight"]
+        if str(vcpu_weight) != "None":
+            LOG.debug(_("Setting VCPU weight"))
+            self._session.call_xenapi("VM.add_to_VCPUs_params", vm_ref,
+                    "weight", vcpu_weight)
+
     def _spawn(self, instance, vm_ref):
         """Spawn a new instance."""
         LOG.debug(_('Starting VM %s...'), vm_ref)
@@ -404,83 +442,32 @@ class VMOps(object):
                         'os': instance.os_type,
                         'architecture': instance.architecture})
 
-        def _check_agent_version():
-            LOG.debug(_("Querying agent version"))
+        # Wait for boot to finish
+        LOG.debug(_('Instance %s: waiting for running'), instance_name)
+        expiration = time.time() + FLAGS.xenapi_running_timeout
+        while time.time() < expiration:
+            state = self.get_info(instance_name)['state']
+            if state == power_state.RUNNING:
+                break
 
-            version = self.get_agent_version(instance)
-            if not version:
-                return
+            greenthread.sleep(0.5)
 
+        LOG.debug(_('Instance %s: running'), instance_name)
+
+        # Update agent, if necessary
+        # This also waits until the agent starts
+        LOG.debug(_("Querying agent version"))
+        version = self.get_agent_version(instance)
+        if version:
             LOG.info(_('Instance agent version: %s') % version)
-            if not agent_build:
-                return
 
-            if cmp_version(version, agent_build['version']) < 0:
-                LOG.info(_('Updating Agent to %s') % agent_build['version'])
-                self.agent_update(instance, agent_build['url'],
-                              agent_build['md5hash'])
+        if version and agent_build and \
+           cmp_version(version, agent_build['version']) < 0:
+            LOG.info(_('Updating Agent to %s') % agent_build['version'])
+            self.agent_update(instance, agent_build['url'],
+                          agent_build['md5hash'])
 
-        def _inject_files():
-            injected_files = instance.injected_files
-            if injected_files:
-                # Check if this is a JSON-encoded string and convert if needed.
-                if isinstance(injected_files, basestring):
-                    try:
-                        injected_files = json.loads(injected_files)
-                    except ValueError:
-                        LOG.exception(
-                            _("Invalid value for injected_files: '%s'")
-                                % injected_files)
-                        injected_files = []
-                # Inject any files, if specified
-                for path, contents in instance.injected_files:
-                    LOG.debug(_("Injecting file path: '%s'") % path)
-                    self.inject_file(instance, path, contents)
-
-        def _set_admin_password():
-            admin_password = instance.admin_pass
-            if admin_password:
-                LOG.debug(_("Setting admin password"))
-                self.set_admin_password(instance, admin_password)
-
-        def _reset_network():
-            LOG.debug(_("Resetting network"))
-            self.reset_network(instance, vm_ref)
-
-        def _set_vcpu_weight():
-            inst_type = db.instance_type_get(ctx, instance.instance_type_id)
-            vcpu_weight = inst_type["vcpu_weight"]
-            if str(vcpu_weight) != "None":
-                LOG.debug(_("Setting VCPU weight"))
-                self._session.call_xenapi("VM.add_to_VCPUs_params", vm_ref,
-                        "weight", vcpu_weight)
-
-        # NOTE(armando): Do we really need to do this in virt?
-        # NOTE(tr3buchet): not sure but wherever we do it, we need to call
-        #                  reset_network afterwards
-        timer = utils.LoopingCall(f=None)
-
-        def _wait_for_boot():
-            try:
-                state = self.get_info(instance_name)['state']
-                if state == power_state.RUNNING:
-                    LOG.debug(_('Instance %s: booted'), instance_name)
-                    timer.stop()
-                    _check_agent_version()
-                    _inject_files()
-                    _set_admin_password()
-                    _reset_network()
-                    _set_vcpu_weight()
-                    return True
-            except Exception, exc:
-                LOG.warn(exc)
-                LOG.exception(_('Instance %s: failed to boot'), instance_name)
-                timer.stop()
-                return False
-
-        timer.f = _wait_for_boot
-
-        return timer.start(interval=0.5, now=True)
+        self._configure_instance(ctx, instance, vm_ref)
 
     def _handle_spawn_error(self, vdis, spawn_error):
         # Extract resource list from spawn_error.
@@ -615,7 +602,7 @@ class VMOps(object):
         label = "%s-snapshot" % instance.name
         try:
             template_vm_ref, template_vdi_uuids = VMHelper.create_snapshot(
-                self._session, instance.id, vm_ref, label)
+                    self._session, instance, vm_ref, label)
             return template_vm_ref, template_vdi_uuids
         except self.XenAPI.Failure, exc:
             logging.error(_("Unable to Snapshot %(vm_ref)s: %(exc)s")
@@ -635,7 +622,7 @@ class VMOps(object):
             task = self._session.async_call_plugin('migration',
                                                    'transfer_vhd',
                                                    _params)
-            self._session.wait_for_task(task, instance_id)
+            self._session.wait_for_task(task, instance_uuid)
         except self.XenAPI.Failure:
             msg = _("Failed to transfer vhd to new host")
             raise exception.MigrationError(reason=msg)
@@ -797,7 +784,7 @@ class VMOps(object):
 
         task = self._session.async_call_plugin('migration',
                 'move_vhds_into_sr', {'params': pickle.dumps(params)})
-        self._session.wait_for_task(task, instance.id)
+        self._session.wait_for_task(task, instance['uuid'])
 
         # Now we rescan the SR so we find the VHDs
         VMHelper.scan_default_sr(self._session)
@@ -848,7 +835,7 @@ class VMOps(object):
         else:
             task = self._session.call_xenapi('Async.VM.clean_reboot', vm_ref)
 
-        self._session.wait_for_task(task, instance.id)
+        self._session.wait_for_task(task, instance['uuid'])
 
     def get_agent_version(self, instance):
         """Get the version of the agent running on the VM instance."""
@@ -989,7 +976,7 @@ class VMOps(object):
             else:
                 task = self._session.call_xenapi("Async.VM.clean_shutdown",
                                                  vm_ref)
-            self._session.wait_for_task(task, instance.id)
+            self._session.wait_for_task(task, instance['uuid'])
         except self.XenAPI.Failure, exc:
             LOG.exception(exc)
 
@@ -1021,7 +1008,7 @@ class VMOps(object):
         for vdi_ref in vdi_refs:
             try:
                 task = self._session.call_xenapi('Async.VDI.destroy', vdi_ref)
-                self._session.wait_for_task(task, instance.id)
+                self._session.wait_for_task(task, instance['uuid'])
             except self.XenAPI.Failure, exc:
                 LOG.exception(exc)
 
@@ -1091,7 +1078,7 @@ class VMOps(object):
         instance_uuid = instance['uuid']
         try:
             task = self._session.call_xenapi('Async.VM.destroy', vm_ref)
-            self._session.wait_for_task(task, instance_id)
+            self._session.wait_for_task(task, instance_uuid)
         except self.XenAPI.Failure, exc:
             LOG.exception(exc)
 
@@ -1139,34 +1126,32 @@ class VMOps(object):
             self._destroy_kernel_ramdisk(instance, vm_ref)
         self._destroy_vm(instance, vm_ref)
 
-        if network_info:
-            for (network, mapping) in network_info:
-                self.vif_driver.unplug(instance, network, mapping)
+        self.unplug_vifs(instance, network_info)
 
     def pause(self, instance):
         """Pause VM instance."""
         vm_ref = self._get_vm_opaque_ref(instance)
         task = self._session.call_xenapi('Async.VM.pause', vm_ref)
-        self._session.wait_for_task(task, instance.id)
+        self._session.wait_for_task(task, instance['uuid'])
 
     def unpause(self, instance):
         """Unpause VM instance."""
         vm_ref = self._get_vm_opaque_ref(instance)
         task = self._session.call_xenapi('Async.VM.unpause', vm_ref)
-        self._session.wait_for_task(task, instance.id)
+        self._session.wait_for_task(task, instance['uuid'])
 
     def suspend(self, instance):
         """Suspend the specified instance."""
         vm_ref = self._get_vm_opaque_ref(instance)
         task = self._session.call_xenapi('Async.VM.suspend', vm_ref)
-        self._session.wait_for_task(task, instance.id)
+        self._session.wait_for_task(task, instance['uuid'])
 
     def resume(self, instance):
         """Resume the specified instance."""
         vm_ref = self._get_vm_opaque_ref(instance)
         task = self._session.call_xenapi('Async.VM.resume',
                                          vm_ref, False, True)
-        self._session.wait_for_task(task, instance.id)
+        self._session.wait_for_task(task, instance['uuid'])
 
     def rescue(self, context, instance, network_info, image_meta):
         """Rescue the specified instance.
@@ -1402,7 +1387,7 @@ class VMOps(object):
             task = self._session.async_call_plugin("xenhost", method,
                     args=arg_dict)
                     #args={"params": arg_dict})
-            ret = self._session.wait_for_task(task, task_id)
+            ret = self._session.wait_for_task(task, str(task_id))
         except self.XenAPI.Failure as e:
             ret = e
             LOG.error(_("The call to %(method)s returned an error: %(e)s.")
@@ -1445,8 +1430,8 @@ class VMOps(object):
         self._session.call_xenapi("VM.get_record", vm_ref)
 
         for device, (network, info) in enumerate(network_info):
-            vif_rec = self.vif_driver.plug(self._session,
-                    vm_ref, instance, device, network, info)
+            vif_rec = self.vif_driver.plug(instance, network, info,
+                                           vm_ref=vm_ref, device=device)
             network_ref = vif_rec['network']
             LOG.debug(_('Creating VIF for VM %(vm_ref)s,' \
                 ' network %(network_ref)s.') % locals())
@@ -1456,8 +1441,13 @@ class VMOps(object):
 
     def plug_vifs(self, instance, network_info):
         """Set up VIF networking on the host."""
-        for (network, mapping) in network_info:
-            self.vif_driver.plug(self._session, instance, network, mapping)
+        for device, (network, mapping) in enumerate(network_info):
+            self.vif_driver.plug(instance, network, mapping, device=device)
+
+    def unplug_vifs(self, instance, network_info):
+        if network_info:
+            for (network, mapping) in network_info:
+                self.vif_driver.unplug(instance, network, mapping)
 
     def reset_network(self, instance, vm_ref=None):
         """Creates uuid arg to pass to make_agent_call and calls it."""
@@ -1557,7 +1547,7 @@ class VMOps(object):
         args.update(addl_args or {})
         try:
             task = self._session.async_call_plugin(plugin, method, args)
-            ret = self._session.wait_for_task(task, instance_id)
+            ret = self._session.wait_for_task(task, instance_uuid)
         except self.XenAPI.Failure, e:
             ret = None
             err_msg = e.details[-1].splitlines()[-1]

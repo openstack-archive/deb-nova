@@ -23,6 +23,7 @@ import base64
 import webob.dec
 import webob.exc
 
+from nova.api.ec2 import ec2utils
 from nova import block_device
 from nova import compute
 from nova import context
@@ -33,12 +34,12 @@ from nova import log as logging
 from nova import network
 from nova import volume
 from nova import wsgi
-from nova.api.ec2 import ec2utils
 
 
 LOG = logging.getLogger('nova.api.metadata')
 FLAGS = flags.FLAGS
 flags.DECLARE('use_forwarded_for', 'nova.api.auth')
+flags.DECLARE('dhcp_domain', 'nova.network.manager')
 
 _DEFAULT_MAPPINGS = {'ami': 'sda1',
                      'ephemeral0': 'sda2',

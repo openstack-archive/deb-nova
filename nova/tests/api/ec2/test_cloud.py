@@ -21,7 +21,6 @@ import copy
 import functools
 import os
 
-from eventlet import greenthread
 from M2Crypto import BIO
 from M2Crypto import RSA
 
@@ -1128,7 +1127,7 @@ class CloudTestCase(test.TestCase):
         output = self.cloud.get_console_output(context=self.context,
                                                instance_id=[instance_id])
         self.assertEquals(base64.b64decode(output['output']),
-                'FAKE CONSOLE?OUTPUT')
+                'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE')
         # TODO(soren): We need this until we can stop polling in the rpc code
         #              for unit tests.
         rv = self.cloud.terminate_instances(self.context, [instance_id])
@@ -1401,6 +1400,9 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
+        result = self.cloud.rescue_instance(self.context, instance_id)
+        self.assertTrue(result)
+
         result = self.cloud.unrescue_instance(self.context, instance_id)
         self.assertTrue(result)
 
@@ -1418,9 +1420,10 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
-        # a running instance can't be started. It is just ignored.
-        result = self.cloud.start_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        # a running instance can't be started.
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.cloud.start_instances,
+                          self.context, [instance_id])
 
         result = self.cloud.stop_instances(self.context, [instance_id])
         self.assertTrue(result)
@@ -1469,9 +1472,10 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
-        # a running instance can't be started. It is just ignored.
-        result = self.cloud.start_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        # a running instance can't be started.
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.cloud.start_instances,
+                          self.context, [instance_id])
 
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertTrue(result)
@@ -1483,9 +1487,10 @@ class CloudTestCase(test.TestCase):
                   'max_count': 1, }
         instance_id = self._run_instance(**kwargs)
 
-        # a running instance can't be started. It is just ignored.
-        result = self.cloud.start_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        # a running instance can't be started.
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.cloud.start_instances,
+                          self.context, [instance_id])
 
         result = self.cloud.reboot_instances(self.context, [instance_id])
         self.assertTrue(result)

@@ -39,7 +39,7 @@ def _translate_floating_ip_view(floating_ip):
     except (TypeError, KeyError):
         result['fixed_ip'] = None
     try:
-        result['instance_id'] = floating_ip['fixed_ip']['instance_id']
+        result['instance_id'] = floating_ip['fixed_ip']['instance']['uuid']
     except (TypeError, KeyError):
         result['instance_id'] = None
     return {'floating_ip': result}
@@ -146,7 +146,7 @@ class Floating_ips(extensions.ExtensionDescriptor):
 
     name = "Floating_ips"
     alias = "os-floating-ips"
-    namespace = "http://docs.openstack.org/ext/floating_ips/api/v1.1"
+    namespace = "http://docs.openstack.org/compute/ext/floating_ips/api/v1.1"
     updated = "2011-06-16T00:00:00+00:00"
 
     def __init__(self, ext_mgr):

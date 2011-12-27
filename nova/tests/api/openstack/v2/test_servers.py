@@ -154,19 +154,6 @@ def fake_compute_api(cls, req, id):
     return True
 
 
-_fake_compute_actions = [
-    dict(
-        created_at=str(datetime.datetime(2010, 11, 11, 11, 0, 0)),
-        action='Fake Action',
-        error='Fake Error',
-        )
-    ]
-
-
-def fake_compute_actions(_1, _2, _3):
-    return [InstanceActions(**a) for a in _fake_compute_actions]
-
-
 def find_host(self, context, instance_id):
     return "nova"
 
@@ -205,8 +192,6 @@ class ServersControllerTest(test.TestCase):
                        instance_addresses)
         self.stubs.Set(nova.db, 'instance_get_floating_address',
                        instance_addresses)
-        self.stubs.Set(nova.compute.API, "get_diagnostics", fake_compute_api)
-        self.stubs.Set(nova.compute.API, "get_actions", fake_compute_actions)
 
         self.config_drive = None
 
@@ -1168,23 +1153,6 @@ class ServersControllerTest(test.TestCase):
             self.assertEqual(s['status'], 'BUILD')
             self.assertEqual(s['metadata']['seq'], str(i))
 
-    def test_server_actions(self):
-        req = fakes.HTTPRequest.blank(
-            "/v2/fake/servers/%s/actions" % FAKE_UUID)
-        res_dict = self.controller.actions(req, FAKE_UUID)
-        self.assertEqual(res_dict, {'actions': _fake_compute_actions})
-
-    def test_server_actions_after_reboot(self):
-        """
-        Bug #897091 was this failure mode -- the /actions call failed if
-        /action had been called first.
-        """
-        body = dict(reboot=dict(type="HARD"))
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake/servers/%s/action' % FAKE_UUID)
-        self.controller.action(req, FAKE_UUID, body)
-        self.test_server_actions()
-
     def test_get_all_server_details_with_host(self):
         '''
         We want to make sure that if two instances are on the same host, then
@@ -1220,11 +1188,13 @@ class ServersControllerTest(test.TestCase):
 
         self.server_delete_called = False
 
+        new_return_server = return_server_with_attributes(
+            vm_state=vm_states.ACTIVE)
+        self.stubs.Set(nova.db, 'instance_get', new_return_server)
+
         def instance_destroy_mock(context, id):
             self.server_delete_called = True
-
-        self.stubs.Set(nova.db, 'instance_destroy',
-            instance_destroy_mock)
+        self.stubs.Set(nova.db, 'instance_destroy', instance_destroy_mock)
 
         self.controller.delete(req, FAKE_UUID)
 
@@ -2440,6 +2410,158 @@ class ServersViewBuilderTest(test.TestCase):
         output = self.view_builder.show(self.request, self.instance)
         self.assertDictMatch(output, expected_server)
 
+    def test_build_server_detail_with_fault(self):
+        self.instance['vm_state'] = vm_states.ERROR
+        self.instance['fault'] = {
+            'code': 404,
+            'instance_uuid': self.uuid,
+            'message': "HTTPNotFound",
+            'details': "Stock details for test",
+            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+        }
+
+        image_bookmark = "http://localhost/fake/images/5"
+        flavor_bookmark = "http://localhost/fake/flavors/1"
+        self_link = "http://localhost/v2/fake/servers/%s" % self.uuid
+        bookmark_link = "http://localhost/fake/servers/%s" % self.uuid
+        expected_server = {
+            "server": {
+                "id": self.uuid,
+                "user_id": "fake",
+                "tenant_id": "fake",
+                "updated": "2010-11-11T11:00:00Z",
+                "created": "2010-10-10T12:00:00Z",
+                "name": "test_server",
+                "status": "ERROR",
+                "accessIPv4": "",
+                "accessIPv6": "",
+                "hostId": '',
+                "key_name": '',
+                "image": {
+                    "id": "5",
+                    "links": [
+                        {
+                            "rel": "bookmark",
+                            "href": image_bookmark,
+                        },
+                    ],
+                },
+                "flavor": {
+                    "id": "1",
+                  "links": [
+                                            {
+                          "rel": "bookmark",
+                          "href": flavor_bookmark,
+                      },
+                  ],
+                },
+                "addresses": {
+                    'private': [
+                        {'version': 4, 'addr': '172.19.0.1'}
+                    ],
+                    'public': [
+                        {'version': 6, 'addr': 'b33f::fdee:ddff:fecc:bbaa'},
+                        {'version': 4, 'addr': '192.168.0.3'},
+                    ],
+                },
+                "metadata": {},
+                "config_drive": None,
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": self_link,
+                    },
+                    {
+                        "rel": "bookmark",
+                        "href": bookmark_link,
+                    },
+                ],
+                "fault": {
+                    "code": 404,
+                    "created": "2010-10-10T12:00:00Z",
+                    "message": "HTTPNotFound",
+                    "details": "Stock details for test",
+                },
+            }
+        }
+
+        output = self.view_builder.show(self.request, self.instance)
+        self.assertDictMatch(output, expected_server)
+
+    def test_build_server_detail_with_fault_but_active(self):
+        self.instance['vm_state'] = vm_states.ACTIVE
+        self.instance['progress'] = 100
+        self.instance['fault'] = {
+            'code': 404,
+            'instance_uuid': self.uuid,
+            'message': "HTTPNotFound",
+            'details': "Stock details for test",
+            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+        }
+
+        image_bookmark = "http://localhost/fake/images/5"
+        flavor_bookmark = "http://localhost/fake/flavors/1"
+        self_link = "http://localhost/v2/fake/servers/%s" % self.uuid
+        bookmark_link = "http://localhost/fake/servers/%s" % self.uuid
+        expected_server = {
+            "server": {
+                "id": self.uuid,
+                "user_id": "fake",
+                "tenant_id": "fake",
+                "updated": "2010-11-11T11:00:00Z",
+                "created": "2010-10-10T12:00:00Z",
+                "progress": 100,
+                "name": "test_server",
+                "status": "ACTIVE",
+                "accessIPv4": "",
+                "accessIPv6": "",
+                "hostId": '',
+                "key_name": '',
+                "image": {
+                    "id": "5",
+                    "links": [
+                        {
+                            "rel": "bookmark",
+                            "href": image_bookmark,
+                        },
+                    ],
+                },
+                "flavor": {
+                    "id": "1",
+                  "links": [
+                                            {
+                          "rel": "bookmark",
+                          "href": flavor_bookmark,
+                      },
+                  ],
+                },
+                "addresses": {
+                    'private': [
+                        {'version': 4, 'addr': '172.19.0.1'}
+                    ],
+                    'public': [
+                        {'version': 6, 'addr': 'b33f::fdee:ddff:fecc:bbaa'},
+                        {'version': 4, 'addr': '192.168.0.3'},
+                    ],
+                },
+                "metadata": {},
+                "config_drive": None,
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": self_link,
+                    },
+                    {
+                        "rel": "bookmark",
+                        "href": bookmark_link,
+                    },
+                ],
+            }
+        }
+
+        output = self.view_builder.show(self.request, self.instance)
+        self.assertDictMatch(output, expected_server)
+
     def test_build_server_detail_active_status(self):
         #set the power state of the instance to running
         self.instance['vm_state'] = vm_states.ACTIVE
@@ -3450,6 +3572,12 @@ class ServerXMLSerializationTest(test.TestCase):
                         'rel': 'bookmark',
                     },
                 ],
+                "fault": {
+                    "code": 500,
+                    "created": self.TIMESTAMP,
+                    "message": "Error Message",
+                    "details": "Fault details",
+                }
             }
         }
 
@@ -3509,6 +3637,15 @@ class ServerXMLSerializationTest(test.TestCase):
                                  str(ip['version']))
                 self.assertEqual(str(ip_elem.get('addr')),
                                  str(ip['addr']))
+
+        fault_root = root.find('{0}fault'.format(NS))
+        fault_dict = server_dict['fault']
+        self.assertEqual(fault_root.get("code"), str(fault_dict["code"]))
+        self.assertEqual(fault_root.get("created"), fault_dict["created"])
+        msg_elem = fault_root.find('{0}message'.format(NS))
+        self.assertEqual(msg_elem.text, fault_dict["message"])
+        det_elem = fault_root.find('{0}details'.format(NS))
+        self.assertEqual(det_elem.text, fault_dict["details"])
 
     def test_action(self):
         serializer = servers.ServerXMLSerializer()
@@ -3639,3 +3776,42 @@ class ServerXMLSerializationTest(test.TestCase):
                                  str(ip['version']))
                 self.assertEqual(str(ip_elem.get('addr')),
                                  str(ip['addr']))
+
+
+class ServerHeadersSerializationTest(test.TestCase):
+    def test_create_location(self):
+        selfhref = 'http://localhost/v2/fake/servers/%s' % FAKE_UUID
+        bookhref = 'http://localhost/fake/servers/%s' % FAKE_UUID
+
+        serializer = servers.HeadersSerializer()
+        response = webob.Response()
+        server = {
+            'links': [{
+                'rel': 'self',
+                'href': selfhref,
+            }, {
+                'rel': 'bookmark',
+                'href': bookhref,
+            }],
+        }
+        serializer.create(response, {'server': server})
+        self.assertEqual(response.headers['Location'], selfhref)
+
+    def test_rebuild_location(self):
+        selfhref = 'http://localhost/v2/fake/servers/%s' % FAKE_UUID
+        bookhref = 'http://localhost/fake/servers/%s' % FAKE_UUID
+
+        serializer = servers.HeadersSerializer()
+        response = webob.Response()
+        server = {
+            'status': 'REBUILD',
+            'links': [{
+                'rel': 'self',
+                'href': selfhref,
+            }, {
+                'rel': 'bookmark',
+                'href': bookhref,
+            }],
+        }
+        serializer.action(response, {'server': server})
+        self.assertEqual(response.headers['Location'], selfhref)

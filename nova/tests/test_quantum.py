@@ -49,7 +49,7 @@ class FakeQuantumClientConnection(object):
                 net_ids.append(net_id)
         return {'networks': net_ids}
 
-    def create_network(self, tenant_id, network_name):
+    def create_network(self, tenant_id, network_name, **kwargs):
 
         uuid = str(utils.gen_uuid())
         self.nets[uuid] = {'net-name': network_name,
@@ -77,7 +77,8 @@ class FakeQuantumClientConnection(object):
                     raise Exception(_("interface '%s' is already attached" %
                                           interface_id))
 
-    def create_and_attach_port(self, tenant_id, net_id, interface_id):
+    def create_and_attach_port(self, tenant_id, net_id, interface_id,
+                               **kwargs):
         if not self.network_exists(tenant_id, net_id):
             raise Exception(
                 _("network %(net_id)s does not exist for tenant %(tenant_id)"
@@ -103,6 +104,15 @@ class FakeQuantumClientConnection(object):
                     if p['attachment-id'] == attachment_id:
                         return port_id
         return None
+
+    def get_attached_ports(self, tenant_id, net_id):
+        ports = []
+        for nid, n in self.nets.items():
+            if nid == net_id and n['tenant-id'] == tenant_id:
+                for port_id, p in n['ports'].items():
+                    ports.append({'port-id': port_id,
+                            'attachment': p['attachment-id']})
+        return ports
 
     def get_networks(self, tenant_id):
         nets = []

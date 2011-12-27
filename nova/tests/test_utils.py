@@ -14,6 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import __builtin__
+import mox
 import datetime
 import os
 import tempfile
@@ -77,7 +79,14 @@ exit 1
     def test_unknown_kwargs_raises_error(self):
         self.assertRaises(exception.Error,
                           utils.execute,
-                          '/bin/true', this_is_not_a_valid_kwarg=True)
+                          '/usr/bin/env', 'true',
+                          this_is_not_a_valid_kwarg=True)
+
+    def test_check_exit_code_boolean(self):
+        utils.execute('/usr/bin/env', 'false', check_exit_code=False)
+        self.assertRaises(exception.ProcessExecutionError,
+                          utils.execute,
+                          '/usr/bin/env', 'false', check_exit_code=True)
 
     def test_no_retry_on_success(self):
         fd, tmpfilename = tempfile.mkstemp()
@@ -324,6 +333,33 @@ class GenericUtilsTestCase(test.TestCase):
         actual_url = "http://%s:%d" % (FLAGS.glance_host, FLAGS.glance_port)
         self.assertEqual(generated_url, actual_url)
 
+    def test_read_cached_file(self):
+        self.mox.StubOutWithMock(os.path, "getmtime")
+        os.path.getmtime(mox.IgnoreArg()).AndReturn(1)
+        self.mox.ReplayAll()
+
+        cache_data = {"data": 1123, "mtime": 1}
+        data = utils.read_cached_file("/this/is/a/fake", cache_data)
+        self.assertEqual(cache_data["data"], data)
+
+    def test_read_modified_cached_file(self):
+        self.mox.StubOutWithMock(os.path, "getmtime")
+        self.mox.StubOutWithMock(__builtin__, 'open')
+
+        os.path.getmtime(mox.IgnoreArg()).AndReturn(2)
+
+        fake_contents = "lorem ipsum"
+        fake_file = self.mox.CreateMockAnything()
+        fake_file.read().AndReturn(fake_contents)
+        __builtin__.open(mox.IgnoreArg()).AndReturn(fake_file)
+
+        self.mox.ReplayAll()
+        cache_data = {"data": 1123, "mtime": 1}
+        data = utils.read_cached_file("/this/is/a/fake", cache_data)
+        self.mox.VerifyAll()
+        self.mox.UnsetStubs()
+        self.assertEqual(data, fake_contents)
+
 
 class IsUUIDLikeTestCase(test.TestCase):
     def assertUUIDLike(self, val, expected):
@@ -341,6 +377,13 @@ class IsUUIDLikeTestCase(test.TestCase):
     def test_non_uuid_string_passed(self):
         val = 'foo-fooo'
         self.assertUUIDLike(val, False)
+
+    def test_non_uuid_string_passed2(self):
+        val = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+        self.assertUUIDLike(val, False)
+
+    def test_gen_valid_uuid(self):
+        self.assertUUIDLike(str(utils.gen_uuid()), True)
 
 
 class ToPrimitiveTestCase(test.TestCase):

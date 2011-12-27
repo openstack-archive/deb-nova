@@ -87,11 +87,13 @@ class LibvirtNetVolumeDriver(LibvirtVolumeDriver):
 class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
     """Driver to attach Network volumes to libvirt."""
 
-    def _run_iscsiadm(self, iscsi_properties, iscsi_command):
+    def _run_iscsiadm(self, iscsi_properties, iscsi_command, **kwargs):
+        check_exit_code = kwargs.pop('check_exit_code', 0)
         (out, err) = utils.execute('iscsiadm', '-m', 'node', '-T',
                                    iscsi_properties['target_iqn'],
                                    '-p', iscsi_properties['target_portal'],
-                                   *iscsi_command, run_as_root=True)
+                                   *iscsi_command, run_as_root=True,
+                                   check_exit_code=check_exit_code)
         LOG.debug("iscsiadm %s: stdout=%s stderr=%s" %
                   (iscsi_command, out, err))
         return (out, err)
@@ -127,9 +129,14 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
 
         self._iscsiadm_update(iscsi_properties, "node.startup", "automatic")
 
-        host_device = ("/dev/disk/by-path/ip-%s-iscsi-%s-lun-0" %
-                        (iscsi_properties['target_portal'],
-                         iscsi_properties['target_iqn']))
+        if FLAGS.iscsi_helper == 'tgtadm':
+            host_device = ("/dev/disk/by-path/ip-%s-iscsi-%s-lun-1" %
+                            (iscsi_properties['target_portal'],
+                             iscsi_properties['target_iqn']))
+        else:
+            host_device = ("/dev/disk/by-path/ip-%s-iscsi-%s-lun-0" %
+                            (iscsi_properties['target_portal'],
+                             iscsi_properties['target_iqn']))
 
         # The /dev/disk/by-path/... node is not always present immediately
         # TODO(justinsb): This retry-with-delay is a pattern, move to utils?
@@ -165,5 +172,7 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
         sup.disconnect_volume(connection_info, mount_device)
         iscsi_properties = connection_info['data']
         self._iscsiadm_update(iscsi_properties, "node.startup", "manual")
-        self._run_iscsiadm(iscsi_properties, ("--logout",))
-        self._run_iscsiadm(iscsi_properties, ('--op', 'delete'))
+        self._run_iscsiadm(iscsi_properties, ("--logout",),
+                           check_exit_code=[0, 255])
+        self._run_iscsiadm(iscsi_properties, ('--op', 'delete'),
+                           check_exit_code=[0, 255])

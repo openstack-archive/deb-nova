@@ -17,9 +17,13 @@ import json
 
 import webob
 
+from nova.api.openstack import v2
+from nova.api.openstack.v2 import extensions
+from nova.api.openstack import wsgi
 from nova import compute
 from nova import flags
 from nova import test
+from nova import utils
 from nova.tests.api.openstack import fakes
 
 
@@ -60,28 +64,139 @@ class AdminActionsTest(test.TestCase):
 
     def setUp(self):
         super(AdminActionsTest, self).setUp()
-        self.flags(allow_admin_api=True)
         self.stubs.Set(compute.API, 'get', fake_compute_api_get)
+        self.UUID = utils.gen_uuid()
+        self.flags(allow_admin_api=True)
         for _method in self._methods:
             self.stubs.Set(compute.API, _method, fake_compute_api)
 
-    def test_admin_api_enabled(self):
+    def test_admin_api_actions(self):
+        self.maxDiff = None
         app = fakes.wsgi_app()
         for _action in self._actions:
-            req = webob.Request.blank('/v2/fake/servers/abcd/action')
+            req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
             req.method = 'POST'
             req.body = json.dumps({_action: None})
             req.content_type = 'application/json'
             res = req.get_response(app)
             self.assertEqual(res.status_int, 202)
 
-    def test_admin_api_disabled(self):
-        FLAGS.allow_admin_api = False
-        app = fakes.wsgi_app()
-        for _action in self._actions:
-            req = webob.Request.blank('/v2/fake/servers/abcd/action')
-            req.method = 'POST'
-            req.body = json.dumps({_action: None})
-            req.content_type = 'application/json'
-            res = req.get_response(app)
-            self.assertEqual(res.status_int, 404)
+
+class CreateBackupTests(test.TestCase):
+
+    def setUp(self):
+        super(CreateBackupTests, self).setUp()
+
+        self.stubs.Set(compute.API, 'get', fake_compute_api_get)
+        self.backup_stubs = fakes.stub_out_compute_api_backup(self.stubs)
+
+        self.flags(allow_admin_api=True)
+        router = v2.APIRouter()
+        ext_middleware = extensions.ExtensionMiddleware(router)
+        self.app = wsgi.LazySerializationMiddleware(ext_middleware)
+
+        self.uuid = utils.gen_uuid()
+
+    def _get_request(self, body):
+        url = '/fake/servers/%s/action' % self.uuid
+        req = fakes.HTTPRequest.blank(url)
+        req.method = 'POST'
+        req.content_type = 'application/json'
+        req.body = json.dumps(body)
+        return req
+
+    def test_create_backup_with_metadata(self):
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+                'metadata': {'123': 'asdf'},
+            },
+        }
+
+        request = self._get_request(body)
+        response = request.get_response(self.app)
+
+        self.assertEqual(response.status_int, 202)
+        self.assertTrue(response.headers['Location'])
+
+    def test_create_backup_with_too_much_metadata(self):
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+                'metadata': {'123': 'asdf'},
+            },
+        }
+        for num in range(FLAGS.quota_metadata_items + 1):
+            body['createBackup']['metadata']['foo%i' % num] = "bar"
+
+        request = self._get_request(body)
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 413)
+
+    def test_create_backup_no_name(self):
+        """Name is required for backups"""
+        body = {
+            'createBackup': {
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+
+        request = self._get_request(body)
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 400)
+
+    def test_create_backup_no_rotation(self):
+        """Rotation is required for backup requests"""
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+            },
+        }
+
+        request = self._get_request(body)
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 400)
+
+    def test_create_backup_no_backup_type(self):
+        """Backup Type (daily or weekly) is required for backup requests"""
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'rotation': 1,
+            },
+        }
+
+        request = self._get_request(body)
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 400)
+
+    def test_create_backup_bad_entity(self):
+        body = {'createBackup': 'go'}
+
+        request = self._get_request(body)
+        response = request.get_response(self.app)
+        self.assertEqual(response.status_int, 400)
+
+    def test_create_backup(self):
+        """The happy path for creating backups"""
+        body = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+
+        request = self._get_request(body)
+        response = request.get_response(self.app)
+
+        self.assertTrue(response.headers['Location'])
+        instance_ref = self.backup_stubs.extra_props_last_call['instance_ref']
+        expected_server_location = 'http://localhost/v2/servers/%s' % self.uuid
+        self.assertEqual(expected_server_location, instance_ref)

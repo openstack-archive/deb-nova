@@ -33,7 +33,6 @@ terminating it.
 
 """
 
-import datetime
 import functools
 import os
 import socket
@@ -122,6 +121,25 @@ def checks_instance_lock(function):
     return decorated_function
 
 
+def wrap_instance_fault(function):
+    """Wraps a method to catch exceptions related to instances.
+
+    This decorator wraps a method to catch any exceptions having to do with
+    an instance that may get thrown. It then logs an instance fault in the db.
+    """
+    @functools.wraps(function)
+    def decorated_function(self, context, instance_uuid, *args, **kwargs):
+        try:
+            return function(self, context, instance_uuid, *args, **kwargs)
+        except exception.InstanceNotFound:
+            raise
+        except Exception, e:
+            with utils.save_and_reraise_exception():
+                self.add_instance_fault_from_exc(context, instance_uuid, e)
+
+    return decorated_function
+
+
 def _get_image_meta(context, image_ref):
     image_service, image_id = nova.image.get_image_service(context, image_ref)
     return image_service.show(context, image_id)
@@ -146,6 +164,7 @@ class ComputeManager(manager.SchedulerDependentManager):
             sys.exit(1)
 
         self.network_api = network.API()
+        self.volume_api = volume.API()
         self.network_manager = utils.import_object(FLAGS.network_manager)
         self._last_host_check = 0
         self._last_bw_usage_poll = 0
@@ -245,7 +264,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     def _setup_block_device_mapping(self, context, instance):
         """setup volumes for block device mapping"""
-        volume_api = volume.API()
         block_device_mapping = []
         swap = None
         ephemerals = []
@@ -273,18 +291,18 @@ class ComputeManager(manager.SchedulerDependentManager):
             if ((bdm['snapshot_id'] is not None) and
                 (bdm['volume_id'] is None)):
                 # TODO(yamahata): default name and description
-                vol = volume_api.create(context, bdm['volume_size'],
-                                        bdm['snapshot_id'], '', '')
+                vol = self.volume_api.create(context, bdm['volume_size'],
+                                             bdm['snapshot_id'], '', '')
                 # TODO(yamahata): creating volume simultaneously
                 #                 reduces creation time?
-                volume_api.wait_creation(context, vol['id'])
+                self.volume_api.wait_creation(context, vol['id'])
                 self.db.block_device_mapping_update(
                     context, bdm['id'], {'volume_id': vol['id']})
                 bdm['volume_id'] = vol['id']
 
             if bdm['volume_id'] is not None:
-                volume_api.check_attach(context,
-                                        volume_id=bdm['volume_id'])
+                self.volume_api.check_attach(context,
+                                             volume_id=bdm['volume_id'])
                 cinfo = self._attach_volume_boot(context, instance,
                                                     bdm['volume_id'],
                                                     bdm['device_name'])
@@ -296,6 +314,34 @@ class ComputeManager(manager.SchedulerDependentManager):
                                              bdm['device_name']})
 
         return (swap, ephemerals, block_device_mapping)
+
+    def _is_instance_terminated(self, instance_uuid):
+        """Instance in DELETING task state or not found in DB"""
+        context = nova.context.get_admin_context()
+        try:
+            instance = self.db.instance_get_by_uuid(context, instance_uuid)
+            if instance['task_state'] == task_states.DELETING:
+                return True
+            return False
+        except:
+            return True
+
+    def _shutdown_instance_even_if_deleted(self, context, instance_uuid):
+        """Call terminate_instance even for already deleted instances"""
+        LOG.info(_("Going to force the deletion of the vm %(instance_uuid)s, "
+                   "even if it is deleted") % locals())
+        try:
+            try:
+                self.terminate_instance(context, instance_uuid)
+            except exception.InstanceNotFound:
+                LOG.info(_("Instance %(instance_uuid)s did not exist in the "
+                         "DB, but I will shut it down anyway using a special "
+                         "context") % locals())
+                ctxt = nova.context.get_admin_context(True)
+                self.terminate_instance(ctxt, instance_uuid)
+        except Exception as ex:
+            LOG.info(_("exception terminating the instance "
+                     "%(instance_id)s") % locals())
 
     def _run_instance(self, context, instance_uuid,
                       requested_networks=None,
@@ -320,14 +366,18 @@ class ComputeManager(manager.SchedulerDependentManager):
                 with utils.save_and_reraise_exception():
                     self._deallocate_network(context, instance)
             self._notify_about_instance_usage(instance)
+            if self._is_instance_terminated(instance_uuid):
+                raise exception.InstanceNotFound
         except exception.InstanceNotFound:
             LOG.exception(_("Instance %s not found.") % instance_uuid)
-            return  # assuming the instance was already deleted
+            # assuming the instance was already deleted, run "delete" again
+            # just in case
+            self._shutdown_instance_even_if_deleted(context, instance_uuid)
+            return
         except Exception as e:
             with utils.save_and_reraise_exception():
                 self._instance_update(context, instance_uuid,
                                       vm_state=vm_states.ERROR)
-                self.add_instance_fault_from_exc(context, instance_uuid, e)
 
     def _check_instance_not_already_created(self, context, instance):
         """Ensure an instance with the same name is not already present."""
@@ -474,6 +524,15 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                                 instance_id)
         return [bdm for bdm in bdms if bdm['volume_id']]
 
+    def _get_instance_volume_bdm(self, context, instance_id, volume_id):
+        bdms = self._get_instance_volume_bdms(context, instance_id)
+        for bdm in bdms:
+            # NOTE(vish): Comparing as strings because the os_api doesn't
+            #             convert to integer and we may wish to support uuids
+            #             in the future.
+            if str(bdm['volume_id']) == str(volume_id):
+                return bdm
+
     def _get_instance_volume_block_device_info(self, context, instance_id):
         bdms = self._get_instance_volume_bdms(context, instance_id)
         block_device_mapping = []
@@ -482,16 +541,18 @@ class ComputeManager(manager.SchedulerDependentManager):
             block_device_mapping.append({'connection_info': cinfo,
                                          'mount_device':
                                          bdm['device_name']})
-        ## NOTE(vish): The mapping is passed in so the driver can disconnect
-        ##             from remote volumes if necessary
+        # NOTE(vish): The mapping is passed in so the driver can disconnect
+        #             from remote volumes if necessary
         return {'block_device_mapping': block_device_mapping}
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def run_instance(self, context, instance_uuid, **kwargs):
         self._run_instance(context, instance_uuid, **kwargs)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def start_instance(self, context, instance_uuid):
         """Starting an instance on this host."""
         # TODO(yamahata): injected_files isn't supported.
@@ -513,29 +574,33 @@ class ComputeManager(manager.SchedulerDependentManager):
         if not FLAGS.stub_network:
             self.network_api.deallocate_for_instance(context, instance)
 
-        for bdm in self._get_instance_volume_bdms(context, instance_id):
-            volume_id = bdm['volume_id']
-            try:
-                self._detach_volume(context, instance_uuid, volume_id)
-            except exception.DiskNotFound as exc:
-                LOG.warn(_("Ignoring DiskNotFound: %s") % exc)
-
         if instance['power_state'] == power_state.SHUTOFF:
             self.db.instance_destroy(context, instance_id)
             raise exception.Error(_('trying to destroy already destroyed'
                                     ' instance: %s') % instance_uuid)
+        # NOTE(vish) get bdms before destroying the instance
+        bdms = self._get_instance_volume_bdms(context, instance_id)
         block_device_info = self._get_instance_volume_block_device_info(
             context, instance_id)
         self.driver.destroy(instance, network_info, block_device_info, cleanup)
+        for bdm in bdms:
+            try:
+                # NOTE(vish): actual driver detach done in driver.destroy, so
+                #             just tell nova-volume that we are done with it.
+                self.volume_api.terminate_connection(context,
+                                                     bdm['volume_id'],
+                                                     FLAGS.my_ip)
+                self.volume_api.detach(context, bdm['volume_id'])
+            except exception.DiskNotFound as exc:
+                LOG.warn(_("Ignoring DiskNotFound: %s") % exc)
 
     def _cleanup_volumes(self, context, instance_id):
-        volume_api = volume.API()
         bdms = self.db.block_device_mapping_get_all_by_instance(context,
                                                                 instance_id)
         for bdm in bdms:
             LOG.debug(_("terminating bdm %s") % bdm)
             if bdm['volume_id'] and bdm['delete_on_termination']:
-                volume_api.delete(context, bdm['volume_id'])
+                self.volume_api.delete(context, bdm['volume_id'])
             # NOTE(vish): bdms will be deleted on instance destroy
 
     def _delete_instance(self, context, instance):
@@ -558,6 +623,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def terminate_instance(self, context, instance_uuid):
         """Terminate an instance on this host."""
         elevated = context.elevated()
@@ -567,6 +633,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def stop_instance(self, context, instance_uuid):
         """Stopping an instance on this host."""
         # FIXME(vish): I've kept the files during stop instance, but
@@ -582,6 +649,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def power_off_instance(self, context, instance_uuid):
         """Power off an instance on this host."""
         instance = self.db.instance_get_by_uuid(context, instance_uuid)
@@ -594,6 +662,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def power_on_instance(self, context, instance_uuid):
         """Power on an instance on this host."""
         instance = self.db.instance_get_by_uuid(context, instance_uuid)
@@ -606,6 +675,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def rebuild_instance(self, context, instance_uuid, **kwargs):
         """Destroy and re-make this instance.
 
@@ -671,6 +741,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def reboot_instance(self, context, instance_uuid, reboot_type="SOFT"):
         """Reboot an instance on this host."""
         LOG.audit(_("Rebooting instance %s"), instance_uuid, context=context)
@@ -702,6 +773,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                               task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def snapshot_instance(self, context, instance_uuid, image_id,
                           image_type='snapshot', backup_type=None,
                           rotation=None):
@@ -742,8 +814,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                        'instance: %(instance_uuid)s (state: %(state)s '
                        'expected: %(running)s)') % locals())
 
-        self.driver.snapshot(context, instance_ref, image_id)
-        self._instance_update(context, instance_ref['id'], task_state=None)
+        try:
+            self.driver.snapshot(context, instance_ref, image_id)
+        finally:
+            self._instance_update(context, instance_ref['id'], task_state=None)
 
         if image_type == 'snapshot' and rotation:
             raise exception.ImageRotationNotAllowed()
@@ -754,6 +828,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         elif image_type == 'backup':
             raise exception.RotationRequiredForBackup()
 
+    @wrap_instance_fault
     def rotate_backups(self, context, instance_uuid, backup_type, rotation):
         """Delete excess backups associated to an instance.
 
@@ -802,6 +877,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def set_admin_password(self, context, instance_uuid, new_pass=None):
         """Set the root/admin password for an instance on this host.
 
@@ -848,18 +924,21 @@ class ComputeManager(manager.SchedulerDependentManager):
                     # Catch all here because this could be anything.
                     LOG.exception(e)
                     if i == max_tries - 1:
-                        # At some point this exception may make it back
-                        # to the API caller, and we don't want to reveal
-                        # too much.  The real exception is logged above
                         self._instance_update(context,
                                               instance_id,
+                                              task_state=None,
                                               vm_state=vm_states.ERROR)
-                        raise exception.Error(_('Internal error'))
+                        # We create a new exception here so that we won't
+                        # potentially reveal password information to the
+                        # API caller.  The real exception is logged above
+                        _msg = _('Error setting admin password')
+                        raise exception.Error(_msg)
                     time.sleep(1)
                     continue
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def inject_file(self, context, instance_uuid, path, file_contents):
         """Write a file to the specified path in an instance on this host."""
         context = context.elevated()
@@ -877,6 +956,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def agent_update(self, context, instance_uuid, url, md5hash):
         """Update agent running on an instance on this host."""
         context = context.elevated()
@@ -894,6 +974,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def rescue_instance(self, context, instance_uuid, **kwargs):
         """
         Rescue an instance on this host.
@@ -920,6 +1001,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def unrescue_instance(self, context, instance_uuid):
         """Rescue an instance on this host."""
         LOG.audit(_('instance %s: unrescuing'), instance_uuid, context=context)
@@ -939,6 +1021,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def confirm_resize(self, context, instance_uuid, migration_id):
         """Destroys the source instance."""
         migration_ref = self.db.migration_get(context, migration_id)
@@ -957,6 +1040,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def revert_resize(self, context, instance_uuid, migration_id):
         """Destroys the new instance on the destination machine.
 
@@ -980,6 +1064,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def finish_revert_resize(self, context, instance_uuid, migration_id):
         """Finishes the second half of reverting a resize.
 
@@ -1015,6 +1100,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def prep_resize(self, context, instance_uuid, instance_type_id):
         """Initiates the process of moving a running instance to another host.
 
@@ -1030,8 +1116,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             self._instance_update(context,
                                   instance_uuid,
                                   vm_state=vm_states.ERROR)
-            msg = _('Migration error: destination same as source!')
-            raise exception.Error(msg)
+            msg = _('destination same as source!')
+            raise exception.MigrationError(msg)
 
         old_instance_type_id = instance_ref['instance_type_id']
         old_instance_type = instance_types.get_instance_type(
@@ -1066,6 +1152,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def resize_instance(self, context, instance_uuid, migration_id):
         """Starts the migration of a running instance to another host."""
         migration_ref = self.db.migration_get(context, migration_id)
@@ -1107,6 +1194,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def finish_resize(self, context, instance_uuid, migration_id, disk_info):
         """Completes the migration process.
 
@@ -1162,6 +1250,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def add_fixed_ip_to_instance(self, context, instance_uuid, network_id):
         """Calls network_api to add new fixed_ip to instance
         then injects the new network info and resets instance networking.
@@ -1181,6 +1270,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def remove_fixed_ip_from_instance(self, context, instance_uuid, address):
         """Calls network_api to remove existing fixed_ip from instance
         by injecting the altered network info and resetting
@@ -1200,6 +1290,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def pause_instance(self, context, instance_uuid):
         """Pause an instance on this host."""
         LOG.audit(_('instance %s: pausing'), instance_uuid, context=context)
@@ -1217,6 +1308,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def unpause_instance(self, context, instance_uuid):
         """Unpause a paused instance on this host."""
         LOG.audit(_('instance %s: unpausing'), instance_uuid, context=context)
@@ -1243,6 +1335,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self.driver.set_host_enabled(host, enabled)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def get_diagnostics(self, context, instance_uuid):
         """Retrieve diagnostics for an instance on this host."""
         instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
@@ -1253,6 +1346,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def suspend_instance(self, context, instance_uuid):
         """Suspend the given instance."""
         LOG.audit(_('instance %s: suspending'), instance_uuid, context=context)
@@ -1270,6 +1364,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def resume_instance(self, context, instance_uuid):
         """Resume the given suspended instance."""
         LOG.audit(_('instance %s: resuming'), instance_uuid, context=context)
@@ -1286,6 +1381,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                               task_state=None)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def lock_instance(self, context, instance_uuid):
         """Lock the given instance."""
         context = context.elevated()
@@ -1294,6 +1390,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_update(context, instance_uuid, {'locked': True})
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def unlock_instance(self, context, instance_uuid):
         """Unlock the given instance."""
         context = context.elevated()
@@ -1302,6 +1399,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_update(context, instance_uuid, {'locked': False})
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def get_lock(self, context, instance_uuid):
         """Return the boolean state of the given instance's lock."""
         context = context.elevated()
@@ -1311,6 +1409,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         return instance_ref['locked']
 
     @checks_instance_lock
+    @wrap_instance_fault
     def reset_network(self, context, instance_uuid):
         """Reset networking on the given instance."""
         instance = self.db.instance_get_by_uuid(context, instance_uuid)
@@ -1319,6 +1418,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.driver.reset_network(instance)
 
     @checks_instance_lock
+    @wrap_instance_fault
     def inject_network_info(self, context, instance_uuid):
         """Inject network info for the given instance."""
         LOG.debug(_('instance %s: inject network info'), instance_uuid,
@@ -1330,16 +1430,33 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.driver.inject_network_info(instance, network_info)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    def get_console_output(self, context, instance_uuid):
+    @wrap_instance_fault
+    def get_console_output(self, context, instance_uuid, tail_length=None):
         """Send the console output for the given instance."""
         context = context.elevated()
         instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
         LOG.audit(_("Get console output for instance %s"), instance_uuid,
                   context=context)
         output = self.driver.get_console_output(instance_ref)
+
+        if tail_length is not None:
+            output = self._tail_log(output, tail_length)
+
         return output.decode('utf-8', 'replace').encode('ascii', 'replace')
 
+    def _tail_log(self, log, length):
+        try:
+            length = int(length)
+        except ValueError:
+            length = 0
+
+        if length == 0:
+            return ''
+        else:
+            return '\n'.join(log.split('\n')[-int(length):])
+
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def get_ajax_console(self, context, instance_uuid):
         """Return connection information for an ajax console."""
         context = context.elevated()
@@ -1348,6 +1465,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self.driver.get_ajax_console(instance_ref)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def get_vnc_console(self, context, instance_uuid):
         """Return connection information for a vnc console."""
         context = context.elevated()
@@ -1365,14 +1483,15 @@ class ComputeManager(manager.SchedulerDependentManager):
                     "volume %(volume_id)s at %(mountpoint)s") %
                   locals(), context=context)
         address = FLAGS.my_ip
-        volume_api = volume.API()
-        connection_info = volume_api.initialize_connection(context,
-                                                           volume_id,
-                                                           address)
-        volume_api.attach(context, volume_id, instance_id, mountpoint)
+        connection_info = self.volume_api.initialize_connection(context,
+                                                                volume_id,
+                                                                address)
+        self.volume_api.attach(context, volume_id, instance_id, mountpoint)
         return connection_info
 
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
+    @wrap_instance_fault
     def attach_volume(self, context, instance_uuid, volume_id, mountpoint):
         """Attach a volume to an instance."""
         context = context.elevated()
@@ -1381,11 +1500,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         LOG.audit(
             _("instance %(instance_uuid)s: attaching volume %(volume_id)s"
               " to %(mountpoint)s") % locals(), context=context)
-        volume_api = volume.API()
         address = FLAGS.my_ip
-        connection_info = volume_api.initialize_connection(context,
-                                                           volume_id,
-                                                           address)
+        connection_info = self.volume_api.initialize_connection(context,
+                                                                volume_id,
+                                                                address)
         try:
             self.driver.attach_volume(connection_info,
                                       instance_ref['name'],
@@ -1397,10 +1515,10 @@ class ComputeManager(manager.SchedulerDependentManager):
             #             ecxception below.
             LOG.exception(_("instance %(instance_uuid)s: attach failed"
                     " %(mountpoint)s, removing") % locals(), context=context)
-            volume_api.terminate_connection(context, volume_id, address)
+            self.volume_api.terminate_connection(context, volume_id, address)
             raise exc
 
-        volume_api.attach(context, volume_id, instance_id, mountpoint)
+        self.volume_api.attach(context, volume_id, instance_id, mountpoint)
         values = {
             'instance_id': instance_id,
             'connection_info': utils.dumps(connection_info),
@@ -1414,60 +1532,52 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.block_device_mapping_create(context, values)
         return True
 
-    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    @checks_instance_lock
-    def _detach_volume(self, context, instance_uuid, volume_id,
-                       destroy_bdm=False, mark_detached=True,
-                       force_detach=False):
-        """Detach a volume from an instance."""
-        context = context.elevated()
-        instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
-        instance_id = instance_ref['id']
-        bdms = self.db.block_device_mapping_get_all_by_instance(
-                context, instance_id)
-        for item in bdms:
-            # NOTE(vish): Comparing as strings because the os_api doesn't
-            #             convert to integer and we may wish to support uuids
-            #             in the future.
-            if str(item['volume_id']) == str(volume_id):
-                bdm = item
-                break
+    def _detach_volume(self, context, instance_name, bdm):
+        """Do the actual driver detach using block device mapping."""
         mp = bdm['device_name']
+        volume_id = bdm['volume_id']
 
         LOG.audit(_("Detach volume %(volume_id)s from mountpoint %(mp)s"
-                " on instance %(instance_id)s") % locals(), context=context)
-        volume_api = volume.API()
-        if (instance_ref['name'] not in self.driver.list_instances() and
-            not force_detach):
-            LOG.warn(_("Detaching volume from unknown instance %s"),
-                     instance_id, context=context)
-        else:
-            self.driver.detach_volume(utils.loads(bdm['connection_info']),
-                                      instance_ref['name'],
-                                      bdm['device_name'])
-        address = FLAGS.my_ip
-        volume_api.terminate_connection(context, volume_id, address)
-        if mark_detached:
-            volume_api.detach(context, volume_id)
-        if destroy_bdm:
-            self.db.block_device_mapping_destroy_by_instance_and_volume(
-                context, instance_id, volume_id)
-        return True
+                " on instance %(instance_name)s") % locals(), context=context)
 
+        if instance_name not in self.driver.list_instances():
+            LOG.warn(_("Detaching volume from unknown instance %s"),
+                     instance_name, context=context)
+        self.driver.detach_volume(utils.loads(bdm['connection_info']),
+                                  instance_name,
+                                  mp)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @checks_instance_lock
+    @wrap_instance_fault
     def detach_volume(self, context, instance_uuid, volume_id):
         """Detach a volume from an instance."""
-        return self._detach_volume(context, instance_uuid, volume_id, True)
+        instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
+        instance_id = instance_ref['id']
+        bdm = self._get_instance_volume_bdm(context, instance_id, volume_id)
+        self._detach_volume(context, instance_ref['name'], bdm)
+        self.volume_api.terminate_connection(context, volume_id, FLAGS.my_ip)
+        self.volume_api.detach(context.elevated(), volume_id)
+        self.db.block_device_mapping_destroy_by_instance_and_volume(
+            context, instance_id, volume_id)
+        return True
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     def remove_volume_connection(self, context, instance_id, volume_id):
-        """Detach a volume from an instance.,"""
+        """Remove a volume connection using the volume api"""
         # NOTE(vish): We don't want to actually mark the volume
         #             detached, or delete the bdm, just remove the
         #             connection from this host.
         try:
             instance_ref = self.db.instance_get(context, instance_id)
-            self._detach_volume(context, instance_ref['uuid'], volume_id,
-                                False, False, True)
+            bdm = self._get_instance_volume_bdm(context,
+                                                instance_id,
+                                                volume_id)
+            self._detach_volume(context, instance_ref['name'],
+                                bdm['volume_id'], bdm['device_name'])
+            self.volume_api.terminate_connection(context,
+                                                 volume_id,
+                                                 FLAGS.my_ip)
         except exception.NotFound:
             pass
 
@@ -1735,6 +1845,12 @@ class ComputeManager(manager.SchedulerDependentManager):
         # must be deleted for preparing next block migration
         if block_migration:
             self.driver.destroy(instance_ref, network_info)
+        else:
+            # self.driver.destroy() usually performs  vif unplugging
+            # but we must do it explicitly here when block_migration
+            # is false, as the network devices at the source must be
+            # torn down
+            self.driver.unplug_vifs(instance_ref, network_info)
 
         LOG.info(_('Migrating %(i_name)s to %(dest)s finished successfully.')
                  % locals())
@@ -1780,8 +1896,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         for bdm in self._get_instance_volume_bdms(context, instance_ref['id']):
             volume_id = bdm['volume_id']
             self.db.volume_update(context, volume_id, {'status': 'in-use'})
-            volume.API().remove_from_compute(context, instance_ref['id'],
-                                             volume_id, dest)
+            self.volume_api.remove_from_compute(context, instance_ref['id'],
+                                                volume_id, dest)
 
         # Block migration needs empty image at destination host
         # before migration starts, so if any failure occurs,
@@ -1931,16 +2047,5 @@ class ComputeManager(manager.SchedulerDependentManager):
             'code': code,
             'message': fault.__class__.__name__,
             'details': fault.message,
-        }
-        self.db.instance_fault_create(context, values)
-
-    def add_instance_fault(self, context, instance_uuid, code=500,
-                           message='', details=''):
-        """Adds a fault to the database using the specified values."""
-        values = {
-            'instance_uuid': instance_uuid,
-            'code': code,
-            'message': message,
-            'details': details,
         }
         self.db.instance_fault_create(context, values)

@@ -63,10 +63,10 @@ Using the Python WMI library:
 import os
 import time
 
+from nova.compute import power_state
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova.compute import power_state
 from nova.virt import driver
 from nova.virt import images
 
@@ -515,4 +515,12 @@ class HyperVConnection(driver.ComputeDriver):
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
+        pass
+
+    def plug_vifs(self, instance, network_info):
+        """Plug VIFs into networks."""
+        pass
+
+    def unplug_vifs(self, instance, network_info):
+        """Unplug VIFs from networks."""
         pass

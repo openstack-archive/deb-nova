@@ -42,22 +42,20 @@ Supports KVM, LXC, QEMU, UML, and XEN.
 import hashlib
 import functools
 import multiprocessing
-import netaddr
 import os
-import random
-import re
 import shutil
 import sys
 import tempfile
-import time
 import uuid
+
+from eventlet import greenthread
 from xml.dom import minidom
 from xml.etree import ElementTree
 
-from eventlet import greenthread
-from eventlet import tpool
-
+from nova.auth import manager
 from nova import block_device
+from nova.compute import instance_types
+from nova.compute import power_state
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -65,11 +63,7 @@ from nova import flags
 import nova.image
 from nova import log as logging
 from nova import utils
-from nova import vnc
-from nova.auth import manager
-from nova.compute import instance_types
-from nova.compute import power_state
-from nova.virt import disk
+from nova.virt.disk import api as disk
 from nova.virt import driver
 from nova.virt import images
 from nova.virt.libvirt import utils as libvirt_utils
@@ -184,12 +178,10 @@ class LibvirtConnection(driver.ComputeDriver):
 
     def __init__(self, read_only):
         super(LibvirtConnection, self).__init__()
-        self.libvirt_uri = self.get_uri()
 
-        self.libvirt_xml = open(FLAGS.libvirt_xml_template).read()
-        self.cpuinfo_xml = open(FLAGS.cpuinfo_xml_template).read()
         self._host_state = None
         self._wrapped_conn = None
+        self.container = None
         self.read_only = read_only
 
         fw_class = utils.import_class(FLAGS.firewall_driver)
@@ -221,10 +213,26 @@ class LibvirtConnection(driver.ComputeDriver):
         # NOTE(nsokolov): moved instance restarting to ComputeManager
         pass
 
+    @property
+    def libvirt_xml(self):
+        if not hasattr(self, '_libvirt_xml_cache_info'):
+            self._libvirt_xml_cache_info = {}
+
+        return utils.read_cached_file(FLAGS.libvirt_xml_template,
+                self._libvirt_xml_cache_info)
+
+    @property
+    def cpuinfo_xml(self):
+        if not hasattr(self, '_cpuinfo_xml_cache_info'):
+            self._cpuinfo_xml_cache_info = {}
+
+        return utils.read_cached_file(FLAGS.cpuinfo_xml_template,
+                self._cpuinfo_xml_cache_info)
+
     def _get_connection(self):
         if not self._wrapped_conn or not self._test_connection():
-            LOG.debug(_('Connecting to libvirt: %s'), self.libvirt_uri)
-            self._wrapped_conn = self._connect(self.libvirt_uri,
+            LOG.debug(_('Connecting to libvirt: %s'), self.uri)
+            self._wrapped_conn = self._connect(self.uri,
                                                self.read_only)
         return self._wrapped_conn
     _conn = property(_get_connection)
@@ -241,7 +249,8 @@ class LibvirtConnection(driver.ComputeDriver):
                 return False
             raise
 
-    def get_uri(self):
+    @property
+    def uri(self):
         if FLAGS.libvirt_type == 'uml':
             uri = FLAGS.libvirt_uri or 'uml:///system'
         elif FLAGS.libvirt_type == 'xen':
@@ -252,7 +261,8 @@ class LibvirtConnection(driver.ComputeDriver):
             uri = FLAGS.libvirt_uri or 'qemu:///system'
         return uri
 
-    def _connect(self, uri, read_only):
+    @staticmethod
+    def _connect(uri, read_only):
         auth = [[libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_NOECHOPROMPT],
                 'root',
                 None]
@@ -266,7 +276,8 @@ class LibvirtConnection(driver.ComputeDriver):
         return [self._conn.lookupByID(x).name()
                 for x in self._conn.listDomainsID()]
 
-    def _map_to_instance_info(self, domain):
+    @staticmethod
+    def _map_to_instance_info(domain):
         """Gets info from a virsh domain object into an InstanceInfo"""
 
         # domain.info() returns a list of:
@@ -290,9 +301,14 @@ class LibvirtConnection(driver.ComputeDriver):
         return infos
 
     def plug_vifs(self, instance, network_info):
-        """Plugin VIFs into networks."""
+        """Plug VIFs into networks."""
         for (network, mapping) in network_info:
             self.vif_driver.plug(instance, network, mapping)
+
+    def unplug_vifs(self, instance, network_info):
+        """Unplug VIFs from networks."""
+        for (network, mapping) in network_info:
+            self.vif_driver.unplug(instance, network, mapping)
 
     def destroy(self, instance, network_info, block_device_info=None,
                 cleanup=True):
@@ -350,8 +366,7 @@ class LibvirtConnection(driver.ComputeDriver):
                             locals())
                 raise
 
-        for (network, mapping) in network_info:
-            self.vif_driver.unplug(instance, network, mapping)
+        self.unplug_vifs(instance, network_info)
 
         def _wait_for_destroy():
             """Called at an interval until the VM is gone."""
@@ -390,7 +405,7 @@ class LibvirtConnection(driver.ComputeDriver):
         LOG.info(_('instance %(instance_name)s: deleting instance files'
                 ' %(target)s') % locals())
         if FLAGS.libvirt_type == 'lxc':
-            disk.destroy_container(target, instance, nbd=FLAGS.use_cow_images)
+            disk.destroy_container(self.container)
         if os.path.exists(target):
             shutil.rmtree(target)
 
@@ -412,7 +427,8 @@ class LibvirtConnection(driver.ComputeDriver):
                                         mount_device)
         virt_dom.attachDevice(xml)
 
-    def _get_disk_xml(self, xml, device):
+    @staticmethod
+    def _get_disk_xml(xml, device):
         """Returns the xml for the disk mounted at device"""
         try:
             doc = ElementTree.fromstring(xml)
@@ -545,6 +561,7 @@ class LibvirtConnection(driver.ComputeDriver):
         # better because we cannot ensure flushing dirty buffers
         # in the guest OS. But, in case of KVM, shutdown() does not work...
         self.destroy(instance, network_info, cleanup=False)
+        self.unplug_vifs(instance, network_info)
         self.plug_vifs(instance, network_info)
         self.firewall_driver.setup_basic_filtering(instance, network_info)
         self.firewall_driver.prepare_instance_filter(instance, network_info)
@@ -749,7 +766,8 @@ class LibvirtConnection(driver.ComputeDriver):
         libvirt_utils.run_ajaxterm(ajaxterm_cmd, token, port)
         return {'token': token, 'host': host, 'port': port}
 
-    def get_host_ip_addr(self):
+    @staticmethod
+    def get_host_ip_addr():
         return FLAGS.my_ip
 
     @exception.wrap_exception()
@@ -804,14 +822,16 @@ class LibvirtConnection(driver.ComputeDriver):
             else:
                 libvirt_utils.copy_image(base, target)
 
-    def _fetch_image(self, context, target, image_id, user_id, project_id,
+    @staticmethod
+    def _fetch_image(context, target, image_id, user_id, project_id,
                      size=None):
         """Grab image and optionally attempt to resize it"""
         images.fetch_to_raw(context, image_id, target, user_id, project_id)
         if size:
             disk.extend(target, size)
 
-    def _create_local(self, target, local_size, unit='G', fs_format=None):
+    @staticmethod
+    def _create_local(target, local_size, unit='G', fs_format=None):
         """Create a blank image of specified size"""
 
         if not fs_format:
@@ -826,7 +846,8 @@ class LibvirtConnection(driver.ComputeDriver):
         self._create_local(target, local_size)
         disk.mkfs(os_type, fs_label, target)
 
-    def _create_swap(self, target, swap_mb):
+    @staticmethod
+    def _create_swap(target, swap_mb):
         """Create a swap file of specified size"""
         libvirt_utils.create_image('raw', target, '%dM' % swap_mb)
         libvirt_utils.mkfs(target, 'swap')
@@ -1017,11 +1038,11 @@ class LibvirtConnection(driver.ComputeDriver):
             if config_drive:  # Should be True or None by now.
                 injection_path = basepath('disk.config')
                 img_id = 'config-drive'
-                tune2fs = False
+                disable_auto_fsck = False
             else:
                 injection_path = basepath('disk')
                 img_id = inst.image_ref
-                tune2fs = True
+                disable_auto_fsck = True
 
             for injection in ('metadata', 'key', 'net'):
                 if locals()[injection]:
@@ -1031,8 +1052,8 @@ class LibvirtConnection(driver.ComputeDriver):
             try:
                 disk.inject_data(injection_path, key, net, metadata,
                                  partition=target_partition,
-                                 nbd=FLAGS.use_cow_images,
-                                 tune2fs=tune2fs)
+                                 use_cow=FLAGS.use_cow_images,
+                                 disable_auto_fsck=disable_auto_fsck)
 
             except Exception as e:
                 # This could be a windows image, or a vmdk format disk
@@ -1040,14 +1061,15 @@ class LibvirtConnection(driver.ComputeDriver):
                         ' data into image %(img_id)s (%(e)s)') % locals())
 
         if FLAGS.libvirt_type == 'lxc':
-            disk.setup_container(basepath('disk'),
-                                container_dir=container_dir,
-                                nbd=FLAGS.use_cow_images)
+            self.container = disk.setup_container(basepath('disk'),
+                                                  container_dir=container_dir,
+                                                  use_cow=FLAGS.use_cow_images)
 
         if FLAGS.libvirt_type == 'uml':
             libvirt_utils.chown(basepath('disk'), 'root')
 
-    def _volume_in_mapping(self, mount_device, block_device_info):
+    @staticmethod
+    def _volume_in_mapping(mount_device, block_device_info):
         block_device_list = [block_device.strip_dev(vol['mount_device'])
                              for vol in
                              driver.block_device_info_get_mapping(
@@ -1300,7 +1322,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         return interfaces
 
-    def get_vcpu_total(self):
+    @staticmethod
+    def get_vcpu_total():
         """Get vcpu number of physical computer.
 
         :returns: the number of cpu core.
@@ -1316,7 +1339,8 @@ class LibvirtConnection(driver.ComputeDriver):
                        "This error can be safely ignored for now."))
             return 0
 
-    def get_memory_mb_total(self):
+    @staticmethod
+    def get_memory_mb_total():
         """Get the total memory size(MB) of physical computer.
 
         :returns: the total amount of memory(MB).
@@ -1331,7 +1355,8 @@ class LibvirtConnection(driver.ComputeDriver):
         # transforming kb to mb.
         return int(meminfo[idx + 1]) / 1024
 
-    def get_local_gb_total(self):
+    @staticmethod
+    def get_local_gb_total():
         """Get the total hdd size(GB) of physical computer.
 
         :returns:
@@ -1354,7 +1379,13 @@ class LibvirtConnection(driver.ComputeDriver):
         total = 0
         for dom_id in self._conn.listDomainsID():
             dom = self._conn.lookupByID(dom_id)
-            total += len(dom.vcpus()[1])
+            vcpus = dom.vcpus()
+            if vcpus is None:
+                # dom.vcpus is not implemented for lxc, but returning 0 for
+                # a used count is hardly useful for something measuring usage
+                total += 1
+            else:
+                total += len(vcpus[1])
         return total
 
     def get_memory_mb_used(self):
