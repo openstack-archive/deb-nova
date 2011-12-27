@@ -1,3 +1,9 @@
+nova (2012.1~e2+git508-gcff2ddc-1) experimental; urgency=low
+
+  * New snapshot release
+
+ -- Ghe Rivero <ghe@debian.org>  Tue, 27 Dec 2011 20:25:31 +0100
+
 nova (2012.1~e2-3) unstable; urgency=low
 
   [ Thomas Goirand ]
