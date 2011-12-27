@@ -27,11 +27,12 @@ Cmnd_Alias NOVACMDS = /bin/chown,                               \
                       /sbin/vgs,                                \
                       /sbin/iscsiadm,                           \
                       /sbin/parted,                             \
-                      /usr/sbin/dnsmasq,						\
-                      /usr/bin/arping,							\
-                      /bin/netcat,								\
-                      /usr/bin/dhcp_release, \
-		      /usr/bin/ovs-vsctl
+                      /usr/sbin/dnsmasq,			\
+                      /usr/bin/arping,				\
+                      /bin/netcat,				\
+                      /usr/bin/dhcp_release, 			\
+                      /usr/bin/ovs-vsctl,			\
+                      /usr/bin/ovs-ofctl
 
 nova ALL = (root) NOPASSWD: SETENV: NOVACMDS
 

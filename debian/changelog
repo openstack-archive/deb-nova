@@ -1,9 +1,14 @@
 nova (2012.1~e2-3) unstable; urgency=low
 
+  [ Thomas Goirand ]
   * nova-compute-xen shouldn't depends on the Xen hypervisor: it can be
   installed in a domU for example.
 
- -- Thomas Goirand <zigo@debian.org>  Thu, 22 Dec 2011 20:23:07 +0000
+  [ Ghe Rivero ]
+  * Lintian clean of empty packages
+  * Added ovs-ofctl to nova_sudoers
+
+ -- Ghe Rivero <ghe@debian.org>  Tue, 27 Dec 2011 11:59:22 +0100
 
 nova (2012.1~e2-2) unstable; urgency=low
 
