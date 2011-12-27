@@ -17,7 +17,7 @@ Build-Depends: debhelper (>= 7.0.50),
  python-netaddr,
  python-gflags,
  python-feedparser,
- python-suds,
+ python-suds (>= 0.4.0),
  python-coverage,
  python-greenlet
 Build-Depends-Indep:
@@ -143,7 +143,7 @@ Description: OpenStack Compute - compute node (LXC)
  (SQLite, MySQL, and PostgreSQL, for instance), different types of user
  databases (LDAP or SQL), etc.
  .
- Install this package on your compute nodes if you're using LXC.
+ Install this virtual package on your compute nodes if you're using LXC.
 
 Package: nova-compute-uml
 Architecture: all
@@ -164,12 +164,12 @@ Description: OpenStack Compute - compute node (UserModeLinux)
  (SQLite, MySQL, and PostgreSQL, for instance), different types of user
  databases (LDAP or SQL), etc.
  .
- Install this package on your compute nodes if you're using UserModeLinux.
+ Install this virtual package on your compute nodes if you're using
+ UserModeLinux.
 
 Package: nova-compute-xen
 Architecture: all
-Depends: python-libvirt, libvirt-bin, xen-hypervisor-4.1-amd64 | xen-hypervisor-4.1-i386,
-  ${misc:Depends}
+Depends: python-libvirt, libvirt-bin, ${misc:Depends}
 Provides: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (Xen)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -186,7 +186,8 @@ Description: OpenStack Compute - compute node (Xen)
  (SQLite, MySQL, and PostgreSQL, for instance), different types of user
  databases (LDAP or SQL), etc.
  .
- Install this package on your compute nodes if you're using Xen.
+ Install this virtual package to remote-control a XenServer or an XCP (Xen Cloud
+ Platform) cloud using Xen API.
 
 Package: nova-compute-kvm
 Architecture: all
@@ -207,7 +208,7 @@ Description: OpenStack Compute - compute node (KVM)
  (SQLite, MySQL, and PostgreSQL, for instance), different types of user
  databases (LDAP or SQL), etc.
  .
- Install this package on your compute nodes if you're using kvm.
+ Install this virtual package on your compute nodes if you're using kvm.
 
 Package: nova-scheduler
 Architecture: all

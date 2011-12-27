@@ -1,28 +1,33 @@
-nova (2012.1~e1+git354-g1b4a0f8-2) experimental; urgency=low
+nova (2012.1~e2-3) unstable; urgency=low
 
-  * Fix build-depends
-
- -- Julien Danjou <acid@debian.org>  Mon, 12 Dec 2011 12:51:47 +0100
-
-nova (2012.1~e1+git354-g1b4a0f8-1) experimental; urgency=low
-
-  * New snapshot-release
-
- -- Julien Danjou <acid@debian.org>  Mon, 12 Dec 2011 11:38:46 +0100
-
-nova (2012.1~e1+git332-gaa7ca15-1) experimental; urgency=low
+  [ Thomas Goirand ]
+  * nova-compute-xen shouldn't depends on the Xen hypervisor: it can be
+  installed in a domU for example.
 
   [ Ghe Rivero ]
-  * New snapshot release
+  * Lintian clean of empty packages
+  * Added ovs-ofctl to nova_sudoers
 
- -- Ghe Rivero <ghe@debian.org>  Fri, 09 Dec 2011 14:49:10 +0100
+ -- Ghe Rivero <ghe@debian.org>  Tue, 27 Dec 2011 11:59:22 +0100
 
-nova (2012.1~e1+git256-g022295e) experimental; urgency=low
+nova (2012.1~e2-2) unstable; urgency=low
 
-  * New snapshot release
-  * Refreshed patches to new upstream
+  * Do not fail postinst if the database upgrade fails (Closes: #648282)
+  * Add missing files in debian/copyright (Closes: #633600)
 
- -- Ghe Rivero <ghe@debian.org>  Mon, 05 Dec 2011 11:37:48 +0100
+ -- Julien Danjou <acid@debian.org>  Mon, 19 Dec 2011 12:50:08 +0100
+
+nova (2012.1~e2-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Ghe Rivero <ghe@debian.org>  Fri, 16 Dec 2011 09:32:01 +0100
+
+nova (2012.1~e1-4) unstable; urgency=high
+
+  * Added security patch. CVE-2011-4596
+
+ -- Ghe Rivero <ghe@debian.org>  Tue, 13 Dec 2011 16:25:56 +0100
 
 nova (2012.1~e1-3) unstable; urgency=low
 

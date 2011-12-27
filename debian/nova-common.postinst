@@ -3,7 +3,7 @@
 if [ "$1" = "configure" ]; then
     addgroup --quiet --system nova
     adduser --quiet --system --home /var/lib/nova --ingroup nova --no-create-home --shell /bin/bash nova
-    chown -R nova:nova /var/log/nova/ /etc/nova/nova.conf
+    chown nova:nova /var/log/nova /etc/nova/nova.conf
     if [ -z "$2" ]; then
         # New install - blanket permissions
         chown -R nova:nova /var/lib/nova/
@@ -20,7 +20,7 @@ if [ "$1" = "configure" ]; then
     chmod 0700 /var/log/nova
     if grep -q sql_connection /etc/nova/nova.conf
     then
-      su -c 'nova-manage db sync' nova
+      su -c 'nova-manage db sync' nova || true
     fi
 fi
 
