@@ -385,8 +385,7 @@ Description: OpenStack Compute - Console
 Package: nova-doc
 Architecture: all
 Section: doc
-Depends: ${misc:Depends}
-Recommends: libjs-jquery, libjs-underscore
+Depends: ${misc:Depends}, libjs-jquery, libjs-underscore
 Description: OpenStack Compute - documentation
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
