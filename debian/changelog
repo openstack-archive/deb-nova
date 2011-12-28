@@ -7,8 +7,11 @@ nova (2012.1~e2-3) unstable; urgency=low
   [ Ghe Rivero ]
   * Lintian clean of empty packages
   * Added ovs-ofctl to nova_sudoers
+  * Clean rules files moving nova-doc linking to nova-doc.links
+  * Remove verbose logging in nova.conf
+  * Sync nova database only if using it by default.
 
- -- Ghe Rivero <ghe@debian.org>  Tue, 27 Dec 2011 11:59:22 +0100
+ -- Ghe Rivero <ghe@debian.org>  Wed, 28 Dec 2011 10:17:35 +0100
 
 nova (2012.1~e2-2) unstable; urgency=low
 
