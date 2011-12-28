@@ -120,7 +120,7 @@ Description: OpenStack Compute - common files
 
 Package: nova-compute
 Architecture: all
-Depends: lsb-base (>= 3.0.6), adduser, qemu-utils, libvirt-bin, nova-common (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
+Depends: lsb-base (>= 3.0.6), adduser, qemu-utils, nova-common (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
  ${python:Depends}, ${misc:Depends}
 Recommends: ajaxterm
 Description: OpenStack Compute - compute node
@@ -186,7 +186,7 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 
 Package: nova-compute-xen
 Architecture: all
-Depends: python-libvirt, libvirt-bin, ${misc:Depends}
+Depends: python-libvirt, ${misc:Depends}
 Provides: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (Xen)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
