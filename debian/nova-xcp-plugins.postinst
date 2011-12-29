@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "configure" ] ; then
+	if ! [ -e /etc/xcp/xenhost.conf ] ; then
+		echo "{}" >/etc/xcp/xenhost.conf
+	fi
+fi
+
+#DEBHELPER#
+
+exit0
