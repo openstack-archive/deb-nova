@@ -33,6 +33,7 @@ Build-Depends: debhelper (>= 7.0.50),
  python-paramiko,
  python-paste,
  python-simplejson,
+ euca2ools,
  ipython,
  bpython
 Build-Depends-Indep:
