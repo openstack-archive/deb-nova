@@ -2,7 +2,9 @@ nova (2012.1~e2-4) experimental; urgency=low
 
   [ Thomas Goirand ]
   * Added missing Build-Depends: python-xattr, python-webob, python-glance,
-  python-routes, ipython, bpython
+  python-routes, ipython, bpython.
+  * Removed duplicates in Build-Depends:
+  * Now also building a nova-xcp-plugins package.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Dec 2011 12:19:41 +0000
 
