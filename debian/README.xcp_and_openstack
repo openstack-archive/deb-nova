@@ -1,0 +1,76 @@
+This file intends to be a quick howto on how to setup
+openstack together with XCP.
+
+1/ Setting-up XCP
+Please follow the XCP README.Debian howto. Make sure that
+you can create, boot, shutdown and destroy virtual machines
+using the xe command line.
+
+2/ Setting-up a domU to install openstack on it
+Best way to setup Openstack with XCP is to set it up in a
+XCP domU. Again, follow the XCP README.debian located in
+/usr/share/doc/xcp-xapi once you have installed the XenAPI
+package (eg: apt-get install xcp-xapi).
+
+3/ Installing nova
+You will need to install all nova packages:
+apt-get install nova-network nova-compute-xen nova-compute \
+  nova-api nova-scheduler glance-api glance-registry \
+  python-glance glance keystone python-keystoneclient \
+  mysql-server rabbitmq-server
+
+Make sure you have changed the default root password for
+mysql-server (if needed, do dpkg-reconfigure mysql-server-5.1).
+
+Create the nova and glance dbs:
+
+mysql -u root -p -e "create database nova; create database glance;"
+
+then create the nova and glance users, give them passwords,
+and access to their respective databases:
+
+<FIX ME: put here the MySQL commands to do that>
+
+then make sure all tables and SQL schema are up-to-date:
+
+nova-manage db sync
+glance-manage db_sync
+
+4/ Generate the Openstack CA
+
+<FIX ME: insert here how to do that>
+
+5/ Configuring Openstack
+In /etc/nova/nova.conf, you will need a configuration file
+looking like this one:
+
+--sql_connection=mysql://nova:XXXXXX@127.0.0.1/nova
+--network_manager=nova.network.manager.FlatManager
+--flat_network_bridge=xenbr0
+--connection_type=xenapi
+--xenapi_connection_url=https://<ip-of-your-xcp-dom0>
+--xenapi_connection_username=root
+--xenapi_connection_password=XXXXXXXXXXXX
+--reboot_timeout=600
+--rescue_timeout=86400
+--resize_confirm_window=86400
+--allow_admin_api
+--allow_resize_to_same_host
+--logdir=/var/log/nova
+--state_path=/var/lib/nova
+--lock_path=/var/lock/nova
+--force_dhcp_release
+--use_deprecated_auth
+--use_project_ca
+--verbose
+
+6/ Install the XCP nova plugin on the XCP dom0
+apt-get install nova-xcp-pluggins
+
+7/ Restart nova-compute and check the logs
+
+8/ Add a private LAN to nova
+
+9/ Create a nova user and project
+
+10/ Upload a VM image and start the VM to check everything is working
