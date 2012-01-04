@@ -88,6 +88,7 @@ from nova import rpc
 from nova import utils
 from nova import version
 from nova import vsa
+from nova.api.ec2 import admin
 from nova.api.ec2 import ec2utils
 from nova.auth import manager
 from nova.cloudpipe import pipelib
@@ -174,8 +175,9 @@ class VpnCommands(object):
     def spawn(self):
         """Run all VPNs."""
         print "WARNING: This method only works with deprecated auth"
+        ctxt = context.get_admin_context()
         for p in reversed(self.manager.get_projects()):
-            if not self._vpn_for(p.id):
+            if self._vpn_for(ctxt, p.id):
                 print 'spawning %s' % p.id
                 self.pipe.launch_vpn_instance(p.id, p.project_manager_id)
                 time.sleep(10)
@@ -210,6 +212,9 @@ class VpnCommands(object):
                               network['id'],
                               {'vpn_public_address': ip,
                                'vpn_public_port': int(port)})
+
+    def _vpn_for(self, context, project_id):
+        return admin.AdminController()._vpn_for(context, project_id)
 
 
 class ShellCommands(object):
@@ -682,8 +687,10 @@ class FloatingIpCommands(object):
     @args('--ip_range', dest="range", metavar='<range>', help='IP range')
     def create(self, range):
         """Creates floating ips for zone by range"""
-        for address in netaddr.IPNetwork(range):
-            db.floating_ip_create(context.get_admin_context(),
+        addresses = netaddr.IPNetwork(range)
+        admin_context = context.get_admin_context()
+        for address in addresses.iter_hosts():
+            db.floating_ip_create(admin_context,
                                   {'address': str(address)})
 
     @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
@@ -1077,7 +1084,7 @@ class ServiceCommands(object):
                      {"method": "show_host_resources",
                       "args": {"host": host}})
 
-        if type(result) != dict:
+        if not isinstance(result, dict):
             print _('An unexpected error has occurred.')
             print _('[Result]'), result
         else:
@@ -1391,7 +1398,7 @@ class VsaCommands(object):
         if storage is not None:
             try:
                 storage_list = ast.literal_eval(storage)
-            except:
+            except Exception:
                 print _("Invalid string format %s") % storage
                 raise
 
@@ -1580,7 +1587,7 @@ class VsaDriveTypeCommands(object):
         except exception.DBError, e:
             print "DB Error: %s" % e
             sys.exit(2)
-        except:
+        except Exception:
             sys.exit(3)
         else:
             print "%s %s" % (name, verb)
@@ -1740,7 +1747,7 @@ class InstanceTypeCommands(object):
             print "Currently defined instance_type names and flavorids:"
             self.list("--all")
             sys.exit(2)
-        except:
+        except Exception:
             print "Unknown error"
             sys.exit(3)
         else:
@@ -1765,7 +1772,7 @@ class InstanceTypeCommands(object):
         except exception.DBError, e:
             print "DB Error: %s" % e
             sys.exit(2)
-        except:
+        except Exception:
             sys.exit(3)
         else:
             print "%s %s" % (name, verb)

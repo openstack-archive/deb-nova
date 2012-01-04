@@ -1,5 +1,4 @@
 # Copyright 2011 OpenStack LLC.
-# All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -13,24 +12,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from sqlalchemy import Index, MetaData, Table
 
-import nova.context
-
-from nova import flags
-from nova import rpc
+meta = MetaData()
 
 
-FLAGS = flags.FLAGS
+def upgrade(migrate_engine):
+    meta.bind = migrate_engine
+    instances = Table('instances', meta, autoload=True)
+    index = Index('project_id', instances.c.project_id)
+    index.create(migrate_engine)
 
-flags.DEFINE_string('notification_topic', 'notifications',
-                    'RabbitMQ topic used for Nova notifications')
 
-
-def notify(message):
-    """Sends a notification to the RabbitMQ"""
-    context = nova.context.get_admin_context()
-    priority = message.get('priority',
-                           FLAGS.default_notification_level)
-    priority = priority.lower()
-    topic = '%s.%s' % (FLAGS.notification_topic, priority)
-    rpc.notify(context, topic, message)
+def downgrade(migrate_engine):
+    meta.bind = migrate_engine
+    instances = Table('instances', meta, autoload=True)
+    index = Index('project_id', instances.c.project_id)
+    index.drop(migrate_engine)

@@ -18,11 +18,11 @@ import kombu
 import kombu.entity
 import kombu.messaging
 import kombu.connection
+import inspect
 import itertools
 import sys
 import time
 import traceback
-import types
 import uuid
 
 import eventlet
@@ -290,6 +290,27 @@ class FanoutPublisher(Publisher):
                 **options)
 
 
+class NotifyPublisher(TopicPublisher):
+    """Publisher class for 'notify'"""
+
+    def __init__(self, *args, **kwargs):
+        self.durable = kwargs.pop('durable', FLAGS.rabbit_durable_queues)
+        super(NotifyPublisher, self).__init__(*args, **kwargs)
+
+    def reconnect(self, channel):
+        super(NotifyPublisher, self).reconnect(channel)
+
+        # NOTE(jerdfelt): Normally the consumer would create the queue, but
+        # we do this to ensure that messages don't get dropped if the
+        # consumer is started after we do
+        queue = kombu.entity.Queue(channel=channel,
+                exchange=self.exchange,
+                durable=self.durable,
+                name=self.routing_key,
+                routing_key=self.routing_key)
+        queue.declare()
+
+
 class Connection(object):
     """Connection object."""
 
@@ -425,12 +446,12 @@ class Connection(object):
                 pass
             self.consumer_thread = None
 
-    def publisher_send(self, cls, topic, msg):
+    def publisher_send(self, cls, topic, msg, **kwargs):
         """Send to a publisher based on the publisher class"""
         while True:
             publisher = None
             try:
-                publisher = cls(self.channel, topic)
+                publisher = cls(self.channel, topic, **kwargs)
                 publisher.send(msg)
                 return
             except self.connection.connection_errors, e:
@@ -468,6 +489,10 @@ class Connection(object):
     def fanout_send(self, topic, msg):
         """Send a 'fanout' message"""
         self.publisher_send(FanoutPublisher, topic, msg)
+
+    def notify_send(self, topic, msg, **kwargs):
+        """Send a notify message on a topic"""
+        self.publisher_send(NotifyPublisher, topic, msg, **kwargs)
 
     def consume(self, limit=None):
         """Consume from all queues/consumers"""
@@ -626,7 +651,7 @@ class ProxyCallback(object):
         try:
             rval = node_func(context=ctxt, **node_args)
             # Check if the result was a generator
-            if isinstance(rval, types.GeneratorType):
+            if inspect.isgenerator(rval):
                 for x in rval:
                     ctxt.reply(x, None)
             else:
@@ -771,6 +796,14 @@ def fanout_cast(context, topic, msg):
     _pack_context(msg, context)
     with ConnectionContext() as conn:
         conn.fanout_send(topic, msg)
+
+
+def notify(context, topic, msg):
+    """Sends a notification event on a topic."""
+    LOG.debug(_('Sending notification on %s...'), topic)
+    _pack_context(msg, context)
+    with ConnectionContext() as conn:
+        conn.notify_send(topic, msg, durable=True)
 
 
 def msg_reply(msg_id, reply=None, failure=None, ending=False):

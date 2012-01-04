@@ -24,14 +24,23 @@ SHOULD include dedicated exception logging.
 
 """
 
-from functools import wraps
+import functools
 import sys
 
-from novaclient import exceptions as novaclient_exceptions
+import novaclient.exceptions
+import webob.exc
 
 from nova import log as logging
 
 LOG = logging.getLogger('nova.exception')
+
+
+class ConvertedException(webob.exc.WSGIHTTPException):
+    def __init__(self, code=0, title="", explanation=""):
+        self.code = code
+        self.title = title
+        self.explanation = explanation
+        super(ConvertedException, self).__init__()
 
 
 def novaclient_converter(f):
@@ -42,7 +51,7 @@ def novaclient_converter(f):
         try:
             ret = f(*args, **kwargs)
             return ret
-        except novaclient_exceptions.ClientException, e:
+        except novaclient.exceptions.ClientException, e:
             raise ConvertedException(e.code, e.message, e.details)
     return new_f
 
@@ -147,7 +156,7 @@ def wrap_exception(notifier=None, publisher_id=None, event_type=None,
                 # re-raise original exception since it may have been clobbered
                 raise exc_info[0], exc_info[1], exc_info[2]
 
-        return wraps(f)(wrapped)
+        return functools.wraps(f)(wrapped)
     return inner
 
 
@@ -553,6 +562,10 @@ class NoFixedIpsDefined(NotFound):
 
 class FloatingIpNotFound(NotFound):
     message = _("Floating ip not found for id %(id)s.")
+
+
+class FloatingIpDNSExists(Invalid):
+    message = _("The DNS entry %(name)s already exists in zone %(zone)s.")
 
 
 class FloatingIpNotFoundForAddress(FloatingIpNotFound):

@@ -25,7 +25,6 @@ import functools
 import inspect
 import json
 import lockfile
-import netaddr
 import os
 import random
 import re
@@ -34,7 +33,6 @@ import socket
 import struct
 import sys
 import time
-import types
 import uuid
 import pyclbr
 from xml.sax import saxutils
@@ -43,11 +41,11 @@ from eventlet import event
 from eventlet import greenthread
 from eventlet import semaphore
 from eventlet.green import subprocess
+import netaddr
 
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import version
 
 
 LOG = logging.getLogger("nova.utils")
@@ -177,11 +175,11 @@ def execute(*cmd, **kwargs):
     process_input = kwargs.pop('process_input', None)
     check_exit_code = kwargs.pop('check_exit_code', [0])
     ignore_exit_code = False
-    if type(check_exit_code) == int:
-        check_exit_code = [check_exit_code]
-    elif type(check_exit_code) == bool:
+    if isinstance(check_exit_code, bool):
         ignore_exit_code = not check_exit_code
         check_exit_code = [0]
+    elif isinstance(check_exit_code, int):
+        check_exit_code = [check_exit_code]
     delay_on_retry = kwargs.pop('delay_on_retry', True)
     attempts = kwargs.pop('attempts', 1)
     run_as_root = kwargs.pop('run_as_root', False)
@@ -351,13 +349,13 @@ def generate_uid(topic, size=8):
 
 # Default symbols to use for passwords. Avoids visually confusing characters.
 # ~6 bits per symbol
-DEFAULT_PASSWORD_SYMBOLS = ('23456789'  # Removed: 0,1
-                            'ABCDEFGHJKLMNPQRSTUVWXYZ'  # Removed: I, O
+DEFAULT_PASSWORD_SYMBOLS = ('23456789',  # Removed: 0,1
+                            'ABCDEFGHJKLMNPQRSTUVWXYZ',   # Removed: I, O
                             'abcdefghijkmnopqrstuvwxyz')  # Removed: l
 
 
 # ~5 bits per symbol
-EASIER_PASSWORD_SYMBOLS = ('23456789'  # Removed: 0, 1
+EASIER_PASSWORD_SYMBOLS = ('23456789',  # Removed: 0, 1
                            'ABCDEFGHJKLMNPQRSTUVWXYZ')  # Removed: I, O
 
 
@@ -421,14 +419,37 @@ def usage_from_instance(instance_ref, **kw):
     return usage_info
 
 
-def generate_password(length=20, symbols=DEFAULT_PASSWORD_SYMBOLS):
-    """Generate a random password from the supplied symbols.
+def generate_password(length=20, symbolgroups=DEFAULT_PASSWORD_SYMBOLS):
+    """Generate a random password from the supplied symbol groups.
+
+    At least one symbol from each group will be included. Unpredictable
+    results if length is less than the number of symbol groups.
 
     Believed to be reasonably secure (with a reasonable password length!)
 
     """
     r = random.SystemRandom()
-    return ''.join([r.choice(symbols) for _i in xrange(length)])
+
+    # NOTE(jerdfelt): Some password policies require at least one character
+    # from each group of symbols, so start off with one random character
+    # from each symbol group
+    password = [r.choice(s) for s in symbolgroups]
+    # If length < len(symbolgroups), the leading characters will only
+    # be from the first length groups. Try our best to not be predictable
+    # by shuffling and then truncating.
+    r.shuffle(password)
+    password = password[:length]
+    length -= len(password)
+
+    # then fill with random characters from all symbol groups
+    symbols = ''.join(symbolgroups)
+    password.extend([r.choice(symbols) for _i in xrange(length)])
+
+    # finally shuffle to ensure first x characters aren't from a
+    # predictable group
+    r.shuffle(password)
+
+    return ''.join(password)
 
 
 def last_octet(address):
@@ -547,7 +568,7 @@ class LazyPluggable(object):
                 raise exception.Error(_('Invalid backend: %s') % backend_name)
 
             backend = self.__backends[backend_name]
-            if type(backend) == type(tuple()):
+            if isinstance(backend, tuple):
                 name = backend[0]
                 fromlist = backend[1]
             else:
@@ -674,13 +695,13 @@ def to_primitive(value, convert_instances=False, level=0):
     # The try block may not be necessary after the class check above,
     # but just in case ...
     try:
-        if type(value) is type([]) or type(value) is type((None,)):
+        if isinstance(value, (list, tuple)):
             o = []
             for v in value:
                 o.append(to_primitive(v, convert_instances=convert_instances,
                                       level=level))
             return o
-        elif type(value) is type({}):
+        elif isinstance(value, dict):
             o = {}
             for k, v in value.iteritems():
                 o[k] = to_primitive(v, convert_instances=convert_instances,
@@ -836,7 +857,7 @@ def get_from_path(items, path):
     if items is None:
         return results
 
-    if not isinstance(items, types.ListType):
+    if not isinstance(items, list):
         # Wrap single objects in a list
         items = [items]
 
@@ -849,7 +870,7 @@ def get_from_path(items, path):
         child = get_method(first_token)
         if child is None:
             continue
-        if isinstance(child, types.ListType):
+        if isinstance(child, list):
             # Flatten intermediate lists
             for x in child:
                 results.append(x)
@@ -1090,7 +1111,7 @@ def save_and_reraise_exception():
     type_, value, traceback = sys.exc_info()
     try:
         yield
-    except:
+    except Exception:
         LOG.exception(_('Original exception being dropped'),
                       exc_info=(type_, value, traceback))
         raise
@@ -1159,3 +1180,31 @@ def read_cached_file(filename, cache_info):
     cache_info['data'] = data
     cache_info['mtime'] = mtime
     return data
+
+
+@contextlib.contextmanager
+def temporary_mutation(obj, **kwargs):
+    """Temporarily set the attr on a particular object to a given value then
+    revert when finished.
+
+    One use of this is to temporarily set the read_deleted flag on a context
+    object:
+
+        with temporary_mutation(context, read_deleted="yes"):
+            do_something_that_needed_deleted_objects()
+    """
+    NOT_PRESENT = object()
+
+    old_values = {}
+    for attr, new_value in kwargs.items():
+        old_values[attr] = getattr(obj, attr, NOT_PRESENT)
+        setattr(obj, attr, new_value)
+
+    try:
+        yield
+    finally:
+        for attr, old_value in old_values.items():
+            if old_value is NOT_PRESENT:
+                del obj[attr]
+            else:
+                setattr(obj, attr, old_value)

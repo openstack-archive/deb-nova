@@ -100,6 +100,7 @@ class ExtensionControllerTest(ExtensionTestCase):
         self.ext_list = [
             "Accounts",
             "AdminActions",
+            "Cloudpipe",
             "Console_output",
             "Createserverext",
             "DeferredDelete",
@@ -108,6 +109,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "FlavorExtraSpecs",
             "FlavorExtraData",
             "Floating_ips",
+            "Floating_ip_dns",
             "Fox In Socks",
             "Hosts",
             "Keypairs",
