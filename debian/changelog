@@ -5,6 +5,8 @@ nova (2012.1~e2-4) experimental; urgency=low
   python-routes, ipython, bpython.
   * Removed duplicates in Build-Depends:
   * Now also building a nova-xcp-plugins package.
+  * Now build-depends on the new python-xenapi and nova-compute-xen depends
+  on it and not on libvirt anymore.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Dec 2011 12:19:41 +0000
 
