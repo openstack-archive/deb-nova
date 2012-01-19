@@ -33,6 +33,7 @@ Build-Depends: debhelper (>= 7.0.50),
  python-paramiko,
  python-paste,
  python-simplejson,
+ python-xenapi,
  euca2ools,
  ipython,
  bpython
@@ -184,7 +185,7 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 
 Package: nova-compute-xen
 Architecture: all
-Depends: python-libvirt, ${misc:Depends}
+Depends: python-xenapi, ${misc:Depends}
 Provides: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (Xen)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce

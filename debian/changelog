@@ -5,6 +5,19 @@ nova (2012.1~e2+git757-g62cf887-1) experimental; urgency=low
 
  -- Ghe Rivero <ghe@debian.org>  Thu, 19 Jan 2012 08:44:36 +0100
 
+nova (2012.1~e2+git-CHANGE-ME-1) experimental; urgency=low
+
+  * New snapshot release.
+  * Now build-depends on the new python-xenapi and nova-compute-xen depends
+  on it and not on libvirt anymore.
+  * Now build-depends on the new python-xenapi and nova-compute-xen depends
+  on it and not on libvirt anymore.
+  * Moved nova user creation in nova-compute-{lxc,uml,xen,kvm}.postinst because
+  nova-compute-xen doesn't Depends: on libvirt, and then the libvirt group
+  doesn't exist, then postinst fails.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 08 Jan 2012 10:21:26 +0000
+
 nova (2012.1~e2+git548-g6f0ef42-1) experimental; urgency=low
 
   * New snapshot release

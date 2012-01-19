@@ -1,0 +1,7 @@
+#!/bin/sh -e
+
+if [ "$1" = "configure" ]; then
+    adduser --quiet nova nova
+fi
+
+#DEBHELPER#
