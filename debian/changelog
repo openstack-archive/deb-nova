@@ -1,8 +1,9 @@
 nova (2012.1~e2+git757-g62cf887-2) experimental; urgency=low
 
   * Fixed git debian/experimental merging
+  * Added adduser depends to nova-compute-{lxc,xen,kvm,uml}
 
- -- Ghe Rivero <ghe@debian.org>  Thu, 19 Jan 2012 10:03:09 +0100
+ -- Ghe Rivero <ghe@debian.org>  Thu, 19 Jan 2012 10:23:45 +0100
 
 nova (2012.1~e2+git757-g62cf887-1) experimental; urgency=low
 
