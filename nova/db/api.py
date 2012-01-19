@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -237,13 +238,18 @@ def floating_ip_get(context, id):
     return IMPL.floating_ip_get(context, id)
 
 
-def floating_ip_allocate_address(context, project_id):
-    """Allocate free floating ip and return the address.
+def floating_ip_get_pools(context):
+    """Returns a list of floating ip pools"""
+    return IMPL.floating_ip_get_pools(context)
+
+
+def floating_ip_allocate_address(context, project_id, pool):
+    """Allocate free floating ip from specified pool and return the address.
 
     Raises if one is not available.
 
     """
-    return IMPL.floating_ip_allocate_address(context, project_id)
+    return IMPL.floating_ip_allocate_address(context, project_id, pool)
 
 
 def floating_ip_create(context, values):
@@ -284,11 +290,6 @@ def floating_ip_fixed_ip_associate(context, floating_address,
                                                host)
 
 
-def floating_ip_get_all(context):
-    """Get all floating ips."""
-    return IMPL.floating_ip_get_all(context)
-
-
 def floating_ip_get_all_by_host(context, host):
     """Get all floating ips by host."""
     return IMPL.floating_ip_get_all_by_host(context, host)
@@ -309,6 +310,11 @@ def floating_ip_get_by_fixed_address(context, fixed_address):
     return IMPL.floating_ip_get_by_fixed_address(context, fixed_address)
 
 
+def floating_ip_get_by_fixed_ip_id(context, fixed_ip_id):
+    """Get a floating ips by fixed address"""
+    return IMPL.floating_ip_get_by_fixed_ip_id(context, fixed_ip_id)
+
+
 def floating_ip_update(context, address, values):
     """Update a floating ip by address or raise if it doesn't exist."""
     return IMPL.floating_ip_update(context, address, values)
@@ -317,6 +323,32 @@ def floating_ip_update(context, address, values):
 def floating_ip_set_auto_assigned(context, address):
     """Set auto_assigned flag to floating ip"""
     return IMPL.floating_ip_set_auto_assigned(context, address)
+
+
+def dnsdomain_list(context):
+    """Get a list of all zones in our database, public and private."""
+    return IMPL.dnsdomain_list(context)
+
+
+def dnsdomain_register_for_zone(context, fqdomain, zone):
+    """Associated a DNS domain with an availability zone"""
+    return IMPL.dnsdomain_register_for_zone(context, fqdomain, zone)
+
+
+def dnsdomain_register_for_project(context, fqdomain, project):
+    """Associated a DNS domain with a project id"""
+    return IMPL.dnsdomain_register_for_project(context, fqdomain, project)
+
+
+def dnsdomain_unregister(context, fqdomain):
+    """Purge associations for the specified DNS zone"""
+    return IMPL.dnsdomain_unregister(context, fqdomain)
+
+
+def dnsdomain_get(context, fqdomain):
+    """Get the db record for the specified domain."""
+    return IMPL.dnsdomain_get(context, fqdomain)
+
 
 ####################
 
@@ -399,11 +431,6 @@ def fixed_ip_get(context, id):
 def fixed_ip_get_all(context):
     """Get all defined fixed ips."""
     return IMPL.fixed_ip_get_all(context)
-
-
-def fixed_ip_get_all_by_instance_host(context, host):
-    """Get all allocated fixed ips filtered by instance host."""
-    return IMPL.fixed_ip_get_all_by_instance_host(context, host)
 
 
 def fixed_ip_get_by_address(context, address):
@@ -575,15 +602,6 @@ def instance_get_all_by_reservation(context, reservation_id):
     return IMPL.instance_get_all_by_reservation(context, reservation_id)
 
 
-def instance_get_fixed_addresses(context, instance_id):
-    """Get the fixed ip address of an instance."""
-    return IMPL.instance_get_fixed_addresses(context, instance_id)
-
-
-def instance_get_fixed_addresses_v6(context, instance_id):
-    return IMPL.instance_get_fixed_addresses_v6(context, instance_id)
-
-
 def instance_get_floating_address(context, instance_id):
     """Get the first floating ip address of an instance."""
     return IMPL.instance_get_floating_address(context, instance_id)
@@ -648,34 +666,32 @@ def instance_info_cache_create(context, values):
     return IMPL.instance_info_cache_create(context, values)
 
 
-def instance_info_cache_get(context, instance_id, session=None):
+def instance_info_cache_get(context, instance_uuid, session=None):
     """Gets an instance info cache from the table.
 
-    :param instance_id: = id of the info cache's instance
+    :param instance_uuid: = uuid of the info cache's instance
     :param session: = optional session object
     """
-    return IMPL.instance_info_cache_get(context, instance_id, session=None)
+    return IMPL.instance_info_cache_get(context, instance_uuid, session=None)
 
 
-def instance_info_cache_update(context, instance_id, values,
+def instance_info_cache_update(context, instance_uuid, values,
                                session=None):
     """Update an instance info cache record in the table.
 
-    :param instance_id: = id of info cache's instance
+    :param instance_uuid: = uuid of info cache's instance
     :param values: = dict containing column values to update
     """
-    return IMPL.instance_info_cache_update(context, instance_id, values,
+    return IMPL.instance_info_cache_update(context, instance_uuid, values,
                                            session)
 
 
-def instance_info_cache_delete_by_instance_id(context, instance_id,
-                                              session=None):
+def instance_info_cache_delete(context, instance_uuid, session=None):
     """Deletes an existing instance_info_cache record
 
-    :param instance_id: = id of the instance tied to the cache record
+    :param instance_uuid: = uuid of the instance tied to the cache record
     """
-    return IMPL.instance_info_cache_delete_by_instance_id(context, instance_id,
-                                                          session)
+    return IMPL.instance_info_cache_delete(context, instance_uuid, session)
 
 
 ###################
@@ -1746,6 +1762,65 @@ def sm_volume_get(context, volume_id):
 def sm_volume_get_all(context):
     """Get all child Zones."""
     return IMPL.sm_volume_get_all(context)
+
+
+####################
+
+
+def aggregate_create(context, values, metadata=None):
+    """Create a new aggregate with metadata."""
+    return IMPL.aggregate_create(context, values, metadata)
+
+
+def aggregate_get(context, aggregate_id, read_deleted='no'):
+    """Get a specific aggregate by id."""
+    return IMPL.aggregate_get(context, aggregate_id, read_deleted)
+
+
+def aggregate_update(context, aggregate_id, values):
+    """Update the attributes of an aggregates. If values contains a metadata
+    key, it updates the aggregate metadata too."""
+    return IMPL.aggregate_update(context, aggregate_id, values)
+
+
+def aggregate_delete(context, aggregate_id):
+    """Delete an aggregate."""
+    return IMPL.aggregate_delete(context, aggregate_id)
+
+
+def aggregate_get_all(context, read_deleted='yes'):
+    """Get all aggregates."""
+    return IMPL.aggregate_get_all(context, read_deleted)
+
+
+def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False):
+    """Add/update metadata. If set_delete=True, it adds only."""
+    IMPL.aggregate_metadata_add(context, aggregate_id, metadata, set_delete)
+
+
+def aggregate_metadata_get(context, aggregate_id, read_deleted='no'):
+    """Get metadata for the specified aggregate."""
+    return IMPL.aggregate_metadata_get(context, aggregate_id, read_deleted)
+
+
+def aggregate_metadata_delete(context, aggregate_id, key):
+    """Delete the given metadata key."""
+    IMPL.aggregate_metadata_delete(context, aggregate_id, key)
+
+
+def aggregate_host_add(context, aggregate_id, host):
+    """Add host to the aggregate."""
+    IMPL.aggregate_host_add(context, aggregate_id, host)
+
+
+def aggregate_host_get_all(context, aggregate_id, read_deleted='yes'):
+    """Get hosts for the specified aggregate."""
+    return IMPL.aggregate_host_get_all(context, aggregate_id, read_deleted)
+
+
+def aggregate_host_delete(context, aggregate_id, host):
+    """Delete the given host from the aggregate."""
+    IMPL.aggregate_host_delete(context, aggregate_id, host)
 
 
 ####################

@@ -1,0 +1,129 @@
+{
+    "compute:create": [],
+    "compute:create:attach_network": [],
+    "compute:create:attach_volume": [],
+
+    "compute:get": [],
+    "compute:get_all": [],
+
+    "compute:update": [],
+
+    "compute:get_instance_metadata": [],
+    "compute:update_instance_metadata": [],
+    "compute:delete_instance_metadata": [],
+
+    "compute:get_instance_faults": [],
+    "compute:get_actions": [],
+    "compute:get_diagnostics": [],
+
+    "compute:get_lock": [],
+    "compute:lock": [],
+    "compute:unlock": [],
+
+    "compute:get_ajax_console": [],
+    "compute:get_vnc_console": [],
+    "compute:get_console_output": [],
+
+    "compute:associate_floating_ip": [],
+    "compute:reset_network": [],
+    "compute:inject_network_info": [],
+    "compute:add_fixed_ip": [],
+    "compute:remove_fixed_ip": [],
+
+    "compute:attach_volume": [],
+    "compute:detach_volume": [],
+
+    "compute:inject_file": [],
+
+    "compute:set_admin_password": [],
+
+    "compute:rescue": [],
+    "compute:unrescue": [],
+
+    "compute:suspend": [],
+    "compute:resume": [],
+
+    "compute:pause": [],
+    "compute:unpause": [],
+
+    "compute:start": [],
+    "compute:stop": [],
+
+    "compute:resize": [],
+    "compute:confirm_resize": [],
+    "compute:revert_resize": [],
+
+    "compute:rebuild": [],
+
+    "compute:reboot": [],
+
+    "compute:snapshot": [],
+    "compute:backup": [],
+
+    "compute:add_security_group": [],
+    "compute:remove_security_group": [],
+
+    "compute:delete": [],
+    "compute:soft_delete": [],
+    "compute:force_delete": [],
+    "compute:restore": [],
+
+
+    "volume:create": [],
+    "volume:get": [],
+    "volume:get_all": [],
+    "volume:get_volume_metadata": [],
+    "volume:delete": [],
+    "volume:update": [],
+    "volume:delete_volume_metadata": [],
+    "volume:update_volume_metadata": [],
+
+    "volume:attach": [],
+    "volume:detach": [],
+    "volume:check_attach": [],
+    "volume:check_detach": [],
+    "volume:initialize_connection": [],
+    "volume:terminate_connection": [],
+
+    "volume:create_snapshot": [],
+    "volume:delete_snapshot": [],
+    "volume:get_snapshot": [],
+    "volume:get_all_snapshots": [],
+
+
+    "network:get_all_networks": [],
+    "network:get_network": [],
+    "network:delete_network": [],
+    "network:disassociate_network": [],
+    "network:get_vifs_by_instance": [],
+    "network:allocate_for_instance": [],
+    "network:deallocate_for_instance": [],
+    "network:validate_networks": [],
+    "network:get_instance_uuids_by_ip_filter": [],
+
+    "network:get_floating_ip": [],
+    "network:get_floating_ip_pools": [],
+    "network:get_floating_ip_by_address": [],
+    "network:get_floating_ips_by_project": [],
+    "network:get_floating_ips_by_fixed_address": [],
+    "network:allocate_floating_ip": [],
+    "network:deallocate_floating_ip": [],
+    "network:associate_floating_ip": [],
+    "network:disassociate_floating_ip": [],
+
+    "network:get_fixed_ip": [],
+    "network:add_fixed_ip_to_instance": [],
+    "network:remove_fixed_ip_from_instance": [],
+    "network:add_network_to_project": [],
+    "network:get_instance_nw_info": [],
+
+    "network:get_dns_domains": [],
+    "network:add_dns_entry": [],
+    "network:modify_dns_entry": [],
+    "network:delete_dns_entry": [],
+    "network:get_dns_entries_by_address": [],
+    "network:get_dns_entries_by_name": [],
+    "network:create_private_dns_domain": [],
+    "network:create_public_dns_domain": [],
+    "network:delete_dns_domain": []
+}

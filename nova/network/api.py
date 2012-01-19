@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -16,8 +17,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Handles all requests relating to instances (guest vms)."""
-
 from nova.db import base
 from nova import exception
 from nova import flags
@@ -33,11 +32,46 @@ LOG = logging.getLogger('nova.network')
 class API(base.Base):
     """API for interacting with the network manager."""
 
+    def get_all(self, context):
+        return rpc.call(context,
+                        FLAGS.network_topic,
+                        {'method': 'get_all_networks'})
+
+    def get(self, context, fixed_range, network_uuid):
+        return rpc.call(context,
+                        FLAGS.network_topic,
+                        {'method': 'get_network',
+                         'args': {'network_uuid': network_uuid}})
+
+    def delete(self, context, network_uuid):
+        return rpc.call(context,
+                        FLAGS.network_topic,
+                        {'method': 'delete_network',
+                         'args': {'fixed_range': None,
+                                  'uuid': network_uuid}})
+
+    def disassociate(self, context, network_uuid):
+        return rpc.call(context,
+                        FLAGS.network_topic,
+                        {'method': 'disassociate_network',
+                         'args': {'network_uuid': network_uuid}})
+
+    def get_fixed_ip(self, context, id):
+        return rpc.call(context,
+                        FLAGS.network_topic,
+                        {'method': 'get_fixed_ip',
+                         'args': {'id': id}})
+
     def get_floating_ip(self, context, id):
         return rpc.call(context,
                         FLAGS.network_topic,
                         {'method': 'get_floating_ip',
                          'args': {'id': id}})
+
+    def get_floating_ip_pools(self, context):
+        return rpc.call(context,
+                        FLAGS.network_topic,
+                        {'method': 'get_floating_pools'})
 
     def get_floating_ip_by_address(self, context, address):
         return rpc.call(context,
@@ -62,8 +96,8 @@ class API(base.Base):
                         {'method': 'get_vifs_by_instance',
                          'args': {'instance_id': instance_id}})
 
-    def allocate_floating_ip(self, context):
-        """Adds a floating ip to a project. (allocates)"""
+    def allocate_floating_ip(self, context, pool=None):
+        """Adds a floating ip to a project from a pool. (allocates)"""
         # NOTE(vish): We don't know which network host should get the ip
         #             when we allocate, so just send it to any one.  This
         #             will probably need to move into a network supervisor
@@ -71,7 +105,8 @@ class API(base.Base):
         return rpc.call(context,
                         FLAGS.network_topic,
                         {'method': 'allocate_floating_ip',
-                         'args': {'project_id': context.project_id}})
+                         'args': {'project_id': context.project_id,
+                                  'pool': pool}})
 
     def release_floating_ip(self, context, address,
                             affect_auto_assigned=False):
@@ -110,6 +145,7 @@ class API(base.Base):
         """
         args = kwargs
         args['instance_id'] = instance['id']
+        args['instance_uuid'] = instance['uuid']
         args['project_id'] = instance['project_id']
         args['host'] = instance['host']
         args['instance_type_id'] = instance['instance_type_id']
@@ -153,6 +189,7 @@ class API(base.Base):
     def get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
         args = {'instance_id': instance['id'],
+                'instance_uuid': instance['uuid'],
                 'instance_type_id': instance['instance_type_id'],
                 'host': instance['host']}
         try:
@@ -193,41 +230,71 @@ class API(base.Base):
                         {'method': 'get_instance_uuids_by_ip_filter',
                          'args': args})
 
-    def get_dns_zones(self, context):
-        """Returns a list of available dns zones.
+    def get_dns_domains(self, context):
+        """Returns a list of available dns domains.
         These can be used to create DNS entries for floating ips.
         """
         return rpc.call(context,
                         FLAGS.network_topic,
-                        {'method': 'get_dns_zones'})
+                        {'method': 'get_dns_domains'})
 
-    def add_dns_entry(self, context, address, name, dns_type, zone):
+    def add_dns_entry(self, context, address, name, dns_type, domain):
         """Create specified DNS entry for address"""
         args = {'address': address,
-                'dns_name': name,
+                'name': name,
                 'dns_type': dns_type,
-                'dns_zone': zone}
+                'domain': domain}
         return rpc.call(context, FLAGS.network_topic,
                         {'method': 'add_dns_entry',
                          'args': args})
 
-    def delete_dns_entry(self, context, name, zone):
+    def modify_dns_entry(self, context, name, address, domain):
+        """Create specified DNS entry for address"""
+        args = {'address': address,
+                'name': name,
+                'domain': domain}
+        return rpc.call(context, FLAGS.network_topic,
+                        {'method': 'modify_dns_entry',
+                         'args': args})
+
+    def delete_dns_entry(self, context, name, domain):
         """Delete the specified dns entry."""
-        args = {'dns_name': name, 'dns_zone': zone}
+        args = {'name': name, 'domain': domain}
         return rpc.call(context, FLAGS.network_topic,
                         {'method': 'delete_dns_entry',
                          'args': args})
 
-    def get_dns_entries_by_address(self, context, address, zone):
-        """Get entries for address and zone"""
-        args = {'address': address, 'dns_zone': zone}
+    def delete_dns_domain(self, context, domain):
+        """Delete the specified dns domain."""
+        args = {'domain': domain}
+        return rpc.call(context, FLAGS.network_topic,
+                        {'method': 'delete_dns_domain',
+                         'args': args})
+
+    def get_dns_entries_by_address(self, context, address, domain):
+        """Get entries for address and domain"""
+        args = {'address': address, 'domain': domain}
         return rpc.call(context, FLAGS.network_topic,
                         {'method': 'get_dns_entries_by_address',
                          'args': args})
 
-    def get_dns_entries_by_name(self, context, name, zone):
-        """Get entries for name and zone"""
-        args = {'name': name, 'dns_zone': zone}
+    def get_dns_entries_by_name(self, context, name, domain):
+        """Get entries for name and domain"""
+        args = {'name': name, 'domain': domain}
         return rpc.call(context, FLAGS.network_topic,
                         {'method': 'get_dns_entries_by_name',
+                         'args': args})
+
+    def create_private_dns_domain(self, context, domain, availability_zone):
+        """Create a private DNS domain with nova availability zone."""
+        args = {'domain': domain, 'av_zone': availability_zone}
+        return rpc.call(context, FLAGS.network_topic,
+                        {'method': 'create_private_dns_domain',
+                         'args': args})
+
+    def create_public_dns_domain(self, context, domain, project=None):
+        """Create a private DNS domain with optional nova project."""
+        args = {'domain': domain, 'project': project}
+        return rpc.call(context, FLAGS.network_topic,
+                        {'method': 'create_public_dns_domain',
                          'args': args})

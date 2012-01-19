@@ -18,7 +18,6 @@ import os
 import sys
 import StringIO
 import tempfile
-import unittest
 
 import stubout
 
@@ -154,7 +153,7 @@ class CliOptsTestCase(BaseTestCase):
 
 class ConfigFileOptsTestCase(BaseTestCase):
 
-    def test_str_default(self):
+    def test_conf_file_str_default(self):
         self.conf.register_opt(StrOpt('foo', default='bar'))
 
         paths = self.create_tempfiles([('test.conf',
@@ -165,7 +164,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 'bar')
 
-    def test_str_value(self):
+    def test_conf_file_str_value(self):
         self.conf.register_opt(StrOpt('foo'))
 
         paths = self.create_tempfiles([('test.conf',
@@ -177,7 +176,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 'bar')
 
-    def test_str_value_override(self):
+    def test_conf_file_str_value_override(self):
         self.conf.register_cli_opt(StrOpt('foo'))
 
         paths = self.create_tempfiles([('1.conf',
@@ -194,7 +193,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 'baaar')
 
-    def test_int_default(self):
+    def test_conf_file_int_default(self):
         self.conf.register_opt(IntOpt('foo', default=666))
 
         paths = self.create_tempfiles([('test.conf',
@@ -205,7 +204,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 666)
 
-    def test_int_value(self):
+    def test_conf_file_int_value(self):
         self.conf.register_opt(IntOpt('foo'))
 
         paths = self.create_tempfiles([('test.conf',
@@ -217,7 +216,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 666)
 
-    def test_int_value_override(self):
+    def test_conf_file_int_value_override(self):
         self.conf.register_cli_opt(IntOpt('foo'))
 
         paths = self.create_tempfiles([('1.conf',
@@ -234,7 +233,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 666)
 
-    def test_float_default(self):
+    def test_conf_file_float_default(self):
         self.conf.register_opt(FloatOpt('foo', default=6.66))
 
         paths = self.create_tempfiles([('test.conf',
@@ -245,7 +244,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 6.66)
 
-    def test_float_value(self):
+    def test_conf_file_float_value(self):
         self.conf.register_opt(FloatOpt('foo'))
 
         paths = self.create_tempfiles([('test.conf',
@@ -257,7 +256,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 6.66)
 
-    def test_float_value_override(self):
+    def test_conf_file_float_value_override(self):
         self.conf.register_cli_opt(FloatOpt('foo'))
 
         paths = self.create_tempfiles([('1.conf',
@@ -274,7 +273,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, 6.66)
 
-    def test_list_default(self):
+    def test_conf_file_list_default(self):
         self.conf.register_opt(ListOpt('foo', default=['bar']))
 
         paths = self.create_tempfiles([('test.conf',
@@ -285,7 +284,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, ['bar'])
 
-    def test_list_value(self):
+    def test_conf_file_list_value(self):
         self.conf.register_opt(ListOpt('foo'))
 
         paths = self.create_tempfiles([('test.conf',
@@ -297,7 +296,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, ['bar'])
 
-    def test_list_value_override(self):
+    def test_conf_file_list_value_override(self):
         self.conf.register_cli_opt(ListOpt('foo'))
 
         paths = self.create_tempfiles([('1.conf',
@@ -314,7 +313,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, ['b', 'a', 'r'])
 
-    def test_multistr_default(self):
+    def test_conf_file_multistr_default(self):
         self.conf.register_opt(MultiStrOpt('foo', default=['bar']))
 
         paths = self.create_tempfiles([('test.conf',
@@ -325,7 +324,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, ['bar'])
 
-    def test_multistr_value(self):
+    def test_conf_file_multistr_value(self):
         self.conf.register_opt(MultiStrOpt('foo'))
 
         paths = self.create_tempfiles([('test.conf',
@@ -337,7 +336,7 @@ class ConfigFileOptsTestCase(BaseTestCase):
         self.assertTrue(hasattr(self.conf, 'foo'))
         self.assertEquals(self.conf.foo, ['bar'])
 
-    def test_multistr_values_append(self):
+    def test_conf_file_multistr_values_append(self):
         self.conf.register_cli_opt(ListOpt('foo'))
 
         paths = self.create_tempfiles([('1.conf',
@@ -573,7 +572,7 @@ class OverridesTestCase(BaseTestCase):
         self.conf.set_default('foo', 'bar', group='blaa')
         self.assertEquals(self.conf.blaa.foo, 'bar')
 
-    def test_default_override(self):
+    def test_group_default_override(self):
         self.conf.register_group(OptGroup('blaa'))
         self.conf.register_opt(StrOpt('foo', default='foo'), group='blaa')
         self.conf([])
@@ -583,7 +582,7 @@ class OverridesTestCase(BaseTestCase):
         self.conf.set_default('foo', None, group='blaa')
         self.assertEquals(self.conf.blaa.foo, 'foo')
 
-    def test_override(self):
+    def test_group_override(self):
         self.conf.register_group(OptGroup('blaa'))
         self.conf.register_opt(StrOpt('foo'), group='blaa')
         self.conf.set_override('foo', 'bar', group='blaa')
@@ -597,6 +596,11 @@ class SadPathTestCase(BaseTestCase):
         self.conf([])
         self.assertFalse(hasattr(self.conf, 'foo'))
         self.assertRaises(NoSuchOptError, getattr, self.conf, 'foo')
+
+    def test_unknown_attr_is_attr_error(self):
+        self.conf([])
+        self.assertFalse(hasattr(self.conf, 'foo'))
+        self.assertRaises(AttributeError, getattr, self.conf, 'foo')
 
     def test_unknown_group_attr(self):
         self.conf.register_group(OptGroup('blaa'))
@@ -674,7 +678,7 @@ class SadPathTestCase(BaseTestCase):
         self.assertRaises(ConfigFilesNotFoundError,
                           self.conf, ['--config-file', paths[0]])
 
-    def test_conf_file_not_found(self):
+    def test_conf_file_broken(self):
         paths = self.create_tempfiles([('test.conf', 'foo')])
 
         self.assertRaises(ConfigFileParseError,

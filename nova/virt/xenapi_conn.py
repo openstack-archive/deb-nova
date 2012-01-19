@@ -232,8 +232,7 @@ class XenAPIConnection(driver.ComputeDriver):
         """
         self._vmops.inject_file(instance, b64_path, b64_contents)
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                cleanup=True):
+    def destroy(self, instance, network_info, block_device_info=None):
         """Destroy VM instance"""
         self._vmops.destroy(instance, network_info)
 
@@ -339,6 +338,10 @@ class XenAPIConnection(driver.ComputeDriver):
         """Return link to instance's ajax console"""
         return self._vmops.get_ajax_console(instance)
 
+    def get_vnc_console(self, instance):
+        """Return link to instance's ajax console"""
+        return self._vmops.get_vnc_console(instance)
+
     @staticmethod
     def get_host_ip_addr():
         xs_url = urlparse.urlparse(FLAGS.xenapi_connection_url)
@@ -411,6 +414,10 @@ class XenAPIConnection(driver.ComputeDriver):
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         """This method is supported only libvirt."""
+        # NOTE(salvatore-orlando): it enforces security groups on
+        # host initialization and live migration.
+        # Live migration is not supported by XenAPI (as of 2011-11-09)
+        # In XenAPI we do not assume instances running upon host initialization
         return
 
     def live_migration(self, context, instance_ref, dest,
@@ -419,8 +426,22 @@ class XenAPIConnection(driver.ComputeDriver):
         return
 
     def unfilter_instance(self, instance_ref, network_info):
-        """This method is supported only by libvirt."""
-        raise NotImplementedError('This method is supported only by libvirt.')
+        """Removes security groups configured for an instance."""
+        return self._vmops.unfilter_instance(instance_ref, network_info)
+
+    def refresh_security_group_rules(self, security_group_id):
+        """ Updates security group rules for all instances
+            associated with a given security group
+            Invoked when security group rules are updated
+        """
+        return self._vmops.refresh_security_group_rules(security_group_id)
+
+    def refresh_security_group_members(self, security_group_id):
+        """ Updates security group rules for all instances
+            associated with a given security group
+            Invoked when instances are added/removed to a security group
+        """
+        return self._vmops.refresh_security_group_members(security_group_id)
 
     def update_host_status(self):
         """Update the status info of the host, and return those values
@@ -475,6 +496,11 @@ class XenAPISession(object):
     def get_imported_xenapi(self):
         """Stubout point. This can be replaced with a mock xenapi module."""
         return __import__('XenAPI')
+
+    def get_session_id(self):
+        """Return a string session_id.  Used for vnc consoles."""
+        with self._get_session() as session:
+            return str(session._session)
 
     @contextlib.contextmanager
     def _get_session(self):

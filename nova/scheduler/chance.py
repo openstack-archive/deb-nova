@@ -34,10 +34,12 @@ class ChanceScheduler(driver.Scheduler):
         """Filter a list of hosts based on request_spec."""
 
         # Filter out excluded host
-        if (request_spec and 'original_host' in request_spec and
-            request_spec.get('avoid_original_host', True)):
-            hosts = [host for host in hosts
-                     if host != request_spec['original_host']]
+        try:
+            if request_spec['avoid_original_host']:
+                original_host = request_spec['instance_properties']['host']
+                hosts = [host for host in hosts if host != original_host]
+        except (KeyError, TypeError):
+            pass
 
         return hosts
 
@@ -65,12 +67,11 @@ class ChanceScheduler(driver.Scheduler):
 
     def schedule_run_instance(self, context, request_spec, *_args, **kwargs):
         """Create and run an instance or instances"""
-        elevated = context.elevated()
         num_instances = request_spec.get('num_instances', 1)
         instances = []
         for num in xrange(num_instances):
             host = self._schedule(context, 'compute', request_spec, **kwargs)
-            instance = self.create_instance_db_entry(elevated, request_spec)
+            instance = self.create_instance_db_entry(context, request_spec)
             driver.cast_to_compute_host(context, host,
                     'run_instance', instance_uuid=instance['uuid'], **kwargs)
             instances.append(driver.encode_instance(instance))
@@ -83,4 +84,4 @@ class ChanceScheduler(driver.Scheduler):
     def schedule_prep_resize(self, context, request_spec, *args, **kwargs):
         """Select a target for resize."""
         host = self._schedule(context, 'compute', request_spec, **kwargs)
-        driver.cast_to_host(context, 'compute', host, 'prep_resize', **kwargs)
+        driver.cast_to_compute_host(context, host, 'prep_resize', **kwargs)

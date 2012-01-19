@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -46,6 +47,7 @@ flags.DEFINE_string('networks_path', '$state_path/networks',
                     'Location to keep network config files')
 flags.DEFINE_string('public_interface', 'eth0',
                     'Interface for public IP addresses')
+flags.DEFINE_string('network_device_mtu', None, 'MTU setting for vlan')
 flags.DEFINE_string('dhcpbridge', _bin_file('nova-dhcpbridge'),
                         'location of nova-dhcpbridge')
 flags.DEFINE_string('routing_source_ip', '$my_ip',
@@ -431,28 +433,29 @@ def init_host(ip_range=None):
     iptables_manager.apply()
 
 
-def bind_floating_ip(floating_ip, check_exit_code=True):
+def bind_floating_ip(floating_ip, device):
     """Bind ip to public interface."""
     _execute('ip', 'addr', 'add', str(floating_ip) + '/32',
-             'dev', FLAGS.public_interface,
-             run_as_root=True, check_exit_code=check_exit_code)
+             'dev', device,
+             run_as_root=True, check_exit_code=[0, 254])
     if FLAGS.send_arp_for_ha:
         _execute('arping', '-U', floating_ip,
-                 '-A', '-I', FLAGS.public_interface,
+                 '-A', '-I', device,
                  '-c', 1, run_as_root=True, check_exit_code=False)
 
 
-def unbind_floating_ip(floating_ip):
+def unbind_floating_ip(floating_ip, device):
     """Unbind a public ip from public interface."""
     _execute('ip', 'addr', 'del', str(floating_ip) + '/32',
-             'dev', FLAGS.public_interface, run_as_root=True)
+             'dev', device,
+             run_as_root=True, check_exit_code=[0, 254])
 
 
 def ensure_metadata_ip():
     """Sets up local metadata ip."""
     _execute('ip', 'addr', 'add', '169.254.169.254/32',
              'scope', 'link', 'dev', 'lo',
-             run_as_root=True, check_exit_code=False)
+             run_as_root=True, check_exit_code=[0, 254])
 
 
 def ensure_vpn_forward(public_ip, port, private_ip):
@@ -521,17 +524,17 @@ def initialize_gateway_device(dev, network_ref):
                             fields[-1] == dev:
                 gateway = fields[1]
                 _execute('route', 'del', 'default', 'gw', gateway,
-                         'dev', dev, check_exit_code=False,
-                         run_as_root=True)
+                         'dev', dev, run_as_root=True,
+                         check_exit_code=[0, 7])
         for ip_params in old_ip_params:
             _execute(*_ip_bridge_cmd('del', ip_params, dev),
-                        run_as_root=True)
+                        run_as_root=True, check_exit_code=[0, 254])
         for ip_params in new_ip_params:
             _execute(*_ip_bridge_cmd('add', ip_params, dev),
-                        run_as_root=True)
+                        run_as_root=True, check_exit_code=[0, 254])
         if gateway:
             _execute('route', 'add', 'default', 'gw', gateway,
-                        run_as_root=True)
+                     run_as_root=True, check_exit_code=[0, 7])
         if FLAGS.send_arp_for_ha:
             _execute('arping', '-U', network_ref['dhcp_server'],
                       '-A', '-I', dev,
@@ -553,10 +556,20 @@ def get_dhcp_leases(context, network_ref):
     hosts = []
     for fixed_ref in db.network_get_associated_fixed_ips(context,
                                                          network_ref['id']):
-        host = fixed_ref['instance']['host']
-        if network_ref['multi_host'] and FLAGS.host != host:
+        vif_id = fixed_ref['virtual_interface_id']
+        # NOTE(jkoelker) We need a larger refactor to happen to prevent
+        #                looking these up here
+        vif_ref = db.virtual_interface_get(context, vif_id)
+        instance_id = fixed_ref['instance_id']
+        try:
+            instance_ref = db.instance_get(context, instance_id)
+        except exception.InstanceNotFound:
+            msg = _("Instance %(instance_id)s not found")
+            LOG.debug(msg % {'instance_id': instance_id})
             continue
-        hosts.append(_host_lease(fixed_ref))
+        if network_ref['multi_host'] and FLAGS.host != instance_ref['host']:
+            continue
+        hosts.append(_host_lease(fixed_ref, vif_ref, instance_ref))
     return '\n'.join(hosts)
 
 
@@ -565,10 +578,20 @@ def get_dhcp_hosts(context, network_ref):
     hosts = []
     for fixed_ref in db.network_get_associated_fixed_ips(context,
                                                          network_ref['id']):
-        host = fixed_ref['instance']['host']
-        if network_ref['multi_host'] and FLAGS.host != host:
+        vif_id = fixed_ref['virtual_interface_id']
+        # NOTE(jkoelker) We need a larger refactor to happen to prevent
+        #                looking these up here
+        vif_ref = db.virtual_interface_get(context, vif_id)
+        instance_id = fixed_ref['instance_id']
+        try:
+            instance_ref = db.instance_get(context, instance_id)
+        except exception.InstanceNotFound:
+            msg = _("Instance %(instance_id)s not found")
+            LOG.debug(msg % {'instance_id': instance_id})
             continue
-        hosts.append(_host_dhcp(fixed_ref))
+        if network_ref['multi_host'] and FLAGS.host != instance_ref['host']:
+            continue
+        hosts.append(_host_dhcp(fixed_ref, vif_ref, instance_ref))
     return '\n'.join(hosts)
 
 
@@ -602,11 +625,19 @@ def get_dhcp_opts(context, network_ref):
 
         for fixed_ip_ref in ips_ref:
             instance_id = fixed_ip_ref['instance_id']
+            try:
+                instance_ref = db.instance_get(context, instance_id)
+            except exception.InstanceNotFound:
+                msg = _("Instance %(instance_id)s not found")
+                LOG.debug(msg % {'instance_id': instance_id})
+                continue
+
             if instance_id in default_gw_network_node:
                 target_network_id = default_gw_network_node[instance_id]
                 # we don't want default gateway for this fixed ip
                 if target_network_id != fixed_ip_ref['network_id']:
-                    hosts.append(_host_dhcp_opts(fixed_ip_ref))
+                    hosts.append(_host_dhcp_opts(fixed_ip_ref,
+                                                 instance_ref))
     return '\n'.join(hosts)
 
 
@@ -737,9 +768,8 @@ interface %s
     _execute(*cmd, run_as_root=True)
 
 
-def _host_lease(fixed_ip_ref):
+def _host_lease(fixed_ip_ref, vif_ref, instance_ref):
     """Return a host string for an address in leasefile format."""
-    instance_ref = fixed_ip_ref['instance']
     if instance_ref['updated_at']:
         timestamp = instance_ref['updated_at']
     else:
@@ -748,37 +778,35 @@ def _host_lease(fixed_ip_ref):
     seconds_since_epoch = calendar.timegm(timestamp.utctimetuple())
 
     return '%d %s %s %s *' % (seconds_since_epoch + FLAGS.dhcp_lease_time,
-                              fixed_ip_ref['virtual_interface']['address'],
+                              vif_ref['address'],
                               fixed_ip_ref['address'],
                               instance_ref['hostname'] or '*')
 
 
-def _host_dhcp_network(fixed_ip_ref):
-    instance_ref = fixed_ip_ref['instance']
+def _host_dhcp_network(fixed_ip_ref, instance_ref):
     return 'NW-i%08d-%s' % (instance_ref['id'],
                             fixed_ip_ref['network_id'])
 
 
-def _host_dhcp(fixed_ip_ref):
+def _host_dhcp(fixed_ip_ref, vif_ref, instance_ref):
     """Return a host string for an address in dhcp-host format."""
-    instance_ref = fixed_ip_ref['instance']
-    vif = fixed_ip_ref['virtual_interface']
     if FLAGS.use_single_default_gateway:
-        return '%s,%s.%s,%s,%s' % (vif['address'],
+        return '%s,%s.%s,%s,%s' % (vif_ref['address'],
                                instance_ref['hostname'],
                                FLAGS.dhcp_domain,
                                fixed_ip_ref['address'],
-                               "net:" + _host_dhcp_network(fixed_ip_ref))
+                               "net:" + _host_dhcp_network(fixed_ip_ref,
+                                                           instance_ref))
     else:
-        return '%s,%s.%s,%s' % (vif['address'],
+        return '%s,%s.%s,%s' % (vif_ref['address'],
                                instance_ref['hostname'],
                                FLAGS.dhcp_domain,
                                fixed_ip_ref['address'])
 
 
-def _host_dhcp_opts(fixed_ip_ref):
+def _host_dhcp_opts(fixed_ip_ref, instance_ref):
     """Return a host string for an address in dhcp-host format."""
-    return '%s,%s' % (_host_dhcp_network(fixed_ip_ref), 3)
+    return '%s,%s' % (_host_dhcp_network(fixed_ip_ref, instance_ref), 3)
 
 
 def _execute(*cmd, **kwargs):
@@ -942,6 +970,9 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                 _execute('ip', 'link', 'set', interface, "address",
                             mac_address, run_as_root=True)
             _execute('ip', 'link', 'set', interface, 'up', run_as_root=True)
+            if FLAGS.network_device_mtu:
+                _execute('ip', 'link', 'set', interface, 'mtu',
+                         FLAGS.network_device_mtu, run_as_root=True)
         return interface
 
     @classmethod
@@ -986,8 +1017,8 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                                 fields[-1] == interface:
                     old_gateway = fields[1]
                     _execute('route', 'del', 'default', 'gw', old_gateway,
-                             'dev', interface, check_exit_code=False,
-                             run_as_root=True)
+                             'dev', interface, run_as_root=True,
+                             check_exit_code=[0, 7])
             out, err = _execute('ip', 'addr', 'show', 'dev', interface,
                                 'scope', 'global', run_as_root=True)
             for line in out.split('\n'):
@@ -995,12 +1026,12 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                 if fields and fields[0] == 'inet':
                     params = fields[1:-1]
                     _execute(*_ip_bridge_cmd('del', params, fields[-1]),
-                                run_as_root=True)
+                                run_as_root=True, check_exit_code=[0, 254])
                     _execute(*_ip_bridge_cmd('add', params, bridge),
-                                run_as_root=True)
+                                run_as_root=True, check_exit_code=[0, 254])
             if old_gateway:
                 _execute('route', 'add', 'default', 'gw', old_gateway,
-                            run_as_root=True)
+                         run_as_root=True, check_exit_code=[0, 7])
 
             if (err and err != "device %s is already a member of a bridge;"
                      "can't enslave it to bridge %s.\n" % (interface, bridge)):
@@ -1042,6 +1073,9 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
                         run_as_root=True)
             _execute('ip', 'link', 'set', dev, "address", mac_address,
                         run_as_root=True)
+            if FLAGS.network_device_mtu:
+                _execute('ip', 'link', 'set', dev, 'mtu',
+                         FLAGS.network_device_mtu, run_as_root=True)
             _execute('ip', 'link', 'set', dev, 'up', run_as_root=True)
             if not gateway:
                 # If we weren't instructed to act as a gateway then add the

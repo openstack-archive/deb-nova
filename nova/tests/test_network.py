@@ -1,6 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright 2011 Rackspace
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -21,11 +22,11 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+import nova.policy
 from nova import rpc
 from nova import test
 from nova import utils
 from nova.network import manager as network_manager
-from nova.network import api as network_api
 from nova.tests import fake_network
 
 
@@ -33,15 +34,6 @@ LOG = logging.getLogger('nova.tests.network')
 
 
 HOST = "testhost"
-
-
-class FakeModel(dict):
-    """Represent a model from the db"""
-    def __init__(self, *args, **kwargs):
-        self.update(kwargs)
-
-        def __getattr__(self, name):
-            return self[name]
 
 
 networks = [{'id': 0,
@@ -85,7 +77,6 @@ networks = [{'id': 0,
              'project_id': 'fake_project',
              'vpn_public_address': '192.168.1.2'}]
 
-
 fixed_ips = [{'id': 0,
               'network_id': 0,
               'address': '192.168.0.100',
@@ -108,6 +99,8 @@ flavor = {'id': 0,
 
 floating_ip_fields = {'id': 0,
                       'address': '192.168.10.100',
+                      'pool': 'nova',
+                      'interface': 'eth0',
                       'fixed_ip_id': 0,
                       'project_id': None,
                       'auto_assigned': False}
@@ -116,19 +109,16 @@ vifs = [{'id': 0,
          'address': 'DE:AD:BE:EF:00:00',
          'uuid': '00000000-0000-0000-0000-0000000000000000',
          'network_id': 0,
-         'network': FakeModel(**networks[0]),
          'instance_id': 0},
         {'id': 1,
          'address': 'DE:AD:BE:EF:00:01',
          'uuid': '00000000-0000-0000-0000-0000000000000001',
          'network_id': 1,
-         'network': FakeModel(**networks[1]),
          'instance_id': 0},
         {'id': 2,
          'address': 'DE:AD:BE:EF:00:02',
          'uuid': '00000000-0000-0000-0000-0000000000000002',
          'network_id': 2,
-         'network': None,
          'instance_id': 0}]
 
 
@@ -194,6 +184,7 @@ class FlatNetworkTestCase(test.TestCase):
             self.assertDictListMatch(info['ips'], check)
 
     def test_validate_networks(self):
+        self.mox.StubOutWithMock(db, 'network_get')
         self.mox.StubOutWithMock(db, 'network_get_all_by_uuids')
         self.mox.StubOutWithMock(db, "fixed_ip_get_by_address")
 
@@ -201,11 +192,13 @@ class FlatNetworkTestCase(test.TestCase):
                                "192.168.1.100")]
         db.network_get_all_by_uuids(mox.IgnoreArg(),
                                 mox.IgnoreArg()).AndReturn(networks)
+        db.network_get(mox.IgnoreArg(),
+                       mox.IgnoreArg()).AndReturn(networks[1])
 
-        fixed_ips[1]['network'] = FakeModel(**networks[1])
-        fixed_ips[1]['instance'] = None
+        ip = fixed_ips[1].copy()
+        ip['instance_id'] = None
         db.fixed_ip_get_by_address(mox.IgnoreArg(),
-                                    mox.IgnoreArg()).AndReturn(fixed_ips[1])
+                                    mox.IgnoreArg()).AndReturn(ip)
 
         self.mox.ReplayAll()
         self.network.validate_networks(self.context, requested_networks)
@@ -238,7 +231,7 @@ class FlatNetworkTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         self.assertRaises(exception.FixedIpInvalid,
-                          self.network.validate_networks, None,
+                          self.network.validate_networks, self.context,
                           requested_networks)
 
     def test_validate_networks_empty_fixed_ip(self):
@@ -251,7 +244,7 @@ class FlatNetworkTestCase(test.TestCase):
 
         self.assertRaises(exception.FixedIpInvalid,
                           self.network.validate_networks,
-                          None, requested_networks)
+                          self.context, requested_networks)
 
     def test_validate_networks_none_fixed_ip(self):
         self.mox.StubOutWithMock(db, 'network_get_all_by_uuids')
@@ -261,7 +254,7 @@ class FlatNetworkTestCase(test.TestCase):
                                     mox.IgnoreArg()).AndReturn(networks)
         self.mox.ReplayAll()
 
-        self.network.validate_networks(None, requested_networks)
+        self.network.validate_networks(self.context, requested_networks)
 
     def test_add_fixed_ip_instance_without_vpn_requested_networks(self):
         self.mox.StubOutWithMock(db, 'network_get')
@@ -282,7 +275,10 @@ class FlatNetworkTestCase(test.TestCase):
                         mox.IgnoreArg()).AndReturn({'security_groups':
                                                              [{'id': 0}]})
         db.instance_get(self.context,
-                        1).AndReturn({'display_name': HOST})
+                        1).AndReturn({'display_name': HOST,
+                                      'uuid': 'test-00001'})
+        db.instance_get(mox.IgnoreArg(),
+                        mox.IgnoreArg()).AndReturn({'availability_zone': ''})
         db.fixed_ip_associate_pool(mox.IgnoreArg(),
                                    mox.IgnoreArg(),
                                    mox.IgnoreArg()).AndReturn('192.168.0.101')
@@ -297,26 +293,34 @@ class FlatNetworkTestCase(test.TestCase):
         zone1 = "example.org"
         zone2 = "example.com"
         driver = self.network.instance_dns_manager
-        driver.create_entry("hostone", "10.0.0.1", 0, zone1)
-        driver.create_entry("hosttwo", "10.0.0.2", 0, zone1)
-        driver.create_entry("hostthree", "10.0.0.3", 0, zone1)
-        driver.create_entry("hostfour", "10.0.0.4", 0, zone1)
-        driver.create_entry("hostfive", "10.0.0.5", 0, zone2)
-        driver.create_entry("hostsix", "10.0.0.6", 0, zone2)
-        driver.delete_entry("hosttwo", zone1)
-        driver.rename_entry("10.0.0.3", "hostone", zone1)
+        driver.create_entry("hostone", "10.0.0.1", "A", zone1)
+        driver.create_entry("hosttwo", "10.0.0.2", "A", zone1)
+        driver.create_entry("hostthree", "10.0.0.3", "A", zone1)
+        driver.create_entry("hostfour", "10.0.0.4", "A", zone1)
+        driver.create_entry("hostfive", "10.0.0.5", "A", zone2)
+
+        driver.delete_entry("hostone", zone1)
         driver.modify_address("hostfour", "10.0.0.1", zone1)
+        driver.modify_address("hostthree", "10.0.0.1", zone1)
         names = driver.get_entries_by_address("10.0.0.1", zone1)
         self.assertEqual(len(names), 2)
-        self.assertIn('hostone', names)
+        self.assertIn('hostthree', names)
         self.assertIn('hostfour', names)
-        names = driver.get_entries_by_address("10.0.0.6", zone2)
+
+        names = driver.get_entries_by_address("10.0.0.5", zone2)
         self.assertEqual(len(names), 1)
-        self.assertIn('hostsix', names)
-        addresses = driver.get_entries_by_name("hostone", zone1)
-        self.assertEqual(len(addresses), 2)
-        self.assertIn('10.0.0.1', addresses)
-        self.assertIn('10.0.0.3', addresses)
+        self.assertIn('hostfive', names)
+
+        addresses = driver.get_entries_by_name("hosttwo", zone1)
+        self.assertEqual(len(addresses), 1)
+        self.assertIn('10.0.0.2', addresses)
+
+        self.assertRaises(exception.InvalidInput,
+                driver.create_entry,
+                "hostname",
+                "10.10.10.10",
+                "invalidtype",
+                zone1)
 
     def test_instance_dns(self):
         fixedip = '192.168.0.101'
@@ -339,17 +343,25 @@ class FlatNetworkTestCase(test.TestCase):
                                                              [{'id': 0}]})
 
         db.instance_get(self.context,
-                        1).AndReturn({'display_name': HOST})
+                        1).AndReturn({'display_name': HOST,
+                                      'uuid': 'test-00001'})
+        db.instance_get(mox.IgnoreArg(),
+                        mox.IgnoreArg()).AndReturn({'availability_zone': ''})
         db.fixed_ip_associate_pool(mox.IgnoreArg(),
                                    mox.IgnoreArg(),
                                    mox.IgnoreArg()).AndReturn(fixedip)
         db.network_get(mox.IgnoreArg(),
                        mox.IgnoreArg()).AndReturn(networks[0])
         db.network_update(mox.IgnoreArg(), mox.IgnoreArg(), mox.IgnoreArg())
+
         self.mox.ReplayAll()
         self.network.add_fixed_ip_to_instance(self.context, 1, HOST,
                                               networks[0]['id'])
-        addresses = self.network.instance_dns_manager.get_entries_by_name(HOST)
+        instance_manager = self.network.instance_dns_manager
+        addresses = instance_manager.get_entries_by_name(HOST)
+        self.assertEqual(len(addresses), 1)
+        self.assertEqual(addresses[0], fixedip)
+        addresses = instance_manager.get_entries_by_name('test-00001')
         self.assertEqual(len(addresses), 1)
         self.assertEqual(addresses[0], fixedip)
 
@@ -431,6 +443,10 @@ class VlanNetworkTestCase(test.TestCase):
                           cidr='192.168.0.1/24', network_size=100)
 
     def test_validate_networks(self):
+        def network_get(_context, network_id):
+            return networks[network_id]
+
+        self.stubs.Set(db, 'network_get', network_get)
         self.mox.StubOutWithMock(db, 'network_get_all_by_uuids')
         self.mox.StubOutWithMock(db, "fixed_ip_get_by_address")
 
@@ -440,8 +456,8 @@ class VlanNetworkTestCase(test.TestCase):
                                 mox.IgnoreArg(),
                                 mox.IgnoreArg()).AndReturn(networks)
 
-        fixed_ips[1]['network'] = FakeModel(**networks[1])
-        fixed_ips[1]['instance'] = None
+        fixed_ips[1]['network_id'] = networks[1]['id']
+        fixed_ips[1]['instance_id'] = None
         db.fixed_ip_get_by_address(mox.IgnoreArg(),
                                     mox.IgnoreArg()).AndReturn(fixed_ips[1])
 
@@ -580,22 +596,36 @@ class VlanNetworkTestCase(test.TestCase):
         # floating ip that's already associated
         def fake2(*args, **kwargs):
             return {'address': '10.0.0.1',
+                    'pool': 'nova',
+                    'interface': 'eth0',
                     'fixed_ip_id': 1}
 
         # floating ip that isn't associated
         def fake3(*args, **kwargs):
             return {'address': '10.0.0.1',
+                    'pool': 'nova',
+                    'interface': 'eth0',
                     'fixed_ip_id': None}
 
         # fixed ip with remote host
         def fake4(*args, **kwargs):
             return {'address': '10.0.0.1',
-                    'network': {'multi_host': False, 'host': 'jibberjabber'}}
+                    'pool': 'nova',
+                    'interface': 'eth0',
+                    'network_id': 'blah'}
+
+        def fake4_network(*args, **kwargs):
+            return {'multi_host': False, 'host': 'jibberjabber'}
 
         # fixed ip with local host
         def fake5(*args, **kwargs):
             return {'address': '10.0.0.1',
-                    'network': {'multi_host': False, 'host': 'testhost'}}
+                    'pool': 'nova',
+                    'interface': 'eth0',
+                    'network_id': 'blahblah'}
+
+        def fake5_network(*args, **kwargs):
+            return {'multi_host': False, 'host': 'testhost'}
 
         def fake6(*args, **kwargs):
             self.local = False
@@ -618,6 +648,7 @@ class VlanNetworkTestCase(test.TestCase):
         # does not raise and makes call remotely
         self.local = True
         self.stubs.Set(self.network.db, 'fixed_ip_get_by_address', fake4)
+        self.stubs.Set(self.network.db, 'network_get', fake4_network)
         self.stubs.Set(rpc, 'cast', fake6)
         self.network.associate_floating_ip(ctxt, mox.IgnoreArg(),
                                                  mox.IgnoreArg())
@@ -626,6 +657,7 @@ class VlanNetworkTestCase(test.TestCase):
         # does not raise and makes call locally
         self.local = False
         self.stubs.Set(self.network.db, 'fixed_ip_get_by_address', fake5)
+        self.stubs.Set(self.network.db, 'network_get', fake5_network)
         self.stubs.Set(self.network, '_associate_floating_ip', fake7)
         self.network.associate_floating_ip(ctxt, mox.IgnoreArg(),
                                                  mox.IgnoreArg())
@@ -641,22 +673,37 @@ class VlanNetworkTestCase(test.TestCase):
         # floating ip that isn't associated
         def fake2(*args, **kwargs):
             return {'address': '10.0.0.1',
+                    'pool': 'nova',
+                    'interface': 'eth0',
                     'fixed_ip_id': None}
 
         # floating ip that is associated
         def fake3(*args, **kwargs):
             return {'address': '10.0.0.1',
+                    'pool': 'nova',
+                    'interface': 'eth0',
                     'fixed_ip_id': 1}
 
         # fixed ip with remote host
         def fake4(*args, **kwargs):
             return {'address': '10.0.0.1',
-                    'network': {'multi_host': False, 'host': 'jibberjabber'}}
+                    'pool': 'nova',
+                    'interface': 'eth0',
+                    'network_id': 'blah'}
+
+        def fake4_network(*args, **kwargs):
+            return {'multi_host': False,
+                    'host': 'jibberjabber'}
 
         # fixed ip with local host
         def fake5(*args, **kwargs):
             return {'address': '10.0.0.1',
-                    'network': {'multi_host': False, 'host': 'testhost'}}
+                    'pool': 'nova',
+                    'interface': 'eth0',
+                    'network_id': 'blahblah'}
+
+        def fake5_network(*args, **kwargs):
+            return {'multi_host': False, 'host': 'testhost'}
 
         def fake6(*args, **kwargs):
             self.local = False
@@ -678,6 +725,7 @@ class VlanNetworkTestCase(test.TestCase):
         # does not raise and makes call remotely
         self.local = True
         self.stubs.Set(self.network.db, 'fixed_ip_get', fake4)
+        self.stubs.Set(self.network.db, 'network_get', fake4_network)
         self.stubs.Set(rpc, 'cast', fake6)
         self.network.disassociate_floating_ip(ctxt, mox.IgnoreArg())
         self.assertFalse(self.local)
@@ -685,6 +733,7 @@ class VlanNetworkTestCase(test.TestCase):
         # does not raise and makes call locally
         self.local = False
         self.stubs.Set(self.network.db, 'fixed_ip_get', fake5)
+        self.stubs.Set(self.network.db, 'network_get', fake5_network)
         self.stubs.Set(self.network, '_disassociate_floating_ip', fake7)
         self.network.disassociate_floating_ip(ctxt, mox.IgnoreArg())
         self.assertTrue(self.local)
@@ -705,7 +754,8 @@ class VlanNetworkTestCase(test.TestCase):
 
         db.instance_get(mox.IgnoreArg(),
                         mox.IgnoreArg()).AndReturn({'security_groups':
-                                                             [{'id': 0}]})
+                                                             [{'id': 0}],
+                                                    'availability_zone': ''})
         db.fixed_ip_associate_pool(mox.IgnoreArg(),
                                    mox.IgnoreArg(),
                                    mox.IgnoreArg()).AndReturn('192.168.0.101')
@@ -718,6 +768,11 @@ class VlanNetworkTestCase(test.TestCase):
     def test_ip_association_and_allocation_of_other_project(self):
         """Makes sure that we cannot deallocaate or disassociate
         a public ip of other project"""
+
+        def network_get(_context, network_id):
+            return networks[network_id]
+
+        self.stubs.Set(db, 'network_get', network_get)
 
         context1 = context.RequestContext('user', 'project1')
         context2 = context.RequestContext('user', 'project2')
@@ -756,6 +811,7 @@ class VlanNetworkTestCase(test.TestCase):
                           float_addr)
 
         # Clean up the ip addresses
+        self.network.disassociate_floating_ip(context1, float_addr)
         self.network.deallocate_floating_ip(context1, float_addr)
         self.network.deallocate_fixed_ip(context1, fix_addr)
         db.floating_ip_destroy(context1.elevated(), float_addr)
@@ -763,12 +819,17 @@ class VlanNetworkTestCase(test.TestCase):
 
 
 class CommonNetworkTestCase(test.TestCase):
+
+    def setUp(self):
+        super(CommonNetworkTestCase, self).setUp()
+        self.context = context.RequestContext('fake', 'fake')
+
     def fake_create_fixed_ips(self, context, network_id):
         return None
 
     def test_remove_fixed_ip_from_instance(self):
         manager = fake_network.FakeNetworkManager()
-        manager.remove_fixed_ip_from_instance(None, 99, '10.0.0.1')
+        manager.remove_fixed_ip_from_instance(self.context, 99, '10.0.0.1')
 
         self.assertEquals(manager.deallocate_called, '10.0.0.1')
 
@@ -776,7 +837,7 @@ class CommonNetworkTestCase(test.TestCase):
         manager = fake_network.FakeNetworkManager()
         self.assertRaises(exception.FixedIpNotFoundForSpecificInstance,
                           manager.remove_fixed_ip_from_instance,
-                          None, 99, 'bad input')
+                          self.context, 99, 'bad input')
 
     def test_validate_cidrs(self):
         manager = fake_network.FakeNetworkManager()
@@ -1081,6 +1142,67 @@ class CommonNetworkTestCase(test.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]['instance_id'], _vifs[2]['instance_id'])
 
+    def test_get_network(self):
+        manager = fake_network.FakeNetworkManager()
+        fake_context = context.RequestContext('user', 'project')
+        self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
+        manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
+                                            mox.IgnoreArg()).\
+                                            AndReturn(networks)
+        self.mox.ReplayAll()
+        uuid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        network = manager.get_network(fake_context, uuid)
+        self.assertEqual(network['uuid'], uuid)
+
+    def test_get_network_not_found(self):
+        manager = fake_network.FakeNetworkManager()
+        fake_context = context.RequestContext('user', 'project')
+        self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
+        manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
+                                            mox.IgnoreArg()).\
+                                            AndReturn([])
+        self.mox.ReplayAll()
+        uuid = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        self.assertRaises(exception.NetworkNotFound,
+                          manager.get_network, fake_context, uuid)
+
+    def test_get_all_networks(self):
+        manager = fake_network.FakeNetworkManager()
+        fake_context = context.RequestContext('user', 'project')
+        self.mox.StubOutWithMock(manager.db, 'network_get_all')
+        manager.db.network_get_all(mox.IgnoreArg()).\
+                                   AndReturn(networks)
+        self.mox.ReplayAll()
+        output = manager.get_all_networks(fake_context)
+        self.assertEqual(len(networks), 2)
+        self.assertEqual(output[0]['uuid'],
+                         'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+        self.assertEqual(output[1]['uuid'],
+                         'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')
+
+    def test_disassociate_network(self):
+        manager = fake_network.FakeNetworkManager()
+        fake_context = context.RequestContext('user', 'project')
+        self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
+        manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
+                                            mox.IgnoreArg()).\
+                                            AndReturn(networks)
+        self.mox.ReplayAll()
+        uuid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        manager.disassociate_network(fake_context, uuid)
+
+    def test_disassociate_network_not_found(self):
+        manager = fake_network.FakeNetworkManager()
+        fake_context = context.RequestContext('user', 'project')
+        self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
+        manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
+                                            mox.IgnoreArg()).\
+                                            AndReturn([])
+        self.mox.ReplayAll()
+        uuid = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        self.assertRaises(exception.NetworkNotFound,
+                          manager.disassociate_network, fake_context, uuid)
+
 
 class TestRPCFixedManager(network_manager.RPCAllocateFixedIP,
         network_manager.NetworkManager):
@@ -1147,16 +1269,6 @@ class FloatingIPTestCase(test.TestCase):
         self.network.deallocate_for_instance(self.context,
                 instance_id=instance_ref['id'])
 
-    def test_floating_dns_zones(self):
-        zone1 = "example.org"
-        zone2 = "example.com"
-        flags.FLAGS.floating_ip_dns_zones = [zone1, zone2]
-
-        zones = self.network.get_dns_zones(self.context)
-        self.assertEqual(len(zones), 2)
-        self.assertEqual(zones[0], zone1)
-        self.assertEqual(zones[1], zone2)
-
     def test_floating_dns_create_conflict(self):
         zone = "example.org"
         address1 = "10.10.10.11"
@@ -1209,3 +1321,236 @@ class FloatingIPTestCase(test.TestCase):
         self.assertRaises(exception.NotFound,
                           self.network.delete_dns_entry, self.context,
                           name1, zone)
+
+    def test_floating_dns_domains_public(self):
+        zone1 = "testzone"
+        domain1 = "example.org"
+        domain2 = "example.com"
+        address1 = '10.10.10.10'
+        entryname = 'testentry'
+
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                               is_admin=True)
+
+        self.assertRaises(exception.AdminRequired,
+                          self.network.create_public_dns_domain, self.context,
+                          domain1, zone1)
+        self.network.create_public_dns_domain(context_admin, domain1,
+                                              'testproject')
+        self.network.create_public_dns_domain(context_admin, domain2,
+                                              'fakeproject')
+
+        domains = self.network.get_dns_domains(self.context)
+        self.assertEquals(len(domains), 2)
+        self.assertEquals(domains[0]['domain'], domain1)
+        self.assertEquals(domains[1]['domain'], domain2)
+        self.assertEquals(domains[0]['project'], 'testproject')
+        self.assertEquals(domains[1]['project'], 'fakeproject')
+
+        self.network.add_dns_entry(self.context, address1, entryname,
+                                   'A', domain1)
+        entries = self.network.get_dns_entries_by_name(self.context,
+                                                       entryname, domain1)
+        self.assertEquals(len(entries), 1)
+        self.assertEquals(entries[0], address1)
+
+        self.assertRaises(exception.AdminRequired,
+                          self.network.delete_dns_domain, self.context,
+                          domain1)
+        self.network.delete_dns_domain(context_admin, domain1)
+        self.network.delete_dns_domain(context_admin, domain2)
+
+        # Verify that deleting the domain deleted the associated entry
+        entries = self.network.get_dns_entries_by_name(self.context,
+                                                       entryname, domain1)
+        self.assertFalse(entries)
+
+    def test_delete_all_by_ip(self):
+        domain1 = "example.org"
+        domain2 = "example.com"
+        address = "10.10.10.10"
+        name1 = "foo"
+        name2 = "bar"
+
+        def fake_domains(context):
+            return [{'domain': 'example.org', 'scope': 'public'},
+                    {'domain': 'example.com', 'scope': 'public'},
+                    {'domain': 'test.example.org', 'scope': 'public'}]
+
+        self.stubs.Set(self.network, 'get_dns_domains', fake_domains)
+
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                              is_admin=True)
+
+        self.network.create_public_dns_domain(context_admin, domain1,
+                                              'testproject')
+        self.network.create_public_dns_domain(context_admin, domain2,
+                                              'fakeproject')
+
+        domains = self.network.get_dns_domains(self.context)
+        for domain in domains:
+            self.network.add_dns_entry(self.context, address,
+                                       name1, "A", domain['domain'])
+            self.network.add_dns_entry(self.context, address,
+                                       name2, "A", domain['domain'])
+            entries = self.network.get_dns_entries_by_address(self.context,
+                                                              address,
+                                                              domain['domain'])
+            self.assertEquals(len(entries), 2)
+
+        self.network._delete_all_entries_for_ip(self.context, address)
+
+        for domain in domains:
+            entries = self.network.get_dns_entries_by_address(self.context,
+                                                              address,
+                                                              domain['domain'])
+            self.assertFalse(entries)
+
+        self.network.delete_dns_domain(context_admin, domain1)
+        self.network.delete_dns_domain(context_admin, domain2)
+
+
+class NetworkPolicyTestCase(test.TestCase):
+    def setUp(self):
+        super(NetworkPolicyTestCase, self).setUp()
+
+        nova.policy.reset()
+        nova.policy.init()
+
+        self.context = context.get_admin_context()
+
+    def tearDown(self):
+        super(NetworkPolicyTestCase, self).tearDown()
+        nova.policy.reset()
+
+    def _set_rules(self, rules):
+        nova.common.policy.set_brain(nova.common.policy.HttpBrain(rules))
+
+    def test_check_policy(self):
+        self.mox.StubOutWithMock(nova.policy, 'enforce')
+        target = {
+            'project_id': self.context.project_id,
+            'user_id': self.context.user_id,
+        }
+        nova.policy.enforce(self.context, 'network:get_all', target)
+        self.mox.ReplayAll()
+        network_manager.check_policy(self.context, 'get_all')
+        self.mox.UnsetStubs()
+        self.mox.VerifyAll()
+
+
+class InstanceDNSTestCase(test.TestCase):
+    """Tests nova.network.manager instance DNS"""
+    def setUp(self):
+        super(InstanceDNSTestCase, self).setUp()
+        self.network = TestFloatingIPManager()
+        temp = utils.import_object('nova.network.minidns.MiniDNS')
+        self.network.instance_dns_manager = temp
+        temp = utils.import_object('nova.network.dns_driver.DNSDriver')
+        self.network.floating_dns_manager = temp
+        self.network.db = db
+        self.project_id = 'testproject'
+        self.context = context.RequestContext('testuser', self.project_id,
+            is_admin=False)
+
+    def tearDown(self):
+        super(InstanceDNSTestCase, self).tearDown()
+        self.network.instance_dns_manager.delete_dns_file()
+
+    def test_dns_domains_private(self):
+        zone1 = 'testzone'
+        domain1 = 'example.org'
+
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                              is_admin=True)
+
+        self.assertRaises(exception.AdminRequired,
+                          self.network.create_private_dns_domain, self.context,
+                          domain1, zone1)
+
+        self.network.create_private_dns_domain(context_admin, domain1, zone1)
+        domains = self.network.get_dns_domains(self.context)
+        self.assertEquals(len(domains), 1)
+        self.assertEquals(domains[0]['domain'], domain1)
+        self.assertEquals(domains[0]['availability_zone'], zone1)
+
+        self.assertRaises(exception.AdminRequired,
+                          self.network.delete_dns_domain, self.context,
+                          domain1)
+        self.network.delete_dns_domain(context_admin, domain1)
+
+
+domain1 = "example.org"
+domain2 = "example.com"
+
+
+class LdapDNSTestCase(test.TestCase):
+    """Tests nova.network.ldapdns.LdapDNS"""
+    def setUp(self):
+        super(LdapDNSTestCase, self).setUp()
+        temp = utils.import_object('nova.network.ldapdns.FakeLdapDNS')
+        self.driver = temp
+        self.driver.create_domain(domain1)
+        self.driver.create_domain(domain2)
+
+    def tearDown(self):
+        super(LdapDNSTestCase, self).tearDown()
+        self.driver.delete_domain(domain1)
+        self.driver.delete_domain(domain2)
+
+    def test_ldap_dns_domains(self):
+        flags.FLAGS.floating_ip_dns_domains = [domain1, domain2]
+
+        domains = self.driver.get_domains()
+        self.assertEqual(len(domains), 2)
+        self.assertEqual(domains[0], domain1)
+        self.assertEqual(domains[1], domain2)
+
+    def test_ldap_dns_create_conflict(self):
+        address1 = "10.10.10.11"
+        name1 = "foo"
+        name2 = "bar"
+
+        self.driver.create_entry(name1, address1, "A", domain1)
+
+        self.assertRaises(exception.FloatingIpDNSExists,
+                          self.driver.create_entry,
+                          name1, address1, "A", domain1)
+
+    def test_ldap_dns_create_and_get(self):
+        address1 = "10.10.10.11"
+        name1 = "foo"
+        name2 = "bar"
+        entries = self.driver.get_entries_by_address(address1, domain1)
+        self.assertFalse(entries)
+
+        self.driver.create_entry(name1, address1, "A", domain1)
+        self.driver.create_entry(name2, address1, "A", domain1)
+        entries = self.driver.get_entries_by_address(address1, domain1)
+        self.assertEquals(len(entries), 2)
+        self.assertEquals(entries[0], name1)
+        self.assertEquals(entries[1], name2)
+
+        entries = self.driver.get_entries_by_name(name1, domain1)
+        self.assertEquals(len(entries), 1)
+        self.assertEquals(entries[0], address1)
+
+    def test_ldap_dns_delete(self):
+        address1 = "10.10.10.11"
+        name1 = "foo"
+        name2 = "bar"
+
+        self.driver.create_entry(name1, address1, "A", domain1)
+        self.driver.create_entry(name2, address1, "A", domain1)
+        entries = self.driver.get_entries_by_address(address1, domain1)
+        self.assertEquals(len(entries), 2)
+
+        self.driver.delete_entry(name1, domain1)
+        entries = self.driver.get_entries_by_address(address1, domain1)
+        LOG.debug("entries: %s" % entries)
+        self.assertEquals(len(entries), 1)
+        self.assertEquals(entries[0], name2)
+
+        self.assertRaises(exception.NotFound,
+                          self.driver.delete_entry,
+                          name1, domain1)

@@ -91,10 +91,6 @@ class ApiError(Error):
         super(ApiError, self).__init__(outstr)
 
 
-class RebuildRequiresActiveInstance(Error):
-    pass
-
-
 class DBError(Error):
     """Wraps an implementation specific exception."""
     def __init__(self, inner_exception=None):
@@ -207,16 +203,8 @@ class AdminRequired(NotAuthorized):
     message = _("User does not have admin privileges")
 
 
-class InstanceBusy(NovaException):
-    message = _("Instance %(instance_id)s is busy. (%(task_state)s)")
-
-
-class InstanceSnapshotting(InstanceBusy):
-    message = _("Instance %(instance_uuid)s is currently snapshotting.")
-
-
-class InstanceBackingUp(InstanceBusy):
-    message = _("Instance %(instance_uuid)s is currently being backed up.")
+class PolicyNotAuthorized(NotAuthorized):
+    message = _("Policy doesn't allow %(action)s to be performed.")
 
 
 class Invalid(NovaException):
@@ -309,6 +297,10 @@ class ComputeServiceUnavailable(ServiceUnavailable):
 class UnableToMigrateToSelf(Invalid):
     message = _("Unable to migrate instance (%(instance_id)s) "
                 "to current host (%(host)s).")
+
+
+class DestinationHostUnavailable(Invalid):
+    message = _("Destination compute host is unavailable at this time.")
 
 
 class SourceHostUnavailable(Invalid):
@@ -565,7 +557,7 @@ class FloatingIpNotFound(NotFound):
 
 
 class FloatingIpDNSExists(Invalid):
-    message = _("The DNS entry %(name)s already exists in zone %(zone)s.")
+    message = _("The DNS entry %(name)s already exists in domain %(domain)s.")
 
 
 class FloatingIpNotFoundForAddress(FloatingIpNotFound):
@@ -685,6 +677,10 @@ class ConsoleNotFoundForInstance(ConsoleNotFound):
 class ConsoleNotFoundInPoolForInstance(ConsoleNotFound):
     message = _("Console for instance %(instance_id)s "
                 "in pool %(pool_id)s could not be found.")
+
+
+class ConsoleTypeInvalid(Invalid):
+    message = _("Invalid console type %(console_type)s ")
 
 
 class NoInstanceTypesFound(NotFound):
@@ -892,3 +888,28 @@ class WillNotSchedule(NovaException):
 class QuotaError(ApiError):
     """Quota Exceeded."""
     pass
+
+
+class AggregateNotFound(NotFound):
+    message = _("Aggregate %(aggregate_id)s could not be found.")
+
+
+class AggregateNameExists(Duplicate):
+    message = _("Aggregate %(aggregate_name)s already exists.")
+
+
+class AggregateHostNotFound(NotFound):
+    message = _("Aggregate %(aggregate_id)s has no host %(host)s.")
+
+
+class AggregateMetadataNotFound(NotFound):
+    message = _("Aggregate %(aggregate_id)s has no metadata with "
+                "key %(metadata_key)s.")
+
+
+class AggregateHostConflict(Duplicate):
+    message = _("Host %(host)s already member of another aggregate.")
+
+
+class AggregateHostExists(Duplicate):
+    message = _("Aggregate %(aggregate_id)s already has host %(host)s.")

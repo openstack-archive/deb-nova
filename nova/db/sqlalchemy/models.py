@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2011 Piston Cloud Computing, Inc.
@@ -146,6 +147,7 @@ class ComputeNode(BASE, NovaBase):
     # above, since it is copied from <cpu> tag of getCapabilities()
     # (See libvirt.virtConnection).
     cpu_info = Column(Text, nullable=True)
+    disk_available_least = Column(Integer)
 
 
 class Certificate(BASE, NovaBase):
@@ -256,18 +258,25 @@ class Instance(BASE, NovaBase):
     auto_disk_config = Column(Boolean())
     progress = Column(Integer)
 
+    # EC2 instance_initiated_shutdown_teminate
+    # True: -> 'terminate'
+    # False: -> 'stop'
+    shutdown_terminate = Column(Boolean(), default=True, nullable=False)
+
+    # EC2 disable_api_termination
+    disable_terminate = Column(Boolean(), default=False, nullable=False)
+
 
 class InstanceInfoCache(BASE, NovaBase):
     """
     Represents a cache of information about an instance
     """
     __tablename__ = 'instance_info_caches'
-    id = Column(String(36), primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
 
     # text column used for storing a json object of network data for api
     network_info = Column(Text)
 
-    # this is all uuid based, we have them might as well start using them
     instance_id = Column(String(36), ForeignKey('instances.uuid'),
                                      nullable=False, unique=True)
     instance = relationship(Instance,
@@ -674,19 +683,9 @@ class FixedIp(BASE, NovaBase):
     __tablename__ = 'fixed_ips'
     id = Column(Integer, primary_key=True)
     address = Column(String(255))
-    network_id = Column(Integer, ForeignKey('networks.id'), nullable=True)
-    network = relationship(Network, backref=backref('fixed_ips'))
-    virtual_interface_id = Column(Integer, ForeignKey('virtual_interfaces.id'),
-                                                                 nullable=True)
-    virtual_interface = relationship(VirtualInterface,
-                                     backref=backref('fixed_ips'))
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=True)
-    instance = relationship(Instance,
-                            backref=backref('fixed_ips'),
-                            foreign_keys=instance_id,
-                            primaryjoin='and_('
-                                'FixedIp.instance_id == Instance.id,'
-                                'FixedIp.deleted == False)')
+    network_id = Column(Integer, nullable=True)
+    virtual_interface_id = Column(Integer, nullable=True)
+    instance_id = Column(Integer, nullable=True)
     # associated means that a fixed_ip has its instance_id column set
     # allocated means that a fixed_ip has a its virtual_interface_id column set
     allocated = Column(Boolean, default=False)
@@ -701,16 +700,12 @@ class FloatingIp(BASE, NovaBase):
     __tablename__ = 'floating_ips'
     id = Column(Integer, primary_key=True)
     address = Column(String(255))
-    fixed_ip_id = Column(Integer, ForeignKey('fixed_ips.id'), nullable=True)
-    fixed_ip = relationship(FixedIp,
-                            backref=backref('floating_ips'),
-                            foreign_keys=fixed_ip_id,
-                            primaryjoin='and_('
-                                'FloatingIp.fixed_ip_id == FixedIp.id,'
-                                'FloatingIp.deleted == False)')
+    fixed_ip_id = Column(Integer, nullable=True)
     project_id = Column(String(255))
     host = Column(String(255))  # , ForeignKey('hosts.id'))
     auto_assigned = Column(Boolean, default=False, nullable=False)
+    pool = Column(String(255))
+    interface = Column(String(255))
 
 
 class AuthToken(BASE, NovaBase):
@@ -752,6 +747,19 @@ class Project(BASE, NovaBase):
     members = relationship(User,
                            secondary='user_project_association',
                            backref='projects')
+
+
+class DNSDomain(BASE, NovaBase):
+    """Represents a DNS domain with availability zone or project info."""
+    __tablename__ = 'dns_domains'
+    domain = Column(String(512), primary_key=True)
+    scope = Column(String(255))
+    availability_zone = Column(String(255))
+    project_id = Column(String(255))
+    project = relationship(Project,
+                           primaryjoin=project_id == Project.id,
+                           foreign_keys=[Project.id],
+                           uselist=False)
 
 
 class UserProjectRoleAssociation(BASE, NovaBase):
@@ -854,6 +862,42 @@ class Zone(BASE, NovaBase):
     weight_scale = Column(Float(), default=1.0)
 
 
+class Aggregate(BASE, NovaBase):
+    """Represents a cluster of hosts that exists in this zone."""
+    __tablename__ = 'aggregates'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True)
+    operational_state = Column(String(255), nullable=False)
+    availability_zone = Column(String(255), nullable=False)
+
+
+class AggregateHost(BASE, NovaBase):
+    """Represents a host that is member of an aggregate."""
+    __tablename__ = 'aggregate_hosts'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    host = Column(String(255), unique=True)
+    aggregate_id = Column(Integer, ForeignKey('aggregates.id'), nullable=False)
+    aggregate = relationship(Aggregate, backref=backref('aggregates'),
+                             foreign_keys=aggregate_id,
+                             primaryjoin='and_('
+                                  'AggregateHost.aggregate_id == Aggregate.id,'
+                                  'AggregateHost.deleted == False)')
+
+
+class AggregateMetadata(BASE, NovaBase):
+    """Represents a metadata key/value pair for an aggregate."""
+    __tablename__ = 'aggregate_metadata'
+    id = Column(Integer, primary_key=True)
+    key = Column(String(255), nullable=False)
+    value = Column(String(255), nullable=False)
+    aggregate_id = Column(Integer, ForeignKey('aggregates.id'), nullable=False)
+    aggregate = relationship(Aggregate, backref="metadata",
+                             foreign_keys=aggregate_id,
+                             primaryjoin='and_('
+                              'AggregateMetadata.aggregate_id == Aggregate.id,'
+                              'AggregateMetadata.deleted == False)')
+
+
 class AgentBuild(BASE, NovaBase):
     """Represents an agent build."""
     __tablename__ = 'agent_builds'
@@ -931,7 +975,7 @@ def register_models():
     """
     from sqlalchemy import create_engine
     models = (Service, Instance, InstanceActions, InstanceTypes,
-              Volume, ExportDevice, IscsiTarget, FixedIp, FloatingIp,
+              Volume, IscsiTarget, FixedIp, FloatingIp,
               Network, SecurityGroup, SecurityGroupIngressRule,
               SecurityGroupInstanceAssociation, AuthToken, User,
               Project, Certificate, ConsolePool, Console, Zone,

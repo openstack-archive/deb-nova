@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 OpenStack, LLC
 # All Rights Reserved.
 #
@@ -17,12 +18,8 @@
 
 """Stubouts, mocks and fixtures for the test suite"""
 
-import time
-
 from nova import db
 from nova import exception
-from nova import test
-from nova import utils
 
 
 class FakeModel(object):
@@ -88,6 +85,7 @@ def stub_out_db_network_api(stubs):
                           'fixed_ip_id': None,
                           'fixed_ip': None,
                           'project_id': None,
+                          'pool': 'nova',
                           'auto_assigned': False}
 
     virtual_interface_fields = {'id': 0,
@@ -101,9 +99,10 @@ def stub_out_db_network_api(stubs):
     virtual_interfacees = [virtual_interface_fields]
     networks = [network_fields]
 
-    def fake_floating_ip_allocate_address(context, project_id):
-        ips = filter(lambda i: i['fixed_ip_id'] == None \
-                           and i['project_id'] == None,
+    def fake_floating_ip_allocate_address(context, project_id, pool):
+        ips = filter(lambda i: i['fixed_ip_id'] is None \
+                           and i['project_id'] is None \
+                           and i['pool'] == pool,
                      floating_ips)
         if not ips:
             raise exception.NoMoreFloatingIps()
@@ -442,12 +441,6 @@ def stub_out_db_instance_api(stubs, injected=True):
         else:
             return [FakeModel(flat_network_fields)]
 
-    def fake_instance_get_fixed_addresses(context, instance_id):
-        return [FakeModel(fixed_ip_fields).address]
-
-    def fake_instance_get_fixed_addresses_v6(context, instance_id):
-        return [FakeModel(fixed_ip_fields).address]
-
     def fake_fixed_ip_get_by_instance(context, instance_id):
         return [FakeModel(fixed_ip_fields)]
 
@@ -456,8 +449,6 @@ def stub_out_db_instance_api(stubs, injected=True):
              fake_instance_type_get_all,
              fake_instance_type_get_by_name,
              fake_instance_type_get,
-             fake_instance_get_fixed_addresses,
-             fake_instance_get_fixed_addresses_v6,
              fake_network_get_all_by_instance,
              fake_fixed_ip_get_by_instance]
     stub_out(stubs, funcs)
