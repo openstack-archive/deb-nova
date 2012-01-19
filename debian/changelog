@@ -1,13 +1,16 @@
+nova (2012.1~e2+git757-g62cf887-2) experimental; urgency=low
+
+  * Fixed git debian/experimental merging
+
+ -- Ghe Rivero <ghe@debian.org>  Thu, 19 Jan 2012 10:03:09 +0100
+
 nova (2012.1~e2+git757-g62cf887-1) experimental; urgency=low
 
+  [ Ghe Rivero ]
   * New snapshot release
   * Removed nova-vncproxy binary package
 
- -- Ghe Rivero <ghe@debian.org>  Thu, 19 Jan 2012 08:44:36 +0100
-
-nova (2012.1~e2+git-CHANGE-ME-1) experimental; urgency=low
-
-  * New snapshot release.
+  [ Thomas Goirand ]
   * Now build-depends on the new python-xenapi and nova-compute-xen depends
   on it and not on libvirt anymore.
   * Now build-depends on the new python-xenapi and nova-compute-xen depends
@@ -16,7 +19,7 @@ nova (2012.1~e2+git-CHANGE-ME-1) experimental; urgency=low
   nova-compute-xen doesn't Depends: on libvirt, and then the libvirt group
   doesn't exist, then postinst fails.
 
- -- Thomas Goirand <zigo@debian.org>  Sun, 08 Jan 2012 10:21:26 +0000
+ -- Ghe Rivero <ghe@debian.org>  Thu, 19 Jan 2012 08:44:36 +0100
 
 nova (2012.1~e2+git548-g6f0ef42-1) experimental; urgency=low
 
