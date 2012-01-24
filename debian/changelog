@@ -4,7 +4,7 @@ nova (2012.1~e2-4) experimental; urgency=low
   * Added missing Build-Depends: python-xattr, python-webob, python-glance,
   python-routes, ipython, bpython.
   * Removed duplicates in Build-Depends:
-  * Now also building a nova-xcp-plugins package.
+  * Now also building nova-xcp-plugins and nova-xcp-network packages.
   * Now build-depends on the new python-xenapi and nova-compute-xen depends
   on it and not on libvirt anymore.
   * Moved nova user creation in nova-compute-{lxc,uml,xen,kvm}.postinst because

@@ -1,0 +1,1 @@
+SUBSYSTEM=="xen-backend", KERNEL=="vif*", RUN+="/usr/lib/xcp/scripts/ovs_configure_vif_flows.py $env{ACTION} %k all"
