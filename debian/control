@@ -397,7 +397,29 @@ Description: OpenStack Compute plugin for the Xen Cloud Platform
  .
  This package is to be installed on the server where you have installed your
  master Xen API server (see the xcp-xapi package), so that nova-compute can
- remotely control your Xen nodes.
+ remotely control your XCP nodes and start VM instances.
+
+Package: nova-xcp-network
+Architecture: all
+Depends: xcp-xapi, lsb-base (>= 3.0.6), ${python:Depends}, ${misc:Depends}, nova-xcp-plugins (= ${binary:Version}), openvswitch-switch, ebtables, arptables, iproute
+Description: OpenStack Compute network plugin for the Xen Cloud Platform
+ OpenStack is a reliable cloud infrastructure. Its mission is to produce
+ the ubiquitous cloud computing platform that will meet the needs of public
+ and private cloud providers regardless of size, by being simple to implement
+ and massively scalable.
+ .
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller. In
+ addition to its "native" API (the OpenStack API), it also supports the Amazon
+ EC2 API.
+ .
+ Nova is intended to be modular and easy to extend and adapt. It supports many
+ different hypervisors (KVM and Xen to name a few), different database backends
+ (SQLite, MySQL, and PostgreSQL, for instance), different types of user
+ databases (LDAP or SQL), etc.
+ .
+ This package is to be installed on the server where you have installed your
+ master Xen API server (see the xcp-xapi package), so that nova can remotely
+ configure the network of your XCP servers.
 
 Package: nova-doc
 Architecture: all

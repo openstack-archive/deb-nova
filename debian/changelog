@@ -1,3 +1,15 @@
+nova (2012.1~e2+git757-g62cf887-3) experimental; urgency=low
+
+  [ Thomas Goirand ]
+  * Added missing Build-Depends: python-xattr, python-webob, python-glance,
+  python-routes, ipython, bpython.
+  * Removed duplicates in Build-Depends:
+  * Now also building nova-xcp-plugins and nova-xcp-network packages.
+  [ Ghe Rivero ]
+  * ...
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 25 Jan 2012 07:51:52 +0000
+
 nova (2012.1~e2+git757-g62cf887-2) experimental; urgency=low
 
   * Fixed git debian/experimental merging
