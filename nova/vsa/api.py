@@ -26,7 +26,6 @@ For assistance and guidelines pls contact
 import sys
 
 from nova import compute
-from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
@@ -68,10 +67,10 @@ class API(base.Base):
         super(API, self).__init__(**kwargs)
 
     def _check_volume_type_correctness(self, vol_type):
-        if vol_type.get('extra_specs') == None or\
+        if vol_type.get('extra_specs') is None or\
            vol_type['extra_specs'].get('type') != 'vsa_drive' or\
-           vol_type['extra_specs'].get('drive_type') == None or\
-           vol_type['extra_specs'].get('drive_size') == None:
+           vol_type['extra_specs'].get('drive_type') is None or\
+           vol_type['extra_specs'].get('drive_size') is None:
 
             raise exception.ApiError(_("Invalid drive type %s")
                                         % vol_type['name'])
@@ -162,7 +161,7 @@ class API(base.Base):
         if storage is None:
             storage = []
 
-        if shared is None or shared == 'False' or shared == False:
+        if not shared or shared == 'False':
             shared = False
         else:
             shared = True
@@ -247,13 +246,13 @@ class API(base.Base):
 
                     vol_ref = self.volume_api.create(context,
                                     vol_size,
-                                    None,
                                     vol_name,
                                     vol['description'],
+                                    None,
                                     volume_type=vol_type,
                                     metadata=dict(to_vsa_id=str(vsa_id)),
                                     availability_zone=availability_zone)
-                except:
+                except Exception:
                     self.update_vsa_status(context, vsa_id,
                                            status=VsaState.PARTIAL)
                     raise
@@ -350,7 +349,7 @@ class API(base.Base):
                 vol_name = volume['name']
                 LOG.info(_("VSA ID %(vsa_id)s: Deleting %(direction)s "\
                            "volume %(vol_name)s"), locals())
-                self.volume_api.delete(context, volume['id'])
+                self.volume_api.delete(context, volume)
             except exception.ApiError:
                 LOG.info(_("Unable to delete volume %s"), volume['name'])
                 if force_delete:

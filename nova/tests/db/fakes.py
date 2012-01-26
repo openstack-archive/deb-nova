@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 OpenStack, LLC
 # All Rights Reserved.
 #
@@ -17,12 +18,8 @@
 
 """Stubouts, mocks and fixtures for the test suite"""
 
-import time
-
 from nova import db
 from nova import exception
-from nova import test
-from nova import utils
 
 
 class FakeModel(object):
@@ -88,6 +85,7 @@ def stub_out_db_network_api(stubs):
                           'fixed_ip_id': None,
                           'fixed_ip': None,
                           'project_id': None,
+                          'pool': 'nova',
                           'auto_assigned': False}
 
     virtual_interface_fields = {'id': 0,
@@ -101,9 +99,10 @@ def stub_out_db_network_api(stubs):
     virtual_interfacees = [virtual_interface_fields]
     networks = [network_fields]
 
-    def fake_floating_ip_allocate_address(context, project_id):
-        ips = filter(lambda i: i['fixed_ip_id'] == None \
-                           and i['project_id'] == None,
+    def fake_floating_ip_allocate_address(context, project_id, pool):
+        ips = filter(lambda i: i['fixed_ip_id'] is None \
+                           and i['project_id'] is None \
+                           and i['pool'] == pool,
                      floating_ips)
         if not ips:
             raise exception.NoMoreFloatingIps()
@@ -350,29 +349,33 @@ def stub_out_db_instance_api(stubs, injected=True):
         'm1.tiny': dict(id=2,
                         memory_mb=512,
                         vcpus=1,
-                        local_gb=0,
+                        root_gb=0,
+                        ephemeral_gb=10,
                         flavorid=1,
                         rxtx_cap=1,
                         swap=0),
         'm1.small': dict(id=5,
                          memory_mb=2048,
                          vcpus=1,
-                         local_gb=20,
+                         root_gb=20,
+                         ephemeral_gb=0,
                          flavorid=2,
                          rxtx_cap=2,
-                         swap=0),
+                         swap=1024),
         'm1.medium':
             dict(id=1,
                  memory_mb=4096,
                  vcpus=2,
-                 local_gb=40,
+                 root_gb=40,
+                 ephemeral_gb=40,
                  flavorid=3,
                  rxtx_cap=3,
                  swap=0),
         'm1.large': dict(id=3,
                          memory_mb=8192,
                          vcpus=4,
-                         local_gb=80,
+                         root_gb=80,
+                         ephemeral_gb=80,
                          flavorid=4,
                          rxtx_cap=4,
                          swap=0),
@@ -380,7 +383,8 @@ def stub_out_db_instance_api(stubs, injected=True):
             dict(id=4,
                  memory_mb=16384,
                  vcpus=8,
-                 local_gb=160,
+                 root_gb=160,
+                 ephemeral_gb=160,
                  flavorid=5,
                  rxtx_cap=5,
                  swap=0)}
@@ -442,12 +446,6 @@ def stub_out_db_instance_api(stubs, injected=True):
         else:
             return [FakeModel(flat_network_fields)]
 
-    def fake_instance_get_fixed_addresses(context, instance_id):
-        return [FakeModel(fixed_ip_fields).address]
-
-    def fake_instance_get_fixed_addresses_v6(context, instance_id):
-        return [FakeModel(fixed_ip_fields).address]
-
     def fake_fixed_ip_get_by_instance(context, instance_id):
         return [FakeModel(fixed_ip_fields)]
 
@@ -456,8 +454,6 @@ def stub_out_db_instance_api(stubs, injected=True):
              fake_instance_type_get_all,
              fake_instance_type_get_by_name,
              fake_instance_type_get,
-             fake_instance_get_fixed_addresses,
-             fake_instance_get_fixed_addresses_v6,
              fake_network_get_all_by_instance,
              fake_fixed_ip_get_by_instance]
     stub_out(stubs, funcs)

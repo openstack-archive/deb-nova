@@ -106,6 +106,7 @@ class UbuntuOneiric(Distro):
         """
         The pip installed version of m2crypto has problems on oneiric
         """
+        print "Attempting to install 'python-m2crypto' via apt-get"
         run_command(['sudo', 'apt-get', 'install', '-y',
             "python-m2crypto"])
 
@@ -120,6 +121,7 @@ class Fedora(Distro):
                                      check_exit_code=False)[1] == 0
 
     def yum_install(self, pkg, **kwargs):
+        print "Attempting to install '%s' via yum" % pkg
         run_command(['sudo', 'yum', 'install', '-y', pkg], **kwargs)
 
     def apply_patch(self, originalfile, patchfile):
@@ -188,7 +190,8 @@ def create_virtualenv(venv=VENV, no_site_packages=True):
         run_command(['virtualenv', '-q', VENV])
     print 'done.'
     print 'Installing pip in virtualenv...',
-    if not run_command(['tools/with_venv.sh', 'easy_install', 'pip']).strip():
+    if not run_command(['tools/with_venv.sh', 'easy_install',
+                        'pip>1.0']).strip():
         die("Failed to install pip.")
     print 'done.'
 

@@ -63,10 +63,10 @@ Using the Python WMI library:
 import os
 import time
 
+from nova.compute import power_state
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova.compute import power_state
 from nova.virt import driver
 from nova.virt import images
 
@@ -374,8 +374,7 @@ class HyperVConnection(driver.ComputeDriver):
             raise exception.InstanceNotFound(instance_id=instance.id)
         self._set_vm_state(instance.name, 'Reboot')
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                cleanup=True):
+    def destroy(self, instance, network_info, block_device_info=None):
         """Destroy the VM. Also destroy the associated VHD disk files"""
         LOG.debug(_("Got request to destroy vm %s"), instance.name)
         vm = self._lookup(instance.name)

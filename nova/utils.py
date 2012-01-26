@@ -25,8 +25,8 @@ import functools
 import inspect
 import json
 import lockfile
-import netaddr
 import os
+import pyclbr
 import random
 import re
 import shlex
@@ -36,18 +36,18 @@ import sys
 import time
 import types
 import uuid
-import pyclbr
+import warnings
 from xml.sax import saxutils
 
 from eventlet import event
 from eventlet import greenthread
 from eventlet import semaphore
 from eventlet.green import subprocess
+import netaddr
 
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import version
 
 
 LOG = logging.getLogger("nova.utils")
@@ -169,16 +169,19 @@ def execute(*cmd, **kwargs):
 
     :raises exception.Error on receiving unknown arguments
     :raises exception.ProcessExecutionError
+
+    :returns a tuple, (stdout, stderr) from the spawned process, or None if
+             the command fails.
     """
 
     process_input = kwargs.pop('process_input', None)
     check_exit_code = kwargs.pop('check_exit_code', [0])
     ignore_exit_code = False
-    if type(check_exit_code) == int:
-        check_exit_code = [check_exit_code]
-    elif type(check_exit_code) == bool:
+    if isinstance(check_exit_code, bool):
         ignore_exit_code = not check_exit_code
         check_exit_code = [0]
+    elif isinstance(check_exit_code, int):
+        check_exit_code = [check_exit_code]
     delay_on_retry = kwargs.pop('delay_on_retry', True)
     attempts = kwargs.pop('attempts', 1)
     run_as_root = kwargs.pop('run_as_root', False)
@@ -212,7 +215,7 @@ def execute(*cmd, **kwargs):
             _returncode = obj.returncode  # pylint: disable=E1101
             if _returncode:
                 LOG.debug(_('Result was %s') % _returncode)
-                if ignore_exit_code == False \
+                if not ignore_exit_code \
                     and _returncode not in check_exit_code:
                     (stdout, stderr) = result
                     raise exception.ProcessExecutionError(
@@ -233,6 +236,36 @@ def execute(*cmd, **kwargs):
             #               call clean something up in between calls, without
             #               it two execute calls in a row hangs the second one
             greenthread.sleep(0)
+
+
+def trycmd(*args, **kwargs):
+    """
+    A wrapper around execute() to more easily handle warnings and errors.
+
+    Returns an (out, err) tuple of strings containing the output of
+    the command's stdout and stderr.  If 'err' is not empty then the
+    command can be considered to have failed.
+
+    :discard_warnings   True | False. Defaults to False. If set to True,
+                        then for succeeding commands, stderr is cleared
+
+    """
+    discard_warnings = kwargs.pop('discard_warnings', False)
+
+    try:
+        out, err = execute(*args, **kwargs)
+        failed = False
+    except exception.ProcessExecutionError, exn:
+        out, err = '', str(exn)
+        LOG.debug(err)
+        failed = True
+
+    if not failed and discard_warnings and err:
+        # Handle commands that output to stderr but otherwise succeed
+        LOG.debug(err)
+        err = ''
+
+    return out, err
 
 
 def ssh_execute(ssh, cmd, process_input=None,
@@ -318,13 +351,13 @@ def generate_uid(topic, size=8):
 
 # Default symbols to use for passwords. Avoids visually confusing characters.
 # ~6 bits per symbol
-DEFAULT_PASSWORD_SYMBOLS = ('23456789'  # Removed: 0,1
-                            'ABCDEFGHJKLMNPQRSTUVWXYZ'  # Removed: I, O
+DEFAULT_PASSWORD_SYMBOLS = ('23456789',  # Removed: 0,1
+                            'ABCDEFGHJKLMNPQRSTUVWXYZ',   # Removed: I, O
                             'abcdefghijkmnopqrstuvwxyz')  # Removed: l
 
 
 # ~5 bits per symbol
-EASIER_PASSWORD_SYMBOLS = ('23456789'  # Removed: 0, 1
+EASIER_PASSWORD_SYMBOLS = ('23456789',  # Removed: 0, 1
                            'ABCDEFGHJKLMNPQRSTUVWXYZ')  # Removed: I, O
 
 
@@ -365,7 +398,7 @@ def current_audit_period(unit=None):
     return (begin, end)
 
 
-def usage_from_instance(instance_ref, **kw):
+def usage_from_instance(instance_ref, network_info=None, **kw):
     image_ref_url = "%s/images/%s" % (generate_glance_url(),
             instance_ref['image_ref'])
 
@@ -375,6 +408,8 @@ def usage_from_instance(instance_ref, **kw):
           instance_id=instance_ref['uuid'],
           instance_type=instance_ref['instance_type']['name'],
           instance_type_id=instance_ref['instance_type_id'],
+          memory_mb=instance_ref['memory_mb'],
+          disk_gb=instance_ref['root_gb'] + instance_ref['ephemeral_gb'],
           display_name=instance_ref['display_name'],
           created_at=str(instance_ref['created_at']),
           launched_at=str(instance_ref['launched_at']) \
@@ -382,20 +417,51 @@ def usage_from_instance(instance_ref, **kw):
           image_ref_url=image_ref_url,
           state=instance_ref['vm_state'],
           state_description=instance_ref['task_state'] \
-                             if instance_ref['task_state'] else '',
-          fixed_ips=[a.address for a in instance_ref['fixed_ips']])
+                             if instance_ref['task_state'] else '')
+
+    # NOTE(jkoelker) This nastyness can go away once compute uses the
+    #                network model
+    if network_info is not None:
+        fixed_ips = []
+        for network, info in network_info:
+            fixed_ips.extend([ip['ip'] for ip in info['ips']])
+        usage_info['fixed_ips'] = fixed_ips
+
     usage_info.update(kw)
     return usage_info
 
 
-def generate_password(length=20, symbols=DEFAULT_PASSWORD_SYMBOLS):
-    """Generate a random password from the supplied symbols.
+def generate_password(length=20, symbolgroups=DEFAULT_PASSWORD_SYMBOLS):
+    """Generate a random password from the supplied symbol groups.
+
+    At least one symbol from each group will be included. Unpredictable
+    results if length is less than the number of symbol groups.
 
     Believed to be reasonably secure (with a reasonable password length!)
 
     """
     r = random.SystemRandom()
-    return ''.join([r.choice(symbols) for _i in xrange(length)])
+
+    # NOTE(jerdfelt): Some password policies require at least one character
+    # from each group of symbols, so start off with one random character
+    # from each symbol group
+    password = [r.choice(s) for s in symbolgroups]
+    # If length < len(symbolgroups), the leading characters will only
+    # be from the first length groups. Try our best to not be predictable
+    # by shuffling and then truncating.
+    r.shuffle(password)
+    password = password[:length]
+    length -= len(password)
+
+    # then fill with random characters from all symbol groups
+    symbols = ''.join(symbolgroups)
+    password.extend([r.choice(symbols) for _i in xrange(length)])
+
+    # finally shuffle to ensure first x characters aren't from a
+    # predictable group
+    r.shuffle(password)
+
+    return ''.join(password)
 
 
 def last_octet(address):
@@ -489,7 +555,7 @@ def parse_mailmap(mailmap='.mailmap'):
             l = l.strip()
             if not l.startswith('#') and ' ' in l:
                 canonical_email, alias = l.split(' ')
-                mapping[alias] = canonical_email
+                mapping[alias.lower()] = canonical_email.lower()
     return mapping
 
 
@@ -514,7 +580,7 @@ class LazyPluggable(object):
                 raise exception.Error(_('Invalid backend: %s') % backend_name)
 
             backend = self.__backends[backend_name]
-            if type(backend) == type(tuple()):
+            if isinstance(backend, tuple):
                 name = backend[0]
                 fromlist = backend[1]
             else:
@@ -635,19 +701,27 @@ def to_primitive(value, convert_instances=False, level=0):
         if test(value):
             return unicode(value)
 
+    # FIXME(vish): Workaround for LP bug 852095. Without this workaround,
+    #              tests that raise an exception in a mocked method that
+    #              has a @wrap_exception with a notifier will fail. If
+    #              we up the dependency to 0.5.4 (when it is released) we
+    #              can remove this workaround.
+    if getattr(value, '__module__', None) == 'mox':
+        return 'mock'
+
     if level > 3:
         return '?'
 
     # The try block may not be necessary after the class check above,
     # but just in case ...
     try:
-        if type(value) is type([]) or type(value) is type((None,)):
+        if isinstance(value, (list, tuple)):
             o = []
             for v in value:
                 o.append(to_primitive(v, convert_instances=convert_instances,
                                       level=level))
             return o
-        elif type(value) is type({}):
+        elif isinstance(value, dict):
             o = {}
             for k, v in value.iteritems():
                 o[k] = to_primitive(v, convert_instances=convert_instances,
@@ -803,7 +877,7 @@ def get_from_path(items, path):
     if items is None:
         return results
 
-    if not isinstance(items, types.ListType):
+    if not isinstance(items, list):
         # Wrap single objects in a list
         items = [items]
 
@@ -816,7 +890,7 @@ def get_from_path(items, path):
         child = get_method(first_token)
         if child is None:
             continue
-        if isinstance(child, types.ListType):
+        if isinstance(child, list):
             # Flatten intermediate lists
             for x in child:
                 results.append(x)
@@ -916,9 +990,11 @@ def is_uuid_like(val):
 
         aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
     """
-    if not isinstance(val, basestring):
+    try:
+        uuid.UUID(val)
+        return True
+    except (TypeError, ValueError, AttributeError):
         return False
-    return (len(val) == 36) and (val.count('-') == 4)
 
 
 def bool_from_str(val):
@@ -1055,7 +1131,7 @@ def save_and_reraise_exception():
     type_, value, traceback = sys.exc_info()
     try:
         yield
-    except:
+    except Exception:
         LOG.exception(_('Original exception being dropped'),
                       exc_info=(type_, value, traceback))
         raise
@@ -1110,3 +1186,226 @@ def sanitize_hostname(hostname):
     hostname = hostname.strip('.-')
 
     return hostname
+
+
+def read_cached_file(filename, cache_info, reload_func=None):
+    """Read from a file if it has been modified.
+
+    :param cache_info: dictionary to hold opaque cache.
+    :param reload_func: optional function to be called with data when
+                        file is reloaded due to a modification.
+
+    :returns: data from file
+
+    """
+    mtime = os.path.getmtime(filename)
+    if not cache_info or mtime != cache_info.get('mtime'):
+        with open(filename) as fap:
+            cache_info['data'] = fap.read()
+        cache_info['mtime'] = mtime
+        if reload_func:
+            reload_func(cache_info['data'])
+    return cache_info['data']
+
+
+@contextlib.contextmanager
+def temporary_mutation(obj, **kwargs):
+    """Temporarily set the attr on a particular object to a given value then
+    revert when finished.
+
+    One use of this is to temporarily set the read_deleted flag on a context
+    object:
+
+        with temporary_mutation(context, read_deleted="yes"):
+            do_something_that_needed_deleted_objects()
+    """
+    NOT_PRESENT = object()
+
+    old_values = {}
+    for attr, new_value in kwargs.items():
+        old_values[attr] = getattr(obj, attr, NOT_PRESENT)
+        setattr(obj, attr, new_value)
+
+    try:
+        yield
+    finally:
+        for attr, old_value in old_values.items():
+            if old_value is NOT_PRESENT:
+                del obj[attr]
+            else:
+                setattr(obj, attr, old_value)
+
+
+def warn_deprecated_class(cls, msg):
+    """
+    Issues a warning to indicate that the given class is deprecated.
+    If a message is given, it is appended to the deprecation warning.
+    """
+
+    fullname = '%s.%s' % (cls.__module__, cls.__name__)
+    if msg:
+        fullmsg = _("Class %(fullname)s is deprecated: %(msg)s")
+    else:
+        fullmsg = _("Class %(fullname)s is deprecated")
+
+    # Issue the warning
+    warnings.warn(fullmsg % locals(), DeprecationWarning, stacklevel=3)
+
+
+def warn_deprecated_function(func, msg):
+    """
+    Issues a warning to indicate that the given function is
+    deprecated.  If a message is given, it is appended to the
+    deprecation warning.
+    """
+
+    name = func.__name__
+
+    # Find the function's definition
+    sourcefile = inspect.getsourcefile(func)
+
+    # Find the line number, if possible
+    if inspect.ismethod(func):
+        code = func.im_func.func_code
+    else:
+        code = func.func_code
+    lineno = getattr(code, 'co_firstlineno', None)
+
+    if lineno is None:
+        location = sourcefile
+    else:
+        location = "%s:%d" % (sourcefile, lineno)
+
+    # Build up the message
+    if msg:
+        fullmsg = _("Function %(name)s in %(location)s is deprecated: %(msg)s")
+    else:
+        fullmsg = _("Function %(name)s in %(location)s is deprecated")
+
+    # Issue the warning
+    warnings.warn(fullmsg % locals(), DeprecationWarning, stacklevel=3)
+
+
+def _stubout(klass, message):
+    """
+    Scans a class and generates wrapping stubs for __new__() and every
+    class and static method.  Returns a dictionary which can be passed
+    to type() to generate a wrapping class.
+    """
+
+    overrides = {}
+
+    def makestub_class(name, func):
+        """
+        Create a stub for wrapping class methods.
+        """
+
+        def stub(cls, *args, **kwargs):
+            warn_deprecated_class(klass, message)
+            return func(*args, **kwargs)
+
+        # Overwrite the stub's name
+        stub.__name__ = name
+        stub.func_name = name
+
+        return classmethod(stub)
+
+    def makestub_static(name, func):
+        """
+        Create a stub for wrapping static methods.
+        """
+
+        def stub(*args, **kwargs):
+            warn_deprecated_class(klass, message)
+            return func(*args, **kwargs)
+
+        # Overwrite the stub's name
+        stub.__name__ = name
+        stub.func_name = name
+
+        return staticmethod(stub)
+
+    for name, kind, _klass, _obj in inspect.classify_class_attrs(klass):
+        # We're only interested in __new__(), class methods, and
+        # static methods...
+        if (name != '__new__' and
+            kind not in ('class method', 'static method')):
+            continue
+
+        # Get the function...
+        func = getattr(klass, name)
+
+        # Override it in the class
+        if kind == 'class method':
+            stub = makestub_class(name, func)
+        elif kind == 'static method' or name == '__new__':
+            stub = makestub_static(name, func)
+
+        # Save it in the overrides dictionary...
+        overrides[name] = stub
+
+    # Apply the overrides
+    for name, stub in overrides.items():
+        setattr(klass, name, stub)
+
+
+def deprecated(message=''):
+    """
+    Marks a function, class, or method as being deprecated.  For
+    functions and methods, emits a warning each time the function or
+    method is called.  For classes, generates a new subclass which
+    will emit a warning each time the class is instantiated, or each
+    time any class or static method is called.
+
+    If a message is passed to the decorator, that message will be
+    appended to the emitted warning.  This may be used to suggest an
+    alternate way of achieving the desired effect, or to explain why
+    the function, class, or method is deprecated.
+    """
+
+    def decorator(f_or_c):
+        # Make sure we can deprecate it...
+        if not callable(f_or_c) or isinstance(f_or_c, types.ClassType):
+            warnings.warn("Cannot mark object %r as deprecated" % f_or_c,
+                          DeprecationWarning, stacklevel=2)
+            return f_or_c
+
+        # If we're deprecating a class, create a subclass of it and
+        # stub out all the class and static methods
+        if inspect.isclass(f_or_c):
+            klass = f_or_c
+            _stubout(klass, message)
+            return klass
+
+        # OK, it's a function; use a traditional wrapper...
+        func = f_or_c
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            warn_deprecated_function(func, message)
+
+            return func(*args, **kwargs)
+
+        return wrapper
+    return decorator
+
+
+def _showwarning(message, category, filename, lineno, file=None, line=None):
+    """
+    Redirect warnings into logging.
+    """
+
+    fmtmsg = warnings.formatwarning(message, category, filename, lineno, line)
+    LOG.warning(fmtmsg)
+
+
+# Install our warnings handler
+warnings.showwarning = _showwarning
+
+
+def service_is_up(service):
+    """Check whether a service is up based on last heartbeat."""
+    last_heartbeat = service['updated_at'] or service['created_at']
+    # Timestamps in DB are UTC.
+    elapsed = total_seconds(utcnow() - last_heartbeat)
+    return abs(elapsed) <= FLAGS.service_down_time

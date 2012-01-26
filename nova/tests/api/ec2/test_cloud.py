@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -21,12 +22,13 @@ import copy
 import functools
 import os
 
-from eventlet import greenthread
 from M2Crypto import BIO
 from M2Crypto import RSA
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
+from nova.api.ec2 import inst_state
+from nova.compute import power_state
 from nova.compute import vm_states
 from nova import context
 from nova import crypto
@@ -56,32 +58,42 @@ class AjaxProxyManager(manager.SchedulerDependentManager):
         return None
 
 
-def get_fake_fixed_ips():
-    vif = {'address': 'aa:bb:cc:dd:ee:ff'}
-    network = {'label': 'private',
-               'project_id': 'fake',
-               'cidr_v6': 'fe80:b33f::/64'}
-    floating_ips = [{'address': '1.2.3.4'},
-                    {'address': '5.6.7.8'}]
-    fixed_ip1 = {'address': '192.168.0.3',
-                 'floating_ips': floating_ips,
-                 'virtual_interface': vif,
-                 'network': network}
-    fixed_ip2 = {'address': '192.168.0.4',
-                 'network': network}
-    return [fixed_ip1, fixed_ip2]
+def get_fake_cache():
+    def _ip(ip, fixed=True, floats=None):
+        ip_dict = {'address': ip, 'type': 'fixed'}
+        if not fixed:
+            ip_dict['type'] = 'floating'
+        if fixed and floats:
+            ip_dict['floating_ips'] = [_ip(f, fixed=False) for f in floats]
+        return ip_dict
+
+    info = [{'address': 'aa:bb:cc:dd:ee:ff',
+             'id': 1,
+             'network': {'bridge': 'br0',
+                         'id': 1,
+                         'label': 'private',
+                         'subnets': [{'cidr': '192.168.0.0/24',
+                                      'ips': [_ip('192.168.0.3',
+                                                  floats=['1.2.3.4',
+                                                          '5.6.7.8']),
+                                              _ip('192.168.0.4')]}]}}]
+    if FLAGS.use_ipv6:
+        ipv6_addr = 'fe80:b33f::a8bb:ccff:fedd:eeff'
+        info[0]['network']['subnets'].append({'cidr': 'fe80:b33f::/64',
+                                              'ips': [_ip(ipv6_addr)]})
+    return info
 
 
-def get_instances_with_fixed_ips(orig_func, *args, **kwargs):
-    """Kludge fixed_ips into instance(s) without having to create DB
+def get_instances_with_cached_ips(orig_func, *args, **kwargs):
+    """Kludge the cache into instance(s) without having to create DB
     entries
     """
     instances = orig_func(*args, **kwargs)
     if isinstance(instances, list):
         for instance in instances:
-            instance['fixed_ips'] = get_fake_fixed_ips()
+            instance['info_cache'] = {'network_info': get_fake_cache()}
     else:
-        instances['fixed_ips'] = get_fake_fixed_ips()
+        instances['info_cache'] = {'network_info': get_fake_cache()}
     return instances
 
 
@@ -134,7 +146,7 @@ class CloudTestCase(test.TestCase):
         orig_func = getattr(self.cloud.compute_api, func_name)
 
         def fake_get(*args, **kwargs):
-            return get_instances_with_fixed_ips(orig_func, *args, **kwargs)
+            return get_instances_with_cached_ips(orig_func, *args, **kwargs)
         self.stubs.Set(self.cloud.compute_api, func_name, fake_get)
 
     def _create_key(self, name):
@@ -154,7 +166,7 @@ class CloudTestCase(test.TestCase):
         address = "10.10.10.10"
         db.floating_ip_create(self.context,
                               {'address': address,
-                               'host': self.network.host})
+                               'pool': 'nova'})
         self.cloud.allocate_address(self.context)
         self.cloud.describe_addresses(self.context)
         self.cloud.release_address(self.context,
@@ -166,7 +178,7 @@ class CloudTestCase(test.TestCase):
         allocate = self.cloud.allocate_address
         db.floating_ip_create(self.context,
                               {'address': address,
-                               'host': self.network.host})
+                               'pool': 'nova'})
         self.assertEqual(allocate(self.context)['publicIp'], address)
         db.floating_ip_destroy(self.context, address)
         self.assertRaises(exception.NoMoreFloatingIps,
@@ -175,10 +187,9 @@ class CloudTestCase(test.TestCase):
 
     def test_release_address(self):
         address = "10.10.10.10"
-        allocate = self.cloud.allocate_address
         db.floating_ip_create(self.context,
                               {'address': address,
-                               'host': self.network.host,
+                               'pool': 'nova',
                                'project_id': self.project_id})
         result = self.cloud.release_address(self.context, address)
         self.assertEqual(result['releaseResponse'], ['Address released.'])
@@ -186,7 +197,9 @@ class CloudTestCase(test.TestCase):
     def test_associate_disassociate_address(self):
         """Verifies associate runs cleanly without raising an exception"""
         address = "10.10.10.10"
-        db.floating_ip_create(self.context, {'address': address})
+        db.floating_ip_create(self.context,
+                              {'address': address,
+                               'pool': 'nova'})
         self.cloud.allocate_address(self.context)
         # TODO(jkoelker) Probably need to query for instance_type_id and
         #                make sure we get a valid one
@@ -200,6 +213,7 @@ class CloudTestCase(test.TestCase):
         type_id = inst['instance_type_id']
         ips = self.network.allocate_for_instance(self.context,
                                                  instance_id=inst['id'],
+                                                 instance_uuid='',
                                                  host=inst['host'],
                                                  vpn=None,
                                                  instance_type_id=type_id,
@@ -593,6 +607,38 @@ class CloudTestCase(test.TestCase):
         db.instance_destroy(self.context, inst2['id'])
         db.service_destroy(self.context, comp1['id'])
         db.service_destroy(self.context, comp2['id'])
+
+    def test_describe_instance_state(self):
+        """Makes sure describe_instances for instanceState works."""
+
+        def test_instance_state(expected_code, expected_name,
+                                power_state_, vm_state_, values=None):
+            image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
+            values = values or {}
+            values.update({'image_ref': image_uuid, 'instance_type_id': 1,
+                           'power_state': power_state_, 'vm_state': vm_state_})
+            inst = db.instance_create(self.context, values)
+
+            instance_id = ec2utils.id_to_ec2_id(inst['id'])
+            result = self.cloud.describe_instances(self.context,
+                                                 instance_id=[instance_id])
+            result = result['reservationSet'][0]
+            result = result['instancesSet'][0]['instanceState']
+
+            name = result['name']
+            code = result['code']
+            self.assertEqual(code, expected_code)
+            self.assertEqual(name, expected_name)
+
+            db.instance_destroy(self.context, inst['id'])
+
+        test_instance_state(inst_state.RUNNING_CODE, inst_state.RUNNING,
+                            power_state.RUNNING, vm_states.ACTIVE)
+        test_instance_state(inst_state.TERMINATED_CODE, inst_state.SHUTOFF,
+                            power_state.NOSTATE, vm_states.SHUTOFF)
+        test_instance_state(inst_state.STOPPED_CODE, inst_state.STOPPED,
+                            power_state.NOSTATE, vm_states.SHUTOFF,
+                            {'shutdown_terminate': False})
 
     def test_describe_instances_no_ipv6(self):
         """Makes sure describe_instances w/ no ipv6 works."""
@@ -1128,7 +1174,7 @@ class CloudTestCase(test.TestCase):
         output = self.cloud.get_console_output(context=self.context,
                                                instance_id=[instance_id])
         self.assertEquals(base64.b64decode(output['output']),
-                'FAKE CONSOLE?OUTPUT')
+                'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE')
         # TODO(soren): We need this until we can stop polling in the rpc code
         #              for unit tests.
         rv = self.cloud.terminate_instances(self.context, [instance_id])
@@ -1165,19 +1211,7 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(filter(lambda k: k['keyName'] == 'test1', keys))
         self.assertTrue(filter(lambda k: k['keyName'] == 'test2', keys))
 
-    def test_import_public_key(self):
-        # test when user provides all values
-        result1 = self.cloud.import_public_key(self.context,
-                                               'testimportkey1',
-                                               'mytestpubkey',
-                                               'mytestfprint')
-        self.assertTrue(result1)
-        keydata = db.key_pair_get(self.context,
-                                  self.context.user_id,
-                                  'testimportkey1')
-        self.assertEqual('mytestpubkey', keydata['public_key'])
-        self.assertEqual('mytestfprint', keydata['fingerprint'])
-        # test when user omits fingerprint
+    def test_import_key_pair(self):
         pubkey_path = os.path.join(os.path.dirname(__file__), 'public_key')
         f = open(pubkey_path + '/dummy.pub', 'r')
         dummypub = f.readline().rstrip()
@@ -1185,13 +1219,16 @@ class CloudTestCase(test.TestCase):
         f = open(pubkey_path + '/dummy.fingerprint', 'r')
         dummyfprint = f.readline().rstrip()
         f.close
-        result2 = self.cloud.import_public_key(self.context,
-                                               'testimportkey2',
-                                               dummypub)
-        self.assertTrue(result2)
+        key_name = 'testimportkey'
+        public_key_material = base64.b64encode(dummypub)
+        result = self.cloud.import_key_pair(self.context,
+                                            key_name,
+                                            public_key_material)
+        self.assertEqual(result['keyName'], key_name)
+        self.assertEqual(result['keyFingerprint'], dummyfprint)
         keydata = db.key_pair_get(self.context,
                                   self.context.user_id,
-                                  'testimportkey2')
+                                  key_name)
         self.assertEqual(dummypub, keydata['public_key'])
         self.assertEqual(dummyfprint, keydata['fingerprint'])
 
@@ -1707,6 +1744,7 @@ class CloudTestCase(test.TestCase):
 
         for snapshot_id in (ec2_snapshot1_id, ec2_snapshot2_id):
             self.cloud.delete_snapshot(self.context, snapshot_id)
+
         db.volume_destroy(self.context, vol['id'])
 
     def test_create_image(self):
@@ -1800,6 +1838,8 @@ class CloudTestCase(test.TestCase):
                 'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
                 'ramdisk_id': '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
                 'user_data': 'fake-user data',
+                'shutdown_terminate': False,
+                'disable_terminate': False,
                 }
         self.stubs.Set(self.cloud.compute_api, 'get', fake_get)
 
@@ -1828,8 +1868,6 @@ class CloudTestCase(test.TestCase):
                                      'attachTime': '13:56:24'}}]}
         expected_bdm['blockDeviceMapping'].sort()
         self.assertEqual(bdm, expected_bdm)
-        # NOTE(yamahata): this isn't supported
-        # get_attribute('disableApiTermination')
         groupSet = get_attribute('groupSet')
         groupSet['groupSet'].sort()
         expected_groupSet = {'instance_id': 'i-12345678',
@@ -1839,7 +1877,10 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(groupSet, expected_groupSet)
         self.assertEqual(get_attribute('instanceInitiatedShutdownBehavior'),
                          {'instance_id': 'i-12345678',
-                          'instanceInitiatedShutdownBehavior': 'stopped'})
+                          'instanceInitiatedShutdownBehavior': 'stop'})
+        self.assertEqual(get_attribute('disableApiTermination'),
+                         {'instance_id': 'i-12345678',
+                          'disableApiTermination': False})
         self.assertEqual(get_attribute('instanceType'),
                          {'instance_id': 'i-12345678',
                           'instanceType': 'fake_type'})
@@ -1857,3 +1898,72 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(get_attribute('userData'),
                          {'instance_id': 'i-12345678',
                           'userData': '}\xa9\x1e\xba\xc7\xabu\xabZ'})
+
+    def test_instance_initiated_shutdown_behavior(self):
+        def test_dia_iisb(expected_result, **kwargs):
+            """test describe_instance_attribute
+            attribute instance_initiated_shutdown_behavior"""
+            kwargs.update({'instance_type': FLAGS.default_instance_type,
+                           'max_count': 1})
+            instance_id = self._run_instance(**kwargs)
+
+            result = self.cloud.describe_instance_attribute(self.context,
+                            instance_id, 'instanceInitiatedShutdownBehavior')
+            self.assertEqual(result['instanceInitiatedShutdownBehavior'],
+                             expected_result)
+
+            result = self.cloud.terminate_instances(self.context,
+                                                    [instance_id])
+            self.assertTrue(result)
+            self._restart_compute_service()
+
+        test_dia_iisb('terminate', image_id='ami-1')
+
+        block_device_mapping = [{'device_name': '/dev/vdb',
+                                 'virtual_name': 'ephemeral0'}]
+        test_dia_iisb('stop', image_id='ami-2',
+                     block_device_mapping=block_device_mapping)
+
+        def fake_show(self, context, id_):
+            LOG.debug("id_ %s", id_)
+            print id_
+
+            prop = {}
+            if id_ == 'ami-3':
+                pass
+            elif id_ == 'ami-4':
+                prop = {'mappings': [{'device': 'sdb0',
+                                          'virtual': 'ephemeral0'}]}
+            elif id_ == 'ami-5':
+                prop = {'block_device_mapping':
+                        [{'device_name': '/dev/sdb0',
+                          'virtual_name': 'ephemeral0'}]}
+            elif id_ == 'ami-6':
+                prop = {'mappings': [{'device': 'sdb0',
+                                          'virtual': 'ephemeral0'}],
+                        'block_device_mapping':
+                        [{'device_name': '/dev/sdb0',
+                          'virtual_name': 'ephemeral0'}]}
+
+            prop_base = {'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                         'type': 'machine'}
+            prop_base.update(prop)
+
+            return {
+                'id': id_,
+                'properties': prop_base,
+                'container_format': 'ami',
+                'status': 'active'}
+
+        # NOTE(yamahata): create ami-3 ... ami-6
+        # ami-1 and ami-2 is already created by setUp()
+        for i in range(3, 7):
+            db.api.s3_image_create(self.context, 'ami-%d' % i)
+
+        self.stubs.UnsetAll()
+        self.stubs.Set(fake._FakeImageService, 'show', fake_show)
+
+        test_dia_iisb('terminate', image_id='ami-3')
+        test_dia_iisb('stop', image_id='ami-4')
+        test_dia_iisb('stop', image_id='ami-5')
+        test_dia_iisb('stop', image_id='ami-6')

@@ -21,10 +21,11 @@ Test suites for 'common' code used throughout the OpenStack HTTP API.
 
 from lxml import etree
 import webob.exc
+# FIXME(comstud): Don't import classes (HACKING)
+from webob import Request
 import xml.dom.minidom as minidom
 
-from webob import Request
-
+from nova import exception
 from nova import test
 from nova.api.openstack import common
 from nova.api.openstack import xmlutil
@@ -299,6 +300,34 @@ class MiscFunctionsTest(test.TestCase):
         actual = common.get_version_from_href(fixture)
         self.assertEqual(actual, expected)
 
+    def test_raise_http_conflict_for_instance_invalid_state(self):
+        # Correct args
+        exc = exception.InstanceInvalidState(attr='fake_attr',
+                state='fake_state', method='fake_method')
+        try:
+            common.raise_http_conflict_for_instance_invalid_state(exc,
+                    'meow')
+        except Exception, e:
+            self.assertTrue(isinstance(e, webob.exc.HTTPConflict))
+            msg = str(e)
+            self.assertEqual(msg,
+                "Cannot 'meow' while instance is in fake_attr fake_state")
+        else:
+            self.fail("webob.exc.HTTPConflict was not raised")
+
+        # Incorrect args
+        exc = exception.InstanceInvalidState()
+        try:
+            common.raise_http_conflict_for_instance_invalid_state(exc,
+                    'meow')
+        except Exception, e:
+            self.assertTrue(isinstance(e, webob.exc.HTTPConflict))
+            msg = str(e)
+            self.assertEqual(msg,
+                "Instance is in an invalid state for 'meow'")
+        else:
+            self.fail("webob.exc.HTTPConflict was not raised")
+
 
 class MetadataXMLDeserializationTest(test.TestCase):
 
@@ -343,7 +372,7 @@ class MetadataXMLDeserializationTest(test.TestCase):
 class MetadataXMLSerializationTest(test.TestCase):
 
     def test_xml_declaration(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetadataTemplate()
         fixture = {
             'metadata': {
                 'one': 'two',
@@ -351,20 +380,20 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
 
-        output = serializer.serialize(fixture, 'index')
+        output = serializer.serialize(fixture)
         print output
         has_dec = output.startswith("<?xml version='1.0' encoding='UTF-8'?>")
         self.assertTrue(has_dec)
 
     def test_index(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetadataTemplate()
         fixture = {
             'metadata': {
                 'one': 'two',
                 'three': 'four',
             },
         }
-        output = serializer.serialize(fixture, 'index')
+        output = serializer.serialize(fixture)
         print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
@@ -377,13 +406,13 @@ class MetadataXMLSerializationTest(test.TestCase):
             self.assertEqual(str(metadata_elem.text).strip(), str(meta_value))
 
     def test_index_null(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetadataTemplate()
         fixture = {
             'metadata': {
                 None: None,
             },
         }
-        output = serializer.serialize(fixture, 'index')
+        output = serializer.serialize(fixture)
         print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
@@ -396,13 +425,13 @@ class MetadataXMLSerializationTest(test.TestCase):
             self.assertEqual(str(metadata_elem.text).strip(), str(meta_value))
 
     def test_index_unicode(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetadataTemplate()
         fixture = {
             'metadata': {
                 u'three': u'Jos\xe9',
             },
         }
-        output = serializer.serialize(fixture, 'index')
+        output = serializer.serialize(fixture)
         print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
@@ -415,13 +444,13 @@ class MetadataXMLSerializationTest(test.TestCase):
             self.assertEqual(metadata_elem.text.strip(), meta_value)
 
     def test_show(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetaItemTemplate()
         fixture = {
             'meta': {
                 'one': 'two',
             },
         }
-        output = serializer.serialize(fixture, 'show')
+        output = serializer.serialize(fixture)
         print output
         root = etree.XML(output)
         meta_dict = fixture['meta']
@@ -430,14 +459,14 @@ class MetadataXMLSerializationTest(test.TestCase):
         self.assertEqual(root.text.strip(), meta_value)
 
     def test_update_all(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetadataTemplate()
         fixture = {
             'metadata': {
                 'key6': 'value6',
                 'key4': 'value4',
             },
         }
-        output = serializer.serialize(fixture, 'update_all')
+        output = serializer.serialize(fixture)
         print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
@@ -450,13 +479,13 @@ class MetadataXMLSerializationTest(test.TestCase):
             self.assertEqual(str(metadata_elem.text).strip(), str(meta_value))
 
     def test_update_item(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetaItemTemplate()
         fixture = {
             'meta': {
                 'one': 'two',
             },
         }
-        output = serializer.serialize(fixture, 'update')
+        output = serializer.serialize(fixture)
         print output
         root = etree.XML(output)
         meta_dict = fixture['meta']
@@ -465,7 +494,7 @@ class MetadataXMLSerializationTest(test.TestCase):
         self.assertEqual(root.text.strip(), meta_value)
 
     def test_create(self):
-        serializer = common.MetadataXMLSerializer()
+        serializer = common.MetadataTemplate()
         fixture = {
             'metadata': {
                 'key9': 'value9',
@@ -473,7 +502,7 @@ class MetadataXMLSerializationTest(test.TestCase):
                 'key1': 'value1',
             },
         }
-        output = serializer.serialize(fixture, 'create')
+        output = serializer.serialize(fixture)
         print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
@@ -495,8 +524,3 @@ class MetadataXMLSerializationTest(test.TestCase):
         """.replace("  ", "").replace("\n", ""))
 
         self.assertEqual(expected.toxml(), actual.toxml())
-
-    def test_delete(self):
-        serializer = common.MetadataXMLSerializer()
-        output = serializer.serialize(None, 'delete')
-        self.assertEqual(output, '')

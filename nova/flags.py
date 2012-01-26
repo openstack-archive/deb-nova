@@ -261,7 +261,7 @@ DEFINE_string('my_ip', _get_my_ip(), 'host ip address')
 DEFINE_list('region_list',
             [],
             'list of region=fqdn pairs separated by commas')
-DEFINE_string('connection_type', 'libvirt', 'libvirt, xenapi or fake')
+DEFINE_string('connection_type', None, 'libvirt, xenapi or fake')
 DEFINE_string('aws_access_key_id', 'admin', 'AWS Access ID')
 DEFINE_string('aws_secret_access_key', 'admin', 'AWS Access Key')
 # NOTE(sirp): my_ip interpolation doesn't work within nested structures
@@ -275,6 +275,7 @@ DEFINE_integer('glance_num_retries', 0,
 DEFINE_integer('s3_port', 3333, 's3 port')
 DEFINE_string('s3_host', '$my_ip', 's3 host (for infrastructure)')
 DEFINE_string('s3_dmz', '$my_ip', 's3 dmz ip (for instances)')
+DEFINE_string('cert_topic', 'cert', 'the topic cert nodes listen on')
 DEFINE_string('compute_topic', 'compute', 'the topic compute nodes listen on')
 DEFINE_string('console_topic', 'console',
               'the topic console proxy nodes listen on')
@@ -309,19 +310,21 @@ DEFINE_integer('rabbit_max_retries', 0,
         'maximum rabbit connection attempts (0=try forever)')
 DEFINE_string('control_exchange', 'nova', 'the main exchange to connect to')
 DEFINE_boolean('rabbit_durable_queues', False, 'use durable queues')
-DEFINE_list('enabled_apis', ['ec2', 'osapi', 'metadata'],
+DEFINE_list('enabled_apis',
+            ['ec2', 'osapi_compute', 'osapi_volume', 'metadata'],
             'list of APIs to enable by default')
 DEFINE_string('ec2_host', '$my_ip', 'ip of api server')
 DEFINE_string('ec2_dmz_host', '$my_ip', 'internal ip of api server')
 DEFINE_integer('ec2_port', 8773, 'cloud controller port')
 DEFINE_string('ec2_scheme', 'http', 'prefix for ec2')
 DEFINE_string('ec2_path', '/services/Cloud', 'suffix for ec2')
-DEFINE_multistring('osapi_extension',
-                   ['nova.api.openstack.v2.contrib.standard_extensions'],
-                   'osapi extension to load')
-DEFINE_string('osapi_host', '$my_ip', 'ip of api server')
+DEFINE_multistring('osapi_compute_extension',
+                   ['nova.api.openstack.compute.contrib.standard_extensions'],
+                   'osapi compute extension to load')
+DEFINE_multistring('osapi_volume_extension',
+                   ['nova.api.openstack.volume.contrib.standard_extensions'],
+                   'osapi volume extension to load')
 DEFINE_string('osapi_scheme', 'http', 'prefix for openstack')
-DEFINE_integer('osapi_port', 8774, 'OpenStack API port')
 DEFINE_string('osapi_path', '/v1.1/', 'suffix for openstack')
 DEFINE_integer('osapi_max_limit', 1000,
                'max number of items returned in a collection response')
@@ -365,11 +368,16 @@ DEFINE_string('compute_manager', 'nova.compute.manager.ComputeManager',
               'Manager for compute')
 DEFINE_string('console_manager', 'nova.console.manager.ConsoleProxyManager',
               'Manager for console proxy')
+DEFINE_string('cert_manager', 'nova.cert.manager.CertManager',
+              'Manager for cert')
 DEFINE_string('instance_dns_manager',
-              'nova.network.instance_dns_driver.InstanceDNSManagerDriver',
+              'nova.network.dns_driver.DNSDriver',
               'DNS Manager for instance IPs')
-DEFINE_string('instance_dns_zone', '',
+DEFINE_string('instance_dns_domain', '',
               'DNS Zone for instance IPs')
+DEFINE_string('floating_ip_dns_manager',
+              'nova.network.dns_driver.DNSDriver',
+              'DNS Manager for floating IPs')
 DEFINE_string('network_manager', 'nova.network.manager.VlanManager',
               'Manager for network')
 DEFINE_string('volume_manager', 'nova.volume.manager.VolumeManager',
@@ -387,7 +395,10 @@ DEFINE_integer('max_vcs_in_vsa', 32,
                'maxinum VCs in a VSA')
 DEFINE_integer('vsa_part_size_gb', 100,
                'default partition size for shared capacity')
-
+# Default firewall driver for security groups and provider firewall
+DEFINE_string('firewall_driver',
+              'nova.virt.libvirt.firewall.IptablesFirewallDriver',
+              'Firewall driver (defaults to iptables)')
 # The service to use for image search and retrieval
 DEFINE_string('image_service', 'nova.image.glance.GlanceImageService',
               'The service to use for retrieving and searching for images.')
@@ -420,6 +431,10 @@ DEFINE_bool('start_guests_on_host_boot', False,
             'Whether to restart guests when the host reboots')
 DEFINE_bool('resume_guests_state_on_host_boot', False,
             'Whether to start guests, that was running before the host reboot')
+DEFINE_string('default_ephemeral_format',
+              None,
+              'The default format a ephemeral_volume will be formatted '
+              'with on creation.')
 
 DEFINE_string('root_helper', 'sudo',
               'Command prefix to use for running commands as root')
@@ -456,3 +471,10 @@ DEFINE_integer('zombie_instance_updated_at_window', 172800,
                'being cleaned up.')
 
 DEFINE_boolean('allow_ec2_admin_api', False, 'Enable/Disable EC2 Admin API')
+
+DEFINE_integer('service_down_time', 60,
+        'maximum time since last check-in for up service')
+DEFINE_string('default_schedule_zone', None,
+              'zone to use when user doesnt specify one')
+DEFINE_list('isolated_images', [], 'Images to run on isolated host')
+DEFINE_list('isolated_hosts', [], 'Host reserved for specific images')

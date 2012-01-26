@@ -19,11 +19,8 @@
 import gettext
 import glob
 import os
-import subprocess
-import sys
 
 from setuptools import find_packages
-from setuptools.command.sdist import sdist
 
 # In order to run the i18n commands for compiling and
 # installing message catalogs, we use DistUtilsExtra.
@@ -55,7 +52,7 @@ try:
                 BuildDoc.run(self)
     nova_cmdclass['build_sphinx'] = local_BuildDoc
 
-except:
+except Exception:
     pass
 
 
@@ -72,13 +69,6 @@ def find_data_files(destdir, srcdir):
     return package_data
 
 
-def load_required_packages():
-    with file('tools/pip-requires', 'r') as f:
-        return [line.strip() for line in f]
-
-
-required_packages = load_required_packages()
-
 setup(name='nova',
       version=version.canonical_version_string(),
       description='cloud computing fabric controller',
@@ -90,14 +80,19 @@ setup(name='nova',
       include_package_data=True,
       test_suite='nose.collector',
       data_files=find_data_files('share/nova', 'tools'),
-      install_requires=required_packages,
-      scripts=['bin/nova-ajax-console-proxy',
+      scripts=['bin/clear_rabbit_queues',
+               'bin/instance-usage-audit',
+               'bin/nova-ajax-console-proxy',
+               'bin/nova-all',
                'bin/nova-api',
                'bin/nova-api-ec2',
                'bin/nova-api-metadata',
-               'bin/nova-api-os',
+               'bin/nova-api-os-compute',
+               'bin/nova-api-os-volume',
+               'bin/nova-cert',
                'bin/nova-compute',
                'bin/nova-console',
+               'bin/nova-consoleauth',
                'bin/nova-dhcpbridge',
                'bin/nova-direct-api',
                'bin/nova-logspool',
@@ -107,8 +102,9 @@ setup(name='nova',
                'bin/nova-rootwrap',
                'bin/nova-scheduler',
                'bin/nova-spoolsentry',
-               'bin/stack',
                'bin/nova-volume',
-               'bin/nova-vncproxy',
+               'bin/nova-vsa',
+               'bin/nova-xvpvncproxy',
+               'bin/stack',
                'tools/nova-debug'],
         py_modules=[])

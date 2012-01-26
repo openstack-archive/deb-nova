@@ -25,7 +25,6 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import manager
 from nova.network import manager
 from nova.network.quantum import quantum_connection
 from nova.network.quantum import melange_ipam_lib
@@ -46,11 +45,14 @@ flags.DEFINE_bool('use_melange_mac_generation', False,
                   "Use Melange for assignment of MAC addresses")
 
 
-flags.DEFINE_string('quantum_use_dhcp', 'False',
+flags.DEFINE_bool('quantum_use_dhcp', False,
                     'Whether or not to enable DHCP for networks')
 
+flags.DEFINE_bool('quantum_use_port_security', False,
+                  'Whether or not to enable port security')
 
-class QuantumManager(manager.FlatManager):
+
+class QuantumManager(manager.FloatingIP, manager.FlatManager):
     """NetworkManager class that communicates with a Quantum service
        via a web services API to provision VM network connectivity.
 
@@ -81,9 +83,17 @@ class QuantumManager(manager.FlatManager):
         super(QuantumManager, self).__init__(*args, **kwargs)
 
     def init_host(self):
+        # Don't call into self.driver (linux_net) unless dhcp is enabled
+        if not FLAGS.quantum_use_dhcp:
+            return
+
         # Initialize forwarding rules for anything specified in
         # FLAGS.fixed_range()
         self.driver.init_host()
+        # Initialize floating ip support (only works for nova ipam currently)
+        if FLAGS.quantum_ipam_lib == 'nova.network.quantum.nova_ipam_lib':
+            LOG.debug("Initializing FloatingIP support")
+            self.init_host_floating_ips()
         # Set up all the forwarding rules for any network that has a
         # gateway set.
         networks = self.get_all_networks()
@@ -95,11 +105,14 @@ class QuantumManager(manager.FlatManager):
         self.driver.ensure_metadata_ip()
         self.driver.metadata_forward()
 
-    def _get_nova_id(self, context):
+    def _get_nova_id(self, instance=None):
         # When creating the network we need to pass in an identifier for
         # this zone.  Some Quantum plugins need this information in order
         # to set up appropriate networking.
-        return FLAGS.node_availability_zone
+        if instance and instance['availability_zone']:
+            return instance['availability_zone']
+        else:
+            return FLAGS.node_availability_zone
 
     def get_all_networks(self):
         networks = []
@@ -123,9 +136,55 @@ class QuantumManager(manager.FlatManager):
 
            In both cases, we initialize a subnet using the IPAM lib.
         """
+        # Enforce Configuration sanity.
+        #
+        # These flags are passed in from bin/nova-manage. The script
+        # collects the arguments and then passes them in through this
+        # function call. Note that in some cases, the script pre-processes
+        # the arguments, and sets them to a default value if a parameter's
+        # value was not specified on the command line. For pre-processed
+        # parameters, the most effective check to see if the user passed it
+        # in is to see if is different from the default value. (This
+        # does miss the use case where the user passes in the default value
+        # on the command line -- but it is unavoidable.)
+        if multi_host != FLAGS.multi_host:
+            # User specified it on the command line.
+            raise Exception(_("QuantumManager does not use 'multi_host'"
+                              " parameter."))
+
         if num_networks != 1:
             raise Exception(_("QuantumManager requires that only one"
                               " network is created per call"))
+
+        if network_size != int(FLAGS.network_size):
+            # User specified it on the command line.
+            LOG.warning("Ignoring unnecessary parameter 'network_size'")
+
+        if kwargs.get('vlan_start', None):
+            if kwargs['vlan_start'] != int(FLAGS.vlan_start):
+                # User specified it on the command line.
+                LOG.warning(_("QuantumManager does not use 'vlan_start'"
+                              " parameter."))
+
+        if kwargs.get('vpn_start', None):
+            if kwargs['vpn_start'] != int(FLAGS.vpn_start):
+                # User specified it on the command line.
+                LOG.warning(_("QuantumManager does not use 'vpn_start'"
+                              " parameter."))
+
+        if bridge is not None and len(bridge) > 0:
+            LOG.warning(_("QuantumManager does not use 'bridge'"
+                          " parameter."))
+
+        if bridge_interface is not None and len(bridge_interface) > 0:
+            LOG.warning(_("QuantumManager does not use 'bridge_interface'"
+                          " parameter."))
+
+        if gateway is not None and len(gateway) > 0:
+            if gateway.split('.')[3] != '1':
+                raise Exception(_("QuantumManager requires a valid (.1)"
+                              " gateway address."))
+
         q_tenant_id = kwargs["project_id"] or FLAGS.quantum_default_tenant_id
         quantum_net_id = uuid
         # If a uuid was specified with the network it should have already been
@@ -136,7 +195,7 @@ class QuantumManager(manager.FlatManager):
                         " network for tenant '%(q_tenant_id)s' with "
                         "net-id '%(quantum_net_id)s'" % locals()))
         else:
-            nova_id = self._get_nova_id(context)
+            nova_id = self._get_nova_id()
             quantum_net_id = self.q_conn.create_network(q_tenant_id, label,
                                                         nova_id=nova_id)
 
@@ -147,7 +206,7 @@ class QuantumManager(manager.FlatManager):
             cidr_v6, dns1, dns2)
 
         # Initialize forwarding if gateway is set
-        if gateway:
+        if gateway and FLAGS.quantum_use_dhcp:
             self.driver.add_snat_rule(cidr)
 
         return [{'uuid': quantum_net_id}]
@@ -187,8 +246,9 @@ class QuantumManager(manager.FlatManager):
         self.ipam.delete_subnets_by_net_id(context, quantum_net_id,
                 project_id)
         # Get rid of dnsmasq
-        dev = self._generate_gw_dev(quantum_net_id)
-        self.driver.kill_dhcp(dev)
+        if FLAGS.quantum_use_dhcp:
+            dev = self._generate_gw_dev(quantum_net_id)
+            self.driver.kill_dhcp(dev)
 
     def allocate_for_instance(self, context, **kwargs):
         """Called by compute when it is creating a new VM.
@@ -280,23 +340,31 @@ class QuantumManager(manager.FlatManager):
             instance = db.instance_get(context, instance_id)
             instance_type = instance_types.get_instance_type(instance_type_id)
             rxtx_factor = instance_type['rxtx_factor']
-            nova_id = self._get_nova_id(context)
+            nova_id = self._get_nova_id(instance)
             q_tenant_id = project_id or FLAGS.quantum_default_tenant_id
+            # Tell the ipam library to allocate an IP
+            ip = self.ipam.allocate_fixed_ip(context, project_id,
+                    quantum_net_id, vif_rec)
+            pairs = []
+            # Set up port security if enabled
+            if FLAGS.quantum_use_port_security:
+                pairs = [{'mac_address': vif_rec['address'],
+                          'ip_address': ip}]
             self.q_conn.create_and_attach_port(q_tenant_id, quantum_net_id,
                                                vif_rec['uuid'],
                                                vm_id=instance['uuid'],
                                                rxtx_factor=rxtx_factor,
-                                               nova_id=nova_id)
-            # Tell melange to allocate an IP
-            ip = self.ipam.allocate_fixed_ip(context, project_id,
-                    quantum_net_id, vif_rec)
+                                               nova_id=nova_id,
+                                               allowed_address_pairs=pairs)
             # Set up/start the dhcp server for this network if necessary
             if FLAGS.quantum_use_dhcp:
                 self.enable_dhcp(context, quantum_net_id, network_ref,
                     vif_rec, project_id)
         return self.get_instance_nw_info(context, instance_id,
+                                         instance['uuid'],
                                          instance_type_id, host)
 
+    @utils.synchronized('quantum-enable-dhcp')
     def enable_dhcp(self, context, quantum_net_id, network_ref, vif_rec,
             project_id):
         LOG.info("Using DHCP for network: %s" % network_ref['label'])
@@ -339,7 +407,7 @@ class QuantumManager(manager.FlatManager):
             if not port:  # No dhcp server has been started
                 mac_address = self.generate_mac_address()
                 dev = self.driver.plug(network_ref, mac_address,
-                    gateway=(network_ref['gateway'] != None))
+                    gateway=(network_ref['gateway'] is not None))
                 self.driver.initialize_gateway_device(dev, network_ref)
                 LOG.debug("Intializing DHCP for network: %s" %
                     network_ref)
@@ -379,8 +447,8 @@ class QuantumManager(manager.FlatManager):
 
         return self.db.virtual_interface_create(context, vif)
 
-    def get_instance_nw_info(self, context, instance_id,
-                                instance_type_id, host):
+    def get_instance_nw_info(self, context, instance_id, instance_uuid,
+                                            instance_type_id, host):
         """This method is used by compute to fetch all network data
            that should be used when creating the VM.
 
@@ -436,10 +504,12 @@ class QuantumManager(manager.FlatManager):
             network_dict = {
                 'cidr': v4_subnet['cidr'],
                 'injected': True,
+                'bridge': net['bridge'],
                 'multi_host': False}
 
             q_tenant_id = project_id or FLAGS.quantum_default_tenant_id
             info = {
+                'net_uuid': net_id,
                 'label': self.q_conn.get_network_name(q_tenant_id, net_id),
                 'gateway': v4_subnet['gateway'],
                 'dhcp_server': v4_subnet['gateway'],
@@ -455,7 +525,7 @@ class QuantumManager(manager.FlatManager):
                     info['ip6s'] = [ip_dict(ip, v6_subnet) for ip in v6_ips]
 
                 if v6_subnet['gateway']:
-                    info['gateway6'] = v6_subnet['gateway']
+                    info['gateway_v6'] = v6_subnet['gateway']
 
             dns_dict = {}
             for s in [v4_subnet, v6_subnet]:

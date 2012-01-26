@@ -155,7 +155,7 @@ class Client(object):
         action = Client.action_prefix + action
         action = action.replace('{tenant_id}', self.tenant)
 
-        if type(params) is dict:
+        if isinstance(params, dict):
             action += '?' + urllib.urlencode(params)
 
         try:
@@ -165,7 +165,7 @@ class Client(object):
 
             # Open connection and send request, handling SSL certs
             certs = {'key_file': self.key_file, 'cert_file': self.cert_file}
-            certs = dict((x, certs[x]) for x in certs if certs[x] != None)
+            certs = dict((x, certs[x]) for x in certs if certs[x] is not None)
 
             if self.use_ssl and len(certs):
                 c = connection_type(self.host, self.port, **certs)
@@ -219,7 +219,7 @@ class Client(object):
     def serialize(self, data):
         if not data:
             return None
-        elif type(data) is dict:
+        elif isinstance(data, dict):
             return JSONSerializer().serialize(data, self.content_type())
         else:
             raise Exception(_("unable to deserialize object of type = '%s'" %

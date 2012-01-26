@@ -19,8 +19,8 @@ import os.path
 
 from lxml import etree
 
-from nova import utils
 from nova.api.openstack import wsgi
+from nova import utils
 
 
 XMLNS_V10 = 'http://docs.rackspacecloud.com/servers/api/v1.0'
@@ -29,11 +29,11 @@ XMLNS_ATOM = 'http://www.w3.org/2005/Atom'
 
 
 def validate_schema(xml, schema_name):
-    if type(xml) is str:
+    if isinstance(xml, str):
         xml = etree.fromstring(xml)
-    base_path = 'nova/api/openstack/v2/schemas/v1.1/'
+    base_path = 'nova/api/openstack/compute/schemas/v1.1/'
     if schema_name in ('atom', 'atom-link'):
-        base_path = 'nova/api/openstack/v2/schemas/'
+        base_path = 'nova/api/openstack/compute/schemas/'
     schema_path = os.path.join(utils.novadir(),
                                '%s%s.rng' % (base_path, schema_name))
     schema_doc = etree.parse(schema_path)
@@ -526,6 +526,7 @@ class Template(object):
 
         self.root = root.unwrap() if root is not None else None
         self.nsmap = nsmap or {}
+        self.serialize_options = dict(encoding='UTF-8', xml_declaration=True)
 
     def _serialize(self, parent, obj, siblings, nsmap=None):
         """Internal serialization.
@@ -584,6 +585,9 @@ class Template(object):
         elem = self.make_tree(obj)
         if elem is None:
             return ''
+
+        for k, v in self.serialize_options.items():
+            kwargs.setdefault(k, v)
 
         # Serialize it into XML
         return etree.tostring(elem, *args, **kwargs)
@@ -852,48 +856,6 @@ class TemplateBuilder(object):
         """
 
         raise NotImplementedError(_("subclasses must implement construct()!"))
-
-
-class XMLTemplateSerializer(wsgi.ActionDispatcher):
-    """Template-based XML serializer.
-
-    Data serializer that uses templates to perform its serialization.
-    """
-
-    def get_template(self, action='default'):
-        """Retrieve the template to use for serialization."""
-
-        return self.dispatch(action=action)
-
-    def serialize(self, data, action='default', template=None):
-        """Serialize data.
-
-        :param data: The data to serialize.
-        :param action: The action, for identifying the template to
-                       use.  If no template is provided,
-                       get_template() will be called with this action
-                       to retrieve the template.
-        :param template: The template to use in serialization.
-        """
-
-        # No template provided, look one up
-        if template is None:
-            template = self.get_template(action)
-
-        # Still couldn't find a template; try the base
-        # XMLDictSerializer
-        if template is None:
-            serial = wsgi.XMLDictSerializer()
-            return serial.serialize(data, action=action)
-
-        # Serialize the template
-        return template.serialize(data, encoding='UTF-8',
-                                  xml_declaration=True)
-
-    def default(self):
-        """Retrieve the default template to use."""
-
-        return None
 
 
 def make_links(parent, selector=None):

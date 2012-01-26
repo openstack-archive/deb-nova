@@ -20,7 +20,6 @@
 """
 Scheduler that allows routing some calls to one driver and others to another.
 """
-
 from nova import flags
 from nova import utils
 from nova.scheduler import driver
@@ -37,8 +36,8 @@ flags.DEFINE_string('volume_scheduler_driver',
 
 # A mapping of methods to topics so we can figure out which driver to use.
 _METHOD_MAP = {'run_instance': 'compute',
-               'start_instance': 'compute',
                'prep_resize': 'compute',
+               'live_migration': 'compute',
                'create_volume': 'volume',
                'create_volumes': 'volume'}
 

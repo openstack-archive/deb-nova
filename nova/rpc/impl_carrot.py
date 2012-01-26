@@ -24,11 +24,11 @@ No fan-out support yet.
 
 """
 
+import inspect
 import json
 import sys
 import time
 import traceback
-import types
 import uuid
 
 from carrot import connection as carrot_connection
@@ -42,6 +42,8 @@ import greenlet
 from nova import context
 from nova import exception
 from nova import flags
+from nova import local
+from nova.rpc import common as rpc_common
 from nova.rpc.common import RemoteError, LOG
 from nova.testing import fake
 
@@ -51,7 +53,7 @@ eventlet.monkey_patch()
 FLAGS = flags.FLAGS
 
 
-class Connection(carrot_connection.BrokerConnection):
+class Connection(carrot_connection.BrokerConnection, rpc_common.Connection):
     """Connection instance object."""
 
     def __init__(self, *args, **kwargs):
@@ -105,7 +107,7 @@ class Connection(carrot_connection.BrokerConnection):
                 # ignore all errors
                 pass
         self._rpc_consumers = []
-        super(Connection, self).close()
+        carrot_connection.BrokerConnection.close(self)
 
     def consume_in_thread(self):
         """Consumer from all queues/consumers in a greenthread"""
@@ -252,7 +254,11 @@ class AdapterConsumer(Consumer):
         Example: {'method': 'echo', 'args': {'value': 42}}
 
         """
-        LOG.debug(_('received %s') % message_data)
+        # It is important to clear the context here, because at this point
+        # the previous context is stored in local.store.context
+        if hasattr(local.store, 'context'):
+            del local.store.context
+        rpc_common._safe_log(LOG.debug, _('received %s'), message_data)
         # This will be popped off in _unpack_context
         msg_id = message_data.get('_msg_id', None)
         ctxt = _unpack_context(message_data)
@@ -283,7 +289,7 @@ class AdapterConsumer(Consumer):
         try:
             rval = node_func(context=ctxt, **node_args)
             # Check if the result was a generator
-            if isinstance(rval, types.GeneratorType):
+            if inspect.isgenerator(rval):
                 for x in rval:
                     ctxt.reply(x, None)
             else:
@@ -391,10 +397,11 @@ class TopicPublisher(Publisher):
 
     exchange_type = 'topic'
 
-    def __init__(self, connection=None, topic='broadcast'):
+    def __init__(self, connection=None, topic='broadcast', durable=None):
         self.routing_key = topic
         self.exchange = FLAGS.control_exchange
-        self.durable = FLAGS.rabbit_durable_queues
+        self.durable = FLAGS.rabbit_durable_queues \
+                       if durable is None else durable
         super(TopicPublisher, self).__init__(connection=connection)
 
 
@@ -483,8 +490,9 @@ def _unpack_context(msg):
             value = msg.pop(key)
             context_dict[key[9:]] = value
     context_dict['msg_id'] = msg.pop('_msg_id', None)
-    LOG.debug(_('unpacked context: %s'), context_dict)
-    return RpcContext.from_dict(context_dict)
+    ctx = RpcContext.from_dict(context_dict)
+    LOG.debug(_('unpacked context: %s'), ctx.to_dict())
+    return ctx
 
 
 def _pack_context(msg, context):
@@ -612,6 +620,17 @@ def fanout_cast(context, topic, msg):
     _pack_context(msg, context)
     with ConnectionPool.item() as conn:
         publisher = FanoutPublisher(topic, connection=conn)
+        publisher.send(msg)
+        publisher.close()
+
+
+def notify(context, topic, msg):
+    """Sends a notification event on a topic."""
+    LOG.debug(_('Sending notification on %s...'), topic)
+    _pack_context(msg, context)
+    with ConnectionPool.item() as conn:
+        publisher = TopicPublisher(connection=conn, topic=topic,
+                                   durable=True)
         publisher.send(msg)
         publisher.close()
 

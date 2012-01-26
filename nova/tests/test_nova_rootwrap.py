@@ -14,8 +14,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.rootwrap.filters import CommandFilter, RegExpFilter, DnsmasqFilter
-from nova.rootwrap.wrapper import match_filter
+import os
+import subprocess
+
+from nova.rootwrap import filters
+from nova.rootwrap import wrapper
 from nova import test
 
 
@@ -24,11 +27,11 @@ class RootwrapTestCase(test.TestCase):
     def setUp(self):
         super(RootwrapTestCase, self).setUp()
         self.filters = [
-            RegExpFilter("/bin/ls", "root", 'ls', '/[a-z]+'),
-            CommandFilter("/usr/bin/foo_bar_not_exist", "root"),
-            RegExpFilter("/bin/cat", "root", 'cat', '/[a-z]+'),
-            CommandFilter("/nonexistant/cat", "root"),
-            CommandFilter("/bin/cat", "root")  # Keep this one last
+            filters.RegExpFilter("/bin/ls", "root", 'ls', '/[a-z]+'),
+            filters.CommandFilter("/usr/bin/foo_bar_not_exist", "root"),
+            filters.RegExpFilter("/bin/cat", "root", 'cat', '/[a-z]+'),
+            filters.CommandFilter("/nonexistant/cat", "root"),
+            filters.CommandFilter("/bin/cat", "root")  # Keep this one last
             ]
 
     def tearDown(self):
@@ -36,30 +39,62 @@ class RootwrapTestCase(test.TestCase):
 
     def test_RegExpFilter_match(self):
         usercmd = ["ls", "/root"]
-        filtermatch = match_filter(self.filters, usercmd)
+        filtermatch = wrapper.match_filter(self.filters, usercmd)
         self.assertFalse(filtermatch is None)
         self.assertEqual(filtermatch.get_command(usercmd),
             ["/bin/ls", "/root"])
 
     def test_RegExpFilter_reject(self):
         usercmd = ["ls", "root"]
-        filtermatch = match_filter(self.filters, usercmd)
+        filtermatch = wrapper.match_filter(self.filters, usercmd)
         self.assertTrue(filtermatch is None)
 
     def test_missing_command(self):
         usercmd = ["foo_bar_not_exist"]
-        filtermatch = match_filter(self.filters, usercmd)
+        filtermatch = wrapper.match_filter(self.filters, usercmd)
         self.assertTrue(filtermatch is None)
 
-    def test_dnsmasq_filter(self):
-        usercmd = ['FLAGFILE=A', 'NETWORK_ID="foo bar"', 'dnsmasq', 'foo']
-        f = DnsmasqFilter("/usr/bin/dnsmasq", "root")
+    def test_DnsmasqFilter(self):
+        usercmd = ['FLAGFILE=A', 'NETWORK_ID=foobar', 'dnsmasq', 'foo']
+        f = filters.DnsmasqFilter("/usr/bin/dnsmasq", "root")
         self.assertTrue(f.match(usercmd))
-        self.assertEqual(f.get_command(usercmd),
-            ['FLAGFILE=A', 'NETWORK_ID="foo bar"', '/usr/bin/dnsmasq', 'foo'])
+        self.assertEqual(f.get_command(usercmd), ['/usr/bin/dnsmasq', 'foo'])
+        env = f.get_environment(usercmd)
+        self.assertEqual(env.get('FLAGFILE'), 'A')
+        self.assertEqual(env.get('NETWORK_ID'), 'foobar')
+
+    @test.skip_if(not os.path.exists("/proc/%d" % os.getpid()),
+                  "Test requires /proc filesystem (procfs)")
+    def test_KillFilter(self):
+        p = subprocess.Popen(["/bin/sleep", "5"])
+        f = filters.KillFilter("/bin/kill", "root",
+                               ["-ALRM"],
+                               ["/bin/sleep"])
+        usercmd = ['kill', '-9', p.pid]
+        # Incorrect signal should fail
+        self.assertFalse(f.match(usercmd))
+        usercmd = ['kill', p.pid]
+        # Providing no signal should fail
+        self.assertFalse(f.match(usercmd))
+
+        f = filters.KillFilter("/bin/kill", "root",
+                               ["-9", ""],
+                               ["/bin/sleep"])
+        usercmd = ['kill', '-9', os.getpid()]
+        # Our own PID does not match /bin/sleep, so it should fail
+        self.assertFalse(f.match(usercmd))
+        usercmd = ['kill', '-9', 999999]
+        # Nonexistant PID should fail
+        self.assertFalse(f.match(usercmd))
+        usercmd = ['kill', p.pid]
+        # Providing no signal should work
+        self.assertTrue(f.match(usercmd))
+        usercmd = ['kill', '-9', p.pid]
+        # Providing -9 signal should work
+        self.assertTrue(f.match(usercmd))
 
     def test_skips(self):
         # Check that all filters are skipped and that the last matches
         usercmd = ["cat", "/"]
-        filtermatch = match_filter(self.filters, usercmd)
+        filtermatch = wrapper.match_filter(self.filters, usercmd)
         self.assertTrue(filtermatch is self.filters[-1])

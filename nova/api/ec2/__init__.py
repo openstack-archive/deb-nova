@@ -20,21 +20,24 @@ Starting point for routing EC2 requests.
 
 """
 
+import urlparse
 
+from eventlet.green import httplib
 import webob
 import webob.dec
 import webob.exc
 
+from nova.api.ec2 import apirequest
+from nova.api.ec2 import ec2utils
+from nova.api.ec2 import faults
+from nova.api import validator
+from nova.auth import manager
 from nova import context
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
 from nova import wsgi
-from nova.api.ec2 import apirequest
-from nova.api.ec2 import ec2utils
-from nova.api.ec2 import faults
-from nova.auth import manager
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger("nova.api")
@@ -44,6 +47,9 @@ flags.DEFINE_integer('lockout_minutes', 15,
                      'Number of minutes to lockout if triggered.')
 flags.DEFINE_integer('lockout_window', 15,
                      'Number of minutes for lockout window.')
+flags.DEFINE_string('keystone_ec2_url',
+                    'http://localhost:5000/v2.0/ec2tokens',
+                    'URL to get token from ec2 request.')
 flags.DECLARE('use_forwarded_for', 'nova.api.auth')
 
 
@@ -148,6 +154,63 @@ class Lockout(wsgi.Middleware):
                 self.mc.set(failures_key, str(failures),
                             time=FLAGS.lockout_minutes * 60)
         return res
+
+
+class EC2Token(wsgi.Middleware):
+    """Authenticate an EC2 request with keystone and convert to token."""
+
+    @webob.dec.wsgify(RequestClass=wsgi.Request)
+    def __call__(self, req):
+        # Read request signature and access id.
+        try:
+            signature = req.params['Signature']
+            access = req.params['AWSAccessKeyId']
+        except KeyError, e:
+            LOG.exception(e)
+            raise webob.exc.HTTPBadRequest()
+
+        # Make a copy of args for authentication and signature verification.
+        auth_params = dict(req.params)
+        # Not part of authentication args
+        auth_params.pop('Signature')
+
+        # Authenticate the request.
+        creds = {'ec2Credentials': {'access': access,
+                                    'signature': signature,
+                                    'host': req.host,
+                                    'verb': req.method,
+                                    'path': req.path,
+                                    'params': auth_params,
+                                   }}
+        creds_json = utils.dumps(creds)
+        headers = {'Content-Type': 'application/json'}
+
+        # Disable "has no x member" pylint error
+        # for httplib and urlparse
+        # pylint: disable-msg=E1101
+        o = urlparse.urlparse(FLAGS.keystone_ec2_url)
+        if o.scheme == "http":
+            conn = httplib.HTTPConnection(o.netloc)
+        else:
+            conn = httplib.HTTPSConnection(o.netloc)
+        conn.request('POST', o.path, body=creds_json, headers=headers)
+        response = conn.getresponse().read()
+        conn.close()
+
+        # NOTE(vish): We could save a call to keystone by
+        #             having keystone return token, tenant,
+        #             user, and roles from this call.
+
+        result = utils.loads(response)
+        try:
+            token_id = result['access']['token']['id']
+        except (AttributeError, KeyError), e:
+            LOG.exception(e)
+            raise webob.exc.HTTPBadRequest()
+
+        # Authenticated!
+        req.headers['X-Auth-Token'] = token_id
+        return self.application
 
 
 class NoAuth(wsgi.Middleware):
@@ -278,7 +341,7 @@ class Authorizer(wsgi.Middleware):
                 'CreateKeyPair': ['all'],
                 'DeleteKeyPair': ['all'],
                 'DescribeSecurityGroups': ['all'],
-                'ImportPublicKey': ['all'],
+                'ImportKeyPair': ['all'],
                 'AuthorizeSecurityGroupIngress': ['netadmin'],
                 'RevokeSecurityGroupIngress': ['netadmin'],
                 'CreateSecurityGroup': ['netadmin'],
@@ -340,12 +403,52 @@ class Authorizer(wsgi.Middleware):
         return any(role in context.roles for role in roles)
 
 
+class Validator(wsgi.Middleware):
+
+    def validate_ec2_id(val):
+        if not validator.validate_str()(val):
+            return False
+        try:
+            ec2utils.ec2_id_to_id(val)
+        except exception.InvalidEc2Id:
+            return False
+        return True
+
+    validator.validate_ec2_id = validate_ec2_id
+
+    validator.DEFAULT_VALIDATOR = {
+        'instance_id': validator.validate_ec2_id,
+        'volume_id': validator.validate_ec2_id,
+        'image_id': validator.validate_ec2_id,
+        'attribute': validator.validate_str(),
+        'image_location': validator.validate_image_path,
+        'public_ip': validator.validate_ipv4,
+        'region_name': validator.validate_str(),
+        'group_name': validator.validate_str(max_length=255),
+        'group_description': validator.validate_str(max_length=255),
+        'size': validator.validate_int(),
+        'user_data': validator.validate_user_data
+    }
+
+    def __init__(self, application):
+        super(Validator, self).__init__(application)
+
+    @webob.dec.wsgify(RequestClass=wsgi.Request)
+    def __call__(self, req):
+        if validator.validate(req.environ['ec2.request'].args,
+                              validator.DEFAULT_VALIDATOR):
+            return self.application
+        else:
+            raise webob.exc.HTTPBadRequest()
+
+
 class Executor(wsgi.Application):
 
     """Execute an EC2 API request.
 
-    Executes 'ec2.request', passing 'nova.context' (both variables in WSGI
-    environ.)  Returns an XML response, or a 400 upon failure.
+    Executes 'ec2.action' upon 'ec2.controller', passing 'nova.context' and
+    'ec2.action_args' (all variables in WSGI environ.)  Returns an XML
+    response, or a 400 upon failure.
     """
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
@@ -421,7 +524,7 @@ class Executor(wsgi.Application):
             return resp
 
     def _error(self, req, context, code, message):
-        LOG.error("%s: %s", code, message, context=context)
+        LOG.error(_('%(code)s: %(message)s') % locals())
         resp = webob.Response()
         resp.status = 400
         resp.headers['Content-Type'] = 'text/xml'

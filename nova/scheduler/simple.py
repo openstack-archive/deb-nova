@@ -26,6 +26,7 @@ from nova import flags
 from nova import exception
 from nova.scheduler import driver
 from nova.scheduler import chance
+from nova import utils
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("max_cores", 16,
@@ -34,8 +35,8 @@ flags.DEFINE_integer("max_gigabytes", 10000,
                      "maximum number of volume gigabytes to allow per host")
 flags.DEFINE_integer("max_networks", 1000,
                      "maximum number of networks to allow per host")
-flags.DEFINE_string('default_schedule_zone', None,
-                    'zone to use when user doesnt specify one')
+flags.DEFINE_boolean('skip_isolated_core_check', True,
+                     'Allow overcommitting vcpus on isolated hosts')
 
 
 class SimpleScheduler(chance.ChanceScheduler):
@@ -53,20 +54,29 @@ class SimpleScheduler(chance.ChanceScheduler):
 
         if host and context.is_admin:
             service = db.service_get_by_args(elevated, host, 'nova-compute')
-            if not self.service_is_up(service):
+            if not utils.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
             return host
 
         results = db.service_get_all_compute_sorted(elevated)
+        in_isolation = instance_opts['image_ref'] in FLAGS.isolated_images
+        check_cores = not in_isolation or not FLAGS.skip_isolated_core_check
         if zone:
             results = [(service, cores) for (service, cores) in results
                        if service['availability_zone'] == zone]
         for result in results:
             (service, instance_cores) = result
-            if instance_cores + instance_opts['vcpus'] > FLAGS.max_cores:
-                msg = _("All hosts have too many cores")
+            if in_isolation and service['host'] not in FLAGS.isolated_hosts:
+                # isloated images run on isolated hosts
+                continue
+            if service['host'] in FLAGS.isolated_hosts and not in_isolation:
+                # images that aren't isolated only run on general hosts
+                continue
+            if check_cores and \
+                    instance_cores + instance_opts['vcpus'] > FLAGS.max_cores:
+                msg = _("Not enough allocatable CPU cores remaining")
                 raise exception.NoValidHost(reason=msg)
-            if self.service_is_up(service):
+            if utils.service_is_up(service) and not service['disabled']:
                 return service['host']
         msg = _("Is the appropriate service running?")
         raise exception.NoValidHost(reason=msg)
@@ -82,14 +92,11 @@ class SimpleScheduler(chance.ChanceScheduler):
             driver.cast_to_compute_host(context, host, 'run_instance',
                     instance_uuid=instance_ref['uuid'], **_kwargs)
             instances.append(driver.encode_instance(instance_ref))
+            # So if we loop around, create_instance_db_entry will actually
+            # create a new entry, instead of assume it's been created
+            # already
+            del request_spec['instance_properties']['uuid']
         return instances
-
-    def schedule_start_instance(self, context, instance_id, *_args, **_kwargs):
-        instance_ref = db.instance_get(context, instance_id)
-        host = self._schedule_instance(context, instance_ref,
-                *_args, **_kwargs)
-        driver.cast_to_compute_host(context, host, 'start_instance',
-                instance_id=instance_id, **_kwargs)
 
     def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
         """Picks a host that is up and has the fewest volumes."""
@@ -103,7 +110,7 @@ class SimpleScheduler(chance.ChanceScheduler):
             zone, _x, host = availability_zone.partition(':')
         if host and context.is_admin:
             service = db.service_get_by_args(elevated, host, 'nova-volume')
-            if not self.service_is_up(service):
+            if not utils.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
             driver.cast_to_volume_host(context, host, 'create_volume',
                     volume_id=volume_id, **_kwargs)
@@ -116,28 +123,11 @@ class SimpleScheduler(chance.ChanceScheduler):
         for result in results:
             (service, volume_gigabytes) = result
             if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
-                msg = _("All hosts have too many gigabytes")
+                msg = _("Not enough allocatable volume gigabytes remaining")
                 raise exception.NoValidHost(reason=msg)
-            if self.service_is_up(service):
+            if utils.service_is_up(service) and not service['disabled']:
                 driver.cast_to_volume_host(context, service['host'],
                         'create_volume', volume_id=volume_id, **_kwargs)
-                return None
-        msg = _("Is the appropriate service running?")
-        raise exception.NoValidHost(reason=msg)
-
-    def schedule_set_network_host(self, context, *_args, **_kwargs):
-        """Picks a host that is up and has the fewest networks."""
-        elevated = context.elevated()
-
-        results = db.service_get_all_network_sorted(elevated)
-        for result in results:
-            (service, instance_count) = result
-            if instance_count >= FLAGS.max_networks:
-                msg = _("All hosts have too many networks")
-                raise exception.NoValidHost(reason=msg)
-            if self.service_is_up(service):
-                driver.cast_to_network_host(context, service['host'],
-                        'set_network_host', **_kwargs)
                 return None
         msg = _("Is the appropriate service running?")
         raise exception.NoValidHost(reason=msg)

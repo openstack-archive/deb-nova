@@ -25,11 +25,11 @@ semantics of real hypervisor connections.
 
 """
 
+from nova.compute import power_state
 from nova import db
 from nova import exception
 from nova import log as logging
 from nova import utils
-from nova.compute import power_state
 from nova.virt import driver
 
 
@@ -115,7 +115,8 @@ class FakeConnection(driver.ComputeDriver):
     def reboot(self, instance, network_info, reboot_type):
         pass
 
-    def get_host_ip_addr(self):
+    @staticmethod
+    def get_host_ip_addr():
         return '192.168.0.1'
 
     def resize(self, instance, flavor):
@@ -161,8 +162,7 @@ class FakeConnection(driver.ComputeDriver):
     def resume(self, instance):
         pass
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                cleanup=True):
+    def destroy(self, instance, network_info, block_device_info=None):
         key = instance['name']
         if key in self.instances:
             del self.instances[key]
@@ -217,7 +217,7 @@ class FakeConnection(driver.ComputeDriver):
         return [0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L]
 
     def get_console_output(self, instance):
-        return 'FAKE CONSOLE\xffOUTPUT'
+        return 'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE'
 
     def get_ajax_console(self, instance):
         return {'token': 'FAKETOKEN',
@@ -225,7 +225,7 @@ class FakeConnection(driver.ComputeDriver):
                 'port': 6969}
 
     def get_vnc_console(self, instance):
-        return {'token': 'FAKETOKEN',
+        return {'internal_access_path': 'FAKE',
                 'host': 'fakevncconsole.com',
                 'port': 6969}
 
@@ -264,12 +264,12 @@ class FakeConnection(driver.ComputeDriver):
                'local_gb_used': 0,
                'hypervisor_type': 'fake',
                'hypervisor_version': '1.0',
+               'service_id': service_ref['id'],
                'cpu_info': '?'}
 
         compute_node_ref = service_ref['compute_node']
         if not compute_node_ref:
             LOG.info(_('Compute_service record created for %s ') % host)
-            dic['service_id'] = service_ref['id']
             db.compute_node_create(ctxt, dic)
         else:
             LOG.info(_('Compute_service record updated for %s ') % host)
@@ -283,13 +283,20 @@ class FakeConnection(driver.ComputeDriver):
         """This method is supported only by libvirt."""
         raise NotImplementedError('This method is supported only by libvirt.')
 
-    def get_instance_disk_info(self, ctxt, instance_ref):
+    def get_instance_disk_info(self, instance_name):
         """This method is supported only by libvirt."""
         return
 
     def live_migration(self, context, instance_ref, dest,
                        post_method, recover_method, block_migration=False):
         """This method is supported only by libvirt."""
+        return
+
+    def finish_migration(self, context, migration, instance, disk_info,
+                         network_info, image_meta, resize_instance):
+        return
+
+    def confirm_migration(self, migration, instance, network_info):
         return
 
     def pre_live_migration(self, block_device_info):
@@ -318,4 +325,8 @@ class FakeConnection(driver.ComputeDriver):
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
+        pass
+
+    def get_disk_available_least(self):
+        """ """
         pass

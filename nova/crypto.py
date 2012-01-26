@@ -39,6 +39,7 @@ gettext.install('nova', unicode=1)
 
 from nova import context
 from nova import db
+from nova import exception
 from nova import flags
 from nova import log as logging
 
@@ -60,19 +61,14 @@ flags.DEFINE_string('ca_path', '$state_path/CA',
 flags.DEFINE_boolean('use_project_ca', False,
                      _('Should we use a CA for each project?'))
 flags.DEFINE_string('user_cert_subject',
-                    '/C=US/ST=California/L=MountainView/O=AnsoLabs/'
-                    'OU=NovaDev/CN=%s-%s-%s',
+                    '/C=US/ST=California/O=OpenStack/'
+                    'OU=NovaDev/CN=%.16s-%.16s-%s',
                     _('Subject for certificate for users, '
                     '%s for project, user, timestamp'))
 flags.DEFINE_string('project_cert_subject',
-                    '/C=US/ST=California/L=MountainView/O=AnsoLabs/'
-                    'OU=NovaDev/CN=project-ca-%s-%s',
+                    '/C=US/ST=California/O=OpenStack/'
+                    'OU=NovaDev/CN=project-ca-%.16s-%s',
                     _('Subject for certificate for projects, '
-                    '%s for project, timestamp'))
-flags.DEFINE_string('vpn_cert_subject',
-                    '/C=US/ST=California/L=MountainView/O=AnsoLabs/'
-                    'OU=NovaDev/CN=project-vpn-%s-%s',
-                    _('Subject for certificate for vpns, '
                     '%s for project, timestamp'))
 
 
@@ -90,24 +86,48 @@ def key_path(project_id=None):
     return os.path.join(ca_folder(project_id), FLAGS.key_file)
 
 
-def fetch_ca(project_id=None, chain=True):
+def crl_path(project_id=None):
+    return os.path.join(ca_folder(project_id), FLAGS.crl_file)
+
+
+def fetch_ca(project_id=None):
     if not FLAGS.use_project_ca:
         project_id = None
-    buffer = ''
-    if project_id:
-        with open(ca_path(project_id), 'r') as cafile:
-            buffer += cafile.read()
-        if not chain:
-            return buffer
-    with open(ca_path(None), 'r') as cafile:
-        buffer += cafile.read()
-    return buffer
+    with open(ca_path(project_id), 'r') as cafile:
+        return cafile.read()
+
+
+def ensure_ca_filesystem():
+    """Ensure the CA filesystem exists."""
+    ca_dir = ca_folder()
+    if not os.path.exists(ca_path()):
+        genrootca_sh_path = os.path.join(os.path.dirname(__file__),
+                                         'CA',
+                                         'genrootca.sh')
+
+        start = os.getcwd()
+        if not os.path.exists(ca_dir):
+            os.makedirs(ca_dir)
+        os.chdir(ca_dir)
+        utils.runthis(_("Generating root CA: %s"), "sh", genrootca_sh_path)
+        os.chdir(start)
+
+
+def _generate_fingerprint(public_key_file):
+    (out, err) = utils.execute('ssh-keygen', '-q', '-l', '-f', public_key_file)
+    fingerprint = out.split(' ')[1]
+    return fingerprint
 
 
 def generate_fingerprint(public_key):
-    (out, err) = utils.execute('ssh-keygen', '-q', '-l', '-f', public_key)
-    fingerprint = out.split(' ')[1]
-    return fingerprint
+    tmpdir = tempfile.mkdtemp()
+    try:
+        pubfile = os.path.join(tmpdir, 'temp.pub')
+        with open(pubfile, 'w') as f:
+            f.write(public_key)
+        return _generate_fingerprint(pubfile)
+    finally:
+        shutil.rmtree(tmpdir)
 
 
 def generate_key_pair(bits=1024):
@@ -116,8 +136,8 @@ def generate_key_pair(bits=1024):
     tmpdir = tempfile.mkdtemp()
     keyfile = os.path.join(tmpdir, 'temp')
     utils.execute('ssh-keygen', '-q', '-b', bits, '-N', '',
-                  '-f', keyfile)
-    fingerprint = generate_fingerprint('%s.pub' % (keyfile))
+                  '-t', 'rsa', '-f', keyfile)
+    fingerprint = _generate_fingerprint('%s.pub' % (keyfile))
     private_key = open(keyfile).read()
     public_key = open(keyfile + '.pub').read()
 
@@ -147,6 +167,29 @@ def ssl_pub_to_ssh_pub(ssl_public_key, name='root', suffix='nova'):
 
     b64_blob = base64.b64encode(key_data)
     return '%s %s %s@%s\n' % (key_type, b64_blob, name, suffix)
+
+
+def fetch_crl(project_id):
+    """Get crl file for project."""
+    if not FLAGS.use_project_ca:
+        project_id = None
+    with open(crl_path(project_id), 'r') as crlfile:
+        return crlfile.read()
+
+
+def decrypt_text(project_id, text):
+    private_key = key_path(project_id)
+    if not os.path.exists(private_key):
+        raise exception.ProjectNotFound(project_id=project_id)
+    try:
+        dec, _err = utils.execute('openssl',
+                                 'rsautl',
+                                 '-decrypt',
+                                 '-inkey', '%s' % private_key,
+                                 process_input=text)
+        return dec
+    except exception.ProcessExecutionError:
+        raise exception.DecryptionFailure()
 
 
 def revoke_cert(project_id, file_name):
@@ -190,11 +233,6 @@ def _project_cert_subject(project_id):
     return FLAGS.project_cert_subject % (project_id, utils.isotime())
 
 
-def _vpn_cert_subject(project_id):
-    """Helper to generate user cert subject."""
-    return FLAGS.vpn_cert_subject % (project_id, utils.isotime())
-
-
 def _user_cert_subject(user_id, project_id):
     """Helper to generate user cert subject."""
     return FLAGS.user_cert_subject % (project_id, user_id, utils.isotime())
@@ -235,26 +273,21 @@ def _ensure_project_folder(project_id):
 
 def generate_vpn_files(project_id):
     project_folder = ca_folder(project_id)
-    csr_fn = os.path.join(project_folder, 'server.csr')
+    key_fn = os.path.join(project_folder, 'server.key')
     crt_fn = os.path.join(project_folder, 'server.crt')
 
-    genvpn_sh_path = os.path.join(os.path.dirname(__file__),
-                                  'CA',
-                                  'genvpn.sh')
     if os.path.exists(crt_fn):
         return
-    _ensure_project_folder(project_id)
-    start = os.getcwd()
-    os.chdir(ca_folder())
-    # TODO(vish): the shell scripts could all be done in python
-    utils.execute('sh', genvpn_sh_path,
-                  project_id, _vpn_cert_subject(project_id))
-    with open(csr_fn, 'r') as csrfile:
-        csr_text = csrfile.read()
-    (serial, signed_csr) = sign_csr(csr_text, project_id)
+    # NOTE(vish): The 2048 is to maintain compatibility with the old script.
+    #             We are using "project-vpn" as the user_id for the cert
+    #             even though that user may not really exist. Ultimately
+    #             this will be changed to be launched by a real user.  At
+    #             that point we will can delete this helper method.
+    key, csr = generate_x509_cert('project-vpn', project_id, 2048)
+    with open(key_fn, 'f') as keyfile:
+        keyfile.write(key)
     with open(crt_fn, 'w') as crtfile:
-        crtfile.write(signed_csr)
-    os.chdir(start)
+        crtfile.write(csr)
 
 
 def sign_csr(csr_text, project_id=None):

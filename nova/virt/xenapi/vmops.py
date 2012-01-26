@@ -21,14 +21,13 @@ Management class for VM-related functions (spawn, reboot, etc).
 
 import base64
 import json
-import os
 import pickle
 import random
-import subprocess
 import sys
 import time
 import uuid
 
+from eventlet import greenthread
 import M2Crypto
 
 from nova.compute import api as compute
@@ -37,7 +36,6 @@ from nova import context as nova_context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import ipv6
 from nova import log as logging
 from nova import utils
 from nova.virt import driver
@@ -52,9 +50,13 @@ XenAPI = None
 LOG = logging.getLogger("nova.virt.xenapi.vmops")
 
 FLAGS = flags.FLAGS
+flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 flags.DEFINE_integer('agent_version_timeout', 300,
                      'number of seconds to wait for agent to be fully '
                      'operational')
+flags.DEFINE_integer('xenapi_running_timeout', 60,
+                     'number of seconds to wait for instance to go to '
+                     'running state')
 flags.DEFINE_string('xenapi_vif_driver',
                     'nova.virt.xenapi.vif.XenAPIBridgeDriver',
                     'The XenAPI VIF driver using XenServer Network APIs.')
@@ -93,7 +95,10 @@ class VMOps(object):
         self._session = session
         self.poll_rescue_last_ran = None
         VMHelper.XenAPI = self.XenAPI
-        self.vif_driver = utils.import_object(FLAGS.xenapi_vif_driver)
+        fw_class = utils.import_class(FLAGS.firewall_driver)
+        self.firewall_driver = fw_class(xenapi_session=self._session)
+        vif_impl = utils.import_class(FLAGS.xenapi_vif_driver)
+        self.vif_driver = vif_impl(xenapi_session=self._session)
         self._product_version = product_version
 
     def list_instances(self):
@@ -205,16 +210,29 @@ class VMOps(object):
             self._update_instance_progress(context, instance,
                                            step=3,
                                            total_steps=BUILD_TOTAL_STEPS)
+            # 4. Prepare security group filters
+            # NOTE(salvatore-orlando): setup_basic_filtering might be empty or
+            # not implemented at all, as basic filter could be implemented
+            # with VIF rules created by xapi plugin
+            try:
+                self.firewall_driver.setup_basic_filtering(
+                        instance, network_info)
+            except NotImplementedError:
+                pass
+            self.firewall_driver.prepare_instance_filter(instance,
+                                                         network_info)
 
-            # 4. Boot the Instance
+            # 5. Boot the Instance
             self._spawn(instance, vm_ref)
+            # The VM has started, let's ensure the security groups are enforced
+            self.firewall_driver.apply_instance_filter(instance, network_info)
             self._update_instance_progress(context, instance,
                                            step=4,
                                            total_steps=BUILD_TOTAL_STEPS)
 
         except (self.XenAPI.Failure, OSError, IOError) as spawn_error:
             LOG.exception(_("instance %s: Failed to spawn"),
-                          instance.id, exc_info=sys.exc_info())
+                          instance.uuid, exc_info=sys.exc_info())
             LOG.debug(_('Instance %s failed to spawn - performing clean-up'),
                       instance.id)
             self._handle_spawn_error(vdis, spawn_error)
@@ -353,7 +371,7 @@ class VMOps(object):
                         instance.instance_type_id)
                 VMHelper.auto_configure_disk(session=self._session,
                                              vdi_ref=first_vdi_ref,
-                                             new_gb=instance_type['local_gb'])
+                                             new_gb=instance_type['root_gb'])
 
             VolumeHelper.create_vbd(session=self._session, vm_ref=vm_ref,
                                     vdi_ref=first_vdi_ref,
@@ -372,6 +390,13 @@ class VMOps(object):
                                    swap_mb=swap_mb)
             userdevice += 1
 
+        ephemeral_gb = instance_type['ephemeral_gb']
+        if ephemeral_gb:
+            VMHelper.generate_ephemeral(self._session, instance,
+                                        vm_ref, userdevice,
+                                        ephemeral_gb)
+            userdevice += 1
+
         # Attach any other disks
         for vdi in vdis[1:]:
             if generate_swap and vdi['vdi_type'] == 'swap':
@@ -382,6 +407,42 @@ class VMOps(object):
                     vdi_ref=vdi_ref, userdevice=userdevice,
                     bootable=False)
             userdevice += 1
+
+    def _configure_instance(self, ctx, instance, vm_ref):
+        # Inject files, if necessary
+        injected_files = instance.injected_files
+        if injected_files:
+            # Check if this is a JSON-encoded string and convert if needed.
+            if isinstance(injected_files, basestring):
+                try:
+                    injected_files = json.loads(injected_files)
+                except ValueError:
+                    LOG.exception(
+                        _("Invalid value for injected_files: '%s'")
+                            % injected_files)
+                    injected_files = []
+            # Inject any files, if specified
+            for path, contents in instance.injected_files:
+                LOG.debug(_("Injecting file path: '%s'") % path)
+                self.inject_file(instance, path, contents)
+
+        # Set admin password, if necessary
+        admin_password = instance.admin_pass
+        if admin_password:
+            LOG.debug(_("Setting admin password"))
+            self.set_admin_password(instance, admin_password)
+
+        # Reset network config
+        LOG.debug(_("Resetting network"))
+        self.reset_network(instance, vm_ref)
+
+        # Set VCPU weight
+        inst_type = db.instance_type_get(ctx, instance.instance_type_id)
+        vcpu_weight = inst_type["vcpu_weight"]
+        if str(vcpu_weight) != "None":
+            LOG.debug(_("Setting VCPU weight"))
+            self._session.call_xenapi("VM.add_to_VCPUs_params", vm_ref,
+                    "weight", vcpu_weight)
 
     def _spawn(self, instance, vm_ref):
         """Spawn a new instance."""
@@ -404,83 +465,32 @@ class VMOps(object):
                         'os': instance.os_type,
                         'architecture': instance.architecture})
 
-        def _check_agent_version():
-            LOG.debug(_("Querying agent version"))
+        # Wait for boot to finish
+        LOG.debug(_('Instance %s: waiting for running'), instance_name)
+        expiration = time.time() + FLAGS.xenapi_running_timeout
+        while time.time() < expiration:
+            state = self.get_info(instance_name)['state']
+            if state == power_state.RUNNING:
+                break
 
-            version = self.get_agent_version(instance)
-            if not version:
-                return
+            greenthread.sleep(0.5)
 
+        LOG.debug(_('Instance %s: running'), instance_name)
+
+        # Update agent, if necessary
+        # This also waits until the agent starts
+        LOG.debug(_("Querying agent version"))
+        version = self.get_agent_version(instance)
+        if version:
             LOG.info(_('Instance agent version: %s') % version)
-            if not agent_build:
-                return
 
-            if cmp_version(version, agent_build['version']) < 0:
-                LOG.info(_('Updating Agent to %s') % agent_build['version'])
-                self.agent_update(instance, agent_build['url'],
-                              agent_build['md5hash'])
+        if version and agent_build and \
+           cmp_version(version, agent_build['version']) < 0:
+            LOG.info(_('Updating Agent to %s') % agent_build['version'])
+            self.agent_update(instance, agent_build['url'],
+                          agent_build['md5hash'])
 
-        def _inject_files():
-            injected_files = instance.injected_files
-            if injected_files:
-                # Check if this is a JSON-encoded string and convert if needed.
-                if isinstance(injected_files, basestring):
-                    try:
-                        injected_files = json.loads(injected_files)
-                    except ValueError:
-                        LOG.exception(
-                            _("Invalid value for injected_files: '%s'")
-                                % injected_files)
-                        injected_files = []
-                # Inject any files, if specified
-                for path, contents in instance.injected_files:
-                    LOG.debug(_("Injecting file path: '%s'") % path)
-                    self.inject_file(instance, path, contents)
-
-        def _set_admin_password():
-            admin_password = instance.admin_pass
-            if admin_password:
-                LOG.debug(_("Setting admin password"))
-                self.set_admin_password(instance, admin_password)
-
-        def _reset_network():
-            LOG.debug(_("Resetting network"))
-            self.reset_network(instance, vm_ref)
-
-        def _set_vcpu_weight():
-            inst_type = db.instance_type_get(ctx, instance.instance_type_id)
-            vcpu_weight = inst_type["vcpu_weight"]
-            if str(vcpu_weight) != "None":
-                LOG.debug(_("Setting VCPU weight"))
-                self._session.call_xenapi("VM.add_to_VCPUs_params", vm_ref,
-                        "weight", vcpu_weight)
-
-        # NOTE(armando): Do we really need to do this in virt?
-        # NOTE(tr3buchet): not sure but wherever we do it, we need to call
-        #                  reset_network afterwards
-        timer = utils.LoopingCall(f=None)
-
-        def _wait_for_boot():
-            try:
-                state = self.get_info(instance_name)['state']
-                if state == power_state.RUNNING:
-                    LOG.debug(_('Instance %s: booted'), instance_name)
-                    timer.stop()
-                    _check_agent_version()
-                    _inject_files()
-                    _set_admin_password()
-                    _reset_network()
-                    _set_vcpu_weight()
-                    return True
-            except Exception, exc:
-                LOG.warn(exc)
-                LOG.exception(_('Instance %s: failed to boot'), instance_name)
-                timer.stop()
-                return False
-
-        timer.f = _wait_for_boot
-
-        return timer.start(interval=0.5, now=True)
+        self._configure_instance(ctx, instance, vm_ref)
 
     def _handle_spawn_error(self, vdis, spawn_error):
         # Extract resource list from spawn_error.
@@ -700,10 +710,10 @@ class VMOps(object):
             sr_path = VMHelper.get_sr_path(self._session)
 
             if instance['auto_disk_config'] and \
-               instance['local_gb'] > instance_type['local_gb']:
+               instance['root_gb'] > instance_type['root_gb']:
                 # Resizing disk storage down
-                old_gb = instance['local_gb']
-                new_gb = instance_type['local_gb']
+                old_gb = instance['root_gb']
+                new_gb = instance_type['root_gb']
 
                 LOG.debug(_("Resizing down VDI %(cow_uuid)s from "
                           "%(old_gb)dGB to %(new_gb)dGB") % locals())
@@ -813,7 +823,7 @@ class VMOps(object):
         """Resize a running instance by changing its disk size."""
         #TODO(mdietz): this will need to be adjusted for swap later
 
-        new_disk_size = instance.local_gb * 1024 * 1024 * 1024
+        new_disk_size = instance.root_gb * 1024 * 1024 * 1024
         if not new_disk_size:
             return
 
@@ -825,7 +835,7 @@ class VMOps(object):
 
         instance_name = instance.name
         old_gb = virtual_size / (1024 * 1024 * 1024)
-        new_gb = instance.local_gb
+        new_gb = instance.root_gb
 
         if virtual_size < new_disk_size:
             # Resize up. Simple VDI resize will do the trick
@@ -841,6 +851,9 @@ class VMOps(object):
 
     def reboot(self, instance, reboot_type):
         """Reboot VM instance."""
+        # Note (salvatore-orlando): security group rules are not re-enforced
+        # upon reboot, since this action on the XenAPI drivers does not
+        # remove existing filters
         vm_ref = self._get_vm_opaque_ref(instance)
 
         if reboot_type == "HARD":
@@ -924,8 +937,9 @@ class VMOps(object):
         resp = self._make_agent_call('key_init', instance, '', key_init_args)
         # Successful return code from key_init is 'D0'
         if resp['returncode'] != 'D0':
-            LOG.error(_('Failed to exchange keys: %(resp)r') % locals())
-            return None
+            msg = _('Failed to exchange keys: %(resp)r') % locals()
+            LOG.error(msg)
+            raise Exception(msg)
         # Some old versions of the Windows agent have a trailing \\r\\n
         # (ie CRLF escaped) for some reason. Strip that off.
         agent_pub = int(resp['message'].replace('\\r\\n', ''))
@@ -939,8 +953,9 @@ class VMOps(object):
         resp = self._make_agent_call('password', instance, '', password_args)
         # Successful return code from password is '0'
         if resp['returncode'] != '0':
-            LOG.error(_('Failed to update password: %(resp)r') % locals())
-            return None
+            msg = _('Failed to update password: %(resp)r') % locals()
+            LOG.error(msg)
+            raise Exception(msg)
         return resp['message']
 
     def inject_file(self, instance, path, contents):
@@ -994,11 +1009,19 @@ class VMOps(object):
             LOG.exception(exc)
 
     def _find_rescue_vbd_ref(self, vm_ref, rescue_vm_ref):
-        """Find and return the rescue VM's vbd_ref.
+        """Find and return the rescue VM's vbd_ref."""
+        vbd_refs = self._session.call_xenapi("VM.get_VBDs", vm_ref)
 
-        We use the second VBD here because swap is first with the root file
-        system coming in second."""
-        vbd_ref = self._session.call_xenapi("VM.get_VBDs", vm_ref)[1]
+        if len(vbd_refs) == 0:
+            raise Exception(_("Unable to find VBD for VM"))
+        elif len(vbd_refs) == 1:
+            # If we only have one VBD, assume it's the root fs
+            vbd_ref = vbd_refs[0]
+        else:
+            # If we have more than one VBD, swap will be first by convention
+            # with the root fs coming second
+            vbd_ref = vbd_refs[1]
+
         vdi_ref = self._session.call_xenapi("VBD.get_record", vbd_ref)["VDI"]
 
         return VolumeHelper.create_vbd(self._session, rescue_vm_ref, vdi_ref,
@@ -1130,16 +1153,21 @@ class VMOps(object):
         if vm_ref is None:
             LOG.warning(_("VM is not present, skipping destroy..."))
             return
-
+        is_snapshot = VMHelper.is_snapshot(self._session, vm_ref)
         if shutdown:
             self._shutdown(instance, vm_ref)
 
         self._destroy_vdis(instance, vm_ref)
         if destroy_kernel_ramdisk:
             self._destroy_kernel_ramdisk(instance, vm_ref)
-        self._destroy_vm(instance, vm_ref)
 
+        self._destroy_vm(instance, vm_ref)
         self.unplug_vifs(instance, network_info)
+        # Remove security groups filters for instance
+        # Unless the vm is a snapshot
+        if not is_snapshot:
+            self.firewall_driver.unfilter_instance(instance,
+                                                   network_info=network_info)
 
     def pause(self, instance):
         """Pause VM instance."""
@@ -1338,6 +1366,7 @@ class VMOps(object):
         except exception.CouldNotFetchMetrics:
             LOG.exception(_("Could not get bandwidth info."),
                           exc_info=sys.exc_info())
+            return {}
         bw = {}
         for uuid, data in metrics.iteritems():
             vm_ref = self._session.call_xenapi("VM.get_by_uuid", uuid)
@@ -1369,6 +1398,17 @@ class VMOps(object):
         """Return link to instance's ajax console."""
         # TODO: implement this!
         return 'http://fakeajaxconsole/fake_url'
+
+    def get_vnc_console(self, instance):
+        """Return connection info for a vnc console."""
+        vm_ref = self._get_vm_opaque_ref(instance)
+        session_id = self._session.get_session_id()
+        path = "/console?ref=%s&session_id=%s"\
+                   % (str(vm_ref), session_id)
+
+        # NOTE: XS5.6sp2+ use http over port 80 for xenapi com
+        return {'host': FLAGS.vncserver_proxyclient_address, 'port': 80,
+                'internal_access_path': path}
 
     def host_power_action(self, host, action):
         """Reboots or shuts down the host."""
@@ -1443,8 +1483,8 @@ class VMOps(object):
         self._session.call_xenapi("VM.get_record", vm_ref)
 
         for device, (network, info) in enumerate(network_info):
-            vif_rec = self.vif_driver.plug(self._session,
-                    vm_ref, instance, device, network, info)
+            vif_rec = self.vif_driver.plug(instance, network, info,
+                                           vm_ref=vm_ref, device=device)
             network_ref = vif_rec['network']
             LOG.debug(_('Creating VIF for VM %(vm_ref)s,' \
                 ' network %(network_ref)s.') % locals())
@@ -1454,8 +1494,8 @@ class VMOps(object):
 
     def plug_vifs(self, instance, network_info):
         """Set up VIF networking on the host."""
-        for (network, mapping) in network_info:
-            self.vif_driver.plug(self._session, instance, network, mapping)
+        for device, (network, mapping) in enumerate(network_info):
+            self.vif_driver.plug(instance, network, mapping, device=device)
 
     def unplug_vifs(self, instance, network_info):
         if network_info:
@@ -1695,6 +1735,19 @@ class VMOps(object):
     def clear_param_xenstore(self, instance_or_vm):
         """Removes all data from the xenstore parameter record for this VM."""
         self.write_to_param_xenstore(instance_or_vm, {})
+
+    def refresh_security_group_rules(self, security_group_id):
+        """ recreates security group rules for every instance """
+        self.firewall_driver.refresh_security_group_rules(security_group_id)
+
+    def refresh_security_group_members(self, security_group_id):
+        """ recreates security group rules for every instance """
+        self.firewall_driver.refresh_security_group_members(security_group_id)
+
+    def unfilter_instance(self, instance_ref, network_info):
+        """Removes filters for each VIF of the specified instance."""
+        self.firewall_driver.unfilter_instance(instance_ref,
+                                               network_info=network_info)
     ########################################################################
 
 

@@ -21,19 +21,20 @@ Admin API controller, exposed through http via the api worker.
 """
 
 import base64
-import netaddr
 import urllib
 
+import netaddr
+
+from nova.api.ec2 import ec2utils
+from nova.auth import manager
 from nova import compute
 from nova.compute import instance_types
+from nova.compute import vm_states
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-from nova.api.ec2 import ec2utils
-from nova.auth import manager
-from nova.compute import vm_states
 
 
 FLAGS = flags.FLAGS
@@ -88,7 +89,7 @@ def instance_dict(inst):
     return {'name': inst['name'],
             'memory_mb': inst['memory_mb'],
             'vcpus': inst['vcpus'],
-            'disk_gb': inst['local_gb'],
+            'disk_gb': inst['root_gb'],
             'flavor_id': inst['flavorid']}
 
 

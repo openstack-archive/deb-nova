@@ -294,7 +294,7 @@ class _VirtDriverTestCase(test.TestCase):
     def test_get_vnc_console(self):
         instance_ref, network_info = self._get_running_instance()
         vnc_console = self.connection.get_vnc_console(instance_ref)
-        self.assertIn('token', vnc_console)
+        self.assertIn('internal_access_path', vnc_console)
         self.assertIn('host', vnc_console)
         self.assertIn('port', vnc_console)
 
@@ -322,11 +322,6 @@ class _VirtDriverTestCase(test.TestCase):
     def test_refresh_provider_fw_rules(self):
         instance_ref, network_info = self._get_running_instance()
         self.connection.refresh_provider_fw_rules()
-
-    @catch_notimplementederror
-    def test_update_available_resource(self):
-        self.compute = self.start_service('compute', host='dummy')
-        self.connection.update_available_resource(self.ctxt, 'dummy')
 
     @catch_notimplementederror
     def test_compare_cpu(self):

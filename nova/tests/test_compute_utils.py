@@ -66,6 +66,8 @@ class UsageInfoTestCase(test.TestCase):
         type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
         inst['instance_type_id'] = type_id
         inst['ami_launch_index'] = 0
+        inst['root_gb'] = 0
+        inst['ephemeral_gb'] = 0
         inst.update(params)
         return db.instance_create(self.context, inst)['id']
 
@@ -86,7 +88,7 @@ class UsageInfoTestCase(test.TestCase):
         type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         for attr in ('display_name', 'created_at', 'launched_at',
-                     'state', 'state_description', 'fixed_ips',
+                     'state', 'state_description',
                      'bandwidth', 'audit_period_beginning',
                      'audit_period_ending'):
             self.assertTrue(attr in payload,

@@ -32,14 +32,14 @@ Options can be strings, integers, floats, booleans, lists or 'multi strings':
 
     enabled_apis_opt = \
         cfg.ListOpt('enabled_apis',
-                    default=['ec2', 'osapi'],
+                    default=['ec2', 'osapi_compute'],
                     help='List of APIs to enable by default')
 
     DEFAULT_EXTENSIONS = [
         'nova.api.openstack.contrib.standard_extensions'
     ]
-    osapi_extension_opt = \
-        cfg.MultiStrOpt('osapi_extension',
+    osapi_compute_extension_opt = \
+        cfg.MultiStrOpt('osapi_compute_extension',
                         default=DEFAULT_EXTENSIONS)
 
 Option schemas are registered with with the config manager at runtime, but
@@ -55,7 +55,7 @@ before the option is referenced:
             ...
 
         def _load_extensions(self):
-            for ext_factory in self.conf.osapi_extension:
+            for ext_factory in self.conf.osapi_compute_extension:
                 ....
 
 A common usage pattern is for each option schema to be defined in the module or
@@ -229,7 +229,7 @@ class ArgsAlreadyParsedError(Error):
         return ret
 
 
-class NoSuchOptError(Error):
+class NoSuchOptError(Error, AttributeError):
     """Raised if an opt which doesn't exist is referenced."""
 
     def __init__(self, opt_name, group=None):
@@ -821,7 +821,7 @@ class ConfigOpts(object):
         :return: False if the opt was already register, True otherwise
         :raises: DuplicateOptError, ArgsAlreadyParsedError
         """
-        if self._args != None:
+        if self._args is not None:
             raise ArgsAlreadyParsedError("cannot register CLI option")
 
         if not self.register_opt(opt, group):
@@ -962,9 +962,9 @@ class ConfigOpts(object):
         :param value: the string value, or list of string values
         :returns: the substituted string(s)
         """
-        if type(value) is list:
+        if isinstance(value, list):
             return [self._substitute(i) for i in value]
-        elif type(value) is str:
+        elif isinstance(value, str):
             tmpl = string.Template(value)
             return tmpl.safe_substitute(self.StrSubWrapper(self))
         else:

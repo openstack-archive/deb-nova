@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -59,7 +60,7 @@ import glob
 import json
 import math
 import netaddr
-from optparse import OptionParser
+import optparse
 import os
 import StringIO
 import sys
@@ -88,6 +89,7 @@ from nova import rpc
 from nova import utils
 from nova import version
 from nova import vsa
+from nova.api.ec2 import admin
 from nova.api.ec2 import ec2utils
 from nova.auth import manager
 from nova.cloudpipe import pipelib
@@ -96,13 +98,14 @@ from nova.db import migration
 from nova.volume import volume_types
 
 FLAGS = flags.FLAGS
-flags.DECLARE('fixed_range', 'nova.network.manager')
+flags.DECLARE('flat_network_bridge', 'nova.network.manager')
 flags.DECLARE('num_networks', 'nova.network.manager')
+flags.DECLARE('multi_host', 'nova.network.manager')
 flags.DECLARE('network_size', 'nova.network.manager')
 flags.DECLARE('vlan_start', 'nova.network.manager')
 flags.DECLARE('vpn_start', 'nova.network.manager')
-flags.DECLARE('fixed_range_v6', 'nova.network.manager')
-flags.DECLARE('gateway_v6', 'nova.network.manager')
+flags.DECLARE('default_floating_pool', 'nova.network.manager')
+flags.DECLARE('public_interface', 'nova.network.linux_net')
 flags.DECLARE('libvirt_type', 'nova.virt.libvirt.connection')
 flags.DEFINE_flag(flags.HelpFlag())
 flags.DEFINE_flag(flags.HelpshortFlag())
@@ -175,8 +178,9 @@ class VpnCommands(object):
     def spawn(self):
         """Run all VPNs."""
         print "WARNING: This method only works with deprecated auth"
+        ctxt = context.get_admin_context()
         for p in reversed(self.manager.get_projects()):
-            if not self._vpn_for(p.id):
+            if self._vpn_for(ctxt, p.id):
                 print 'spawning %s' % p.id
                 self.pipe.launch_vpn_instance(p.id, p.project_manager_id)
                 time.sleep(10)
@@ -211,6 +215,9 @@ class VpnCommands(object):
                               network['id'],
                               {'vpn_public_address': ip,
                                'vpn_public_port': int(port)})
+
+    def _vpn_for(self, context, project_id):
+        return admin.AdminController()._vpn_for(context, project_id)
 
 
 class ShellCommands(object):
@@ -630,24 +637,27 @@ class FixedIpCommands(object):
             print "error: %s" % ex
             sys.exit(2)
 
-        print "%-18s\t%-15s\t%-17s\t%-15s\t%s" % (_('network'),
-                                                  _('IP address'),
-                                                  _('MAC address'),
-                                                  _('hostname'),
-                                                  _('host'))
+        instances = db.instance_get_all(context.get_admin_context())
+        instances_by_id = {}
+        for instance in instances:
+            instances_by_id[instance['id']] = instance
+
+        print "%-18s\t%-15s\t%-15s\t%s" % (_('network'),
+                                              _('IP address'),
+                                              _('hostname'),
+                                              _('host'))
         for fixed_ip in fixed_ips:
             hostname = None
             host = None
             mac_address = None
             if fixed_ip['instance']:
-                instance = fixed_ip['instance']
+                instance = instances_by_id[fixed_ip['instance_id']]
                 hostname = instance['hostname']
                 host = instance['host']
-                mac_address = fixed_ip['virtual_interface']['address']
-            print "%-18s\t%-15s\t%-17s\t%-15s\t%s" % (
+            print "%-18s\t%-15s\t%-15s\t%s" % (
                     fixed_ip['network']['cidr'],
                     fixed_ip['address'],
-                    mac_address, hostname, host)
+                    hostname, host)
 
     @args('--address', dest="address", metavar='<ip address>',
           help='IP address')
@@ -680,17 +690,28 @@ class FixedIpCommands(object):
 class FloatingIpCommands(object):
     """Class for managing floating ip."""
 
-    @args('--ip_range', dest="range", metavar='<range>', help='IP range')
-    def create(self, range):
+    @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
+    @args('--pool', dest="pool", metavar='<pool>', help='Optional pool')
+    @args('--interface', dest="interface", metavar='<interface>',
+          help='Optional interface')
+    def create(self, ip_range, pool=None, interface=None):
         """Creates floating ips for zone by range"""
-        for address in netaddr.IPNetwork(range):
-            db.floating_ip_create(context.get_admin_context(),
-                                  {'address': str(address)})
+        addresses = netaddr.IPNetwork(ip_range)
+        admin_context = context.get_admin_context()
+        if not pool:
+            pool = FLAGS.default_floating_pool
+        if not interface:
+            interface = FLAGS.public_interface
+        for address in addresses.iter_hosts():
+            db.floating_ip_create(admin_context,
+                                  {'address': str(address),
+                                   'pool': pool,
+                                   'interface': interface})
 
     @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
     def delete(self, ip_range):
         """Deletes floating ips by range"""
-        for address in netaddr.IPNetwork(ip_range):
+        for address in netaddr.IPNetwork(ip_range).iter_hosts():
             db.floating_ip_destroy(context.get_admin_context(),
                                    str(address))
 
@@ -704,12 +725,16 @@ class FloatingIpCommands(object):
         else:
             floating_ips = db.floating_ip_get_all_by_host(ctxt, host)
         for floating_ip in floating_ips:
-            instance = None
-            if floating_ip['fixed_ip']:
-                instance = floating_ip['fixed_ip']['instance']['hostname']
-            print "%s\t%s\t%s" % (floating_ip['host'],
-                                  floating_ip['address'],
-                                  instance)
+            instance_id = None
+            if floating_ip['fixed_ip_id']:
+                fixed_ip = db.fixed_ip_get(ctxt, floating_ip['fixed_ip_id'])
+                instance = db.instance_get(ctxt, fixed_ip['instance_id'])
+                instance_id = instance.get('uuid', "none")
+            print "%s\t%s\t%s\t%s\t%s" % (floating_ip['project_id'],
+                                          floating_ip['address'],
+                                          instance_id,
+                                          floating_ip['pool'],
+                                          floating_ip['interface'])
 
 
 class NetworkCommands(object):
@@ -882,7 +907,7 @@ class NetworkCommands(object):
         net_manager.delete_network(context.get_admin_context(),
             fixed_range, uuid)
 
-    @args('--network', dest="fixed_range", metavar='<x.x.x.x/yy>',
+    @args('--fixed_range', dest="fixed_range", metavar='<x.x.x.x/yy>',
             help='Network to modify')
     @args('--project', dest="project", metavar='<project name>',
             help='Project name to associate')
@@ -960,7 +985,8 @@ class VmCommands(object):
                 instance['availability_zone'],
                 instance['launch_index'])
 
-    def _migration(self, ec2_id, dest, block_migration=False):
+    def _migration(self, ec2_id, dest, block_migration=False,
+                                       disk_over_commit=False):
         """Migrates a running instance to a new machine.
          :param ec2_id: instance id which comes from euca-describe-instance.
          :param dest: destination host name.
@@ -987,7 +1013,8 @@ class VmCommands(object):
                   "args": {"instance_id": instance_id,
                            "dest": dest,
                            "topic": FLAGS.compute_topic,
-                           "block_migration": block_migration}})
+                           "block_migration": block_migration,
+                           "disk_over_commit": disk_over_commit}})
 
         print _('Migration of %s initiated.'
                'Check its progress using euca-describe-instances.') % ec2_id
@@ -1002,11 +1029,14 @@ class VmCommands(object):
 
     @args('--ec2_id', dest='ec2_id', metavar='<ec2 id>', help='EC2 ID')
     @args('--dest', dest='dest', metavar='<Destanation>',
-            help='destanation node')
-    def block_migration(self, ec2_id, dest):
+                           help='destanation node')
+    @args('--disk_over_commit', dest='disk_over_commit',
+                           metavar='<overcommit flag>',
+                           help='Allow overcommit (default Flase)')
+    def block_migration(self, ec2_id, dest, disk_over_commit=False):
         """Migrates a running instance to a new machine with storage data."""
 
-        self._migration(ec2_id, dest, True)
+        self._migration(ec2_id, dest, True, disk_over_commit)
 
 
 class ServiceCommands(object):
@@ -1071,60 +1101,60 @@ class ServiceCommands(object):
 
     @args('--host', dest='host', metavar='<host>', help='Host')
     def describe_resource(self, host):
-        """Describes cpu/memory/hdd info for host."""
+        """Describes cpu/memory/hdd info for host.
 
+        :param host: hostname.
+
+        """
         result = rpc.call(context.get_admin_context(),
                      FLAGS.scheduler_topic,
                      {"method": "show_host_resources",
                       "args": {"host": host}})
 
-        if type(result) != dict:
+        if not isinstance(result, dict):
             print _('An unexpected error has occurred.')
             print _('[Result]'), result
         else:
-            cpu = result['resource']['vcpus']
-            mem = result['resource']['memory_mb']
-            hdd = result['resource']['local_gb']
-            cpu_u = result['resource']['vcpus_used']
-            mem_u = result['resource']['memory_mb_used']
-            hdd_u = result['resource']['local_gb_used']
+            # Printing a total and used_now
+            # (NOTE)The host name width 16 characters
+            print '%(a)-25s%(b)16s%(c)8s%(d)8s%(e)8s' % {"a": _('HOST'),
+                                                         "b": _('PROJECT'),
+                                                         "c": _('cpu'),
+                                                         "d": _('mem(mb)'),
+                                                         "e": _('hdd')}
+            print '%(a)-16s(total)%(b)26s%(c)8s%(d)8s' %\
+                              {"a": host,
+                               "b": result['resource']['vcpus'],
+                               "c": result['resource']['memory_mb'],
+                               "d": result['resource']['local_gb']}
 
+            print '%(a)-16s(used_now)%(b)23s%(c)8s%(d)8s' %\
+                              {"a": host,
+                               "b": result['resource']['vcpus_used'],
+                               "c": result['resource']['memory_mb_used'],
+                               "d": result['resource']['local_gb_used']}
+
+            # Printing a used_max
             cpu_sum = 0
             mem_sum = 0
             hdd_sum = 0
-            print 'HOST\t\t\tPROJECT\t\tcpu\tmem(mb)\tdisk(gb)'
-            print '%s(total)\t\t\t%s\t%s\t%s' % (host, cpu, mem, hdd)
-            print '%s(used_now)\t\t\t%s\t%s\t%s' % (host, cpu_u, mem_u, hdd_u)
             for p_id, val in result['usage'].items():
                 cpu_sum += val['vcpus']
                 mem_sum += val['memory_mb']
-                hdd_sum += val['local_gb']
-            print '%s(used_max)\t\t\t%s\t%s\t%s' % (host, cpu_sum,
-                                                    mem_sum, hdd_sum)
+                hdd_sum += val['root_gb']
+                hdd_sum += val['ephemeral_gb']
+            print '%(a)-16s(used_max)%(b)23s%(c)8s%(d)8s' % {"a": host,
+                                                             "b": cpu_sum,
+                                                             "c": mem_sum,
+                                                             "d": hdd_sum}
 
             for p_id, val in result['usage'].items():
-                print '%s\t\t%s\t\t%s\t%s\t%s' % (host,
-                                                  p_id,
-                                                  val['vcpus'],
-                                                  val['memory_mb'],
-                                                  val['local_gb'])
-
-    @args('--host', dest='host', metavar='<host>', help='Host')
-    def update_resource(self, host):
-        """Updates available vcpu/memory/disk info for host."""
-
-        ctxt = context.get_admin_context()
-        service_refs = db.service_get_all_by_host(ctxt, host)
-        if len(service_refs) <= 0:
-            raise exception.Invalid(_('%s does not exist.') % host)
-
-        service_refs = [s for s in service_refs if s['topic'] == 'compute']
-        if len(service_refs) <= 0:
-            raise exception.Invalid(_('%s is not compute node.') % host)
-
-        rpc.call(ctxt,
-                 db.queue_get_for(ctxt, FLAGS.compute_topic, host),
-                 {"method": "update_available_resource"})
+                print '%(a)-25s%(b)16s%(c)8s%(d)8s%(e)8s' % {
+                        "a": host,
+                        "b": p_id,
+                        "c": val['vcpus'],
+                        "d": val['memory_mb'],
+                        "e": val['root_gb'] + val['ephemeral_gb']}
 
 
 class HostCommands(object):
@@ -1392,7 +1422,7 @@ class VsaCommands(object):
         if storage is not None:
             try:
                 storage_list = ast.literal_eval(storage)
-            except:
+            except Exception:
                 print _("Invalid string format %s") % storage
                 raise
 
@@ -1581,7 +1611,7 @@ class VsaDriveTypeCommands(object):
         except exception.DBError, e:
             print "DB Error: %s" % e
             sys.exit(2)
-        except:
+        except Exception:
             sys.exit(3)
         else:
             print "%s %s" % (name, verb)
@@ -1599,7 +1629,7 @@ class VsaDriveTypeCommands(object):
         if name is not None:
             search_opts['extra_specs']['name'] = name
 
-        if all == False:
+        if not all:
             search_opts['extra_specs']['visible'] = '1'
 
         drives = volume_types.get_all_types(self.context,
@@ -1705,29 +1735,32 @@ class InstanceTypeCommands(object):
 
     def _print_instance_types(self, name, val):
         deleted = ('', ', inactive')[val["deleted"] == 1]
-        print ("%s: Memory: %sMB, VCPUS: %s, Storage: %sGB, FlavorID: %s, "
-            "Swap: %sMB, RXTX Factor: %s") % (
-            name, val["memory_mb"], val["vcpus"], val["local_gb"],
-            val["flavorid"], val["swap"], val["rxtx_factor"])
+        print ("%s: Memory: %sMB, VCPUS: %s, Root: %sGB, Ephemeral: %sGb, "
+            "FlavorID: %s, Swap: %sMB, RXTX Factor: %s") % (
+            name, val["memory_mb"], val["vcpus"], val["root_gb"],
+            val["ephemeral_gb"], val["flavorid"], val["swap"],
+            val["rxtx_factor"])
 
     @args('--name', dest='name', metavar='<name>',
             help='Name of instance type/flavor')
     @args('--memory', dest='memory', metavar='<memory size>',
             help='Memory size')
     @args('--cpu', dest='vcpus', metavar='<num cores>', help='Number cpus')
-    @args('--local_gb', dest='local_gb', metavar='<local_gb>',
-            help='local_gb')
+    @args('--root_gb', dest='root_gb', metavar='<root_gb>',
+            help='Root disk size')
+    @args('--ephemeral_gb', dest='ephemeral_gb', metavar='<ephemeral_gb>',
+            help='Ephemeral disk size')
     @args('--flavor', dest='flavorid', metavar='<flavor  id>',
             help='Flavor ID')
     @args('--swap', dest='swap', metavar='<swap>', help='Swap')
     @args('--rxtx_factor', dest='rxtx_factor', metavar='<rxtx_factor>',
             help='rxtx_factor')
-    def create(self, name, memory, vcpus, local_gb, flavorid,
+    def create(self, name, memory, vcpus, root_gb, ephemeral_gb, flavorid,
                swap=0, rxtx_factor=1):
         """Creates instance types / flavors"""
         try:
-            instance_types.create(name, memory, vcpus, local_gb,
-                                  flavorid, swap, rxtx_factor)
+            instance_types.create(name, memory, vcpus, root_gb,
+                                  ephemeral_gb, flavorid, swap, rxtx_factor)
         except exception.InvalidInput, e:
             print "Must supply valid parameters to create instance_type"
             print e
@@ -1741,7 +1774,7 @@ class InstanceTypeCommands(object):
             print "Currently defined instance_type names and flavorids:"
             self.list("--all")
             sys.exit(2)
-        except:
+        except Exception:
             print "Unknown error"
             sys.exit(3)
         else:
@@ -1766,7 +1799,7 @@ class InstanceTypeCommands(object):
         except exception.DBError, e:
             print "DB Error: %s" % e
             sys.exit(2)
-        except:
+        except Exception:
             sys.exit(3)
         else:
             print "%s %s" % (name, verb)
@@ -1967,7 +2000,7 @@ class StorageManagerCommands(object):
         ctxt = context.get_admin_context()
 
         try:
-            if flavor == None:
+            if flavor is None:
                 flavors = db.sm_flavor_get_all(ctxt)
             else:
                 flavors = db.sm_flavor_get(ctxt, flavor)
@@ -2009,7 +2042,7 @@ class StorageManagerCommands(object):
         ctxt = context.get_admin_context()
 
         try:
-            if backend_conf_id == None:
+            if backend_conf_id is None:
                 backends = db.sm_backend_conf_get_all(ctxt)
             else:
                 backends = db.sm_backend_conf_get(ctxt, backend_conf_id)
@@ -2069,7 +2102,7 @@ class StorageManagerCommands(object):
         print '(WARNING: Creating will destroy all data on backend!!!)'
         c = raw_input('Proceed? (y/n) ')
         if c == 'y' or c == 'Y':
-            if flavor_label == None:
+            if flavor_label is None:
                 print "error: backend needs to be associated with flavor"
                 sys.exit(2)
 
@@ -2168,7 +2201,9 @@ class ConfigCommands(object):
         pass
 
     def list(self):
-        print FLAGS.FlagsIntoString()
+        for key, value in FLAGS.FlagValuesDict().iteritems():
+            if value is not None:
+                print '%s = %s' % (key, value)
 
 
 class GetLogCommands(object):
@@ -2310,7 +2345,7 @@ def main():
     options = getattr(fn, 'options', [])
 
     usage = "%%prog %s %s <args> [options]" % (category, action)
-    parser = OptionParser(usage=usage)
+    parser = optparse.OptionParser(usage=usage)
     for ar, kw in options:
         parser.add_option(*ar, **kw)
     (opts, fn_args) = parser.parse_args(argv)

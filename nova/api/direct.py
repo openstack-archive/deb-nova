@@ -37,12 +37,11 @@ import urllib
 import routes
 import webob
 
+import nova.api.openstack.wsgi
 from nova import context
 from nova import exception
-from nova import flags
 from nova import utils
 from nova import wsgi
-import nova.api.openstack.wsgi
 
 
 # Global storage for registering modules.
@@ -286,7 +285,7 @@ class ServiceWrapper(object):
         params = dict([(str(k), v) for (k, v) in params.iteritems()])
         result = method(context, **params)
 
-        if result is None or type(result) is str or type(result) is unicode:
+        if result is None or isinstance(result, basestring):
             return result
 
         try:
