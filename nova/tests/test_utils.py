@@ -88,12 +88,6 @@ exit 1
                           utils.execute,
                           '/usr/bin/env', 'false', check_exit_code=True)
 
-    def test_check_exit_code_boolean(self):
-        utils.execute('/bin/false', check_exit_code=False)
-        self.assertRaises(exception.ProcessExecutionError,
-                          utils.execute,
-                          '/bin/false', check_exit_code=True)
-
     def test_no_retry_on_success(self):
         fd, tmpfilename = tempfile.mkstemp()
         _, tmpfilename2 = tempfile.mkstemp()

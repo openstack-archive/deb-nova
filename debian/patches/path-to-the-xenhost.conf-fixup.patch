@@ -1,9 +1,9 @@
 Description: Fixes the path to the xenhost.conf file
 Author: Thomas Goirand <zigo@debian.org>
 Forwarded: not-needed
---- nova-2012.1~e2+git508-gcff2ddc.orig/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
-+++ nova-2012.1~e2+git508-gcff2ddc/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
-@@ -39,7 +39,7 @@ import pluginlib_nova as pluginlib
+--- a/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
++++ b/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
+@@ -40,7 +40,7 @@
  pluginlib.configure_logging("xenhost")
  
  host_data_pattern = re.compile(r"\s*(\S+) \([^\)]+\) *: ?(.*)")

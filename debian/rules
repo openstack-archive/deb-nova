@@ -40,4 +40,5 @@ override_dh_installdocs:
 	ln -sf /usr/share/javascript/underscore/underscore.min.js $(CURDIR)/debian/nova-doc/usr/share/doc/nova-doc/html/_static/underscore.js
 
 override_dh_python2:
-	dh_python2 /
+	dh_python2
+	dh_python2  /usr/lib/xcp
