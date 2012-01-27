@@ -3,6 +3,7 @@ nova (2012.1~e3-2) unstable; urgency=low
   * Fixed compute-xen postinst (Closes: #657569)
   * Minor fix in gbp.conf
   * Added policy.json
+  * Added connection_type flag to nova.conf
 
  -- Ghe Rivero <ghe@debian.org>  Fri, 27 Jan 2012 08:12:24 +0100
 
