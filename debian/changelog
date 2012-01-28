@@ -4,8 +4,9 @@ nova (2012.1~e3-2) unstable; urgency=low
   * Minor fix in gbp.conf
   * Added policy.json
   * Added connection_type flag to nova.conf
+  * Fixed funtions names in nova-xcp-networkt.init 
 
- -- Ghe Rivero <ghe@debian.org>  Fri, 27 Jan 2012 08:12:24 +0100
+ -- Ghe Rivero <ghe@debian.org>  Sat, 28 Jan 2012 10:36:52 +0100
 
 nova (2012.1~e3-1) unstable; urgency=low
 
