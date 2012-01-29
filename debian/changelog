@@ -1,10 +1,16 @@
+nova (2012.1~e3-3) unstable; urgency=low
+
+   * nova-compute- now depends on nova-common
+
+ -- Ghe Rivero <ghe@debian.org>  Sun, 29 Jan 2012 13:30:34 +0100
+
 nova (2012.1~e3-2) unstable; urgency=low
 
   * Fixed compute-xen postinst (Closes: #657569)
   * Minor fix in gbp.conf
   * Added policy.json
   * Added connection_type flag to nova.conf
-  * Fixed funtions names in nova-xcp-networkt.init 
+  * Fixed funtions names in nova-xcp-networkt.init
 
  -- Ghe Rivero <ghe@debian.org>  Sat, 28 Jan 2012 10:36:52 +0100
 
