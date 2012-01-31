@@ -4,7 +4,7 @@ Priority: extra
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
-           Ghe Rivero <ghe@debian.org>
+           Ghe Rivero <ghe.rivero@stackops.com>
 Build-Depends: debhelper (>= 7.0.50),
  python-netaddr,
  python-distutils-extra,

@@ -1,8 +1,9 @@
 nova (2012.1~e3-3) unstable; urgency=low
 
-   * nova-compute- now depends on nova-common
+  * nova-compute- now depends on nova-common (Closes: #657569)
+  * Added nova-consoleauth to nova-console
 
- -- Ghe Rivero <ghe@debian.org>  Sun, 29 Jan 2012 13:30:34 +0100
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Tue, 31 Jan 2012 14:32:31 +0100
 
 nova (2012.1~e3-2) unstable; urgency=low
 
