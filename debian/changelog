@@ -1,3 +1,10 @@
+nova (2012.1~e3-4) unstable; urgency=low
+
+  * Added init script to nova-consoleauth
+  * Added init script to nova-xvpvncproxy
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Tue, 31 Jan 2012 18:50:37 +0100
+
 nova (2012.1~e3-3) unstable; urgency=low
 
   * nova-compute- now depends on nova-common (Closes: #657569)
