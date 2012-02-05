@@ -179,6 +179,10 @@ class NovaException(Exception):
         super(NovaException, self).__init__(message)
 
 
+class DecryptionFailure(NovaException):
+    message = _("Failed to decrypt text")
+
+
 class ImagePaginationFailed(NovaException):
     message = _("Failed to paginate through images from image service")
 
@@ -209,6 +213,14 @@ class PolicyNotAuthorized(NotAuthorized):
 
 class Invalid(NovaException):
     message = _("Unacceptable parameters.")
+
+
+class InvalidKeypair(Invalid):
+    message = _("Keypair data is invalid")
+
+
+class SfJsonEncodeFailure(NovaException):
+    message = _("Failed to load data into json format")
 
 
 class InvalidRequest(Invalid):
@@ -247,10 +259,19 @@ class InvalidCidr(Invalid):
     message = _("Invalid cidr %(cidr)s.")
 
 
+class InvalidRPCConnectionReuse(Invalid):
+    message = _("Invalid reuse of an RPC connection.")
+
+
 # Cannot be templated as the error syntax varies.
 # msg needs to be constructed when raised.
 class InvalidParameterValue(Invalid):
     message = _("%(err)s")
+
+
+class InvalidAggregateAction(Invalid):
+    message = _("Cannot perform action '%(action)s' on aggregate "
+                "%(aggregate_id)s. Reason: %(reason)s.")
 
 
 class InstanceInvalidState(Invalid):
@@ -379,6 +400,10 @@ class InstanceNotFound(NotFound):
 
 class VolumeNotFound(NotFound):
     message = _("Volume %(volume_id)s could not be found.")
+
+
+class SfAccountNotFound(NotFound):
+    message = _("Unable to locate account %(account_name) on Solidfire device")
 
 
 class VolumeNotFoundForInstance(VolumeNotFound):
@@ -582,6 +607,10 @@ class FloatingIpNotAssociated(NovaException):
 
 class NoFloatingIpsDefined(NotFound):
     message = _("Zero floating ips exist.")
+
+
+class NoFloatingIpInterface(NotFound):
+    message = _("Interface %(interface)s not found.")
 
 
 class KeypairNotFound(NotFound):
@@ -913,3 +942,7 @@ class AggregateHostConflict(Duplicate):
 
 class AggregateHostExists(Duplicate):
     message = _("Aggregate %(aggregate_id)s already has host %(host)s.")
+
+
+class DuplicateSfVolumeNames(Duplicate):
+    message = _("Detected more than one volume with name %(vol_name)")

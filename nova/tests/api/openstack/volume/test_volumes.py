@@ -18,9 +18,9 @@ import datetime
 from lxml import etree
 import webob
 
+from nova.api.openstack.volume import volumes
 from nova import flags
 from nova import test
-from nova.api.openstack.volume import volumes
 from nova.tests.api.openstack import fakes
 from nova.volume import api as volume_api
 
@@ -28,41 +28,54 @@ from nova.volume import api as volume_api
 FLAGS = flags.FLAGS
 
 
-def stub_volume(id):
-    return {'id': id,
-            'user_id': 'fakeuser',
-            'project_id': 'fakeproject',
-            'host': 'fakehost',
-            'size': 1,
-            'availability_zone': 'fakeaz',
-            'instance': {'uuid': 'fakeuuid'},
-            'mountpoint': '/',
-            'status': 'fakestatus',
-            'attach_status': 'attached',
-            'display_name': 'displayname',
-            'display_description': 'displaydesc',
-            'created_at': datetime.datetime(1, 1, 1, 1, 1, 1),
-            'snapshot_id': None,
-            'volume_type_id': 'fakevoltype',
-            'volume_type': {'name': 'vol_type_name'}}
-
-
-def stub_volume_get_all(context, search_opts=None):
-    return [stub_volume(1)]
-
-
-class VolumeTest(test.TestCase):
+class VolumeApiTest(test.TestCase):
     def setUp(self):
-        super(VolumeTest, self).setUp()
+        super(VolumeApiTest, self).setUp()
         self.controller = volumes.VolumeController()
 
+        self.stubs.Set(volume_api.API, 'get_all', fakes.stub_volume_get_all)
+        self.stubs.Set(volume_api.API, 'get', fakes.stub_volume_get)
+        self.stubs.Set(volume_api.API, 'delete', fakes.stub_volume_delete)
+
     def tearDown(self):
-        super(VolumeTest, self).tearDown()
+        super(VolumeApiTest, self).tearDown()
+
+    def test_volume_create(self):
+        self.stubs.Set(volume_api.API, "create", fakes.stub_volume_create)
+
+        vol = {"size": 100,
+               "display_name": "Volume Test Name",
+               "display_description": "Volume Test Desc",
+               "availability_zone": "zone1:host1"}
+        body = {"volume": vol}
+        req = fakes.HTTPRequest.blank('/v1/volumes')
+        res_dict = self.controller.create(req, body)
+        expected = {'volume': {'status': 'fakestatus',
+                               'displayDescription': 'Volume Test Desc',
+                               'availabilityZone': 'zone1:host1',
+                               'displayName': 'Volume Test Name',
+                               'attachments': [{'device': '/',
+                                                'serverId': 'fakeuuid',
+                                                'id': 1,
+                                                'volumeId': 1}],
+                               'volumeType': 'vol_type_name',
+                               'snapshotId': None,
+                               'metadata': {},
+                               'id': 1,
+                               'createdAt': datetime.datetime(1, 1, 1,
+                                                              1, 1, 1),
+                               'size': 100}}
+        self.assertEqual(res_dict, expected)
+
+    def test_volume_create_no_body(self):
+        body = {}
+        req = fakes.HTTPRequest.blank('/v1/volumes')
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create,
+                          req,
+                          body)
 
     def test_volume_list(self):
-        self.stubs.Set(volume_api.API, 'get_all',
-                       stub_volume_get_all)
-
         req = fakes.HTTPRequest.blank('/v1/volumes')
         res_dict = self.controller.index(req)
         expected = {'volumes': [{'status': 'fakestatus',
@@ -83,9 +96,6 @@ class VolumeTest(test.TestCase):
         self.assertEqual(res_dict, expected)
 
     def test_volume_list_detail(self):
-        self.stubs.Set(volume_api.API, 'get_all',
-                       stub_volume_get_all)
-
         req = fakes.HTTPRequest.blank('/v1/volumes/detail')
         res_dict = self.controller.index(req)
         expected = {'volumes': [{'status': 'fakestatus',
@@ -104,6 +114,49 @@ class VolumeTest(test.TestCase):
                                                                 1, 1, 1),
                                  'size': 1}]}
         self.assertEqual(res_dict, expected)
+
+    def test_volume_show(self):
+        req = fakes.HTTPRequest.blank('/v1/volumes/1')
+        res_dict = self.controller.show(req, 1)
+        expected = {'volume': {'status': 'fakestatus',
+                               'displayDescription': 'displaydesc',
+                               'availabilityZone': 'fakeaz',
+                               'displayName': 'displayname',
+                               'attachments': [{'device': '/',
+                                                'serverId': 'fakeuuid',
+                                                'id': 1,
+                                                'volumeId': 1}],
+                               'volumeType': 'vol_type_name',
+                               'snapshotId': None,
+                               'metadata': {},
+                               'id': 1,
+                               'createdAt': datetime.datetime(1, 1, 1,
+                                                              1, 1, 1),
+                               'size': 1}}
+        self.assertEqual(res_dict, expected)
+
+    def test_volume_show_no_volume(self):
+        self.stubs.Set(volume_api.API, "get", fakes.stub_volume_get_notfound)
+
+        req = fakes.HTTPRequest.blank('/v1/volumes/1')
+        self.assertRaises(webob.exc.HTTPNotFound,
+                          self.controller.show,
+                          req,
+                          1)
+
+    def test_volume_delete(self):
+        req = fakes.HTTPRequest.blank('/v1/volumes/1')
+        resp = self.controller.delete(req, 1)
+        self.assertEqual(resp.status_int, 202)
+
+    def test_volume_delete_no_volume(self):
+        self.stubs.Set(volume_api.API, "get", fakes.stub_volume_get_notfound)
+
+        req = fakes.HTTPRequest.blank('/v1/volumes/1')
+        self.assertRaises(webob.exc.HTTPNotFound,
+                          self.controller.delete,
+                          req,
+                          1)
 
 
 class VolumeSerializerTest(test.TestCase):
@@ -134,47 +187,8 @@ class VolumeSerializerTest(test.TestCase):
                     not_seen.remove(gr_child.tag)
                 self.assertEqual(0, len(not_seen))
 
-    def test_attach_show_create_serializer(self):
-        serializer = volumes.VolumeAttachmentSerializer()
-        raw_attach = dict(
-            id='vol_id',
-            volumeId='vol_id',
-            serverId='instance_uuid',
-            device='/foo')
-        text = serializer.serialize(dict(volumeAttachment=raw_attach), 'show')
-
-        print text
-        tree = etree.fromstring(text)
-
-        self.assertEqual('volumeAttachment', tree.tag)
-        self._verify_volume_attachment(raw_attach, tree)
-
-    def test_attach_index_serializer(self):
-        serializer = volumes.VolumeAttachmentSerializer()
-        raw_attaches = [dict(
-                id='vol_id1',
-                volumeId='vol_id1',
-                serverId='instance1_uuid',
-                device='/foo1'),
-                        dict(
-                id='vol_id2',
-                volumeId='vol_id2',
-                serverId='instance2_uuid',
-                device='/foo2')]
-        text = serializer.serialize(dict(volumeAttachments=raw_attaches),
-                                    'index')
-
-        print text
-        tree = etree.fromstring(text)
-
-        self.assertEqual('volumeAttachments', tree.tag)
-        self.assertEqual(len(raw_attaches), len(tree))
-        for idx, child in enumerate(tree):
-            self.assertEqual('volumeAttachment', child.tag)
-            self._verify_volume_attachment(raw_attaches[idx], child)
-
     def test_volume_show_create_serializer(self):
-        serializer = volumes.VolumeSerializer()
+        serializer = volumes.VolumeTemplate()
         raw_volume = dict(
             id='vol_id',
             status='vol_status',
@@ -195,7 +209,7 @@ class VolumeSerializerTest(test.TestCase):
                 baz='quux',
                 ),
             )
-        text = serializer.serialize(dict(volume=raw_volume), 'show')
+        text = serializer.serialize(dict(volume=raw_volume))
 
         print text
         tree = etree.fromstring(text)
@@ -203,7 +217,7 @@ class VolumeSerializerTest(test.TestCase):
         self._verify_volume(raw_volume, tree)
 
     def test_volume_index_detail_serializer(self):
-        serializer = volumes.VolumeSerializer()
+        serializer = volumes.VolumesTemplate()
         raw_volumes = [dict(
                 id='vol1_id',
                 status='vol1_status',
@@ -244,7 +258,7 @@ class VolumeSerializerTest(test.TestCase):
                     bar='vol2_bar',
                     ),
                 )]
-        text = serializer.serialize(dict(volumes=raw_volumes), 'index')
+        text = serializer.serialize(dict(volumes=raw_volumes))
 
         print text
         tree = etree.fromstring(text)

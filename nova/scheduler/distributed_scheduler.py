@@ -22,8 +22,6 @@ Weighing Functions.
 import json
 import operator
 
-import M2Crypto
-
 from novaclient import v1_1 as novaclient
 from novaclient import exceptions as novaclient_exceptions
 from nova import crypto
@@ -41,11 +39,6 @@ from nova import utils
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger('nova.scheduler.distributed_scheduler')
-
-
-class InvalidBlob(exception.NovaException):
-    message = _("Ill-formed or incorrectly routed 'blob' data sent "
-            "to instance create request.")
 
 
 class DistributedScheduler(driver.Scheduler):
@@ -92,11 +85,15 @@ class DistributedScheduler(driver.Scheduler):
             weighted_hosts.append(self._make_weighted_host_from_blob(blob))
         else:
             # No plan ... better make one.
-            weighted_hosts = self._schedule(elevated, "compute", request_spec,
+            weighted_hosts = self._schedule(context, "compute", request_spec,
                                         *args, **kwargs)
 
         if not weighted_hosts:
             raise exception.NoValidHost(reason=_(""))
+
+        # NOTE(comstud): Make sure we do not pass this through.  It
+        # contains an instance of RpcContext that cannot be serialized.
+        kwargs.pop('filter_properties', None)
 
         instances = []
         for num in xrange(num_instances):
@@ -135,11 +132,15 @@ class DistributedScheduler(driver.Scheduler):
         instance_type = db.instance_type_get(elevated, instance_type_id)
 
         # Now let's grab a possibility
-        hosts = self._schedule(elevated, 'compute', request_spec,
+        hosts = self._schedule(context, 'compute', request_spec,
                                *args, **kwargs)
         if not hosts:
             raise exception.NoValidHost(reason=_(""))
         host = hosts.pop(0)
+
+        # NOTE(comstud): Make sure we do not pass this through.  It
+        # contains an instance of RpcContext that cannot be serialized.
+        kwargs.pop('filter_properties', None)
 
         # Forward off to the host
         driver.cast_to_compute_host(context, host.host_state.host,
@@ -151,8 +152,7 @@ class DistributedScheduler(driver.Scheduler):
         internal zone information will be encrypted so as not to reveal
         anything about our inner layout.
         """
-        elevated = context.elevated()
-        weighted_hosts = self._schedule(elevated, "compute", request_spec,
+        weighted_hosts = self._schedule(context, "compute", request_spec,
                 *args, **kwargs)
         return [weighted_host.to_dict() for weighted_host in weighted_hosts]
 
@@ -178,19 +178,16 @@ class DistributedScheduler(driver.Scheduler):
         or None if invalid. Broken out for testing.
         """
         decryptor = crypto.decryptor(FLAGS.build_plan_encryption_key)
-        try:
-            json_entry = decryptor(blob)
-            # Extract our WeightedHost values
-            wh_dict = json.loads(json_entry)
-            host = wh_dict.get('host', None)
-            blob = wh_dict.get('blob', None)
-            zone = wh_dict.get('zone', None)
-            return least_cost.WeightedHost(wh_dict['weight'],
-                        host_state=host_manager.HostState(host, 'compute'),
-                        blob=blob, zone=zone)
+        json_entry = decryptor(blob)
 
-        except M2Crypto.EVP.EVPError:
-            raise InvalidBlob()
+        # Extract our WeightedHost values
+        wh_dict = json.loads(json_entry)
+        host = wh_dict.get('host', None)
+        blob = wh_dict.get('blob', None)
+        zone = wh_dict.get('zone', None)
+        return least_cost.WeightedHost(wh_dict['weight'],
+                    host_state=host_manager.HostState(host, 'compute'),
+                    blob=blob, zone=zone)
 
     def _ask_child_zone_to_create_instance(self, context, weighted_host,
             request_spec, kwargs):
@@ -282,17 +279,13 @@ class DistributedScheduler(driver.Scheduler):
         """Stuff things into filter_properties.  Can be overriden in a
         subclass to add more data.
         """
-        try:
-            if request_spec['avoid_original_host']:
-                original_host = request_spec['instance_properties']['host']
-                filter_properties['ignore_hosts'].append(original_host)
-        except (KeyError, TypeError):
-            pass
+        pass
 
-    def _schedule(self, elevated, topic, request_spec, *args, **kwargs):
+    def _schedule(self, context, topic, request_spec, *args, **kwargs):
         """Returns a list of hosts that meet the required specs,
         ordered by their fitness.
         """
+        elevated = context.elevated()
         if topic != "compute":
             msg = _("Scheduler only understands Compute nodes (for now)")
             raise NotImplementedError(msg)
@@ -305,17 +298,16 @@ class DistributedScheduler(driver.Scheduler):
             raise NotImplementedError(msg)
 
         cost_functions = self.get_cost_functions()
-
-        ram_requirement_mb = instance_type['memory_mb']
-        disk_requirement_gb = instance_type['local_gb']
-
         config_options = self._get_configuration_options()
 
-        filter_properties = {'config_options': config_options,
-                             'instance_type': instance_type,
-                             'ignore_hosts': []}
+        filter_properties = kwargs.get('filter_properties', {})
+        filter_properties.update({'context': context,
+                                  'request_spec': request_spec,
+                                  'config_options': config_options,
+                                  'instance_type': instance_type})
 
-        self.populate_filter_properties(request_spec, filter_properties)
+        self.populate_filter_properties(request_spec,
+                                        filter_properties)
 
         # Find our local list of acceptable hosts by repeatedly
         # filtering and weighing our options. Each time we choose a
@@ -356,7 +348,7 @@ class DistributedScheduler(driver.Scheduler):
                     instance_properties)
 
         # Next, tack on the host weights from the child zones
-        if not request_spec.get('local_zone', False):
+        if not filter_properties.get('local_zone_only', False):
             json_spec = json.dumps(request_spec)
             all_zones = self._zone_get_all(elevated)
             child_results = self._call_zone_method(elevated, "select",

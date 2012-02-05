@@ -32,9 +32,8 @@ from nova.volume import volume_types
 
 
 LOG = logging.getLogger("nova.api.openstack.compute.contrib.volumes")
-
-
 FLAGS = flags.FLAGS
+authorize = extensions.extension_authorizer('compute', 'volumes')
 
 
 def _translate_volume_detail_view(context, vol):
@@ -130,6 +129,7 @@ class VolumeController(object):
     def show(self, req, id):
         """Return data about the given volume."""
         context = req.environ['nova.context']
+        authorize(context)
 
         try:
             vol = self.volume_api.get(context, id)
@@ -141,6 +141,7 @@ class VolumeController(object):
     def delete(self, req, id):
         """Delete a volume."""
         context = req.environ['nova.context']
+        authorize(context)
 
         LOG.audit(_("Delete volume with id: %s"), id, context=context)
 
@@ -164,6 +165,7 @@ class VolumeController(object):
     def _items(self, req, entity_maker):
         """Returns a list of volumes, transformed through entity_maker."""
         context = req.environ['nova.context']
+        authorize(context)
 
         volumes = self.volume_api.get_all(context)
         limited_list = common.limited(volumes, req)
@@ -174,6 +176,7 @@ class VolumeController(object):
     def create(self, req, body):
         """Creates a new volume."""
         context = req.environ['nova.context']
+        authorize(context)
 
         if not body:
             raise exc.HTTPUnprocessableEntity()
@@ -199,17 +202,22 @@ class VolumeController(object):
         else:
             snapshot = None
 
-        new_volume = self.volume_api.create(context, size,
+        availability_zone = vol.get('availability_zone', None)
+
+        new_volume = self.volume_api.create(context,
+                                            size,
                                             vol.get('display_name'),
                                             vol.get('display_description'),
                                             snapshot=snapshot,
                                             volume_type=vol_type,
-                                            metadata=metadata)
+                                            metadata=metadata,
+                                            availability_zone=availability_zone
+                                           )
 
-        # Work around problem that instance is lazy-loaded...
-        new_volume = self.volume_api.get(context, new_volume['id'])
-
-        retval = _translate_volume_detail_view(context, new_volume)
+        # TODO(vish): Instance should be None at db layer instead of
+        #             trying to lazy load, but for now we turn it into
+        #             a dict to avoid an error.
+        retval = _translate_volume_detail_view(context, dict(new_volume))
 
         return {'volume': retval}
 
@@ -289,6 +297,7 @@ class VolumeAttachmentController(object):
     def show(self, req, server_id, id):
         """Return data about the given volume attachment."""
         context = req.environ['nova.context']
+        authorize(context)
 
         volume_id = id
         try:
@@ -309,6 +318,7 @@ class VolumeAttachmentController(object):
     def create(self, req, server_id, body):
         """Attach a volume to an instance."""
         context = req.environ['nova.context']
+        authorize(context)
 
         if not body:
             raise exc.HTTPUnprocessableEntity()
@@ -350,6 +360,7 @@ class VolumeAttachmentController(object):
     def delete(self, req, server_id, id):
         """Detach a volume from an instance."""
         context = req.environ['nova.context']
+        authorize(context)
 
         volume_id = id
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
@@ -372,6 +383,7 @@ class VolumeAttachmentController(object):
     def _items(self, req, server_id, entity_maker):
         """Returns a list of attachments, transformed through entity_maker."""
         context = req.environ['nova.context']
+        authorize(context)
 
         try:
             instance = self.compute_api.get(context, server_id)
@@ -452,6 +464,7 @@ class SnapshotController(object):
     def show(self, req, id):
         """Return data about the given snapshot."""
         context = req.environ['nova.context']
+        authorize(context)
 
         try:
             vol = self.volume_api.get_snapshot(context, id)
@@ -463,6 +476,7 @@ class SnapshotController(object):
     def delete(self, req, id):
         """Delete a snapshot."""
         context = req.environ['nova.context']
+        authorize(context)
 
         LOG.audit(_("Delete snapshot with id: %s"), id, context=context)
 
@@ -485,6 +499,7 @@ class SnapshotController(object):
     def _items(self, req, entity_maker):
         """Returns a list of snapshots, transformed through entity_maker."""
         context = req.environ['nova.context']
+        authorize(context)
 
         snapshots = self.volume_api.get_all_snapshots(context)
         limited_list = common.limited(snapshots, req)
@@ -495,6 +510,7 @@ class SnapshotController(object):
     def create(self, req, body):
         """Creates a new snapshot."""
         context = req.environ['nova.context']
+        authorize(context)
 
         if not body:
             return exc.HTTPUnprocessableEntity()

@@ -30,16 +30,21 @@ from nova.compute import power_state
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmware_images
 from nova.virt.vmwareapi import network_utils
 
+
+vmware_vif_driver_opt = \
+    cfg.StrOpt('vmware_vif_driver',
+               default='nova.virt.vmwareapi.vif.VMWareVlanBridgeDriver',
+               help='The VMWare VIF driver to configure the VIFs.')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('vmware_vif_driver',
-                    'nova.virt.vmwareapi.vif.VMWareVlanBridgeDriver',
-                    'The VMWare VIF driver to configure the VIFs.')
+FLAGS.add_option(vmware_vif_driver_opt)
 
 LOG = logging.getLogger("nova.virt.vmwareapi.vmops")
 

@@ -21,6 +21,7 @@ from nova.db import base
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.network import model as network_model
 from nova import rpc
 from nova.rpc import common as rpc_common
 
@@ -90,11 +91,13 @@ class API(base.Base):
                         {'method': 'get_floating_ips_by_fixed_address',
                          'args': {'fixed_address': fixed_address}})
 
-    def get_vifs_by_instance(self, context, instance_id):
+    def get_vifs_by_instance(self, context, instance):
+        # NOTE(vish): When the db calls are converted to store network
+        #             data by instance_uuid, this should pass uuid instead.
         return rpc.call(context,
                         FLAGS.network_topic,
                         {'method': 'get_vifs_by_instance',
-                         'args': {'instance_id': instance_id}})
+                         'args': {'instance_id': instance['id']}})
 
     def allocate_floating_ip(self, context, pool=None):
         """Adds a floating ip to a project from a pool. (allocates)"""
@@ -123,7 +126,7 @@ class API(base.Base):
 
         ensures floating ip is allocated to the project in context
         """
-        rpc.cast(context,
+        rpc.call(context,
                  FLAGS.network_topic,
                  {'method': 'associate_floating_ip',
                   'args': {'floating_address': floating_address,
@@ -150,9 +153,11 @@ class API(base.Base):
         args['host'] = instance['host']
         args['instance_type_id'] = instance['instance_type_id']
 
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'allocate_for_instance',
-                         'args': args})
+        nw_info = rpc.call(context, FLAGS.network_topic,
+                           {'method': 'allocate_for_instance',
+                             'args': args})
+
+        return network_model.NetworkInfo.hydrate(nw_info)
 
     def deallocate_for_instance(self, context, instance, **kwargs):
         """Deallocates all network structures related to instance."""
@@ -193,9 +198,10 @@ class API(base.Base):
                 'instance_type_id': instance['instance_type_id'],
                 'host': instance['host']}
         try:
-            return rpc.call(context, FLAGS.network_topic,
-                    {'method': 'get_instance_nw_info',
-                    'args': args})
+            nw_info = rpc.call(context, FLAGS.network_topic,
+                               {'method': 'get_instance_nw_info',
+                                'args': args})
+            return network_model.NetworkInfo.hydrate(nw_info)
         # FIXME(comstud) rpc calls raise RemoteError if the remote raises
         # an exception.  In the case here, because of a race condition,
         # it's possible the remote will raise a InstanceNotFound when

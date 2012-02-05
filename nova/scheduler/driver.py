@@ -29,22 +29,27 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import rpc
 from nova.scheduler import host_manager
 from nova.scheduler import zone_manager
 from nova import utils
 
 
-FLAGS = flags.FLAGS
 LOG = logging.getLogger('nova.scheduler.driver')
-flags.DEFINE_integer('service_down_time', 60,
-                     'maximum time since last check-in for up service')
-flags.DEFINE_string('scheduler_host_manager',
-        'nova.scheduler.host_manager.HostManager',
-        'The scheduler host manager class to use')
-flags.DEFINE_string('scheduler_zone_manager',
-        'nova.scheduler.zone_manager.ZoneManager',
-        'The scheduler zone manager class to use')
+
+scheduler_driver_opts = [
+    cfg.StrOpt('scheduler_host_manager',
+               default='nova.scheduler.host_manager.HostManager',
+               help='The scheduler host manager class to use'),
+    cfg.StrOpt('scheduler_zone_manager',
+               default='nova.scheduler.zone_manager.ZoneManager',
+               help='The scheduler zone manager class to use'),
+    ]
+
+FLAGS = flags.FLAGS
+FLAGS.add_options(scheduler_driver_opts)
+
 flags.DECLARE('instances_path', 'nova.compute.manager')
 
 
@@ -159,21 +164,13 @@ class Scheduler(object):
         """Poll child zones periodically to get status."""
         return self.zone_manager.update(context)
 
-    @staticmethod
-    def service_is_up(service):
-        """Check whether a service is up based on last heartbeat."""
-        last_heartbeat = service['updated_at'] or service['created_at']
-        # Timestamps in DB are UTC.
-        elapsed = utils.total_seconds(utils.utcnow() - last_heartbeat)
-        return abs(elapsed) <= FLAGS.service_down_time
-
     def hosts_up(self, context, topic):
         """Return the list of hosts that have a running service for topic."""
 
         services = db.service_get_all_by_topic(context, topic)
         return [service['host']
                 for service in services
-                if self.service_is_up(service)]
+                if utils.service_is_up(service)]
 
     def create_instance_db_entry(self, context, request_spec):
         """Create instance DB entry based on request_spec"""
@@ -267,7 +264,7 @@ class Scheduler(object):
         # to the instance.
         if len(instance_ref['volumes']) != 0:
             services = db.service_get_all_by_topic(context, 'volume')
-            if len(services) < 1 or not self.service_is_up(services[0]):
+            if len(services) < 1 or not utils.service_is_up(services[0]):
                 raise exception.VolumeServiceUnavailable()
 
         # Checking src host exists and compute node
@@ -275,7 +272,7 @@ class Scheduler(object):
         services = db.service_get_all_compute_by_host(context, src)
 
         # Checking src host is alive.
-        if not self.service_is_up(services[0]):
+        if not utils.service_is_up(services[0]):
             raise exception.ComputeServiceUnavailable(host=src)
 
     def _live_migration_dest_check(self, context, instance_ref, dest,
@@ -295,7 +292,7 @@ class Scheduler(object):
         dservice_ref = dservice_refs[0]
 
         # Checking dest host is alive.
-        if not self.service_is_up(dservice_ref):
+        if not utils.service_is_up(dservice_ref):
             raise exception.ComputeServiceUnavailable(host=dest)
 
         # Checking whether The host where instance is running
@@ -354,7 +351,7 @@ class Scheduler(object):
         # Checking original host( where instance was launched at) exists.
         try:
             oservice_refs = db.service_get_all_compute_by_host(context,
-                                           instance_ref['launched_on'])
+                                           instance_ref['host'])
         except exception.NotFound:
             raise exception.SourceHostUnavailable()
         oservice_ref = oservice_refs[0]['compute_node'][0]
@@ -416,18 +413,14 @@ class Scheduler(object):
         :param dest: destination host
 
         """
-
         # Getting total available memory of host
         avail = self._get_compute_info(context, dest, 'memory_mb')
 
         # Getting total used memory and disk of host
         # It should be sum of memories that are assigned as max value,
         # because overcommiting is risky.
-        used = 0
         instance_refs = db.instance_get_all_by_host(context, dest)
-        used_list = [i['memory_mb'] for i in instance_refs]
-        if used_list:
-            used = reduce(lambda x, y: x + y, used_list)
+        used = sum([i['memory_mb'] for i in instance_refs])
 
         mem_inst = instance_ref['memory_mb']
         avail = avail - used
@@ -460,11 +453,6 @@ class Scheduler(object):
         # if disk_over_commit is True,
         #  otherwise virtual disk size < available disk size.
 
-        # Refresh compute_nodes table
-        topic = db.queue_get_for(context, FLAGS.compute_topic, dest)
-        rpc.call(context, topic,
-                 {"method": "update_available_resource"})
-
         # Getting total available disk of host
         available_gb = self._get_compute_info(context,
                                               dest, 'disk_available_least')
@@ -476,7 +464,7 @@ class Scheduler(object):
                                               instance_ref['host'])
             ret = rpc.call(context, topic,
                            {"method": 'get_instance_disk_info',
-                            "args": {'instance_name': instance_ref.name}})
+                            "args": {'instance_name': instance_ref['name']}})
             disk_infos = utils.loads(ret)
         except rpc.RemoteError:
             LOG.exception(_("host %(dest)s is not compatible with "

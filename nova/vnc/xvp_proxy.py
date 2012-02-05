@@ -18,8 +18,6 @@
 
 """Eventlet WSGI Services to proxy VNC for XCP protocol."""
 
-import base64
-import os
 import socket
 import webob
 
@@ -31,19 +29,27 @@ import eventlet.wsgi
 from nova import context
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import rpc
 from nova import version
 from nova import wsgi
 
 
 LOG = logging.getLogger('nova.xvpvncproxy')
+
+xvp_proxy_opts = [
+    cfg.IntOpt('xvpvncproxy_port',
+               default=6081,
+               help='Port that the XCP VNC proxy should bind to'),
+    cfg.StrOpt('xvpvncproxy_host',
+               default='0.0.0.0',
+               help='Address that the XCP VNC proxy should bind to'),
+    ]
+
 FLAGS = flags.FLAGS
+FLAGS.add_options(xvp_proxy_opts)
 
 flags.DECLARE('consoleauth_topic', 'nova.consoleauth')
-flags.DEFINE_integer('xvpvncproxy_port', 6081,
-                     'Port that the XCP VNC proxy should bind to')
-flags.DEFINE_string('xvpvncproxy_host', '0.0.0.0',
-                     'Address that the XCP VNC proxy should bind to')
 
 
 class XCPVNCProxy(object):
@@ -103,7 +109,7 @@ class XCPVNCProxy(object):
         sockets['client'] = client
         sockets['server'] = server
 
-    def proxy_connection(self, req, connect_info):
+    def proxy_connection(self, req, connect_info, start_response):
         """Spawn bi-directional vnc proxy."""
         sockets = {}
         t0 = eventlet.spawn(self.handshake, req, connect_info, sockets)
@@ -149,7 +155,7 @@ class XCPVNCProxy(object):
                                [('content-type', 'text/html')])
                 return "Not Authorized"
 
-            self.proxy_connection(req, connect_info)
+            return self.proxy_connection(req, connect_info, start_response)
         except Exception as e:
             LOG.audit(_("Unexpected error: %s"), e)
 

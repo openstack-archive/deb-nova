@@ -44,6 +44,9 @@ from sqlalchemy.sql.expression import desc
 from sqlalchemy.sql.expression import literal_column
 
 FLAGS = flags.FLAGS
+flags.DECLARE('reserved_host_disk_mb', 'nova.scheduler.host_manager')
+flags.DECLARE('reserved_host_memory_mb', 'nova.scheduler.host_manager')
+
 LOG = logging.getLogger("nova.db.sqlalchemy")
 
 
@@ -186,6 +189,48 @@ def model_query(context, *args, **kwargs):
 
     if project_only and is_user_context(context):
         query = query.filter_by(project_id=context.project_id)
+
+    return query
+
+
+def exact_filter(query, model, filters, legal_keys):
+    """Applies exact match filtering to a query.
+
+    Returns the updated query.  Modifies filters argument to remove
+    filters consumed.
+
+    :param query: query to apply filters to
+    :param model: model object the query applies to, for IN-style
+                  filtering
+    :param filters: dictionary of filters; values that are lists,
+                    tuples, sets, or frozensets cause an 'IN' test to
+                    be performed, while exact matching ('==' operator)
+                    is used for other values
+    :param legal_keys: list of keys to apply exact filtering to
+    """
+
+    filter_dict = {}
+
+    # Walk through all the keys
+    for key in legal_keys:
+        # Skip ones we're not filtering on
+        if key not in filters:
+            continue
+
+        # OK, filtering on this key; what value do we search for?
+        value = filters.pop(key)
+
+        if isinstance(value, (list, tuple, set, frozenset)):
+            # Looking for values in a list; apply to query directly
+            column_attr = getattr(model, key)
+            query = query.filter(column_attr.in_(value))
+        else:
+            # OK, simple exact match; save for later
+            filter_dict[key] = value
+
+    # Apply simple exact matches
+    if filter_dict:
+        query = query.filter_by(**filter_dict)
 
     return query
 
@@ -388,6 +433,21 @@ def compute_node_get(context, compute_id, session=None):
 
 
 @require_admin_context
+def compute_node_get_by_service(context, service_id, session=None):
+    if not session:
+        session = get_session()
+
+    result = model_query(context, models.ComputeNode, session=session).\
+                     filter_by(service_id=service_id).\
+                     first()
+
+    if not result:
+        raise exception.ComputeHostNotFound(host="ServiceID=%s" % service_id)
+
+    return result
+
+
+@require_admin_context
 def compute_node_get_all(context, session=None):
     return model_query(context, models.ComputeNode, session=session).\
                     options(joinedload('service')).\
@@ -402,21 +462,154 @@ def compute_node_get_for_service(context, service_id):
                     first()
 
 
+def _get_host_utilization(context, host, ram_mb, disk_gb):
+    """Compute the current utilization of a given host."""
+    instances = instance_get_all_by_host(context, host)
+    vms = len(instances)
+    free_ram_mb = ram_mb - FLAGS.reserved_host_memory_mb
+    free_disk_gb = disk_gb - (FLAGS.reserved_host_disk_mb * 1024)
+
+    work = 0
+    for instance in instances:
+        free_ram_mb -= instance.memory_mb
+        free_disk_gb -= instance.root_gb
+        free_disk_gb -= instance.ephemeral_gb
+        if instance.vm_state in [vm_states.BUILDING, vm_states.REBUILDING,
+                                 vm_states.MIGRATING, vm_states.RESIZING]:
+            work += 1
+    return dict(free_ram_mb=free_ram_mb,
+                free_disk_gb=free_disk_gb,
+                current_workload=work,
+                running_vms=vms)
+
+
+def _adjust_compute_node_values_for_utilization(context, values, session):
+    service_ref = service_get(context, values['service_id'], session=session)
+    host = service_ref['host']
+    ram_mb = values['memory_mb']
+    disk_gb = values['local_gb']
+    values.update(_get_host_utilization(context, host, ram_mb, disk_gb))
+
+
 @require_admin_context
-def compute_node_create(context, values):
-    compute_node_ref = models.ComputeNode()
-    compute_node_ref.update(values)
-    compute_node_ref.save()
+def compute_node_create(context, values, session=None):
+    """Creates a new ComputeNode and populates the capacity fields
+    with the most recent data."""
+    if not session:
+        session = get_session()
+
+    _adjust_compute_node_values_for_utilization(context, values, session)
+    with session.begin(subtransactions=True):
+        compute_node_ref = models.ComputeNode()
+        session.add(compute_node_ref)
+        compute_node_ref.update(values)
     return compute_node_ref
 
 
 @require_admin_context
 def compute_node_update(context, compute_id, values):
+    """Creates a new ComputeNode and populates the capacity fields
+    with the most recent data."""
     session = get_session()
-    with session.begin():
+    _adjust_compute_node_values_for_utilization(context, values, session)
+    with session.begin(subtransactions=True):
         compute_ref = compute_node_get(context, compute_id, session=session)
         compute_ref.update(values)
         compute_ref.save(session=session)
+
+
+# Note: these operations use with_lockmode() ... so this will only work
+# reliably with engines that support row-level locking
+# (postgres, mysql+innodb and above).
+
+def compute_node_get_by_host(context, host):
+    """Get all capacity entries for the given host."""
+    session = get_session()
+    with session.begin():
+        node = session.query(models.ComputeNode).\
+                             options(joinedload('service')).\
+                             filter(models.Service.host == host).\
+                             filter_by(deleted=False).\
+                             with_lockmode('update')
+        return node.first()
+
+
+def compute_node_capacity_find(context, minimum_ram_mb, minimum_disk_gb):
+    """Get all enabled hosts with enough ram and disk."""
+    session = get_session()
+    with session.begin():
+        return session.query(models.ComputeNode).\
+                  options(joinedload('service')).\
+                  filter(models.ComputeNode.free_ram_mb >= minimum_ram_mb).\
+                  filter(models.ComputeNode.free_disk_gb >= minimum_disk_gb).\
+                  filter(models.Service.disabled == False).\
+                  filter_by(deleted=False).\
+                  with_lockmode('update').all()
+
+
+def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
+                          free_disk_gb_delta=0, work_delta=0, vm_delta=0):
+    """Update a specific ComputeNode entry by a series of deltas.
+    Do this as a single atomic action and lock the row for the
+    duration of the operation. Requires that ComputeNode record exist."""
+    session = get_session()
+    compute_node = None
+    with session.begin(subtransactions=True):
+        compute_node = session.query(models.ComputeNode).\
+                              options(joinedload('service')).\
+                              filter(models.Service.host == host).\
+                              filter_by(deleted=False).\
+                              with_lockmode('update').\
+                              first()
+        if compute_node is None:
+            raise exception.NotFound(_("No ComputeNode for %(host)s" %
+                                 locals()))
+
+        # This table thingy is how we get atomic UPDATE x = x + 1
+        # semantics.
+        table = models.ComputeNode.__table__
+        if free_ram_mb_delta != 0:
+            compute_node.free_ram_mb = table.c.free_ram_mb + free_ram_mb_delta
+        if free_disk_gb_delta != 0:
+            compute_node.free_disk_gb = table.c.free_disk_gb + \
+                                        free_disk_gb_delta
+        if work_delta != 0:
+            compute_node.current_workload = table.c.current_workload + \
+                                            work_delta
+        if vm_delta != 0:
+            compute_node.running_vms = table.c.running_vms + vm_delta
+    return compute_node
+
+
+def compute_node_utilization_set(context, host, free_ram_mb=None,
+                                 free_disk_gb=None, work=None, vms=None):
+    """Like compute_node_utilization_update() modify a specific host
+    entry. But this function will set the metrics absolutely
+    (vs. a delta update).
+    """
+    session = get_session()
+    compute_node = None
+    with session.begin(subtransactions=True):
+        compute_node = session.query(models.ComputeNode).\
+                              options(joinedload('service')).\
+                              filter(models.Service.host == host).\
+                              filter_by(deleted=False).\
+                              with_lockmode('update').\
+                              first()
+        if compute_node is None:
+            raise exception.NotFound(_("No ComputeNode for %(host)s" %
+                                 locals()))
+
+        if free_ram_mb != None:
+            compute_node.free_ram_mb = free_ram_mb
+        if free_disk_gb != None:
+            compute_node.free_disk_gb = free_disk_gb
+        if work != None:
+            compute_node.current_workload = work
+        if vms != None:
+            compute_node.running_vms = vms
+
+    return compute_node
 
 
 ###################
@@ -624,6 +817,14 @@ def _floating_ip_get_all(context):
 
 
 @require_admin_context
+def floating_ip_get_all(context):
+    floating_ip_refs = _floating_ip_get_all(context).all()
+    if not floating_ip_refs:
+        raise exception.NoFloatingIpsDefined()
+    return floating_ip_refs
+
+
+@require_admin_context
 def floating_ip_get_all_by_host(context, host):
     floating_ip_refs = _floating_ip_get_all(context).\
                             filter_by(host=host).\
@@ -748,9 +949,9 @@ def dnsdomain_register_for_project(context, fqdomain, project):
 def dnsdomain_unregister(context, fqdomain):
     session = get_session()
     with session.begin():
-        domain_ref = _dnsdomain_get(context, session, fqdomain)
-        if domain_ref:
-            domain_ref.delete(session=session)
+        session.query(models.DNSDomain).\
+                     filter_by(domain=fqdomain).\
+                     delete()
 
 
 @require_context
@@ -862,7 +1063,7 @@ def fixed_ip_disassociate(context, address):
         fixed_ip_ref = fixed_ip_get_by_address(context,
                                                address,
                                                session=session)
-        fixed_ip_ref.instance = None
+        fixed_ip_ref['instance_id'] = None
         fixed_ip_ref.save(session=session)
 
 
@@ -1307,18 +1508,6 @@ def instance_get_all_by_filters(context, filters):
             return True
         return False
 
-    def _exact_match_filter(query, column, value):
-        """Do exact match against a column.  value to match can be a list
-        so you can match any value in the list.
-        """
-        if isinstance(value, list) or isinstance(value, set):
-            column_attr = getattr(models.Instance, column)
-            return query.filter(column_attr.in_(value))
-        else:
-            filter_dict = {}
-            filter_dict[column] = value
-            return query.filter_by(**filter_dict)
-
     session = get_session()
     query_prefix = session.query(models.Instance).\
             options(joinedload('info_cache')).\
@@ -1360,14 +1549,9 @@ def instance_get_all_by_filters(context, filters):
     exact_match_filter_names = ['project_id', 'user_id', 'image_ref',
             'vm_state', 'instance_type_id', 'uuid']
 
-    query_filters = [key for key in filters.iterkeys()
-            if key in exact_match_filter_names]
-
-    for filter_name in query_filters:
-        # Do the matching and remove the filter from the dictionary
-        # so we don't try it again below..
-        query_prefix = _exact_match_filter(query_prefix, filter_name,
-                filters.pop(filter_name))
+    # Filter the query
+    query_prefix = exact_filter(query_prefix, models.Instance,
+                                filters, exact_match_filter_names)
 
     instances = query_prefix.all()
     if not instances:
@@ -1398,36 +1582,36 @@ def instance_get_all_by_filters(context, filters):
 
 @require_context
 def instance_get_active_by_window(context, begin, end=None, project_id=None):
-    """Return instances that were continuously active over window."""
+    """Return instances that were active during window."""
     session = get_session()
-    query = session.query(models.Instance).\
-                    filter(models.Instance.launched_at < begin)
+    query = session.query(models.Instance)
+
+    query = query.filter(or_(models.Instance.terminated_at == None,
+                             models.Instance.terminated_at > begin))
     if end:
-        query = query.filter(or_(models.Instance.terminated_at == None,
-                                 models.Instance.terminated_at > end))
-    else:
-        query = query.filter(models.Instance.terminated_at == None)
+        query = query.filter(models.Instance.launched_at < end)
     if project_id:
         query = query.filter_by(project_id=project_id)
+
     return query.all()
 
 
 @require_admin_context
 def instance_get_active_by_window_joined(context, begin, end=None,
                                          project_id=None):
-    """Return instances and joins that were continuously active over window."""
+    """Return instances and joins that were active during window."""
     session = get_session()
-    query = session.query(models.Instance).\
-                    options(joinedload('security_groups')).\
-                    options(joinedload('instance_type')).\
-                    filter(models.Instance.launched_at < begin)
+    query = session.query(models.Instance)
+
+    query = query.options(joinedload('security_groups')).\
+                  options(joinedload('instance_type')).\
+                  filter(or_(models.Instance.terminated_at == None,
+                             models.Instance.terminated_at > begin))
     if end:
-        query = query.filter(or_(models.Instance.terminated_at == None,
-                                 models.Instance.terminated_at > end))
-    else:
-        query = query.filter(models.Instance.terminated_at == None)
+        query = query.filter(models.Instance.launched_at < end)
     if project_id:
         query = query.filter_by(project_id=project_id)
+
     return query.all()
 
 
@@ -1638,11 +1822,16 @@ def instance_info_cache_update(context, instance_uuid, values,
     info_cache = instance_info_cache_get(context, instance_uuid,
                                          session=session)
 
-    values['updated_at'] = literal_column('updated_at')
-
     if info_cache:
         info_cache.update(values)
         info_cache.save(session=session)
+    else:
+        # NOTE(tr3buchet): just in case someone blows away an instance's
+        #                  cache entry
+        values['instance_id'] = instance_uuid
+        info_cache = \
+            instance_info_cache_create(context, values)
+
     return info_cache
 
 
@@ -3182,13 +3371,13 @@ def instance_type_create(context, values):
         instance_type_ref.save()
     except Exception, e:
         raise exception.DBError(e)
-    return instance_type_ref
+    return _dict_with_extra_specs(instance_type_ref)
 
 
 def _dict_with_extra_specs(inst_type_query):
-    """Takes an instance OR volume type query returned by sqlalchemy
-    and returns it as a dictionary, converting the extra_specs
-    entry from a list of dicts:
+    """Takes an instance, volume, or instance type query returned
+    by sqlalchemy and returns it as a dictionary, converting the
+    extra_specs entry from a list of dicts:
 
     'extra_specs' : [{'key': 'k1', 'value': 'v1', ...}, ...]
 
@@ -3222,9 +3411,9 @@ def instance_type_get_all(context, inactive=False, filters=None):
     if 'min_memory_mb' in filters:
         query = query.filter(
                 models.InstanceTypes.memory_mb >= filters['min_memory_mb'])
-    if 'min_local_gb' in filters:
+    if 'min_root_gb' in filters:
         query = query.filter(
-                models.InstanceTypes.local_gb >= filters['min_local_gb'])
+                models.InstanceTypes.root_gb >= filters['min_root_gb'])
 
     inst_types = query.order_by("name").all()
 
@@ -3493,6 +3682,29 @@ def bw_usage_get_by_instance(context, instance_id, start_period):
                    filter_by(instance_id=instance_id).\
                    filter_by(start_period=start_period).\
                    all()
+
+
+@require_context
+def bw_usage_get_all_by_filters(context, filters):
+    """Return bandwidth usage that matches all filters."""
+
+    session = get_session()
+    query_prefix = session.query(models.BandwidthUsage).\
+            order_by(desc(models.BandwidthUsage.created_at))
+
+    # Make a copy of the filters dictionary to use going forward, as we'll
+    # be modifying it and we shouldn't affect the caller's use of it.
+    filters = filters.copy()
+
+    # Filters for exact matches that we can do along with the SQL query.
+    exact_match_filter_names = ["instance_id", "network_label",
+            "start_period", "last_refreshed", "bw_in", "bw_out"]
+
+    # Filter the query
+    query_prefix = exact_filter(query_prefix, models.BandwidthUsage,
+                                filters, exact_match_filter_names)
+
+    return query_prefix.all()
 
 
 @require_context
@@ -3903,7 +4115,7 @@ def sm_backend_conf_update(context, sm_backend_id, values):
                 _("No backend config with id %(sm_backend_id)s") % locals())
 
     backend_conf.update(values)
-    backend_conf.save(session=session)
+    backend_conf.save()
     return backend_conf
 
 
@@ -4051,7 +4263,7 @@ def aggregate_create(context, values, metadata=None):
     try:
         aggregate = models.Aggregate()
         aggregate.update(values)
-        aggregate.operational_state = aggregate_states.BUILDING
+        aggregate.operational_state = aggregate_states.CREATED
         aggregate.save()
     except exception.DBError:
         raise exception.AggregateNameExists(aggregate_name=values['name'])
@@ -4229,20 +4441,27 @@ def aggregate_host_delete(context, aggregate_id, host):
 @require_admin_context
 @require_aggregate_exists
 def aggregate_host_add(context, aggregate_id, host):
+    session = get_session()
     host_ref = _aggregate_get_query(context,
                                     models.AggregateHost,
                                     models.AggregateHost.aggregate_id,
                                     aggregate_id,
-                                    read_deleted='no').\
+                                    session=session,
+                                    read_deleted='yes').\
                                     filter_by(host=host).first()
     if not host_ref:
         try:
             host_ref = models.AggregateHost()
             values = {"host": host, "aggregate_id": aggregate_id, }
             host_ref.update(values)
-            host_ref.save()
+            host_ref.save(session=session)
         except exception.DBError:
             raise exception.AggregateHostConflict(host=host)
+    elif host_ref.deleted:
+        host_ref.update({'deleted': False,
+                         'deleted_at': None,
+                         'updated_at': literal_column('updated_at')})
+        host_ref.save(session=session)
     else:
         raise exception.AggregateHostExists(host=host,
                                             aggregate_id=aggregate_id)

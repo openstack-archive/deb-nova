@@ -29,6 +29,10 @@ from nova import flags
 
 
 FLAGS = flags.FLAGS
+authorize_show = extensions.extension_authorizer('compute',
+                                                 'simple_tenant_usage:show')
+authorize_list = extensions.extension_authorizer('compute',
+                                                 'simple_tenant_usage:list')
 
 
 def make_usage(elem):
@@ -109,8 +113,6 @@ class SimpleTenantUsageController(object):
                                                      period_start,
                                                      period_stop,
                                                      tenant_id)
-        from nova import log as logging
-        logging.info(instances)
         rval = {}
         flavors = {}
 
@@ -135,7 +137,7 @@ class SimpleTenantUsageController(object):
             info['name'] = instance['display_name']
 
             info['memory_mb'] = flavor['memory_mb']
-            info['local_gb'] = flavor['local_gb']
+            info['local_gb'] = flavor['root_gb'] + flavor['ephemeral_gb']
             info['vcpus'] = flavor['vcpus']
 
             info['tenant_id'] = instance['project_id']
@@ -158,7 +160,7 @@ class SimpleTenantUsageController(object):
             else:
                 delta = now - info['started_at']
 
-            info['uptime'] = delta.days * 24 * 60 + delta.seconds
+            info['uptime'] = delta.days * 24 * 3600 + delta.seconds
 
             if not info['tenant_id'] in rval:
                 summary = {}
@@ -212,8 +214,7 @@ class SimpleTenantUsageController(object):
         """Retrive tenant_usage for all tenants"""
         context = req.environ['nova.context']
 
-        if not context.is_admin:
-            return webob.Response(status_int=403)
+        authorize_list(context)
 
         (period_start, period_stop, detailed) = self._get_datetime_range(req)
         usages = self._tenant_usages_for_period(context,
@@ -228,9 +229,7 @@ class SimpleTenantUsageController(object):
         tenant_id = id
         context = req.environ['nova.context']
 
-        if not context.is_admin:
-            if tenant_id != context.project_id:
-                return webob.Response(status_int=403)
+        authorize_show(context, {'project_id': tenant_id})
 
         (period_start, period_stop, ignore) = self._get_datetime_range(req)
         usage = self._tenant_usages_for_period(context,
@@ -253,7 +252,6 @@ class Simple_tenant_usage(extensions.ExtensionDescriptor):
     namespace = "http://docs.openstack.org/compute/ext/" \
                 "os-simple-tenant-usage/api/v1.1"
     updated = "2011-08-19T00:00:00+00:00"
-    admin_only = True
 
     def get_resources(self):
         resources = []

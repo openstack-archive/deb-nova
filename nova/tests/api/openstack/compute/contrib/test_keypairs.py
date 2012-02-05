@@ -22,6 +22,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack.compute.contrib import keypairs
 from nova import context
 from nova import db
+from nova import exception
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -43,6 +44,10 @@ def db_key_pair_create(self, keypair):
 def db_key_pair_destroy(context, user_id, name):
     if not (user_id and name):
         raise Exception()
+
+
+def db_key_pair_get(context, user_id, name):
+    pass
 
 
 class KeypairsTest(test.TestCase):
@@ -80,6 +85,28 @@ class KeypairsTest(test.TestCase):
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
         self.assertTrue(len(res_dict['keypair']['private_key']) > 0)
 
+    def test_keypair_create_with_empty_name(self):
+        body = {'keypair': {'name': ''}}
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+
+    def test_keypair_create_with_invalid_name(self):
+        body = {
+            'keypair': {
+                'name': 'a' * 256
+            }
+        }
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+
     def test_keypair_import(self):
         body = {
             'keypair': {
@@ -107,12 +134,49 @@ class KeypairsTest(test.TestCase):
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
         self.assertFalse('private_key' in res_dict['keypair'])
 
+    def test_keypair_create_duplicate(self):
+        self.stubs.Set(db, "key_pair_get", db_key_pair_get)
+        body = {'keypair': {'name': 'create_duplicate'}}
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 409)
+
+    def test_keypair_import_bad_key(self):
+        body = {
+            'keypair': {
+                'name': 'create_test',
+                'public_key': 'ssh-what negative',
+            },
+        }
+
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+
     def test_keypair_delete(self):
         req = webob.Request.blank('/v2/fake/os-keypairs/FAKE')
         req.method = 'DELETE'
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 202)
+
+    def test_keypair_delete_not_found(self):
+
+        def db_key_pair_get_not_found(context, user_id, name):
+            raise exception.KeyPairNotFound()
+
+        self.stubs.Set(db, "key_pair_get",
+                       db_key_pair_get_not_found)
+        req = webob.Request.blank('/v2/fake/os-keypairs/WHAT')
+        res = req.get_response(fakes.wsgi_app())
+        print res
+        self.assertEqual(res.status_int, 404)
 
 
 class KeypairsXMLSerializerTest(test.TestCase):

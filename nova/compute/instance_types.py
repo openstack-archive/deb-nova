@@ -30,13 +30,20 @@ FLAGS = flags.FLAGS
 LOG = logging.getLogger('nova.instance_types')
 
 
-def create(name, memory, vcpus, local_gb, flavorid, swap=0,
-           rxtx_factor=1):
+def create(name, memory, vcpus, root_gb, ephemeral_gb, flavorid, swap=None,
+           rxtx_factor=None):
     """Creates instance types."""
+
+    if swap is None:
+        swap = 0
+    if rxtx_factor is None:
+        rxtx_factor = 1
+
     kwargs = {
         'memory_mb': memory,
         'vcpus': vcpus,
-        'local_gb': local_gb,
+        'root_gb': root_gb,
+        'ephemeral_gb': ephemeral_gb,
         'swap': swap,
         'rxtx_factor': rxtx_factor,
     }
@@ -111,8 +118,8 @@ def get_default_instance_type():
     name = FLAGS.default_instance_type
     try:
         return get_instance_type_by_name(name)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown instance type: %s") % name)
+    except exception.InstanceTypeNotFound as e:
+        raise exception.ApiError(e)
 
 
 def get_instance_type(instance_type_id):
@@ -123,9 +130,8 @@ def get_instance_type(instance_type_id):
     ctxt = context.get_admin_context()
     try:
         return db.instance_type_get(ctxt, instance_type_id)
-    except exception.DBError:
-        msg = _("Unknown instance type: %s") % instance_type_id
-        raise exception.ApiError(msg)
+    except exception.InstanceTypeNotFound as e:
+        raise exception.ApiError(e)
 
 
 def get_instance_type_by_name(name):
@@ -137,16 +143,16 @@ def get_instance_type_by_name(name):
 
     try:
         return db.instance_type_get_by_name(ctxt, name)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown instance type: %s") % name)
+    except exception.InstanceTypeNotFound as e:
+        raise exception.ApiError(e)
 
 
 # TODO(termie): flavor-specific code should probably be in the API that uses
 #               flavors.
 def get_instance_type_by_flavor_id(flavorid):
-    """Retrieve instance type by flavorid."""
+    """Retrieve instance type by flavorid.
+
+    :raises: FlavorNotFound
+    """
     ctxt = context.get_admin_context()
-    try:
-        return db.instance_type_get_by_flavor_id(ctxt, flavorid)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown instance type: %s") % flavorid)
+    return db.instance_type_get_by_flavor_id(ctxt, flavorid)

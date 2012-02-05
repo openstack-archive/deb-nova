@@ -23,10 +23,7 @@ datastore.
 """
 
 import base64
-import os
 import re
-import shutil
-import tempfile
 import time
 import urllib
 
@@ -50,7 +47,6 @@ from nova import volume
 
 FLAGS = flags.FLAGS
 flags.DECLARE('dhcp_domain', 'nova.network.manager')
-flags.DECLARE('service_down_time', 'nova.scheduler.driver')
 
 LOG = logging.getLogger("nova.api.ec2.cloud")
 
@@ -206,34 +202,9 @@ class CloudController(object):
         self.volume_api = volume.API()
         self.compute_api = compute.API(network_api=self.network_api,
                                        volume_api=self.volume_api)
-        self.setup()
 
     def __str__(self):
         return 'CloudController'
-
-    def setup(self):
-        """ Ensure the keychains and folders exist. """
-        # FIXME(ja): this should be moved to a nova-manage command,
-        # if not setup throw exceptions instead of running
-        # Create keys folder, if it doesn't exist
-        if not os.path.exists(FLAGS.keys_path):
-            os.makedirs(FLAGS.keys_path)
-        # Gen root CA, if we don't have one
-        root_ca_path = os.path.join(FLAGS.ca_path, FLAGS.ca_file)
-        if not os.path.exists(root_ca_path):
-            genrootca_sh_path = os.path.join(os.path.dirname(__file__),
-                                             os.path.pardir,
-                                             os.path.pardir,
-                                             'CA',
-                                             'genrootca.sh')
-
-            start = os.getcwd()
-            if not os.path.exists(FLAGS.ca_path):
-                os.makedirs(FLAGS.ca_path)
-            os.chdir(FLAGS.ca_path)
-            # TODO(vish): Do this with M2Crypto instead
-            utils.runthis(_("Generating root CA: %s"), "sh", genrootca_sh_path)
-            os.chdir(start)
 
     def _get_image_state(self, image):
         # NOTE(vish): fallback status if image_state isn't set
@@ -279,7 +250,6 @@ class CloudController(object):
                                         'zoneState': 'available'}]}
 
         services = db.service_get_all(context, False)
-        now = utils.utcnow()
         hosts = []
         for host in [service['host'] for service in services]:
             if not host in hosts:
@@ -290,8 +260,7 @@ class CloudController(object):
             hsvcs = [service for service in services \
                      if service['host'] == host]
             for svc in hsvcs:
-                delta = now - (svc['updated_at'] or svc['created_at'])
-                alive = (delta.seconds <= FLAGS.service_down_time)
+                alive = utils.service_is_up(svc)
                 art = (alive and ":-)") or "XXX"
                 active = 'enabled'
                 if svc['disabled']:
@@ -350,9 +319,6 @@ class CloudController(object):
         s['ownerId'] = snapshot['project_id']
         s['volumeSize'] = snapshot['volume_size']
         s['description'] = snapshot['display_description']
-
-        s['display_name'] = snapshot['display_name']
-        s['display_description'] = snapshot['display_description']
         return s
 
     def create_snapshot(self, context, volume_id, **kwargs):
@@ -363,8 +329,8 @@ class CloudController(object):
         snapshot = self.volume_api.create_snapshot(
                 context,
                 volume,
-                kwargs.get('display_name'),
-                kwargs.get('display_description'))
+                None,
+                kwargs.get('description'))
         return self._format_snapshot(context, snapshot)
 
     def delete_snapshot(self, context, snapshot_id, **kwargs):
@@ -621,17 +587,14 @@ class CloudController(object):
            defined in the given security group.
         """
         for rule in security_group.rules:
-            if 'group_id' in values:
-                if rule['group_id'] == values['group_id']:
-                    return rule['id']
-            else:
-                is_duplicate = True
-                for key in ('cidr', 'from_port', 'to_port', 'protocol'):
-                    if rule[key] != values[key]:
-                        is_duplicate = False
-                        break
-                if is_duplicate:
-                    return rule['id']
+            is_duplicate = True
+            keys = ('group_id', 'cidr', 'from_port', 'to_port', 'protocol')
+            for key in keys:
+                if rule.get(key) != values.get(key):
+                    is_duplicate = False
+                    break
+            if is_duplicate:
+                return rule['id']
         return False
 
     def revoke_security_group_ingress(self, context, group_name=None,
@@ -820,15 +783,6 @@ class CloudController(object):
                 "Timestamp": now,
                 "output": base64.b64encode(output)}
 
-    def get_ajax_console(self, context, instance_id, **kwargs):
-        """Web based ajax terminal for vm.
-
-        This is an extension to the normal ec2_api"""
-        ec2_id = instance_id[0]
-        instance_id = ec2utils.ec2_id_to_id(ec2_id)
-        instance = self.compute_api.get(context, instance_id)
-        return self.compute_api.get_ajax_console(context, instance)
-
     def describe_volumes(self, context, volume_id=None, **kwargs):
         if volume_id:
             volumes = []
@@ -876,8 +830,6 @@ class CloudController(object):
         else:
             v['snapshotId'] = None
 
-        v['display_name'] = volume['display_name']
-        v['display_description'] = volume['display_description']
         return v
 
     def create_volume(self, context, **kwargs):
@@ -891,11 +843,14 @@ class CloudController(object):
             snapshot = None
             LOG.audit(_("Create volume of %s GB"), size, context=context)
 
+        availability_zone = kwargs.get('availability_zone', None)
+
         volume = self.volume_api.create(context,
                                         size,
-                                        kwargs.get('display_name'),
-                                        kwargs.get('display_description'),
-                                        snapshot)
+                                        None,
+                                        None,
+                                        snapshot,
+                                        availability_zone=availability_zone)
         # TODO(vish): Instance should be None at db layer instead of
         #             trying to lazy load, but for now we turn it into
         #             a dict to avoid an error.
@@ -905,18 +860,6 @@ class CloudController(object):
         volume_id = ec2utils.ec2_id_to_id(volume_id)
         volume = self.volume_api.get(context, volume_id)
         self.volume_api.delete(context, volume)
-        return True
-
-    def update_volume(self, context, volume_id, **kwargs):
-        volume_id = ec2utils.ec2_id_to_id(volume_id)
-        updatable_fields = ['display_name', 'display_description']
-        changes = {}
-        for field in updatable_fields:
-            if field in kwargs:
-                changes[field] = kwargs[field]
-        if changes:
-            volume = self.volume_api.get(context, volume_id)
-            self.volume_api.update(context, volume, fields=changes)
         return True
 
     def attach_volume(self, context, volume_id, instance_id, device, **kwargs):
@@ -1050,6 +993,25 @@ class CloudController(object):
         assert len(i) == 1
         return i[0]
 
+    def _format_terminate_instances(self, context, instance_id,
+                                    previous_states):
+        instances_set = []
+        for (ec2_id, previous_state) in zip(instance_id, previous_states):
+            i = {}
+            i['instanceId'] = ec2_id
+            i['previousState'] = _state_description(previous_state['vm_state'],
+                                        previous_state['shutdown_terminate'])
+            try:
+                internal_id = ec2utils.ec2_id_to_id(ec2_id)
+                instance = self.compute_api.get(context, internal_id)
+                i['shutdownState'] = _state_description(instance['vm_state'],
+                                            instance['shutdown_terminate'])
+            except exception.NotFound:
+                i['shutdownState'] = _state_description(vm_states.DELETED,
+                                                        True)
+            instances_set.append(i)
+        return {'instancesSet': instances_set}
+
     def _format_instance_bdm(self, context, instance_id, root_device_name,
                              result):
         """Format InstanceBlockDeviceMappingResponseItemType"""
@@ -1168,8 +1130,6 @@ class CloudController(object):
             self._format_instance_type(instance, i)
             i['launchTime'] = instance['created_at']
             i['amiLaunchIndex'] = instance['launch_index']
-            i['displayName'] = instance['display_name']
-            i['displayDescription'] = instance['display_description']
             self._format_instance_root_device_name(instance, i)
             self._format_instance_bdm(context, instance_id,
                                       i['rootDeviceName'], i)
@@ -1228,7 +1188,7 @@ class CloudController(object):
     def release_address(self, context, public_ip, **kwargs):
         LOG.audit(_("Release address %s"), public_ip, context=context)
         self.network_api.release_floating_ip(context, address=public_ip)
-        return {'releaseResponse': ["Address released."]}
+        return {'return': "true"}
 
     def associate_address(self, context, instance_id, public_ip, **kwargs):
         LOG.audit(_("Associate address %(public_ip)s to"
@@ -1238,12 +1198,12 @@ class CloudController(object):
         self.compute_api.associate_floating_ip(context,
                                                instance,
                                                address=public_ip)
-        return {'associateResponse': ["Address associated."]}
+        return {'return': "true"}
 
     def disassociate_address(self, context, public_ip, **kwargs):
         LOG.audit(_("Disassociate address %s"), public_ip, context=context)
         self.network_api.disassociate_floating_ip(context, address=public_ip)
-        return {'disassociateResponse': ["Address disassociated."]}
+        return {'return': "true"}
 
     def run_instances(self, context, **kwargs):
         max_count = int(kwargs.get('max_count', 1))
@@ -1276,8 +1236,6 @@ class CloudController(object):
             max_count=max_count,
             kernel_id=kwargs.get('kernel_id'),
             ramdisk_id=kwargs.get('ramdisk_id'),
-            display_name=kwargs.get('display_name'),
-            display_description=kwargs.get('display_description'),
             key_name=kwargs.get('key_name'),
             user_data=kwargs.get('user_data'),
             security_group=kwargs.get('security_group'),
@@ -1290,11 +1248,15 @@ class CloudController(object):
         """Terminate each instance in instance_id, which is a list of ec2 ids.
         instance_id is a kwarg so its name cannot be modified."""
         LOG.debug(_("Going to start terminating instances"))
+        previous_states = []
         for ec2_id in instance_id:
             _instance_id = ec2utils.ec2_id_to_id(ec2_id)
             instance = self.compute_api.get(context, _instance_id)
+            previous_states.append(instance)
             self.compute_api.delete(context, instance)
-        return True
+        return self._format_terminate_instances(context,
+                                                instance_id,
+                                                previous_states)
 
     def reboot_instances(self, context, instance_id, **kwargs):
         """instance_id is a list of instance ids"""
@@ -1323,35 +1285,6 @@ class CloudController(object):
             _instance_id = ec2utils.ec2_id_to_id(ec2_id)
             instance = self.compute_api.get(context, _instance_id)
             self.compute_api.start(context, instance)
-        return True
-
-    def rescue_instance(self, context, instance_id, **kwargs):
-        """This is an extension to the normal ec2_api"""
-        LOG.debug(_("Going to rescue instance %s") % instance_id)
-        _instance_id = ec2utils.ec2_id_to_id(instance_id)
-        instance = self.compute_api.get(context, _instance_id)
-        self.compute_api.rescue(context, instance)
-        return True
-
-    def unrescue_instance(self, context, instance_id, **kwargs):
-        """This is an extension to the normal ec2_api"""
-        LOG.debug(_("Going to unrescue instance %s") % instance_id)
-        _instance_id = ec2utils.ec2_id_to_id(instance_id)
-        instance = self.compute_api.get(context, _instance_id)
-        self.compute_api.unrescue(context, instance)
-        return True
-
-    def update_instance(self, context, instance_id, **kwargs):
-        """This is an extension to the normal ec2_api"""
-        updatable_fields = ['display_name', 'display_description']
-        changes = {}
-        for field in updatable_fields:
-            if field in kwargs:
-                changes[field] = kwargs[field]
-        if changes:
-            instance_id = ec2utils.ec2_id_to_id(instance_id)
-            instance = self.compute_api.get(context, instance_id)
-            self.compute_api.update(context, instance, **changes)
         return True
 
     def _get_image(self, context, ec2_id):
@@ -1398,7 +1331,6 @@ class CloudController(object):
             i['imageLocation'] = image['properties'].get('image_location')
 
         i['imageState'] = self._get_image_state(image)
-        i['displayName'] = name
         i['description'] = image.get('description')
         display_mapping = {'aki': 'kernel',
                            'ari': 'ramdisk',

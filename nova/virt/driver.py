@@ -380,7 +380,7 @@ class ComputeDriver(object):
             * another host 'H1' runs an instance 'i-1'
             * instance 'i-1' is a member of security group 'b'
 
-            When 'i-1' launches or terminates we will recieve the message
+            When 'i-1' launches or terminates we will receive the message
             to update members of group 'b', at which time we will make
             any changes needed to the rules for instance 'i-0' to allow
             or deny traffic coming from 'i-1', depending on if it is being
@@ -399,7 +399,7 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def refresh_provider_fw_rules(self, security_group_id):
+    def refresh_provider_fw_rules(self):
         """This triggers a firewall update based on database changes.
 
         When this is called, rules have either been added or removed from the
@@ -603,5 +603,23 @@ class ComputeDriver(object):
         unused.
 
         Note that this function takes an instance ID.
+        """
+        raise NotImplementedError()
+
+    def legacy_nwinfo(self):
+        """
+        Indicate if the driver requires the legacy network_info format.
+        """
+        # TODO(tr3buchet): update all subclasses and remove this
+        return True
+
+    def manage_image_cache(self, context):
+        """
+        Manage the driver's local image cache.
+
+        Some drivers chose to cache images for instances on disk. This method
+        is an opportunity to do management of that cache which isn't directly
+        related to other calls into the driver. The prime example is to clean
+        the cache and remove images which are no longer of interest.
         """
         raise NotImplementedError()

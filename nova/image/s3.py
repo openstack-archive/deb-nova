@@ -18,6 +18,7 @@
 
 """Proxy AMI-related calls from cloud controller to objectstore service."""
 
+import base64
 import binascii
 import os
 import shutil
@@ -28,24 +29,33 @@ from xml.etree import ElementTree
 import boto.s3.connection
 import eventlet
 
-from nova import crypto
+from nova import rpc
 import nova.db.api
 from nova import exception
 from nova import flags
 from nova import image
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.api.ec2 import ec2utils
 
 
 LOG = logging.getLogger("nova.image.s3")
+
+s3_opts = [
+    cfg.StrOpt('image_decryption_dir',
+               default='/tmp',
+               help='parent dir for tempdir used for image decryption'),
+    cfg.StrOpt('s3_access_key',
+               default='notchecked',
+               help='access key to use for s3 server for images'),
+    cfg.StrOpt('s3_secret_key',
+               default='notchecked',
+               help='secret key to use for s3 server for images'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('image_decryption_dir', '/tmp',
-                    'parent dir for tempdir used for image decryption')
-flags.DEFINE_string('s3_access_key', 'notchecked',
-                    'access key to use for s3 server for images')
-flags.DEFINE_string('s3_secret_key', 'notchecked',
-                    'secret key to use for s3 server for images')
+FLAGS.add_options(s3_opts)
 
 
 class S3ImageService(object):
@@ -302,14 +312,9 @@ class S3ImageService(object):
                 hex_iv = manifest.find('image/ec2_encrypted_iv').text
                 encrypted_iv = binascii.a2b_hex(hex_iv)
 
-                # FIXME(vish): grab key from common service so this can run on
-                #              any host.
-                cloud_pk = crypto.key_path(context.project_id)
-
                 dec_filename = os.path.join(image_path, 'image.tar.gz')
-                self._decrypt_image(enc_filename, encrypted_key,
-                                    encrypted_iv, cloud_pk,
-                                    dec_filename)
+                self._decrypt_image(context, enc_filename, encrypted_key,
+                                    encrypted_iv, dec_filename)
             except Exception:
                 LOG.exception(_("Failed to decrypt %(image_location)s "
                                 "to %(image_path)s"), log_vars)
@@ -353,39 +358,38 @@ class S3ImageService(object):
         return image
 
     @staticmethod
-    def _decrypt_image(encrypted_filename, encrypted_key, encrypted_iv,
-                       cloud_private_key, decrypted_filename):
-        key, err = utils.execute('openssl',
-                                 'rsautl',
-                                 '-decrypt',
-                                 '-inkey', '%s' % cloud_private_key,
-                                 process_input=encrypted_key,
-                                 check_exit_code=False)
-        if err:
+    def _decrypt_image(context, encrypted_filename, encrypted_key,
+                       encrypted_iv, decrypted_filename):
+        elevated = context.elevated()
+        try:
+            key = rpc.call(elevated, FLAGS.cert_topic,
+                           {"method": "decrypt_text",
+                            "args": {"project_id": context.project_id,
+                                     "text": base64.b64encode(encrypted_key)}})
+        except Exception, exc:
             raise exception.Error(_('Failed to decrypt private key: %s')
-                                  % err)
-        iv, err = utils.execute('openssl',
-                                'rsautl',
-                                '-decrypt',
-                                '-inkey', '%s' % cloud_private_key,
-                                process_input=encrypted_iv,
-                                check_exit_code=False)
-        if err:
+                                  % exc)
+        try:
+            iv = rpc.call(elevated, FLAGS.cert_topic,
+                          {"method": "decrypt_text",
+                           "args": {"project_id": context.project_id,
+                                    "text": base64.b64encode(encrypted_iv)}})
+        except Exception, exc:
             raise exception.Error(_('Failed to decrypt initialization '
-                                    'vector: %s') % err)
+                                    'vector: %s') % exc)
 
-        _out, err = utils.execute('openssl', 'enc',
-                                  '-d', '-aes-128-cbc',
-                                  '-in', '%s' % (encrypted_filename,),
-                                  '-K', '%s' % (key,),
-                                  '-iv', '%s' % (iv,),
-                                  '-out', '%s' % (decrypted_filename,),
-                                  check_exit_code=False)
-        if err:
+        try:
+            utils.execute('openssl', 'enc',
+                          '-d', '-aes-128-cbc',
+                          '-in', '%s' % (encrypted_filename,),
+                          '-K', '%s' % (key,),
+                          '-iv', '%s' % (iv,),
+                          '-out', '%s' % (decrypted_filename,))
+        except exception.ProcessExecutionError, exc:
             raise exception.Error(_('Failed to decrypt image file '
                                     '%(image_file)s: %(err)s') %
                                     {'image_file': encrypted_filename,
-                                     'err': err})
+                                     'err': exc.stdout})
 
     @staticmethod
     def _test_for_malicious_tarball(path, filename):

@@ -16,30 +16,44 @@
 Fakes For Scheduler tests.
 """
 
+import mox
+
 from nova import db
+from nova.compute import instance_types
+from nova.compute import vm_states
 from nova.scheduler import distributed_scheduler
 from nova.scheduler import host_manager
 from nova.scheduler import zone_manager
 
 
 COMPUTE_NODES = [
-        dict(id=1, local_gb=1024, memory_mb=1024, service=dict(host='host1')),
-        dict(id=2, local_gb=2048, memory_mb=2048, service=dict(host='host2')),
-        dict(id=3, local_gb=4096, memory_mb=4096, service=dict(host='host3')),
-        dict(id=4, local_gb=8192, memory_mb=8192, service=dict(host='host4')),
+        dict(id=1, local_gb=1024, memory_mb=1024, vcpus=1,
+                service=dict(host='host1', disabled=False)),
+        dict(id=2, local_gb=2048, memory_mb=2048, vcpus=2,
+                service=dict(host='host2', disabled=True)),
+        dict(id=3, local_gb=4096, memory_mb=4096, vcpus=4,
+                service=dict(host='host3', disabled=False)),
+        dict(id=4, local_gb=8192, memory_mb=8192, vcpus=8,
+                service=dict(host='host4', disabled=False)),
         # Broken entry
-        dict(id=5, local_gb=1024, memory_mb=1024, service=None),
+        dict(id=5, local_gb=1024, memory_mb=1024, vcpus=1, service=None),
 ]
 
 INSTANCES = [
-        dict(local_gb=512, memory_mb=512, host='host1'),
-        dict(local_gb=512, memory_mb=512, host='host2'),
-        dict(local_gb=512, memory_mb=512, host='host2'),
-        dict(local_gb=1024, memory_mb=1024, host='host3'),
+        dict(root_gb=512, ephemeral_gb=0, memory_mb=512, vcpus=1,
+             host='host1'),
+        dict(root_gb=512, ephemeral_gb=0, memory_mb=512, vcpus=1,
+             host='host2'),
+        dict(root_gb=512, ephemeral_gb=0, memory_mb=512, vcpus=1,
+             host='host2'),
+        dict(root_gb=1024, ephemeral_gb=0, memory_mb=1024, vcpus=1,
+             host='host3'),
         # Broken host
-        dict(local_gb=1024, memory_mb=1024, host=None),
+        dict(root_gb=1024, ephemeral_gb=0, memory_mb=1024, vcpus=1,
+             host=None),
         # No matching host
-        dict(local_gb=1024, memory_mb=1024, host='host5'),
+        dict(root_gb=1024, ephemeral_gb=0, memory_mb=1024, vcpus=1,
+             host='host5'),
 ]
 
 
@@ -90,9 +104,41 @@ class FakeHostState(host_manager.HostState):
             setattr(self, key, val)
 
 
-def mox_host_manager_db_calls(mox, context):
-    mox.StubOutWithMock(db, 'compute_node_get_all')
-    mox.StubOutWithMock(db, 'instance_get_all')
+class FakeInstance(object):
+    def __init__(self, context=None, params=None, type_name='m1.tiny'):
+        """Create a test instance. Returns uuid"""
+        self.context = context
 
-    db.compute_node_get_all(context).AndReturn(COMPUTE_NODES)
-    db.instance_get_all(context).AndReturn(INSTANCES)
+        i = self._create_fake_instance(params, type_name=type_name)
+        self.uuid = i['uuid']
+
+    def _create_fake_instance(self, params=None, type_name='m1.tiny'):
+        """Create a test instance"""
+        if not params:
+            params = {}
+
+        inst = {}
+        inst['vm_state'] = vm_states.ACTIVE
+        inst['image_ref'] = 1
+        inst['reservation_id'] = 'r-fakeres'
+        inst['launch_time'] = '10'
+        inst['user_id'] = 'fake'
+        inst['project_id'] = 'fake'
+        type_id = instance_types.get_instance_type_by_name(type_name)['id']
+        inst['instance_type_id'] = type_id
+        inst['ami_launch_index'] = 0
+        inst.update(params)
+        return db.instance_create(self.context, inst)
+
+
+class FakeComputeAPI(object):
+    def create_db_entry_for_new_instance(self, *args, **kwargs):
+        pass
+
+
+def mox_host_manager_db_calls(mock, context):
+    mock.StubOutWithMock(db, 'compute_node_get_all')
+    mock.StubOutWithMock(db, 'instance_get_all')
+
+    db.compute_node_get_all(mox.IgnoreArg()).AndReturn(COMPUTE_NODES)
+    db.instance_get_all(mox.IgnoreArg()).AndReturn(INSTANCES)

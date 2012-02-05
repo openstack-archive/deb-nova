@@ -210,12 +210,17 @@ class CacheConcurrencyTestCase(test.TestCase):
         def fake_execute(*args, **kwargs):
             pass
 
+        def fake_extend(image, size):
+            pass
+
         self.stubs.Set(os.path, 'exists', fake_exists)
         self.stubs.Set(utils, 'execute', fake_execute)
         connection.libvirt_utils = fake_libvirt_utils
+        connection.disk.extend = fake_extend
 
     def tearDown(self):
         connection.libvirt_utils = libvirt_utils
+        connection.disk.extend = disk.extend
         super(CacheConcurrencyTestCase, self).tearDown()
 
     def test_same_fname_concurrency(self):
@@ -224,11 +229,11 @@ class CacheConcurrencyTestCase(test.TestCase):
         wait1 = eventlet.event.Event()
         done1 = eventlet.event.Event()
         eventlet.spawn(conn._cache_image, _concurrency,
-                       'target', 'fname', False, wait1, done1)
+                       'target', 'fname', False, None, wait1, done1)
         wait2 = eventlet.event.Event()
         done2 = eventlet.event.Event()
         eventlet.spawn(conn._cache_image, _concurrency,
-                       'target', 'fname', False, wait2, done2)
+                       'target', 'fname', False, None, wait2, done2)
         wait2.send()
         eventlet.sleep(0)
         try:
@@ -245,11 +250,11 @@ class CacheConcurrencyTestCase(test.TestCase):
         wait1 = eventlet.event.Event()
         done1 = eventlet.event.Event()
         eventlet.spawn(conn._cache_image, _concurrency,
-                       'target', 'fname2', False, wait1, done1)
+                       'target', 'fname2', False, None, wait1, done1)
         wait2 = eventlet.event.Event()
         done2 = eventlet.event.Event()
         eventlet.spawn(conn._cache_image, _concurrency,
-                       'target', 'fname1', False, wait2, done2)
+                       'target', 'fname1', False, None, wait2, done2)
         wait2.send()
         eventlet.sleep(0)
         try:
@@ -292,8 +297,14 @@ class LibvirtConnTestCase(test.TestCase):
         self.call_libvirt_dependant_setup = False
         connection.libvirt_utils = fake_libvirt_utils
 
+        def fake_extend(image, size):
+            pass
+
+        connection.disk.extend = fake_extend
+
     def tearDown(self):
         connection.libvirt_utils = libvirt_utils
+        connection.disk.extend = disk.extend
         super(LibvirtConnTestCase, self).tearDown()
 
     test_instance = {'memory_kb': '1024000',
@@ -303,7 +314,8 @@ class LibvirtConnTestCase(test.TestCase):
                      'project_id': 'fake',
                      'bridge': 'br101',
                      'image_ref': '155d900f-4e14-4e4c-a73d-069cbf4541e6',
-                     'local_gb': 20,
+                     'root_gb': 10,
+                     'ephemeral_gb': 20,
                      'instance_type_id': '5'}  # m1.small
 
     def create_fake_libvirt_mock(self, **kwargs):
@@ -387,6 +399,10 @@ class LibvirtConnTestCase(test.TestCase):
         instance_data['kernel_id'] = 'aki-deadbeef'
         self._check_xml_and_uri(instance_data, expect_kernel=True,
                                 expect_ramdisk=True, rescue=True)
+
+    def test_xml_uuid(self):
+        instance_data = dict(self.test_instance)
+        self._check_xml_and_uuid(instance_data)
 
     def test_lxc_container_and_uri(self):
         instance_data = dict(self.test_instance)
@@ -660,6 +676,18 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEqual(tree.find('./devices/disk').get('device'),
                          device_type)
         self.assertEqual(tree.find('./devices/disk/target').get('bus'), bus)
+
+    def _check_xml_and_uuid(self, image_meta):
+        user_context = context.RequestContext(self.user_id, self.project_id)
+        instance_ref = db.instance_create(user_context, self.test_instance)
+        network_info = _fake_network_info(self.stubs, 1)
+
+        xml = connection.LibvirtConnection(True).to_xml(instance_ref,
+                                                        network_info,
+                                                        image_meta)
+        tree = xml_to_tree(xml)
+        self.assertEqual(tree.find('./uuid').text,
+                         instance_ref['uuid'])
 
     def _check_xml_and_uri(self, instance, expect_ramdisk, expect_kernel,
                            rescue=False):
@@ -1625,7 +1653,8 @@ class NWFilterTestCase(test.TestCase):
         inst['name'] = 'm1.small'
         inst['memory_mb'] = '1024'
         inst['vcpus'] = '1'
-        inst['local_gb'] = '20'
+        inst['root_gb'] = '10'
+        inst['ephemeral_gb'] = '20'
         inst['flavorid'] = '1'
         inst['swap'] = '2048'
         inst['rxtx_factor'] = 1
@@ -1897,7 +1926,6 @@ disk size: 4.4M''', ''))
 
     def test_fetch_image(self):
         self.mox.StubOutWithMock(images, 'fetch')
-        self.mox.StubOutWithMock(disk, 'extend')
 
         context = 'opaque context'
         target = '/tmp/targetfile'
@@ -1905,11 +1933,7 @@ disk size: 4.4M''', ''))
         user_id = 'fake'
         project_id = 'fake'
         images.fetch(context, image_id, target, user_id, project_id)
-        images.fetch(context, image_id, target, user_id, project_id)
-        disk.extend(target, '10G')
 
         self.mox.ReplayAll()
         libvirt_utils.fetch_image(context, target, image_id,
                                   user_id, project_id)
-        libvirt_utils.fetch_image(context, target, image_id,
-                                  user_id, project_id, size='10G')

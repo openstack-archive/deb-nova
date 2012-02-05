@@ -20,10 +20,8 @@
 import base64
 import copy
 import functools
+import tempfile
 import os
-
-from M2Crypto import BIO
-from M2Crypto import RSA
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
@@ -31,31 +29,18 @@ from nova.api.ec2 import inst_state
 from nova.compute import power_state
 from nova.compute import vm_states
 from nova import context
-from nova import crypto
 from nova import db
 from nova import exception
 from nova import flags
 from nova.image import fake
 from nova import log as logging
-from nova import manager
 from nova import rpc
 from nova import test
 from nova import utils
 
 
-FLAGS = flags.FLAGS
 LOG = logging.getLogger('nova.tests.cloud')
-
-
-flags.DEFINE_string('ajax_proxy_manager',
-        'nova.tests.api.ec2.test_cloud.AjaxProxyManager', '')
-
-
-class AjaxProxyManager(manager.SchedulerDependentManager):
-    """Fake ajax proxy service, so that an 'rpc.call' will work."""
-    @staticmethod
-    def authorize_ajax_console(context, **kwargs):
-        return None
+FLAGS = flags.FLAGS
 
 
 def get_fake_cache():
@@ -103,6 +88,10 @@ class CloudTestCase(test.TestCase):
         self.flags(connection_type='fake',
                    stub_network=True)
 
+        def dumb(*args, **kwargs):
+            pass
+
+        self.stubs.Set(utils, 'usage_from_instance', dumb)
         # set up our cloud
         self.cloud = cloud.CloudController()
 
@@ -111,7 +100,6 @@ class CloudTestCase(test.TestCase):
         self.scheduter = self.start_service('scheduler')
         self.network = self.start_service('network')
         self.volume = self.start_service('volume')
-        self.ajax_proxy = self.start_service('ajax_proxy')
         self.image_service = utils.import_object(FLAGS.image_service)
 
         self.user_id = 'fake'
@@ -192,7 +180,7 @@ class CloudTestCase(test.TestCase):
                                'pool': 'nova',
                                'project_id': self.project_id})
         result = self.cloud.release_address(self.context, address)
-        self.assertEqual(result['releaseResponse'], ['Address released.'])
+        self.assertEqual(result.get('return', None), 'true')
 
     def test_associate_disassociate_address(self):
         """Verifies associate runs cleanly without raising an exception"""
@@ -211,20 +199,15 @@ class CloudTestCase(test.TestCase):
                               {'host': self.network.host})
         project_id = self.context.project_id
         type_id = inst['instance_type_id']
-        ips = self.network.allocate_for_instance(self.context,
+        nw_info = self.network.allocate_for_instance(self.context,
                                                  instance_id=inst['id'],
                                                  instance_uuid='',
                                                  host=inst['host'],
                                                  vpn=None,
                                                  instance_type_id=type_id,
                                                  project_id=project_id)
-        # TODO(jkoelker) Make this mas bueno
-        self.assertTrue(ips)
-        self.assertTrue('ips' in ips[0][1])
-        self.assertTrue(ips[0][1]['ips'])
-        self.assertTrue('ip' in ips[0][1]['ips'][0])
 
-        fixed = ips[0][1]['ips'][0]['ip']
+        fixed_ips = nw_info.fixed_ips()
 
         ec2_id = ec2utils.id_to_ec2_id(inst['id'])
         self.cloud.associate_address(self.context,
@@ -234,7 +217,7 @@ class CloudTestCase(test.TestCase):
                                         public_ip=address)
         self.cloud.release_address(self.context,
                                   public_ip=address)
-        self.network.deallocate_fixed_ip(self.context, fixed)
+        self.network.deallocate_fixed_ip(self.context, fixed_ips[0]['address'])
         db.instance_destroy(self.context, inst['id'])
         db.floating_ip_destroy(self.context, address)
 
@@ -469,6 +452,26 @@ class CloudTestCase(test.TestCase):
                 vol2['id'])
         db.volume_destroy(self.context, vol1['id'])
         db.volume_destroy(self.context, vol2['id'])
+
+    def test_create_volume_in_availability_zone(self):
+        """Makes sure create_volume works when we specify an availability
+        zone
+        """
+        availability_zone = 'zone1:host1'
+
+        result = self.cloud.create_volume(self.context,
+                                          size=1,
+                                          availability_zone=availability_zone)
+        volume_id = result['volumeId']
+        availabilityZone = result['availabilityZone']
+        self.assertEqual(availabilityZone, availability_zone)
+        result = self.cloud.describe_volumes(self.context)
+        self.assertEqual(len(result['volumeSet']), 1)
+        self.assertEqual(result['volumeSet'][0]['volumeId'], volume_id)
+        self.assertEqual(result['volumeSet'][0]['availabilityZone'],
+                         availabilityZone)
+
+        db.volume_destroy(self.context, ec2utils.ec2_id_to_id(volume_id))
 
     def test_create_volume_from_snapshot(self):
         """Makes sure create_volume works when we specify a snapshot."""
@@ -1179,29 +1182,24 @@ class CloudTestCase(test.TestCase):
         #              for unit tests.
         rv = self.cloud.terminate_instances(self.context, [instance_id])
 
-    def test_ajax_console(self):
-        instance_id = self._run_instance(image_id='ami-1')
-        output = self.cloud.get_ajax_console(context=self.context,
-                                             instance_id=[instance_id])
-        self.assertEquals(output['url'],
-                          '%s/?token=FAKETOKEN' % FLAGS.ajax_console_proxy_url)
-        # TODO(soren): We need this until we can stop polling in the rpc code
-        #              for unit tests.
-        rv = self.cloud.terminate_instances(self.context, [instance_id])
-
     def test_key_generation(self):
         result = self._create_key('test')
         private_key = result['private_key']
-        key = RSA.load_key_string(private_key, callback=lambda: None)
-        bio = BIO.MemoryBuffer()
-        public_key = db.key_pair_get(self.context,
+
+        expected = db.key_pair_get(self.context,
                                     self.context.user_id,
                                     'test')['public_key']
-        key.save_pub_key_bio(bio)
-        converted = crypto.ssl_pub_to_ssh_pub(bio.read())
+
+        (fd, fname) = tempfile.mkstemp()
+        os.write(fd, private_key)
+
+        public_key, err = utils.execute('ssh-keygen', '-e', '-f', fname)
+
+        os.unlink(fname)
+
         # assert key fields are equal
-        self.assertEqual(public_key.split(" ")[1].strip(),
-                         converted.split(" ")[1].strip())
+        self.assertEqual(''.join(public_key.split("\n")[2:-2]),
+                         expected.split(" ")[1].strip())
 
     def test_describe_key_pairs(self):
         self._create_key('test1')
@@ -1252,6 +1250,11 @@ class CloudTestCase(test.TestCase):
 
         self.stubs.UnsetAll()
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
+
+        def dumb(*args, **kwargs):
+            pass
+
+        self.stubs.Set(utils, 'usage_from_instance', dumb)
         # NOTE(comstud): Make 'cast' behave like a 'call' which will
         # ensure that operations complete
         self.stubs.Set(rpc, 'cast', rpc.call)
@@ -1259,7 +1262,6 @@ class CloudTestCase(test.TestCase):
         result = run_instances(self.context, **kwargs)
         instance = result['instancesSet'][0]
         self.assertEqual(instance['imageId'], 'ami-00000001')
-        self.assertEqual(instance['displayName'], 'Server 1')
         self.assertEqual(instance['instanceId'], 'i-00000001')
         self.assertEqual(instance['instanceState']['name'], 'running')
         self.assertEqual(instance['instanceType'], 'm1.small')
@@ -1356,57 +1358,6 @@ class CloudTestCase(test.TestCase):
         result = run_instances(self.context, **kwargs)
         self.assertEqual(len(result['instancesSet']), 1)
 
-    def test_terminate_instances(self):
-        inst1 = db.instance_create(self.context, {'reservation_id': 'a',
-                                                  'image_ref': 1,
-                                                  'host': 'host1'})
-        terminate_instances = self.cloud.terminate_instances
-        # valid instance_id
-        result = terminate_instances(self.context, ['i-00000001'])
-        self.assertTrue(result)
-        # non-existing instance_id
-        self.assertRaises(exception.InstanceNotFound, terminate_instances,
-                          self.context, ['i-2'])
-        db.instance_destroy(self.context, inst1['id'])
-
-    def test_update_of_instance_display_fields(self):
-        inst = db.instance_create(self.context, {})
-        ec2_id = ec2utils.id_to_ec2_id(inst['id'])
-        self.cloud.update_instance(self.context, ec2_id,
-                                   display_name='c00l 1m4g3')
-        inst = db.instance_get(self.context, inst['id'])
-        self.assertEqual('c00l 1m4g3', inst['display_name'])
-        db.instance_destroy(self.context, inst['id'])
-
-    def test_update_of_instance_wont_update_private_fields(self):
-        inst = db.instance_create(self.context, {})
-        host = inst['host']
-        ec2_id = ec2utils.id_to_ec2_id(inst['id'])
-        self.cloud.update_instance(self.context, ec2_id,
-                                   display_name='c00l 1m4g3',
-                                   host='otherhost')
-        inst = db.instance_get(self.context, inst['id'])
-        self.assertEqual(host, inst['host'])
-        db.instance_destroy(self.context, inst['id'])
-
-    def test_update_of_volume_display_fields(self):
-        vol = db.volume_create(self.context, {})
-        self.cloud.update_volume(self.context,
-                                 ec2utils.id_to_ec2_vol_id(vol['id']),
-                                 display_name='c00l v0lum3')
-        vol = db.volume_get(self.context, vol['id'])
-        self.assertEqual('c00l v0lum3', vol['display_name'])
-        db.volume_destroy(self.context, vol['id'])
-
-    def test_update_of_volume_wont_update_private_fields(self):
-        vol = db.volume_create(self.context, {})
-        self.cloud.update_volume(self.context,
-                                 ec2utils.id_to_ec2_vol_id(vol['id']),
-                                 mountpoint='/not/here')
-        vol = db.volume_get(self.context, vol['id'])
-        self.assertEqual(None, vol['mountpoint'])
-        db.volume_destroy(self.context, vol['id'])
-
     def _restart_compute_service(self, periodic_interval=None):
         """restart compute service. NOTE: fake driver forgets all instances."""
         self.compute.kill()
@@ -1415,38 +1366,6 @@ class CloudTestCase(test.TestCase):
                 'compute', periodic_interval=periodic_interval)
         else:
             self.compute = self.start_service('compute')
-
-    def test_rescue_instances(self):
-        kwargs = {'image_id': 'ami-1',
-                  'instance_type': FLAGS.default_instance_type,
-                  'max_count': 1, }
-        instance_id = self._run_instance(**kwargs)
-
-        result = self.cloud.stop_instances(self.context, [instance_id])
-        self.assertTrue(result)
-
-        result = self.cloud.rescue_instance(self.context, instance_id)
-        self.assertTrue(result)
-
-        result = self.cloud.terminate_instances(self.context, [instance_id])
-        self.assertTrue(result)
-        self._restart_compute_service()
-
-    def test_unrescue_instances(self):
-        kwargs = {'image_id': 'ami-1',
-                  'instance_type': FLAGS.default_instance_type,
-                  'max_count': 1, }
-        instance_id = self._run_instance(**kwargs)
-
-        result = self.cloud.rescue_instance(self.context, instance_id)
-        self.assertTrue(result)
-
-        result = self.cloud.unrescue_instance(self.context, instance_id)
-        self.assertTrue(result)
-
-        result = self.cloud.terminate_instances(self.context, [instance_id])
-        self.assertTrue(result)
-        self._restart_compute_service()
 
     def test_stop_start_instance(self):
         """Makes sure stop/start instance works"""
@@ -1472,8 +1391,14 @@ class CloudTestCase(test.TestCase):
         result = self.cloud.stop_instances(self.context, [instance_id])
         self.assertTrue(result)
 
+        expected = {'instancesSet': [
+                        {'instanceId': 'i-00000001',
+                         'previousState': {'code': 80,
+                                           'name': 'stopped'},
+                         'shutdownState': {'code': 48,
+                                           'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        self.assertEqual(result, expected)
 
     def test_start_instances(self):
         kwargs = {'image_id': 'ami-1',
@@ -1487,8 +1412,14 @@ class CloudTestCase(test.TestCase):
         result = self.cloud.start_instances(self.context, [instance_id])
         self.assertTrue(result)
 
+        expected = {'instancesSet': [
+                        {'instanceId': 'i-00000001',
+                         'previousState': {'code': 16,
+                                           'name': 'running'},
+                         'shutdownState': {'code': 48,
+                                           'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        self.assertEqual(result, expected)
         self._restart_compute_service()
 
     def test_stop_instances(self):
@@ -1500,8 +1431,14 @@ class CloudTestCase(test.TestCase):
         result = self.cloud.stop_instances(self.context, [instance_id])
         self.assertTrue(result)
 
+        expected = {'instancesSet': [
+                        {'instanceId': 'i-00000001',
+                         'previousState': {'code': 80,
+                                           'name': 'stopped'},
+                         'shutdownState': {'code': 48,
+                                           'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
-        self.assertTrue(result)
+        self.assertEqual(result, expected)
         self._restart_compute_service()
 
     def test_terminate_instances(self):
@@ -1515,8 +1452,82 @@ class CloudTestCase(test.TestCase):
                           self.cloud.start_instances,
                           self.context, [instance_id])
 
+        expected = {'instancesSet': [
+                        {'instanceId': 'i-00000001',
+                         'previousState': {'code': 16,
+                                           'name': 'running'},
+                         'shutdownState': {'code': 48,
+                                           'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertEqual(result, expected)
+        self._restart_compute_service()
+
+    def test_terminate_instances_invalid_instance_id(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        self.assertRaises(exception.InstanceNotFound,
+                          self.cloud.terminate_instances,
+                          self.context, ['i-2'])
+        self._restart_compute_service()
+
+    def test_terminate_instances_disable_terminate(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+
+        internal_id = ec2utils.ec2_id_to_id(instance_id)
+        instance = db.instance_update(self.context, internal_id,
+                                      {'disable_terminate': True})
+
+        expected = {'instancesSet': [
+                        {'instanceId': 'i-00000001',
+                         'previousState': {'code': 16,
+                                           'name': 'running'},
+                         'shutdownState': {'code': 16,
+                                           'name': 'running'}}]}
+        result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertEqual(result, expected)
+
+        instance = db.instance_update(self.context, internal_id,
+                                      {'disable_terminate': False})
+
+        expected = {'instancesSet': [
+                        {'instanceId': 'i-00000001',
+                         'previousState': {'code': 16,
+                                           'name': 'running'},
+                         'shutdownState': {'code': 48,
+                                           'name': 'terminated'}}]}
+        result = self.cloud.terminate_instances(self.context, [instance_id])
+        self.assertEqual(result, expected)
+        self._restart_compute_service()
+
+    def test_terminate_instances_two_instances(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': FLAGS.default_instance_type,
+                  'max_count': 1, }
+        inst1 = self._run_instance(**kwargs)
+        inst2 = self._run_instance(**kwargs)
+
+        result = self.cloud.stop_instances(self.context, [inst1])
         self.assertTrue(result)
+
+        expected = {'instancesSet': [
+                        {'instanceId': 'i-00000001',
+                         'previousState': {'code': 80,
+                                           'name': 'stopped'},
+                         'shutdownState': {'code': 48,
+                                           'name': 'terminated'}},
+                        {'instanceId': 'i-00000002',
+                         'previousState': {'code': 16,
+                                           'name': 'running'},
+                         'shutdownState': {'code': 48,
+                                           'name': 'terminated'}}]}
+        result = self.cloud.terminate_instances(self.context, [inst1, inst2])
+        self.assertEqual(result, expected)
         self._restart_compute_service()
 
     def test_reboot_instances(self):
@@ -1912,9 +1923,15 @@ class CloudTestCase(test.TestCase):
             self.assertEqual(result['instanceInitiatedShutdownBehavior'],
                              expected_result)
 
+            expected = {'instancesSet': [
+                            {'instanceId': instance_id,
+                             'previousState': {'code': 16,
+                                               'name': 'running'},
+                             'shutdownState': {'code': 48,
+                                               'name': 'terminated'}}]}
             result = self.cloud.terminate_instances(self.context,
                                                     [instance_id])
-            self.assertTrue(result)
+            self.assertEqual(result, expected)
             self._restart_compute_service()
 
         test_dia_iisb('terminate', image_id='ami-1')

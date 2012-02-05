@@ -44,12 +44,18 @@ from nova import context
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import rpc
 from nova import utils
 
 
+delete_exchange_opt = \
+    cfg.BoolOpt('delete_exchange',
+                default=False,
+                help='delete nova exchange too.')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_boolean('delete_exchange', False, 'delete nova exchange too.')
+FLAGS.add_option(delete_exchange_opt)
 
 
 def delete_exchange(exch):

@@ -26,15 +26,20 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import rpc
 from nova import utils
 
 from eventlet import greenpool
 
+
+enable_zone_routing_opt = \
+    cfg.BoolOpt('enable_zone_routing',
+                default=False,
+                help='When True, routing to child zones will occur.')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_bool('enable_zone_routing',
-    False,
-    'When True, routing to child zones will occur.')
+FLAGS.add_option(enable_zone_routing_opt)
 
 LOG = logging.getLogger('nova.scheduler.api')
 
@@ -419,3 +424,15 @@ def redirect_handler(f):
                 raise e.results
             return e.results
     return new_f
+
+
+def live_migration(context, block_migration, disk_over_commit,
+                   instance_id, dest, topic):
+    """Migrate a server to a new host"""
+    params = {"instance_id": instance_id,
+              "dest": dest,
+              "topic": topic,
+              "block_migration": block_migration,
+              "disk_over_commit": disk_over_commit}
+    return _call_scheduler("live_migration", context=context,
+                           params=params)

@@ -89,11 +89,11 @@ from nova import rpc
 from nova import utils
 from nova import version
 from nova import vsa
-from nova.api.ec2 import admin
 from nova.api.ec2 import ec2utils
 from nova.auth import manager
 from nova.cloudpipe import pipelib
 from nova.compute import instance_types
+from nova.compute import vm_states
 from nova.db import migration
 from nova.volume import volume_types
 
@@ -107,9 +107,6 @@ flags.DECLARE('vpn_start', 'nova.network.manager')
 flags.DECLARE('default_floating_pool', 'nova.network.manager')
 flags.DECLARE('public_interface', 'nova.network.linux_net')
 flags.DECLARE('libvirt_type', 'nova.virt.libvirt.connection')
-flags.DEFINE_flag(flags.HelpFlag())
-flags.DEFINE_flag(flags.HelpshortFlag())
-flags.DEFINE_flag(flags.HelpXMLFlag())
 
 
 # Decorators for actions
@@ -217,7 +214,11 @@ class VpnCommands(object):
                                'vpn_public_port': int(port)})
 
     def _vpn_for(self, context, project_id):
-        return admin.AdminController()._vpn_for(context, project_id)
+        """Get the VPN instance for a project ID."""
+        for instance in db.instance_get_all_by_project(context, project_id):
+            if (instance['image_id'] == str(FLAGS.vpn_image_id)
+                and not instance['vm_state'] in [vm_states.DELETED]):
+                return instance
 
 
 class ShellCommands(object):
@@ -637,24 +638,27 @@ class FixedIpCommands(object):
             print "error: %s" % ex
             sys.exit(2)
 
-        print "%-18s\t%-15s\t%-17s\t%-15s\t%s" % (_('network'),
-                                                  _('IP address'),
-                                                  _('MAC address'),
-                                                  _('hostname'),
-                                                  _('host'))
+        instances = db.instance_get_all(context.get_admin_context())
+        instances_by_id = {}
+        for instance in instances:
+            instances_by_id[instance['id']] = instance
+
+        print "%-18s\t%-15s\t%-15s\t%s" % (_('network'),
+                                              _('IP address'),
+                                              _('hostname'),
+                                              _('host'))
         for fixed_ip in fixed_ips:
             hostname = None
             host = None
             mac_address = None
             if fixed_ip['instance']:
-                instance = fixed_ip['instance']
+                instance = instances_by_id[fixed_ip['instance_id']]
                 hostname = instance['hostname']
                 host = instance['host']
-                mac_address = fixed_ip['virtual_interface']['address']
-            print "%-18s\t%-15s\t%-17s\t%-15s\t%s" % (
+            print "%-18s\t%-15s\t%-15s\t%s" % (
                     fixed_ip['network']['cidr'],
                     fixed_ip['address'],
-                    mac_address, hostname, host)
+                    hostname, host)
 
     @args('--address', dest="address", metavar='<ip address>',
           help='IP address')
@@ -722,12 +726,14 @@ class FloatingIpCommands(object):
         else:
             floating_ips = db.floating_ip_get_all_by_host(ctxt, host)
         for floating_ip in floating_ips:
-            instance = None
-            if floating_ip['fixed_ip']:
-                instance = floating_ip['fixed_ip']['instance']['uuid']
+            instance_id = None
+            if floating_ip['fixed_ip_id']:
+                fixed_ip = db.fixed_ip_get(ctxt, floating_ip['fixed_ip_id'])
+                instance = db.instance_get(ctxt, fixed_ip['instance_id'])
+                instance_id = instance.get('uuid', "none")
             print "%s\t%s\t%s\t%s\t%s" % (floating_ip['project_id'],
                                           floating_ip['address'],
-                                          instance,
+                                          instance_id,
                                           floating_ip['pool'],
                                           floating_ip['interface'])
 
@@ -902,7 +908,7 @@ class NetworkCommands(object):
         net_manager.delete_network(context.get_admin_context(),
             fixed_range, uuid)
 
-    @args('--network', dest="fixed_range", metavar='<x.x.x.x/yy>',
+    @args('--fixed_range', dest="fixed_range", metavar='<x.x.x.x/yy>',
             help='Network to modify')
     @args('--project', dest="project", metavar='<project name>',
             help='Project name to associate')
@@ -967,7 +973,7 @@ class VmCommands(object):
         for instance in instances:
             print "%-10s %-15s %-10s %-10s %-26s %-9s %-9s %-9s" \
                   "  %-10s %-10s %-10s %-5d" % (
-                instance['hostname'],
+                instance['display_name'],
                 instance['host'],
                 instance['instance_type'].name,
                 instance['vm_state'],
@@ -1133,43 +1139,23 @@ class ServiceCommands(object):
             cpu_sum = 0
             mem_sum = 0
             hdd_sum = 0
-            ctxt = context.get_admin_context()
-            instance_refs = db.instance_get_all_by_host(ctxt, host)
-
-            project_ids = [i['project_id'] for i in instance_refs]
-            project_ids = list(set(project_ids))
-            usage = dict()
-            for project_id in project_ids:
-                vcpus = [i['vcpus'] for i in instance_refs \
-                    if i['project_id'] == project_id]
-
-                mem = [i['memory_mb']  for i in instance_refs \
-                    if i['project_id'] == project_id]
-
-                disk = [i['local_gb']  for i in instance_refs \
-                    if i['project_id'] == project_id]
-
-                usage[project_id] = {
-                                 'vcpus': reduce(lambda x, y: x + y, vcpus),
-                                 'memory_mb': reduce(lambda x, y: x + y, mem),
-                                 'local_gb': reduce(lambda x, y: x + y, disk)}
-
-            for p_id, val in usage.items():
+            for p_id, val in result['usage'].items():
                 cpu_sum += val['vcpus']
                 mem_sum += val['memory_mb']
-                hdd_sum += val['local_gb']
+                hdd_sum += val['root_gb']
+                hdd_sum += val['ephemeral_gb']
             print '%(a)-16s(used_max)%(b)23s%(c)8s%(d)8s' % {"a": host,
                                                              "b": cpu_sum,
                                                              "c": mem_sum,
                                                              "d": hdd_sum}
 
-            for p_id, val in usage.items():
-                print '%(a)-25s%(b)16s%(c)8s%(d)8s%(e)8s' %\
-                                                     {"a": host,
-                                                      "b": p_id,
-                                                      "c": val['vcpus'],
-                                                      "d": val['memory_mb'],
-                                                      "e": val['local_gb']}
+            for p_id, val in result['usage'].items():
+                print '%(a)-25s%(b)16s%(c)8s%(d)8s%(e)8s' % {
+                        "a": host,
+                        "b": p_id,
+                        "c": val['vcpus'],
+                        "d": val['memory_mb'],
+                        "e": val['root_gb'] + val['ephemeral_gb']}
 
 
 class HostCommands(object):
@@ -1750,29 +1736,32 @@ class InstanceTypeCommands(object):
 
     def _print_instance_types(self, name, val):
         deleted = ('', ', inactive')[val["deleted"] == 1]
-        print ("%s: Memory: %sMB, VCPUS: %s, Storage: %sGB, FlavorID: %s, "
-            "Swap: %sMB, RXTX Factor: %s") % (
-            name, val["memory_mb"], val["vcpus"], val["local_gb"],
-            val["flavorid"], val["swap"], val["rxtx_factor"])
+        print ("%s: Memory: %sMB, VCPUS: %s, Root: %sGB, Ephemeral: %sGb, "
+            "FlavorID: %s, Swap: %sMB, RXTX Factor: %s") % (
+            name, val["memory_mb"], val["vcpus"], val["root_gb"],
+            val["ephemeral_gb"], val["flavorid"], val["swap"],
+            val["rxtx_factor"])
 
     @args('--name', dest='name', metavar='<name>',
             help='Name of instance type/flavor')
     @args('--memory', dest='memory', metavar='<memory size>',
             help='Memory size')
     @args('--cpu', dest='vcpus', metavar='<num cores>', help='Number cpus')
-    @args('--local_gb', dest='local_gb', metavar='<local_gb>',
-            help='local_gb')
+    @args('--root_gb', dest='root_gb', metavar='<root_gb>',
+            help='Root disk size')
+    @args('--ephemeral_gb', dest='ephemeral_gb', metavar='<ephemeral_gb>',
+            help='Ephemeral disk size')
     @args('--flavor', dest='flavorid', metavar='<flavor  id>',
             help='Flavor ID')
     @args('--swap', dest='swap', metavar='<swap>', help='Swap')
     @args('--rxtx_factor', dest='rxtx_factor', metavar='<rxtx_factor>',
             help='rxtx_factor')
-    def create(self, name, memory, vcpus, local_gb, flavorid,
+    def create(self, name, memory, vcpus, root_gb, ephemeral_gb, flavorid,
                swap=0, rxtx_factor=1):
         """Creates instance types / flavors"""
         try:
-            instance_types.create(name, memory, vcpus, local_gb,
-                                  flavorid, swap, rxtx_factor)
+            instance_types.create(name, memory, vcpus, root_gb,
+                                  ephemeral_gb, flavorid, swap, rxtx_factor)
         except exception.InvalidInput, e:
             print "Must supply valid parameters to create instance_type"
             print e
@@ -1977,8 +1966,7 @@ class ImageCommands(object):
                 with open(image_path) as ifile:
                     image = self.image_service.create(elevated, meta, ifile)
                 new = image['id']
-                print _("Image %(old)s converted to " \
-                        "%(new)s (%(new)08x).") % locals()
+                print _("Image %(old)s converted to %(new)s.") % locals()
             except Exception as exc:
                 print _("Failed to convert %(old)s: %(exc)s") % locals()
 
@@ -2213,7 +2201,9 @@ class ConfigCommands(object):
         pass
 
     def list(self):
-        print FLAGS.FlagsIntoString()
+        for key, value in FLAGS.FlagValuesDict().iteritems():
+            if value is not None:
+                print '%s = %s' % (key, value)
 
 
 class GetLogCommands(object):
@@ -2317,7 +2307,16 @@ def methods_of(obj):
 
 def main():
     """Parse options and call the appropriate class/method."""
-    utils.default_flagfile()
+    flagfile = utils.default_flagfile()
+
+    if flagfile and not os.access(flagfile, os.R_OK):
+        st = os.stat(flagfile)
+        print "Could not read %s. Re-running with sudo" % flagfile
+        try:
+            os.execvp('sudo', ['sudo', '-u', '#%s' % st.st_uid] + sys.argv)
+        except:
+            print 'sudo failed, continuing as if nothing happened'
+
     argv = FLAGS(sys.argv)
     logging.setup()
 
@@ -2368,6 +2367,7 @@ def main():
     # call the action with the remaining arguments
     try:
         fn(*fn_args, **fn_kwargs)
+        rpc.cleanup()
         sys.exit(0)
     except TypeError:
         print _("Possible wrong number of arguments supplied")

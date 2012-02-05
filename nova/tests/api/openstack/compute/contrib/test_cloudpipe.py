@@ -21,7 +21,7 @@ from lxml import etree
 
 from nova.api import auth
 from nova.api.openstack import compute
-from nova.api.openstack.compute import wsgi
+from nova.api.openstack import wsgi
 from nova.api.openstack.compute.contrib import cloudpipe
 from nova import context
 from nova import db
@@ -107,7 +107,6 @@ class CloudpipeTest(test.TestCase):
 
     def setUp(self):
         super(CloudpipeTest, self).setUp()
-        self.flags(allow_admin_api=True)
         self.app = fakes.wsgi_app()
         inner_app = compute.APIRouter()
         self.context = context.RequestContext('fake', 'fake', is_admin=True)

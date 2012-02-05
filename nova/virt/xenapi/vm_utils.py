@@ -30,13 +30,14 @@ import tempfile
 import time
 import urllib
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from xml.dom import minidom
 
 from nova import exception
 from nova import flags
 from nova.image import glance
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.compute import instance_types
 from nova.compute import power_state
@@ -47,12 +48,29 @@ from nova.virt.xenapi import volume_utils
 
 LOG = logging.getLogger("nova.virt.xenapi.vm_utils")
 
+xenapi_vm_utils_opts = [
+    cfg.StrOpt('default_os_type',
+               default='linux',
+               help='Default OS type'),
+    cfg.IntOpt('block_device_creation_timeout',
+               default=10,
+               help='time to wait for a block device to be created'),
+    cfg.IntOpt('max_kernel_ramdisk_size',
+               default=16 * 1024 * 1024,
+               help='maximum size in bytes of kernel or ramdisk images'),
+    cfg.StrOpt('sr_matching_filter',
+               default='other-config:i18n-key=local-storage',
+               help='Filter for finding the SR to be used to install guest '
+                    'instances on. The default value is the Local Storage in '
+                    'default XenServer/XCP installations. To select an SR '
+                    'with a different matching criteria, you could set it to '
+                    'other-config:my_favorite_sr=true. On the other hand, to '
+                    'fall back on the Default SR, as displayed by XenCenter, '
+                    'set this flag to: default-sr:true'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('default_os_type', 'linux', 'Default OS type')
-flags.DEFINE_integer('block_device_creation_timeout', 10,
-                     'time to wait for a block device to be created')
-flags.DEFINE_integer('max_kernel_ramdisk_size', 16 * 1024 * 1024,
-                     'maximum size in bytes of kernel or ramdisk images')
+FLAGS.add_options(xenapi_vm_utils_opts)
 
 XENAPI_POWER_STATE = {
     'Halted': power_state.SHUTDOWN,
@@ -393,7 +411,7 @@ class VMHelper(HelperBase):
             # Resize partition and filesystem down
             cls.auto_configure_disk(session=session,
                                     vdi_ref=copy_ref,
-                                    new_gb=instance_type['local_gb'])
+                                    new_gb=instance_type['root_gb'])
 
             # Create new VDI
             new_ref = cls.fetch_blank_disk(session,
@@ -401,7 +419,7 @@ class VMHelper(HelperBase):
             new_uuid = session.call_xenapi('VDI.get_uuid', new_ref)
 
             # Manually copy contents over
-            virtual_size = instance_type['local_gb'] * 1024 * 1024 * 1024
+            virtual_size = instance_type['root_gb'] * 1024 * 1024 * 1024
             _copy_partition(session, copy_ref, new_ref, 1, virtual_size)
 
             return new_ref, new_uuid
@@ -411,7 +429,7 @@ class VMHelper(HelperBase):
     @classmethod
     def auto_configure_disk(cls, session, vdi_ref, new_gb):
         """Partition and resize FS to match the size specified by
-        instance_types.local_gb.
+        instance_types.root_gb.
 
         This is a fail-safe to prevent accidentally destroying data on a disk
         erroneously marked as auto_disk_config=True.
@@ -437,47 +455,51 @@ class VMHelper(HelperBase):
                 _resize_part_and_fs(dev, start, old_sectors, new_sectors)
 
     @classmethod
-    def generate_swap(cls, session, instance, vm_ref, userdevice, swap_mb):
+    def _generate_disk(cls, session, instance, vm_ref, userdevice, name,
+                       size_mb, fs_type):
         """
-        Steps to programmatically generate swap:
+        Steps to programmatically generate a disk:
 
-            1. Create VDI of desired swap size
+            1. Create VDI of desired size
 
             2. Attach VDI to compute worker
 
-            3. Create swap partition
+            3. Create partition
 
-            4. Create VBD between instance VM and swap VDI
+            4. Create VBD between instance VM and VDI
         """
         # 1. Create VDI
         sr_ref = cls.safe_find_sr(session)
-        name_label = instance.name + "-swap"
+        name_label = '%s-%s' % (instance.name, name)
         ONE_MEG = 1024 * 1024
-        virtual_size = swap_mb * ONE_MEG
+        virtual_size = size_mb * ONE_MEG
         vdi_ref = cls.create_vdi(
             session, sr_ref, name_label, virtual_size, read_only=False)
 
         try:
             # 2. Attach VDI to compute worker (VBD hotplug)
             with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
-                # 3. Create swap partition
-
-                # NOTE(jk0): We use a FAT32 filesystem for the Windows swap
-                # partition because that is what parted supports.
-                is_windows = instance.os_type == "windows"
-                fs_type = "fat32" if is_windows else "linux-swap"
-
+                # 3. Create partition
                 dev_path = utils.make_dev_path(dev)
                 utils.execute('parted', '--script', dev_path,
                               'mklabel', 'msdos', run_as_root=True)
 
                 partition_start = 0
-                partition_end = swap_mb
-                utils.execute('parted', '--script', dev_path, 'mkpartfs',
-                              'primary', fs_type,
+                partition_end = size_mb
+                utils.execute('parted', '--script', dev_path,
+                              'mkpart', 'primary',
                               str(partition_start),
                               str(partition_end),
                               run_as_root=True)
+
+                partition_path = utils.make_dev_path(dev, partition=1)
+
+                if fs_type == 'linux-swap':
+                    utils.execute('mkswap', partition_path,
+                                  run_as_root=True)
+                elif fs_type is not None:
+                    utils.execute('mkfs', '-t', fs_type, partition_path,
+                                  run_as_root=True)
 
             # 4. Create VBD between instance VM and swap VDI
             volume_utils.VolumeHelper.create_vbd(
@@ -487,11 +509,28 @@ class VMHelper(HelperBase):
                 cls.destroy_vdi(session, vdi_ref)
 
     @classmethod
+    def generate_swap(cls, session, instance, vm_ref, userdevice, swap_mb):
+        # NOTE(jk0): We use a FAT32 filesystem for the Windows swap
+        # partition because that is what parted supports.
+        is_windows = instance.os_type == "windows"
+        fs_type = "fat32" if is_windows else "linux-swap"
+
+        cls._generate_disk(session, instance, vm_ref, userdevice,
+                           'swap', swap_mb, fs_type)
+
+    @classmethod
+    def generate_ephemeral(cls, session, instance, vm_ref, userdevice,
+                           size_gb):
+        cls._generate_disk(session, instance, vm_ref, userdevice,
+                           'ephemeral', size_gb * 1024,
+                           FLAGS.default_ephemeral_format)
+
+    @classmethod
     def fetch_blank_disk(cls, session, instance_type_id):
         # Size the blank harddrive to suit the machine type:
         one_gig = 1024 * 1024 * 1024
         req_type = instance_types.get_instance_type(instance_type_id)
-        req_size = req_type['local_gb']
+        req_size = req_type['root_gb']
 
         LOG.debug("Creating blank HD of size %(req_size)d gigs"
                     % locals())
@@ -595,7 +634,7 @@ class VMHelper(HelperBase):
         # refactor this to a common area
         instance_type_id = instance['instance_type_id']
         instance_type = instance_types.get_instance_type(instance_type_id)
-        allowed_size_gb = instance_type['local_gb']
+        allowed_size_gb = instance_type['root_gb']
         allowed_size_bytes = allowed_size_gb * 1024 * 1024 * 1024
 
         LOG.debug(_("image_size_bytes=%(size_bytes)d, allowed_size_bytes="
@@ -935,15 +974,34 @@ class VMHelper(HelperBase):
     def find_sr(cls, session):
         """Return the storage repository to hold VM images"""
         host = session.get_xenapi_host()
+        try:
+            tokens = FLAGS.sr_matching_filter.split(':')
+            filter_criteria = tokens[0]
+            filter_pattern = tokens[1]
+        except IndexError:
+            # oops, flag is invalid
+            LOG.warning(_("Flag sr_matching_filter '%s' does not respect "
+                          "formatting convention"), FLAGS.sr_matching_filter)
+            return None
 
-        for sr_ref, sr_rec in cls.get_all_refs_and_recs(session, 'SR'):
-            if not ('i18n-key' in sr_rec['other_config'] and
-                    sr_rec['other_config']['i18n-key'] == 'local-storage'):
-                continue
-            for pbd_ref in sr_rec['PBDs']:
-                pbd_rec = cls.get_rec(session, 'PBD', pbd_ref)
-                if pbd_rec and pbd_rec['host'] == host:
-                    return sr_ref
+        if filter_criteria == 'other-config':
+            key, value = filter_pattern.split('=', 1)
+            for sr_ref, sr_rec in cls.get_all_refs_and_recs(session, 'SR'):
+                if not (key in sr_rec['other_config'] and
+                        sr_rec['other_config'][key] == value):
+                    continue
+                for pbd_ref in sr_rec['PBDs']:
+                    pbd_rec = cls.get_rec(session, 'PBD', pbd_ref)
+                    if pbd_rec and pbd_rec['host'] == host:
+                        return sr_ref
+        elif filter_criteria == 'default-sr' and filter_pattern == 'true':
+            pool_ref = session.call_xenapi('pool.get_all')[0]
+            return session.call_xenapi('pool.get_default_SR', pool_ref)
+        # No SR found!
+        LOG.warning(_("XenAPI is unable to find a Storage Repository to "
+                      "install guest instances on. Please check your "
+                      "configuration and/or configure the flag "
+                      "'sr_matching_filter'"))
         return None
 
     @classmethod
@@ -1052,9 +1110,21 @@ def parse_rrd_update(doc, start, until=None):
 def average_series(data, col, start, until=None):
     vals = [row['values'][col] for row in data
             if (not until or (row['time'] <= until)) and
-                not row['values'][col].is_nan()]
+                row['values'][col].is_finite()]
     if vals:
-        return (sum(vals) / len(vals)).quantize(Decimal('1.0000'))
+        try:
+            return (sum(vals) / len(vals)).quantize(Decimal('1.0000'))
+        except InvalidOperation:
+            # (mdragon) Xenserver occasionally returns odd values in
+            # data that will throw an error on averaging (see bug 918490)
+            # These are hard to find, since, whatever those values are,
+            # Decimal seems to think they are a valid number, sortof.
+            # We *think* we've got the the cases covered, but just in
+            # case, log and return NaN, so we don't break reporting of
+            # other statistics.
+            LOG.error(_("Invalid statistics data from Xenserver: %s")
+                      % str(vals))
+            return Decimal('NaN')
     else:
         return Decimal('0.0000')
 

@@ -18,8 +18,6 @@ Tests For HostManager
 
 import datetime
 
-import mox
-
 from nova import db
 from nova import exception
 from nova import log as logging
@@ -264,6 +262,12 @@ class HostManagerTestCase(test.TestCase):
         self.mox.VerifyAll()
 
         self.assertEqual(len(host_states), 4)
+        # Check that .service is set properly
+        for i in xrange(4):
+            compute_node = fakes.COMPUTE_NODES[i]
+            host = compute_node['service']['host']
+            self.assertEqual(host_states[host].service,
+                    compute_node['service'])
         self.assertEqual(host_states['host1'].free_ram_mb, 0)
         # 511GB
         self.assertEqual(host_states['host1'].free_disk_mb, 523264)
@@ -358,3 +362,21 @@ class HostStateTestCase(test.TestCase):
         result = fake_host.passes_filters(filter_fns, filter_properties)
         self.mox.VerifyAll()
         self.assertFalse(result)
+
+    def test_host_state_passes_filters_skipped_from_force(self):
+        fake_host = host_manager.HostState('host1', 'compute')
+        filter_properties = {'force_hosts': ['host1']}
+
+        cls1 = ComputeFilterClass1()
+        cls2 = ComputeFilterClass2()
+        self.mox.StubOutWithMock(cls1, 'host_passes')
+        self.mox.StubOutWithMock(cls2, 'host_passes')
+        filter_fns = [cls1.host_passes, cls2.host_passes]
+
+        # cls[12].host_passes() not called because of short circuit
+        # with matching host to force
+
+        self.mox.ReplayAll()
+        result = fake_host.passes_filters(filter_fns, filter_properties)
+        self.mox.VerifyAll()
+        self.assertTrue(result)

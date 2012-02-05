@@ -22,20 +22,26 @@ import socket
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import manager
 from nova import rpc
 from nova import utils
 
 
+console_manager_opts = [
+    cfg.StrOpt('console_driver',
+               default='nova.console.xvp.XVPConsoleProxy',
+               help='Driver to use for the console proxy'),
+    cfg.BoolOpt('stub_compute',
+                default=False,
+                help='Stub calls to compute worker for tests'),
+    cfg.StrOpt('console_public_hostname',
+               default=socket.gethostname(),
+               help='Publicly visable name for this console host'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('console_driver',
-                    'nova.console.xvp.XVPConsoleProxy',
-                    'Driver to use for the console proxy')
-flags.DEFINE_boolean('stub_compute', False,
-                     'Stub calls to compute worker for tests')
-flags.DEFINE_string('console_public_hostname',
-                    socket.gethostname(),
-                    'Publicly visable name for this console host')
+FLAGS.add_options(console_manager_opts)
 
 
 class ConsoleProxyManager(manager.Manager):

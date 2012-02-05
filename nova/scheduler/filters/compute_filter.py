@@ -15,6 +15,7 @@
 
 from nova import log as logging
 from nova.scheduler.filters import abstract_filter
+from nova import utils
 
 
 LOG = logging.getLogger('nova.scheduler.filter.compute_filter')
@@ -37,20 +38,15 @@ class ComputeFilter(abstract_filter.AbstractHostFilter):
                 return False
         return True
 
-    def _basic_ram_filter(self, host_state, instance_type):
-        """Only return hosts with sufficient available RAM."""
-        requested_ram = instance_type['memory_mb']
-        free_ram_mb = host_state.free_ram_mb
-        return free_ram_mb >= requested_ram
-
     def host_passes(self, host_state, filter_properties):
         """Return a list of hosts that can create instance_type."""
         instance_type = filter_properties.get('instance_type')
         if host_state.topic != 'compute' or not instance_type:
             return True
-        capabilities = host_state.capabilities or {}
+        capabilities = host_state.capabilities
+        service = host_state.service
 
-        if not self._basic_ram_filter(host_state, instance_type):
+        if not utils.service_is_up(service) or service['disabled']:
             return False
         if not capabilities.get("enabled", True):
             return False

@@ -23,6 +23,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.api.openstack import extensions
 from nova import compute
+from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
@@ -31,6 +32,7 @@ from nova.scheduler import api as scheduler_api
 
 LOG = logging.getLogger("nova.api.openstack.compute.contrib.hosts")
 FLAGS = flags.FLAGS
+authorize = extensions.extension_authorizer('compute', 'hosts')
 
 
 class HostIndexTemplate(xmlutil.TemplateBuilder):
@@ -52,6 +54,7 @@ class HostUpdateTemplate(xmlutil.TemplateBuilder):
         root = xmlutil.TemplateElement('host')
         root.set('host')
         root.set('status')
+        root.set('maintenance_mode')
 
         return xmlutil.MasterTemplate(root, 1)
 
@@ -61,6 +64,16 @@ class HostActionTemplate(xmlutil.TemplateBuilder):
         root = xmlutil.TemplateElement('host')
         root.set('host')
         root.set('power_action')
+
+        return xmlutil.MasterTemplate(root, 1)
+
+
+class HostShowTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = xmlutil.TemplateElement('host')
+        elem = xmlutil.make_flat_dict('resource', selector='host',
+                                      subselector='resource')
+        root.append(elem)
 
         return xmlutil.MasterTemplate(root, 1)
 
@@ -112,12 +125,14 @@ class HostController(object):
 
     @wsgi.serializers(xml=HostIndexTemplate)
     def index(self, req):
+        authorize(req.environ['nova.context'])
         return {'hosts': _list_hosts(req)}
 
     @wsgi.serializers(xml=HostUpdateTemplate)
     @wsgi.deserializers(xml=HostDeserializer)
     @check_host
     def update(self, req, id, body):
+        authorize(req.environ['nova.context'])
         for raw_key, raw_val in body.iteritems():
             key = raw_key.lower().strip()
             val = raw_val.lower().strip()
@@ -125,14 +140,17 @@ class HostController(object):
             # settings may follow.
             if key == "status":
                 if val[:6] in ("enable", "disabl"):
-                    return self._set_enabled_status(req, id,
-                            enabled=(val.startswith("enable")))
+                    enabled = val.startswith("enable")
                 else:
                     explanation = _("Invalid status: '%s'") % raw_val
                     raise webob.exc.HTTPBadRequest(explanation=explanation)
+            elif key == "maintenance_mode":
+                raise webob.exc.HTTPNotImplemented
             else:
                 explanation = _("Invalid update setting: '%s'") % raw_key
                 raise webob.exc.HTTPBadRequest(explanation=explanation)
+
+        return self._set_enabled_status(req, id, enabled=enabled)
 
     def _set_enabled_status(self, req, host, enabled):
         """Sets the specified host's ability to accept new instances."""
@@ -149,6 +167,7 @@ class HostController(object):
     def _host_power_action(self, req, host, action):
         """Reboots, shuts down or powers up the host."""
         context = req.environ['nova.context']
+        authorize(context)
         try:
             result = self.compute_api.host_power_action(context, host=host,
                     action=action)
@@ -168,6 +187,80 @@ class HostController(object):
     def reboot(self, req, id):
         return self._host_power_action(req, host=id, action="reboot")
 
+    @wsgi.serializers(xml=HostShowTemplate)
+    def show(self, req, id):
+        """Shows the physical/usage resource given by hosts.
+
+        :param context: security context
+        :param host: hostname
+        :returns: expected to use HostShowTemplate.
+            ex. {'host': {'resource':D},..}
+                D: {'host': 'hostname','project': 'admin',
+                    'cpu': 1, 'memory_mb': 2048, 'disk_gb': 30}
+        """
+        host = id
+        context = req.environ['nova.context']
+        # Expected to use AuthMiddleware.
+        # Otherwise, non-admin user can use describe-resource
+        if not context.is_admin:
+            msg = _("Describe-resource is admin only functionality")
+            raise webob.exc.HTTPForbidden(explanation=msg)
+
+        # Getting compute node info and related instances info
+        try:
+            compute_ref = db.service_get_all_compute_by_host(context, host)
+            compute_ref = compute_ref[0]
+        except exception.ComputeHostNotFound:
+            raise webob.exc.HTTPNotFound(explanation=_("Host not found"))
+        instance_refs = db.instance_get_all_by_host(context,
+                                                    compute_ref['host'])
+
+        # Getting total available/used resource
+        compute_ref = compute_ref['compute_node'][0]
+        resources = [{'resource': {'host': host, 'project': '(total)',
+                      'cpu': compute_ref['vcpus'],
+                      'memory_mb': compute_ref['memory_mb'],
+                      'disk_gb': compute_ref['local_gb']}},
+                     {'resource': {'host': host, 'project': '(used_now)',
+                      'cpu': compute_ref['vcpus_used'],
+                      'memory_mb': compute_ref['memory_mb_used'],
+                      'disk_gb': compute_ref['local_gb_used']}}]
+
+        cpu_sum = 0
+        mem_sum = 0
+        hdd_sum = 0
+        for i in instance_refs:
+            cpu_sum += i['vcpus']
+            mem_sum += i['memory_mb']
+            hdd_sum += i['root_gb'] + i['ephemeral_gb']
+
+        resources.append({'resource': {'host': host,
+                          'project': '(used_max)',
+                          'cpu': cpu_sum,
+                          'memory_mb': mem_sum,
+                          'disk_gb': hdd_sum}})
+
+        # Getting usage resource per project
+        project_ids = [i['project_id'] for i in instance_refs]
+        project_ids = list(set(project_ids))
+        for project_id in project_ids:
+            vcpus = [i['vcpus'] for i in instance_refs
+                     if i['project_id'] == project_id]
+
+            mem = [i['memory_mb']  for i in instance_refs
+                   if i['project_id'] == project_id]
+
+            disk = [i['root_gb'] + i['ephemeral_gb'] for i in instance_refs
+                    if i['project_id'] == project_id]
+
+            resources.append({'resource': {'host': host,
+                              'project': project_id,
+                              'cpu': reduce(lambda x, y: x + y, vcpus),
+                              'memory_mb': reduce(lambda x, y: x + y, mem),
+                              'disk_gb': reduce(lambda x, y: x + y, disk)}})
+
+        return {'host': resources}
+
 
 class Hosts(extensions.ExtensionDescriptor):
     """Admin-only host administration"""
@@ -176,7 +269,6 @@ class Hosts(extensions.ExtensionDescriptor):
     alias = "os-hosts"
     namespace = "http://docs.openstack.org/compute/ext/hosts/api/v1.1"
     updated = "2011-06-29T00:00:00+00:00"
-    admin_only = True
 
     def get_resources(self):
         resources = [extensions.ResourceExtension('os-hosts',

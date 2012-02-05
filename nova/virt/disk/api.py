@@ -32,42 +32,47 @@ import tempfile
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.virt.disk import guestfs
 from nova.virt.disk import loop
 from nova.virt.disk import nbd
 
+
 LOG = logging.getLogger('nova.compute.disk')
+
+disk_opts = [
+    cfg.StrOpt('injected_network_template',
+               default=utils.abspath('virt/interfaces.template'),
+               help='Template file for injected network'),
+    cfg.ListOpt('img_handlers',
+                default=['loop', 'nbd', 'guestfs'],
+                help='Order of methods used to mount disk images'),
+
+    # NOTE(yamahata): ListOpt won't work because the command may include a
+    #                 comma. For example:
+    #
+    #                 mkfs.ext3 -O dir_index,extent -E stride=8,stripe-width=16
+    #                           --label %(fs_label)s %(target)s
+    #
+    #                 list arguments are comma separated and there is no way to
+    #                 escape such commas.
+    #
+    cfg.MultiStrOpt('virt_mkfs',
+                    default=[
+                      'default=mkfs.ext3 -L %(fs_label)s -F %(target)s',
+                      'linux=mkfs.ext3 -L %(fs_label)s -F %(target)s',
+                      'windows='
+                      'mkfs.ntfs --fast --label %(fs_label)s %(target)s',
+                      # NOTE(yamahata): vfat case
+                      #'windows=mkfs.vfat -n %(fs_label)s %(target)s',
+                      ],
+                    help='mkfs commands for ephemeral device. '
+                         'The format is <os_type>=<mkfs command>'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('minimum_root_size', 1024 * 1024 * 1024 * 10,
-                     'minimum size in bytes of root partition')
-flags.DEFINE_string('injected_network_template',
-                    utils.abspath('virt/interfaces.template'),
-                    'Template file for injected network')
-flags.DEFINE_list('img_handlers', ['loop', 'nbd', 'guestfs'],
-                    'Order of methods used to mount disk images')
-
-
-# NOTE(yamahata): DEFINE_list() doesn't work because the command may
-#                 include ','. For example,
-#                 mkfs.ext3 -O dir_index,extent -E stride=8,stripe-width=16
-#                 --label %(fs_label)s %(target)s
-#
-#                 DEFINE_list() parses its argument by
-#                 [s.strip() for s in argument.split(self._token)]
-#                 where self._token = ','
-#                 No escape nor exceptional handling for ','.
-#                 DEFINE_list() doesn't give us what we need.
-flags.DEFINE_multistring('virt_mkfs',
-                         ['windows=mkfs.ntfs --fast --label %(fs_label)s '
-                          '%(target)s',
-                          # NOTE(yamahata): vfat case
-                          #'windows=mkfs.vfat -n %(fs_label)s %(target)s',
-                          'linux=mkfs.ext3 -L %(fs_label)s -F %(target)s',
-                          'default=mkfs.ext3 -L %(fs_label)s -F %(target)s'],
-                         'mkfs commands for ephemeral device. The format is'
-                         '<os_type>=<mkfs command>')
-
+FLAGS.add_options(disk_opts)
 
 _MKFS_COMMAND = {}
 _DEFAULT_MKFS_COMMAND = None
@@ -104,12 +109,10 @@ def extend(image, size):
 class _DiskImage(object):
     """Provide operations on a disk image file."""
 
-    def __init__(self, image, partition=None, use_cow=False,
-                 disable_auto_fsck=False, mount_dir=None):
+    def __init__(self, image, partition=None, use_cow=False, mount_dir=None):
         # These passed to each mounter
         self.image = image
         self.partition = partition
-        self.disable_auto_fsck = disable_auto_fsck
         self.mount_dir = mount_dir
 
         # Internal
@@ -159,7 +162,6 @@ class _DiskImage(object):
                 mounter_cls = self._handler_class(h)
                 mounter = mounter_cls(image=self.image,
                                       partition=self.partition,
-                                      disable_auto_fsck=self.disable_auto_fsck,
                                       mount_dir=self.mount_dir)
                 if mounter.do_mount():
                     self._mounter = mounter
@@ -186,7 +188,7 @@ class _DiskImage(object):
 # Public module functions
 
 def inject_data(image, key=None, net=None, metadata=None,
-                partition=None, use_cow=False, disable_auto_fsck=True):
+                partition=None, use_cow=False):
     """Injects a ssh key and optionally net data into a disk image.
 
     it will mount the image as a fully partitioned disk and attempt to inject
@@ -195,12 +197,24 @@ def inject_data(image, key=None, net=None, metadata=None,
     If partition is not specified it mounts the image as a single partition.
 
     """
-    img = _DiskImage(image=image, partition=partition, use_cow=use_cow,
-                     disable_auto_fsck=disable_auto_fsck)
+    img = _DiskImage(image=image, partition=partition, use_cow=use_cow)
     if img.mount():
         try:
             inject_data_into_fs(img.mount_dir, key, net, metadata,
                                 utils.execute)
+        finally:
+            img.umount()
+    else:
+        raise exception.Error(img.errors)
+
+
+def inject_files(image, files, partition=None, use_cow=False):
+    """Injects arbitrary files into a disk image"""
+    img = _DiskImage(image=image, partition=partition, use_cow=use_cow)
+    if img.mount():
+        try:
+            for (path, contents) in files:
+                _inject_file_into_fs(img.mount_dir, path, contents)
         finally:
             img.umount()
     else:
@@ -253,6 +267,14 @@ def inject_data_into_fs(fs, key, net, metadata, execute):
         _inject_metadata_into_fs(metadata, fs, execute=execute)
 
 
+def _inject_file_into_fs(fs, path, contents):
+    absolute_path = os.path.join(fs, path.lstrip('/'))
+    parent_dir = os.path.dirname(absolute_path)
+    utils.execute('mkdir', '-p', parent_dir, run_as_root=True)
+    utils.execute('tee', absolute_path, process_input=contents,
+          run_as_root=True)
+
+
 def _inject_metadata_into_fs(metadata, fs, execute=None):
     metadata_path = os.path.join(fs, "meta.js")
     metadata = dict([(m.key, m.value) for m in metadata])
@@ -272,8 +294,15 @@ def _inject_key_into_fs(key, fs, execute=None):
     utils.execute('chown', 'root', sshdir, run_as_root=True)
     utils.execute('chmod', '700', sshdir, run_as_root=True)
     keyfile = os.path.join(sshdir, 'authorized_keys')
+    key_data = [
+        '\n',
+        '# The following ssh key was injected by Nova',
+        '\n',
+        key.strip(),
+        '\n',
+    ]
     utils.execute('tee', '-a', keyfile,
-                  process_input='\n' + key.strip() + '\n', run_as_root=True)
+                  process_input=''.join(key_data), run_as_root=True)
 
 
 def _inject_net_into_fs(net, fs, execute=None):

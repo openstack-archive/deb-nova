@@ -258,7 +258,7 @@ class AdapterConsumer(Consumer):
         # the previous context is stored in local.store.context
         if hasattr(local.store, 'context'):
             del local.store.context
-        LOG.debug(_('received %s') % message_data)
+        rpc_common._safe_log(LOG.debug, _('received %s'), message_data)
         # This will be popped off in _unpack_context
         msg_id = message_data.get('_msg_id', None)
         ctxt = _unpack_context(message_data)
@@ -522,8 +522,9 @@ class RpcContext(context.RequestContext):
                 self.msg_id = None
 
 
-def multicall(context, topic, msg):
+def multicall(context, topic, msg, timeout=None):
     """Make a call that returns multiple times."""
+    # NOTE(russellb): carrot doesn't support timeouts
     LOG.debug(_('Making asynchronous call on %s ...'), topic)
     msg_id = uuid.uuid4().hex
     msg.update({'_msg_id': msg_id})
@@ -594,9 +595,9 @@ def create_connection(new=True):
     return Connection.instance(new=new)
 
 
-def call(context, topic, msg):
+def call(context, topic, msg, timeout=None):
     """Sends a message on a topic and wait for a response."""
-    rv = multicall(context, topic, msg)
+    rv = multicall(context, topic, msg, timeout)
     # NOTE(vish): return the last result from the multicall
     rv = list(rv)
     if not rv:
@@ -633,6 +634,10 @@ def notify(context, topic, msg):
                                    durable=True)
         publisher.send(msg)
         publisher.close()
+
+
+def cleanup():
+    pass
 
 
 def generic_response(message_data, message):

@@ -18,7 +18,6 @@ Tests For Distributed Scheduler.
 
 import json
 
-from nova.compute import api as compute_api
 from nova import context
 from nova import db
 from nova import exception
@@ -105,7 +104,8 @@ class DistributedSchedulerTestCase(test.TestCase):
         self.stubs.Set(db, 'zone_get_all', fake_zone_get_all)
 
         fake_context = context.RequestContext('user', 'project')
-        request_spec = {'instance_type': {'memory_mb': 1, 'local_gb': 1},
+        request_spec = {'instance_type': {'memory_mb': 1, 'root_gb': 1,
+                                          'ephemeral_gb': 0},
                         'instance_properties': {'project_id': 1}}
         self.assertRaises(exception.NoValidHost, sched.schedule_run_instance,
                           fake_context, request_spec)
@@ -129,6 +129,8 @@ class DistributedSchedulerTestCase(test.TestCase):
             return least_cost.WeightedHost(1, zone='x', blob='y')
 
         def _fake_provision_resource_locally(*args, **kwargs):
+            # Tests that filter_properties is stripped
+            self.assertNotIn('filter_properties', kwargs)
             self.locally_called = True
             return 1
 
@@ -152,7 +154,8 @@ class DistributedSchedulerTestCase(test.TestCase):
             }
 
         fake_context = context.RequestContext('user', 'project')
-        instances = sched.schedule_run_instance(fake_context, request_spec)
+        instances = sched.schedule_run_instance(fake_context, request_spec,
+                filter_properties={})
         self.assertTrue(instances)
         self.assertFalse(self.schedule_called)
         self.assertTrue(self.from_blob_called)
@@ -165,32 +168,36 @@ class DistributedSchedulerTestCase(test.TestCase):
         a non-admin context.  DB actions should work."""
         self.was_admin = False
 
-        def fake_schedule(context, *args, **kwargs):
+        def fake_get(context, *args, **kwargs):
             # make sure this is called with admin context, even though
             # we're using user context below
             self.was_admin = context.is_admin
-            return []
+            return {}
 
         sched = fakes.FakeDistributedScheduler()
-        self.stubs.Set(sched, '_schedule', fake_schedule)
+        self.stubs.Set(sched.host_manager, 'get_all_host_states', fake_get)
 
         fake_context = context.RequestContext('user', 'project')
 
+        request_spec = {'instance_type': {'memory_mb': 1, 'local_gb': 1},
+                        'instance_properties': {'project_id': 1}}
         self.assertRaises(exception.NoValidHost, sched.schedule_run_instance,
-                          fake_context, {})
+                          fake_context, request_spec)
         self.assertTrue(self.was_admin)
 
     def test_schedule_bad_topic(self):
         """Parameter checking."""
         sched = fakes.FakeDistributedScheduler()
-        self.assertRaises(NotImplementedError, sched._schedule, None, "foo",
-                          {})
+        fake_context = context.RequestContext('user', 'project')
+        self.assertRaises(NotImplementedError, sched._schedule, fake_context,
+                          "foo", {})
 
     def test_schedule_no_instance_type(self):
         """Parameter checking."""
         sched = fakes.FakeDistributedScheduler()
         request_spec = {'instance_properties': {}}
-        self.assertRaises(NotImplementedError, sched._schedule, None,
+        fake_context = context.RequestContext('user', 'project')
+        self.assertRaises(NotImplementedError, sched._schedule, fake_context,
                           "compute", request_spec=request_spec)
 
     def test_schedule_happy_day(self):
@@ -216,7 +223,8 @@ class DistributedSchedulerTestCase(test.TestCase):
         self.stubs.Set(sched, '_call_zone_method', fake_call_zone_method)
 
         request_spec = {'num_instances': 10,
-                        'instance_type': {'memory_mb': 512, 'local_gb': 512},
+                        'instance_type': {'memory_mb': 512, 'root_gb': 512,
+                                          'ephemeral_gb': 0},
                         'instance_properties': {'project_id': 1}}
         self.mox.ReplayAll()
         weighted_hosts = sched._schedule(fake_context, 'compute',
@@ -234,7 +242,8 @@ class DistributedSchedulerTestCase(test.TestCase):
 
     def test_schedule_local_zone(self):
         """Test to make sure _schedule makes no call out to zones if
-        local_zone in the request spec is True."""
+        local_zone_only in the filter_properties is True.
+        """
 
         self.next_weight = 1.0
 
@@ -256,14 +265,17 @@ class DistributedSchedulerTestCase(test.TestCase):
         self.stubs.Set(sched, '_call_zone_method', fake_call_zone_method)
 
         request_spec = {'num_instances': 10,
-                        'instance_type': {'memory_mb': 512, 'local_gb': 512},
+                        'instance_type': {'memory_mb': 512, 'root_gb': 512,
+                                          'ephemeral_gb': 256},
                         'instance_properties': {'project_id': 1,
                                                 'memory_mb': 512,
-                                                'local_gb': 512},
-                        'local_zone': True}
+                                                'root_gb': 512,
+                                                'ephemeral_gb': 0,
+                                                'vcpus': 1}}
+        filter_properties = {'local_zone_only': True}
         self.mox.ReplayAll()
         weighted_hosts = sched._schedule(fake_context, 'compute',
-                                         request_spec)
+                request_spec, filter_properties=filter_properties)
         self.mox.VerifyAll()
         self.assertEquals(len(weighted_hosts), 10)
         for weighted_host in weighted_hosts:
@@ -298,34 +310,5 @@ class DistributedSchedulerTestCase(test.TestCase):
         self.assertEquals(weight, 1.0)
         hostinfo = host_manager.HostState('host', 'compute')
         hostinfo.update_from_compute_node(dict(memory_mb=1000,
-                local_gb=0))
+                local_gb=0, vcpus=1))
         self.assertEquals(1000 - 128, fn(hostinfo, {}))
-
-    def test_populate_filter_properties(self):
-        request_spec = {'instance_properties': {}}
-        fixture = fakes.FakeDistributedScheduler()
-        filter_properties = {'ignore_hosts': []}
-        fixture.populate_filter_properties(request_spec, filter_properties)
-        self.assertEqual(len(filter_properties['ignore_hosts']), 0)
-
-        # No original host results in not ignoring
-        request_spec = {'instance_properties': {},
-                        'avoid_original_host': True}
-        fixture = fakes.FakeDistributedScheduler()
-        fixture.populate_filter_properties(request_spec, filter_properties)
-        self.assertEqual(len(filter_properties['ignore_hosts']), 0)
-
-        # Original host but avoid is False should not ignore it
-        request_spec = {'instance_properties': {'host': 'foo'},
-                        'avoid_original_host': False}
-        fixture = fakes.FakeDistributedScheduler()
-        fixture.populate_filter_properties(request_spec, filter_properties)
-        self.assertEqual(len(filter_properties['ignore_hosts']), 0)
-
-        # Original host but avoid is True should ignore it
-        request_spec = {'instance_properties': {'host': 'foo'},
-                        'avoid_original_host': True}
-        fixture = fakes.FakeDistributedScheduler()
-        fixture.populate_filter_properties(request_spec, filter_properties)
-        self.assertEqual(len(filter_properties['ignore_hosts']), 1)
-        self.assertEqual(filter_properties['ignore_hosts'][0], 'foo')

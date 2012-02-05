@@ -20,11 +20,16 @@
 
 from nova import utils
 from nova import flags
+from nova.openstack.common import cfg
 
+
+db_driver_opt = \
+    cfg.StrOpt('db_driver',
+               default='nova.db',
+               help='driver to use for database access')
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('db_driver', 'nova.db',
-                    'driver to use for database access')
+FLAGS.add_option(db_driver_opt)
 
 
 class Base(object):

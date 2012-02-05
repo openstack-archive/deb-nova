@@ -35,6 +35,7 @@ from nova import utils
 
 LOG = logging.getLogger("nova.api.openstack.compute.contrib.security_groups")
 FLAGS = flags.FLAGS
+authorize = extensions.extension_authorizer('compute', 'security_groups')
 
 
 def make_rule(elem):
@@ -223,6 +224,7 @@ class SecurityGroupController(object):
     def show(self, req, id):
         """Return data about the given security group."""
         context = req.environ['nova.context']
+        authorize(context)
         security_group = self._get_security_group(context, id)
         return {'security_group': self._format_security_group(context,
                                                               security_group)}
@@ -230,6 +232,7 @@ class SecurityGroupController(object):
     def delete(self, req, id):
         """Delete a security group."""
         context = req.environ['nova.context']
+        authorize(context)
         security_group = self._get_security_group(context, id)
         LOG.audit(_("Delete security group %s"), id, context=context)
         db.security_group_destroy(context, security_group.id)
@@ -240,6 +243,7 @@ class SecurityGroupController(object):
     def index(self, req):
         """Returns a list of security groups"""
         context = req.environ['nova.context']
+        authorize(context)
 
         self.compute_api.ensure_default_security_group(context)
         groups = db.security_group_get_by_project(context,
@@ -257,6 +261,7 @@ class SecurityGroupController(object):
     def create(self, req, body):
         """Creates a new security group."""
         context = req.environ['nova.context']
+        authorize(context)
         if not body:
             raise exc.HTTPUnprocessableEntity()
 
@@ -313,6 +318,7 @@ class SecurityGroupRulesController(SecurityGroupController):
     @wsgi.deserializers(xml=SecurityGroupRulesXMLDeserializer)
     def create(self, req, body):
         context = req.environ['nova.context']
+        authorize(context)
 
         if not body:
             raise exc.HTTPUnprocessableEntity()
@@ -373,17 +379,14 @@ class SecurityGroupRulesController(SecurityGroupController):
            defined in the given security group.
         """
         for rule in security_group.rules:
-            if 'group_id' in values:
-                if rule['group_id'] == values['group_id']:
-                    return True
-            else:
-                is_duplicate = True
-                for key in ('cidr', 'from_port', 'to_port', 'protocol'):
-                    if rule[key] != values[key]:
-                        is_duplicate = False
-                        break
-                if is_duplicate:
-                    return True
+            is_duplicate = True
+            keys = ('group_id', 'cidr', 'from_port', 'to_port', 'protocol')
+            for key in keys:
+                if rule.get(key) != values.get(key):
+                    is_duplicate = False
+                    break
+            if is_duplicate:
+                return True
         return False
 
     def _rule_args_to_dict(self, context, to_port=None, from_port=None,
@@ -471,6 +474,7 @@ class SecurityGroupRulesController(SecurityGroupController):
 
     def delete(self, req, id):
         context = req.environ['nova.context']
+        authorize(context)
 
         self.compute_api.ensure_default_security_group(context)
         try:
@@ -505,6 +509,7 @@ class SecurityGroupActionController(wsgi.Controller):
     @wsgi.action('addSecurityGroup')
     def _addSecurityGroup(self, req, id, body):
         context = req.environ['nova.context']
+        authorize(context)
 
         try:
             body = body['addSecurityGroup']
@@ -535,6 +540,7 @@ class SecurityGroupActionController(wsgi.Controller):
     @wsgi.action('removeSecurityGroup')
     def _removeSecurityGroup(self, req, id, body):
         context = req.environ['nova.context']
+        authorize(context)
 
         try:
             body = body['removeSecurityGroup']

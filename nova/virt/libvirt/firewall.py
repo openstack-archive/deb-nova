@@ -259,7 +259,7 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
                 LOG.debug(_('The nwfilter(%(instance_filter_name)s) '
                             'for %(instance_name)s is not found.') % locals())
 
-        instance_secgroup_filter_name =\
+        instance_secgroup_filter_name = \
             '%s-secgroup' % (self._instance_filter_name(instance))
 
         try:
@@ -486,99 +486,6 @@ class IptablesFirewallDriver(base_firewall.IptablesFirewallDriver):
             LOG.info(_('Attempted to unfilter instance %s which is not '
                      'filtered'), instance['id'])
 
-    def _do_basic_rules(self, ipv4_rules, ipv6_rules, network_info):
-        # Always drop invalid packets
-        ipv4_rules += ['-m state --state ' 'INVALID -j DROP']
-        ipv6_rules += ['-m state --state ' 'INVALID -j DROP']
-
-        # Allow established connections
-        ipv4_rules += ['-m state --state ESTABLISHED,RELATED -j ACCEPT']
-        ipv6_rules += ['-m state --state ESTABLISHED,RELATED -j ACCEPT']
-
-        # Pass through provider-wide drops
-        ipv4_rules += ['-j $provider']
-        ipv6_rules += ['-j $provider']
-
     def instance_filter_exists(self, instance, network_info):
         """Check nova-instance-instance-xxx exists"""
         return self.nwfilter.instance_filter_exists(instance, network_info)
-
-    def refresh_provider_fw_rules(self):
-        """See class:FirewallDriver: docs."""
-        self._do_refresh_provider_fw_rules()
-        self.iptables.apply()
-
-    @utils.synchronized('iptables', external=True)
-    def _do_refresh_provider_fw_rules(self):
-        """Internal, synchronized version of refresh_provider_fw_rules."""
-        self._purge_provider_fw_rules()
-        self._build_provider_fw_rules()
-
-    def _purge_provider_fw_rules(self):
-        """Remove all rules from the provider chains."""
-        self.iptables.ipv4['filter'].empty_chain('provider')
-        if FLAGS.use_ipv6:
-            self.iptables.ipv6['filter'].empty_chain('provider')
-
-    def _build_provider_fw_rules(self):
-        """Create all rules for the provider IP DROPs."""
-        self.iptables.ipv4['filter'].add_chain('provider')
-        if FLAGS.use_ipv6:
-            self.iptables.ipv6['filter'].add_chain('provider')
-        ipv4_rules, ipv6_rules = self._provider_rules()
-        for rule in ipv4_rules:
-            self.iptables.ipv4['filter'].add_rule('provider', rule)
-
-        if FLAGS.use_ipv6:
-            for rule in ipv6_rules:
-                self.iptables.ipv6['filter'].add_rule('provider', rule)
-
-    @staticmethod
-    def _provider_rules():
-        """Generate a list of rules from provider for IP4 & IP6."""
-        ctxt = context.get_admin_context()
-        ipv4_rules = []
-        ipv6_rules = []
-        rules = db.provider_fw_rule_get_all(ctxt)
-        for rule in rules:
-            LOG.debug(_('Adding provider rule: %s'), rule['cidr'])
-            version = netutils.get_ip_version(rule['cidr'])
-            if version == 4:
-                fw_rules = ipv4_rules
-            else:
-                fw_rules = ipv6_rules
-
-            protocol = rule['protocol']
-            if version == 6 and protocol == 'icmp':
-                protocol = 'icmpv6'
-
-            args = ['-p', protocol, '-s', rule['cidr']]
-
-            if protocol in ['udp', 'tcp']:
-                if rule['from_port'] == rule['to_port']:
-                    args += ['--dport', '%s' % (rule['from_port'],)]
-                else:
-                    args += ['-m', 'multiport',
-                             '--dports', '%s:%s' % (rule['from_port'],
-                                                    rule['to_port'])]
-            elif protocol == 'icmp':
-                icmp_type = rule['from_port']
-                icmp_code = rule['to_port']
-
-                if icmp_type == -1:
-                    icmp_type_arg = None
-                else:
-                    icmp_type_arg = '%s' % icmp_type
-                    if not icmp_code == -1:
-                        icmp_type_arg += '/%s' % icmp_code
-
-                if icmp_type_arg:
-                    if version == 4:
-                        args += ['-m', 'icmp', '--icmp-type',
-                                 icmp_type_arg]
-                    elif version == 6:
-                        args += ['-m', 'icmp6', '--icmpv6-type',
-                                 icmp_type_arg]
-            args += ['-j DROP']
-            fw_rules += [' '.join(args)]
-        return ipv4_rules, ipv6_rules

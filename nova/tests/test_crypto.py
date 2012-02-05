@@ -16,12 +16,19 @@
 Tests for Crypto module.
 """
 
+import os
+import shutil
+import tempfile
+
 import mox
-import stubout
 
 from nova import crypto
 from nova import db
+from nova import flags
 from nova import test
+from nova import utils
+
+FLAGS = flags.FLAGS
 
 
 class SymmetricKeyTestCase(test.TestCase):
@@ -40,27 +47,56 @@ class SymmetricKeyTestCase(test.TestCase):
 
         self.assertEquals(plain_text, plain)
 
-        # IV supplied ...
-        iv = '562e17996d093d28ddb3ba695a2e6f58'
-        encrypt = crypto.encryptor(key, iv)
-        cipher_text = encrypt(plain_text)
-        self.assertNotEquals(plain_text, cipher_text)
 
-        decrypt = crypto.decryptor(key, iv)
-        plain = decrypt(cipher_text)
+class X509Test(test.TestCase):
+    def test_can_generate_x509(self):
+        tmpdir = tempfile.mkdtemp()
+        self.flags(ca_path=tmpdir)
+        try:
+            crypto.ensure_ca_filesystem()
+            _key, cert_str = crypto.generate_x509_cert('fake', 'fake')
 
-        self.assertEquals(plain_text, plain)
+            project_cert = crypto.fetch_ca(project_id='fake')
+
+            signed_cert_file = os.path.join(tmpdir, "signed")
+            with open(signed_cert_file, 'w') as keyfile:
+                keyfile.write(cert_str)
+
+            project_cert_file = os.path.join(tmpdir, "project")
+            with open(project_cert_file, 'w') as keyfile:
+                keyfile.write(project_cert)
+
+            enc, err = utils.execute('openssl', 'verify', '-CAfile',
+                    project_cert_file, '-verbose', signed_cert_file)
+            self.assertFalse(err)
+
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_encrypt_decrypt_x509(self):
+        tmpdir = tempfile.mkdtemp()
+        self.flags(ca_path=tmpdir)
+        project_id = "fake"
+        try:
+            crypto.ensure_ca_filesystem()
+            cert = crypto.fetch_ca(project_id)
+            public_key = os.path.join(tmpdir, "public.pem")
+            with open(public_key, 'w') as keyfile:
+                keyfile.write(cert)
+            text = "some @#!%^* test text"
+            enc, _err = utils.execute('openssl',
+                                     'rsautl',
+                                     '-certin',
+                                     '-encrypt',
+                                     '-inkey', '%s' % public_key,
+                                     process_input=text)
+            dec = crypto.decrypt_text(project_id, enc)
+            self.assertEqual(text, dec)
+        finally:
+            shutil.rmtree(tmpdir)
 
 
 class RevokeCertsTest(test.TestCase):
-
-    def setUp(self):
-        super(RevokeCertsTest, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        super(RevokeCertsTest, self).tearDown()
 
     def test_revoke_certs_by_user_and_project(self):
         user_id = 'test_user'

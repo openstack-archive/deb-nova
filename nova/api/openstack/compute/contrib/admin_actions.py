@@ -32,6 +32,11 @@ FLAGS = flags.FLAGS
 LOG = logging.getLogger("nova.api.openstack.compute.contrib.admin_actions")
 
 
+def authorize(context, action_name):
+    action = 'admin_actions:%s' % action_name
+    extensions.extension_authorizer('compute', action)(context)
+
+
 class AdminActionsController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(AdminActionsController, self).__init__(*args, **kwargs)
@@ -45,6 +50,7 @@ class AdminActionsController(wsgi.Controller):
     def _pause(self, req, id, body):
         """Permit Admins to pause the server"""
         ctxt = req.environ['nova.context']
+        authorize(ctxt, 'pause')
         try:
             server = self.compute_api.get(ctxt, id)
             self.compute_api.pause(ctxt, server)
@@ -63,6 +69,7 @@ class AdminActionsController(wsgi.Controller):
     def _unpause(self, req, id, body):
         """Permit Admins to unpause the server"""
         ctxt = req.environ['nova.context']
+        authorize(ctxt, 'unpause')
         try:
             server = self.compute_api.get(ctxt, id)
             self.compute_api.unpause(ctxt, server)
@@ -81,6 +88,7 @@ class AdminActionsController(wsgi.Controller):
     def _suspend(self, req, id, body):
         """Permit admins to suspend the server"""
         context = req.environ['nova.context']
+        authorize(context, 'suspend')
         try:
             server = self.compute_api.get(context, id)
             self.compute_api.suspend(context, server)
@@ -99,6 +107,7 @@ class AdminActionsController(wsgi.Controller):
     def _resume(self, req, id, body):
         """Permit admins to resume the server from suspend"""
         context = req.environ['nova.context']
+        authorize(context, 'resume')
         try:
             server = self.compute_api.get(context, id)
             self.compute_api.resume(context, server)
@@ -117,6 +126,7 @@ class AdminActionsController(wsgi.Controller):
     def _migrate(self, req, id, body):
         """Permit admins to migrate a server to a new host"""
         context = req.environ['nova.context']
+        authorize(context, 'migrate')
         try:
             instance = self.compute_api.get(context, id)
             self.compute_api.resize(req.environ['nova.context'], instance)
@@ -134,6 +144,7 @@ class AdminActionsController(wsgi.Controller):
     def _reset_network(self, req, id, body):
         """Permit admins to reset networking on an server"""
         context = req.environ['nova.context']
+        authorize(context, 'resetNetwork')
         try:
             instance = self.compute_api.get(context, id)
             self.compute_api.reset_network(context, instance)
@@ -149,6 +160,7 @@ class AdminActionsController(wsgi.Controller):
     def _inject_network_info(self, req, id, body):
         """Permit admins to inject network info into a server"""
         context = req.environ['nova.context']
+        authorize(context, 'injectNetworkInfo')
         try:
             instance = self.compute_api.get(context, id)
             self.compute_api.inject_network_info(context, instance)
@@ -166,6 +178,7 @@ class AdminActionsController(wsgi.Controller):
     def _lock(self, req, id, body):
         """Permit admins to lock a server"""
         context = req.environ['nova.context']
+        authorize(context, 'lock')
         try:
             instance = self.compute_api.get(context, id)
             self.compute_api.lock(context, instance)
@@ -183,6 +196,7 @@ class AdminActionsController(wsgi.Controller):
     def _unlock(self, req, id, body):
         """Permit admins to lock a server"""
         context = req.environ['nova.context']
+        authorize(context, 'unlock')
         try:
             instance = self.compute_api.get(context, id)
             self.compute_api.unlock(context, instance)
@@ -207,6 +221,7 @@ class AdminActionsController(wsgi.Controller):
 
         """
         context = req.environ["nova.context"]
+        authorize(context, 'createBackup')
 
         try:
             entity = body["createBackup"]
@@ -261,6 +276,39 @@ class AdminActionsController(wsgi.Controller):
         resp.headers['Location'] = image_ref
         return resp
 
+    @wsgi.action('os-migrateLive')
+    @exception.novaclient_converter
+    @scheduler_api.redirect_handler
+    def _migrate_live(self, req, id, body):
+        """Permit admins to (live) migrate a server to a new host"""
+        context = req.environ["nova.context"]
+        authorize(context, 'migrateLive')
+
+        try:
+            block_migration = body["os-migrateLive"]["block_migration"]
+            disk_over_commit = body["os-migrateLive"]["disk_over_commit"]
+            host = body["os-migrateLive"]["host"]
+        except (TypeError, KeyError):
+            msg = _("host and block_migration must be specified.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
+        try:
+            instance = self.compute_api.get(context, id)
+            result = scheduler_api.live_migration(context,
+                                                  block_migration,
+                                                  disk_over_commit,
+                                                  instance["id"],
+                                                  host,
+                                                  topic=FLAGS.compute_topic)
+        except Exception, e:
+            msg = _("Live migration of instance %(id)s to host %(host)s"
+                    " failed") % locals()
+            LOG.exception(msg)
+            # Return messages from scheduler
+            raise exc.HTTPBadRequest(explanation=msg)
+
+        return webob.Response(status_int=202)
+
 
 class Admin_actions(extensions.ExtensionDescriptor):
     """Enable admin-only server actions
@@ -273,7 +321,6 @@ class Admin_actions(extensions.ExtensionDescriptor):
     alias = "os-admin-actions"
     namespace = "http://docs.openstack.org/compute/ext/admin-actions/api/v1.1"
     updated = "2011-09-20T00:00:00+00:00"
-    admin_only = True
 
     def get_controller_extensions(self):
         controller = AdminActionsController()

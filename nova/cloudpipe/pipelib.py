@@ -33,22 +33,27 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 # TODO(eday): Eventually changes these to something not ec2-specific
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
 
 
+cloudpipe_opts = [
+    cfg.StrOpt('boot_script_template',
+               default=utils.abspath('cloudpipe/bootscript.template'),
+               help=_('Template for cloudpipe instance boot script')),
+    cfg.StrOpt('dmz_net',
+               default='10.0.0.0',
+               help=_('Network to push into openvpn config')),
+    cfg.StrOpt('dmz_mask',
+               default='255.255.255.0',
+               help=_('Netmask to push into openvpn config')),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('boot_script_template',
-                    utils.abspath('cloudpipe/bootscript.template'),
-                    _('Template for script to run on cloudpipe instance boot'))
-flags.DEFINE_string('dmz_net',
-                    '10.0.0.0',
-                    _('Network to push into openvpn config'))
-flags.DEFINE_string('dmz_mask',
-                    '255.255.255.0',
-                    _('Netmask to push into openvpn config'))
+FLAGS.add_options(cloudpipe_opts)
 
 
 LOG = logging.getLogger('nova.cloudpipe')

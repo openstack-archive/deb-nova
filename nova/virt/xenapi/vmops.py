@@ -20,7 +20,9 @@ Management class for VM-related functions (spawn, reboot, etc).
 """
 
 import base64
+import binascii
 import json
+import os
 import pickle
 import random
 import sys
@@ -28,7 +30,6 @@ import time
 import uuid
 
 from eventlet import greenthread
-import M2Crypto
 
 from nova.compute import api as compute
 from nova.compute import power_state
@@ -37,6 +38,7 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.virt import driver
 from nova.virt.xenapi import volume_utils
@@ -49,21 +51,28 @@ VMHelper = vm_utils.VMHelper
 XenAPI = None
 LOG = logging.getLogger("nova.virt.xenapi.vmops")
 
+xenapi_vmops_opts = [
+    cfg.IntOpt('agent_version_timeout',
+               default=300,
+               help='number of seconds to wait for agent '
+                    'to be fully operational'),
+    cfg.IntOpt('xenapi_running_timeout',
+               default=60,
+               help='number of seconds to wait for instance '
+                    'to go to running state'),
+    cfg.StrOpt('xenapi_vif_driver',
+               default='nova.virt.xenapi.vif.XenAPIBridgeDriver',
+               help='The XenAPI VIF driver using XenServer Network APIs.'),
+    cfg.BoolOpt('xenapi_generate_swap',
+                default=False,
+                help='Whether to generate swap '
+                     '(False means fetching it from OVA)'),
+    ]
+
 FLAGS = flags.FLAGS
+FLAGS.add_options(xenapi_vmops_opts)
+
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
-flags.DEFINE_integer('agent_version_timeout', 300,
-                     'number of seconds to wait for agent to be fully '
-                     'operational')
-flags.DEFINE_integer('xenapi_running_timeout', 60,
-                     'number of seconds to wait for instance to go to '
-                     'running state')
-flags.DEFINE_string('xenapi_vif_driver',
-                    'nova.virt.xenapi.vif.XenAPIBridgeDriver',
-                    'The XenAPI VIF driver using XenServer Network APIs.')
-flags.DEFINE_bool('xenapi_generate_swap',
-                  False,
-                  'Whether to generate swap (False means fetching it'
-                  ' from OVA)')
 
 
 RESIZE_TOTAL_STEPS = 5
@@ -232,7 +241,7 @@ class VMOps(object):
 
         except (self.XenAPI.Failure, OSError, IOError) as spawn_error:
             LOG.exception(_("instance %s: Failed to spawn"),
-                          instance.id, exc_info=sys.exc_info())
+                          instance.uuid, exc_info=sys.exc_info())
             LOG.debug(_('Instance %s failed to spawn - performing clean-up'),
                       instance.id)
             self._handle_spawn_error(vdis, spawn_error)
@@ -241,6 +250,14 @@ class VMOps(object):
     def spawn_rescue(self, context, instance, image_meta, network_info):
         """Spawn a rescue instance."""
         self.spawn(context, instance, image_meta, network_info)
+
+    def _generate_hostname(self, instance):
+        """Generate the instance's hostname."""
+        hostname = instance["hostname"]
+        if getattr(instance, "_rescue", False):
+            hostname = "RESCUE-%s" % hostname
+
+        return hostname
 
     def _create_vm(self, context, instance, vdis, network_info, image_meta):
         """Create VM instance."""
@@ -330,7 +347,9 @@ class VMOps(object):
 
         self.create_vifs(vm_ref, instance, network_info)
         self.inject_network_info(instance, network_info, vm_ref)
-        self.inject_hostname(instance, vm_ref, instance['hostname'])
+
+        hostname = self._generate_hostname(instance)
+        self.inject_hostname(instance, vm_ref, hostname)
 
         return vm_ref
 
@@ -371,7 +390,7 @@ class VMOps(object):
                         instance.instance_type_id)
                 VMHelper.auto_configure_disk(session=self._session,
                                              vdi_ref=first_vdi_ref,
-                                             new_gb=instance_type['local_gb'])
+                                             new_gb=instance_type['root_gb'])
 
             VolumeHelper.create_vbd(session=self._session, vm_ref=vm_ref,
                                     vdi_ref=first_vdi_ref,
@@ -390,18 +409,30 @@ class VMOps(object):
                                    swap_mb=swap_mb)
             userdevice += 1
 
+        ephemeral_gb = instance_type['ephemeral_gb']
+        if ephemeral_gb:
+            VMHelper.generate_ephemeral(self._session, instance,
+                                        vm_ref, userdevice,
+                                        ephemeral_gb)
+            userdevice += 1
+
         # Attach any other disks
         for vdi in vdis[1:]:
-            if generate_swap and vdi['vdi_type'] == 'swap':
-                continue
             vdi_ref = self._session.call_xenapi('VDI.get_by_uuid',
                     vdi['vdi_uuid'])
+
+            if generate_swap and vdi['vdi_type'] == 'swap':
+                # We won't be using it, so don't let it leak
+                VMHelper.destroy_vdi(self._session, vdi_ref)
+                continue
+
             VolumeHelper.create_vbd(session=self._session, vm_ref=vm_ref,
                     vdi_ref=vdi_ref, userdevice=userdevice,
                     bootable=False)
             userdevice += 1
 
-    def _configure_instance(self, ctx, instance, vm_ref):
+    def _configure_instance(self, ctx, instance, vm_ref,
+                            skip_set_password=False):
         # Inject files, if necessary
         injected_files = instance.injected_files
         if injected_files:
@@ -419,9 +450,9 @@ class VMOps(object):
                 LOG.debug(_("Injecting file path: '%s'") % path)
                 self.inject_file(instance, path, contents)
 
-        # Set admin password, if necessary
         admin_password = instance.admin_pass
-        if admin_password:
+        # Set admin password, if necessary
+        if admin_password and not skip_set_password:
             LOG.debug(_("Setting admin password"))
             self.set_admin_password(instance, admin_password)
 
@@ -483,7 +514,10 @@ class VMOps(object):
             self.agent_update(instance, agent_build['url'],
                           agent_build['md5hash'])
 
-        self._configure_instance(ctx, instance, vm_ref)
+        # if the guest agent is not available, configure the
+        # instance, but skip the admin password configuration
+        no_agent = version is None
+        self._configure_instance(ctx, instance, vm_ref, no_agent)
 
     def _handle_spawn_error(self, vdis, spawn_error):
         # Extract resource list from spawn_error.
@@ -596,7 +630,7 @@ class VMOps(object):
         """
         template_vm_ref = None
         try:
-            template_vm_ref, template_vdi_uuids =\
+            template_vm_ref, template_vdi_uuids = \
                     self._create_snapshot(instance)
             # call plugin to ship snapshot off to glance
             VMHelper.upload_image(context,
@@ -689,7 +723,7 @@ class VMOps(object):
         template_vdi_uuids = template_vm_ref = None
         try:
             # 1. Create Snapshot
-            template_vm_ref, template_vdi_uuids =\
+            template_vm_ref, template_vdi_uuids = \
                     self._create_snapshot(instance)
             self._update_instance_progress(context, instance,
                                            step=1,
@@ -703,10 +737,10 @@ class VMOps(object):
             sr_path = VMHelper.get_sr_path(self._session)
 
             if instance['auto_disk_config'] and \
-               instance['local_gb'] > instance_type['local_gb']:
+               instance['root_gb'] > instance_type['root_gb']:
                 # Resizing disk storage down
-                old_gb = instance['local_gb']
-                new_gb = instance_type['local_gb']
+                old_gb = instance['root_gb']
+                new_gb = instance_type['root_gb']
 
                 LOG.debug(_("Resizing down VDI %(cow_uuid)s from "
                           "%(old_gb)dGB to %(new_gb)dGB") % locals())
@@ -816,7 +850,7 @@ class VMOps(object):
         """Resize a running instance by changing its disk size."""
         #TODO(mdietz): this will need to be adjusted for swap later
 
-        new_disk_size = instance.local_gb * 1024 * 1024 * 1024
+        new_disk_size = instance.root_gb * 1024 * 1024 * 1024
         if not new_disk_size:
             return
 
@@ -828,7 +862,7 @@ class VMOps(object):
 
         instance_name = instance.name
         old_gb = virtual_size / (1024 * 1024 * 1024)
-        new_gb = instance.local_gb
+        new_gb = instance.root_gb
 
         if virtual_size < new_disk_size:
             # Resize up. Simple VDI resize will do the trick
@@ -930,8 +964,9 @@ class VMOps(object):
         resp = self._make_agent_call('key_init', instance, '', key_init_args)
         # Successful return code from key_init is 'D0'
         if resp['returncode'] != 'D0':
-            LOG.error(_('Failed to exchange keys: %(resp)r') % locals())
-            return None
+            msg = _('Failed to exchange keys: %(resp)r') % locals()
+            LOG.error(msg)
+            raise Exception(msg)
         # Some old versions of the Windows agent have a trailing \\r\\n
         # (ie CRLF escaped) for some reason. Strip that off.
         agent_pub = int(resp['message'].replace('\\r\\n', ''))
@@ -945,8 +980,9 @@ class VMOps(object):
         resp = self._make_agent_call('password', instance, '', password_args)
         # Successful return code from password is '0'
         if resp['returncode'] != '0':
-            LOG.error(_('Failed to update password: %(resp)r') % locals())
-            return None
+            msg = _('Failed to update password: %(resp)r') % locals()
+            LOG.error(msg)
+            raise Exception(msg)
         return resp['message']
 
     def inject_file(self, instance, path, contents):
@@ -1000,11 +1036,19 @@ class VMOps(object):
             LOG.exception(exc)
 
     def _find_rescue_vbd_ref(self, vm_ref, rescue_vm_ref):
-        """Find and return the rescue VM's vbd_ref.
+        """Find and return the rescue VM's vbd_ref."""
+        vbd_refs = self._session.call_xenapi("VM.get_VBDs", vm_ref)
 
-        We use the second VBD here because swap is first with the root file
-        system coming in second."""
-        vbd_ref = self._session.call_xenapi("VM.get_VBDs", vm_ref)[1]
+        if len(vbd_refs) == 0:
+            raise Exception(_("Unable to find VBD for VM"))
+        elif len(vbd_refs) == 1:
+            # If we only have one VBD, assume it's the root fs
+            vbd_ref = vbd_refs[0]
+        else:
+            # If we have more than one VBD, swap will be first by convention
+            # with the root fs coming second
+            vbd_ref = vbd_refs[1]
+
         vdi_ref = self._session.call_xenapi("VBD.get_record", vbd_ref)["VDI"]
 
         return VolumeHelper.create_vbd(self._session, rescue_vm_ref, vdi_ref,
@@ -1359,7 +1403,7 @@ class VMOps(object):
                         for vrec in vm_rec['VIFs']]:
                 vif_map[vif['device']] = vif['MAC']
             name = vm_rec['name_label']
-            if name.startswith('Control domain'):
+            if vm_rec["is_a_template"] or vm_rec["is_control_domain"]:
                 continue
             vifs_bw = bw.setdefault(name, {})
             for key, val in data.iteritems():
@@ -1727,11 +1771,13 @@ class VMOps(object):
         """ recreates security group rules for every instance """
         self.firewall_driver.refresh_security_group_members(security_group_id)
 
+    def refresh_provider_fw_rules(self):
+        self.firewall_driver.refresh_provider_fw_rules()
+
     def unfilter_instance(self, instance_ref, network_info):
         """Removes filters for each VIF of the specified instance."""
         self.firewall_driver.unfilter_instance(instance_ref,
                                                network_info=network_info)
-    ########################################################################
 
 
 class SimpleDH(object):
@@ -1744,51 +1790,35 @@ class SimpleDH(object):
     as it uses that to handle the encryption and decryption. If openssl
     is not available, a RuntimeError will be raised.
     """
-    def __init__(self, prime=None, base=None, secret=None):
-        """
-        You can specify the values for prime and base if you wish;
-        otherwise, reasonable default values will be used.
-        """
-        if prime is None:
-            self._prime = 162259276829213363391578010288127
-        else:
-            self._prime = prime
-        if base is None:
-            self._base = 5
-        else:
-            self._base = base
-        self._shared = self._public = None
+    def __init__(self):
+        self._prime = 162259276829213363391578010288127
+        self._base = 5
+        self._public = None
+        self._shared = None
+        self.generate_private()
 
-        self._dh = M2Crypto.DH.set_params(
-                self.dec_to_mpi(self._prime),
-                self.dec_to_mpi(self._base))
-        self._dh.gen_key()
-        self._public = self.mpi_to_dec(self._dh.pub)
+    def generate_private(self):
+        self._private = int(binascii.hexlify(os.urandom(10)), 16)
+        return self._private
 
     def get_public(self):
+        self._public = self.mod_exp(self._base, self._private, self._prime)
         return self._public
 
     def compute_shared(self, other):
-        self._shared = self.bin_to_dec(
-                self._dh.compute_key(self.dec_to_mpi(other)))
+        self._shared = self.mod_exp(other, self._private, self._prime)
         return self._shared
 
-    def mpi_to_dec(self, mpi):
-        bn = M2Crypto.m2.mpi_to_bn(mpi)
-        hexval = M2Crypto.m2.bn_to_hex(bn)
-        dec = int(hexval, 16)
-        return dec
-
-    def bin_to_dec(self, binval):
-        bn = M2Crypto.m2.bin_to_bn(binval)
-        hexval = M2Crypto.m2.bn_to_hex(bn)
-        dec = int(hexval, 16)
-        return dec
-
-    def dec_to_mpi(self, dec):
-        bn = M2Crypto.m2.dec_to_bn('%s' % dec)
-        mpi = M2Crypto.m2.bn_to_mpi(bn)
-        return mpi
+    @staticmethod
+    def mod_exp(num, exp, mod):
+        """Efficient implementation of (num ** exp) % mod"""
+        result = 1
+        while exp > 0:
+            if (exp & 1) == 1:
+                result = (result * num) % mod
+            exp = exp >> 1
+            num = (num * num) % mod
+        return result
 
     def _run_ssl(self, text, decrypt=False):
         cmd = ['openssl', 'aes-128-cbc', '-A', '-a', '-pass',

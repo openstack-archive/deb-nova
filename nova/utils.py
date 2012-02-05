@@ -22,6 +22,7 @@
 import contextlib
 import datetime
 import functools
+import hashlib
 import inspect
 import json
 import lockfile
@@ -48,12 +49,18 @@ import netaddr
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 
 
 LOG = logging.getLogger("nova.utils")
 ISO_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 PERFECT_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f"
 FLAGS = flags.FLAGS
+
+
+FLAGS.add_option(
+    cfg.BoolOpt('disable_process_locking', default=False,
+                help='Whether to disable inter-process locks'))
 
 
 def import_class(import_str):
@@ -128,7 +135,7 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
     if session_id is None:
         session_id = random.randint(0, 0xffffffffffffffff)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    data = struct.pack('!BQxxxxxx', 0x38, session_id)
+    data = struct.pack('!BQxxxxx', 0x38, session_id)
     sock.sendto(data, (address, port))
     sock.settimeout(timeout)
     try:
@@ -318,7 +325,7 @@ def default_flagfile(filename='nova.conf', args=None):
         args = sys.argv
     for arg in args:
         if arg.find('flagfile') != -1:
-            break
+            return arg[arg.index('flagfile') + 1:]
     else:
         if not os.path.isabs(filename):
             # turn relative filename into an absolute path
@@ -331,16 +338,12 @@ def default_flagfile(filename='nova.conf', args=None):
         if os.path.exists(filename):
             flagfile = '--flagfile=%s' % filename
             args.insert(1, flagfile)
+            return filename
 
 
 def debug(arg):
     LOG.debug(_('debug in callback: %s'), arg)
     return arg
-
-
-def runthis(prompt, *cmd, **kwargs):
-    LOG.debug(_('Running %s'), (' '.join(cmd)))
-    rv, err = execute(*cmd, **kwargs)
 
 
 def generate_uid(topic, size=8):
@@ -408,6 +411,8 @@ def usage_from_instance(instance_ref, network_info=None, **kw):
           instance_id=instance_ref['uuid'],
           instance_type=instance_ref['instance_type']['name'],
           instance_type_id=instance_ref['instance_type_id'],
+          memory_mb=instance_ref['memory_mb'],
+          disk_gb=instance_ref['root_gb'] + instance_ref['ephemeral_gb'],
           display_name=instance_ref['display_name'],
           created_at=str(instance_ref['created_at']),
           launched_at=str(instance_ref['launched_at']) \
@@ -417,13 +422,8 @@ def usage_from_instance(instance_ref, network_info=None, **kw):
           state_description=instance_ref['task_state'] \
                              if instance_ref['task_state'] else '')
 
-    # NOTE(jkoelker) This nastyness can go away once compute uses the
-    #                network model
     if network_info is not None:
-        fixed_ips = []
-        for network, info in network_info:
-            fixed_ips.extend([ip['ip'] for ip in info['ips']])
-        usage_info['fixed_ips'] = fixed_ips
+        usage_info['fixed_ips'] = network_info.fixed_ips()
 
     usage_info.update(kw)
     return usage_info
@@ -772,14 +772,6 @@ else:
 _semaphores = {}
 
 
-class _NoopContextManager(object):
-    def __enter__(self):
-        pass
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-
 def synchronized(name, external=False):
     """Synchronization decorator.
 
@@ -824,21 +816,19 @@ def synchronized(name, external=False):
                 LOG.debug(_('Got semaphore "%(lock)s" for method '
                             '"%(method)s"...' % {'lock': name,
                                                  'method': f.__name__}))
-                if external:
+                if external and not FLAGS.disable_process_locking:
                     LOG.debug(_('Attempting to grab file lock "%(lock)s" for '
                                 'method "%(method)s"...' %
                                 {'lock': name, 'method': f.__name__}))
                     lock_file_path = os.path.join(FLAGS.lock_path,
-                                                  'nova-%s.lock' % name)
+                                                  'nova-%s' % name)
                     lock = lockfile.FileLock(lock_file_path)
-                else:
-                    lock = _NoopContextManager()
-
-                with lock:
-                    if external:
+                    with lock:
                         LOG.debug(_('Got file lock "%(lock)s" for '
                                     'method "%(method)s"...' %
                                     {'lock': name, 'method': f.__name__}))
+                        retval = f(*args, **kwargs)
+                else:
                     retval = f(*args, **kwargs)
 
             # If no-one else is waiting for it, delete it.
@@ -1073,12 +1063,12 @@ def monkey_patch():
             if isinstance(module_data[key], pyclbr.Class):
                 clz = import_class("%s.%s" % (module, key))
                 for method, func in inspect.getmembers(clz, inspect.ismethod):
-                    setattr(clz, method,\
+                    setattr(clz, method,
                         decorator("%s.%s.%s" % (module, key, method), func))
             # set the decorator for the function
             if isinstance(module_data[key], pyclbr.Function):
                 func = import_class("%s.%s" % (module, key))
-                setattr(sys.modules[module], key,\
+                setattr(sys.modules[module], key,
                     decorator("%s.%s" % (module, key), func))
 
 
@@ -1204,6 +1194,13 @@ def read_cached_file(filename, cache_info, reload_func=None):
         if reload_func:
             reload_func(cache_info['data'])
     return cache_info['data']
+
+
+def hash_file(file_like_object):
+    """Generate a hash for the contents of a file."""
+    checksum = hashlib.sha1()
+    any(map(checksum.update, iter(lambda: file_like_object.read(32768), '')))
+    return checksum.hexdigest()
 
 
 @contextlib.contextmanager
@@ -1399,3 +1396,20 @@ def _showwarning(message, category, filename, lineno, file=None, line=None):
 
 # Install our warnings handler
 warnings.showwarning = _showwarning
+
+
+def service_is_up(service):
+    """Check whether a service is up based on last heartbeat."""
+    last_heartbeat = service['updated_at'] or service['created_at']
+    # Timestamps in DB are UTC.
+    elapsed = total_seconds(utcnow() - last_heartbeat)
+    return abs(elapsed) <= FLAGS.service_down_time
+
+
+def generate_mac_address():
+    """Generate an Ethernet MAC address."""
+    mac = [0x02, 0x16, 0x3e,
+           random.randint(0x00, 0x7f),
+           random.randint(0x00, 0xff),
+           random.randint(0x00, 0xff)]
+    return ':'.join(map(lambda x: "%02x" % x, mac))

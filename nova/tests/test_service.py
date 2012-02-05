@@ -26,17 +26,26 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import flags
+from nova.openstack.common import cfg
 from nova import test
 from nova import service
 from nova import manager
 from nova import wsgi
 
-flags.DEFINE_string("fake_manager", "nova.tests.test_service.FakeManager",
-                    "Manager for testing")
-flags.DEFINE_string("test_service_listen", None,
-                    "Host to bind test service to")
-flags.DEFINE_integer("test_service_listen_port", 0,
-                     "Port number to bind test service to")
+
+test_service_opts = [
+    cfg.StrOpt("fake_manager",
+               default="nova.tests.test_service.FakeManager",
+               help="Manager for testing"),
+    cfg.StrOpt("test_service_listen",
+               default=None,
+               help="Host to bind test service to"),
+    cfg.IntOpt("test_service_listen_port",
+               default=0,
+               help="Port number to bind test service to"),
+    ]
+
+flags.FLAGS.add_options(test_service_opts)
 
 
 class FakeManager(manager.Manager):

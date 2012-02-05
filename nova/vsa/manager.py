@@ -27,6 +27,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import manager
+from nova.openstack.common import cfg
 from nova import volume
 from nova import vsa
 from nova import utils
@@ -34,9 +35,13 @@ from nova.compute import instance_types
 from nova.vsa import utils as vsa_utils
 from nova.vsa.api import VsaState
 
+vsa_driver_opt = \
+    cfg.StrOpt('vsa_driver',
+               default='nova.vsa.connection.get_connection',
+               help='Driver to use for controlling VSAs')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('vsa_driver', 'nova.vsa.connection.get_connection',
-                    'Driver to use for controlling VSAs')
+FLAGS.add_option(vsa_driver_opt)
 
 LOG = logging.getLogger('nova.vsa.manager')
 

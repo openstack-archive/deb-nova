@@ -17,17 +17,29 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import copy
 
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
+
 
 LOG = logging.getLogger('nova.rpc')
 
-flags.DEFINE_integer('rpc_thread_pool_size', 1024,
-                             'Size of RPC thread pool')
-flags.DEFINE_integer('rpc_conn_pool_size', 30,
-                             'Size of RPC connection pool')
+rpc_opts = [
+    cfg.IntOpt('rpc_thread_pool_size',
+               default=1024,
+               help='Size of RPC thread pool'),
+    cfg.IntOpt('rpc_conn_pool_size',
+               default=30,
+               help='Size of RPC connection pool'),
+    cfg.IntOpt('rpc_response_timeout',
+               default=3600,
+               help='Seconds to wait for a response from call or multicall'),
+    ]
+
+flags.FLAGS.add_options(rpc_opts)
 
 
 class RemoteError(exception.NovaException):
@@ -48,6 +60,15 @@ class RemoteError(exception.NovaException):
         super(RemoteError, self).__init__(exc_type=exc_type,
                                           value=value,
                                           traceback=traceback)
+
+
+class Timeout(exception.NovaException):
+    """Signifies that a timeout has occurred.
+
+    This exception is raised if the rpc_response_timeout is reached while
+    waiting for a response from the remote side.
+    """
+    message = _("Timeout while waiting on RPC response.")
 
 
 class Connection(object):
@@ -102,3 +123,22 @@ class Connection(object):
         pool for dispatching the messages to the proxy objects.
         """
         raise NotImplementedError()
+
+
+def _safe_log(log_func, msg, msg_data):
+    """Sanitizes the msg_data field before logging."""
+    SANITIZE = {
+                'set_admin_password': ('new_pass',),
+                'run_instance': ('admin_password',),
+               }
+    method = msg_data['method']
+    if method in SANITIZE:
+        msg_data = copy.deepcopy(msg_data)
+        args_to_sanitize = SANITIZE[method]
+        for arg in args_to_sanitize:
+            try:
+                msg_data['args'][arg] = "<SANITIZED>"
+            except KeyError:
+                pass
+
+    return log_func(msg, msg_data)

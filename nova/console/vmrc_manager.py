@@ -21,6 +21,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import manager
+from nova.openstack.common import cfg
 from nova import rpc
 from nova import utils
 from nova.virt import vmwareapi_conn
@@ -28,12 +29,17 @@ from nova.virt import vmwareapi_conn
 
 LOG = logging.getLogger("nova.console.vmrc_manager")
 
+vmrc_manager_opts = [
+    cfg.StrOpt('console_public_hostname',
+               default='',
+               help='Publicly visible name for this console host'),
+    cfg.StrOpt('console_driver',
+               default='nova.console.vmrc.VMRCConsole',
+               help='Driver to use for the console'),
+    ]
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('console_public_hostname', '',
-                    'Publicly visible name for this console host')
-flags.DEFINE_string('console_driver', 'nova.console.vmrc.VMRCConsole',
-                    'Driver to use for the console')
+FLAGS.add_options(vmrc_manager_opts)
 
 
 class ConsoleVMRCManager(manager.Manager):

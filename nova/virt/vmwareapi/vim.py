@@ -27,19 +27,23 @@ except ImportError:
     suds = None
 
 from nova import flags
+from nova.openstack.common import cfg
 from nova.virt.vmwareapi import error_util
 
 RESP_NOT_XML_ERROR = 'Response is "text/html", not "text/xml"'
 CONN_ABORT_ERROR = 'Software caused connection abort'
 ADDRESS_IN_USE_ERROR = 'Address already in use'
 
+vmwareapi_wsdl_loc_opt = \
+    cfg.StrOpt('vmwareapi_wsdl_loc',
+               default=None,
+               help='VIM Service WSDL Location '
+                    'e.g http://<server>/vimService.wsdl. '
+                    'Due to a bug in vSphere ESX 4.1 default wsdl. '
+                    'Refer readme-vmware to setup')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('vmwareapi_wsdl_loc',
-                   None,
-                   'VIM Service WSDL Location'
-                   'e.g http://<server>/vimService.wsdl'
-                   'Due to a bug in vSphere ESX 4.1 default wsdl'
-                   'Refer readme-vmware to setup')
+FLAGS.add_option(vmwareapi_wsdl_loc_opt)
 
 
 if suds:

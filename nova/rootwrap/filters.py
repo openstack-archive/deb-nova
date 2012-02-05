@@ -41,6 +41,10 @@ class CommandFilter(object):
             return ['sudo', '-u', self.run_as, self.exec_path] + userargs[1:]
         return [self.exec_path] + userargs[1:]
 
+    def get_environment(self, userargs):
+        """Returns specific environment to set, None if none"""
+        return None
+
 
 class RegExpFilter(CommandFilter):
     """Command filter doing regexp matching for every argument"""
@@ -77,4 +81,45 @@ class DnsmasqFilter(CommandFilter):
         return False
 
     def get_command(self, userargs):
-        return userargs[0:2] + [self.exec_path] + userargs[3:]
+        return [self.exec_path] + userargs[3:]
+
+    def get_environment(self, userargs):
+        env = os.environ.copy()
+        env['FLAGFILE'] = userargs[0].split('=')[-1]
+        env['NETWORK_ID'] = userargs[1].split('=')[-1]
+        return env
+
+
+class KillFilter(CommandFilter):
+    """Specific filter for the kill calls.
+       1st argument is a list of accepted signals (emptystring means no signal)
+       2nd argument is a list of accepted affected executables.
+
+       This filter relies on /proc to accurately determine affected
+       executable, so it will only work on procfs-capable systems (not OSX).
+    """
+
+    def match(self, userargs):
+        args = list(userargs)
+        if len(args) == 3:
+            signal = args.pop(1)
+            if signal not in self.args[0]:
+                # Requested signal not in accepted list
+                return False
+        else:
+            if len(args) != 2:
+                # Incorrect number of arguments
+                return False
+            if '' not in self.args[0]:
+                # No signal, but list doesn't include empty string
+                return False
+        pid = int(args[1])
+        try:
+            command = os.readlink("/proc/%d/exe" % pid)
+            if command not in self.args[1]:
+                # Affected executable not in accepted list
+                return False
+        except:
+            # Incorrect PID
+            return False
+        return True

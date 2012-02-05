@@ -40,6 +40,7 @@ from nova import context
 from nova.db.sqlalchemy import models
 from nova import exception as exc
 import nova.image.fake
+from nova.tests import fake_network
 from nova.tests.glance import stubs as glance_stubs
 from nova import utils
 from nova import wsgi
@@ -50,7 +51,7 @@ class Context(object):
 
 
 class FakeRouter(wsgi.Router):
-    def __init__(self):
+    def __init__(self, ext_mgr=None):
         pass
 
     @webob.dec.wsgify
@@ -74,10 +75,9 @@ def fake_wsgi(self, req):
 
 
 def wsgi_app(inner_app_v2=None, fake_auth=True, fake_auth_context=None,
-        serialization=os_wsgi.LazySerializationMiddleware,
-        use_no_auth=False):
+        use_no_auth=False, ext_mgr=None):
     if not inner_app_v2:
-        inner_app_v2 = compute.APIRouter()
+        inner_app_v2 = compute.APIRouter(ext_mgr)
 
     if fake_auth:
         if fake_auth_context is not None:
@@ -85,19 +85,13 @@ def wsgi_app(inner_app_v2=None, fake_auth=True, fake_auth_context=None,
         else:
             ctxt = context.RequestContext('fake', 'fake', auth_token=True)
         api_v2 = openstack_api.FaultWrapper(api_auth.InjectContext(ctxt,
-              limits.RateLimitingMiddleware(
-                  serialization(
-                      extensions.ExtensionMiddleware(inner_app_v2)))))
+              limits.RateLimitingMiddleware(inner_app_v2)))
     elif use_no_auth:
         api_v2 = openstack_api.FaultWrapper(auth.NoAuthMiddleware(
-              limits.RateLimitingMiddleware(
-                  serialization(
-                      extensions.ExtensionMiddleware(inner_app_v2)))))
+              limits.RateLimitingMiddleware(inner_app_v2)))
     else:
         api_v2 = openstack_api.FaultWrapper(auth.AuthMiddleware(
-              limits.RateLimitingMiddleware(
-                  serialization(
-                      extensions.ExtensionMiddleware(inner_app_v2)))))
+              limits.RateLimitingMiddleware(inner_app_v2)))
 
     mapper = urlmap.URLMap()
     mapper['/v2'] = api_v2
@@ -187,15 +181,9 @@ class stub_out_compute_api_backup(object):
         return dict(id='123', status='ACTIVE', name=name, properties=props)
 
 
-def stub_out_nw_api_get_instance_nw_info(stubs, func=None):
-    def get_instance_nw_info(self, context, instance):
-        return [(None, {'label': 'public',
-                         'ips': [{'ip': '192.168.0.3'}],
-                         'ip6s': []})]
-
-    if func is None:
-        func = get_instance_nw_info
-    stubs.Set(nova.network.API, 'get_instance_nw_info', func)
+def stub_out_nw_api_get_instance_nw_info(stubs, num_networks=1, func=None):
+    fake_network.stub_out_nw_api_get_instance_nw_info(stubs,
+                                                      spectacular=True)
 
 
 def stub_out_nw_api_get_floating_ips_by_fixed_address(stubs, func=None):
@@ -215,8 +203,7 @@ def stub_out_nw_api(stubs, cls=None, private=None, publics=None):
 
     class Fake:
         def get_instance_nw_info(*args, **kwargs):
-            return [(None, {'label': 'private',
-                            'ips': [{'ip': private}]})]
+            pass
 
         def get_floating_ips_by_fixed_address(*args, **kwargs):
             return publics
@@ -224,6 +211,7 @@ def stub_out_nw_api(stubs, cls=None, private=None, publics=None):
     if cls is None:
         cls = Fake
     stubs.Set(nova.network, 'API', cls)
+    fake_network.stub_out_nw_api_get_instance_nw_info(stubs, spectacular=True)
 
 
 def _make_image_fixtures():
@@ -480,7 +468,6 @@ def stub_instance(id, user_id='fake', project_id='fake', host=None,
                   auto_disk_config=False, display_name=None,
                   include_fake_metadata=True,
                   power_state=None, nw_cache=None):
-
     if include_fake_metadata:
         metadata = [models.InstanceMetadata(key='seq', value=id)]
     else:
@@ -521,9 +508,11 @@ def stub_instance(id, user_id='fake', project_id='fake', host=None,
         "power_state": power_state,
         "memory_mb": 0,
         "vcpus": 0,
-        "local_gb": 0,
+        "root_gb": 0,
+        "ephemeral_gb": 0,
         "hostname": "",
         "host": host,
+        "instance_type_id": 1,
         "instance_type": dict(inst_type),
         "user_data": "",
         "reservation_id": reservation_id,
@@ -548,3 +537,65 @@ def stub_instance(id, user_id='fake', project_id='fake', host=None,
     instance.update(info_cache)
 
     return instance
+
+
+def stub_volume(id):
+    return {'id': id,
+            'user_id': 'fakeuser',
+            'project_id': 'fakeproject',
+            'host': 'fakehost',
+            'size': 1,
+            'availability_zone': 'fakeaz',
+            'instance': {'uuid': 'fakeuuid'},
+            'mountpoint': '/',
+            'status': 'fakestatus',
+            'attach_status': 'attached',
+            'name': 'vol name',
+            'display_name': 'displayname',
+            'display_description': 'displaydesc',
+            'created_at': datetime.datetime(1, 1, 1, 1, 1, 1),
+            'snapshot_id': None,
+            'volume_type_id': 'fakevoltype',
+            'volume_metadata': [],
+            'volume_type': {'name': 'vol_type_name'}}
+
+
+def stub_volume_create(self, context, size, name, description, snapshot,
+                       **param):
+    vol = stub_volume(1)
+    vol['size'] = size
+    vol['display_name'] = name
+    vol['display_description'] = description
+    try:
+        vol['snapshot_id'] = snapshot['id']
+    except (KeyError, TypeError):
+        vol['snapshot_id'] = None
+    vol['availability_zone'] = param.get('availability_zone', 'fakeaz')
+    return vol
+
+
+def stub_volume_update(self, context, *args, **param):
+    pass
+
+
+def stub_volume_delete(self, context, *args, **param):
+    pass
+
+
+def stub_volume_get(self, context, volume_id):
+    vol = stub_volume(volume_id)
+    if volume_id == '234':
+        meta = {'key': 'from_vsa_id', 'value': '123'}
+        vol['volume_metadata'].append(meta)
+    if volume_id == '345':
+        meta = {'key': 'to_vsa_id', 'value': '123'}
+        vol['volume_metadata'].append(meta)
+    return vol
+
+
+def stub_volume_get_notfound(self, context, volume_id):
+    raise exc.NotFound
+
+
+def stub_volume_get_all(self, context, search_opts=None):
+    return [stub_volume_get(self, context, 1)]

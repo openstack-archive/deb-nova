@@ -17,11 +17,14 @@ from lxml import etree
 import webob.exc
 
 from nova import context
+from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import test
 from nova.api.openstack.compute.contrib import hosts as os_hosts
+from nova.compute import power_state
+from nova.compute import vm_states
 from nova.scheduler import api as scheduler_api
 
 
@@ -50,6 +53,35 @@ def stub_set_host_enabled(context, host, enabled):
 
 def stub_host_power_action(context, host, action):
     return action
+
+
+def _create_instance(**kwargs):
+    """Create a test instance"""
+    ctxt = context.get_admin_context()
+    return db.instance_create(ctxt, _create_instance_dict(**kwargs))
+
+
+def _create_instance_dict(**kwargs):
+    """Create a dictionary for a test instance"""
+    inst = {}
+    inst['image_ref'] = 'cedef40a-ed67-4d10-800e-17455edce175'
+    inst['reservation_id'] = 'r-fakeres'
+    inst['user_id'] = kwargs.get('user_id', 'admin')
+    inst['project_id'] = kwargs.get('project_id', 'fake')
+    inst['instance_type_id'] = '1'
+    if 'host' in kwargs:
+        inst['host'] = kwargs.get('host')
+    inst['vcpus'] = kwargs.get('vcpus', 1)
+    inst['memory_mb'] = kwargs.get('memory_mb', 20)
+    inst['root_gb'] = kwargs.get('root_gb', 30)
+    inst['ephemeral_gb'] = kwargs.get('ephemeral_gb', 30)
+    inst['vm_state'] = kwargs.get('vm_state', vm_states.ACTIVE)
+    inst['power_state'] = kwargs.get('power_state', power_state.RUNNING)
+    inst['task_state'] = kwargs.get('task_state', None)
+    inst['availability_zone'] = kwargs.get('availability_zone', None)
+    inst['ami_launch_index'] = 0
+    inst['launched_on'] = kwargs.get('launched_on', 'dummy')
+    return inst
 
 
 class FakeRequest(object):
@@ -93,18 +125,27 @@ class HostTestCase(test.TestCase):
         result_c2 = self.controller.update(self.req, "host_c2", body=en_body)
         self.assertEqual(result_c2["status"], "disabled")
 
+    def test_enable_maintainance_mode(self):
+        body = {"maintenance_mode": "enable"}
+        self.assertRaises(webob.exc.HTTPNotImplemented,
+                          self.controller.update,
+                          self.req, "host_c1", body=body)
+
+    def test_disable_maintainance_mode_and_enable(self):
+        body = {"status": "enable", "maintenance_mode": "disable"}
+        self.assertRaises(webob.exc.HTTPNotImplemented,
+                          self.controller.update,
+                          self.req, "host_c1", body=body)
+
     def test_host_startup(self):
-        self.flags(allow_admin_api=True)
         result = self.controller.startup(self.req, "host_c1")
         self.assertEqual(result["power_action"], "startup")
 
     def test_host_shutdown(self):
-        self.flags(allow_admin_api=True)
         result = self.controller.shutdown(self.req, "host_c1")
         self.assertEqual(result["power_action"], "shutdown")
 
     def test_host_reboot(self):
-        self.flags(allow_admin_api=True)
         result = self.controller.reboot(self.req, "host_c1")
         self.assertEqual(result["power_action"], "reboot")
 
@@ -118,9 +159,83 @@ class HostTestCase(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                 self.req, "host_c1", body=bad_body)
 
+    def test_bad_update_key_and_correct_udpate_key(self):
+        bad_body = {"status": "disable", "crazy": "bad"}
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
+                self.req, "host_c1", body=bad_body)
+
     def test_bad_host(self):
         self.assertRaises(exception.HostNotFound, self.controller.update,
                 self.req, "bogus_host_name", body={"status": "disable"})
+
+    def test_show_forbidden(self):
+        self.req.environ["nova.context"].is_admin = False
+        dest = 'dummydest'
+        self.assertRaises(webob.exc.HTTPForbidden,
+                          self.controller.show,
+                          self.req, dest)
+        self.req.environ["nova.context"].is_admin = True
+
+    def test_show_host_not_exist(self):
+        """A host given as an argument does not exists."""
+        self.req.environ["nova.context"].is_admin = True
+        dest = 'dummydest'
+        self.assertRaises(webob.exc.HTTPNotFound,
+                          self.controller.show,
+                          self.req, dest)
+
+    def _create_compute_service(self):
+        """Create compute-manager(ComputeNode and Service record)."""
+        ctxt = context.get_admin_context()
+        dic = {'host': 'dummy', 'binary': 'nova-compute', 'topic': 'compute',
+               'report_count': 0, 'availability_zone': 'dummyzone'}
+        s_ref = db.service_create(ctxt, dic)
+
+        dic = {'service_id': s_ref['id'],
+               'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
+               'vcpus_used': 16, 'memory_mb_used': 32, 'local_gb_used': 10,
+               'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
+               'cpu_info': ''}
+        db.compute_node_create(ctxt, dic)
+
+        return db.service_get(ctxt, s_ref['id'])
+
+    def test_show_no_project(self):
+        """No instance are running on the given host."""
+        ctxt = context.get_admin_context()
+        s_ref = self._create_compute_service()
+
+        result = self.controller.show(self.req, s_ref['host'])
+
+        proj = ['(total)', '(used_now)', '(used_max)']
+        column = ['host', 'project', 'cpu', 'memory_mb', 'disk_gb']
+        self.assertEqual(len(result['host']), 3)
+        for resource in result['host']:
+            self.assertTrue(resource['resource']['project'] in proj)
+            self.assertEqual(len(resource['resource']), 5)
+            self.assertTrue(set(resource['resource'].keys()) == set(column))
+        db.service_destroy(ctxt, s_ref['id'])
+
+    def test_show_works_correctly(self):
+        """show() works correctly as expected."""
+        ctxt = context.get_admin_context()
+        s_ref = self._create_compute_service()
+        i_ref1 = _create_instance(project_id='p-01', host=s_ref['host'])
+        i_ref2 = _create_instance(project_id='p-02', vcpus=3,
+                                       host=s_ref['host'])
+
+        result = self.controller.show(self.req, s_ref['host'])
+
+        proj = ['(total)', '(used_now)', '(used_max)', 'p-01', 'p-02']
+        column = ['host', 'project', 'cpu', 'memory_mb', 'disk_gb']
+        self.assertEqual(len(result['host']), 5)
+        for resource in result['host']:
+            self.assertTrue(resource['resource']['project'] in proj)
+            self.assertEqual(len(resource['resource']), 5)
+            self.assertTrue(set(resource['resource'].keys()) == set(column))
+        db.service_destroy(ctxt, s_ref['id'])
+        db.instance_destroy(ctxt, i_ref1['id'])
+        db.instance_destroy(ctxt, i_ref2['id'])
 
 
 class HostSerializerTest(test.TestCase):
@@ -143,8 +258,32 @@ class HostSerializerTest(test.TestCase):
             self.assertEqual(HOST_LIST[i]['service'],
                              tree[i].get('service'))
 
-    def test_update_serializer(self):
+    def test_update_serializer_with_status(self):
         exemplar = dict(host='host_c1', status='enabled')
+        serializer = os_hosts.HostUpdateTemplate()
+        text = serializer.serialize(exemplar)
+
+        tree = etree.fromstring(text)
+
+        self.assertEqual('host', tree.tag)
+        for key, value in exemplar.items():
+            self.assertEqual(value, tree.get(key))
+
+    def test_update_serializer_with_maintainance_mode(self):
+        exemplar = dict(host='host_c1', maintenance_mode='enabled')
+        serializer = os_hosts.HostUpdateTemplate()
+        text = serializer.serialize(exemplar)
+
+        tree = etree.fromstring(text)
+
+        self.assertEqual('host', tree.tag)
+        for key, value in exemplar.items():
+            self.assertEqual(value, tree.get(key))
+
+    def test_update_serializer_with_maintainance_mode_and_status(self):
+        exemplar = dict(host='host_c1',
+                        maintenance_mode='enabled',
+                        status='enabled')
         serializer = os_hosts.HostUpdateTemplate()
         text = serializer.serialize(exemplar)
 

@@ -128,6 +128,7 @@ class FlatNetworkTestCase(test.TestCase):
         self.network = network_manager.FlatManager(host=HOST)
         temp = utils.import_object('nova.network.minidns.MiniDNS')
         self.network.instance_dns_manager = temp
+        self.network.instance_dns_domain = ''
         self.network.db = db
         self.context = context.RequestContext('testuser', 'testproject',
                                               is_admin=False)
@@ -358,10 +359,12 @@ class FlatNetworkTestCase(test.TestCase):
         self.network.add_fixed_ip_to_instance(self.context, 1, HOST,
                                               networks[0]['id'])
         instance_manager = self.network.instance_dns_manager
-        addresses = instance_manager.get_entries_by_name(HOST)
+        addresses = instance_manager.get_entries_by_name(HOST,
+                                             self.network.instance_dns_domain)
         self.assertEqual(len(addresses), 1)
         self.assertEqual(addresses[0], fixedip)
-        addresses = instance_manager.get_entries_by_name('test-00001')
+        addresses = instance_manager.get_entries_by_name('test-00001',
+                                              self.network.instance_dns_domain)
         self.assertEqual(len(addresses), 1)
         self.assertEqual(addresses[0], fixedip)
 
@@ -632,6 +635,23 @@ class VlanNetworkTestCase(test.TestCase):
 
         def fake7(*args, **kwargs):
             self.local = True
+
+        def fake8(*args, **kwargs):
+            raise exception.ProcessExecutionError('',
+                    'Cannot find device "em0"\n')
+
+        # raises because interface doesn't exist
+        self.stubs.Set(self.network.db,
+                       'floating_ip_fixed_ip_associate',
+                       fake1)
+        self.stubs.Set(self.network.db, 'floating_ip_disassociate', fake1)
+        self.stubs.Set(self.network.driver, 'bind_floating_ip', fake8)
+        self.assertRaises(exception.NoFloatingIpInterface,
+                          self.network._associate_floating_ip,
+                          ctxt,
+                          mox.IgnoreArg(),
+                          mox.IgnoreArg(),
+                          mox.IgnoreArg())
 
         self.stubs.Set(self.network, '_floating_ip_owned_by_project', fake1)
 
@@ -1499,12 +1519,10 @@ class LdapDNSTestCase(test.TestCase):
         self.driver.delete_domain(domain2)
 
     def test_ldap_dns_domains(self):
-        flags.FLAGS.floating_ip_dns_domains = [domain1, domain2]
-
         domains = self.driver.get_domains()
         self.assertEqual(len(domains), 2)
-        self.assertEqual(domains[0], domain1)
-        self.assertEqual(domains[1], domain2)
+        self.assertIn(domain1, domains)
+        self.assertIn(domain2, domains)
 
     def test_ldap_dns_create_conflict(self):
         address1 = "10.10.10.11"

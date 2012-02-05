@@ -107,7 +107,7 @@ class XenAPIVolumeTestCase(test.TestCase):
                   'image_ref': 1,
                   'kernel_id': 2,
                   'ramdisk_id': 3,
-                  'local_gb': 20,
+                  'root_gb': 20,
                   'instance_type_id': '3',  # m1.large
                   'os_type': 'linux',
                   'architecture': 'x86-64'}
@@ -414,7 +414,7 @@ class XenAPIVMTestCase(test.TestCase):
                       'image_ref': image_ref,
                       'kernel_id': kernel_id,
                       'ramdisk_id': ramdisk_id,
-                      'local_gb': 20,
+                      'root_gb': 20,
                       'instance_type_id': instance_type_id,
                       'os_type': os_type,
                       'hostname': hostname,
@@ -700,7 +700,7 @@ class XenAPIVMTestCase(test.TestCase):
             'image_ref': 1,
             'kernel_id': 2,
             'ramdisk_id': 3,
-            'local_gb': 20,
+            'root_gb': 20,
             'instance_type_id': '3',  # m1.large
             'os_type': 'linux',
             'architecture': 'x86-64'}
@@ -797,7 +797,7 @@ class XenAPIMigrateInstance(test.TestCase):
                   'image_ref': 1,
                   'kernel_id': None,
                   'ramdisk_id': None,
-                  'local_gb': 5,
+                  'root_gb': 5,
                   'instance_type_id': '3',  # m1.large
                   'os_type': 'linux',
                   'architecture': 'x86-64'}
@@ -874,7 +874,7 @@ class XenAPIMigrateInstance(test.TestCase):
             self.fake_finish_revert_migration_called = True
 
         self.stubs.Set(stubs.FakeSessionForMigrationTests,
-                "VDI_resize_online", fake_vdi_resize)
+                       "VDI_resize_online", fake_vdi_resize)
         self.stubs.Set(vmops.VMOps, '_start', fake_vm_start)
         self.stubs.Set(vmops.VMOps, 'finish_revert_migration',
                        fake_finish_revert_migration)
@@ -889,7 +889,7 @@ class XenAPIMigrateInstance(test.TestCase):
                            'gateway_v6': 'dead:beef::1',
                            'ip6s': [{'enabled': '1',
                                      'ip': 'dead:beef::dcad:beff:feef:0',
-                                           'netmask': '64'}],
+                                     'netmask': '64'}],
                            'ips': [{'enabled': '1',
                                     'ip': '192.168.0.100',
                                     'netmask': '255.255.255.0'}],
@@ -917,9 +917,9 @@ class XenAPIMigrateInstance(test.TestCase):
         def fake_vdi_resize(*args, **kwargs):
             self.called = True
 
-        self.stubs.Set(stubs.FakeSessionForMigrationTests,
-                "VDI_resize_online", fake_vdi_resize)
         self.stubs.Set(vmops.VMOps, '_start', fake_vm_start)
+        self.stubs.Set(stubs.FakeSessionForMigrationTests,
+                       "VDI_resize_online", fake_vdi_resize)
 
         stubs.stubout_session(self.stubs, stubs.FakeSessionForMigrationTests)
         stubs.stubout_loopingcall_start(self.stubs)
@@ -949,14 +949,14 @@ class XenAPIMigrateInstance(test.TestCase):
         tiny_type_id = \
                 instance_types.get_instance_type_by_name('m1.tiny')['id']
         self.instance_values.update({'instance_type_id': tiny_type_id,
-                                     'local_gb': 0})
+                                     'root_gb': 0})
         instance = db.instance_create(self.context, self.instance_values)
 
         def fake_vdi_resize(*args, **kwargs):
             raise Exception("This shouldn't be called")
 
         self.stubs.Set(stubs.FakeSessionForMigrationTests,
-                "VDI_resize_online", fake_vdi_resize)
+                       "VDI_resize_online", fake_vdi_resize)
         stubs.stubout_session(self.stubs, stubs.FakeSessionForMigrationTests)
         stubs.stubout_loopingcall_start(self.stubs)
         conn = xenapi_conn.get_connection(False)
@@ -1157,7 +1157,7 @@ class XenAPIAutoDiskConfigTestCase(test.TestCase):
                   'image_ref': 1,
                   'kernel_id': 2,
                   'ramdisk_id': 3,
-                  'local_gb': 20,
+                  'root_gb': 20,
                   'instance_type_id': '3',  # m1.large
                   'os_type': 'linux',
                   'architecture': 'x86-64'}
@@ -1226,6 +1226,87 @@ class XenAPIAutoDiskConfigTestCase(test.TestCase):
         self.assertIsPartitionCalled(True)
 
 
+class XenAPIGenerateLocal(test.TestCase):
+    """Test generating of local disks, like swap and ephemeral"""
+    def setUp(self):
+        super(XenAPIGenerateLocal, self).setUp()
+        self.stubs = stubout.StubOutForTesting()
+        self.flags(target_host='127.0.0.1',
+                   xenapi_connection_url='test_url',
+                   xenapi_connection_password='test_pass',
+                   xenapi_generate_swap=True,
+                   firewall_driver='nova.virt.xenapi.firewall.'
+                                   'Dom0IptablesFirewallDriver')
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
+        db_fakes.stub_out_db_instance_api(self.stubs)
+        xenapi_fake.reset()
+        self.conn = xenapi_conn.get_connection(False)
+
+        self.user_id = 'fake'
+        self.project_id = 'fake'
+
+        self.instance_values = {'id': 1,
+                  'project_id': self.project_id,
+                  'user_id': self.user_id,
+                  'image_ref': 1,
+                  'kernel_id': 2,
+                  'ramdisk_id': 3,
+                  'root_gb': 20,
+                  'instance_type_id': '3',  # m1.large
+                  'os_type': 'linux',
+                  'architecture': 'x86-64'}
+
+        self.context = context.RequestContext(self.user_id, self.project_id)
+
+        @classmethod
+        def fake_create_vbd(cls, session, vm_ref, vdi_ref, userdevice,
+                            bootable=True):
+            pass
+
+        self.stubs.Set(volume_utils.VolumeHelper,
+                       "create_vbd",
+                       fake_create_vbd)
+
+    def assertCalled(self, instance):
+        disk_image_type = vm_utils.ImageType.DISK_VHD
+        vm_ref = "blah"
+        first_vdi_ref = "blah"
+        vdis = ["blah"]
+
+        self.called = False
+        self.conn._vmops._attach_disks(instance, disk_image_type,
+                                       vm_ref, first_vdi_ref, vdis)
+        self.assertTrue(self.called)
+
+    def test_generate_swap(self):
+        """Test swap disk generation."""
+        instance = db.instance_create(self.context, self.instance_values)
+        instance = db.instance_update(self.context, instance['id'],
+                                      {'instance_type_id': 5})
+
+        @classmethod
+        def fake_generate_swap(cls, *args, **kwargs):
+            self.called = True
+        self.stubs.Set(vm_utils.VMHelper, 'generate_swap',
+                       fake_generate_swap)
+
+        self.assertCalled(instance)
+
+    def test_generate_ephemeral(self):
+        """Test ephemeral disk generation."""
+        instance = db.instance_create(self.context, self.instance_values)
+        instance = db.instance_update(self.context, instance['id'],
+                                      {'instance_type_id': 4})
+
+        @classmethod
+        def fake_generate_ephemeral(cls, *args):
+            self.called = True
+        self.stubs.Set(vm_utils.VMHelper, 'generate_ephemeral',
+                       fake_generate_ephemeral)
+
+        self.assertCalled(instance)
+
+
 class XenAPIBWUsageTestCase(test.TestCase):
     def setUp(self):
         super(XenAPIBWUsageTestCase, self).setUp()
@@ -1253,6 +1334,9 @@ class XenAPIBWUsageTestCase(test.TestCase):
         self.assertEqual(result, [])
 
 
+# TODO(salvatore-orlando): this class and
+# nova.tests.test_libvirt.IPTablesFirewallDriverTestCase share a lot of code.
+# Consider abstracting common code in a base class for firewall driver testing.
 class XenAPIDom0IptablesFirewallTestCase(test.TestCase):
 
     _in_nat_rules = [
@@ -1500,3 +1584,129 @@ class XenAPIDom0IptablesFirewallTestCase(test.TestCase):
         self.assertTrue(len(filter(regex.match, self._out_rules)) > 0,
                         "Rules were not updated properly."
                         "The rule for UDP acceptance is missing")
+
+    def test_provider_firewall_rules(self):
+        # setup basic instance data
+        instance_ref = self._create_instance_ref()
+        # FRAGILE: as in libvirt tests
+        # peeks at how the firewall names chains
+        chain_name = 'inst-%s' % instance_ref['id']
+
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs, 1, 1)
+        self.fw.prepare_instance_filter(instance_ref, network_info)
+        self.assertTrue('provider' in self.fw.iptables.ipv4['filter'].chains)
+        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
+                      if rule.chain == 'provider']
+        self.assertEqual(0, len(rules))
+
+        admin_ctxt = context.get_admin_context()
+        # add a rule and send the update message, check for 1 rule
+        provider_fw0 = db.provider_fw_rule_create(admin_ctxt,
+                                                  {'protocol': 'tcp',
+                                                   'cidr': '10.99.99.99/32',
+                                                   'from_port': 1,
+                                                   'to_port': 65535})
+        self.fw.refresh_provider_fw_rules()
+        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
+                      if rule.chain == 'provider']
+        self.assertEqual(1, len(rules))
+
+        # Add another, refresh, and make sure number of rules goes to two
+        provider_fw1 = db.provider_fw_rule_create(admin_ctxt,
+                                                  {'protocol': 'udp',
+                                                   'cidr': '10.99.99.99/32',
+                                                   'from_port': 1,
+                                                   'to_port': 65535})
+        self.fw.refresh_provider_fw_rules()
+        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
+                      if rule.chain == 'provider']
+        self.assertEqual(2, len(rules))
+
+        # create the instance filter and make sure it has a jump rule
+        self.fw.prepare_instance_filter(instance_ref, network_info)
+        self.fw.apply_instance_filter(instance_ref, network_info)
+        inst_rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
+                           if rule.chain == chain_name]
+        jump_rules = [rule for rule in inst_rules if '-j' in rule.rule]
+        provjump_rules = []
+        # IptablesTable doesn't make rules unique internally
+        for rule in jump_rules:
+            if 'provider' in rule.rule and rule not in provjump_rules:
+                provjump_rules.append(rule)
+        self.assertEqual(1, len(provjump_rules))
+
+        # remove a rule from the db, cast to compute to refresh rule
+        db.provider_fw_rule_destroy(admin_ctxt, provider_fw1['id'])
+        self.fw.refresh_provider_fw_rules()
+        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
+                      if rule.chain == 'provider']
+        self.assertEqual(1, len(rules))
+
+
+class XenAPISRSelectionTestCase(test.TestCase):
+    """Unit tests for testing we find the right SR."""
+    def setUp(self):
+        super(XenAPISRSelectionTestCase, self).setUp()
+        self.stubs = stubout.StubOutForTesting()
+        stubs.stub_out_get_target(self.stubs)
+        xenapi_fake.reset()
+
+    def tearDown(self):
+        super(XenAPISRSelectionTestCase, self).tearDown()
+        self.stubs.UnsetAll()
+
+    def test_safe_find_sr_raise_exception(self):
+        """Ensure StorageRepositoryNotFound is raise when wrong filter."""
+        self.flags(sr_matching_filter='yadayadayada')
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
+        session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass')
+        helper = vm_utils.VMHelper
+        helper.XenAPI = session.get_imported_xenapi()
+        self.assertRaises(exception.StorageRepositoryNotFound,
+                          helper.safe_find_sr, session)
+
+    def test_safe_find_sr_local_storage(self):
+        """Ensure the default local-storage is found."""
+        self.flags(sr_matching_filter='other-config:i18n-key=local-storage')
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
+        session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass')
+        helper = vm_utils.VMHelper
+        helper.XenAPI = session.get_imported_xenapi()
+        host_ref = xenapi_fake.get_all('host')[0]
+        local_sr = xenapi_fake.\
+                    create_sr(name_label='Fake Storage',
+                              type='lvm',
+                              other_config={'i18n-original-value-name_label':
+                                            'Local storage',
+                                            'i18n-key': 'local-storage'},
+                              host_ref=host_ref)
+        expected = helper.safe_find_sr(session)
+        self.assertEqual(local_sr, expected)
+
+    def test_safe_find_sr_by_other_criteria(self):
+        """Ensure the SR is found when using a different filter."""
+        self.flags(sr_matching_filter='other-config:my_fake_sr=true')
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
+        session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass')
+        helper = vm_utils.VMHelper
+        helper.XenAPI = session.get_imported_xenapi()
+        host_ref = xenapi_fake.get_all('host')[0]
+        local_sr = xenapi_fake.\
+                    create_sr(name_label='Fake Storage',
+                              type='lvm',
+                              other_config={'my_fake_sr': 'true'},
+                              host_ref=host_ref)
+        expected = helper.safe_find_sr(session)
+        self.assertEqual(local_sr, expected)
+
+    def test_safe_find_sr_default(self):
+        """Ensure the default SR is found regardless of other-config."""
+        self.flags(sr_matching_filter='default-sr:true')
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
+        session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass')
+        helper = vm_utils.VMHelper
+        pool_ref = xenapi_fake.create_pool('')
+        helper.XenAPI = session.get_imported_xenapi()
+        expected = helper.safe_find_sr(session)
+        self.assertEqual(session.call_xenapi('pool.get_default_SR', pool_ref),
+                         expected)

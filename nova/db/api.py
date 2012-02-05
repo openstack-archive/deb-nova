@@ -45,22 +45,33 @@ these objects be simple dictionaries.
 
 from nova import exception
 from nova import flags
+from nova.openstack.common import cfg
 from nova import utils
 
 
+db_opts = [
+    cfg.StrOpt('db_backend',
+               default='sqlalchemy',
+               help='The backend to use for db'),
+    cfg.BoolOpt('enable_new_services',
+                default=True,
+                help='Services to be added to the available pool on create'),
+    cfg.StrOpt('instance_name_template',
+               default='instance-%08x',
+               help='Template string to be used to generate instance names'),
+    cfg.StrOpt('volume_name_template',
+               default='volume-%08x',
+               help='Template string to be used to generate instance names'),
+    cfg.StrOpt('snapshot_name_template',
+               default='snapshot-%08x',
+               help='Template string to be used to generate snapshot names'),
+    cfg.StrOpt('vsa_name_template',
+               default='vsa-%08x',
+               help='Template string to be used to generate VSA names'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('db_backend', 'sqlalchemy',
-                    'The backend to use for db')
-flags.DEFINE_boolean('enable_new_services', True,
-                     'Services to be added to the available pool on create')
-flags.DEFINE_string('instance_name_template', 'instance-%08x',
-                    'Template string to be used to generate instance names')
-flags.DEFINE_string('volume_name_template', 'volume-%08x',
-                    'Template string to be used to generate instance names')
-flags.DEFINE_string('snapshot_name_template', 'snapshot-%08x',
-                    'Template string to be used to generate snapshot names')
-flags.DEFINE_string('vsa_name_template', 'vsa-%08x',
-                    'Template string to be used to generate VSA names')
+FLAGS.add_options(db_opts)
 
 IMPL = utils.LazyPluggable(FLAGS['db_backend'],
                            sqlalchemy='nova.db.sqlalchemy.api')
@@ -163,12 +174,12 @@ def service_update(context, service_id, values):
 ###################
 
 
-def compute_node_get(context, compute_id, session=None):
+def compute_node_get(context, compute_id):
     """Get an computeNode or raise if it does not exist."""
     return IMPL.compute_node_get(context, compute_id)
 
 
-def compute_node_get_all(context, session=None):
+def compute_node_get_all(context):
     """Get all computeNodes."""
     return IMPL.compute_node_get_all(context)
 
@@ -187,11 +198,30 @@ def compute_node_update(context, compute_id, values):
     """Set the given properties on an computeNode and update it.
 
     Raises NotFound if computeNode does not exist.
-
     """
-
     return IMPL.compute_node_update(context, compute_id, values)
 
+
+def compute_node_get_by_host(context, host):
+    return IMPL.compute_node_get_by_host(context, host)
+
+
+def compute_node_capacity_find(context, minimum_ram_mb, minimum_disk_gb):
+    return IMPL.compute_node_capacity_find(context, minimum_ram_mb,
+                                           minimum_disk_gb)
+
+
+def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
+                          free_disk_gb_delta=0, work_delta=0, vm_delta=0):
+    return IMPL.compute_node_utilization_update(context, host,
+                          free_ram_mb_delta, free_disk_gb_delta, work_delta,
+                          vm_delta)
+
+
+def compute_node_utilization_set(context, host, free_ram_mb=None,
+                                 free_disk_gb=None, work=None, vms=None):
+    return IMPL.compute_node_utilization_set(context, host, free_ram_mb,
+                                             free_disk_gb, work, vms)
 
 ###################
 
@@ -288,6 +318,11 @@ def floating_ip_fixed_ip_associate(context, floating_address,
                                                floating_address,
                                                fixed_address,
                                                host)
+
+
+def floating_ip_get_all(context):
+    """Get all floating ips."""
+    return IMPL.floating_ip_get_all(context)
 
 
 def floating_ip_get_all_by_host(context, host):
@@ -612,10 +647,9 @@ def instance_get_project_vpn(context, project_id):
     return IMPL.instance_get_project_vpn(context, project_id)
 
 
-def instance_get_all_hung_in_rebooting(context, reboot_window, session=None):
+def instance_get_all_hung_in_rebooting(context, reboot_window):
     """Get all instances stuck in a rebooting state."""
-    return IMPL.instance_get_all_hung_in_rebooting(context, reboot_window,
-            session)
+    return IMPL.instance_get_all_hung_in_rebooting(context, reboot_window)
 
 
 def instance_update(context, instance_id, values):
@@ -666,32 +700,29 @@ def instance_info_cache_create(context, values):
     return IMPL.instance_info_cache_create(context, values)
 
 
-def instance_info_cache_get(context, instance_uuid, session=None):
+def instance_info_cache_get(context, instance_uuid):
     """Gets an instance info cache from the table.
 
     :param instance_uuid: = uuid of the info cache's instance
-    :param session: = optional session object
     """
-    return IMPL.instance_info_cache_get(context, instance_uuid, session=None)
+    return IMPL.instance_info_cache_get(context, instance_uuid)
 
 
-def instance_info_cache_update(context, instance_uuid, values,
-                               session=None):
+def instance_info_cache_update(context, instance_uuid, values):
     """Update an instance info cache record in the table.
 
     :param instance_uuid: = uuid of info cache's instance
     :param values: = dict containing column values to update
     """
-    return IMPL.instance_info_cache_update(context, instance_uuid, values,
-                                           session)
+    return IMPL.instance_info_cache_update(context, instance_uuid, values)
 
 
-def instance_info_cache_delete(context, instance_uuid, session=None):
+def instance_info_cache_delete(context, instance_uuid):
     """Deletes an existing instance_info_cache record
 
     :param instance_uuid: = uuid of the instance tied to the cache record
     """
-    return IMPL.instance_info_cache_delete(context, instance_uuid, session)
+    return IMPL.instance_info_cache_delete(context, instance_uuid)
 
 
 ###################
@@ -1511,20 +1542,23 @@ def bw_usage_get_by_instance(context, instance_id, start_period):
     return IMPL.bw_usage_get_by_instance(context, instance_id, start_period)
 
 
+def bw_usage_get_all_by_filters(context, filters):
+    """Return bandwidth usage that matches all filters."""
+    return IMPL.bw_usage_get_all_by_filters(context, filters)
+
+
 def bw_usage_update(context,
                     instance_id,
                     network_label,
                     start_period,
-                    bw_in, bw_out,
-                    session=None):
+                    bw_in, bw_out):
     """Update cached bw usage for an instance and network
        Creates new record if needed."""
     return IMPL.bw_usage_update(context,
                                 instance_id,
                                 network_label,
                                 start_period,
-                                bw_in, bw_out,
-                                session=None)
+                                bw_in, bw_out)
 
 
 ####################

@@ -23,6 +23,7 @@ from nova import context
 from nova import db
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import rpc
 from nova import utils
 from nova import exception
@@ -31,15 +32,23 @@ from nova.scheduler import simple
 from nova.vsa.api import VsaState
 from nova.volume import volume_types
 
+
 LOG = logging.getLogger('nova.scheduler.vsa')
 
+vsa_scheduler_opts = [
+    cfg.IntOpt('drive_type_approx_capacity_percent',
+               default=10,
+               help='The percentage range for capacity comparison'),
+    cfg.IntOpt('vsa_unique_hosts_per_alloc',
+               default=10,
+               help='The number of unique hosts per storage allocation'),
+    cfg.BoolOpt('vsa_select_unique_drives',
+                default=True,
+                help='Allow selection of same host for multiple drives'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('drive_type_approx_capacity_percent', 10,
-                    'The percentage range for capacity comparison')
-flags.DEFINE_integer('vsa_unique_hosts_per_alloc', 10,
-                    'The number of unique hosts per storage allocation')
-flags.DEFINE_boolean('vsa_select_unique_drives', True,
-                     'Allow selection of same host for multiple drives')
+FLAGS.add_options(vsa_scheduler_opts)
 
 
 def BYTES_TO_GB(bytes):
@@ -215,7 +224,7 @@ class VsaScheduler(simple.SimpleScheduler):
             zone, _x, host = availability_zone.partition(':')
             service = db.service_get_by_args(context.elevated(), host,
                                              'nova-volume')
-            if not self.service_is_up(service):
+            if service['disabled'] or not utils.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
 
             return host

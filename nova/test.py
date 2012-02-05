@@ -36,17 +36,24 @@ import stubout
 from nova import flags
 import nova.image.fake
 from nova import log
+from nova.openstack.common import cfg
 from nova import utils
 from nova import service
 from nova.testing.fake import rabbit
 from nova.virt import fake
 
 
+test_opts = [
+    cfg.StrOpt('sqlite_clean_db',
+               default='clean.sqlite',
+               help='File name of clean sqlite db'),
+    cfg.BoolOpt('fake_tests',
+                default=True,
+                help='should we use everything for testing'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('sqlite_clean_db', 'clean.sqlite',
-                    'File name of clean sqlite db')
-flags.DEFINE_bool('fake_tests', True,
-                  'should we use everything for testing')
+FLAGS.add_options(test_opts)
 
 LOG = log.getLogger('nova.tests')
 

@@ -19,12 +19,14 @@ from nova.api.openstack import common
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova import compute
 from nova import log as logging
 from nova import network
 
 
 LOG = logging.getLogger("nova.api.openstack.compute."
                         "contrib.virtual_interfaces")
+authorize = extensions.extension_authorizer('compute', 'virtual_interfaces')
 
 
 vif_nsmap = {None: wsgi.XMLNS_V11}
@@ -53,6 +55,7 @@ class ServerVirtualInterfaceController(object):
     """
 
     def __init__(self):
+        self.compute_api = compute.API()
         self.network_api = network.API()
         super(ServerVirtualInterfaceController, self).__init__()
 
@@ -60,7 +63,8 @@ class ServerVirtualInterfaceController(object):
         """Returns a list of VIFs, transformed through entity_maker."""
         context = req.environ['nova.context']
 
-        vifs = self.network_api.get_vifs_by_instance(context, server_id)
+        instance = self.compute_api.get(context, server_id)
+        vifs = self.network_api.get_vifs_by_instance(context, instance)
         limited_list = common.limited(vifs, req)
         res = [entity_maker(context, vif) for vif in limited_list]
         return {'virtual_interfaces': res}
@@ -68,6 +72,7 @@ class ServerVirtualInterfaceController(object):
     @wsgi.serializers(xml=VirtualInterfaceTemplate)
     def index(self, req, server_id):
         """Returns the list of VIFs for a given instance."""
+        authorize(req.environ['nova.context'])
         return self._items(req, server_id,
                            entity_maker=_translate_vif_summary_view)
 

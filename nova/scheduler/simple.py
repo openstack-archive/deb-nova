@@ -24,22 +24,29 @@ Simple Scheduler
 from nova import db
 from nova import flags
 from nova import exception
+from nova.openstack.common import cfg
 from nova.scheduler import driver
 from nova.scheduler import chance
+from nova import utils
+
+
+simple_scheduler_opts = [
+    cfg.IntOpt("max_cores",
+               default=16,
+               help="maximum number of instance cores to allow per host"),
+    cfg.IntOpt("max_gigabytes",
+               default=10000,
+               help="maximum number of volume gigabytes to allow per host"),
+    cfg.IntOpt("max_networks",
+               default=1000,
+               help="maximum number of networks to allow per host"),
+    cfg.BoolOpt('skip_isolated_core_check',
+                default=True,
+                help='Allow overcommitting vcpus on isolated hosts'),
+    ]
 
 FLAGS = flags.FLAGS
-flags.DEFINE_integer("max_cores", 16,
-                     "maximum number of instance cores to allow per host")
-flags.DEFINE_integer("max_gigabytes", 10000,
-                     "maximum number of volume gigabytes to allow per host")
-flags.DEFINE_integer("max_networks", 1000,
-                     "maximum number of networks to allow per host")
-flags.DEFINE_string('default_schedule_zone', None,
-                    'zone to use when user doesnt specify one')
-flags.DEFINE_list('isolated_images', [], 'Images to run on isolated host')
-flags.DEFINE_list('isolated_hosts', [], 'Host reserved for specific images')
-flags.DEFINE_boolean('skip_isolated_core_check', True,
-                     'Allow overcommitting vcpus on isolated hosts')
+FLAGS.add_options(simple_scheduler_opts)
 
 
 class SimpleScheduler(chance.ChanceScheduler):
@@ -57,7 +64,7 @@ class SimpleScheduler(chance.ChanceScheduler):
 
         if host and context.is_admin:
             service = db.service_get_by_args(elevated, host, 'nova-compute')
-            if not self.service_is_up(service):
+            if not utils.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
             return host
 
@@ -79,7 +86,7 @@ class SimpleScheduler(chance.ChanceScheduler):
                     instance_cores + instance_opts['vcpus'] > FLAGS.max_cores:
                 msg = _("Not enough allocatable CPU cores remaining")
                 raise exception.NoValidHost(reason=msg)
-            if self.service_is_up(service):
+            if utils.service_is_up(service) and not service['disabled']:
                 return service['host']
         msg = _("Is the appropriate service running?")
         raise exception.NoValidHost(reason=msg)
@@ -101,13 +108,6 @@ class SimpleScheduler(chance.ChanceScheduler):
             del request_spec['instance_properties']['uuid']
         return instances
 
-    def schedule_start_instance(self, context, instance_id, *_args, **_kwargs):
-        instance_ref = db.instance_get(context, instance_id)
-        host = self._schedule_instance(context, instance_ref,
-                *_args, **_kwargs)
-        driver.cast_to_compute_host(context, host, 'start_instance',
-                instance_id=instance_id, **_kwargs)
-
     def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
         """Picks a host that is up and has the fewest volumes."""
         elevated = context.elevated()
@@ -120,7 +120,7 @@ class SimpleScheduler(chance.ChanceScheduler):
             zone, _x, host = availability_zone.partition(':')
         if host and context.is_admin:
             service = db.service_get_by_args(elevated, host, 'nova-volume')
-            if not self.service_is_up(service):
+            if not utils.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
             driver.cast_to_volume_host(context, host, 'create_volume',
                     volume_id=volume_id, **_kwargs)
@@ -135,7 +135,7 @@ class SimpleScheduler(chance.ChanceScheduler):
             if volume_gigabytes + volume_ref['size'] > FLAGS.max_gigabytes:
                 msg = _("Not enough allocatable volume gigabytes remaining")
                 raise exception.NoValidHost(reason=msg)
-            if self.service_is_up(service):
+            if utils.service_is_up(service) and not service['disabled']:
                 driver.cast_to_volume_host(context, service['host'],
                         'create_volume', volume_id=volume_id, **_kwargs)
                 return None

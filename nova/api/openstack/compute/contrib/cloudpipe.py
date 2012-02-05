@@ -32,6 +32,7 @@ from nova import utils
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger("nova.api.openstack.compute.contrib.cloudpipe")
+authorize = extensions.extension_authorizer('compute', 'cloudpipe')
 
 
 class CloudpipeTemplate(xmlutil.TemplateBuilder):
@@ -59,28 +60,11 @@ class CloudpipeController(object):
 
     def setup(self):
         """Ensure the keychains and folders exist."""
-        # TODO(todd): this was copyed from api.ec2.cloud
-        # FIXME(ja): this should be moved to a nova-manage command,
-        # if not setup throw exceptions instead of running
-        # Create keys folder, if it doesn't exist
+        # NOTE(vish): One of the drawbacks of doing this in the api is
+        #             the keys will only be on the api node that launched
+        #             the cloudpipe.
         if not os.path.exists(FLAGS.keys_path):
             os.makedirs(FLAGS.keys_path)
-        # Gen root CA, if we don't have one
-        root_ca_path = os.path.join(FLAGS.ca_path, FLAGS.ca_file)
-        if not os.path.exists(root_ca_path):
-            genrootca_sh_path = os.path.join(os.path.dirname(__file__),
-                                             os.path.pardir,
-                                             os.path.pardir,
-                                             'CA',
-                                             'genrootca.sh')
-
-            start = os.getcwd()
-            if not os.path.exists(FLAGS.ca_path):
-                os.makedirs(FLAGS.ca_path)
-            os.chdir(FLAGS.ca_path)
-            # TODO(vish): Do this with M2Crypto instead
-            utils.runthis(_("Generating root CA: %s"), "sh", genrootca_sh_path)
-            os.chdir(start)
 
     def _get_cloudpipe_for_project(self, context, project_id):
         """Get the cloudpipe instance for a project ID."""
@@ -120,6 +104,7 @@ class CloudpipeController(object):
         """
 
         ctxt = req.environ['nova.context']
+        authorize(ctxt)
         params = body.get('cloudpipe', {})
         project_id = params.get('project_id', ctxt.project_id)
         instance = self._get_cloudpipe_for_project(ctxt, project_id)
@@ -137,8 +122,9 @@ class CloudpipeController(object):
 
     @wsgi.serializers(xml=CloudpipesTemplate)
     def index(self, req):
-        """Show admins the list of running cloudpipe instances."""
+        """List running cloudpipe instances."""
         context = req.environ['nova.context']
+        authorize(context)
         vpns = []
         # TODO(todd): could use compute_api.get_all with admin context?
         for project in self.auth_manager.get_projects():
@@ -162,7 +148,6 @@ class Cloudpipe(extensions.ExtensionDescriptor):
     alias = "os-cloudpipe"
     namespace = "http://docs.openstack.org/compute/ext/cloudpipe/api/v1.1"
     updated = "2011-12-16T00:00:00+00:00"
-    admin_only = True
 
     def get_resources(self):
         resources = []

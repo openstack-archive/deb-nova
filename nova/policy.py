@@ -20,13 +20,21 @@
 from nova.common import policy
 from nova import exception
 from nova import flags
+from nova.openstack.common import cfg
 from nova import utils
 
+
+policy_opts = [
+    cfg.StrOpt('policy_file',
+               default='policy.json',
+               help=_('JSON file representing policy')),
+    cfg.StrOpt('policy_default_rule',
+               default='default',
+               help=_('Rule checked when requested rule is not found')),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('policy_file', 'policy.json',
-                    _('JSON file representing policy'))
-flags.DEFINE_string('policy_default_rule', 'default',
-                    _('Rule checked when requested rule is not found'))
+FLAGS.add_options(policy_opts)
 
 _POLICY_PATH = None
 _POLICY_CACHE = {}

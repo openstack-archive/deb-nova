@@ -17,15 +17,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
-from nova.utils import import_object
-from nova.rpc.common import RemoteError, LOG
 from nova import flags
+from nova.openstack.common import cfg
+from nova.rpc.common import RemoteError, LOG
+from nova.utils import import_object
+
+
+rpc_backend_opt = \
+    cfg.StrOpt('rpc_backend',
+               default='nova.rpc.impl_kombu',
+               help="The messaging module to use, defaults to kombu.")
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('rpc_backend',
-                    'nova.rpc.impl_kombu',
-                    "The messaging module to use, defaults to kombu.")
+FLAGS.add_option(rpc_backend_opt)
 
 
 def create_connection(new=True):
@@ -44,7 +48,7 @@ def create_connection(new=True):
     return _get_impl().create_connection(new=new)
 
 
-def call(context, topic, msg):
+def call(context, topic, msg, timeout=None):
     """Invoke a remote method that returns something.
 
     :param context: Information that identifies the user that has made this
@@ -55,10 +59,15 @@ def call(context, topic, msg):
                   when the consumer was created with fanout=False.
     :param msg: This is a dict in the form { "method" : "method_to_invoke",
                                              "args" : dict_of_kwargs }
+    :param timeout: int, number of seconds to use for a response timeout.
+                    If set, this overrides the rpc_response_timeout option.
 
     :returns: A dict from the remote method.
+
+    :raises: nova.rpc.common.Timeout if a complete response is not received
+             before the timeout is reached.
     """
-    return _get_impl().call(context, topic, msg)
+    return _get_impl().call(context, topic, msg, timeout)
 
 
 def cast(context, topic, msg):
@@ -98,7 +107,7 @@ def fanout_cast(context, topic, msg):
     return _get_impl().fanout_cast(context, topic, msg)
 
 
-def multicall(context, topic, msg):
+def multicall(context, topic, msg, timeout=None):
     """Invoke a remote method and get back an iterator.
 
     In this case, the remote method will be returning multiple values in
@@ -113,13 +122,18 @@ def multicall(context, topic, msg):
                   when the consumer was created with fanout=False.
     :param msg: This is a dict in the form { "method" : "method_to_invoke",
                                              "args" : dict_of_kwargs }
+    :param timeout: int, number of seconds to use for a response timeout.
+                    If set, this overrides the rpc_response_timeout option.
 
     :returns: An iterator.  The iterator will yield a tuple (N, X) where N is
               an index that starts at 0 and increases by one for each value
               returned and X is the Nth value that was returned by the remote
               method.
+
+    :raises: nova.rpc.common.Timeout if a complete response is not received
+             before the timeout is reached.
     """
-    return _get_impl().multicall(context, topic, msg)
+    return _get_impl().multicall(context, topic, msg, timeout)
 
 
 def notify(context, topic, msg):
@@ -133,6 +147,19 @@ def notify(context, topic, msg):
     :returns: None
     """
     return _get_impl().notify(context, topic, msg)
+
+
+def cleanup():
+    """Clean up resoruces in use by implementation.
+
+    Clean up any resources that have been allocated by the RPC implementation.
+    This is typically open connections to a messaging service.  This function
+    would get called before an application using this API exits to allow
+    connections to get torn down cleanly.
+
+    :returns: None
+    """
+    return _get_impl().cleanup()
 
 
 _RPCIMPL = None

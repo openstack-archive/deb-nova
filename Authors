@@ -30,15 +30,18 @@ Chris Behrens <cbehrens@codestud.com>
 Christian Berendt <berendt@b1-systems.de>
 Christopher MacGown <chris@pistoncloud.com>
 Chuck Short <zulcss@ubuntu.com>
+Cole Robinson <crobinso@redhat.com>
 Cor Cornelisse <cor@hyves.nl>
 Cory Wright <corywright@gmail.com>
 Dan Prince <dan.prince@rackspace.com>
 Dan Wendlandt <dan@nicira.com>
 Daniel P. Berrange <berrange@redhat.com>
+Dave Lapsley <dlapsley@nicira.com>
 Dave Walker <DaveWalker@ubuntu.com>
 David Pravec <David.Pravec@danix.org>
 David Subiros <david.perez5@hp.com>
 Dean Troyer <dtroyer@gmail.com>
+Deepak Garg <deepak.garg@citrix.com>
 Derek Higgins <higginsd@gmail.com>
 Devendra Modium <dmodium@isi.edu>
 Devin Carlen <devin.carlen@gmail.com>
@@ -72,6 +75,8 @@ Joe Heck <heckj@mac.com>
 Joel Moore <joelbm24@gmail.com>
 Johannes Erdfelt <johannes.erdfelt@rackspace.com>
 John Dewey <john@dewey.ws>
+John Garbutt <john.garbutt@citrix.com>
+John Griffith <john.griffith@solidfire.com>
 John Tran <jtran@attinteractive.com>
 Jonathan Bryce <jbryce@jbryce.com>
 Jordan Rinke <jordan@openstack.org>
@@ -92,6 +97,7 @@ masukotm<masukotm@nttdata.co.jp>
 Ken Pepple <ken.pepple@gmail.com>
 Kevin Bringard <kbringard@attinteractive.com>
 Kevin L. Mitchell <kevin.mitchell@rackspace.com>
+Kiall Mac Innes <kiall@managedit.ie>
 Kirill Shileev <kshileev@gmail.com>
 Koji Iida <iida.koji@lab.ntt.co.jp>
 Likitha Shetty <likitha.shetty@citrix.com>
@@ -101,10 +107,12 @@ Lvov Maxim <usrleon@gmail.com>
 Mandell Degerness <mdegerne@gmail.com>
 Mark McLoughlin <markmc@redhat.com>
 Mark Washenberger <mark.washenberger@rackspace.com>
+Maru Newby <mnewby@internap.com>
 Masanori Itoh <itoumsn@nttdata.co.jp>
 Matt Dietz <matt.dietz@rackspace.com>
 Matthew Hooker <matt@cloudscaling.com>
 Michael Gundlach <michael.gundlach@rackspace.com>
+Michael Still <mikal@stillhq.com>
 Mike Lundy <mike@pistoncloud.com>
 Mike Scherbakov <mihgen@gmail.com>
 Mohammed Naser <mnaser@vexxhost.com>
@@ -116,7 +124,7 @@ Muneyuki Noguchi <noguchimn@nttdata.co.jp>
 Nachi Ueno <ueno.nachi@lab.ntt.co.jp>
 Naveed Massjouni <naveedm9@gmail.com>
 Nikolay Sokolov <nsokolov@griddynamics.com>
-Nirmal Ranganathan <nirmal.ranganathan@rackspace.com>
+Nirmal Ranganathan <rnirmal@gmail.com>
 Ollie Leahy <oliver.leahy@hp.com>
 Pádraig Brady <pbrady@redhat.com>
 Paul Voccio <paul@openstack.org>
@@ -140,7 +148,9 @@ Stephanie Reese <reese.sm@gmail.com>
 Thierry Carrez <thierry@openstack.org>
 Tim Simpson <tim.simpson@rackspace.com>
 Todd Willey <todd@ansolabs.com>
+Tomoe Sugihara <tomoe@midokura.com>
 Tomoya Masuko<masukotm@nttdata.co.jp>
+Thorsten Tarrach <thorsten@atomia.com>
 Trey Morris <trey.morris@rackspace.com>
 Troy Toman <troy.toman@rackspace.com>
 Tushar Patil <tushar.vitthal.patil@gmail.com>
@@ -149,6 +159,7 @@ Vasiliy Shlykov <vash@vasiliyshlykov.org>
 Vishvananda Ishaya <vishvananda@gmail.com>
 Vivek Y S <vivek.ys@gmail.com>
 Vladimir Popovski <vladimir@zadarastorage.com>
+William Henry <whenry@redhat.com>
 William Kelly <william.kelly@rackspace.com>
 William Wolf <throughnothing@gmail.com>
 Yoshiaki Tamura <yoshi@midokura.jp>
@@ -159,3 +170,4 @@ Yuriy Taraday <yorik.sar@gmail.com>
 Zed Shaw <zedshaw@zedshaw.com>
 Zhixue Wu <Zhixue.Wu@citrix.com>
 Zhongyue Luo <lzyeval@gmail.com>
+Ziad Sawalha <github@highbridgellc.com>

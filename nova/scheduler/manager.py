@@ -29,14 +29,20 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import manager
+from nova.openstack.common import cfg
 from nova import rpc
 from nova import utils
 
+
 LOG = logging.getLogger('nova.scheduler.manager')
+
+scheduler_driver_opt = \
+    cfg.StrOpt('scheduler_driver',
+               default='nova.scheduler.multi.MultiScheduler',
+               help='Default driver to use for the scheduler')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('scheduler_driver',
-                    'nova.scheduler.multi.MultiScheduler',
-                    'Default driver to use for the scheduler')
+FLAGS.add_option(scheduler_driver_opt)
 
 
 class SchedulerManager(manager.Manager):
@@ -105,28 +111,26 @@ class SchedulerManager(manager.Manager):
             with utils.save_and_reraise_exception():
                 self._set_instance_error(method, context, ex, *args, **kwargs)
 
-    # NOTE (David Subiros) : If the exception is raised during run_instance
-    #                        method, we may or may not have an instance_id
     def _set_instance_error(self, method, context, ex, *args, **kwargs):
         """Sets VM to Error state"""
         LOG.warning(_("Failed to schedule_%(method)s: %(ex)s") % locals())
-        if method != "start_instance" and method != "run_instance":
+        # FIXME(comstud): Re-factor this somehow.  Not sure this belongs
+        # in the scheduler manager like this.  Needs to support more than
+        # run_instance
+        if method != "run_instance":
             return
-        # FIXME(comstud): Clean this up after fully on UUIDs.
-        instance_id = kwargs.get('instance_uuid', kwargs.get('instance_id'))
-        if not instance_id:
-            # FIXME(comstud): We should make this easier.  run_instance
-            # only sends a request_spec, and an instance may or may not
-            # have been created in the API (or scheduler) already.  If it
-            # was created, there's a 'uuid' set in the instance_properties
-            # of the request_spec.
-            request_spec = kwargs.get('request_spec', {})
-            properties = request_spec.get('instance_properties', {})
-            instance_id = properties.get('uuid', {})
-        if instance_id:
-            LOG.warning(_("Setting instance %(instance_id)s to "
+        # FIXME(comstud): We should make this easier.  run_instance
+        # only sends a request_spec, and an instance may or may not
+        # have been created in the API (or scheduler) already.  If it
+        # was created, there's a 'uuid' set in the instance_properties
+        # of the request_spec.
+        request_spec = kwargs.get('request_spec', {})
+        properties = request_spec.get('instance_properties', {})
+        instance_uuid = properties.get('uuid', {})
+        if instance_uuid:
+            LOG.warning(_("Setting instance %(instance_uuid)s to "
                     "ERROR state.") % locals())
-            db.instance_update(context, instance_id,
+            db.instance_update(context, instance_uuid,
                     {'vm_state': vm_states.ERROR})
 
     # NOTE (masumotok) : This method should be moved to nova.api.ec2.admin.
@@ -145,10 +149,6 @@ class SchedulerManager(manager.Manager):
                 'local_gb_used': 64}
 
         """
-        # Update latest compute_node table
-        topic = db.queue_get_for(context, FLAGS.compute_topic, host)
-        rpc.call(context, topic, {"method": "update_available_resource"})
-
         # Getting compute node info and related instances info
         compute_ref = db.service_get_all_compute_by_host(context, host)
         compute_ref = compute_ref[0]
@@ -171,17 +171,21 @@ class SchedulerManager(manager.Manager):
         project_ids = [i['project_id'] for i in instance_refs]
         project_ids = list(set(project_ids))
         for project_id in project_ids:
-            vcpus = [i['vcpus'] for i in instance_refs \
-                if i['project_id'] == project_id]
+            vcpus = [i['vcpus'] for i in instance_refs
+                     if i['project_id'] == project_id]
 
-            mem = [i['memory_mb']  for i in instance_refs \
-                if i['project_id'] == project_id]
+            mem = [i['memory_mb'] for i in instance_refs
+                   if i['project_id'] == project_id]
 
-            disk = [i['local_gb']  for i in instance_refs \
-                if i['project_id'] == project_id]
+            root = [i['root_gb'] for i in instance_refs
+                    if i['project_id'] == project_id]
 
-            usage[project_id] = {'vcpus': reduce(lambda x, y: x + y, vcpus),
-                                 'memory_mb': reduce(lambda x, y: x + y, mem),
-                                 'local_gb': reduce(lambda x, y: x + y, disk)}
+            ephemeral = [i['ephemeral_gb'] for i in instance_refs
+                         if i['project_id'] == project_id]
+
+            usage[project_id] = {'vcpus': sum(vcpus),
+                                 'memory_mb': sum(mem),
+                                 'root_gb': sum(root),
+                                 'ephemeral_gb': sum(ephemeral)}
 
         return {'resource': resource, 'usage': usage}
