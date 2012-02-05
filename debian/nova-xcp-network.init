@@ -90,38 +90,38 @@ run_ovs_conf_base_flows () {
 }
 
 # Functions to configure the firewall to work with openvswitch, XCP and nova
-iptables-up () {
+iptables_up () {
 	${IPTABLES} -P FORWARD DROP
 	for i in ${INTERFACES} ; do
 		${IPTABLES} -A FORWARD -m physdev --physdev-in ${i} -j ACCEPT
 	done
 }
-ebtables-up () {
+ebtables_up () {
 	${EBTABLES} -P FORWARD DROP
 	for i in ${INTERFACES} ; do
 		${EBTABLES} -A FORWARD -o ${i} -j ACCEPT
 	done
 }
-arptables-up () {
+arptables_up () {
 	${ARPTABLES} -P FORWARD DROP
 	for i in ${INTERFACES} ; do
 		${ARPTABLES} -A FORWARD --opcode Request --in-interface ${i} -j ACCEPT
 		${ARPTABLES} -A FORWARD --opcode Reply --in-interface ${i} -j ACCEPT
 	done
 }
-iptables-down () {
+iptables_down () {
 	${IPTABLES} -P FORWARD ACCEPT
 	for i in ${INTERFACES} ; do
 		${IPTABLES} -D FORWARD -m physdev --physdev-in ${i} -j ACCEPT
 	done
 }
-ebtables-down () {
+ebtables_down () {
 	${EBTABLES} -P FORWARD ACCEPT
 	for i in ${INTERFACES} ; do
 		${EBTABLES} -D FORWARD -o ${i} -j ACCEPT
 	done
 }
-arptables-down () {
+arptables_down () {
 	${ARPTABLES} -P FORWARD ACCEPT
 	for i in ${INTERFACES} ; do
 		${ARPTABLES} -D FORWARD --opcode Request --in-interface ${i} -j ACCEPT
@@ -132,18 +132,18 @@ arptables-down () {
 case "${1}" in
 start)
 	[ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
-	iptables-up
-	ebtables-up
-	arptables-up
+	iptables_up
+	ebtables_up
+	arptables_up
 	run_ovs_conf_base_flows online
 	log_end_msg 0
 	;;
 stop)
 	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
 	run_ovs_conf_base_flows offline
-	iptables-down
-	ebtables-down
-	arptables-down
+	iptables_down
+	ebtables_down
+	arptables_down
 	log_end_msg 0
 	;;
 reload|force-reload)

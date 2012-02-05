@@ -1,5 +1,51 @@
-nova (2012.1~e2+git757-g62cf887-3) experimental; urgency=low
+nova (2012.1~e3-4) unstable; urgency=low
 
+  * Added init script to nova-consoleauth
+  * Added init script to nova-xvpvncproxy
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Tue, 31 Jan 2012 18:50:37 +0100
+
+nova (2012.1~e3-3) unstable; urgency=low
+
+  * nova-compute- now depends on nova-common (Closes: #657569)
+  * Added nova-consoleauth to nova-console
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Tue, 31 Jan 2012 14:32:31 +0100
+
+nova (2012.1~e3-2) unstable; urgency=low
+
+  * Fixed compute-xen postinst (Closes: #657569)
+  * Minor fix in gbp.conf
+  * Added policy.json
+  * Added connection_type flag to nova.conf
+  * Fixed funtions names in nova-xcp-networkt.init
+
+ -- Ghe Rivero <ghe@debian.org>  Sat, 28 Jan 2012 10:36:52 +0100
+
+nova (2012.1~e3-1) unstable; urgency=low
+
+  * New upstream version
+
+ -- Ghe Rivero <ghe@debian.org>  Thu, 26 Jan 2012 14:16:48 +0100
+
+nova (2012.1~e2-4) experimental; urgency=low
+
+  [ Thomas Goirand ]
+  * Added missing Build-Depends: python-xattr, python-webob, python-glance,
+  python-routes, ipython, bpython.
+  * Removed duplicates in Build-Depends:
+  * Now also building nova-xcp-plugins and nova-xcp-network packages.
+  * Now build-depends on the new python-xenapi and nova-compute-xen depends
+  on it and not on libvirt anymore.
+  * Now build-depends on the new python-xenapi and nova-compute-xen depends
+  on it and not on libvirt anymore.
+  * Moved nova user creation in nova-compute-{lxc,uml,xen,kvm}.postinst because
+  nova-compute-xen doesn't Depends: on libvirt, and then the libvirt group
+  doesn't exist, then postinst fails.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 28 Dec 2011 12:19:41 +0000
+
+nova (2012.1~e2+git757-g62cf887-3) experimental; urgency=low
   [ Thomas Goirand ]
   * Added missing Build-Depends: python-xattr, python-webob, python-glance,
   python-routes, ipython, bpython.

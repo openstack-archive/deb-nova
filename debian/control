@@ -4,7 +4,7 @@ Priority: extra
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
-           Ghe Rivero <ghe@debian.org>
+           Ghe Rivero <ghe.rivero@stackops.com>
 Build-Depends: debhelper (>= 7.0.50),
  python-netaddr,
  python-distutils-extra,
@@ -142,7 +142,7 @@ Description: OpenStack Compute - compute node
 
 Package: nova-compute-lxc
 Architecture: all
-Depends: python-libvirt, libvirt-bin, ${misc:Depends}, adduser
+Depends: python-libvirt, libvirt-bin, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (LXC)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -163,7 +163,7 @@ Description: OpenStack Compute - compute node (LXC)
 
 Package: nova-compute-uml
 Architecture: all
-Depends: python-libvirt, libvirt-bin, user-mode-linux, ${misc:Depends}, adduser
+Depends: python-libvirt, libvirt-bin, user-mode-linux, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (UserModeLinux)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -185,7 +185,7 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 
 Package: nova-compute-xen
 Architecture: all
-Depends: python-xenapi, ${misc:Depends}, adduser
+Depends: python-xenapi, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (Xen)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -207,7 +207,7 @@ Description: OpenStack Compute - compute node (Xen)
 
 Package: nova-compute-kvm
 Architecture: all
-Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser
+Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Description: OpenStack Compute - compute node (KVM)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -441,3 +441,24 @@ Description: OpenStack Compute - documentation
  databases (LDAP or SQL), etc.
  .
  This package contains the documentation for Nova.
+
+Package: nova-xvpvncproxy
+Architecture: all
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Description: OpenStack Compute - XVP VNC proxy
+ OpenStack is a reliable cloud infrastructure. Its mission is to produce
+ the ubiquitous cloud computing platform that will meet the needs of public
+ and private cloud providers regardless of size, by being simple to implement
+ and massively scalable.
+ .
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller. In
+ addition to its "native" API (the OpenStack API), it also supports the Amazon
+ EC2 API.
+ .
+ Nova is intended to be modular and easy to extend and adapt. It supports many
+ different hypervisors (KVM and Xen to name a few), different database backends
+ (SQLite, MySQL, and PostgreSQL, for instance), different types of user
+ databases (LDAP or SQL), etc.
+ .
+ This package provides the XVP VNC proxy. It is a publically reachable
+ component which proxies access to VNCs running on compute nodes.
