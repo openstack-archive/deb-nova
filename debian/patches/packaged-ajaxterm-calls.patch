@@ -4,7 +4,7 @@ Author: Soren Hansen <soren@ubuntu.com>
 Last-Update: 2011-04-15
 --- a/nova/virt/libvirt/utils.py
 +++ b/nova/virt/libvirt/utils.py
-@@ -225,8 +225,9 @@
+@@ -234,8 +234,9 @@
      :param token: Token to require for authentication
      :param port: Port to run on
      """
