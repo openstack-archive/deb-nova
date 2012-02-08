@@ -47,11 +47,6 @@ License: BSD-Style
  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  DEALINGS IN THE SOFTWARE.
 
-Files: tools/ajaxterm/sarissa*
-Copyright: Manos Batsis
-License: LGPL-2.1
- See /usr/share/common-licenses/LGPL-2.1
-
 Files: bin/nova-manage
 Copyright: 2005, the Lawrence Journal-World
 License: BSD
