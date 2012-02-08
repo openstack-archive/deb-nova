@@ -69,7 +69,7 @@ class FlagValues(object):
 
     def __init__(self):
         self._conf = cfg.ConfigOpts()
-        self._conf._oparser.disable_interspersed_args()
+        self._conf.disable_interspersed_args()
         self._opts = {}
         self.Reset()
 
@@ -128,7 +128,7 @@ class FlagValues(object):
         self._conf.set_default(name, default)
 
     def __iter__(self):
-        return self.FlagValuesDict().iterkeys()
+        return self._conf.iterkeys()
 
     def __getitem__(self, name):
         self._parse()
@@ -147,12 +147,12 @@ class FlagValues(object):
     def FlagValuesDict(self):
         self._parse()
         ret = {}
-        for opt in self._opts.values():
-            ret[opt.dest] = getattr(self, opt.dest)
+        for name in self._conf:
+            ret[name] = getattr(self, name)
         return ret
 
     def add_option(self, opt):
-        if opt.dest in self._opts:
+        if opt.dest in self._conf:
             return
 
         self._opts[opt.dest] = opt
@@ -250,15 +250,6 @@ global_opts = [
     cfg.StrOpt('network_topic',
                default='network',
                help='the topic network nodes listen on'),
-    cfg.StrOpt('ajax_console_proxy_topic',
-               default='ajax_proxy',
-               help='the topic ajax proxy nodes listen on'),
-    cfg.StrOpt('ajax_console_proxy_url',
-               default='http://127.0.0.1:8000',
-               help='URL of ajax console proxy, in the form http://host:port'),
-    cfg.IntOpt('ajax_console_proxy_port',
-               default=8000,
-               help='port that ajax_console_proxy binds'),
     cfg.StrOpt('vsa_topic',
                default='vsa',
                help='the topic that nova-vsa service listens on'),
@@ -338,6 +329,14 @@ global_opts = [
     cfg.StrOpt('osapi_path',
                default='/v1.1/',
                help='suffix for openstack'),
+    cfg.StrOpt('osapi_compute_link_prefix',
+               default=None,
+               help='Base URL that will be presented to users in links '
+                    'to the Openstack Compute API'),
+    cfg.StrOpt('osapi_glance_link_prefix',
+               default=None,
+               help='Base URL that will be presented to users in links '
+                    'to glance resources'),
     cfg.IntOpt('osapi_max_limit',
                default=1000,
                help='max number of items returned in a collection response'),
@@ -442,7 +441,7 @@ global_opts = [
                default=100,
                help='default partition size for shared capacity'),
     cfg.StrOpt('firewall_driver',
-               default='nova.virt.libvirt.firewall.IptablesFirewallDriver',
+               default='nova.virt.firewall.IptablesFirewallDriver',
                help='Firewall driver (defaults to iptables)'),
     cfg.StrOpt('image_service',
                default='nova.image.glance.GlanceImageService',

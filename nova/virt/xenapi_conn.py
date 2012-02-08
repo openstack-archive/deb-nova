@@ -179,6 +179,7 @@ class XenAPIConnection(driver.ComputeDriver):
         self._host_state = None
         self._product_version = self._session.get_product_version()
         self._vmops = VMOps(self._session, self._product_version)
+        self._initiator = None
 
     @property
     def host_state(self):
@@ -327,26 +328,32 @@ class XenAPIConnection(driver.ComputeDriver):
         for iusage in self._vmops.get_all_bw_usage(start_time, stop_time).\
                       values():
             for macaddr, usage in iusage.iteritems():
-                vi = db.virtual_interface_get_by_address(
-                                    context.get_admin_context(),
-                                    macaddr)
-                if vi:
-                    bwusage.append(dict(virtual_interface=vi,
-                                        bw_in=usage['bw_in'],
-                                        bw_out=usage['bw_out']))
+                bwusage.append(dict(mac_address=macaddr,
+                                    bw_in=usage['bw_in'],
+                                    bw_out=usage['bw_out']))
         return bwusage
 
     def get_console_output(self, instance):
         """Return snapshot of console"""
         return self._vmops.get_console_output(instance)
 
-    def get_ajax_console(self, instance):
-        """Return link to instance's ajax console"""
-        return self._vmops.get_ajax_console(instance)
-
     def get_vnc_console(self, instance):
-        """Return link to instance's ajax console"""
+        """Return link to instance's VNC console"""
         return self._vmops.get_vnc_console(instance)
+
+    def get_volume_connector(self, _instance):
+        """Return volume connector information"""
+        if not self._initiator:
+            stats = self.get_host_stats(update=True)
+            try:
+                self._initiator = stats['host_other-config']['iscsi_iqn']
+            except (TypeError, KeyError):
+                LOG.warn(_('Could not determine iscsi initiator name'))
+                self._initiator = None
+        return {
+            'ip': self.get_host_ip_addr(),
+            'initiator': self._initiator
+        }
 
     @staticmethod
     def get_host_ip_addr():

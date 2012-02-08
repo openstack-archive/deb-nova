@@ -100,6 +100,8 @@ class KillFilter(CommandFilter):
     """
 
     def match(self, userargs):
+        if userargs[0] != "kill":
+            return False
         args = list(userargs)
         if len(args) == 3:
             signal = args.pop(1)
@@ -113,13 +115,29 @@ class KillFilter(CommandFilter):
             if '' not in self.args[0]:
                 # No signal, but list doesn't include empty string
                 return False
-        pid = int(args[1])
         try:
-            command = os.readlink("/proc/%d/exe" % pid)
+            command = os.readlink("/proc/%d/exe" % int(args[1]))
             if command not in self.args[1]:
                 # Affected executable not in accepted list
                 return False
-        except:
+        except (ValueError, OSError):
             # Incorrect PID
+            return False
+        return True
+
+
+class ReadFileFilter(CommandFilter):
+    """Specific filter for the utils.read_file_as_root call"""
+
+    def __init__(self, file_path, *args):
+        self.file_path = file_path
+        super(ReadFileFilter, self).__init__("/bin/cat", "root", *args)
+
+    def match(self, userargs):
+        if userargs[0] != 'cat':
+            return False
+        if userargs[1] != self.file_path:
+            return False
+        if len(userargs) != 2:
             return False
         return True

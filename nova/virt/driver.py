@@ -191,10 +191,6 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def get_ajax_console(self, instance):
-        # TODO(Vek): Need to pass context in for access to auth_token
-        raise NotImplementedError()
-
     def get_vnc_console(self, instance):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
@@ -621,5 +617,19 @@ class ComputeDriver(object):
         is an opportunity to do management of that cache which isn't directly
         related to other calls into the driver. The prime example is to clean
         the cache and remove images which are no longer of interest.
+        """
+        raise NotImplementedError()
+
+    def get_volume_connector(self, instance):
+        """
+        Get connector information for the instance for attaching to volumes.
+
+        Connector information is a dictionary representing the ip of the
+        machine that will be making the connection and and the name of the
+        iscsi initiator as follows:
+            {
+                'ip': ip,
+                'initiator': initiator,
+            }
         """
         raise NotImplementedError()

@@ -325,7 +325,7 @@ def default_flagfile(filename='nova.conf', args=None):
         args = sys.argv
     for arg in args:
         if arg.find('flagfile') != -1:
-            return arg[arg.index('flagfile') + 1:]
+            return arg[arg.index('flagfile') + len('flagfile') + 1:]
     else:
         if not os.path.isabs(filename):
             # turn relative filename into an absolute path
@@ -1413,3 +1413,12 @@ def generate_mac_address():
            random.randint(0x00, 0xff),
            random.randint(0x00, 0xff)]
     return ':'.join(map(lambda x: "%02x" % x, mac))
+
+
+def read_file_as_root(file_path):
+    """Secure helper to read file as root."""
+    try:
+        out, _err = execute('cat', file_path, run_as_root=True)
+        return out
+    except exception.ProcessExecutionError:
+        raise exception.FileNotFound(file_path=file_path)

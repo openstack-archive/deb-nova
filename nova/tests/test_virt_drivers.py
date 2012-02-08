@@ -225,6 +225,12 @@ class _VirtDriverTestCase(test.TestCase):
                          self.connection.list_instances())
 
     @catch_notimplementederror
+    def test_get_volume_connector(self):
+        result = self.connection.get_volume_connector({'id': 'fake'})
+        self.assertTrue('ip' in result)
+        self.assertTrue('initiator' in result)
+
+    @catch_notimplementederror
     def test_attach_detach_volume(self):
         instance_ref, network_info = self._get_running_instance()
         self.connection.attach_volume({'driver_volume_type': 'fake'},
@@ -281,14 +287,6 @@ class _VirtDriverTestCase(test.TestCase):
         instance_ref, network_info = self._get_running_instance()
         console_output = self.connection.get_console_output(instance_ref)
         self.assertTrue(isinstance(console_output, basestring))
-
-    @catch_notimplementederror
-    def test_get_ajax_console(self):
-        instance_ref, network_info = self._get_running_instance()
-        ajax_console = self.connection.get_ajax_console(instance_ref)
-        self.assertIn('token', ajax_console)
-        self.assertIn('host', ajax_console)
-        self.assertIn('port', ajax_console)
 
     @catch_notimplementederror
     def test_get_vnc_console(self):
@@ -444,13 +442,14 @@ class LibvirtConnTestCase(_VirtDriverTestCase):
 
         # Point _VirtDriverTestCase at the right module
         self.driver_module = nova.virt.libvirt.connection
+        FLAGS.firewall_driver = nova.virt.libvirt.firewall.drivers[0]
         super(LibvirtConnTestCase, self).setUp()
         FLAGS.rescue_image_id = "2"
         FLAGS.rescue_kernel_id = "3"
         FLAGS.rescue_ramdisk_id = None
 
     def tearDown(self):
-        super(LibvirtConnTestCase, self).setUp()
+        super(LibvirtConnTestCase, self).tearDown()
 
         # Restore libvirt
         import nova.virt.libvirt.connection

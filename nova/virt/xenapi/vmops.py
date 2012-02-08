@@ -41,9 +41,11 @@ from nova import log as logging
 from nova.openstack.common import cfg
 from nova import utils
 from nova.virt import driver
-from nova.virt.xenapi import volume_utils
+from nova.virt.xenapi import firewall
 from nova.virt.xenapi import network_utils
 from nova.virt.xenapi import vm_utils
+from nova.virt.xenapi import volume_utils
+
 
 VolumeHelper = volume_utils.VolumeHelper
 NetworkHelper = network_utils.NetworkHelper
@@ -104,6 +106,8 @@ class VMOps(object):
         self._session = session
         self.poll_rescue_last_ran = None
         VMHelper.XenAPI = self.XenAPI
+        if FLAGS.firewall_driver not in firewall.drivers:
+            FLAGS['firewall_driver'].SetDefault(firewall.drivers[0])
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(xenapi_session=self._session)
         vif_impl = utils.import_class(FLAGS.xenapi_vif_driver)
@@ -646,7 +650,7 @@ class VMOps(object):
         #TODO(sirp): Add quiesce and VSS locking support when Windows support
         # is added
 
-        logging.debug(_("Starting snapshot for VM %s"), instance)
+        logging.debug(_("Starting snapshot for VM %s"), instance['uuid'])
         vm_ref = VMHelper.lookup(self._session, instance.name)
 
         label = "%s-snapshot" % instance.name
@@ -1420,11 +1424,6 @@ class VMOps(object):
         """Return snapshot of console."""
         # TODO: implement this to fix pylint!
         return 'FAKE CONSOLE OUTPUT of instance'
-
-    def get_ajax_console(self, instance):
-        """Return link to instance's ajax console."""
-        # TODO: implement this!
-        return 'http://fakeajaxconsole/fake_url'
 
     def get_vnc_console(self, instance):
         """Return connection info for a vnc console."""

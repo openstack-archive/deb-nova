@@ -652,9 +652,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                 # NOTE(vish): actual driver detach done in driver.destroy, so
                 #             just tell nova-volume that we are done with it.
                 volume = self.volume_api.get(context, bdm['volume_id'])
+                connector = self.driver.get_volume_connector(instance)
                 self.volume_api.terminate_connection(context,
                                                      volume,
-                                                     FLAGS.my_ip)
+                                                     connector)
                 self.volume_api.detach(context, volume)
             except exception.DiskNotFound as exc:
                 LOG.warn(_("Ignoring DiskNotFound: %s") % exc)
@@ -1552,15 +1553,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @wrap_instance_fault
-    def get_ajax_console(self, context, instance_uuid):
-        """Return connection information for an ajax console."""
-        context = context.elevated()
-        LOG.debug(_("instance %s: getting ajax console"), instance_uuid)
-        instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
-        return self.driver.get_ajax_console(instance_ref)
-
-    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    @wrap_instance_fault
     def get_vnc_console(self, context, instance_uuid, console_type):
         """Return connection information for a vnc console."""
         context = context.elevated()
@@ -1597,10 +1589,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         msg = _("instance %(instance_uuid)s: booting with "
                 "volume %(volume_id)s at %(mountpoint)s")
         LOG.audit(msg % locals(), context=context)
-        address = FLAGS.my_ip
+        connector = self.driver.get_volume_connector(instance)
         connection_info = self.volume_api.initialize_connection(context,
                                                                 volume,
-                                                                address)
+                                                                connector)
         self.volume_api.attach(context, volume, instance_id, mountpoint)
         return connection_info
 
@@ -1616,10 +1608,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         msg = _("instance %(instance_uuid)s: attaching volume %(volume_id)s"
                 " to %(mountpoint)s")
         LOG.audit(msg % locals(), context=context)
-        address = FLAGS.my_ip
+        connector = self.driver.get_volume_connector(instance_ref)
         connection_info = self.volume_api.initialize_connection(context,
                                                                 volume,
-                                                                address)
+                                                                connector)
         try:
             self.driver.attach_volume(connection_info,
                                       instance_ref['name'],
@@ -1631,7 +1623,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                 LOG.exception(msg % locals(), context=context)
                 self.volume_api.terminate_connection(context,
                                                      volume,
-                                                     address)
+                                                     connector)
 
         self.volume_api.attach(context, volume, instance_id, mountpoint)
         values = {
@@ -1674,7 +1666,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         bdm = self._get_instance_volume_bdm(context, instance_id, volume_id)
         self._detach_volume(context, instance_ref, bdm)
         volume = self.volume_api.get(context, volume_id)
-        self.volume_api.terminate_connection(context, volume, FLAGS.my_ip)
+        connector = self.driver.get_volume_connector(instance_ref)
+        self.volume_api.terminate_connection(context, volume, connector)
         self.volume_api.detach(context.elevated(), volume)
         self.db.block_device_mapping_destroy_by_instance_and_volume(
             context, instance_id, volume_id)
@@ -1693,7 +1686,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                 volume_id)
             self._detach_volume(context, instance_ref, bdm)
             volume = self.volume_api.get(context, volume_id)
-            self.volume_api.terminate_connection(context, volume, FLAGS.my_ip)
+            connector = self.driver.get_volume_connector(instance_ref)
+            self.volume_api.terminate_connection(context, volume, connector)
         except exception.NotFound:
             pass
 
@@ -2085,10 +2079,14 @@ class ComputeManager(manager.SchedulerDependentManager):
                 return
 
             for usage in bw_usage:
-                vif = usage['virtual_interface']
+                mac = usage['mac_address']
+                vif = self.network_api.get_vif_by_mac_address(context, mac)
+                if not vif:
+                    continue
+
                 self.db.bw_usage_update(context,
-                                        vif.instance_id,
-                                        vif.network.label,
+                                        vif['instance_id'],
+                                        mac,
                                         start_time,
                                         usage['bw_in'], usage['bw_out'])
 

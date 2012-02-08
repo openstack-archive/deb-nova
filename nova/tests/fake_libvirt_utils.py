@@ -21,6 +21,10 @@ disk_sizes = {}
 disk_backing_files = {}
 
 
+def get_iscsi_initiator():
+    return "fake.initiator.iqn"
+
+
 def create_image(disk_format, path, size):
     pass
 
@@ -87,10 +91,6 @@ def file_delete(path):
 def get_open_port(start_port, end_port):
     # Return the port in the middle
     return int((start_port + end_port) / 2)
-
-
-def run_ajaxterm(cmd, token, port):
-    pass
 
 
 def get_fs_info(path):
