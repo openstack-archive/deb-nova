@@ -56,18 +56,6 @@ def destroy(context, name):
             raise exception.ApiError(_("Unknown volume type: %s") % name)
 
 
-def purge(context, name):
-    """Removes volume types from database."""
-    if name is None:
-        raise exception.InvalidVolumeType(volume_type=name)
-    else:
-        try:
-            db.volume_type_purge(context, name)
-        except exception.NotFound:
-            LOG.exception(_('Volume type %s not found for purge') % name)
-            raise exception.ApiError(_("Unknown volume type: %s") % name)
-
-
 def get_all_types(context, inactive=0, search_opts={}):
     """Get all non-deleted volume_types.
 
@@ -81,8 +69,8 @@ def get_all_types(context, inactive=0, search_opts={}):
 
         def _check_extra_specs_match(vol_type, searchdict):
             for k, v in searchdict.iteritems():
-                if k not in vol_type['extra_specs'].keys()\
-                   or vol_type['extra_specs'][k] != v:
+                if (k not in vol_type['extra_specs'].keys()
+                    or vol_type['extra_specs'][k] != v):
                     return False
             return True
 
@@ -138,8 +126,8 @@ def is_key_value_present(volume_type_id, key, value, volume_type=None):
     if volume_type is None:
         volume_type = get_volume_type(context.get_admin_context(),
                                       volume_type_id)
-    if volume_type.get('extra_specs') is None or\
-       volume_type['extra_specs'].get(key) != value:
+    if (volume_type.get('extra_specs') is None or
+        volume_type['extra_specs'].get(key) != value):
         return False
     else:
         return True
@@ -162,5 +150,5 @@ def is_vsa_object(volume_type_id):
     volume_type = get_volume_type(context.get_admin_context(),
                                   volume_type_id)
 
-    return is_vsa_drive(volume_type_id, volume_type) or\
-           is_vsa_volume(volume_type_id, volume_type)
+    return (is_vsa_drive(volume_type_id, volume_type) or
+            is_vsa_volume(volume_type_id, volume_type))

@@ -22,7 +22,15 @@ Driver base-classes:
     types that support that contract
 """
 
+from nova import context as nova_context
+from nova import db
+from nova import flags
+from nova import log as logging
 from nova.compute import power_state
+
+
+LOG = logging.getLogger("nova.virt.driver")
+FLAGS = flags.FLAGS
 
 
 class InstanceInfo(object):
@@ -113,6 +121,21 @@ class ComputeDriver(object):
         """
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
+
+    def instance_exists(self, instance_id):
+        """Checks existence of an instance on the host.
+
+        Returns True if an instance with the supplied ID exists on
+        the host, False otherwise.
+
+        :note This implementation works for all drivers, but it is
+              not particularly efficient. Maintainers of the virt drivers are
+              encouraged to override this method with something more
+              efficient.
+
+        :param instance_id: The ID / name of the instance to lookup
+        """
+        return instance_id in self.list_instances()
 
     def list_instances(self):
         """
@@ -500,7 +523,7 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def poll_unconfirmed_resizes(self, resize_confirm_window):
-        """Poll for unconfirmed resizes"""
+        """Poll for unconfirmed resizes."""
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 

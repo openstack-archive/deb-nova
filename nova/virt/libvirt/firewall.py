@@ -137,14 +137,15 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
 
     def setup_basic_filtering(self, instance, network_info):
         """Set up basic filtering (MAC, IP, and ARP spoofing protection)"""
-        logging.info('called setup_basic_filtering in nwfilter')
+        LOG.info(_('Called setup_basic_filtering in nwfilter'),
+                 instance=instance)
 
         if self.handle_security_groups:
             # No point in setting up a filter set that we'll be overriding
             # anyway.
             return
 
-        logging.info('ensuring static filters')
+        LOG.info(_('Ensuring static filters'), instance=instance)
         self._ensure_static_filters()
 
         if instance['image_ref'] == str(FLAGS.vpn_image_id):
@@ -255,21 +256,23 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             instance_filter_name = self._instance_filter_name(instance, nic_id)
 
             try:
-                self._conn.nwfilterLookupByName(instance_filter_name).\
-                                                    undefine()
+                _nw = self._conn.nwfilterLookupByName(instance_filter_name)
+                _nw.undefine()
             except libvirt.libvirtError:
                 LOG.debug(_('The nwfilter(%(instance_filter_name)s) '
-                            'for %(instance_name)s is not found.') % locals())
+                            'is not found.') % locals(),
+                          instance=instance)
 
-        instance_secgroup_filter_name = \
-            '%s-secgroup' % (self._instance_filter_name(instance))
+        instance_secgroup_filter_name = ('%s-secgroup' %
+                                         self._instance_filter_name(instance))
 
         try:
-            self._conn.nwfilterLookupByName(instance_secgroup_filter_name)\
-                                            .undefine()
+            _nw = self._conn.nwfilterLookupByName(
+                  instance_secgroup_filter_name)
+            _nw.undefine()
         except libvirt.libvirtError:
             LOG.debug(_('The nwfilter(%(instance_secgroup_filter_name)s) '
-                        'for %(instance_name)s is not found.') % locals())
+                        'is not found.') % locals(), instance=instance)
 
     def prepare_instance_filter(self, instance, network_info):
         """Creates an NWFilter for the given instance.
@@ -282,8 +285,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
 
         ctxt = context.get_admin_context()
 
-        instance_secgroup_filter_name = \
-            '%s-secgroup' % (self._instance_filter_name(instance))
+        instance_secgroup_filter_name = ('%s-secgroup' %
+                                         self._instance_filter_name(instance))
 
         instance_secgroup_filter_children = ['nova-base-ipv4',
                                              'nova-base-ipv6',
@@ -294,11 +297,11 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
                         info['gateway_v6']]
 
             if networks:
-                instance_secgroup_filter_children.\
-                    append('nova-allow-ra-server')
+                instance_secgroup_filter_children.append(
+                        'nova-allow-ra-server')
 
-        for security_group in \
-                db.security_group_get_by_instance(ctxt, instance['id']):
+        for security_group in db.security_group_get_by_instance(ctxt,
+                                                       instance['id']):
 
             self.refresh_security_group_rules(security_group['id'])
 
@@ -309,9 +312,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
                     self._filter_container(instance_secgroup_filter_name,
                                            instance_secgroup_filter_children))
 
-        network_filters = self.\
-            _create_network_filters(instance, network_info,
-                                    instance_secgroup_filter_name)
+        network_filters = self._create_network_filters(instance, network_info,
+                          instance_secgroup_filter_name)
 
         for (name, children) in network_filters:
             self._define_filters(name, children)
@@ -372,15 +374,15 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
                 version = netutils.get_ip_version(rule.cidr)
                 if(FLAGS.use_ipv6 and version == 6):
                     net, prefixlen = netutils.get_net_and_prefixlen(rule.cidr)
-                    rule_xml += "<%s srcipaddr='%s' srcipmask='%s' " % \
-                                (v6protocol[rule.protocol], net, prefixlen)
+                    rule_xml += ("<%s srcipaddr='%s' srcipmask='%s' " %
+                                 (v6protocol[rule.protocol], net, prefixlen))
                 else:
                     net, mask = netutils.get_net_and_mask(rule.cidr)
-                    rule_xml += "<%s srcipaddr='%s' srcipmask='%s' " % \
-                                (rule.protocol, net, mask)
+                    rule_xml += ("<%s srcipaddr='%s' srcipmask='%s' " %
+                                 (rule.protocol, net, mask))
                 if rule.protocol in ['tcp', 'udp']:
-                    rule_xml += "dstportstart='%s' dstportend='%s' " % \
-                                (rule.from_port, rule.to_port)
+                    rule_xml += ("dstportstart='%s' dstportend='%s' " %
+                                 (rule.from_port, rule.to_port))
                 elif rule.protocol == 'icmp':
                     LOG.info('rule.protocol: %r, rule.from_port: %r, '
                              'rule.to_port: %r', rule.protocol,
@@ -410,15 +412,15 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             version = netutils.get_ip_version(rule.cidr)
             if(FLAGS.use_ipv6 and version == 6):
                 net, prefixlen = netutils.get_net_and_prefixlen(rule.cidr)
-                rule_xml += "<%s srcipaddr='%s' srcipmask='%s' " % \
-                            (v6protocol[rule.protocol], net, prefixlen)
+                rule_xml += ("<%s srcipaddr='%s' srcipmask='%s' " %
+                             (v6protocol[rule.protocol], net, prefixlen))
             else:
                 net, mask = netutils.get_net_and_mask(rule.cidr)
-                rule_xml += "<%s srcipaddr='%s' srcipmask='%s' " % \
-                            (rule.protocol, net, mask)
+                rule_xml += ("<%s srcipaddr='%s' srcipmask='%s' " %
+                             (rule.protocol, net, mask))
             if rule.protocol in ['tcp', 'udp']:
-                rule_xml += "dstportstart='%s' dstportend='%s' " % \
-                            (rule.from_port, rule.to_port)
+                rule_xml += ("dstportstart='%s' dstportend='%s' " %
+                             (rule.from_port, rule.to_port))
             elif rule.protocol == 'icmp':
                 LOG.info('rule.protocol: %r, rule.from_port: %r, '
                          'rule.to_port: %r', rule.protocol,
@@ -453,7 +455,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             except libvirt.libvirtError:
                 name = instance.name
                 LOG.debug(_('The nwfilter(%(instance_filter_name)s) for'
-                            '%(name)s is not found.') % locals())
+                            '%(name)s is not found.') % locals(),
+                          instance=instance)
                 return False
         return True
 
@@ -467,7 +470,8 @@ class IptablesFirewallDriver(base_firewall.IptablesFirewallDriver):
         """Set up provider rules and basic NWFilter."""
         self.nwfilter.setup_basic_filtering(instance, network_info)
         if not self.basicly_filtered:
-            LOG.debug(_('iptables firewall: Setup Basic Filtering'))
+            LOG.debug(_('iptables firewall: Setup Basic Filtering'),
+                      instance=instance)
             self.refresh_provider_fw_rules()
             self.basicly_filtered = True
 
@@ -485,8 +489,8 @@ class IptablesFirewallDriver(base_firewall.IptablesFirewallDriver):
             self.iptables.apply()
             self.nwfilter.unfilter_instance(instance, network_info)
         else:
-            LOG.info(_('Attempted to unfilter instance %s which is not '
-                     'filtered'), instance['id'])
+            LOG.info(_('Attempted to unfilter instance which is not '
+                     'filtered'), instance=instance)
 
     def instance_filter_exists(self, instance, network_info):
         """Check nova-instance-instance-xxx exists"""

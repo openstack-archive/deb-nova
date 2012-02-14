@@ -99,9 +99,6 @@ libvirt_opts = [
                default='',
                help='Override the default libvirt URI '
                     '(which is dependent on libvirt_type)'),
-    cfg.BoolOpt('use_cow_images',
-                default=True,
-                help='Whether to use cow images'),
     cfg.StrOpt('cpuinfo_xml_template',
                default=utils.abspath('virt/cpuinfo.xml.template'),
                help='CpuInfo XML Template (Used only live migration now)'),
@@ -149,7 +146,7 @@ libvirt_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(libvirt_opts)
+FLAGS.register_opts(libvirt_opts)
 
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
@@ -190,7 +187,7 @@ class LibvirtConnection(driver.ComputeDriver):
         self.container = None
         self.read_only = read_only
         if FLAGS.firewall_driver not in firewall.drivers:
-            FLAGS['firewall_driver'].SetDefault(firewall.drivers[0])
+            FLAGS.set_default('firewall_driver', firewall.drivers[0])
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(get_connection=self._get_connection)
         self.vif_driver = utils.import_object(FLAGS.libvirt_vif_driver)
@@ -251,9 +248,9 @@ class LibvirtConnection(driver.ComputeDriver):
             self._wrapped_conn.getCapabilities()
             return True
         except libvirt.libvirtError as e:
-            if e.get_error_code() == libvirt.VIR_ERR_SYSTEM_ERROR and \
-               e.get_error_domain() in (libvirt.VIR_FROM_REMOTE,
-                       libvirt.VIR_FROM_RPC):
+            if (e.get_error_code() == libvirt.VIR_ERR_SYSTEM_ERROR and
+                e.get_error_domain() in (libvirt.VIR_FROM_REMOTE,
+                                         libvirt.VIR_FROM_RPC)):
                 LOG.debug(_('Connection to libvirt broke'))
                 return False
             raise
@@ -280,6 +277,14 @@ class LibvirtConnection(driver.ComputeDriver):
             return libvirt.openReadOnly(uri)
         else:
             return libvirt.openAuth(uri, auth, 0)
+
+    def instance_exists(self, instance_id):
+        """Efficient override of base instance_exists method."""
+        try:
+            _ignored = self._conn.lookupByName(instance_id)
+            return True
+        except libvirt.libvirtError:
+            return False
 
     def list_instances(self):
         return [self._conn.lookupByID(x).name()
@@ -346,10 +351,9 @@ class LibvirtConnection(driver.ComputeDriver):
                         is_okay = True
 
                 if not is_okay:
-                    LOG.warning(_("Error from libvirt during destroy of "
-                                  "%(instance_name)s. Code=%(errcode)s "
-                                  "Error=%(e)s") %
-                                locals())
+                    LOG.warning(_("Error from libvirt during destroy. "
+                                  "Code=%(errcode)s Error=%(e)s") %
+                                locals(), instance=instance)
                     raise
 
             try:
@@ -360,8 +364,8 @@ class LibvirtConnection(driver.ComputeDriver):
             except libvirt.libvirtError as e:
                 errcode = e.get_error_code()
                 LOG.warning(_("Error from libvirt during saved instance "
-                              "removal %(instance_name)s. Code=%(errcode)s"
-                              " Error=%(e)s") % locals())
+                              "removal. Code=%(errcode)s Error=%(e)s") %
+                            locals(), instance=instance)
 
             try:
                 # NOTE(justinsb): We remove the domain definition. We probably
@@ -370,10 +374,9 @@ class LibvirtConnection(driver.ComputeDriver):
                 virt_dom.undefine()
             except libvirt.libvirtError as e:
                 errcode = e.get_error_code()
-                LOG.warning(_("Error from libvirt during undefine of "
-                              "%(instance_name)s. Code=%(errcode)s "
-                              "Error=%(e)s") %
-                            locals())
+                LOG.warning(_("Error from libvirt during undefine. "
+                              "Code=%(errcode)s Error=%(e)s") %
+                            locals(), instance=instance)
                 raise
 
         self.unplug_vifs(instance, network_info)
@@ -385,8 +388,8 @@ class LibvirtConnection(driver.ComputeDriver):
             try:
                 state = self.get_info(instance_name)['state']
             except exception.NotFound:
-                msg = _("Instance %s destroyed successfully.") % instance_name
-                LOG.info(msg)
+                LOG.info(_("Instance destroyed successfully."),
+                         instance=instance)
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_destroy)
@@ -416,18 +419,19 @@ class LibvirtConnection(driver.ComputeDriver):
     def _cleanup(self, instance):
         target = os.path.join(FLAGS.instances_path, instance['name'])
         instance_name = instance['name']
-        LOG.info(_('instance %(instance_name)s: deleting instance files'
-                ' %(target)s') % locals())
+        LOG.info(_('Deleting instance files %(target)s') % locals(),
+                 instance=instance)
         if FLAGS.libvirt_type == 'lxc':
             disk.destroy_container(self.container)
         if os.path.exists(target):
             shutil.rmtree(target)
 
-    def get_volume_connector(self, _instance):
+    def get_volume_connector(self, instance):
         if not self._initiator:
             self._initiator = libvirt_utils.get_iscsi_initiator()
             if not self._initiator:
-                LOG.warn(_('Could not determine iscsi initiator name'))
+                LOG.warn(_('Could not determine iscsi initiator name'),
+                         instance=instance)
         return {
             'ip': FLAGS.my_ip,
             'initiator': self._initiator,
@@ -496,8 +500,8 @@ class LibvirtConnection(driver.ComputeDriver):
         (image_service, image_id) = nova.image.get_image_service(
             context, instance['image_ref'])
         base = image_service.show(context, image_id)
-        (snapshot_image_service, snapshot_image_id) = \
-            nova.image.get_image_service(context, image_href)
+        _image_service = nova.image.get_image_service(context, image_href)
+        snapshot_image_service, snapshot_image_id = _image_service
         snapshot = snapshot_image_service.show(context, snapshot_image_id)
 
         metadata = {'is_public': False,
@@ -599,13 +603,13 @@ class LibvirtConnection(driver.ComputeDriver):
             try:
                 state = self.get_info(instance_name)['state']
             except exception.NotFound:
-                msg = _("During reboot, %s disappeared.") % instance_name
-                LOG.error(msg)
+                LOG.error(_("During reboot, instance disappeared."),
+                          instance=instance)
                 raise utils.LoopingCallDone
 
             if state == power_state.RUNNING:
-                msg = _("Instance %s rebooted successfully.") % instance_name
-                LOG.info(msg)
+                LOG.info(_("Instance rebooted successfully."),
+                         instance=instance)
                 raise utils.LoopingCallDone
 
         timer = utils.LoopingCall(_wait_for_reboot)
@@ -688,7 +692,25 @@ class LibvirtConnection(driver.ComputeDriver):
 
     @exception.wrap_exception()
     def poll_unconfirmed_resizes(self, resize_confirm_window):
-        pass
+        """Poll for unconfirmed resizes.
+
+        Look for any unconfirmed resizes that are older than
+        `resize_confirm_window` and automatically confirm them.
+        """
+        ctxt = nova_context.get_admin_context()
+        migrations = db.migration_get_all_unconfirmed(ctxt,
+            resize_confirm_window)
+
+        migrations_info = dict(migration_count=len(migrations),
+                confirm_window=FLAGS.resize_confirm_window)
+
+        if migrations_info["migration_count"] > 0:
+            LOG.info(_("Found %(migration_count)d unconfirmed migrations "
+                    "older than %(confirm_window)d seconds") % migrations_info)
+
+        for migration in migrations:
+            LOG.info(_("Automatically confirming migration %d"), migration.id)
+            self.compute_api.confirm_resize(ctxt, migration.instance_uuid)
 
     # NOTE(ilyaalekseyev): Implementation like in multinics
     # for xenapi(tr3buchet)
@@ -703,7 +725,7 @@ class LibvirtConnection(driver.ComputeDriver):
                            block_device_info=block_device_info)
 
         domain = self._create_new_domain(xml)
-        LOG.debug(_("instance is running"), instance=instance)
+        LOG.debug(_("Instance is running"), instance=instance)
         self.firewall_driver.apply_instance_filter(instance, network_info)
 
         def _wait_for_boot():
@@ -768,7 +790,7 @@ class LibvirtConnection(driver.ComputeDriver):
             fpath = self._append_to_file(data, console_log)
         elif FLAGS.libvirt_type == 'lxc':
             # LXC is also special
-            LOG.info(_("Unable to read LXC console"))
+            LOG.info(_("Unable to read LXC console"), instance=instance)
         else:
             fpath = console_log
 
@@ -828,27 +850,24 @@ class LibvirtConnection(driver.ComputeDriver):
             if cow or not generating:
                 call_if_not_exists(base, fn, *args, **kwargs)
             elif generating:
-                # For raw it's quicker to generate both
-                # FIXME(p-draigbrady) the first call here is probably
-                # redundant, as it's of no benefit to cache in base?
-                call_if_not_exists(base, fn, *args, **kwargs)
-                if os.path.exists(target):
-                    os.unlink(target)
-                fn(target=target, *args, **kwargs)
+                # For raw it's quicker to just generate outside the cache
+                call_if_not_exists(target, fn, *args, **kwargs)
 
             if cow:
+                cow_base = base
                 if size:
-                    disk.extend(base, size)
-                libvirt_utils.create_cow_image(base, target)
+                    size_gb = size / (1024 * 1024 * 1024)
+                    cow_base += "_%d" % size_gb
+                    if not os.path.exists(cow_base):
+                        libvirt_utils.copy_image(base, cow_base)
+                        disk.extend(cow_base, size)
+                libvirt_utils.create_cow_image(cow_base, target)
             elif not generating:
                 libvirt_utils.copy_image(base, target)
                 # Resize after the copy, as it's usually much faster
                 # to make sparse updates, rather than potentially
                 # naively copying the whole image file.
                 if size:
-                    # FIXME(p-draigbrady) the first call here is probably
-                    # redundant, as it's of no benefit have full size in base?
-                    disk.extend(base, size)
                     disk.extend(target, size)
 
     @staticmethod
@@ -944,9 +963,6 @@ class LibvirtConnection(driver.ComputeDriver):
         inst_type = instance_types.get_instance_type(inst_type_id)
         if size == 0 or suffix == '.rescue':
             size = None
-            root_fname += "_sm"
-        else:
-            root_fname += "_%d" % instance['root_gb']
 
         if not self._volume_in_mapping(self.default_root_device,
                                        block_device_info):
@@ -1250,11 +1266,11 @@ class LibvirtConnection(driver.ComputeDriver):
     def to_xml(self, instance, network_info, image_meta=None, rescue=False,
                block_device_info=None):
         # TODO(termie): cache?
-        LOG.debug(_('instance %s: starting toXML method'), instance['name'])
+        LOG.debug(_('Starting toXML method'), instance=instance)
         xml_info = self._prepare_xml_info(instance, network_info, image_meta,
                                           rescue, block_device_info)
         xml = str(Template(self.libvirt_xml, searchList=[xml_info]))
-        LOG.debug(_('instance %s: finished toXML method'), instance['name'])
+        LOG.debug(_('Finished toXML method'), instance=instance)
         return xml
 
     def _lookup_by_name(self, instance_name):
@@ -1829,11 +1845,14 @@ class LibvirtConnection(driver.ComputeDriver):
                 backing_file = os.path.join(FLAGS.instances_path,
                                             '_base', info['backing_file'])
 
+                # Remove any size tags which the cache manages
+                cached_file = info['backing_file'].split('_')[0]
+
                 if not os.path.exists(backing_file):
                     self._cache_image(fn=self._fetch_image,
                         context=ctxt,
                         target=info['path'],
-                        fname=info['backing_file'],
+                        fname=cached_file,
                         cow=FLAGS.use_cow_images,
                         image_id=instance_ref['image_ref'],
                         user_id=instance_ref['user_id'],
@@ -2037,8 +2056,8 @@ class HostState(object):
         data["disk_used"] = self.connection.get_local_gb_used()
         data["disk_available"] = data["disk_total"] - data["disk_used"]
         data["host_memory_total"] = self.connection.get_memory_mb_total()
-        data["host_memory_free"] = data["host_memory_total"] - \
-            self.connection.get_memory_mb_used()
+        data["host_memory_free"] = (data["host_memory_total"] -
+                                    self.connection.get_memory_mb_used())
         data["hypervisor_type"] = self.connection.get_hypervisor_type()
         data["hypervisor_version"] = self.connection.get_hypervisor_version()
 

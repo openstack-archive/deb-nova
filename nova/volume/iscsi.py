@@ -25,13 +25,12 @@ from nova.openstack.common import cfg
 from nova import utils
 
 
-iscsi_helper_opt = \
-    cfg.StrOpt('iscsi_helper',
-               default='ietadm',
-               help='iscsi target user-land tool to use')
+iscsi_helper_opt = cfg.StrOpt('iscsi_helper',
+                              default='ietadm',
+                              help='iscsi target user-land tool to use')
 
 FLAGS = flags.FLAGS
-FLAGS.add_option(iscsi_helper_opt)
+FLAGS.register_opt(iscsi_helper_opt)
 
 
 class TargetAdmin(object):

@@ -196,6 +196,14 @@ class VirtualInterfaceMacAddressException(NovaException):
                 "with unique mac address failed")
 
 
+class GlanceConnectionFailed(NovaException):
+    message = _("Connection to glance failed") + ": %(reason)s"
+
+
+class MelangeConnectionFailed(NovaException):
+    message = _("Connection to melange failed") + ": %(reason)s"
+
+
 class NotAuthorized(NovaException):
     message = _("Not authorized.")
 
@@ -841,6 +849,14 @@ class ProjectExists(Duplicate):
 
 class InstanceExists(Duplicate):
     message = _("Instance %(name)s already exists.")
+
+
+class InstanceTypeExists(Duplicate):
+    message = _("Instance Type %(name)s already exists.")
+
+
+class VolumeTypeExists(Duplicate):
+    message = _("Volume Type %(name)s already exists.")
 
 
 class InvalidSharedStorage(NovaException):

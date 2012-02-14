@@ -35,7 +35,6 @@ from nova import utils
 from nova.api.ec2 import cloud
 from nova.compute import power_state
 from nova.compute import vm_states
-from nova.virt.disk import api as disk
 from nova.virt import images
 from nova.virt import driver
 from nova.virt.libvirt import connection
@@ -216,12 +215,11 @@ class CacheConcurrencyTestCase(test.TestCase):
 
         self.stubs.Set(os.path, 'exists', fake_exists)
         self.stubs.Set(utils, 'execute', fake_execute)
+        self.stubs.Set(connection.disk, 'extend', fake_extend)
         connection.libvirt_utils = fake_libvirt_utils
-        connection.disk.extend = fake_extend
 
     def tearDown(self):
         connection.libvirt_utils = libvirt_utils
-        connection.disk.extend = disk.extend
         super(CacheConcurrencyTestCase, self).tearDown()
 
     def test_same_fname_concurrency(self):
@@ -301,11 +299,10 @@ class LibvirtConnTestCase(test.TestCase):
         def fake_extend(image, size):
             pass
 
-        connection.disk.extend = fake_extend
+        self.stubs.Set(connection.disk, 'extend', fake_extend)
 
     def tearDown(self):
         connection.libvirt_utils = libvirt_utils
-        connection.disk.extend = disk.extend
         super(LibvirtConnTestCase, self).tearDown()
 
     test_instance = {'memory_kb': '1024000',
@@ -942,8 +939,7 @@ class LibvirtConnTestCase(test.TestCase):
         """Confirms pre_block_migration works correctly."""
         # Replace instances_path since this testcase creates tmpfile
         tmpdir = tempfile.mkdtemp()
-        store = FLAGS.instances_path
-        FLAGS.instances_path = tmpdir
+        self.flags(instances_path=tmpdir)
 
         # Test data
         instance_ref = db.instance_create(self.context, self.test_instance)
@@ -963,8 +959,6 @@ class LibvirtConnTestCase(test.TestCase):
 
         shutil.rmtree(tmpdir)
         db.instance_destroy(self.context, instance_ref['id'])
-        # Restore FLAGS.instances_path
-        FLAGS.instances_path = store
 
     @test.skip_if(missing_libvirt(), "Test requires libvirt")
     def test_get_instance_disk_info_works_correctly(self):
@@ -1926,17 +1920,34 @@ disk size: 4.4M''', ''))
             os.unlink(dst_path)
 
     def test_get_fs_info(self):
-        # Use a 1024-byte block size (df -k) because OS X does not support
-        # the -B flag
-        blocksize = 1024
-        stdout, stderr = utils.execute('df', '-k', '/tmp')
-        info_line = ' '.join(stdout.split('\n')[1:])
-        _dev, total, used, free, _percentage, _mntpnt = info_line.split()
 
-        fs_info = libvirt_utils.get_fs_info('/tmp')
-        self.assertEquals(int(total) * blocksize, fs_info['total'])
-        self.assertEquals(int(free) * blocksize, fs_info['free'])
-        self.assertEquals(int(used) * blocksize, fs_info['used'])
+        class FakeStatResult(object):
+
+            def __init__(self):
+                self.f_bsize = 4096
+                self.f_frsize = 4096
+                self.f_blocks = 2000
+                self.f_bfree = 1000
+                self.f_bavail = 900
+                self.f_files = 2000
+                self.f_ffree = 1000
+                self.f_favail = 900
+                self.f_flag = 4096
+                self.f_namemax = 255
+
+        self.path = None
+
+        def fake_statvfs(path):
+            self.path = path
+            return FakeStatResult()
+
+        self.stubs.Set(os, 'statvfs', fake_statvfs)
+
+        fs_info = libvirt_utils.get_fs_info('/some/file/path')
+        self.assertEquals('/some/file/path', self.path)
+        self.assertEquals(8192000, fs_info['total'])
+        self.assertEquals(3686400, fs_info['free'])
+        self.assertEquals(4096000, fs_info['used'])
 
     def test_fetch_image(self):
         self.mox.StubOutWithMock(images, 'fetch')

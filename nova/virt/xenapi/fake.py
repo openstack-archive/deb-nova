@@ -446,6 +446,35 @@ class SessionBase(object):
             db_ref['xenstore_data'] = {}
         db_ref['xenstore_data'][key] = value
 
+    def VDI_remove_from_other_config(self, _1, vdi_ref, key):
+        db_ref = _db_content['VDI'][vdi_ref]
+        if not 'other_config' in db_ref:
+            return
+        db_ref['other_config'][key] = None
+
+    def VDI_add_to_other_config(self, _1, vdi_ref, key, value):
+        db_ref = _db_content['VDI'][vdi_ref]
+        if not 'other_config' in db_ref:
+            db_ref['other_config'] = {}
+        db_ref['other_config'][key] = value
+
+    def VDI_copy(self, _1, vdi_to_copy_ref, sr_ref):
+        db_ref = _db_content['VDI'][vdi_to_copy_ref]
+        name_label = db_ref['name_label']
+        read_only = db_ref['read_only']
+        sharable = db_ref['sharable']
+        vdi_ref = create_vdi(name_label, read_only, sr_ref, sharable)
+        return vdi_ref
+
+    def VDI_clone(self, _1, vdi_to_clone_ref):
+        db_ref = _db_content['VDI'][vdi_to_clone_ref]
+        name_label = db_ref['name_label']
+        read_only = db_ref['read_only']
+        sr_ref = db_ref['SR']
+        sharable = db_ref['sharable']
+        vdi_ref = create_vdi(name_label, read_only, sr_ref, sharable)
+        return vdi_ref
+
     def host_compute_free_memory(self, _1, ref):
         #Always return 12GB available
         return 12 * 1024 * 1024 * 1024
@@ -456,6 +485,8 @@ class SessionBase(object):
         elif (plugin, method) == ('glance', 'copy_kernel_vdi'):
             return ''
         elif (plugin, method) == ('glance', 'upload_vhd'):
+            return ''
+        elif (plugin, method) == ('glance', 'create_kernel_ramdisk'):
             return ''
         elif (plugin, method) == ('migration', 'move_vhds_into_sr'):
             return ''
@@ -498,9 +529,9 @@ class SessionBase(object):
 
     def _login(self, method, params):
         self._session = str(uuid.uuid4())
-        _db_content['session'][self._session] = \
-                                {'uuid': str(uuid.uuid4()),
-                                 'this_host': _db_content['host'].keys()[0]}
+        _session_info = {'uuid': str(uuid.uuid4()),
+                         'this_host': _db_content['host'].keys()[0]}
+        _db_content['session'][self._session] = _session_info
 
     def _logout(self):
         s = self._session
@@ -621,11 +652,11 @@ class SessionBase(object):
         expected = is_sr_create and 10 or is_vlan_create and 4 or 2
         self._check_arg_count(params, expected)
         (cls, _) = name.split('.')
-        ref = is_sr_create and \
-              _create_sr(cls, params) or \
-              is_vlan_create and \
-              _create_vlan(params[1], params[2], params[3]) or \
-              _create_object(cls, params[1])
+        ref = (is_sr_create and
+               _create_sr(cls, params) or
+               is_vlan_create and
+               _create_vlan(params[1], params[2], params[3]) or
+               _create_object(cls, params[1]))
 
         # Call hook to provide any fixups needed (ex. creating backrefs)
         after_hook = 'after_%s_create' % cls

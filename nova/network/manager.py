@@ -57,7 +57,6 @@ from eventlet import greenpool
 import netaddr
 
 from nova.compute import api as compute_api
-from nova.compute import instance_types
 from nova import context
 from nova import db
 from nova import exception
@@ -162,7 +161,7 @@ network_opts = [
 
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(network_opts)
+FLAGS.register_opts(network_opts)
 
 
 class AddressAlreadyAllocated(exception.Error):
@@ -187,8 +186,8 @@ class RPCAllocateFixedIP(object):
         for network in networks:
             address = None
             if requested_networks is not None:
-                for address in (fixed_ip for (uuid, fixed_ip) in \
-                              requested_networks if network['uuid'] == uuid):
+                for address in (fixed_ip for (uuid, fixed_ip) in
+                                requested_networks if network['uuid'] == uuid):
                     break
 
             # NOTE(vish): if we are not multi_host pass to the network host
@@ -291,8 +290,8 @@ class FloatingIP(object):
         # call the next inherited class's allocate_for_instance()
         # which is currently the NetworkManager version
         # do this first so fixed ip is already allocated
-        nw_info = \
-               super(FloatingIP, self).allocate_for_instance(context, **kwargs)
+        nw_info = super(FloatingIP, self).allocate_for_instance(context,
+                                                                **kwargs)
         if FLAGS.auto_assign_floating_ip:
             # allocate a floating ip
             floating_address = self.allocate_floating_ip(context, project_id)
@@ -852,13 +851,13 @@ class NetworkManager(manager.SchedulerDependentManager):
 
         rpc.called by network_api
         """
-        instance_id = kwargs.pop('instance_id')
-        instance_uuid = kwargs.pop('instance_uuid')
-        host = kwargs.pop('host')
-        project_id = kwargs.pop('project_id')
-        type_id = kwargs.pop('instance_type_id')
+        instance_id = kwargs['instance_id']
+        instance_uuid = kwargs['instance_uuid']
+        host = kwargs['host']
+        project_id = kwargs['project_id']
+        rxtx_factor = kwargs['rxtx_factor']
         requested_networks = kwargs.get('requested_networks')
-        vpn = kwargs.pop('vpn')
+        vpn = kwargs['vpn']
         admin_context = context.elevated()
         LOG.debug(_("network allocations for instance %s"), instance_id,
                                                             context=context)
@@ -870,7 +869,7 @@ class NetworkManager(manager.SchedulerDependentManager):
                                  host, networks, vpn=vpn,
                                  requested_networks=requested_networks)
         return self.get_instance_nw_info(context, instance_id, instance_uuid,
-                                         type_id, host)
+                                         rxtx_factor, host)
 
     @wrap_check_policy
     def deallocate_for_instance(self, context, **kwargs):
@@ -881,8 +880,9 @@ class NetworkManager(manager.SchedulerDependentManager):
         """
         instance_id = kwargs.pop('instance_id')
         try:
-            fixed_ips = kwargs.get('fixed_ips') or \
-                  self.db.fixed_ip_get_by_instance(context, instance_id)
+            fixed_ips = (kwargs.get('fixed_ips') or
+                         self.db.fixed_ip_get_by_instance(context,
+                                                          instance_id))
         except exception.FixedIpNotFoundForInstance:
             fixed_ips = []
         LOG.debug(_("network deallocation for instance |%s|"), instance_id,
@@ -896,7 +896,7 @@ class NetworkManager(manager.SchedulerDependentManager):
 
     @wrap_check_policy
     def get_instance_nw_info(self, context, instance_id, instance_uuid,
-                             instance_type_id, host):
+                             rxtx_factor, host):
         """Creates network info list for instance.
 
         called by allocate_for_instance and network_api
@@ -906,7 +906,6 @@ class NetworkManager(manager.SchedulerDependentManager):
         and info = dict containing pertinent networking data
         """
         vifs = self.db.virtual_interface_get_by_instance(context, instance_id)
-        instance_type = instance_types.get_instance_type(instance_type_id)
         networks = {}
 
         for vif in vifs:
@@ -916,13 +915,13 @@ class NetworkManager(manager.SchedulerDependentManager):
 
         # update instance network cache and return network_info
         nw_info = self.build_network_info_model(context, vifs, networks,
-                                                         instance_type, host)
+                                                         rxtx_factor, host)
         self.db.instance_info_cache_update(context, instance_uuid,
                                           {'network_info': nw_info.as_cache()})
         return nw_info
 
     def build_network_info_model(self, context, vifs, networks,
-                                 instance_type, instance_host):
+                                 rxtx_factor, instance_host):
         """Builds a NetworkInfo object containing all network information
         for an instance"""
         nw_info = network_model.NetworkInfo()
@@ -943,7 +942,7 @@ class NetworkManager(manager.SchedulerDependentManager):
 
             # if rxtx_cap data are not set everywhere, set to none
             try:
-                rxtx_cap = network['rxtx_base'] * instance_type['rxtx_factor']
+                rxtx_cap = network['rxtx_base'] * rxtx_factor
             except (TypeError, KeyError):
                 rxtx_cap = None
 
@@ -1519,8 +1518,8 @@ class FlatManager(NetworkManager):
         for network in networks:
             address = None
             if requested_networks is not None:
-                for address in (fixed_ip for (uuid, fixed_ip) in \
-                              requested_networks if network['uuid'] == uuid):
+                for address in (fixed_ip for (uuid, fixed_ip) in
+                                requested_networks if network['uuid'] == uuid):
                     break
 
             self.allocate_fixed_ip(context, instance_id,

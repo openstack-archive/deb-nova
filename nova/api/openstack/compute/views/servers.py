@@ -136,7 +136,7 @@ class ViewBuilder(common.ViewBuilder):
     @staticmethod
     def _get_metadata(instance):
         metadata = instance.get("metadata", [])
-        return dict((item['key'], str(item['value'])) for item in metadata)
+        return dict((item['key'], item['value']) for item in metadata)
 
     @staticmethod
     def _get_vm_state(instance):
@@ -146,8 +146,10 @@ class ViewBuilder(common.ViewBuilder):
     @staticmethod
     def _get_host_id(instance):
         host = instance.get("host")
+        project = str(instance.get("project_id"))
         if host:
-            return hashlib.sha224(host).hexdigest()  # pylint: disable=E1101
+            sha_hash = hashlib.sha224(project + host)  # pylint: disable=E1101
+            return sha_hash.hexdigest()
 
     def _get_addresses(self, request, instance):
         context = request.environ["nova.context"]

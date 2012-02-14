@@ -88,7 +88,7 @@ ldap_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(ldap_opts)
+FLAGS.register_opts(ldap_opts)
 
 LOG = logging.getLogger("nova.ldapdriver")
 
@@ -223,6 +223,8 @@ class LdapDriver(object):
     def get_user(self, uid):
         """Retrieve user by id"""
         attr = self.__get_ldap_user(uid)
+        if attr is None:
+            raise exception.LDAPUserNotFound(user_id=uid)
         return self.__to_user(attr)
 
     @sanitize
@@ -495,7 +497,10 @@ class LdapDriver(object):
 
     def __user_exists(self, uid):
         """Check if user exists"""
-        return self.get_user(uid) is not None
+        try:
+            return self.get_user(uid) is not None
+        except exception.LDAPUserNotFound:
+            return False
 
     def __ldap_user_exists(self, uid):
         """Check if the user exists in ldap"""
@@ -573,7 +578,7 @@ class LdapDriver(object):
     def __role_to_dn(self, role, project_id=None):
         """Convert role to corresponding dn"""
         if project_id is None:
-            return FLAGS.__getitem__("ldap_%s" % role).value
+            return FLAGS["ldap_%s" % role]
         else:
             project_dn = self.__project_to_dn(project_id)
             return 'cn=%s,%s' % (role, project_dn)
@@ -713,8 +718,8 @@ class LdapDriver(object):
         """Convert ldap attributes to User object"""
         if attr is None:
             return None
-        if ('accessKey' in attr.keys() and 'secretKey' in attr.keys() \
-            and LdapDriver.isadmin_attribute in attr.keys()):
+        if ('accessKey' in attr.keys() and 'secretKey' in attr.keys() and
+            LdapDriver.isadmin_attribute in attr.keys()):
             return {
                 'id': attr[FLAGS.ldap_user_id_attribute][0],
                 'name': attr[FLAGS.ldap_user_name_attribute][0],

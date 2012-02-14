@@ -211,7 +211,8 @@ class _VirtDriverTestCase(test.TestCase):
 
     @catch_notimplementederror
     def test_destroy_instance_nonexistant(self):
-        fake_instance = {'id': 42, 'name': 'I just made this up!'}
+        fake_instance = {'id': 42, 'name': 'I just made this up!',
+                         'uuid': 'bda5fb9e-b347-40e8-8256-42397848cb00'}
         network_info = test_utils.get_test_network_info()
         self.connection.destroy(fake_instance, network_info)
 
@@ -442,15 +443,19 @@ class LibvirtConnTestCase(_VirtDriverTestCase):
 
         # Point _VirtDriverTestCase at the right module
         self.driver_module = nova.virt.libvirt.connection
-        FLAGS.firewall_driver = nova.virt.libvirt.firewall.drivers[0]
         super(LibvirtConnTestCase, self).setUp()
-        FLAGS.rescue_image_id = "2"
-        FLAGS.rescue_kernel_id = "3"
-        FLAGS.rescue_ramdisk_id = None
+        self.flags(firewall_driver=nova.virt.libvirt.firewall.drivers[0],
+                   rescue_image_id="2",
+                   rescue_kernel_id="3",
+                   rescue_ramdisk_id=None)
+
+        def fake_extend(image, size):
+            pass
+
+        self.stubs.Set(nova.virt.libvirt.connection.disk,
+                       'extend', fake_extend)
 
     def tearDown(self):
-        super(LibvirtConnTestCase, self).tearDown()
-
         # Restore libvirt
         import nova.virt.libvirt.connection
         import nova.virt.libvirt.firewall
@@ -459,3 +464,4 @@ class LibvirtConnTestCase(_VirtDriverTestCase):
             nova.virt.libvirt.connection.libvirt = self.saved_libvirt
             nova.virt.libvirt.connection.libvirt_utils = self.saved_libvirt
             nova.virt.libvirt.firewall.libvirt = self.saved_libvirt
+        super(LibvirtConnTestCase, self).tearDown()

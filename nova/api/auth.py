@@ -28,14 +28,13 @@ from nova.openstack.common import cfg
 from nova import wsgi
 
 
-use_forwarded_for_opt = \
-    cfg.BoolOpt('use_forwarded_for',
-                default=False,
-                help='Treat X-Forwarded-For as the canonical remote address. '
-                     'Only enable this if you have a sanitizing proxy.')
+use_forwarded_for_opt = cfg.BoolOpt('use_forwarded_for',
+        default=False,
+        help='Treat X-Forwarded-For as the canonical remote address. '
+             'Only enable this if you have a sanitizing proxy.')
 
 FLAGS = flags.FLAGS
-FLAGS.add_option(use_forwarded_for_opt)
+FLAGS.register_opt(use_forwarded_for_opt)
 
 
 class InjectContext(wsgi.Middleware):
@@ -75,7 +74,6 @@ class NovaKeystoneContext(wsgi.Middleware):
                                      req.headers.get('X_STORAGE_TOKEN'))
 
         # Build a context, including the auth_token...
-        remote_address = getattr(req, 'remote_address', '127.0.0.1')
         remote_address = req.remote_addr
         if FLAGS.use_forwarded_for:
             remote_address = req.headers.get('X-Forwarded-For', remote_address)

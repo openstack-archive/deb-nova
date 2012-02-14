@@ -20,10 +20,13 @@
 """RequestContext: context for requests that persist through all of nova."""
 
 import copy
-import uuid
 
 from nova import local
 from nova import utils
+
+
+def generate_request_id():
+    return 'req-' + str(utils.gen_uuid())
 
 
 class RequestContext(object):
@@ -51,6 +54,8 @@ class RequestContext(object):
         self.is_admin = is_admin
         if self.is_admin is None:
             self.is_admin = 'admin' in [x.lower() for x in self.roles]
+        elif self.is_admin and 'admin' not in self.roles:
+            self.roles.append('admin')
         self.read_deleted = read_deleted
         self.remote_address = remote_address
         if not timestamp:
@@ -59,7 +64,7 @@ class RequestContext(object):
             timestamp = utils.parse_strtime(timestamp)
         self.timestamp = timestamp
         if not request_id:
-            request_id = 'req-' + str(utils.gen_uuid())
+            request_id = generate_request_id()
         self.request_id = request_id
         self.auth_token = auth_token
         self.strategy = strategy
@@ -86,6 +91,9 @@ class RequestContext(object):
         """Return a version of this context with admin flag set."""
         context = copy.copy(self)
         context.is_admin = True
+
+        if 'admin' not in context.roles:
+            context.roles.append('admin')
 
         if read_deleted is not None:
             context.read_deleted = read_deleted

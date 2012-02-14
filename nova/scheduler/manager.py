@@ -36,13 +36,12 @@ from nova import utils
 
 LOG = logging.getLogger('nova.scheduler.manager')
 
-scheduler_driver_opt = \
-    cfg.StrOpt('scheduler_driver',
-               default='nova.scheduler.multi.MultiScheduler',
-               help='Default driver to use for the scheduler')
+scheduler_driver_opt = cfg.StrOpt('scheduler_driver',
+        default='nova.scheduler.multi.MultiScheduler',
+        help='Default driver to use for the scheduler')
 
 FLAGS = flags.FLAGS
-FLAGS.add_option(scheduler_driver_opt)
+FLAGS.register_opt(scheduler_driver_opt)
 
 
 class SchedulerManager(manager.Manager):

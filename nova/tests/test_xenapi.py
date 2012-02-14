@@ -399,7 +399,14 @@ class XenAPIVMTestCase(test.TestCase):
     def _check_vdis(self, start_list, end_list):
         for vdi_ref in end_list:
             if not vdi_ref in start_list:
-                self.fail('Found unexpected VDI:%s' % vdi_ref)
+                vdi_rec = xenapi_fake.get_record('VDI', vdi_ref)
+                # If the cache is turned on then the base disk will be
+                # there even after the cleanup
+                if 'other_config' in vdi_rec:
+                    if vdi_rec['other_config']['image-id'] is None:
+                        self.fail('Found unexpected VDI:%s' % vdi_ref)
+                else:
+                    self.fail('Found unexpected VDI:%s' % vdi_ref)
 
     def _test_spawn(self, image_ref, kernel_id, ramdisk_id,
                     instance_type_id="3", os_type="linux",
@@ -642,7 +649,7 @@ class XenAPIVMTestCase(test.TestCase):
                           instance_uuid="00000000-0000-0000-0000-000000000000",
                           host=FLAGS.host,
                           vpn=None,
-                          instance_type_id=1,
+                          rxtx_factor=3,
                           project_id=self.project_id)
         self._test_spawn(glance_stubs.FakeGlance.IMAGE_MACHINE,
                          glance_stubs.FakeGlance.IMAGE_KERNEL,

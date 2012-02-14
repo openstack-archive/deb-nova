@@ -58,7 +58,7 @@ LOG = logging.getLogger('nova.virt.baremetal.proxy')
 
 FLAGS = flags.FLAGS
 
-global_opts = [
+baremetal_opts = [
     cfg.StrOpt('baremetal_injected_network_template',
                 default=utils.abspath('virt/interfaces.template'),
                 help='Template file for injected network'),
@@ -73,7 +73,7 @@ global_opts = [
                  help='Whether to allow in project network traffic')
     ]
 
-FLAGS.add_options(global_opts)
+FLAGS.register_opts(baremetal_opts)
 
 
 def get_connection(read_only):
@@ -334,11 +334,6 @@ class ProxyConnection(driver.ComputeDriver):
                 libvirt_utils.create_cow_image(base, target)
             else:
                 libvirt_utils.copy_image(base, target)
-
-    def _fetch_image(self, context, target, image_id, user_id, project_id,
-                     size=None):
-        """Grab image and optionally attempt to resize it"""
-        images.fetch_to_raw(context, image_id, target, user_id, project_id)
 
     def _create_image(self, context, inst, xml, suffix='',
                       disk_images=None, network_info=None,

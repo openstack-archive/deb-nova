@@ -72,7 +72,7 @@ xenapi_vmops_opts = [
     ]
 
 FLAGS = flags.FLAGS
-FLAGS.add_options(xenapi_vmops_opts)
+FLAGS.register_opts(xenapi_vmops_opts)
 
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 
@@ -107,7 +107,7 @@ class VMOps(object):
         self.poll_rescue_last_ran = None
         VMHelper.XenAPI = self.XenAPI
         if FLAGS.firewall_driver not in firewall.drivers:
-            FLAGS['firewall_driver'].SetDefault(firewall.drivers[0])
+            FLAGS.set_default('firewall_driver', firewall.drivers[0])
         fw_class = utils.import_class(FLAGS.firewall_driver)
         self.firewall_driver = fw_class(xenapi_session=self._session)
         vif_impl = utils.import_class(FLAGS.xenapi_vif_driver)
@@ -186,7 +186,7 @@ class VMOps(object):
 
     def _create_disks(self, context, instance, image_meta):
         disk_image_type = VMHelper.determine_disk_image_type(image_meta)
-        vdis = VMHelper.fetch_image(context, self._session,
+        vdis = VMHelper.create_image(context, self._session,
                 instance, instance.image_ref,
                 instance.user_id, instance.project_id,
                 disk_image_type)
@@ -279,11 +279,11 @@ class VMOps(object):
         ramdisk = None
         try:
             if instance.kernel_id:
-                kernel = VMHelper.fetch_image(context, self._session,
+                kernel = VMHelper.create_kernel_image(context, self._session,
                         instance, instance.kernel_id, instance.user_id,
                         instance.project_id, vm_utils.ImageType.KERNEL)[0]
             if instance.ramdisk_id:
-                ramdisk = VMHelper.fetch_image(context, self._session,
+                ramdisk = VMHelper.create_kernel_image(context, self._session,
                         instance, instance.ramdisk_id, instance.user_id,
                         instance.project_id, vm_utils.ImageType.RAMDISK)[0]
 
@@ -369,7 +369,7 @@ class VMOps(object):
         # DISK_ISO needs two VBDs: the ISO disk and a blank RW disk
         if disk_image_type == vm_utils.ImageType.DISK_ISO:
             LOG.debug("detected ISO image type, going to create blank VM for "
-                  "install")
+                      "install")
 
             cd_vdi_ref = first_vdi_ref
             first_vdi_ref = VMHelper.fetch_blank_disk(session=self._session,
@@ -477,24 +477,25 @@ class VMOps(object):
         LOG.debug(_('Starting VM %s...'), vm_ref)
         self._start(instance, vm_ref)
         instance_name = instance.name
-        LOG.info(_('Spawning VM %(instance_name)s created %(vm_ref)s.')
+        instance_uuid = instance.uuid
+        LOG.info(_('Spawning VM %(instance_uuid)s created %(vm_ref)s.')
                  % locals())
 
         ctx = nova_context.get_admin_context()
         agent_build = db.agent_build_get_by_triple(ctx, 'xen',
                               instance.os_type, instance.architecture)
         if agent_build:
-            LOG.info(_('Latest agent build for %(hypervisor)s/%(os)s' + \
+            LOG.info(_('Latest agent build for %(hypervisor)s/%(os)s'
                        '/%(architecture)s is %(version)s') % agent_build)
         else:
-            LOG.info(_('No agent build found for %(hypervisor)s/%(os)s' + \
+            LOG.info(_('No agent build found for %(hypervisor)s/%(os)s'
                        '/%(architecture)s') % {
                         'hypervisor': 'xen',
                         'os': instance.os_type,
                         'architecture': instance.architecture})
 
         # Wait for boot to finish
-        LOG.debug(_('Instance %s: waiting for running'), instance_name)
+        LOG.debug(_('Instance %s: waiting for running'), instance_uuid)
         expiration = time.time() + FLAGS.xenapi_running_timeout
         while time.time() < expiration:
             state = self.get_info(instance_name)['state']
@@ -503,7 +504,7 @@ class VMOps(object):
 
             greenthread.sleep(0.5)
 
-        LOG.debug(_('Instance %s: running'), instance_name)
+        LOG.debug(_('Instance %s: running'), instance_uuid)
 
         # Update agent, if necessary
         # This also waits until the agent starts
@@ -512,8 +513,8 @@ class VMOps(object):
         if version:
             LOG.info(_('Instance agent version: %s') % version)
 
-        if version and agent_build and \
-           cmp_version(version, agent_build['version']) < 0:
+        if (version and agent_build and
+            cmp_version(version, agent_build['version']) < 0):
             LOG.info(_('Updating Agent to %s') % agent_build['version'])
             self.agent_update(instance, agent_build['url'],
                           agent_build['md5hash'])
@@ -547,7 +548,7 @@ class VMOps(object):
                 try:
                     vdi_ref = self._session.call_xenapi('VDI.get_by_uuid',
                             vdi_to_remove)
-                    LOG.debug(_('Removing VDI %(vdi_ref)s' +
+                    LOG.debug(_('Removing VDI %(vdi_ref)s'
                                 '(uuid:%(vdi_to_remove)s)'), locals())
                     VMHelper.destroy_vdi(self._session, vdi_ref)
                 except self.XenAPI.Failure:
@@ -634,8 +635,8 @@ class VMOps(object):
         """
         template_vm_ref = None
         try:
-            template_vm_ref, template_vdi_uuids = \
-                    self._create_snapshot(instance)
+            _snapshot_info = self._create_snapshot(instance)
+            template_vm_ref, template_vdi_uuids = _snapshot_info
             # call plugin to ship snapshot off to glance
             VMHelper.upload_image(context,
                     self._session, instance, template_vdi_uuids, image_id)
@@ -644,13 +645,15 @@ class VMOps(object):
                 self._destroy(instance, template_vm_ref,
                         shutdown=False, destroy_kernel_ramdisk=False)
 
-        logging.debug(_("Finished snapshot and upload for VM %s"), instance)
+        LOG.debug(_("Finished snapshot and upload for VM %s"),
+                instance['uuid'])
 
     def _create_snapshot(self, instance):
         #TODO(sirp): Add quiesce and VSS locking support when Windows support
         # is added
 
-        logging.debug(_("Starting snapshot for VM %s"), instance['uuid'])
+        instance_uuid = instance.uuid
+        LOG.debug(_("Starting snapshot for VM %s") % instance_uuid)
         vm_ref = VMHelper.lookup(self._session, instance.name)
 
         label = "%s-snapshot" % instance.name
@@ -659,8 +662,8 @@ class VMOps(object):
                     self._session, instance, vm_ref, label)
             return template_vm_ref, template_vdi_uuids
         except self.XenAPI.Failure, exc:
-            logging.error(_("Unable to Snapshot %(vm_ref)s: %(exc)s")
-                    % locals())
+            LOG.error(_("Unable to Snapshot instance %(instance_uuid)s: "
+                    "%(exc)s") % locals())
             return
 
     def _migrate_vhd(self, instance, vdi_uuid, dest, sr_path):
@@ -727,27 +730,27 @@ class VMOps(object):
         template_vdi_uuids = template_vm_ref = None
         try:
             # 1. Create Snapshot
-            template_vm_ref, template_vdi_uuids = \
-                    self._create_snapshot(instance)
+            _snapshot_info = self._create_snapshot(instance)
+            template_vm_ref, template_vdi_uuids = _snapshot_info
             self._update_instance_progress(context, instance,
                                            step=1,
                                            total_steps=RESIZE_TOTAL_STEPS)
 
             base_copy_uuid = template_vdi_uuids['image']
-            vdi_ref, vm_vdi_rec = \
-                    VMHelper.get_vdi_for_vm_safely(self._session, vm_ref)
+            _vdi_info = VMHelper.get_vdi_for_vm_safely(self._session, vm_ref)
+            vdi_ref, vm_vdi_rec = _vdi_info
             cow_uuid = vm_vdi_rec['uuid']
 
             sr_path = VMHelper.get_sr_path(self._session)
 
-            if instance['auto_disk_config'] and \
-               instance['root_gb'] > instance_type['root_gb']:
+            if (instance['auto_disk_config'] and
+                instance['root_gb'] > instance_type['root_gb']):
                 # Resizing disk storage down
                 old_gb = instance['root_gb']
                 new_gb = instance_type['root_gb']
 
                 LOG.debug(_("Resizing down VDI %(cow_uuid)s from "
-                          "%(old_gb)dGB to %(new_gb)dGB") % locals())
+                            "%(old_gb)dGB to %(new_gb)dGB") % locals())
 
                 # 2. Power down the instance before resizing
                 self._shutdown(instance, vm_ref, hard=False)
@@ -864,7 +867,6 @@ class VMOps(object):
                                                  vdi_ref)
         virtual_size = int(virtual_size)
 
-        instance_name = instance.name
         old_gb = virtual_size / (1024 * 1024 * 1024)
         new_gb = instance.root_gb
 
@@ -878,7 +880,7 @@ class VMOps(object):
                 resize_func_name = 'VDI.resize_online'
             self._session.call_xenapi(resize_func_name, vdi_ref,
                     str(new_disk_size))
-            LOG.debug(_("Resize instance %s complete") % (instance.name))
+            LOG.debug(_("Resize instance %s complete") % (instance.uuid))
 
     def reboot(self, instance, reboot_type):
         """Reboot VM instance."""
@@ -1017,14 +1019,13 @@ class VMOps(object):
 
     def _shutdown(self, instance, vm_ref, hard=True):
         """Shutdown an instance."""
+        instance_uuid = instance.uuid
         state = self.get_info(instance['name'])['state']
         if state == power_state.SHUTDOWN:
-            instance_name = instance.name
-            LOG.warn(_("VM %(instance_name)s already halted,"
+            LOG.warn(_("VM %(instance_uuid)s already halted,"
                     "skipping shutdown...") % locals())
             return
 
-        instance_uuid = instance['uuid']
         LOG.debug(_("Shutting down VM for Instance %(instance_uuid)s")
                   % locals())
         try:
@@ -1372,8 +1373,22 @@ class VMOps(object):
                     "older than %(confirm_window)d seconds") % migrations_info)
 
         for migration in migrations:
-            LOG.info(_("Automatically confirming migration %d"), migration.id)
-            self.compute_api.confirm_resize(ctxt, migration.instance_uuid)
+            LOG.info(_("Automatically confirming migration %d"),
+                     migration['id'])
+            try:
+                instance = self.compute_api.get(ctxt, migration.instance_uuid)
+            except exception.InstanceNotFound:
+                LOG.warn(_("Instance for migration %d not found, skipping"),
+                         migration.id)
+
+                # NOTE(sirp): setting to error so we don't keep trying to auto
+                # confirm this resize
+                db.migration_update(
+                    ctxt, migration['id'], {'status': 'error'})
+
+                continue
+            else:
+                self.compute_api.confirm_resize(ctxt, instance)
 
     def get_info(self, instance):
         """Return data about VM instance."""
@@ -1429,8 +1444,7 @@ class VMOps(object):
         """Return connection info for a vnc console."""
         vm_ref = self._get_vm_opaque_ref(instance)
         session_id = self._session.get_session_id()
-        path = "/console?ref=%s&session_id=%s"\
-                   % (str(vm_ref), session_id)
+        path = "/console?ref=%s&session_id=%s" % (str(vm_ref), session_id)
 
         # NOTE: XS5.6sp2+ use http over port 80 for xenapi com
         return {'host': FLAGS.vncserver_proxyclient_address, 'port': 80,
@@ -1485,7 +1499,7 @@ class VMOps(object):
             self._session.call_xenapi("VM.get_record", vm_ref)
         else:
             vm_ref = VMHelper.lookup(self._session, instance.name)
-        logging.debug(_("injecting network info to xs for vm: |%s|"), vm_ref)
+        LOG.debug(_("injecting network info to xs for vm: |%s|"), vm_ref)
 
         for (network, info) in network_info:
             location = 'vm-data/networking/%s' % info['mac'].replace(':', '')
@@ -1503,7 +1517,7 @@ class VMOps(object):
     def create_vifs(self, vm_ref, instance, network_info):
         """Creates vifs for an instance."""
 
-        logging.debug(_("creating vif(s) for vm: |%s|"), vm_ref)
+        LOG.debug(_("creating vif(s) for vm: |%s|"), vm_ref)
 
         # this function raises if vm_ref is not a vm_opaque_ref
         self._session.call_xenapi("VM.get_record", vm_ref)
@@ -1512,11 +1526,11 @@ class VMOps(object):
             vif_rec = self.vif_driver.plug(instance, network, info,
                                            vm_ref=vm_ref, device=device)
             network_ref = vif_rec['network']
-            LOG.debug(_('Creating VIF for VM %(vm_ref)s,' \
-                ' network %(network_ref)s.') % locals())
+            LOG.debug(_('Creating VIF for VM %(vm_ref)s,'
+                        ' network %(network_ref)s.') % locals())
             vif_ref = self._session.call_xenapi('VIF.create', vif_rec)
             LOG.debug(_('Created VIF %(vif_ref)s for VM %(vm_ref)s,'
-                ' network %(network_ref)s.') % locals())
+                        ' network %(network_ref)s.') % locals())
 
     def plug_vifs(self, instance, network_info):
         """Set up VIF networking on the host."""
@@ -1544,7 +1558,7 @@ class VMOps(object):
             # NOTE(jk0): Windows hostnames can only be <= 15 chars.
             hostname = hostname[:15]
 
-        logging.debug(_("injecting hostname to xs for vm: |%s|"), vm_ref)
+        LOG.debug(_("injecting hostname to xs for vm: |%s|"), vm_ref)
         self._session.call_xenapi_request("VM.add_to_xenstore_data",
                 (vm_ref, "vm-data/hostname", hostname))
 

@@ -303,7 +303,7 @@ class ActionDeserializer(CommonDeserializer):
             raise AttributeError("No flavorRef was specified in request")
 
         if node.hasAttribute("auto_disk_config"):
-            rezise['auto_disk_config'] = node.getAttribute("auto_disk_config")
+            resize['auto_disk_config'] = node.getAttribute("auto_disk_config")
 
         return resize
 
@@ -784,7 +784,8 @@ class Controller(wsgi.Controller):
         if '_is_precooked' in server['server'].keys():
             del server['server']['_is_precooked']
         else:
-            server['server']['adminPass'] = password
+            if FLAGS.enable_instance_password:
+                server['server']['adminPass'] = password
 
         robj = wsgi.ResponseObject(server)
 
@@ -960,7 +961,7 @@ class Controller(wsgi.Controller):
 
     def _image_ref_from_req_data(self, data):
         try:
-            return data['server']['imageRef']
+            return unicode(data['server']['imageRef'])
         except (TypeError, KeyError):
             msg = _("Missing imageRef attribute")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1107,7 +1108,9 @@ class Controller(wsgi.Controller):
         view = self._view_builder.show(req, instance)
 
         # Add on the adminPass attribute since the view doesn't do it
-        view['server']['adminPass'] = password
+        # unless instance passwords are disabled
+        if FLAGS.enable_instance_password:
+            view['server']['adminPass'] = password
 
         robj = wsgi.ResponseObject(view)
         return self._add_location(robj)

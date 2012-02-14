@@ -51,7 +51,7 @@ To run a single test module:
     python nova/testing/runner.py api.test_wsgi
 
 To run a single test:
-    python nova/testing/runner.py \
+    python nova/testing/runner.py
         test_compute:ComputeTestCase.test_run_terminate
 
 """
@@ -73,7 +73,9 @@ reldir = os.path.join(os.path.dirname(__file__), '..', '..')
 absdir = os.path.abspath(reldir)
 sys.path.insert(0, absdir)
 
+from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 
 
 class _AnsiColorizer(object):
@@ -130,9 +132,9 @@ class _Win32Colorizer(object):
     See _AnsiColorizer docstring.
     """
     def __init__(self, stream):
-        from win32console import GetStdHandle, STD_OUT_HANDLE, \
-             FOREGROUND_RED, FOREGROUND_BLUE, FOREGROUND_GREEN, \
-             FOREGROUND_INTENSITY
+        from win32console import (GetStdHandle, STD_OUT_HANDLE,
+                                  FOREGROUND_RED, FOREGROUND_BLUE,
+                                  FOREGROUND_GREEN, FOREGROUND_INTENSITY)
         red, green, blue, bold = (FOREGROUND_RED, FOREGROUND_GREEN,
                                   FOREGROUND_BLUE, FOREGROUND_INTENSITY)
         self.stream = stream
@@ -341,18 +343,16 @@ class NovaTestRunner(core.TextTestRunner):
 
 
 def run():
+    flags.FLAGS.register_cli_opt(cfg.BoolOpt('hide-elapsed', default=False))
+    flags.FLAGS.register_cli_opt(cfg.BoolOpt("stop", short='x', default=False))
+    argv = flags.FLAGS(sys.argv)
     logging.setup()
+
     # If any argument looks like a test name but doesn't have "nova.tests" in
     # front of it, automatically add that so we don't have to type as much
-    show_elapsed = True
-    argv = []
-    for x in sys.argv:
-        if x.startswith('test_'):
-            argv.append('nova.tests.%s' % x)
-        elif x.startswith('--hide-elapsed'):
-            show_elapsed = False
-        else:
-            argv.append(x)
+    for i, arg in enumerate(argv):
+        if arg.startswith('test_'):
+            argv[i] = 'nova.tests.%s' % arg
 
     testdir = os.path.abspath(os.path.join("nova", "tests"))
     c = config.Config(stream=sys.stdout,
@@ -364,7 +364,7 @@ def run():
     runner = NovaTestRunner(stream=c.stream,
                             verbosity=c.verbosity,
                             config=c,
-                            show_elapsed=show_elapsed)
+                            show_elapsed=not flags.FLAGS.hide_elapsed)
     sys.exit(not core.run(config=c, testRunner=runner, argv=argv))
 
 

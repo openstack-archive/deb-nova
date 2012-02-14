@@ -3,7 +3,7 @@
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
-# Copyright 2011 Red Hat, Inc.
+# Copyright 2012 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -30,146 +30,21 @@ import os
 import socket
 import sys
 
-import gflags
-
+from nova.compat import flagfile
 from nova.openstack.common import cfg
 
 
-class FlagValues(object):
-    class Flag:
-        def __init__(self, name, value, update_default=None):
-            self.name = name
-            self.value = value
-            self._update_default = update_default
+class NovaConfigOpts(cfg.ConfigOpts):
 
-        def SetDefault(self, default):
-            if self._update_default:
-                self._update_default(self.name, default)
-
-    class ErrorCatcher:
-        def __init__(self, orig_error):
-            self.orig_error = orig_error
-            self.reset()
-
-        def reset(self):
-            self._error_msg = None
-
-        def catch(self, msg):
-            if ": --" in msg:
-                self._error_msg = msg
-            else:
-                self.orig_error(msg)
-
-        def get_unknown_arg(self, args):
-            if not self._error_msg:
-                return None
-            # Error message is e.g. "no such option: --runtime_answer"
-            a = self._error_msg[self._error_msg.rindex(": --") + 2:]
-            return filter(lambda i: i == a or i.startswith(a + "="), args)[0]
-
-    def __init__(self):
-        self._conf = cfg.ConfigOpts()
-        self._conf.disable_interspersed_args()
-        self._opts = {}
-        self.Reset()
-
-    def _parse(self):
-        if self._extra is not None:
-            return
-
-        args = gflags.FlagValues().ReadFlagsFromFiles(self._args)
-
-        extra = None
-
-        #
-        # This horrendous hack allows us to stop optparse
-        # exiting when it encounters an unknown option
-        #
-        error_catcher = self.ErrorCatcher(self._conf._oparser.error)
-        self._conf._oparser.error = error_catcher.catch
-        try:
-            while True:
-                error_catcher.reset()
-
-                extra = self._conf(args)
-
-                unknown = error_catcher.get_unknown_arg(args)
-                if not unknown:
-                    break
-
-                args.remove(unknown)
-        finally:
-            self._conf._oparser.error = error_catcher.orig_error
-
-        self._extra = extra
+    def __init__(self, *args, **kwargs):
+        super(NovaConfigOpts, self).__init__(*args, **kwargs)
+        self.disable_interspersed_args()
 
     def __call__(self, argv):
-        self.Reset()
-        self._args = argv[1:]
-        self._parse()
-        return [argv[0]] + self._extra
+        with flagfile.handle_flagfiles_managed(argv[1:]) as args:
+            return argv[:1] + super(NovaConfigOpts, self).__call__(args)
 
-    def __getattr__(self, name):
-        self._parse()
-        return getattr(self._conf, name)
-
-    def get(self, name, default):
-        value = getattr(self, name)
-        if value is not None:  # value might be '0' or ""
-            return value
-        else:
-            return default
-
-    def __contains__(self, name):
-        self._parse()
-        return hasattr(self._conf, name)
-
-    def _update_default(self, name, default):
-        self._conf.set_default(name, default)
-
-    def __iter__(self):
-        return self._conf.iterkeys()
-
-    def __getitem__(self, name):
-        self._parse()
-        if not self.__contains__(name):
-            return None
-        return self.Flag(name, getattr(self, name), self._update_default)
-
-    def Reset(self):
-        self._conf.reset()
-        self._args = []
-        self._extra = None
-
-    def ParseNewFlags(self):
-        pass
-
-    def FlagValuesDict(self):
-        self._parse()
-        ret = {}
-        for name in self._conf:
-            ret[name] = getattr(self, name)
-        return ret
-
-    def add_option(self, opt):
-        if opt.dest in self._conf:
-            return
-
-        self._opts[opt.dest] = opt
-
-        try:
-            self._conf.register_cli_opts(self._opts.values())
-        except cfg.ArgsAlreadyParsedError:
-            self._conf.reset()
-            self._conf.register_cli_opts(self._opts.values())
-            self._extra = None
-
-    def add_options(self, opts):
-        for opt in opts:
-            self.add_option(opt)
-
-
-FLAGS = FlagValues()
+FLAGS = NovaConfigOpts()
 
 
 class UnrecognizedFlag(Exception):
@@ -195,6 +70,55 @@ def _get_my_ip():
         return "127.0.0.1"
 
 
+log_opts = [
+    cfg.BoolOpt('verbose',
+                default=False,
+                help='show debug output'),
+    cfg.StrOpt('logdir',
+               default=None,
+               help='output to a per-service log file in named directory'),
+    cfg.StrOpt('logfile',
+               default=None,
+               help='output to named file'),
+    cfg.BoolOpt('use_syslog',
+                default=False,
+                help='output to syslog'),
+    cfg.BoolOpt('use_stderr',
+                default=True,
+                help='log to standard error'),
+    ]
+
+core_opts = [
+    cfg.StrOpt('connection_type',
+               default=None,
+               help='libvirt, xenapi or fake'),
+    cfg.StrOpt('sql_connection',
+               default='sqlite:///$state_path/$sqlite_db',
+               help='connection string for sql database'),
+    cfg.StrOpt('api_paste_config',
+               default="api-paste.ini",
+               help='File name for the paste.deploy config for nova-api'),
+    cfg.StrOpt('state_path',
+               default=os.path.join(os.path.dirname(__file__), '../'),
+               help="Top-level directory for maintaining nova's state"),
+    cfg.StrOpt('lock_path',
+               default=os.path.join(os.path.dirname(__file__), '../'),
+               help='Directory for lock files'),
+    ]
+
+debug_opts = [
+    cfg.BoolOpt('fake_network',
+                default=False,
+                help='should we use fake network devices and addresses'),
+    cfg.BoolOpt('fake_rabbit',
+                default=False,
+                help='use a fake rabbit'),
+]
+
+FLAGS.register_cli_opts(log_opts)
+FLAGS.register_cli_opts(core_opts)
+FLAGS.register_cli_opts(debug_opts)
+
 global_opts = [
     cfg.StrOpt('my_ip',
                default=_get_my_ip(),
@@ -202,9 +126,6 @@ global_opts = [
     cfg.ListOpt('region_list',
                 default=[],
                 help='list of region=fqdn pairs separated by commas'),
-    cfg.StrOpt('connection_type',
-               default=None,
-               help='libvirt, xenapi or fake'),
     cfg.StrOpt('aws_access_key_id',
                default='admin',
                help='AWS Access ID'),
@@ -253,15 +174,6 @@ global_opts = [
     cfg.StrOpt('vsa_topic',
                default='vsa',
                help='the topic that nova-vsa service listens on'),
-    cfg.BoolOpt('verbose',
-                default=False,
-                help='show debug output'),
-    cfg.BoolOpt('fake_rabbit',
-                default=False,
-                help='use a fake rabbit'),
-    cfg.BoolOpt('fake_network',
-                default=False,
-                help='should we use fake network devices and addresses'),
     cfg.StrOpt('rabbit_host',
                default='localhost',
                help='rabbit host'),
@@ -313,11 +225,21 @@ global_opts = [
     cfg.StrOpt('ec2_path',
                default='/services/Cloud',
                help='suffix for ec2'),
+    cfg.ListOpt('osapi_compute_ext_list',
+                default=[],
+                help='Specify list of extensions to load when using osapi_'
+                     'compute_extension option with nova.api.openstack.'
+                     'compute.contrib.select_extensions'),
     cfg.MultiStrOpt('osapi_compute_extension',
                     default=[
                       'nova.api.openstack.compute.contrib.standard_extensions'
                       ],
                     help='osapi compute extension to load'),
+    cfg.ListOpt('osapi_volume_ext_list',
+                default=[],
+                help='Specify list of extensions to load when using osapi_'
+                     'volume_extension option with nova.api.openstack.'
+                     'volume.contrib.select_extensions'),
     cfg.MultiStrOpt('osapi_volume_extension',
                     default=[
                       'nova.api.openstack.volume.contrib.standard_extensions'
@@ -368,15 +290,6 @@ global_opts = [
     cfg.IntOpt('auth_token_ttl',
                default=3600,
                help='Seconds for auth tokens to linger'),
-    cfg.StrOpt('state_path',
-               default=os.path.join(os.path.dirname(__file__), '../'),
-               help="Top-level directory for maintaining nova's state"),
-    cfg.StrOpt('lock_path',
-               default=os.path.join(os.path.dirname(__file__), '../'),
-               help='Directory for lock files'),
-    cfg.StrOpt('logdir',
-               default=None,
-               help='output to a per-service log file in named directory'),
     cfg.StrOpt('logfile_mode',
                default='0644',
                help='Default file mode of the logs.'),
@@ -386,9 +299,6 @@ global_opts = [
     cfg.BoolOpt('sqlite_synchronous',
                 default=True,
                 help='Synchronous mode for sqlite'),
-    cfg.StrOpt('sql_connection',
-               default='sqlite:///$state_path/$sqlite_db',
-               help='connection string for sql database'),
     cfg.IntOpt('sql_idle_timeout',
                default=3600,
                help='timeout for idle sql database connections'),
@@ -494,6 +404,10 @@ global_opts = [
     cfg.BoolOpt('use_ipv6',
                 default=False,
                 help='use ipv6'),
+    cfg.BoolOpt('enable_instance_password',
+                default=True,
+                help='Allows use of instance password during '
+                       'server creation'),
     cfg.IntOpt('password_length',
                default=12,
                help='Length of generated instance admin passwords'),
@@ -531,6 +445,12 @@ global_opts = [
     cfg.ListOpt('isolated_hosts',
                 default=[],
                 help='Host reserved for specific images'),
+    cfg.BoolOpt('cache_images',
+                default=True,
+                help='Cache glance images locally'),
+    cfg.BoolOpt('use_cow_images',
+                default=True,
+                help='Whether to use cow images')
     ]
 
-FLAGS.add_options(global_opts)
+FLAGS.register_opts(global_opts)
