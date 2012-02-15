@@ -49,6 +49,9 @@ if ! [ -x /usr/bin/ovs-ofctl -a -x /usr/bin/ovs-vsctl -a -x /sbin/ip ] ; then
 	exit 0
 fi
 
+# Load the VERBOSE setting and other rcS variables
+[ -r /lib/init/vars.sh ] && . /lib/init/vars.sh
+
 # Get $INTERFACES from /etc/default/openvswitch-nova,
 # default to all what is available.
 if [ -r /etc/default/openvswitch-nova ] ; then
@@ -85,7 +88,7 @@ run_ovs_conf_base_flows () {
 	my_action="${1}"
 	my_all_interfaces=$(cd /sys/class/net/; /bin/ls -d eth*)
 	for i in ${INTERFACES} ; do
-		/usr/bin/python $OVS_CONFIGURE_BASE_FLOWS $action $i
+		/usr/bin/python $OVS_CONFIGURE_BASE_FLOWS $my_action $i
 	done
 }
 
@@ -136,7 +139,7 @@ start)
 	ebtables_up
 	arptables_up
 	run_ovs_conf_base_flows online
-	log_end_msg 0
+	[ "$VERBOSE" != no ] && log_end_msg 0
 	;;
 stop)
 	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
@@ -144,12 +147,12 @@ stop)
 	iptables_down
 	ebtables_down
 	arptables_down
-	log_end_msg 0
+	[ "$VERBOSE" != no ] && log_end_msg 0
 	;;
 reload|force-reload)
-	log_daemon_msg "Restarting $DESC" "$NAME"
+	[ "$VERBOSE" != no ] && log_daemon_msg "Restarting $DESC" "$NAME"
 	run_ovs_conf_base_flows reset
-	log_end_msg 0
+	[ "$VERBOSE" != no ] && log_end_msg 0
 	;;
 restart)
 	$0 start
