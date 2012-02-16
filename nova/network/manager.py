@@ -73,7 +73,7 @@ from nova import utils
 from nova import rpc
 
 
-LOG = logging.getLogger("nova.network.manager")
+LOG = logging.getLogger(__name__)
 
 network_opts = [
     cfg.StrOpt('flat_network_bridge',
@@ -368,11 +368,9 @@ class FloatingIP(object):
         # NOTE(tr3buchet): all network hosts in zone now use the same pool
         LOG.debug("QUOTA: %s" % quota.allowed_floating_ips(context, 1))
         if quota.allowed_floating_ips(context, 1) < 1:
-            LOG.warn(_('Quota exceeded for %s, tried to allocate '
-                       'address'),
+            LOG.warn(_('Quota exceeded for %s, tried to allocate address'),
                      context.project_id)
-            raise exception.QuotaError(_('Address quota exceeded. You cannot '
-                                     'allocate any more addresses'))
+            raise exception.QuotaError(code='AddressLimitExceeded')
         pool = pool or FLAGS.default_floating_pool
         return self.db.floating_ip_allocate_address(context,
                                                     project_id,
@@ -859,11 +857,14 @@ class NetworkManager(manager.SchedulerDependentManager):
         requested_networks = kwargs.get('requested_networks')
         vpn = kwargs['vpn']
         admin_context = context.elevated()
-        LOG.debug(_("network allocations for instance %s"), instance_id,
+        LOG.debug(_("network allocations for instance |%s|"), instance_id,
                                                             context=context)
         networks = self._get_networks_for_instance(admin_context,
                                         instance_id, project_id,
                                         requested_networks=requested_networks)
+        msg = _('networks retrieved for instance |%(instance_id)s|: '
+                '|%(networks)s|')
+        LOG.debug(msg, locals(), context=context)
         self._allocate_mac_addresses(context, instance_id, networks)
         self._allocate_fixed_ips(admin_context, instance_id,
                                  host, networks, vpn=vpn,
@@ -896,7 +897,7 @@ class NetworkManager(manager.SchedulerDependentManager):
 
     @wrap_check_policy
     def get_instance_nw_info(self, context, instance_id, instance_uuid,
-                             rxtx_factor, host):
+                                            rxtx_factor, host, **kwargs):
         """Creates network info list for instance.
 
         called by allocate_for_instance and network_api

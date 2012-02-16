@@ -26,7 +26,7 @@ from nova import log as logging
 
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger("nova.api.openstack.compute.contrib.extendedstatus")
+LOG = logging.getLogger(__name__)
 authorize = extensions.soft_extension_authorizer('compute', 'extended_status')
 
 
@@ -36,6 +36,9 @@ class ExtendedStatusController(wsgi.Controller):
         self.compute_api = compute.API()
 
     def _get_instances(self, context, instance_uuids):
+        if not instance_uuids:
+            return {}
+
         filters = {'uuid': instance_uuids}
         instances = self.compute_api.get_all(context, filters)
         return dict((instance['uuid'], instance) for instance in instances)

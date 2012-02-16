@@ -25,7 +25,6 @@ import json
 import os
 import pickle
 import re
-import sys
 import tempfile
 import time
 import urllib
@@ -48,7 +47,7 @@ from nova.virt.xenapi import HelperBase
 from nova.virt.xenapi import volume_utils
 
 
-LOG = logging.getLogger("nova.virt.xenapi.vm_utils")
+LOG = logging.getLogger(__name__)
 
 xenapi_vm_utils_opts = [
     cfg.StrOpt('default_os_type',
@@ -856,7 +855,7 @@ class VMHelper(HelperBase):
         except (cls.XenAPI.Failure, IOError, OSError) as e:
             # We look for XenAPI and OS failures.
             LOG.exception(_("instance %s: Failed to fetch glance image"),
-                          instance_id, exc_info=sys.exc_info())
+                          instance_id)
             e.args = e.args + ([dict(vdi_type=ImageType.
                                               to_string(image_type),
                                     vdi_uuid=vdi_uuid,
@@ -1599,7 +1598,7 @@ def _resize_part_and_fs(dev, start, old_sectors, new_sectors):
     partition_path = utils.make_dev_path(dev, partition=1)
 
     # Replay journal if FS wasn't cleanly unmounted
-    utils.execute('e2fsck', '-f', partition_path, run_as_root=True)
+    utils.execute('e2fsck', '-f', '-y', partition_path, run_as_root=True)
 
     # Remove ext3 journal (making it ext2)
     utils.execute('tune2fs', '-O ^has_journal', partition_path,

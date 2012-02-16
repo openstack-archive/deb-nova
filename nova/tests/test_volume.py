@@ -34,7 +34,7 @@ from nova import utils
 import nova.volume.api
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.tests.volume')
+LOG = logging.getLogger(__name__)
 
 
 class VolumeTestCase(test.TestCase):
@@ -249,7 +249,7 @@ class VolumeTestCase(test.TestCase):
 
         volume_api = nova.volume.api.API()
         volume = volume_api.get(self.context, volume['id'])
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.InvalidVolume,
                           volume_api.create_snapshot,
                           self.context, volume,
                           'fake_name', 'fake_description')

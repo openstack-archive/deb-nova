@@ -20,7 +20,7 @@ from nova import log as logging
 from nova.volume.san import SolidFireSanISCSIDriver as SFID
 from nova import test
 
-LOG = logging.getLogger('nova.tests.test_solidfire')
+LOG = logging.getLogger(__name__)
 
 
 class SolidFireVolumeTestCase(test.TestCase):
@@ -176,5 +176,5 @@ class SolidFireVolumeTestCase(test.TestCase):
     def test_get_cluster_info_fail(self):
         SFID._issue_api_request = self.fake_issue_api_request_fails
         sfv = SFID()
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.SolidFireAPIException,
                           sfv._get_cluster_info)

@@ -39,7 +39,7 @@ from nova import test
 from nova import utils
 
 
-LOG = logging.getLogger('nova.tests.cloud')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
@@ -97,7 +97,7 @@ class CloudTestCase(test.TestCase):
 
         # set up services
         self.compute = self.start_service('compute')
-        self.scheduter = self.start_service('scheduler')
+        self.scheduler = self.start_service('scheduler')
         self.network = self.start_service('network')
         self.volume = self.start_service('volume')
         self.image_service = utils.import_object(FLAGS.image_service)
@@ -285,7 +285,7 @@ class CloudTestCase(test.TestCase):
 
     def test_delete_security_group_no_params(self):
         delete = self.cloud.delete_security_group
-        self.assertRaises(exception.ApiError, delete, self.context)
+        self.assertRaises(exception.EC2APIError, delete, self.context)
 
     def test_authorize_security_group_ingress(self):
         kwargs = {'project_id': self.context.project_id, 'name': 'test'}
@@ -415,12 +415,12 @@ class CloudTestCase(test.TestCase):
                                        {'project_id': self.context.project_id,
                                         'name': 'test'})
         authz = self.cloud.authorize_security_group_ingress
-        self.assertRaises(exception.ApiError, authz, self.context, 'test')
+        self.assertRaises(exception.EC2APIError, authz, self.context, 'test')
 
     def test_authorize_security_group_ingress_missing_group_name_or_id(self):
         kwargs = {'project_id': self.context.project_id, 'name': 'test'}
         authz = self.cloud.authorize_security_group_ingress
-        self.assertRaises(exception.ApiError, authz, self.context, **kwargs)
+        self.assertRaises(exception.EC2APIError, authz, self.context, **kwargs)
 
     def test_authorize_security_group_ingress_already_exists(self):
         kwargs = {'project_id': self.context.project_id, 'name': 'test'}
@@ -428,13 +428,14 @@ class CloudTestCase(test.TestCase):
         authz = self.cloud.authorize_security_group_ingress
         kwargs = {'to_port': '999', 'from_port': '999', 'ip_protocol': 'tcp'}
         authz(self.context, group_name=sec['name'], **kwargs)
-        self.assertRaises(exception.ApiError, authz, self.context,
+        self.assertRaises(exception.EC2APIError, authz, self.context,
                           group_name=sec['name'], **kwargs)
 
     def test_revoke_security_group_ingress_missing_group_name_or_id(self):
         kwargs = {'to_port': '999', 'from_port': '999', 'ip_protocol': 'tcp'}
         revoke = self.cloud.revoke_security_group_ingress
-        self.assertRaises(exception.ApiError, revoke, self.context, **kwargs)
+        self.assertRaises(exception.EC2APIError, revoke,
+                self.context, **kwargs)
 
     def test_describe_volumes(self):
         """Makes sure describe_volumes works and filters results."""
@@ -1315,7 +1316,7 @@ class CloudTestCase(test.TestCase):
 
         self.stubs.UnsetAll()
         self.stubs.Set(fake._FakeImageService, 'show', fake_show_no_state)
-        self.assertRaises(exception.ApiError, run_instances,
+        self.assertRaises(exception.EC2APIError, run_instances,
                           self.context, **kwargs)
 
     def test_run_instances_image_state_invalid(self):
@@ -1334,7 +1335,7 @@ class CloudTestCase(test.TestCase):
 
         self.stubs.UnsetAll()
         self.stubs.Set(fake._FakeImageService, 'show', fake_show_decrypt)
-        self.assertRaises(exception.ApiError, run_instances,
+        self.assertRaises(exception.EC2APIError, run_instances,
                           self.context, **kwargs)
 
     def test_run_instances_image_status_active(self):

@@ -54,7 +54,7 @@ from nova import utils
 import nova.volume
 
 
-LOG = logging.getLogger('nova.tests.compute')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 flags.DECLARE('stub_network', 'nova.compute.manager')
 flags.DECLARE('live_migration_retry_count', 'nova.compute.manager')
@@ -2357,7 +2357,7 @@ class ComputeAPITestCase(BaseTestCase):
         address = '0.1.2.3'
 
         self.compute.run_instance(self.context, instance_uuid)
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.FixedIpNotFoundForInstance,
                           self.compute_api.associate_floating_ip,
                           self.context,
                           instance,
@@ -2967,7 +2967,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute_api.delete(self.context, instance)
 
     def test_attach_volume_invalid(self):
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.InvalidDevicePath,
                 self.compute_api.attach_volume,
                 self.context,
                 None,

@@ -32,7 +32,7 @@ import webob.exc
 
 from nova import log as logging
 
-LOG = logging.getLogger('nova.exception')
+LOG = logging.getLogger(__name__)
 
 
 class ConvertedException(webob.exc.WSGIHTTPException):
@@ -76,11 +76,10 @@ class ProcessExecutionError(IOError):
 
 
 class Error(Exception):
-    def __init__(self, message=None):
-        super(Error, self).__init__(message)
+    pass
 
 
-class ApiError(Error):
+class EC2APIError(Error):
     def __init__(self, message='Unknown', code=None):
         self.msg = message
         self.code = code
@@ -88,7 +87,7 @@ class ApiError(Error):
             outstr = '%s: %s' % (code, message)
         else:
             outstr = '%s' % message
-        super(ApiError, self).__init__(outstr)
+        super(EC2APIError, self).__init__(outstr)
 
 
 class DBError(Error):
@@ -207,9 +206,6 @@ class MelangeConnectionFailed(NovaException):
 class NotAuthorized(NovaException):
     message = _("Not authorized.")
 
-    def __init__(self, *args, **kwargs):
-        super(NotAuthorized, self).__init__(*args, **kwargs)
-
 
 class AdminRequired(NotAuthorized):
     message = _("User does not have admin privileges")
@@ -221,6 +217,14 @@ class PolicyNotAuthorized(NotAuthorized):
 
 class Invalid(NovaException):
     message = _("Unacceptable parameters.")
+
+
+class InvalidSnapshot(Invalid):
+    message = _("Invalid snapshot") + ": %(reason)s"
+
+
+class VolumeUnattached(Invalid):
+    message = _("Volume %(volume_id)s is not attached to anything")
 
 
 class InvalidKeypair(Invalid):
@@ -248,7 +252,11 @@ class InvalidInstanceType(Invalid):
 
 
 class InvalidVolumeType(Invalid):
-    message = _("Invalid volume type %(volume_type)s.")
+    message = _("Invalid volume type") + ": %(reason)s"
+
+
+class InvalidVolume(Invalid):
+    message = _("Invalid volume") + ": %(reason)s"
 
 
 class InvalidPortRange(Invalid):
@@ -393,9 +401,6 @@ class InvalidEc2Id(Invalid):
 
 class NotFound(NovaException):
     message = _("Resource could not be found.")
-
-    def __init__(self, *args, **kwargs):
-        super(NotFound, self).__init__(*args, **kwargs)
 
 
 class FlagNotSet(NotFound):
@@ -899,11 +904,8 @@ class ImageTooLarge(NovaException):
     message = _("Image is larger than instance type allows")
 
 
-class ZoneRequestError(Error):
-    def __init__(self, message=None):
-        if message is None:
-            message = _("1 or more Zones could not complete the request")
-        super(ZoneRequestError, self).__init__(message=message)
+class ZoneRequestError(NovaException):
+    message = _("1 or more Zones could not complete the request")
 
 
 class InstanceTypeMemoryTooSmall(NovaException):
@@ -930,9 +932,8 @@ class WillNotSchedule(NovaException):
     message = _("Host %(host)s is not up or doesn't exist.")
 
 
-class QuotaError(ApiError):
-    """Quota Exceeded."""
-    pass
+class QuotaError(NovaException):
+    message = _("Quota exceeded") + ": code=%(code)s"
 
 
 class AggregateNotFound(NotFound):
@@ -962,3 +963,28 @@ class AggregateHostExists(Duplicate):
 
 class DuplicateSfVolumeNames(Duplicate):
     message = _("Detected more than one volume with name %(vol_name)")
+
+
+class VolumeTypeCreateFailed(NovaException):
+    message = _("Cannot create volume_type with "
+                "name %(name)s and specs %(extra_specs)s")
+
+
+class InstanceTypeCreateFailed(NovaException):
+    message = _("Unable to create instance type")
+
+
+class SolidFireAPIException(NovaException):
+    message = _("Bad response from SolidFire API")
+
+
+class SolidFireAPIStatusException(SolidFireAPIException):
+    message = _("Error in SolidFire API response: status=%(status)s")
+
+
+class SolidFireAPIDataException(SolidFireAPIException):
+    message = _("Error in SolidFire API response: data=%(data)s")
+
+
+class DuplicateVlan(Duplicate):
+    message = _("Detected existing vlan with id %(vlan)")

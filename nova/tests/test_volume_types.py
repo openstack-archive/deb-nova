@@ -28,7 +28,7 @@ from nova.db.sqlalchemy.session import get_session
 from nova.db.sqlalchemy import models
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.tests.test_volume_types')
+LOG = logging.getLogger(__name__)
 
 
 class VolumeTypeTestCase(test.TestCase):
@@ -85,7 +85,7 @@ class VolumeTypeTestCase(test.TestCase):
 
     def test_non_existant_vol_type_shouldnt_delete(self):
         """Ensures that volume type creation fails with invalid args"""
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.VolumeTypeNotFoundByName,
                           volume_types.destroy, self.ctxt, "sfsfsdfdfs")
 
     def test_repeated_vol_types_shouldnt_raise(self):

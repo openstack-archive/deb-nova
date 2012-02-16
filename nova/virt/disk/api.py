@@ -39,7 +39,7 @@ from nova.virt.disk import loop
 from nova.virt.disk import nbd
 
 
-LOG = logging.getLogger('nova.compute.disk')
+LOG = logging.getLogger(__name__)
 
 disk_opts = [
     cfg.StrOpt('injected_network_template',
@@ -104,6 +104,26 @@ def extend(image, size):
     # NOTE(vish): attempts to resize filesystem
     utils.execute('e2fsck', '-fp', image, check_exit_code=False)
     utils.execute('resize2fs', image, check_exit_code=False)
+
+
+def bind(src, target, instance_name):
+    """Bind device to a filesytem"""
+    if src:
+        utils.execute('touch', target, run_as_root=True)
+        utils.execute('mount', '-o', 'bind', src, target,
+                run_as_root=True)
+        s = os.stat(src)
+        cgroup_info = "c %s:%s rwm" % (os.major(s.st_rdev),
+                                       os.minor(s.st_rdev))
+        cgroups_path = \
+            "/sys/fs/cgroup/devices/sysdefault/libvirt/lxc/%s/devices.allow" \
+            % instance_name
+        utils.execute('echo', '>', cgroup_info, cgroups_path, run_as_root=True)
+
+
+def unbind(target):
+    if target:
+        utils.execute('umount', target, run_as_root=True)
 
 
 class _DiskImage(object):

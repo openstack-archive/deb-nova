@@ -47,7 +47,7 @@ FLAGS = flags.FLAGS
 flags.DECLARE('reserved_host_disk_mb', 'nova.scheduler.host_manager')
 flags.DECLARE('reserved_host_memory_mb', 'nova.scheduler.host_manager')
 
-LOG = logging.getLogger("nova.db.sqlalchemy")
+LOG = logging.getLogger(__name__)
 
 
 def is_admin_context(context):
@@ -1984,9 +1984,16 @@ def network_count_reserved_ips(context, network_id):
 
 @require_admin_context
 def network_create_safe(context, values):
+    if values.get('vlan'):
+        if model_query(context, models.Network, read_deleted="no")\
+                      .filter_by(vlan=values['vlan'])\
+                      .first():
+            raise exception.DuplicateVlan(vlan=values['vlan'])
+
     network_ref = models.Network()
     network_ref['uuid'] = str(utils.gen_uuid())
     network_ref.update(values)
+
     try:
         network_ref.save()
         return network_ref
@@ -3695,7 +3702,7 @@ def bw_usage_get_all_by_filters(context, filters):
     filters = filters.copy()
 
     # Filters for exact matches that we can do along with the SQL query.
-    exact_match_filter_names = ["instance_id", "network_label",
+    exact_match_filter_names = ["instance_id", "mac",
             "start_period", "last_refreshed", "bw_in", "bw_out"]
 
     # Filter the query

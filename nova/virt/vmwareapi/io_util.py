@@ -27,7 +27,7 @@ from eventlet.queue import LightQueue
 from nova import exception
 from nova import log as logging
 
-LOG = logging.getLogger("nova.virt.vmwareapi.io_util")
+LOG = logging.getLogger(__name__)
 
 IO_THREAD_SLEEP_TIME = .01
 GLANCE_POLL_INTERVAL = 5
@@ -98,7 +98,7 @@ class GlanceWriteThread(object):
                         self.stop()
                         exc_msg = (_("Glance image %s is in killed state") %
                                    self.image_id)
-                        LOG.exception(exc_msg)
+                        LOG.error(exc_msg)
                         self.done.send_exception(exception.Error(exc_msg))
                     elif image_status in ["saving", "queued"]:
                         greenthread.sleep(GLANCE_POLL_INTERVAL)
@@ -109,7 +109,7 @@ class GlanceWriteThread(object):
                                     "- %(state)s") % {
                                             "image_id": self.image_id,
                                             "state": image_status}
-                        LOG.exception(exc_msg)
+                        LOG.error(exc_msg)
                         self.done.send_exception(exception.Error(exc_msg))
                 except Exception, exc:
                     self.stop()

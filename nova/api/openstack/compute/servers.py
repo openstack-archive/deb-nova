@@ -37,7 +37,7 @@ from nova.scheduler import api as scheduler_api
 from nova import utils
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.servers')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
@@ -496,12 +496,8 @@ class Controller(wsgi.Controller):
             "InstanceLimitExceeded": error.message,
         }
 
-        expl = code_mappings.get(error.code)
-        if expl:
-            raise exc.HTTPRequestEntityTooLarge(explanation=expl,
-                                                headers={'Retry-After': 0})
-        # if the original error is okay, just reraise it
-        raise exc.HTTPRequestEntityTooLarge(explanation=error.msg,
+        expl = code_mappings.get(error.kwargs['code'], error.message)
+        raise exc.HTTPRequestEntityTooLarge(explanation=expl,
                                             headers={'Retry-After': 0})
 
     def _validate_server_name(self, value):
@@ -899,11 +895,11 @@ class Controller(wsgi.Controller):
             reboot_type = body['reboot']['type'].upper()
             if not valid_reboot_types.count(reboot_type):
                 msg = _("Argument 'type' for reboot is not HARD or SOFT")
-                LOG.exception(msg)
+                LOG.error(msg)
                 raise exc.HTTPBadRequest(explanation=msg)
         else:
             msg = _("Missing argument 'type' for reboot")
-            LOG.exception(msg)
+            LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
 
         context = req.environ['nova.context']

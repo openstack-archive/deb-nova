@@ -25,7 +25,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.contrib.console_output')
+LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'console_output')
 
 
@@ -54,8 +54,8 @@ class ConsoleOutputController(wsgi.Controller):
             output = self.compute_api.get_console_output(context,
                                                          instance,
                                                          length)
-        except exception.ApiError, e:
-            raise webob.exc.HTTPBadRequest(explanation=e.message)
+        except exception.NotFound:
+            raise webob.exc.HTTPNotFound(_('Instance not found'))
 
         return {'output': output}
 

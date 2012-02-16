@@ -25,7 +25,7 @@ from nova import flags
 from nova import log as logging
 from nova import utils
 
-LOG = logging.getLogger('nova.virt.libvirt.volume')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 flags.DECLARE('num_iscsi_scan_tries', 'nova.volume.driver')
 
@@ -114,7 +114,8 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
         try:
             self._run_iscsiadm(iscsi_properties, ())
         except exception.ProcessExecutionError as exc:
-            if exc.exit_code == 255:
+            # iscsiadm returns 21 for "No records found" after version 2.0-871
+            if exc.exit_code in [21, 255]:
                 self._run_iscsiadm(iscsi_properties, ('--op', 'new'))
             else:
                 raise
