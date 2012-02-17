@@ -1,9 +1,13 @@
 nova (2012.1~e3-4) unstable; urgency=low
 
+  [ Ghe Rivero ]
   * Added init script to nova-consoleauth
   * Added init script to nova-xvpvncproxy
 
- -- Ghe Rivero <ghe.rivero@stackops.com>  Tue, 31 Jan 2012 18:50:37 +0100
+  [ Julien Danjou ]
+  * nova-api recommends python-keystone
+
+ -- Julien Danjou <acid@debian.org>  Fri, 17 Feb 2012 10:18:55 +0100
 
 nova (2012.1~e3-3) unstable; urgency=low
 
