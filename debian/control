@@ -268,6 +268,7 @@ Description: OpenStack Compute - storage
 
 Package: nova-api
 Architecture: all
+Recommends: python-keystone
 Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
