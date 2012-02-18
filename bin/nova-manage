@@ -106,7 +106,6 @@ flags.DECLARE('vlan_start', 'nova.network.manager')
 flags.DECLARE('vpn_start', 'nova.network.manager')
 flags.DECLARE('default_floating_pool', 'nova.network.manager')
 flags.DECLARE('public_interface', 'nova.network.linux_net')
-flags.DECLARE('libvirt_type', 'nova.virt.libvirt.connection')
 
 
 # Decorators for actions
@@ -721,10 +720,14 @@ class FloatingIpCommands(object):
         """Lists all floating ips (optionally by host)
         Note: if host is given, only active floating IPs are returned"""
         ctxt = context.get_admin_context()
-        if host is None:
-            floating_ips = db.floating_ip_get_all(ctxt)
-        else:
-            floating_ips = db.floating_ip_get_all_by_host(ctxt, host)
+        try:
+            if host is None:
+                floating_ips = db.floating_ip_get_all(ctxt)
+            else:
+                floating_ips = db.floating_ip_get_all_by_host(ctxt, host)
+        except exception.NoFloatingIpsDefined:
+            print _("No floating IP addresses have been defined.")
+            return
         for floating_ip in floating_ips:
             instance_id = None
             if floating_ip['fixed_ip_id']:
@@ -998,6 +1001,7 @@ class VmCommands(object):
         ctxt = context.get_admin_context()
         instance_id = ec2utils.ec2_id_to_id(ec2_id)
 
+        flags.DECLARE('libvirt_type', 'nova.virt.libvirt.connection')
         if (FLAGS.connection_type != 'libvirt' or
            (FLAGS.connection_type == 'libvirt' and
             FLAGS.libvirt_type not in ['kvm', 'qemu'])):

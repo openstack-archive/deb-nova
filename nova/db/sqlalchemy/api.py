@@ -1354,11 +1354,12 @@ def instance_create(context, values):
     context - request context object
     values - dict containing column values.
     """
+    values = values.copy()
     values['metadata'] = _metadata_refs(values.get('metadata'),
                                         models.InstanceMetadata)
     instance_ref = models.Instance()
-    instance_ref['uuid'] = str(utils.gen_uuid())
-
+    if not values.get('uuid'):
+        values['uuid'] = str(utils.gen_uuid())
     instance_ref.update(values)
 
     session = get_session()
@@ -1388,7 +1389,13 @@ def instance_data_get_for_project(context, project_id):
 def instance_destroy(context, instance_id):
     session = get_session()
     with session.begin():
-        instance_ref = instance_get(context, instance_id, session=session)
+        if utils.is_uuid_like(instance_id):
+            instance_ref = instance_get_by_uuid(context, instance_id,
+                    session=session)
+            instance_id = instance_ref['id']
+        else:
+            instance_ref = instance_get(context, instance_id,
+                    session=session)
         session.query(models.Instance).\
                 filter_by(id=instance_id).\
                 update({'deleted': True,
@@ -1412,6 +1419,7 @@ def instance_destroy(context, instance_id):
 
         instance_info_cache_delete(context, instance_ref['uuid'],
                                    session=session)
+    return instance_ref
 
 
 @require_context
@@ -1602,7 +1610,9 @@ def instance_get_active_by_window_joined(context, begin, end=None,
     session = get_session()
     query = session.query(models.Instance)
 
-    query = query.options(joinedload('security_groups')).\
+    query = query.options(joinedload('info_cache')).\
+                  options(joinedload('security_groups')).\
+                  options(joinedload('metadata')).\
                   options(joinedload('instance_type')).\
                   filter(or_(models.Instance.terminated_at == None,
                              models.Instance.terminated_at > begin))
@@ -3541,7 +3551,7 @@ def zone_get(context, zone_id):
 
 @require_admin_context
 def zone_get_all(context):
-    return model_query(context, models.Zone, read_deleted="yes").all()
+    return model_query(context, models.Zone, read_deleted="no").all()
 
 
 ####################
@@ -3724,7 +3734,7 @@ def bw_usage_update(context,
 
     with session.begin():
         bwusage = model_query(context, models.BandwidthUsage,
-                              read_deleted="yes").\
+                              session=session, read_deleted="yes").\
                       filter_by(instance_id=instance_id).\
                       filter_by(start_period=start_period).\
                       filter_by(mac=mac).\

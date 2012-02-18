@@ -100,6 +100,13 @@ libvirt_opts = [
                default='',
                help='Override the default libvirt URI '
                     '(which is dependent on libvirt_type)'),
+    cfg.BoolOpt('libvirt_inject_password',
+                default=False,
+                help='Inject the admin password at boot time, '
+                     'without an agent.'),
+    cfg.BoolOpt('use_usb_tablet',
+                default=True,
+                help='Sync virtual and real mouse cursors in Windows VMs'),
     cfg.StrOpt('cpuinfo_xml_template',
                default=utils.abspath('virt/cpuinfo.xml.template'),
                help='CpuInfo XML Template (Used only live migration now)'),
@@ -278,6 +285,10 @@ class LibvirtConnection(driver.ComputeDriver):
             return libvirt.openReadOnly(uri)
         else:
             return libvirt.openAuth(uri, auth, 0)
+
+    def get_num_instances(self):
+        """Efficient override of base instance_exists method."""
+        return self._conn.numOfDomains()
 
     def instance_exists(self, instance_id):
         """Efficient override of base instance_exists method."""
@@ -775,6 +786,17 @@ class LibvirtConnection(driver.ComputeDriver):
             LOG.info(_("Automatically confirming migration %d"), migration.id)
             self.compute_api.confirm_resize(ctxt, migration.instance_uuid)
 
+    def _enable_hairpin(self, instance):
+        interfaces = self.get_interfaces(instance['name'])
+        for interface in interfaces:
+            utils.execute('tee',
+                          '/sys/class/net/%s/brport/hairpin_mode' % interface,
+                          '>',
+                          '/dev/null',
+                          process_input='1',
+                          run_as_root=True,
+                          check_exit_code=[0, 1])
+
     # NOTE(ilyaalekseyev): Implementation like in multinics
     # for xenapi(tr3buchet)
     @exception.wrap_exception()
@@ -789,6 +811,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         domain = self._create_new_domain(xml)
         LOG.debug(_("Instance is running"), instance=instance)
+        self._enable_hairpin(instance)
         self.firewall_driver.apply_instance_filter(instance, network_info)
 
         def _wait_for_boot():
@@ -932,21 +955,6 @@ class LibvirtConnection(driver.ComputeDriver):
                 # naively copying the whole image file.
                 if size:
                     disk.extend(target, size)
-
-    @staticmethod
-    def _fetch_image(context, target, image_id, user_id, project_id):
-        """Grab image to raw format"""
-        images.fetch_to_raw(context, image_id, target, user_id, project_id)
-
-        if FLAGS.checksum_base_images:
-            f = open(target, 'r')
-            checksum = utils.hash_file(f)
-            f.close()
-
-            checksum_fname = '%s.sha1' % target
-            fd = os.open(checksum_filename, os.O_WRONLY, mode=0444)
-            os.write(fd, checksum)
-            os.close(fd)
 
     @staticmethod
     def _create_local(target, local_size, unit='G', fs_format=None):
@@ -1151,7 +1159,14 @@ class LibvirtConnection(driver.ComputeDriver):
                                             'use_ipv6': FLAGS.use_ipv6}]))
 
         metadata = instance.get('metadata')
-        if any((key, net, metadata)):
+
+        if FLAGS.libvirt_inject_password:
+            admin_password = instance.get('admin_pass')
+        else:
+            admin_password = None
+
+        if any((key, net, metadata, admin_password)):
+
             instance_name = instance['name']
 
             if config_drive:  # Should be True or None by now.
@@ -1161,12 +1176,13 @@ class LibvirtConnection(driver.ComputeDriver):
                 injection_path = basepath('disk')
                 img_id = instance.image_ref
 
-            for injection in ('metadata', 'key', 'net'):
+            for injection in ('metadata', 'key', 'net', 'admin_password'):
                 if locals()[injection]:
                     LOG.info(_('Injecting %(injection)s into image %(img_id)s'
                                % locals()), instance=instance)
             try:
-                disk.inject_data(injection_path, key, net, metadata,
+                disk.inject_data(injection_path,
+                                 key, net, metadata, admin_password,
                                  partition=target_partition,
                                  use_cow=FLAGS.use_cow_images)
 
@@ -1388,6 +1404,26 @@ class LibvirtConnection(driver.ComputeDriver):
 
         return domain
 
+    def get_all_block_devices(self):
+        """
+        Return all block devices in use on this node.
+        """
+        devices = []
+        for dom_id in self._conn.listDomainsID():
+            domain = self._conn.lookupByID(dom_id)
+            try:
+                doc = ElementTree.fromstring(domain.XMLDesc(0))
+            except Exception:
+                continue
+            ret = doc.findall('./devices/disk')
+            for node in ret:
+                if node.get('type') != 'block':
+                    continue
+                for child in node.getchildren():
+                    if child.tag == 'source':
+                        devices.append(child.get('dev'))
+        return devices
+
     def get_disks(self, instance_name):
         """
         Note that this function takes an instance name.
@@ -1443,9 +1479,9 @@ class LibvirtConnection(driver.ComputeDriver):
         for node in ret:
             devdst = None
 
-            for child in node.children:
-                if child.name == 'target':
-                    devdst = child.prop('dev')
+            for child in list(node):
+                if child.tag == 'target':
+                    devdst = child.attrib['dev']
 
             if devdst is None:
                 continue
@@ -1905,24 +1941,19 @@ class LibvirtConnection(driver.ComputeDriver):
                                            info['disk_size'])
             else:
                 # Creating backing file follows same way as spawning instances.
-                backing_file = os.path.join(FLAGS.instances_path,
-                                            '_base', info['backing_file'])
-
+                cache_name = os.path.basename(info['backing_file'])
                 # Remove any size tags which the cache manages
-                cached_file = info['backing_file'].split('_')[0]
+                cache_name = cache_name.split('_')[0]
 
-                if not os.path.exists(backing_file):
-                    self._cache_image(fn=self._fetch_image,
-                        context=ctxt,
-                        target=info['path'],
-                        fname=cached_file,
-                        cow=FLAGS.use_cow_images,
-                        image_id=instance_ref['image_ref'],
-                        user_id=instance_ref['user_id'],
-                        project_id=instance_ref['project_id'],
-                        size=instance_ref['ephemeral_gb'])
-
-                libvirt_utils.create_cow_image(backing_file, instance_disk)
+                self._cache_image(fn=libvirt_utils.fetch_image,
+                    context=ctxt,
+                    target=instance_disk,
+                    fname=cache_name,
+                    cow=FLAGS.use_cow_images,
+                    image_id=instance_ref['image_ref'],
+                    user_id=instance_ref['user_id'],
+                    project_id=instance_ref['project_id'],
+                    size=info['disk_size'])
 
         # if image has kernel and ramdisk, just download
         # following normal way.
@@ -2005,11 +2036,7 @@ class LibvirtConnection(driver.ComputeDriver):
                 continue
 
             disk_type = driver_nodes[cnt].get('type')
-            if disk_type == 'raw':
-                dk_size = int(os.path.getsize(path))
-                backing_file = ""
-                virt_size = 0
-            else:
+            if disk_type == "qcow2":
                 out, err = utils.execute('qemu-img', 'info', path)
 
                 # virtual size:
@@ -2022,6 +2049,10 @@ class LibvirtConnection(driver.ComputeDriver):
 
                 # backing file:(actual path:)
                 backing_file = libvirt_utils.get_disk_backing_file(path)
+            else:
+                dk_size = int(os.path.getsize(path))
+                backing_file = ""
+                virt_size = 0
 
             disk_info.append({'type': disk_type,
                               'path': path,

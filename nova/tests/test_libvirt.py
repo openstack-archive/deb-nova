@@ -124,7 +124,11 @@ class LibvirtVolumeTestCase(test.TestCase):
 
             def get_hypervisor_type(self):
                 return self.hyperv
-        self.fake_conn = FakeLibvirtConnection("Xen")
+
+            def get_all_block_devices(self):
+                return []
+
+        self.fake_conn = FakeLibvirtConnection()
         self.connr = {
             'ip': '127.0.0.1',
             'initiator': 'fake_initiator'
@@ -165,6 +169,38 @@ class LibvirtVolumeTestCase(test.TestCase):
                               '-p', location, '--logout'),
                              ('iscsiadm', '-m', 'node', '-T', iqn,
                               '-p', location, '--op', 'delete')]
+        self.assertEqual(self.executes, expected_commands)
+
+    def test_libvirt_iscsi_driver_still_in_use(self):
+        # NOTE(vish) exists is to make driver assume connecting worked
+        self.stubs.Set(os.path, 'exists', lambda x: True)
+        vol_driver = volume_driver.ISCSIDriver()
+        libvirt_driver = volume.LibvirtISCSIVolumeDriver(self.fake_conn)
+        location = '10.0.2.15:3260'
+        name = 'volume-00000001'
+        iqn = 'iqn.2010-10.org.openstack:%s' % name
+        devs = ['/dev/disk/by-path/ip-%s-iscsi-%s-lun-1' % (location, iqn)]
+        self.stubs.Set(self.fake_conn, 'get_all_block_devices', lambda: devs)
+        vol = {'id': 1,
+               'name': name,
+               'provider_auth': None,
+               'provider_location': '%s,fake %s' % (location, iqn)}
+        connection_info = vol_driver.initialize_connection(vol, self.connr)
+        mount_device = "vde"
+        xml = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = xml_to_tree(xml)
+        dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
+        self.assertEqual(tree.get('type'), 'block')
+        self.assertEqual(tree.find('./source').get('dev'), dev_str)
+        libvirt_driver.disconnect_volume(connection_info, mount_device)
+        connection_info = vol_driver.terminate_connection(vol, self.connr)
+        expected_commands = [('iscsiadm', '-m', 'node', '-T', iqn,
+                              '-p', location),
+                             ('iscsiadm', '-m', 'node', '-T', iqn,
+                              '-p', location, '--login'),
+                             ('iscsiadm', '-m', 'node', '-T', iqn,
+                              '-p', location, '--op', 'update',
+                              '-n', 'node.startup', '-v', 'automatic')]
         self.assertEqual(self.executes, expected_commands)
 
     def test_libvirt_sheepdog_driver(self):
@@ -468,6 +504,57 @@ class LibvirtConnTestCase(test.TestCase):
         instances = conn.list_instances()
         # Only one should be listed, since domain with ID 0 must be skiped
         self.assertEquals(len(instances), 1)
+
+    def test_get_all_block_devices(self):
+        xml = [
+            # NOTE(vish): id 0 is skipped
+            None,
+            """
+                <domain type='kvm'>
+                    <devices>
+                        <disk type='file'>
+                            <source file='filename'/>
+                        </disk>
+                        <disk type='block'>
+                            <source dev='/path/to/dev/1'/>
+                        </disk>
+                    </devices>
+                </domain>
+            """,
+            """
+                <domain type='kvm'>
+                    <devices>
+                        <disk type='file'>
+                            <source file='filename'/>
+                        </disk>
+                    </devices>
+                </domain>
+            """,
+            """
+                <domain type='kvm'>
+                    <devices>
+                        <disk type='file'>
+                            <source file='filename'/>
+                        </disk>
+                        <disk type='block'>
+                            <source dev='/path/to/dev/3'/>
+                        </disk>
+                    </devices>
+                </domain>
+            """,
+        ]
+
+        def fake_lookup(id):
+            return FakeVirtDomain(xml[id])
+
+        self.mox.StubOutWithMock(connection.LibvirtConnection, '_conn')
+        connection.LibvirtConnection._conn.listDomainsID = lambda: range(4)
+        connection.LibvirtConnection._conn.lookupByID = fake_lookup
+
+        self.mox.ReplayAll()
+        conn = connection.LibvirtConnection(False)
+        devices = conn.get_all_block_devices()
+        self.assertEqual(devices, ['/path/to/dev/1', '/path/to/dev/3'])
 
     @test.skip_if(missing_libvirt(), "Test requires libvirt")
     def test_snapshot_in_ami_format(self):
@@ -1631,28 +1718,6 @@ class NWFilterTestCase(test.TestCase):
         security_group = db.security_group_get_by_name(self.context,
                                                        'fake',
                                                        'testgroup')
-
-        xml = self.fw.security_group_to_nwfilter_xml(security_group.id)
-
-        dom = xml_to_dom(xml)
-        self.assertEqual(dom.firstChild.tagName, 'filter')
-
-        rules = dom.getElementsByTagName('rule')
-        self.assertEqual(len(rules), 1)
-
-        # It's supposed to allow inbound traffic.
-        self.assertEqual(rules[0].getAttribute('action'), 'accept')
-        self.assertEqual(rules[0].getAttribute('direction'), 'in')
-
-        # Must be lower priority than the base filter (which blocks everything)
-        self.assertTrue(int(rules[0].getAttribute('priority')) < 1000)
-
-        ip_conditions = rules[0].getElementsByTagName('tcp')
-        self.assertEqual(len(ip_conditions), 1)
-        self.assertEqual(ip_conditions[0].getAttribute('srcipaddr'), '0.0.0.0')
-        self.assertEqual(ip_conditions[0].getAttribute('srcipmask'), '0.0.0.0')
-        self.assertEqual(ip_conditions[0].getAttribute('dstportstart'), '80')
-        self.assertEqual(ip_conditions[0].getAttribute('dstportend'), '81')
         self.teardown_security_group()
 
     def teardown_security_group(self):
@@ -1732,8 +1797,7 @@ class NWFilterTestCase(test.TestCase):
         def _ensure_all_called(mac):
             instance_filter = 'nova-instance-%s-%s' % (instance_ref['name'],
                                                    mac.translate(None, ':'))
-            secgroup_filter = 'nova-secgroup-%s' % self.security_group['id']
-            for required in [secgroup_filter, 'allow-dhcp-server',
+            for required in ['allow-dhcp-server',
                              'no-arp-spoofing', 'no-ip-spoofing',
                              'no-mac-spoofing']:
                 self.assertTrue(required in
@@ -1754,19 +1818,9 @@ class NWFilterTestCase(test.TestCase):
         mac = network_info[0][1]['mac']
 
         self.fw.setup_basic_filtering(instance, network_info)
-        self.fw.prepare_instance_filter(instance, network_info)
-        self.fw.apply_instance_filter(instance, network_info)
         _ensure_all_called(mac)
         self.teardown_security_group()
         db.instance_destroy(context.get_admin_context(), instance_ref['id'])
-
-    def test_create_network_filters(self):
-        instance_ref = self._create_instance()
-        network_info = _fake_network_info(self.stubs, 3)
-        result = self.fw._create_network_filters(instance_ref,
-                                                 network_info,
-                                                 "fake")
-        self.assertEquals(len(result), 3)
 
     def test_unfilter_instance_undefines_nwfilters(self):
         admin_ctxt = context.get_admin_context()
@@ -1788,13 +1842,9 @@ class NWFilterTestCase(test.TestCase):
 
         network_info = _fake_network_info(self.stubs, 1)
         self.fw.setup_basic_filtering(instance, network_info)
-        self.fw.prepare_instance_filter(instance, network_info)
-        self.fw.apply_instance_filter(instance, network_info)
         original_filter_count = len(fakefilter.filters)
         self.fw.unfilter_instance(instance, network_info)
-
-        # should undefine 2 filters: instance and instance-secgroup
-        self.assertEqual(original_filter_count - len(fakefilter.filters), 2)
+        self.assertEqual(original_filter_count - len(fakefilter.filters), 1)
 
         db.instance_destroy(admin_ctxt, instance_ref['id'])
 
@@ -1975,14 +2025,14 @@ disk size: 4.4M''', ''))
         self.assertEquals(4096000, fs_info['used'])
 
     def test_fetch_image(self):
-        self.mox.StubOutWithMock(images, 'fetch')
+        self.mox.StubOutWithMock(images, 'fetch_to_raw')
 
         context = 'opaque context'
         target = '/tmp/targetfile'
         image_id = '4'
         user_id = 'fake'
         project_id = 'fake'
-        images.fetch(context, image_id, target, user_id, project_id)
+        images.fetch_to_raw(context, image_id, target, user_id, project_id)
 
         self.mox.ReplayAll()
         libvirt_utils.fetch_image(context, target, image_id,

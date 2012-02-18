@@ -56,7 +56,6 @@ find_host_timeout_opt = cfg.StrOpt('find_host_timeout',
 
 FLAGS = flags.FLAGS
 FLAGS.register_opt(find_host_timeout_opt)
-flags.DECLARE('enable_zone_routing', 'nova.scheduler.api')
 flags.DECLARE('consoleauth_topic', 'nova.consoleauth')
 
 
@@ -179,11 +178,12 @@ class API(base.Base):
                display_name, display_description,
                key_name, key_data, security_group,
                availability_zone, user_data, metadata,
-               injected_files, admin_password, zone_blob,
-               reservation_id, access_ip_v4, access_ip_v6,
+               injected_files, admin_password,
+               access_ip_v4, access_ip_v6,
                requested_networks, config_drive,
                block_device_mapping, auto_disk_config,
-               create_instance_here=False, scheduler_hints=None):
+               reservation_id=None, create_instance_here=False,
+               scheduler_hints=None):
         """Verify all the input parameters regardless of the provisioning
         strategy being performed and schedule the instance(s) for
         creation."""
@@ -360,7 +360,7 @@ class API(base.Base):
         instances = self._schedule_run_instance(
                 rpc_method,
                 context, base_options,
-                instance_type, zone_blob,
+                instance_type,
                 availability_zone, injected_files,
                 admin_password, image,
                 num_instances, requested_networks,
@@ -532,7 +532,7 @@ class API(base.Base):
     def _schedule_run_instance(self,
             rpc_method,
             context, base_options,
-            instance_type, zone_blob,
+            instance_type,
             availability_zone, injected_files,
             admin_password, image,
             num_instances,
@@ -549,10 +549,9 @@ class API(base.Base):
                 locals())
 
         request_spec = {
-            'image': image,
+            'image': utils.to_primitive(image),
             'instance_properties': base_options,
             'instance_type': instance_type,
-            'blob': zone_blob,
             'num_instances': num_instances,
             'block_device_mapping': block_device_mapping,
             'security_group': security_group,
@@ -566,28 +565,12 @@ class API(base.Base):
                           "admin_password": admin_password,
                           "injected_files": injected_files,
                           "requested_networks": requested_networks,
+                          "is_first_time": True,
                           "filter_properties": filter_properties}})
 
-    def create(self, context, instance_type,
-               image_href, kernel_id=None, ramdisk_id=None,
-               min_count=None, max_count=None,
-               display_name=None, display_description=None,
-               key_name=None, key_data=None, security_group=None,
-               availability_zone=None, user_data=None, metadata=None,
-               injected_files=None, admin_password=None, zone_blob=None,
-               reservation_id=None, block_device_mapping=None,
-               access_ip_v4=None, access_ip_v6=None,
-               requested_networks=None, config_drive=None,
-               auto_disk_config=None, scheduler_hints=None):
-        """
-        Provision instances, sending instance information to the
-        scheduler.  The scheduler will determine where the instance(s)
-        go and will handle creating the DB entries.
-
-        Returns a tuple of (instances, reservation_id) where instances
-        could be 'None' or a list of instance dicts depending on if
-        we waited for information from the scheduler or not.
-        """
+    def _check_create_policies(self, context, availability_zone,
+            requested_networks, block_device_mapping):
+        """Check policies for create()."""
         target = {'project_id': context.project_id,
                   'user_id': context.user_id,
                   'availability_zone': availability_zone}
@@ -599,12 +582,34 @@ class API(base.Base):
         if block_device_mapping:
             check_policy(context, 'create:attach_volume', target)
 
+    def create(self, context, instance_type,
+               image_href, kernel_id=None, ramdisk_id=None,
+               min_count=None, max_count=None,
+               display_name=None, display_description=None,
+               key_name=None, key_data=None, security_group=None,
+               availability_zone=None, user_data=None, metadata=None,
+               injected_files=None, admin_password=None,
+               block_device_mapping=None, access_ip_v4=None,
+               access_ip_v6=None, requested_networks=None, config_drive=None,
+               auto_disk_config=None, scheduler_hints=None):
+        """
+        Provision instances, sending instance information to the
+        scheduler.  The scheduler will determine where the instance(s)
+        go and will handle creating the DB entries.
+
+        Returns a tuple of (instances, reservation_id) where instances
+        could be 'None' or a list of instance dicts depending on if
+        we waited for information from the scheduler or not.
+        """
+
+        self._check_create_policies(context, availability_zone,
+                requested_networks, block_device_mapping)
+
         # We can create the DB entry for the instance here if we're
-        # only going to create 1 instance and we're in a single
-        # zone deployment.  This speeds up API responses for builds
+        # only going to create 1 instance.
+        # This speeds up API responses for builds
         # as we don't need to wait for the scheduler.
-        create_instance_here = (max_count == 1 and
-                not FLAGS.enable_zone_routing)
+        create_instance_here = max_count == 1
 
         (instances, reservation_id) = self._create_instance(
                                context, instance_type,
@@ -613,8 +618,8 @@ class API(base.Base):
                                display_name, display_description,
                                key_name, key_data, security_group,
                                availability_zone, user_data, metadata,
-                               injected_files, admin_password, zone_blob,
-                               reservation_id, access_ip_v4, access_ip_v6,
+                               injected_files, admin_password,
+                               access_ip_v4, access_ip_v6,
                                requested_networks, config_drive,
                                block_device_mapping, auto_disk_config,
                                create_instance_here=create_instance_here,
@@ -805,7 +810,6 @@ class API(base.Base):
                                    params=params)
 
     @wrap_check_policy
-    @scheduler_api.reroute_compute("update")
     def update(self, context, instance, **kwargs):
         """Updates the instance in the datastore.
 
@@ -823,11 +827,10 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
                                     vm_states.ERROR])
-    @scheduler_api.reroute_compute("soft_delete")
     def soft_delete(self, context, instance):
         """Terminate an instance."""
-        instance_uuid = instance["uuid"]
-        LOG.debug(_("Going to try to soft delete %s"), instance_uuid)
+        LOG.debug(_('Going to try to soft delete instance'),
+                  instance=instance)
 
         if instance['disable_terminate']:
             return
@@ -846,22 +849,30 @@ class API(base.Base):
             self._cast_compute_message('power_off_instance', context,
                                        instance)
         else:
-            LOG.warning(_("No host for instance %s, deleting immediately"),
-                        instance["uuid"])
-            self.db.instance_destroy(context, instance['id'])
+            LOG.warning(_('No host for instance, deleting immediately'),
+                        instance=instance)
+            try:
+                self.db.instance_destroy(context, instance['id'])
+            except exception.InstanceNotFound:
+                # NOTE(comstud): Race condition.  Instance already gone.
+                pass
 
     def _delete(self, context, instance):
         host = instance['host']
-        if host:
-            self.update(context,
-                        instance,
-                        task_state=task_states.DELETING,
-                        progress=0)
+        try:
+            if host:
+                self.update(context,
+                            instance,
+                            task_state=task_states.DELETING,
+                            progress=0)
 
-            self._cast_compute_message('terminate_instance', context,
-                                       instance)
-        else:
-            self.db.instance_destroy(context, instance['id'])
+                self._cast_compute_message('terminate_instance', context,
+                                           instance)
+            else:
+                self.db.instance_destroy(context, instance['id'])
+        except exception.InstanceNotFound:
+            # NOTE(comstud): Race condition.  Instance already gone.
+            pass
 
     # NOTE(jerdfelt): The API implies that only ACTIVE and ERROR are
     # allowed but the EC2 API appears to allow from RESCUED and STOPPED
@@ -870,10 +881,9 @@ class API(base.Base):
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.BUILDING,
                                     vm_states.ERROR, vm_states.RESCUED,
                                     vm_states.SHUTOFF, vm_states.STOPPED])
-    @scheduler_api.reroute_compute("delete")
     def delete(self, context, instance):
         """Terminate an instance."""
-        LOG.debug(_("Going to try to terminate %s"), instance["uuid"])
+        LOG.debug(_("Going to try to terminate instance"), instance=instance)
 
         if instance['disable_terminate']:
             return
@@ -882,7 +892,6 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.SOFT_DELETE])
-    @scheduler_api.reroute_compute("restore")
     def restore(self, context, instance):
         """Restore a previously deleted (but not reclaimed) instance."""
         self.update(context,
@@ -901,7 +910,6 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.SOFT_DELETE])
-    @scheduler_api.reroute_compute("force_delete")
     def force_delete(self, context, instance):
         """Force delete a previously deleted (but not reclaimed) instance."""
         self._delete(context, instance)
@@ -910,11 +918,10 @@ class API(base.Base):
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
                                     vm_states.RESCUED],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("stop")
     def stop(self, context, instance, do_cast=True):
         """Stop an instance."""
         instance_uuid = instance["uuid"]
-        LOG.debug(_("Going to try to stop %s"), instance_uuid)
+        LOG.debug(_("Going to try to stop instance"), instance=instance)
 
         self.update(context,
                     instance,
@@ -933,7 +940,7 @@ class API(base.Base):
         """Start an instance."""
         vm_state = instance["vm_state"]
         instance_uuid = instance["uuid"]
-        LOG.debug(_("Going to try to start %s"), instance_uuid)
+        LOG.debug(_("Going to try to start instance"), instance=instance)
 
         if vm_state == vm_states.SHUTOFF:
             if instance['shutdown_terminate']:
@@ -981,16 +988,6 @@ class API(base.Base):
         # NOTE(comstud): Doesn't get returned with iteritems
         inst['name'] = instance['name']
         return inst
-
-    @scheduler_api.reroute_compute("get")
-    def routing_get(self, context, instance_id):
-        """A version of get with special routing characteristics.
-
-        Use this method instead of get() if this is the only operation you
-        intend to to. It will route to novaclient.get if the instance is not
-        found.
-        """
-        return self.get(context, instance_id)
 
     def get_all(self, context, search_opts=None):
         """Get all instances filtered by one of the given parameters.
@@ -1065,8 +1062,6 @@ class API(base.Base):
                     except ValueError:
                         return []
 
-        local_zone_only = search_opts.get('local_zone_only', False)
-
         inst_models = self._get_instances_by_filters(context, filters)
 
         # Convert the models to dictionaries
@@ -1076,25 +1071,6 @@ class API(base.Base):
             # NOTE(comstud): Doesn't get returned by iteritems
             instance['name'] = inst_model['name']
             instances.append(instance)
-
-        if local_zone_only:
-            return instances
-
-        # Recurse zones. Send along the un-modified search options we received.
-        children = scheduler_api.call_zone_method(context,
-                "list",
-                errors_to_ignore=[novaclient.exceptions.NotFound],
-                novaclient_collection_name="servers",
-                search_opts=search_opts)
-
-        for zone, servers in children:
-            # 'servers' can be None if a 404 was returned by a zone
-            if servers is None:
-                continue
-            for server in servers:
-                # Results are ready to send to user. No need to scrub.
-                server._info['_is_precooked'] = True
-                instances.append(server._info)
 
         return instances
 
@@ -1155,7 +1131,6 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("backup")
     def backup(self, context, instance, name, backup_type, rotation,
                extra_properties=None):
         """Backup the given instance
@@ -1175,7 +1150,6 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("snapshot")
     def snapshot(self, context, instance, name, extra_properties=None):
         """Snapshot the given instance.
 
@@ -1257,7 +1231,6 @@ class API(base.Base):
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
                                     vm_states.RESCUED],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("reboot")
     def reboot(self, context, instance, reboot_type):
         """Reboot the given instance."""
         state = {'SOFT': task_states.REBOOTING,
@@ -1280,7 +1253,6 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("rebuild")
     def rebuild(self, context, instance, image_href, admin_password, **kwargs):
         """Rebuild the given instance with the provided attributes."""
 
@@ -1313,7 +1285,6 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
                           task_state=[task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("revert_resize")
     def revert_resize(self, context, instance):
         """Reverts a resize, deleting the 'new' instance in the process."""
         context = context.elevated()
@@ -1340,7 +1311,6 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
                           task_state=[task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("confirm_resize")
     def confirm_resize(self, context, instance):
         """Confirms a migration/resize and deletes the 'old' instance."""
         context = context.elevated()
@@ -1369,7 +1339,6 @@ class API(base.Base):
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
                           task_state=[None])
-    @scheduler_api.reroute_compute("resize")
     def resize(self, context, instance, flavor_id=None, **kwargs):
         """Resize (ie, migrate) a running instance.
 
@@ -1411,22 +1380,23 @@ class API(base.Base):
                 'num_instances': 1,
                 'instance_properties': instance}
 
-        filter_properties = {'local_zone_only': True, 'ignore_hosts': []}
+        filter_properties = {'ignore_hosts': []}
 
         if not FLAGS.allow_resize_to_same_host:
             filter_properties['ignore_hosts'].append(instance['host'])
 
-        self._cast_scheduler_message(context,
-                    {"method": "prep_resize",
-                     "args": {"topic": FLAGS.compute_topic,
-                              "instance_uuid": instance['uuid'],
-                              "update_db": False,
-                              "instance_type_id": new_instance_type['id'],
-                              "request_spec": request_spec,
-                              "filter_properties": filter_properties}})
+        args = {
+            "topic": FLAGS.compute_topic,
+            "instance_uuid": instance['uuid'],
+            "update_db": False,
+            "instance_type_id": new_instance_type['id'],
+            "request_spec": utils.to_primitive(request_spec),
+            "filter_properties": filter_properties,
+        }
+        self._cast_scheduler_message(context, {"method": "prep_resize",
+                                     "args": args})
 
     @wrap_check_policy
-    @scheduler_api.reroute_compute("add_fixed_ip")
     def add_fixed_ip(self, context, instance, network_id):
         """Add fixed_ip from specified network to given instance."""
         self._cast_compute_message('add_fixed_ip_to_instance',
@@ -1435,7 +1405,6 @@ class API(base.Base):
                                    params=dict(network_id=network_id))
 
     @wrap_check_policy
-    @scheduler_api.reroute_compute("remove_fixed_ip")
     def remove_fixed_ip(self, context, instance, address):
         """Remove fixed_ip from specified network to given instance."""
         self._cast_compute_message('remove_fixed_ip_from_instance',
@@ -1447,7 +1416,6 @@ class API(base.Base):
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
                                     vm_states.RESCUED],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("pause")
     def pause(self, context, instance):
         """Pause the given instance."""
         self.update(context,
@@ -1458,7 +1426,6 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.PAUSED])
-    @scheduler_api.reroute_compute("unpause")
     def unpause(self, context, instance):
         """Unpause the given instance."""
         self.update(context,
@@ -1482,7 +1449,6 @@ class API(base.Base):
                 host=host, params={"action": action})
 
     @wrap_check_policy
-    @scheduler_api.reroute_compute("diagnostics")
     def get_diagnostics(self, context, instance):
         """Retrieve diagnostics for the given instance."""
         return self._call_compute_message("get_diagnostics",
@@ -1498,7 +1464,6 @@ class API(base.Base):
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
                                     vm_states.RESCUED],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("suspend")
     def suspend(self, context, instance):
         """Suspend the given instance."""
         self.update(context,
@@ -1509,7 +1474,6 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.SUSPENDED])
-    @scheduler_api.reroute_compute("resume")
     def resume(self, context, instance):
         """Resume the given instance."""
         self.update(context,
@@ -1522,7 +1486,6 @@ class API(base.Base):
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
                                     vm_states.STOPPED],
                           task_state=[None, task_states.RESIZE_VERIFY])
-    @scheduler_api.reroute_compute("rescue")
     def rescue(self, context, instance, rescue_password=None):
         """Rescue the given instance."""
         self.update(context,
@@ -1539,7 +1502,6 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.RESCUED])
-    @scheduler_api.reroute_compute("unrescue")
     def unrescue(self, context, instance):
         """Unrescue the given instance."""
         self.update(context,
@@ -1551,7 +1513,6 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_state(vm_state=[vm_states.ACTIVE])
-    @scheduler_api.reroute_compute("set_admin_password")
     def set_admin_password(self, context, instance, password=None):
         """Set the root/admin password for the given instance."""
         self.update(context,
@@ -1564,7 +1525,6 @@ class API(base.Base):
                                    params=params)
 
     @wrap_check_policy
-    @scheduler_api.reroute_compute("inject_file")
     def inject_file(self, context, instance, path, file_contents):
         """Write a file to the given instance."""
         params = {'path': path, 'file_contents': file_contents}

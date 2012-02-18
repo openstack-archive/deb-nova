@@ -103,12 +103,6 @@ class ServersDiskConfigTemplate(xmlutil.TemplateBuilder):
 
 class ServerDiskConfigController(wsgi.Controller):
     def _add_disk_config(self, context, servers):
-        # Filter out any servers that already have the key set
-        # (most likely from a remote zone)
-        servers = [s for s in servers if API_DISK_CONFIG not in s]
-        if not servers:
-            return
-
         # Get DB information for servers
         uuids = [server['id'] for server in servers]
         db_servers = db.instance_get_all_by_filters(context,
@@ -185,7 +179,7 @@ class Disk_config(extensions.ExtensionDescriptor):
     name = "DiskConfig"
     alias = ALIAS
     namespace = XMLNS_DCF
-    updated = "2011-09-27:00:00+00:00"
+    updated = "2011-09-27T00:00:00+00:00"
 
     def get_controller_extensions(self):
         servers_extension = extensions.ControllerExtension(

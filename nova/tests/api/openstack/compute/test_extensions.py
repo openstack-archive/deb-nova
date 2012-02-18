@@ -29,7 +29,6 @@ from nova.api.openstack import xmlutil
 from nova import flags
 from nova import test
 from nova.tests.api.openstack import fakes
-from nova import wsgi as base_wsgi
 
 FLAGS = flags.FLAGS
 
@@ -172,6 +171,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "Hosts",
             "Keypairs",
             "Multinic",
+            "Networks",
             "Quotas",
             "Rescue",
             "SchedulerHints",
@@ -185,8 +185,6 @@ class ExtensionControllerTest(ExtensionTestCase):
             "VirtualInterfaces",
             "Volumes",
             "VolumeTypes",
-            "Zones",
-            "Networks",
             ]
         self.ext_list.sort()
 
