@@ -1,3 +1,2 @@
 usr/lib/python*/dist-packages/*
 debian/source_nova.py /usr/share/apport/package-hooks/
-usr/share/locale
