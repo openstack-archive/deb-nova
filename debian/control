@@ -37,7 +37,8 @@ Build-Depends: debhelper (>= 7.0.50),
  euca2ools,
  ipython,
  bpython,
- python-qpid
+ python-qpid,
+ python-iso8601
 Build-Depends-Indep:
  python-setuptools,
  python-sphinx (>> 1.0)
