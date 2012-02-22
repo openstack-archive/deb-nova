@@ -31,6 +31,7 @@ from nova import flags
 from nova import log as logging
 from nova import test
 from nova import utils
+from nova.compute import aggregate_states
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova import exception
@@ -537,8 +538,8 @@ class XenAPIVMTestCase(test.TestCase):
         # Change the default host_call_plugin to one that'll return
         # a swap disk
         orig_func = stubs.FakeSessionForVMTests.host_call_plugin
-        stubs.FakeSessionForVMTests.host_call_plugin = \
-                stubs.FakeSessionForVMTests.host_call_plugin_swap
+        _host_call_plugin = stubs.FakeSessionForVMTests.host_call_plugin_swap
+        stubs.FakeSessionForVMTests.host_call_plugin = _host_call_plugin
         # Stubbing out firewall driver as previous stub sets a particular
         # stub for async plugin calls
         stubs.stubout_firewall_driver(self.stubs, self.conn)
@@ -978,8 +979,8 @@ class XenAPIMigrateInstance(test.TestCase):
         self.assertEqual(self.fake_vm_start_called, True)
 
     def test_finish_migrate_no_local_storage(self):
-        tiny_type_id = \
-                instance_types.get_instance_type_by_name('m1.tiny')['id']
+        tiny_type = instance_types.get_instance_type_by_name('m1.tiny')
+        tiny_type_id = tiny_type['id']
         self.instance_values.update({'instance_type_id': tiny_type_id,
                                      'root_gb': 0})
         instance = db.instance_create(self.context, self.instance_values)
@@ -1574,10 +1575,10 @@ class XenAPIDom0IptablesFirewallTestCase(test.TestCase):
         ipv6_addr_per_network = 1
         networks_count = 5
         instance_ref = self._create_instance_ref()
-        network_info = fake_network.\
-                        fake_get_instance_nw_info(self.stubs,
-                                                  networks_count,
-                                                  ipv4_addr_per_network)
+        _get_instance_nw_info = fake_network.fake_get_instance_nw_info
+        network_info = _get_instance_nw_info(self.stubs,
+                                             networks_count,
+                                             ipv4_addr_per_network)
         ipv4_len = len(self.fw.iptables.ipv4['filter'].rules)
         ipv6_len = len(self.fw.iptables.ipv6['filter'].rules)
         inst_ipv4, inst_ipv6 = self.fw.instance_rules(instance_ref,
@@ -1705,8 +1706,8 @@ class XenAPISRSelectionTestCase(test.TestCase):
         helper = vm_utils.VMHelper
         helper.XenAPI = session.get_imported_xenapi()
         host_ref = xenapi_fake.get_all('host')[0]
-        local_sr = xenapi_fake.\
-                    create_sr(name_label='Fake Storage',
+        local_sr = xenapi_fake.create_sr(
+                              name_label='Fake Storage',
                               type='lvm',
                               other_config={'i18n-original-value-name_label':
                                             'Local storage',
@@ -1723,11 +1724,10 @@ class XenAPISRSelectionTestCase(test.TestCase):
         helper = vm_utils.VMHelper
         helper.XenAPI = session.get_imported_xenapi()
         host_ref = xenapi_fake.get_all('host')[0]
-        local_sr = xenapi_fake.\
-                    create_sr(name_label='Fake Storage',
-                              type='lvm',
-                              other_config={'my_fake_sr': 'true'},
-                              host_ref=host_ref)
+        local_sr = xenapi_fake.create_sr(name_label='Fake Storage',
+                                         type='lvm',
+                                         other_config={'my_fake_sr': 'true'},
+                                         host_ref=host_ref)
         expected = helper.safe_find_sr(session)
         self.assertEqual(local_sr, expected)
 
@@ -1742,3 +1742,149 @@ class XenAPISRSelectionTestCase(test.TestCase):
         expected = helper.safe_find_sr(session)
         self.assertEqual(session.call_xenapi('pool.get_default_SR', pool_ref),
                          expected)
+
+
+class XenAPIAggregateTestCase(test.TestCase):
+    """Unit tests for aggregate operations."""
+    def setUp(self):
+        super(XenAPIAggregateTestCase, self).setUp()
+        self.stubs = stubout.StubOutForTesting()
+        self.flags(xenapi_connection_url='http://test_url',
+                   xenapi_connection_username='test_user',
+                   xenapi_connection_password='test_pass',
+                   instance_name_template='%d',
+                   firewall_driver='nova.virt.xenapi.firewall.'
+                                   'Dom0IptablesFirewallDriver',
+                   host='host')
+        xenapi_fake.reset()
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
+        self.context = context.get_admin_context()
+        self.conn = xenapi_conn.get_connection(False)
+        self.fake_metadata = {'master_compute': 'host'}
+
+    def tearDown(self):
+        super(XenAPIAggregateTestCase, self).tearDown()
+        self.stubs.UnsetAll()
+
+    def test_add_to_aggregate_called(self):
+        def fake_add_to_aggregate(context, aggregate, host):
+            fake_add_to_aggregate.called = True
+        self.stubs.Set(self.conn._pool,
+                       "add_to_aggregate",
+                       fake_add_to_aggregate)
+
+        self.conn.add_to_aggregate(None, None, None)
+        self.assertTrue(fake_add_to_aggregate.called)
+
+    def test_add_to_aggregate_for_first_host_sets_metadata(self):
+        def fake_init_pool(id, name):
+            fake_init_pool.called = True
+        self.stubs.Set(self.conn._pool, "_init_pool", fake_init_pool)
+
+        aggregate = self._aggregate_setup()
+        self.conn._pool.add_to_aggregate(self.context, aggregate, "host")
+        result = db.aggregate_get(self.context, aggregate.id)
+        self.assertTrue(fake_init_pool.called)
+        self.assertDictMatch(self.fake_metadata, result.metadetails)
+        self.assertEqual(aggregate_states.ACTIVE, result.operational_state)
+
+    def test_join_slave(self):
+        """Ensure join_slave gets called when the request gets to master."""
+        def fake_join_slave(id, compute_uuid, host, url, user, password):
+            fake_join_slave.called = True
+        self.stubs.Set(self.conn._pool, "_join_slave", fake_join_slave)
+
+        aggregate = self._aggregate_setup(hosts=['host', 'host2'],
+                                          metadata=self.fake_metadata)
+        self.conn._pool.add_to_aggregate(self.context, aggregate, "host2",
+                                         compute_uuid='fake_uuid',
+                                         url='fake_url',
+                                         user='fake_user',
+                                         passwd='fake_pass',
+                                         xenhost_uuid='fake_uuid')
+        self.assertTrue(fake_join_slave.called)
+
+    def test_add_to_aggregate_first_host(self):
+        def fake_pool_set_name_label(self, session, pool_ref, name):
+            fake_pool_set_name_label.called = True
+        self.stubs.Set(xenapi_fake.SessionBase, "pool_set_name_label",
+                       fake_pool_set_name_label)
+        self.conn._session.call_xenapi("pool.create", {"name": "asdf"})
+
+        values = {"name": 'fake_aggregate',
+                  "availability_zone": 'fake_zone'}
+        result = db.aggregate_create(self.context, values)
+        db.aggregate_host_add(self.context, result.id, "host")
+        aggregate = db.aggregate_get(self.context, result.id)
+        self.assertEqual(["host"], aggregate.hosts)
+        self.assertEqual({}, aggregate.metadetails)
+
+        self.conn._pool.add_to_aggregate(self.context, aggregate, "host")
+        self.assertTrue(fake_pool_set_name_label.called)
+
+    def test_remove_from_aggregate_called(self):
+        def fake_remove_from_aggregate(context, aggregate, host):
+            fake_remove_from_aggregate.called = True
+        self.stubs.Set(self.conn._pool,
+                       "remove_from_aggregate",
+                       fake_remove_from_aggregate)
+
+        self.conn.remove_from_aggregate(None, None, None)
+        self.assertTrue(fake_remove_from_aggregate.called)
+
+    def test_remove_from_empty_aggregate(self):
+        values = {"name": 'fake_aggregate',
+                  "availability_zone": 'fake_zone'}
+        result = db.aggregate_create(self.context, values)
+        self.assertRaises(exception.AggregateError,
+                          self.conn._pool.remove_from_aggregate,
+                          None, result, "test_host")
+
+    def test_remove_slave(self):
+        """Ensure eject slave gets called."""
+        def fake_eject_slave(id, compute_uuid, host_uuid):
+            fake_eject_slave.called = True
+        self.stubs.Set(self.conn._pool, "_eject_slave", fake_eject_slave)
+
+        self.fake_metadata['host2'] = 'fake_host2_uuid'
+        aggregate = self._aggregate_setup(hosts=['host', 'host2'],
+                                          metadata=self.fake_metadata)
+        self.conn._pool.remove_from_aggregate(self.context, aggregate, "host2")
+        self.assertTrue(fake_eject_slave.called)
+
+    def test_remove_master_solo(self):
+        """Ensure metadata are cleared after removal."""
+        def fake_clear_pool(id):
+            fake_clear_pool.called = True
+        self.stubs.Set(self.conn._pool, "_clear_pool", fake_clear_pool)
+
+        aggregate = self._aggregate_setup(aggr_state=aggregate_states.ACTIVE,
+                                          metadata=self.fake_metadata)
+        self.conn._pool.remove_from_aggregate(self.context, aggregate, "host")
+        result = db.aggregate_get(self.context, aggregate.id)
+        self.assertTrue(fake_clear_pool.called)
+        self.assertDictMatch({}, result.metadetails)
+        self.assertEqual(aggregate_states.ACTIVE, result.operational_state)
+
+    def test_remote_master_non_empty_pool(self):
+        """Ensure AggregateError is raised if removing the master."""
+        aggregate = self._aggregate_setup(aggr_state=aggregate_states.ACTIVE,
+                                          hosts=['host', 'host2'],
+                                          metadata=self.fake_metadata)
+        self.assertRaises(exception.AggregateError,
+                          self.conn._pool.remove_from_aggregate,
+                          self.context, aggregate, "host")
+
+    def _aggregate_setup(self, aggr_name='fake_aggregate',
+                         aggr_zone='fake_zone',
+                         aggr_state=aggregate_states.CREATED,
+                         hosts=['host'], metadata=None):
+        values = {"name": aggr_name,
+                  "availability_zone": aggr_zone,
+                  "operational_state": aggr_state, }
+        result = db.aggregate_create(self.context, values)
+        for host in hosts:
+            db.aggregate_host_add(self.context, result.id, host)
+        if metadata:
+            db.aggregate_metadata_add(self.context, result.id, metadata)
+        return db.aggregate_get(self.context, result.id)

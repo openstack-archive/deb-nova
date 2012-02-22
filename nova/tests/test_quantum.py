@@ -220,10 +220,41 @@ class QuantumNovaTestCase(test.TestCase):
         n['uuid'] = nwks[0]['uuid']
 
 
+class QuantumAllocationTestCase(QuantumNovaTestCase):
+    def test_get_network_in_db(self):
+        context = self.mox.CreateMockAnything()
+        context.elevated().AndReturn('elevated')
+        self.mox.StubOutWithMock(db, 'network_get_by_uuid')
+        self.net_man.context = context
+        db.network_get_by_uuid('elevated', 'quantum_net_id').AndReturn(
+                                                                {'uuid': 1})
+
+        self.mox.ReplayAll()
+
+        network = self.net_man.get_network(context, ('quantum_net_id',
+                                                     'net_tenant_id'))
+        self.assertEquals(network['quantum_net_id'], 'quantum_net_id')
+        self.assertEquals(network['uuid'], 1)
+
+    def test_get_network_not_in_db(self):
+        context = self.mox.CreateMockAnything()
+        context.elevated().AndReturn('elevated')
+        self.mox.StubOutWithMock(db, 'network_get_by_uuid')
+        self.net_man.context = context
+        db.network_get_by_uuid('elevated', 'quantum_net_id').AndReturn(None)
+
+        self.mox.ReplayAll()
+
+        network = self.net_man.get_network(context, ('quantum_net_id',
+                                                     'net_tenant_id'))
+        self.assertEquals(network['quantum_net_id'], 'quantum_net_id')
+        self.assertEquals(network['uuid'], 'quantum_net_id')
+
+
 class QuantumDeallocationTestCase(QuantumNovaTestCase):
     def test_deallocate_port(self):
-        quantum = self.mox.CreateMock(quantum_connection\
-        .QuantumClientConnection)
+        quantum = self.mox.CreateMock(
+                                quantum_connection.QuantumClientConnection)
         quantum.get_port_by_attachment('q_tenant_id', 'net_id',
                                        'interface_id').AndReturn('port_id')
         quantum.detach_and_delete_port('q_tenant_id', 'net_id', 'port_id')
@@ -490,8 +521,8 @@ class QuantumNovaPortSecurityTestCase(QuantumNovaTestCase):
             self.assertTrue(pairs[0]['mac_address'] == fake_mac)
             self.net_man.q_conn.create_and_attach_port = oldfunc
             return oldfunc(tenant_id, net_id, interface_id, **kwargs)
-        self.net_man.q_conn.create_and_attach_port = \
-            _instrumented_create_and_attach_port
+        _port_attach = _instrumented_create_and_attach_port
+        self.net_man.q_conn.create_and_attach_port = _port_attach
         nw_info = self.net_man.allocate_for_instance(ctx,
                         instance_id=instance_ref['id'], host="",
                         rxtx_factor=3,
@@ -525,8 +556,8 @@ class QuantumNovaPortSecurityTestCase(QuantumNovaTestCase):
             self.assertTrue(len(pairs) == 0)
             self.net_man.q_conn.create_and_attach_port = oldfunc
             return oldfunc(tenant_id, net_id, interface_id, **kwargs)
-        self.net_man.q_conn.create_and_attach_port = \
-            _instrumented_create_and_attach_port
+        _port_attach = _instrumented_create_and_attach_port
+        self.net_man.q_conn.create_and_attach_port = _port_attach
         nw_info = self.net_man.allocate_for_instance(ctx,
                         instance_id=instance_ref['id'], host="",
                         rxtx_factor=3,
