@@ -15,9 +15,9 @@ if [ "$1" = "configure" ]; then
         find /var/lib/nova/ -name 'rootfs' -prune -o \
            -group nogroup -a -user nova -exec chown nova:nova {} \;
     fi
-    chmod 0600 /etc/nova/nova.conf
+    chmod 0640 /etc/nova/nova.conf
     chmod 0440 /etc/sudoers.d/nova_sudoers
-    chmod 0700 /var/log/nova
+    chmod 0750 /var/log/nova
     if ! grep sql_connection /etc/nova/nova.conf
     then
       su -c 'nova-manage db sync' nova || true
