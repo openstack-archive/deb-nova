@@ -1,9 +1,12 @@
-nova (2012.1~e3-5) UNRELEASED; urgency=low
+nova (2012.1~e4-1) unstable; urgency=low
 
+  * New upstream version
+
+  [ Julien Danjou ]
   * nova-api recommends python-keystone
   * Allow nova group members to read logs and configuration file.
 
- -- Julien Danjou <acid@debian.org>  Thu, 23 Feb 2012 10:51:57 +0100
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Fri, 02 Mar 2012 08:22:03 +0100
 
 nova (2012.1~e3-4) unstable; urgency=low
 
