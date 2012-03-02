@@ -16,22 +16,31 @@
 #    under the License.
 
 import httplib
-import socket
-import urllib
 import json
+import socket
+import time
+import urllib
 
 from nova import flags
+from nova import log as logging
+from nova.openstack.common import cfg
 
+
+melange_opts = [
+    cfg.StrOpt('melange_host',
+               default='127.0.0.1',
+               help='HOST for connecting to melange'),
+    cfg.IntOpt('melange_port',
+               default=9898,
+               help='PORT for connecting to melange'),
+    cfg.IntOpt('melange_num_retries',
+               default=0,
+               help='Number retries when contacting melange'),
+    ]
 
 FLAGS = flags.FLAGS
-
-flags.DEFINE_string('melange_host',
-                    '127.0.0.1',
-                    'HOST for connecting to melange')
-
-flags.DEFINE_string('melange_port',
-                    '9898',
-                    'PORT for connecting to melange')
+FLAGS.register_opts(melange_opts)
+LOG = logging.getLogger(__name__)
 
 json_content_type = {'Content-type': "application/json"}
 
@@ -45,14 +54,15 @@ class MelangeConnection(object):
         if host is None:
             host = FLAGS.melange_host
         if port is None:
-            port = int(FLAGS.melange_port)
+            port = FLAGS.melange_port
         self.host = host
         self.port = port
         self.use_ssl = use_ssl
         self.version = "v0.1"
 
     def get(self, path, params=None, headers=None):
-        return self.do_request("GET", path, params=params, headers=headers)
+        return self.do_request("GET", path, params=params, headers=headers,
+                               retries=FLAGS.melange_num_retries)
 
     def post(self, path, body=None, headers=None):
         return self.do_request("POST", path, body=body, headers=headers)
@@ -67,48 +77,57 @@ class MelangeConnection(object):
             return httplib.HTTPConnection(self.host, self.port)
 
     def do_request(self, method, path, body=None, headers=None, params=None,
-            content_type=".json"):
+                   content_type=".json", retries=0):
         headers = headers or {}
         params = params or {}
 
         url = "/%s/%s%s" % (self.version, path, content_type)
         if params:
             url += "?%s" % urllib.urlencode(params)
-        try:
+        for i in xrange(retries + 1):
             connection = self._get_connection()
-            connection.request(method, url, body, headers)
-            response = connection.getresponse()
-            response_str = response.read()
-            if response.status < 400:
-                return response_str
-            raise Exception(_("Server returned error: %s" % response_str))
-        except (socket.error, IOError), e:
-            raise Exception(_("Unable to connect to "
-                            "server. Got error: %s" % e))
+            try:
+                connection.request(method, url, body, headers)
+                response = connection.getresponse()
+                response_str = response.read()
+                if response.status < 400:
+                    return response_str
+                raise Exception(_("Server returned error: %s" % response_str))
+            except (socket.error, IOError), e:
+                LOG.exception(_('Connection error contacting melange'
+                                ' service, retrying'))
 
-    def allocate_ip(self, network_id, vif_id,
+                time.sleep(1)
+
+        raise exception.MelangeConnectionFailed(
+                reason=_("Maximum attempts reached"))
+
+    def allocate_ip(self, network_id, network_tenant_id, vif_id,
                     project_id=None, mac_address=None):
-        tenant_scope = "/tenants/%s" % project_id if project_id else ""
+        LOG.info(_("allocate IP on network |%(network_id)s| "
+                   "belonging to |%(network_tenant_id)s| "
+                   "to this vif |%(vif_id)s| with mac |%(mac_address)s| "
+                   "belonging to |%(project_id)s| ") % locals())
+        tenant_scope = "/tenants/%s" % (network_tenant_id
+                                        if network_tenant_id else "")
         request_body = (json.dumps(dict(network=dict(mac_address=mac_address,
-                                 tenant_id=project_id)))
+                                                     tenant_id=project_id)))
                     if mac_address else None)
         url = ("ipam%(tenant_scope)s/networks/%(network_id)s/"
-           "interfaces/%(vif_id)s/ip_allocations" % locals())
-        response = self.post(url, body=request_body,
-                                    headers=json_content_type)
+               "interfaces/%(vif_id)s/ip_allocations" % locals())
+        response = self.post(url, body=request_body, headers=json_content_type)
         return json.loads(response)['ip_addresses']
 
     def create_block(self, network_id, cidr,
-                    project_id=None, gateway=None, dns1=None, dns2=None):
+                     project_id=None, gateway=None, dns1=None, dns2=None):
         tenant_scope = "/tenants/%s" % project_id if project_id else ""
 
         url = "ipam%(tenant_scope)s/ip_blocks" % locals()
 
         req_params = dict(ip_block=dict(cidr=cidr, network_id=network_id,
-                                    type='private', gateway=gateway,
-                                    dns1=dns1, dns2=dns2))
-        self.post(url, body=json.dumps(req_params),
-                                headers=json_content_type)
+                                        type='private', gateway=gateway,
+                                        dns1=dns1, dns2=dns2))
+        self.post(url, body=json.dumps(req_params), headers=json_content_type)
 
     def delete_block(self, block_id, project_id=None):
         tenant_scope = "/tenants/%s" % project_id if project_id else ""
@@ -125,11 +144,20 @@ class MelangeConnection(object):
         response = self.get(url, headers=json_content_type)
         return json.loads(response)
 
+    def get_routes(self, block_id, project_id=None):
+        tenant_scope = "/tenants/%s" % project_id if project_id else ""
+
+        url = ("ipam%(tenant_scope)s/ip_blocks/%(block_id)s/ip_routes" %
+               locals())
+
+        response = self.get(url, headers=json_content_type)
+        return json.loads(response)['ip_routes']
+
     def get_allocated_ips(self, network_id, vif_id, project_id=None):
         tenant_scope = "/tenants/%s" % project_id if project_id else ""
 
         url = ("ipam%(tenant_scope)s/networks/%(network_id)s/"
-           "interfaces/%(vif_id)s/ip_allocations" % locals())
+               "interfaces/%(vif_id)s/ip_allocations" % locals())
 
         response = self.get(url, headers=json_content_type)
         return json.loads(response)['ip_addresses']
@@ -146,7 +174,7 @@ class MelangeConnection(object):
         tenant_scope = "/tenants/%s" % project_id if project_id else ""
 
         url = ("ipam%(tenant_scope)s/networks/%(network_id)s/"
-           "interfaces/%(vif_id)s/ip_allocations" % locals())
+               "interfaces/%(vif_id)s/ip_allocations" % locals())
 
         self.delete(url, headers=json_content_type)
 

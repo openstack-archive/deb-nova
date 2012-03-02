@@ -25,7 +25,7 @@ from nova.tests.integrated.api import client
 from nova.volume import driver
 
 
-LOG = logging.getLogger('nova.tests.integrated')
+LOG = logging.getLogger(__name__)
 
 
 class VolumesTest(integrated_helpers._IntegratedTestBase):
@@ -118,32 +118,32 @@ class VolumesTest(integrated_helpers._IntegratedTestBase):
 
         create_actions = driver.LoggingVolumeDriver.logs_like(
                             'create_volume',
-                            id=created_volume_id)
+                            id=int(created_volume_id))
         LOG.debug("Create_Actions: %s" % create_actions)
 
         self.assertEquals(1, len(create_actions))
         create_action = create_actions[0]
-        self.assertEquals(create_action['id'], created_volume_id)
+        self.assertEquals(create_action['id'], int(created_volume_id))
         self.assertEquals(create_action['availability_zone'], 'nova')
         self.assertEquals(create_action['size'], 1)
 
         export_actions = driver.LoggingVolumeDriver.logs_like(
                             'create_export',
-                            id=created_volume_id)
+                            id=int(created_volume_id))
         self.assertEquals(1, len(export_actions))
         export_action = export_actions[0]
-        self.assertEquals(export_action['id'], created_volume_id)
+        self.assertEquals(export_action['id'], int(created_volume_id))
         self.assertEquals(export_action['availability_zone'], 'nova')
 
         delete_actions = driver.LoggingVolumeDriver.logs_like(
                             'delete_volume',
-                            id=created_volume_id)
+                            id=int(created_volume_id))
         self.assertEquals(1, len(delete_actions))
         delete_action = export_actions[0]
-        self.assertEquals(delete_action['id'], created_volume_id)
+        self.assertEquals(delete_action['id'], int(created_volume_id))
 
     def test_create_volume_with_metadata(self):
-        """Creates and deletes a volume."""
+        """Creates a volume with metadata."""
 
         # Create volume
         metadata = {'key1': 'value1',
@@ -159,6 +159,23 @@ class VolumesTest(integrated_helpers._IntegratedTestBase):
         found_volume = self.api.get_volume(created_volume_id)
         self.assertEqual(created_volume_id, found_volume['id'])
         self.assertEqual(metadata, found_volume['metadata'])
+
+    def test_create_volume_in_availability_zone(self):
+        """Creates a volume in availability_zone."""
+
+        # Create volume
+        availability_zone = 'zone1:host1'
+        created_volume = self.api.post_volume(
+            {'volume': {'size': 1,
+                        'availability_zone': availability_zone}})
+        LOG.debug("created_volume: %s" % created_volume)
+        self.assertTrue(created_volume['id'])
+        created_volume_id = created_volume['id']
+
+        # Check it's there and availability zone present
+        found_volume = self.api.get_volume(created_volume_id)
+        self.assertEqual(created_volume_id, found_volume['id'])
+        self.assertEqual(availability_zone, found_volume['availabilityZone'])
 
 if __name__ == "__main__":
     unittest.main()

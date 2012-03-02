@@ -30,18 +30,22 @@ from nova.compute import power_state
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmware_images
 from nova.virt.vmwareapi import network_utils
 
-FLAGS = flags.FLAGS
-flags.DEFINE_string('vmware_vif_driver',
-                    'nova.virt.vmwareapi.vif.VMWareVlanBridgeDriver',
-                    'The VMWare VIF driver to configure the VIFs.')
 
-LOG = logging.getLogger("nova.virt.vmwareapi.vmops")
+vmware_vif_driver_opt = cfg.StrOpt('vmware_vif_driver',
+        default='nova.virt.vmwareapi.vif.VMWareVlanBridgeDriver',
+        help='The VMWare VIF driver to configure the VIFs.')
+
+FLAGS = flags.FLAGS
+FLAGS.register_opt(vmware_vif_driver_opt)
+
+LOG = logging.getLogger(__name__)
 
 VMWARE_POWER_STATES = {
                    'poweredOff': power_state.SHUTDOWN,
@@ -119,7 +123,7 @@ class VMWareVMOps(object):
 
             if data_store_name is None:
                 msg = _("Couldn't get a local Datastore reference")
-                LOG.exception(msg)
+                LOG.error(msg)
                 raise exception.Error(msg)
 
         data_store_name = _get_datastore_ref()
@@ -129,9 +133,10 @@ class VMWareVMOps(object):
             Get the Size of the flat vmdk file that is there on the storage
             repository.
             """
-            image_size, image_properties = \
-                    vmware_images.get_vmdk_size_and_properties(context,
-                                       instance.image_ref, instance)
+            _image_info = vmware_images.get_vmdk_size_and_properties(context,
+                                                          instance.image_ref,
+                                                          instance)
+            image_size, image_properties = _image_info
             vmdk_file_size_in_kb = int(image_size) / 1024
             os_type = image_properties.get("vmware_ostype", "otherGuest")
             adapter_type = image_properties.get("vmware_adaptertype",
@@ -156,9 +161,8 @@ class VMWareVMOps(object):
         vm_folder_mor, res_pool_mor = _get_vmfolder_and_res_pool_mors()
 
         def _check_if_network_bridge_exists(network_name):
-            network_ref = \
-                network_utils.get_network_with_the_name(self._session,
-                                                        network_name)
+            network_ref = network_utils.get_network_with_the_name(
+                          self._session, network_name)
             if network_ref is None:
                 raise exception.NetworkNotFoundForBridge(bridge=network_name)
             return network_ref
@@ -356,9 +360,9 @@ class VMWareVMOps(object):
             hardware_devices = self._session._call_method(vim_util,
                         "get_dynamic_property", vm_ref,
                         "VirtualMachine", "config.hardware.device")
-            vmdk_file_path_before_snapshot, adapter_type = \
-                vm_util.get_vmdk_file_path_and_adapter_type(client_factory,
-                                                            hardware_devices)
+            _vmdk_info = vm_util.get_vmdk_file_path_and_adapter_type(
+                         client_factory, hardware_devices)
+            vmdk_file_path_before_snapshot, adapter_type = _vmdk_info
             datastore_name = vm_util.split_datastore_path(
                                       vmdk_file_path_before_snapshot)[0]
             os_type = self._session._call_method(vim_util,
@@ -367,8 +371,8 @@ class VMWareVMOps(object):
             return (vmdk_file_path_before_snapshot, adapter_type,
                     datastore_name, os_type)
 
-        vmdk_file_path_before_snapshot, adapter_type, datastore_name,\
-            os_type = _get_vm_and_vmdk_attribs()
+        (vmdk_file_path_before_snapshot, adapter_type, datastore_name,
+         os_type) = _get_vm_and_vmdk_attribs()
 
         def _create_vm_snapshot():
             # Create a snapshot of the VM
@@ -554,8 +558,8 @@ class VMWareVMOps(object):
                     elif prop.name == "config.files.vmPathName":
                         vm_config_pathname = prop.val
             if vm_config_pathname:
-                datastore_name, vmx_file_path = \
-                            vm_util.split_datastore_path(vm_config_pathname)
+                _ds_path = vm_util.split_datastore_path(vm_config_pathname)
+                datastore_name, vmx_file_path = _ds_path
             # Power off the VM if it is in PoweredOn state.
             if pwr_state == "poweredOn":
                 LOG.debug(_("Powering off the VM %s") % instance.name)
@@ -606,12 +610,12 @@ class VMWareVMOps(object):
             LOG.exception(exc)
 
     def pause(self, instance):
-        """Pause a VM instance."""
-        raise exception.ApiError("pause not supported for vmwareapi")
+        msg = _("pause not supported for vmwareapi")
+        raise NotImplementedError(msg)
 
     def unpause(self, instance):
-        """Un-Pause a VM instance."""
-        raise exception.ApiError("unpause not supported for vmwareapi")
+        msg = _("unpause not supported for vmwareapi")
+        raise NotImplementedError(msg)
 
     def suspend(self, instance):
         """Suspend the specified instance."""
@@ -657,11 +661,11 @@ class VMWareVMOps(object):
             reason = _("instance is not in a suspended state")
             raise exception.InstanceResumeFailure(reason=reason)
 
-    def get_info(self, instance_name):
+    def get_info(self, instance):
         """Return data about the VM instance."""
-        vm_ref = self._get_vm_ref_from_the_name(instance_name)
+        vm_ref = self._get_vm_ref_from_the_name(instance['name'])
         if vm_ref is None:
-            raise exception.InstanceNotFound(instance_id=instance_name)
+            raise exception.InstanceNotFound(instance_id=instance['name'])
 
         lst_properties = ["summary.config.numCpu",
                     "summary.config.memorySizeMB",
@@ -690,8 +694,8 @@ class VMWareVMOps(object):
 
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics."""
-        raise exception.ApiError("get_diagnostics not implemented for "
-                                 "vmwareapi")
+        msg = _("get_diagnostics not implemented for vmwareapi")
+        raise NotImplementedError(msg)
 
     def get_console_output(self, instance):
         """Return snapshot of console."""
@@ -713,10 +717,6 @@ class VMWareVMOps(object):
             return result.read()
         else:
             return ""
-
-    def get_ajax_console(self, instance):
-        """Return link to instance's ajax console."""
-        return 'http://fakeajaxconsole/fake_url'
 
     def _set_machine_id(self, client_factory, instance, network_info):
         """
@@ -741,17 +741,16 @@ class VMWareVMOps(object):
             else:
                 dns = ''
 
-            interface_str = "%s;%s;%s;%s;%s;%s" % \
-                                            (info['mac'],
-                                             ip_v4 and ip_v4['ip'] or '',
-                                             ip_v4 and ip_v4['netmask'] or '',
-                                             info['gateway'],
-                                             info['broadcast'],
-                                             dns)
+            interface_str = ";".join([info['mac'],
+                                      ip_v4 and ip_v4['ip'] or '',
+                                      ip_v4 and ip_v4['netmask'] or '',
+                                      info['gateway'],
+                                      info['broadcast'],
+                                      dns])
             machine_id_str = machine_id_str + interface_str + '#'
 
-        machine_id_change_spec = \
-            vm_util.get_machine_id_change_spec(client_factory, machine_id_str)
+        machine_id_change_spec = vm_util.get_machine_id_change_spec(
+                                 client_factory, machine_id_str)
 
         LOG.debug(_("Reconfiguring VM instance %(name)s to set the machine id "
                   "with ip - %(ip_addr)s") %

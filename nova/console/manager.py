@@ -22,20 +22,27 @@ import socket
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import manager
 from nova import rpc
 from nova import utils
 
 
+console_manager_opts = [
+    cfg.StrOpt('console_driver',
+               default='nova.console.xvp.XVPConsoleProxy',
+               help='Driver to use for the console proxy'),
+    cfg.BoolOpt('stub_compute',
+                default=False,
+                help='Stub calls to compute worker for tests'),
+    cfg.StrOpt('console_public_hostname',
+               default=socket.gethostname(),
+               help='Publicly visable name for this console host'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('console_driver',
-                    'nova.console.xvp.XVPConsoleProxy',
-                    'Driver to use for the console proxy')
-flags.DEFINE_boolean('stub_compute', False,
-                     'Stub calls to compute worker for tests')
-flags.DEFINE_string('console_public_hostname',
-                    socket.gethostname(),
-                    'Publicly visable name for this console host')
+FLAGS.register_opts(console_manager_opts)
+LOG = logging.getLogger(__name__)
 
 
 class ConsoleProxyManager(manager.Manager):
@@ -67,7 +74,7 @@ class ConsoleProxyManager(manager.Manager):
                                                       pool['id'],
                                                       instance_id)
         except exception.NotFound:
-            logging.debug(_('Adding console'))
+            LOG.debug(_('Adding console'))
             if not password:
                 password = utils.generate_password(8)
             if not port:
@@ -87,7 +94,7 @@ class ConsoleProxyManager(manager.Manager):
         try:
             console = self.db.console_get(context, console_id)
         except exception.NotFound:
-            logging.debug(_('Tried to remove non-existant console '
+            LOG.debug(_('Tried to remove non-existant console '
                             '%(console_id)s.') %
                             {'console_id': console_id})
             return

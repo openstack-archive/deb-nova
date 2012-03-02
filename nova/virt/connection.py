@@ -26,14 +26,20 @@ from nova import log as logging
 from nova import utils
 from nova.virt import driver
 from nova.virt import fake
-from nova.virt import hyperv
 from nova.virt.libvirt import connection as libvirt_conn
 from nova.virt import vmwareapi_conn
 from nova.virt import xenapi_conn
 
 
-LOG = logging.getLogger("nova.virt.connection")
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
+
+"""
+In case of baremetal (FLAGS.connection_type),
+specific driver is set by FLAGS.baremetal_driver
+"""
+if FLAGS.connection_type == 'baremetal':
+    from nova.virt.baremetal import proxy
 
 
 def get_connection(read_only=False):
@@ -57,6 +63,7 @@ def get_connection(read_only=False):
                             * fake
                             * libvirt
                             * xenapi
+                            * vmwareapi
     """
     # TODO(termie): maybe lazy load after initial check for permissions
     # TODO(termie): check whether we can be disconnected
@@ -67,10 +74,10 @@ def get_connection(read_only=False):
         conn = libvirt_conn.get_connection(read_only)
     elif t == 'xenapi':
         conn = xenapi_conn.get_connection(read_only)
-    elif t == 'hyperv':
-        conn = hyperv.get_connection(read_only)
     elif t == 'vmwareapi':
         conn = vmwareapi_conn.get_connection(read_only)
+    elif t == 'baremetal':
+        conn = proxy.get_connection(read_only)
     else:
         raise Exception('Unknown connection type "%s"' % t)
 

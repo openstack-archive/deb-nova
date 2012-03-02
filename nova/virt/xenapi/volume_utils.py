@@ -31,7 +31,7 @@ from nova import utils
 from nova.virt.xenapi import HelperBase
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger("nova.virt.xenapi.volume_utils")
+LOG = logging.getLogger(__name__)
 
 
 class StorageError(Exception):
@@ -235,13 +235,22 @@ class VolumeHelper(HelperBase):
                         ' PBD %(pbd)s') % locals())
 
     @classmethod
-    def introduce_vdi(cls, session, sr_ref, vdi_uuid=None):
+    def introduce_vdi(cls, session, sr_ref, vdi_uuid=None, target_lun=None):
         """Introduce VDI in the host"""
         try:
             session.call_xenapi("SR.scan", sr_ref)
             if vdi_uuid:
                 LOG.debug("vdi_uuid: %s" % vdi_uuid)
                 vdi_ref = session.call_xenapi("VDI.get_by_uuid", vdi_uuid)
+            elif target_lun:
+                vdi_refs = session.call_xenapi("SR.get_VDIs", sr_ref)
+                for curr_ref in vdi_refs:
+                    curr_rec = session.call_xenapi("VDI.get_record", curr_ref)
+                    if ('sm_config' in curr_rec and
+                            'LUNid' in curr_rec['sm_config'] and
+                            curr_rec['sm_config']['LUNid'] == str(target_lun)):
+                        vdi_ref = curr_ref
+                        break
             else:
                 vdi_ref = (session.call_xenapi("SR.get_VDIs", sr_ref))[0]
         except cls.XenAPI.Failure, exc:
@@ -293,8 +302,8 @@ class VolumeHelper(HelperBase):
                 vbd_refs = session.call_xenapi("VDI.get_VBDs", vdi_ref)
             except StorageError, ex:
                 LOG.exception(ex)
-                raise StorageError(_('Unable to find vbd for vdi %s') \
-                                   % vdi_ref)
+                raise StorageError(_('Unable to find vbd for vdi %s') %
+                                   vdi_ref)
             if len(vbd_refs) > 0:
                 return
 
@@ -323,10 +332,10 @@ class VolumeHelper(HelperBase):
         target_iqn = data['target_iqn']
         LOG.debug('(vol_id,number,host,port,iqn): (%s,%s,%s,%s)',
                   volume_id, target_host, target_port, target_iqn)
-        if (device_number < 0) or \
-            (volume_id is None) or \
-            (target_host is None) or \
-            (target_iqn is None):
+        if (device_number < 0 or
+            volume_id is None or
+            target_host is None or
+            target_iqn is None):
             raise StorageError(_('Unable to obtain target information'
                     ' %(data)s, %(mountpoint)s') % locals())
         volume_info = {}
@@ -334,8 +343,8 @@ class VolumeHelper(HelperBase):
         volume_info['target'] = target_host
         volume_info['port'] = target_port
         volume_info['targetIQN'] = target_iqn
-        if  'auth_method' in connection_info and \
-             connection_info['auth_method'] == 'CHAP':
+        if ('auth_method' in connection_info and
+            connection_info['auth_method'] == 'CHAP'):
             volume_info['chapuser'] = connection_info['auth_username']
             volume_info['chappassword'] = connection_info['auth_password']
 
@@ -348,8 +357,8 @@ class VolumeHelper(HelperBase):
             mountpoint = mountpoint[5:]
         if re.match('^[hs]d[a-p]$', mountpoint):
             return (ord(mountpoint[2:3]) - ord('a'))
-        elif re.match('^vd[a-p]$', mountpoint):
-            return (ord(mountpoint[2:3]) - ord('a'))
+        elif re.match('^x?vd[a-p]$', mountpoint):
+            return (ord(mountpoint[-1]) - ord('a'))
         elif re.match('^[0-9]+$', mountpoint):
             return string.atoi(mountpoint, 10)
         else:

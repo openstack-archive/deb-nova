@@ -72,16 +72,6 @@ class SchedulerManagerTestCase(test.TestCase):
         result = self.manager.get_host_list(self.context)
         self.assertEqual(result, expected)
 
-    def test_get_zone_list(self):
-        expected = 'fake_zones'
-
-        self.mox.StubOutWithMock(self.manager.driver, 'get_zone_list')
-        self.manager.driver.get_zone_list().AndReturn(expected)
-
-        self.mox.ReplayAll()
-        result = self.manager.get_zone_list(self.context)
-        self.assertEqual(result, expected)
-
     def test_get_service_capabilities(self):
         expected = 'fake_service_capabs'
 
@@ -141,18 +131,6 @@ class SchedulerManagerTestCase(test.TestCase):
         self.mox.ReplayAll()
         self.manager.noexist(self.context, self.topic,
                 *self.fake_args, **self.fake_kwargs)
-
-    def test_select(self):
-        expected = 'fake_select'
-
-        self.mox.StubOutWithMock(self.manager.driver, 'select')
-        self.manager.driver.select(self.context,
-                *self.fake_args, **self.fake_kwargs).AndReturn(expected)
-
-        self.mox.ReplayAll()
-        result = self.manager.select(self.context, *self.fake_args,
-                **self.fake_kwargs)
-        self.assertEqual(result, expected)
 
     def test_show_host_resources(self):
         host = 'fake_host'
@@ -258,16 +236,6 @@ class SchedulerTestCase(test.TestCase):
 
         self.mox.ReplayAll()
         result = self.driver.get_host_list()
-        self.assertEqual(result, expected)
-
-    def test_get_zone_list(self):
-        expected = 'fake_zones'
-
-        self.mox.StubOutWithMock(self.driver.zone_manager, 'get_zone_list')
-        self.driver.zone_manager.get_zone_list().AndReturn(expected)
-
-        self.mox.ReplayAll()
-        result = self.driver.get_zone_list()
         self.assertEqual(result, expected)
 
     def test_get_service_capabilities(self):
@@ -446,10 +414,6 @@ class SchedulerTestCase(test.TestCase):
         db.instance_get_all_by_host(self.context, dest).AndReturn(
                 [dict(memory_mb=256), dict(memory_mb=512)])
         # assert_compute_node_has_enough_disk()
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue1')
-        rpc.call(self.context, 'dest_queue1',
-                {'method': 'update_available_resource'})
         self.driver._get_compute_info(self.context, dest,
                 'disk_available_least').AndReturn(1025)
         db.queue_get_for(self.context, FLAGS.compute_topic,
@@ -698,10 +662,6 @@ class SchedulerTestCase(test.TestCase):
                 instance, dest)
 
         # Not enough disk
-        db.queue_get_for(self.context, FLAGS.compute_topic,
-                dest).AndReturn('dest_queue')
-        rpc.call(self.context, 'dest_queue',
-                {'method': 'update_available_resource'})
         self.driver._get_compute_info(self.context, dest,
                 'disk_available_least').AndReturn(1023)
         db.queue_get_for(self.context, FLAGS.compute_topic,

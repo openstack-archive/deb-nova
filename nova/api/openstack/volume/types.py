@@ -42,8 +42,8 @@ class VolumeTypeTemplate(xmlutil.TemplateBuilder):
 class VolumeTypesTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('volume_types')
-        sel = lambda obj, do_raise=False: obj.values()
-        elem = xmlutil.SubTemplateElement(root, 'volume_type', selector=sel)
+        elem = xmlutil.SubTemplateElement(root, 'volume_type',
+                                          selector='volume_types')
         make_voltype(elem)
         return xmlutil.MasterTemplate(root, 1)
 
@@ -55,7 +55,7 @@ class VolumeTypesController(object):
     def index(self, req):
         """ Returns the list of volume types """
         context = req.environ['nova.context']
-        return volume_types.get_all_types(context)
+        return {'volume_types': volume_types.get_all_types(context).values()}
 
     @wsgi.serializers(xml=VolumeTypeTemplate)
     def show(self, req, id):
@@ -64,9 +64,11 @@ class VolumeTypesController(object):
 
         try:
             vol_type = volume_types.get_volume_type(context, id)
-        except exception.NotFound or exception.ApiError:
+        except exception.NotFound:
             raise exc.HTTPNotFound()
 
+        # TODO(bcwaldon): remove str cast once we use uuids
+        vol_type['id'] = str(vol_type['id'])
         return {'volume_type': vol_type}
 
 

@@ -27,19 +27,22 @@ except ImportError:
     suds = None
 
 from nova import flags
+from nova.openstack.common import cfg
 from nova.virt.vmwareapi import error_util
 
 RESP_NOT_XML_ERROR = 'Response is "text/html", not "text/xml"'
 CONN_ABORT_ERROR = 'Software caused connection abort'
 ADDRESS_IN_USE_ERROR = 'Address already in use'
 
+vmwareapi_wsdl_loc_opt = cfg.StrOpt('vmwareapi_wsdl_loc',
+        default=None,
+        help='VIM Service WSDL Location '
+             'e.g http://<server>/vimService.wsdl. '
+             'Due to a bug in vSphere ESX 4.1 default wsdl. '
+             'Refer readme-vmware to setup')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('vmwareapi_wsdl_loc',
-                   None,
-                   'VIM Service WSDL Location'
-                   'e.g http://<server>/vimService.wsdl'
-                   'Due to a bug in vSphere ESX 4.1 default wsdl'
-                   'Refer readme-vmware to setup')
+FLAGS.register_opt(vmwareapi_wsdl_loc_opt)
 
 
 if suds:
@@ -91,8 +94,7 @@ class Vim:
         url = '%s://%s/sdk' % (self._protocol, self._host_name)
         self.client = suds.client.Client(wsdl_url, location=url,
                             plugins=[VIMMessagePlugin()])
-        self._service_content = \
-                self.RetrieveServiceContent("ServiceInstance")
+        self._service_content = self.RetrieveServiceContent("ServiceInstance")
 
     def get_service_content(self):
         """Gets the service content object."""
@@ -115,8 +117,8 @@ class Vim:
                 """
                 # Dynamic handler for VI SDK Calls
                 try:
-                    request_mo = \
-                        self._request_managed_object_builder(managed_object)
+                    request_mo = self._request_managed_object_builder(
+                                 managed_object)
                     request = getattr(self.client.service, attr_name)
                     response = request(request_mo, **kwargs)
                     # To check for the faults that are part of the message body

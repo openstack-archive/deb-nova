@@ -28,7 +28,7 @@ from nova import volume
 from nova.volume import volume_types
 
 
-LOG = logging.getLogger("nova.api.openstack.volume.volumes")
+LOG = logging.getLogger(__name__)
 
 
 FLAGS = flags.FLAGS
@@ -48,7 +48,8 @@ def _translate_attachment_summary_view(_context, vol):
     """Maps keys for attachment summary view."""
     d = {}
 
-    volume_id = vol['id']
+    # TODO(bcwaldon): remove str cast once we use uuids
+    volume_id = str(vol['id'])
 
     # NOTE(justinsb): We use the volume id as the id of the attachment object
     d['id'] = volume_id
@@ -76,16 +77,17 @@ def _translate_volume_summary_view(context, vol):
     """Maps keys for volumes summary view."""
     d = {}
 
-    d['id'] = vol['id']
+    # TODO(bcwaldon): remove str cast once we use uuids
+    d['id'] = str(vol['id'])
     d['status'] = vol['status']
     d['size'] = vol['size']
     d['availabilityZone'] = vol['availability_zone']
     d['createdAt'] = vol['created_at']
 
+    d['attachments'] = []
     if vol['attach_status'] == 'attached':
-        d['attachments'] = [_translate_attachment_detail_view(context, vol)]
-    else:
-        d['attachments'] = [{}]
+        attachment = _translate_attachment_detail_view(context, vol)
+        d['attachments'].append(attachment)
 
     d['displayName'] = vol['display_name']
     d['displayDescription'] = vol['display_description']
@@ -93,9 +95,14 @@ def _translate_volume_summary_view(context, vol):
     if vol['volume_type_id'] and vol.get('volume_type'):
         d['volumeType'] = vol['volume_type']['name']
     else:
-        d['volumeType'] = vol['volume_type_id']
+        # TODO(bcwaldon): remove str cast once we use uuids
+        d['volumeType'] = str(vol['volume_type_id'])
 
     d['snapshotId'] = vol['snapshot_id']
+    # TODO(bcwaldon): remove str cast once we use uuids
+    if d['snapshotId'] is not None:
+        d['snapshotId'] = str(d['snapshotId'])
+
     LOG.audit(_("vol=%s"), vol, context=context)
 
     if vol.get('volume_metadata'):
@@ -228,21 +235,23 @@ class VolumeController(object):
 
         snapshot_id = volume.get('snapshot_id')
         if snapshot_id is not None:
-            snapshot = self.volume_api.get_snapshot(context, snapshot_id)
+            kwargs['snapshot'] = self.volume_api.get_snapshot(context,
+                                                              snapshot_id)
         else:
-            snapshot = None
+            kwargs['snapshot'] = None
+
+        kwargs['availability_zone'] = volume.get('availability_zone', None)
 
         new_volume = self.volume_api.create(context,
                                             size,
-                                            snapshot,
                                             volume.get('display_name'),
                                             volume.get('display_description'),
                                             **kwargs)
 
-        # Work around problem that instance is lazy-loaded...
-        new_volume = self.volume_api.get(context, new_volume['id'])
-
-        retval = _translate_volume_detail_view(context, new_volume)
+        # TODO(vish): Instance should be None at db layer instead of
+        #             trying to lazy load, but for now we turn it into
+        #             a dict to avoid an error.
+        retval = _translate_volume_detail_view(context, dict(new_volume))
 
         return {'volume': retval}
 

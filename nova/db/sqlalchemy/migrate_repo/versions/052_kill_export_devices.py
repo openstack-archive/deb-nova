@@ -18,38 +18,48 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer
 from sqlalchemy import MetaData, Table
 from nova import log as logging
 
-meta = MetaData()
-
-# Table definition
-volumes = Table('volumes', meta,
-        Column('id', Integer(), primary_key=True, nullable=False)
-)
-
-export_devices = Table('export_devices', meta,
-        Column('created_at', DateTime(timezone=False)),
-        Column('updated_at', DateTime(timezone=False)),
-        Column('deleted_at', DateTime(timezone=False)),
-        Column('deleted', Boolean(create_constraint=True, name=None)),
-        Column('id', Integer(), primary_key=True, nullable=False),
-        Column('shelf_id', Integer()),
-        Column('blade_id', Integer()),
-        Column('volume_id',
-               Integer(),
-               ForeignKey('volumes.id'),
-               nullable=True),
-        )
+LOG = logging.getLogger(__name__)
 
 
 def downgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
+
+    # load tables for fk
+    volumes = Table('volumes', meta, autoload=True)
+
+    #
+    # New Tables
+    #
+    export_devices = Table('export_devices', meta,
+            Column('created_at', DateTime(timezone=False)),
+            Column('updated_at', DateTime(timezone=False)),
+            Column('deleted_at', DateTime(timezone=False)),
+            Column('deleted', Boolean(create_constraint=True, name=None)),
+            Column('id', Integer(), primary_key=True, nullable=False),
+            Column('shelf_id', Integer()),
+            Column('blade_id', Integer()),
+            Column('volume_id',
+                   Integer(),
+                   ForeignKey('volumes.id'),
+                   nullable=True),
+            )
+
     try:
         export_devices.create()
     except Exception:
-        logging.info(repr(export_devices))
-        logging.exception('Exception while creating table')
+        LOG.info(repr(export_devices))
+        LOG.exception('Exception while creating table')
         raise
 
 
 def upgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
+
+    # load tables for fk
+    volumes = Table('volumes', meta, autoload=True)
+
+    export_devices = Table('export_devices', meta, autoload=True)
+
     export_devices.drop()

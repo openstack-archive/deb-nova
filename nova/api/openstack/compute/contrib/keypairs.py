@@ -17,11 +17,8 @@
 
 """ Keypair management extension"""
 
-import os
-import shutil
-import tempfile
-
 import webob
+import webob.exc
 
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
@@ -84,10 +81,14 @@ class KeypairController(object):
         params = body['keypair']
         name = params['name']
 
+        if not 0 < len(name) < 256:
+            msg = _('Keypair name must be between 1 and 255 characters long')
+            raise webob.exc.HTTPBadRequest(explanation=msg)
         # NOTE(ja): generation is slow, so shortcut invalid name exception
         try:
             db.key_pair_get(context, context.user_id, name)
-            raise exception.KeyPairExists(key_name=name)
+            msg = _("Key pair '%s' already exists.") % name
+            raise webob.exc.HTTPConflict(explanation=msg)
         except exception.NotFound:
             pass
 
@@ -96,7 +97,12 @@ class KeypairController(object):
 
         # import if public_key is sent
         if 'public_key' in params:
-            fingerprint = crypto.generate_fingerprint(params['public_key'])
+            try:
+                fingerprint = crypto.generate_fingerprint(params['public_key'])
+            except exception.InvalidKeypair:
+                msg = _("Keypair data is invalid")
+                raise webob.exc.HTTPBadRequest(explanation=msg)
+
             keypair['public_key'] = params['public_key']
             keypair['fingerprint'] = fingerprint
         else:
@@ -114,7 +120,10 @@ class KeypairController(object):
         """
         context = req.environ['nova.context']
         authorize(context)
-        db.key_pair_destroy(context, context.user_id, id)
+        try:
+            db.key_pair_destroy(context, context.user_id, id)
+        except exception.KeypairNotFound:
+            raise webob.exc.HTTPNotFound()
         return webob.Response(status_int=202)
 
     @wsgi.serializers(xml=KeypairsTemplate)

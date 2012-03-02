@@ -19,23 +19,28 @@
 Unit Tests for remote procedure calls shared between all implementations
 """
 
+import time
+
+import nose
+
 from nova import context
 from nova import log as logging
-from nova.rpc.common import RemoteError
+from nova.rpc.common import RemoteError, Timeout
 from nova import test
 
 
-LOG = logging.getLogger('nova.tests.rpc')
+LOG = logging.getLogger(__name__)
 
 
 class _BaseRpcTestCase(test.TestCase):
-    def setUp(self):
+    def setUp(self, supports_timeouts=True):
         super(_BaseRpcTestCase, self).setUp()
         self.conn = self.rpc.create_connection(True)
         self.receiver = TestReceiver()
         self.conn.create_consumer('test', self.receiver, False)
         self.conn.consume_in_thread()
         self.context = context.get_admin_context()
+        self.supports_timeouts = supports_timeouts
 
     def tearDown(self):
         self.conn.close()
@@ -46,13 +51,6 @@ class _BaseRpcTestCase(test.TestCase):
         result = self.rpc.call(self.context, 'test', {"method": "echo",
                                                  "args": {"value": value}})
         self.assertEqual(value, result)
-
-    def test_call_succeed_despite_multiple_returns(self):
-        value = 42
-        result = self.rpc.call(self.context, 'test',
-                {"method": "echo_three_times",
-                 "args": {"value": value}})
-        self.assertEqual(value + 2, result)
 
     def test_call_succeed_despite_multiple_returns_yield(self):
         value = 42
@@ -70,15 +68,6 @@ class _BaseRpcTestCase(test.TestCase):
         for i, x in enumerate(result):
             if i > 0:
                 self.fail('should only receive one response')
-            self.assertEqual(value + i, x)
-
-    def test_multicall_succeed_three_times(self):
-        value = 42
-        result = self.rpc.multicall(self.context,
-                              'test',
-                              {"method": "echo_three_times",
-                               "args": {"value": value}})
-        for i, x in enumerate(result):
             self.assertEqual(value + i, x)
 
     def test_multicall_three_nones(self):
@@ -162,6 +151,28 @@ class _BaseRpcTestCase(test.TestCase):
         conn.close()
         self.assertEqual(value, result)
 
+    def test_call_timeout(self):
+        """Make sure rpc.call will time out"""
+        if not self.supports_timeouts:
+            raise nose.SkipTest(_("RPC backend does not support timeouts"))
+
+        value = 42
+        self.assertRaises(Timeout,
+                          self.rpc.call,
+                          self.context,
+                          'test',
+                          {"method": "block",
+                           "args": {"value": value}}, timeout=1)
+        try:
+            self.rpc.call(self.context,
+                     'test',
+                     {"method": "block",
+                      "args": {"value": value}},
+                     timeout=1)
+            self.fail("should have thrown Timeout")
+        except Timeout as exc:
+            pass
+
 
 class TestReceiver(object):
     """Simple Proxy class so the consumer has methods to call.
@@ -183,13 +194,6 @@ class TestReceiver(object):
         return context.to_dict()
 
     @staticmethod
-    def echo_three_times(context, value):
-        context.reply(value)
-        context.reply(value + 1)
-        context.reply(value + 2)
-        context.reply(ending=True)
-
-    @staticmethod
     def multicall_three_nones(context, value):
         yield None
         yield None
@@ -205,3 +209,7 @@ class TestReceiver(object):
     def fail(context, value):
         """Raises an exception with the value sent in."""
         raise Exception(value)
+
+    @staticmethod
+    def block(context, value):
+        time.sleep(2)

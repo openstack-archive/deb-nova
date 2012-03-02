@@ -27,7 +27,7 @@ from nova import flags
 from nova import log as logging
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.instance_types')
+LOG = logging.getLogger(__name__)
 
 
 def create(name, memory, vcpus, root_gb, ephemeral_gb, flavorid, swap=None,
@@ -72,9 +72,7 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb, flavorid, swap=None,
         return db.instance_type_create(context.get_admin_context(), kwargs)
     except exception.DBError, e:
         LOG.exception(_('DB error: %s') % e)
-        msg = _("Cannot create instance_type with name %(name)s and "
-                "flavorid %(flavorid)s") % locals()
-        raise exception.ApiError(msg)
+        raise exception.InstanceTypeCreateFailed()
 
 
 def destroy(name):
@@ -84,16 +82,6 @@ def destroy(name):
         db.instance_type_destroy(context.get_admin_context(), name)
     except (AssertionError, exception.NotFound):
         LOG.exception(_('Instance type %s not found for deletion') % name)
-        raise exception.InstanceTypeNotFoundByName(instance_type_name=name)
-
-
-def purge(name):
-    """Removes instance types from database."""
-    try:
-        assert name is not None
-        db.instance_type_purge(context.get_admin_context(), name)
-    except (AssertionError, exception.NotFound):
-        LOG.exception(_('Instance type %s not found for purge') % name)
         raise exception.InstanceTypeNotFoundByName(instance_type_name=name)
 
 
@@ -116,10 +104,7 @@ get_all_flavors = get_all_types
 def get_default_instance_type():
     """Get the default instance type."""
     name = FLAGS.default_instance_type
-    try:
-        return get_instance_type_by_name(name)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown instance type: %s") % name)
+    return get_instance_type_by_name(name)
 
 
 def get_instance_type(instance_type_id):
@@ -128,11 +113,7 @@ def get_instance_type(instance_type_id):
         return get_default_instance_type()
 
     ctxt = context.get_admin_context()
-    try:
-        return db.instance_type_get(ctxt, instance_type_id)
-    except exception.DBError:
-        msg = _("Unknown instance type: %s") % instance_type_id
-        raise exception.ApiError(msg)
+    return db.instance_type_get(ctxt, instance_type_id)
 
 
 def get_instance_type_by_name(name):
@@ -141,19 +122,15 @@ def get_instance_type_by_name(name):
         return get_default_instance_type()
 
     ctxt = context.get_admin_context()
-
-    try:
-        return db.instance_type_get_by_name(ctxt, name)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown instance type: %s") % name)
+    return db.instance_type_get_by_name(ctxt, name)
 
 
 # TODO(termie): flavor-specific code should probably be in the API that uses
 #               flavors.
 def get_instance_type_by_flavor_id(flavorid):
-    """Retrieve instance type by flavorid."""
+    """Retrieve instance type by flavorid.
+
+    :raises: FlavorNotFound
+    """
     ctxt = context.get_admin_context()
-    try:
-        return db.instance_type_get_by_flavor_id(ctxt, flavorid)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown instance type: %s") % flavorid)
+    return db.instance_type_get_by_flavor_id(ctxt, flavorid)

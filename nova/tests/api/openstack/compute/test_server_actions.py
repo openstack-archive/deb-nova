@@ -14,7 +14,6 @@
 #    under the License.
 
 import base64
-import datetime
 
 import mox
 import stubout
@@ -22,7 +21,6 @@ import webob
 
 from nova.api.openstack.compute import servers
 from nova.compute import vm_states
-from nova.compute import instance_types
 from nova import context
 import nova.db
 from nova import exception
@@ -33,103 +31,15 @@ from nova import utils
 
 
 FLAGS = flags.FLAGS
-FAKE_UUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+FAKE_UUID = fakes.FAKE_UUID
 
 
-def return_server_by_id(context, id):
-    return stub_instance(id)
-
-
-def return_server_by_uuid(context, uuid):
-    return stub_instance(1, uuid=uuid)
-
-
-def return_server_by_uuid_not_found(context, uuid):
+def return_server_not_found(context, uuid):
     raise exception.NotFound()
 
 
 def instance_update(context, instance_id, kwargs):
-    return stub_instance(instance_id)
-
-
-def return_server_with_attributes(**kwargs):
-    def _return_server(context, id):
-        return stub_instance(id, **kwargs)
-    return _return_server
-
-
-def return_server_with_state(vm_state, task_state=None):
-    return return_server_with_attributes(vm_state=vm_state,
-                                         task_state=task_state)
-
-
-def return_server_with_uuid_and_state(vm_state, task_state=None):
-    def _return_server(context, id):
-        return return_server_with_state(vm_state, task_state)
-    return _return_server
-
-
-def stub_instance(id, metadata=None, image_ref="10", flavor_id="1",
-                  name=None, vm_state=None, task_state=None, uuid=None,
-                  access_ip_v4="", access_ip_v6=""):
-    if metadata is not None:
-        metadata_items = [{'key':k, 'value':v} for k, v in metadata.items()]
-    else:
-        metadata_items = [{'key':'seq', 'value':id}]
-
-    if uuid is None:
-        uuid = FAKE_UUID
-
-    inst_type = instance_types.get_instance_type_by_flavor_id(int(flavor_id))
-
-    instance = {
-        "id": int(id),
-        "name": str(id),
-        "created_at": datetime.datetime(2010, 10, 10, 12, 0, 0),
-        "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
-        "admin_pass": "",
-        "user_id": "fake",
-        "project_id": "fake",
-        "image_ref": image_ref,
-        "kernel_id": "",
-        "ramdisk_id": "",
-        "launch_index": 0,
-        "key_name": "",
-        "key_data": "",
-        "vm_state": vm_state or vm_states.ACTIVE,
-        "task_state": task_state,
-        "memory_mb": 0,
-        "vcpus": 0,
-        "root_gb": 0,
-        "hostname": "",
-        "host": "fake_host",
-        "instance_type": dict(inst_type),
-        "user_data": "",
-        "reservation_id": "",
-        "mac_address": "",
-        "scheduled_at": utils.utcnow(),
-        "launched_at": utils.utcnow(),
-        "terminated_at": utils.utcnow(),
-        "availability_zone": "",
-        "display_name": name or "server%s" % id,
-        "display_description": "",
-        "locked": False,
-        "metadata": metadata_items,
-        "access_ip_v4": access_ip_v4,
-        "access_ip_v6": access_ip_v6,
-        "uuid": uuid,
-        "virtual_interfaces": [],
-        "progress": 0,
-    }
-
-    instance["fixed_ips"] = [{"address": '192.168.0.1',
-                              "network":
-                                      {'label': 'public', 'cidr_v6': None},
-                              "virtual_interface":
-                                      {'address': 'aa:aa:aa:aa:aa:aa'},
-                              "floating_ips": []}]
-
-    return instance
+    return fakes.stub_instance(instance_id)
 
 
 class MockSetAdminPassword(object):
@@ -150,8 +60,9 @@ class ServerActionsControllerTest(test.TestCase):
 
         self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_auth(self.stubs)
-        self.stubs.Set(nova.db, 'instance_get', return_server_by_id)
-        self.stubs.Set(nova.db, 'instance_get_by_uuid', return_server_by_uuid)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                        host='fake_host'))
         self.stubs.Set(nova.db, 'instance_update', instance_update)
 
         fakes.stub_out_glance(self.stubs)
@@ -165,7 +76,8 @@ class ServerActionsControllerTest(test.TestCase):
         self.service.delete_all()
         self.sent_to_glance = {}
         fakes.stub_out_glance_add_image(self.stubs, self.sent_to_glance)
-        self.flags(allow_instance_snapshots=True)
+        self.flags(allow_instance_snapshots=True,
+                   enable_instance_password=True)
         self.uuid = FAKE_UUID
         self.url = '/v2/fake/servers/%s/action' % self.uuid
         self._image_href = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
@@ -185,6 +97,22 @@ class ServerActionsControllerTest(test.TestCase):
         self.controller._action_change_password(req, FAKE_UUID, body)
 
         self.assertEqual(mock_method.instance_id, self.uuid)
+        self.assertEqual(mock_method.password, '1234pass')
+
+    def test_server_change_password_pass_disabled(self):
+        # run with enable_instance_password disabled to verify adminPass
+        # is missing from response. See lp bug 921814
+        self.flags(enable_instance_password=False)
+
+        mock_method = MockSetAdminPassword()
+        self.stubs.Set(nova.compute.api.API, 'set_admin_password', mock_method)
+        body = {'changePassword': {'adminPass': '1234pass'}}
+
+        req = fakes.HTTPRequest.blank(self.url)
+        self.controller._action_change_password(req, FAKE_UUID, body)
+
+        self.assertEqual(mock_method.instance_id, self.uuid)
+        # note,the mock still contains the password.
         self.assertEqual(mock_method.password, '1234pass')
 
     def test_server_change_password_not_a_string(self):
@@ -241,7 +169,7 @@ class ServerActionsControllerTest(test.TestCase):
 
     def test_reboot_not_found(self):
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
-                       return_server_by_uuid_not_found)
+                       return_server_not_found)
 
         body = dict(reboot=dict(type="HARD"))
         req = fakes.HTTPRequest.blank(self.url)
@@ -263,8 +191,9 @@ class ServerActionsControllerTest(test.TestCase):
                           req, FAKE_UUID, body)
 
     def test_rebuild_accepted_minimum(self):
-        new_return_server = return_server_with_attributes(image_ref='2')
-        self.stubs.Set(nova.db, 'instance_get', new_return_server)
+        return_server = fakes.fake_instance_get(image_ref='2',
+                vm_state=vm_states.ACTIVE, host='fake_host')
+        self.stubs.Set(nova.db, 'instance_get_by_uuid', return_server)
         self_href = 'http://localhost/v2/fake/servers/%s' % FAKE_UUID
 
         body = {
@@ -280,6 +209,32 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertEqual(body['server']['image']['id'], '2')
         self.assertEqual(len(body['server']['adminPass']),
                          FLAGS.password_length)
+
+        self.assertEqual(robj['location'], self_href)
+
+    def test_rebuild_accepted_minimum_pass_disabled(self):
+        # run with enable_instance_password disabled to verify adminPass
+        # is missing from response. See lp bug 921814
+        self.flags(enable_instance_password=False)
+
+        return_server = fakes.fake_instance_get(image_ref='2',
+                vm_state=vm_states.ACTIVE, host='fake_host')
+        self.stubs.Set(nova.db, 'instance_get_by_uuid', return_server)
+        self_href = 'http://localhost/v2/fake/servers/%s' % FAKE_UUID
+
+        body = {
+            "rebuild": {
+                "imageRef": self._image_href,
+            },
+        }
+
+        req = fakes.HTTPRequest.blank(self.url)
+        robj = self.controller._action_rebuild(req, FAKE_UUID, body)
+        body = robj.obj
+
+        self.assertEqual(body['server']['image']['id'], '2')
+        self.assertTrue("adminPass" not in body['server'])
+
         self.assertEqual(robj['location'], self_href)
 
     def test_rebuild_raises_conflict_on_invalid_state(self):
@@ -302,8 +257,9 @@ class ServerActionsControllerTest(test.TestCase):
     def test_rebuild_accepted_with_metadata(self):
         metadata = {'new': 'metadata'}
 
-        new_return_server = return_server_with_attributes(metadata=metadata)
-        self.stubs.Set(nova.db, 'instance_get', new_return_server)
+        return_server = fakes.fake_instance_get(metadata=metadata,
+                vm_state=vm_states.ACTIVE, host='fake_host')
+        self.stubs.Set(nova.db, 'instance_get_by_uuid', return_server)
 
         body = {
             "rebuild": {
@@ -375,8 +331,9 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertTrue('personality' not in body['server'])
 
     def test_rebuild_admin_pass(self):
-        new_return_server = return_server_with_attributes(image_ref='2')
-        self.stubs.Set(nova.db, 'instance_get', new_return_server)
+        return_server = fakes.fake_instance_get(image_ref='2',
+                vm_state=vm_states.ACTIVE, host='fake_host')
+        self.stubs.Set(nova.db, 'instance_get_by_uuid', return_server)
 
         body = {
             "rebuild": {
@@ -391,10 +348,32 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertEqual(body['server']['image']['id'], '2')
         self.assertEqual(body['server']['adminPass'], 'asdf')
 
+    def test_rebuild_admin_pass_pass_disabled(self):
+        # run with enable_instance_password disabled to verify adminPass
+        # is missing from response. See lp bug 921814
+        self.flags(enable_instance_password=False)
+
+        return_server = fakes.fake_instance_get(image_ref='2',
+                vm_state=vm_states.ACTIVE, host='fake_host')
+        self.stubs.Set(nova.db, 'instance_get_by_uuid', return_server)
+
+        body = {
+            "rebuild": {
+                "imageRef": self._image_href,
+                "adminPass": "asdf",
+            },
+        }
+
+        req = fakes.HTTPRequest.blank(self.url)
+        body = self.controller._action_rebuild(req, FAKE_UUID, body).obj
+
+        self.assertEqual(body['server']['image']['id'], '2')
+        self.assertTrue('adminPass' not in body['server'])
+
     def test_rebuild_server_not_found(self):
         def server_not_found(self, instance_id):
             raise exception.InstanceNotFound(instance_id=instance_id)
-        self.stubs.Set(nova.db, 'instance_get', server_not_found)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid', server_not_found)
 
         body = {
             "rebuild": {

@@ -46,13 +46,16 @@ import webob
 
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova import wsgi
 
 
+buckets_path_opt = cfg.StrOpt('buckets_path', default='$state_path/buckets',
+                              help='path to s3 buckets')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('buckets_path', '$state_path/buckets',
-                    'path to s3 buckets')
+FLAGS.register_opt(buckets_path_opt)
 
 
 def get_wsgi_server():
@@ -220,8 +223,8 @@ class BucketHandler(BaseRequestHandler):
         path = os.path.abspath(os.path.join(self.application.directory,
                                             bucket_name))
         terse = int(self.get_argument("terse", 0))
-        if not path.startswith(self.application.directory) or \
-           not os.path.isdir(path):
+        if (not path.startswith(self.application.directory) or
+            not os.path.isdir(path)):
             self.set_status(404)
             return
         object_names = []
@@ -271,8 +274,8 @@ class BucketHandler(BaseRequestHandler):
     def put(self, bucket_name):
         path = os.path.abspath(os.path.join(
             self.application.directory, bucket_name))
-        if not path.startswith(self.application.directory) or \
-           os.path.exists(path):
+        if (not path.startswith(self.application.directory) or
+            os.path.exists(path)):
             self.set_status(403)
             return
         os.makedirs(path)
@@ -281,8 +284,8 @@ class BucketHandler(BaseRequestHandler):
     def delete(self, bucket_name):
         path = os.path.abspath(os.path.join(
             self.application.directory, bucket_name))
-        if not path.startswith(self.application.directory) or \
-           not os.path.isdir(path):
+        if (not path.startswith(self.application.directory) or
+            not os.path.isdir(path)):
             self.set_status(404)
             return
         if len(os.listdir(path)) > 0:
@@ -297,8 +300,8 @@ class ObjectHandler(BaseRequestHandler):
     def get(self, bucket, object_name):
         object_name = urllib.unquote(object_name)
         path = self._object_path(bucket, object_name)
-        if not path.startswith(self.application.directory) or \
-           not os.path.isfile(path):
+        if (not path.startswith(self.application.directory) or
+            not os.path.isfile(path)):
             self.set_status(404)
             return
         info = os.stat(path)
@@ -315,8 +318,8 @@ class ObjectHandler(BaseRequestHandler):
         object_name = urllib.unquote(object_name)
         bucket_dir = os.path.abspath(os.path.join(
             self.application.directory, bucket))
-        if not bucket_dir.startswith(self.application.directory) or \
-           not os.path.isdir(bucket_dir):
+        if (not bucket_dir.startswith(self.application.directory) or
+            not os.path.isdir(bucket_dir)):
             self.set_status(404)
             return
         path = self._object_path(bucket, object_name)
@@ -336,8 +339,8 @@ class ObjectHandler(BaseRequestHandler):
     def delete(self, bucket, object_name):
         object_name = urllib.unquote(object_name)
         path = self._object_path(bucket, object_name)
-        if not path.startswith(self.application.directory) or \
-           not os.path.isfile(path):
+        if (not path.startswith(self.application.directory) or
+            not os.path.isfile(path)):
             self.set_status(404)
             return
         os.unlink(path)

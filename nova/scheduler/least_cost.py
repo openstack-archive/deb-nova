@@ -22,24 +22,32 @@ The cost-function and weights are tabulated, and the host with the least cost
 is then selected for provisioning.
 """
 
-
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 
-LOG = logging.getLogger('nova.scheduler.least_cost')
+
+LOG = logging.getLogger(__name__)
+
+least_cost_opts = [
+    cfg.ListOpt('least_cost_functions',
+                default=[
+                  'nova.scheduler.least_cost.compute_fill_first_cost_fn'
+                  ],
+                help='Which cost functions the LeastCostScheduler should use'),
+    cfg.FloatOpt('noop_cost_fn_weight',
+             default=1.0,
+               help='How much weight to give the noop cost function'),
+    cfg.FloatOpt('compute_fill_first_cost_fn_weight',
+             default=1.0,
+               help='How much weight to give the fill-first cost function'),
+    ]
 
 FLAGS = flags.FLAGS
-flags.DEFINE_list('least_cost_functions',
-        ['nova.scheduler.least_cost.compute_fill_first_cost_fn'],
-        'Which cost functions the LeastCostScheduler should use.')
-
+FLAGS.register_opts(least_cost_opts)
 
 # TODO(sirp): Once we have enough of these rules, we can break them out into a
 # cost_functions.py file (perhaps in a least_cost_scheduler directory)
-flags.DEFINE_float('noop_cost_fn_weight', 1.0,
-             'How much weight to give the noop cost function')
-flags.DEFINE_float('compute_fill_first_cost_fn_weight', 1.0,
-             'How much weight to give the fill-first cost function')
 
 
 class WeightedHost(object):
@@ -47,22 +55,14 @@ class WeightedHost(object):
     This is an attempt to remove some of the ad-hoc dict structures
     previously used."""
 
-    def __init__(self, weight, host_state=None, blob=None, zone=None):
+    def __init__(self, weight, host_state=None):
         self.weight = weight
-        self.blob = blob
-        self.zone = zone
-
-        # Local members. These are not returned outside of the Zone.
         self.host_state = host_state
 
     def to_dict(self):
         x = dict(weight=self.weight)
-        if self.blob:
-            x['blob'] = self.blob
         if self.host_state:
             x['host'] = self.host_state.host
-        if self.zone:
-            x['zone'] = self.zone
         return x
 
 

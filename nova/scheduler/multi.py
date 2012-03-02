@@ -20,19 +20,24 @@
 """
 Scheduler that allows routing some calls to one driver and others to another.
 """
+
 from nova import flags
+from nova.openstack.common import cfg
 from nova import utils
 from nova.scheduler import driver
 
 
-FLAGS = flags.FLAGS
-flags.DEFINE_string('compute_scheduler_driver',
-                    'nova.scheduler.chance.ChanceScheduler',
-                    'Driver to use for scheduling compute calls')
-flags.DEFINE_string('volume_scheduler_driver',
-                    'nova.scheduler.chance.ChanceScheduler',
-                    'Driver to use for scheduling volume calls')
+multi_scheduler_opts = [
+    cfg.StrOpt('compute_scheduler_driver',
+               default='nova.scheduler.chance.ChanceScheduler',
+               help='Driver to use for scheduling compute calls'),
+    cfg.StrOpt('volume_scheduler_driver',
+               default='nova.scheduler.chance.ChanceScheduler',
+               help='Driver to use for scheduling volume calls'),
+    ]
 
+FLAGS = flags.FLAGS
+FLAGS.register_opts(multi_scheduler_opts)
 
 # A mapping of methods to topics so we can figure out which driver to use.
 _METHOD_MAP = {'run_instance': 'compute',
@@ -65,10 +70,6 @@ class MultiScheduler(driver.Scheduler):
         if method not in _METHOD_MAP:
             raise AttributeError(key)
         return getattr(self.drivers[_METHOD_MAP[method]], key)
-
-    def set_zone_manager(self, zone_manager):
-        for k, v in self.drivers.iteritems():
-            v.set_zone_manager(zone_manager)
 
     def schedule(self, context, topic, method, *_args, **_kwargs):
         return self.drivers[topic].schedule(context, topic,

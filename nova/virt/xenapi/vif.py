@@ -21,15 +21,19 @@
 
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova.virt.vif import VIFDriver
 from nova.virt.xenapi.network_utils import NetworkHelper
 from nova.virt.xenapi.vm_utils import VMHelper
 
-FLAGS = flags.FLAGS
-flags.DEFINE_string('xenapi_ovs_integration_bridge', 'xapi1',
-                'Name of Integration Bridge used by Open vSwitch')
 
-LOG = logging.getLogger("nova.virt.xenapi.vif")
+xenapi_ovs_integration_bridge_opt = cfg.StrOpt('xenapi_ovs_integration_bridge',
+        default='xapi1',
+        help='Name of Integration Bridge used by Open vSwitch')
+
+FLAGS = flags.FLAGS
+FLAGS.register_opt(xenapi_ovs_integration_bridge_opt)
+LOG = logging.getLogger(__name__)
 
 
 class XenVIFDriver(VIFDriver):
@@ -60,8 +64,8 @@ class XenAPIBridgeDriver(XenVIFDriver):
         vif_rec['other_config'] = {}
         if "rxtx_cap" in mapping:
             vif_rec['qos_algorithm_type'] = "ratelimit"
-            vif_rec['qos_algorithm_params'] = \
-                {"kbps": str(mapping['rxtx_cap'] * 1024)}
+            vif_rec['qos_algorithm_params'] = {"kbps":
+                                               str(mapping['rxtx_cap'] * 1024)}
         else:
             vif_rec['qos_algorithm_type'] = ""
             vif_rec['qos_algorithm_params'] = {}
@@ -72,7 +76,7 @@ class XenAPIBridgeDriver(XenVIFDriver):
 
         vlan_num = network['vlan']
         bridge = network['bridge']
-        bridge_interface = network['bridge_interface']
+        bridge_interface = FLAGS.vlan_interface or network['bridge_interface']
         # Check whether bridge already exists
         # Retrieve network whose name_label is "bridge"
         network_ref = NetworkHelper.find_network_with_name_label(
@@ -89,14 +93,14 @@ class XenAPIBridgeDriver(XenVIFDriver):
             # 2 - find PIF for VLAN NOTE(salvatore-orlando): using double
             # quotes inside single quotes as xapi filter only support
             # tokens in double quotes
-            expr = 'field "device" = "%s" and \
-                field "VLAN" = "-1"' % bridge_interface
+            expr = ('field "device" = "%s" and field "VLAN" = "-1"' %
+                    bridge_interface)
             pifs = self._session.call_xenapi('PIF.get_all_records_where',
                                              expr)
             pif_ref = None
             # Multiple PIF are ok: we are dealing with a pool
             if len(pifs) == 0:
-                raise Exception(_('Found no PIF for device %s') % \
+                raise Exception(_('Found no PIF for device %s') %
                                         bridge_interface)
             for pif_ref in pifs.keys():
                 self._session.call_xenapi('VLAN.create',
@@ -139,7 +143,7 @@ class XenAPIOpenVswitchDriver(XenVIFDriver):
         # with OVS model, always plug into an OVS integration bridge
         # that is already created
         network_ref = NetworkHelper.find_network_with_bridge(self._session,
-                                        FLAGS.xenapi_ovs_integration_bridge)
+                                       FLAGS.xenapi_ovs_integration_bridge)
         vif_rec = {}
         vif_rec['device'] = str(device)
         vif_rec['network'] = network_ref
@@ -150,8 +154,7 @@ class XenAPIOpenVswitchDriver(XenVIFDriver):
         vif_rec['qos_algorithm_params'] = {}
         # OVS on the hypervisor monitors this key and uses it to
         # set the iface-id attribute
-        vif_rec['other_config'] = \
-                {"nicira-iface-id": mapping['vif_uuid']}
+        vif_rec['other_config'] = {"nicira-iface-id": mapping['vif_uuid']}
         return vif_rec
 
     def unplug(self, instance, network, mapping):

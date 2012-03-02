@@ -35,18 +35,27 @@ from nova import exception
 from nova import flags
 from nova import image
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.api.ec2 import ec2utils
 
 
-LOG = logging.getLogger("nova.image.s3")
+LOG = logging.getLogger(__name__)
+
+s3_opts = [
+    cfg.StrOpt('image_decryption_dir',
+               default='/tmp',
+               help='parent dir for tempdir used for image decryption'),
+    cfg.StrOpt('s3_access_key',
+               default='notchecked',
+               help='access key to use for s3 server for images'),
+    cfg.StrOpt('s3_secret_key',
+               default='notchecked',
+               help='secret key to use for s3 server for images'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('image_decryption_dir', '/tmp',
-                    'parent dir for tempdir used for image decryption')
-flags.DEFINE_string('s3_access_key', 'notchecked',
-                    'access key to use for s3 server for images')
-flags.DEFINE_string('s3_secret_key', 'notchecked',
-                    'secret key to use for s3 server for images')
+FLAGS.register_opts(s3_opts)
 
 
 class S3ImageService(object):
@@ -134,10 +143,6 @@ class S3ImageService(object):
     def show_by_name(self, context, name):
         image = self.service.show_by_name(context, name)
         return self._translate_uuid_to_id(context, image)
-
-    def get(self, context, image_id):
-        image_uuid = self.get_image_uuid(context, image_id)
-        return self.get(self, context, image_uuid)
 
     @staticmethod
     def _conn(context):

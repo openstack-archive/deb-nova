@@ -24,13 +24,18 @@ import webob.exc
 from nova import context
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import wsgi
 
 
+use_forwarded_for_opt = cfg.BoolOpt('use_forwarded_for',
+        default=False,
+        help='Treat X-Forwarded-For as the canonical remote address. '
+             'Only enable this if you have a sanitizing proxy.')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_boolean('use_forwarded_for', False,
-                     'Treat X-Forwarded-For as the canonical remote address. '
-                     'Only enable this if you have a sanitizing proxy.')
+FLAGS.register_opt(use_forwarded_for_opt)
+LOG = logging.getLogger(__name__)
 
 
 class InjectContext(wsgi.Middleware):
@@ -51,10 +56,10 @@ class NovaKeystoneContext(wsgi.Middleware):
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
-        try:
-            user_id = req.headers['X_USER']
-        except KeyError:
-            logging.debug("X_USER not found in request")
+        user_id = req.headers.get('X_USER')
+        user_id = req.headers.get('X_USER_ID', user_id)
+        if user_id is None:
+            LOG.debug("Neither X_USER_ID nor X_USER found in request")
             return webob.exc.HTTPUnauthorized()
         # get the roles
         roles = [r.strip() for r in req.headers.get('X_ROLE', '').split(',')]
@@ -70,7 +75,6 @@ class NovaKeystoneContext(wsgi.Middleware):
                                      req.headers.get('X_STORAGE_TOKEN'))
 
         # Build a context, including the auth_token...
-        remote_address = getattr(req, 'remote_address', '127.0.0.1')
         remote_address = req.remote_addr
         if FLAGS.use_forwarded_for:
             remote_address = req.headers.get('X-Forwarded-For', remote_address)

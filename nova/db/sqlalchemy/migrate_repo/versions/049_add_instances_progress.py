@@ -14,30 +14,31 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from sqlalchemy import *
-from migrate import *
+from sqlalchemy import Column, Integer, MetaData, Table
 
 from nova import log as logging
 
-meta = MetaData()
-
-instances = Table('instances', meta,
-    Column("id", Integer(), primary_key=True, nullable=False))
-
-# Add progress column to instances table
-progress = Column('progress', Integer())
+LOG = logging.getLogger(__name__)
 
 
 def upgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
 
+    instances = Table('instances', meta, autoload=True)
+
+    progress = Column('progress', Integer())
     try:
         instances.create_column(progress)
     except Exception:
-        logging.error(_("progress column not added to instances table"))
+        LOG.error(_("progress column not added to instances table"))
         raise
 
 
 def downgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
-    instances.drop_column(progress)
+
+    instances = Table('instances', meta, autoload=True)
+
+    instances.drop_column('progress')

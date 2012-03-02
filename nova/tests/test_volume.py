@@ -22,6 +22,8 @@ Tests for Volume Code.
 
 import cStringIO
 
+import mox
+
 from nova import context
 from nova import exception
 from nova import db
@@ -34,7 +36,7 @@ from nova import utils
 import nova.volume.api
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.tests.volume')
+LOG = logging.getLogger(__name__)
 
 
 class VolumeTestCase(test.TestCase):
@@ -78,6 +80,25 @@ class VolumeTestCase(test.TestCase):
                           db.volume_get,
                           self.context,
                           volume_id)
+
+    def test_delete_busy_volume(self):
+        """Test volume survives deletion if driver reports it as busy."""
+        volume = self._create_volume()
+        volume_id = volume['id']
+        self.volume.create_volume(self.context, volume_id)
+
+        self.mox.StubOutWithMock(self.volume.driver, 'delete_volume')
+        self.volume.driver.delete_volume(mox.IgnoreArg()) \
+                                              .AndRaise(exception.VolumeIsBusy)
+        self.mox.ReplayAll()
+        res = self.volume.delete_volume(self.context, volume_id)
+        self.assertEqual(True, res)
+        volume_ref = db.volume_get(context.get_admin_context(), volume_id)
+        self.assertEqual(volume_id, volume_ref.id)
+        self.assertEqual("available", volume_ref.status)
+
+        self.mox.UnsetStubs()
+        self.volume.delete_volume(self.context, volume_id)
 
     def test_create_volume_from_snapshot(self):
         """Test volume can be created from a snapshot."""
@@ -249,7 +270,7 @@ class VolumeTestCase(test.TestCase):
 
         volume_api = nova.volume.api.API()
         volume = volume_api.get(self.context, volume['id'])
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.InvalidVolume,
                           volume_api.create_snapshot,
                           self.context, volume,
                           'fake_name', 'fake_description')
@@ -259,6 +280,27 @@ class VolumeTestCase(test.TestCase):
                                                         'fake_description')
         db.snapshot_destroy(self.context, snapshot_ref['id'])
         db.volume_destroy(self.context, volume['id'])
+
+    def test_delete_busy_snapshot(self):
+        """Test snapshot can be created and deleted."""
+        volume = self._create_volume()
+        volume_id = volume['id']
+        self.volume.create_volume(self.context, volume_id)
+        snapshot_id = self._create_snapshot(volume_id)
+        self.volume.create_snapshot(self.context, volume_id, snapshot_id)
+
+        self.mox.StubOutWithMock(self.volume.driver, 'delete_snapshot')
+        self.volume.driver.delete_snapshot(mox.IgnoreArg()) \
+                                            .AndRaise(exception.SnapshotIsBusy)
+        self.mox.ReplayAll()
+        self.volume.delete_snapshot(self.context, snapshot_id)
+        snapshot_ref = db.snapshot_get(self.context, snapshot_id)
+        self.assertEqual(snapshot_id, snapshot_ref.id)
+        self.assertEqual("available", snapshot_ref.status)
+
+        self.mox.UnsetStubs()
+        self.volume.delete_snapshot(self.context, snapshot_id)
+        self.volume.delete_volume(self.context, volume_id)
 
 
 class DriverTestCase(test.TestCase):
@@ -280,13 +322,10 @@ class DriverTestCase(test.TestCase):
 
         log = logging.getLogger()
         self.stream = cStringIO.StringIO()
-        log.addHandler(logging.StreamHandler(self.stream))
+        log.logger.addHandler(logging.logging.StreamHandler(self.stream))
 
         inst = {}
         self.instance_id = db.instance_create(self.context, inst)['id']
-
-    def tearDown(self):
-        super(DriverTestCase, self).tearDown()
 
     def _attach_volume(self):
         """Attach volumes to an instance. This function also sets
@@ -303,12 +342,6 @@ class DriverTestCase(test.TestCase):
 class VolumeDriverTestCase(DriverTestCase):
     """Test case for VolumeDriver"""
     driver_name = "nova.volume.driver.VolumeDriver"
-
-    def setUp(self):
-        super(VolumeDriverTestCase, self).setUp()
-
-    def tearDown(self):
-        super(VolumeDriverTestCase, self).tearDown()
 
     def test_delete_busy_volume(self):
         """Test deleting a busy volume."""
@@ -331,12 +364,6 @@ class VolumeDriverTestCase(DriverTestCase):
 class ISCSITestCase(DriverTestCase):
     """Test Case for ISCSIDriver"""
     driver_name = "nova.volume.driver.ISCSIDriver"
-
-    def setUp(self):
-        super(ISCSITestCase, self).setUp()
-
-    def tearDown(self):
-        super(ISCSITestCase, self).tearDown()
 
     def _attach_volume(self):
         """Attach volumes to an instance. This function also sets

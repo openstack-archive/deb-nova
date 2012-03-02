@@ -31,7 +31,7 @@ from nova import volume
 from nova.volume import volume_types
 
 
-LOG = logging.getLogger("nova.api.openstack.compute.contrib.volumes")
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 authorize = extensions.extension_authorizer('compute', 'volumes')
 
@@ -202,17 +202,22 @@ class VolumeController(object):
         else:
             snapshot = None
 
-        new_volume = self.volume_api.create(context, size,
+        availability_zone = vol.get('availability_zone', None)
+
+        new_volume = self.volume_api.create(context,
+                                            size,
                                             vol.get('display_name'),
                                             vol.get('display_description'),
                                             snapshot=snapshot,
                                             volume_type=vol_type,
-                                            metadata=metadata)
+                                            metadata=metadata,
+                                            availability_zone=availability_zone
+                                           )
 
-        # Work around problem that instance is lazy-loaded...
-        new_volume = self.volume_api.get(context, new_volume['id'])
-
-        retval = _translate_volume_detail_view(context, new_volume)
+        # TODO(vish): Instance should be None at db layer instead of
+        #             trying to lazy load, but for now we turn it into
+        #             a dict to avoid an error.
+        retval = _translate_volume_detail_view(context, dict(new_volume))
 
         return {'volume': retval}
 
@@ -512,18 +517,20 @@ class SnapshotController(object):
 
         snapshot = body['snapshot']
         volume_id = snapshot['volume_id']
+        volume = self.volume_api.get(context, volume_id)
+
         force = snapshot.get('force', False)
         LOG.audit(_("Create snapshot from volume %s"), volume_id,
                 context=context)
 
         if force:
             new_snapshot = self.volume_api.create_snapshot_force(context,
-                                        volume_id,
+                                        volume,
                                         snapshot.get('display_name'),
                                         snapshot.get('display_description'))
         else:
             new_snapshot = self.volume_api.create_snapshot(context,
-                                        volume_id,
+                                        volume,
                                         snapshot.get('display_name'),
                                         snapshot.get('display_description'))
 

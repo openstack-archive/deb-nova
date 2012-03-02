@@ -24,9 +24,7 @@ Nova authentication management
 """
 
 import os
-import shutil
 import string  # pylint: disable=W0402
-import tempfile
 import uuid
 import zipfile
 
@@ -36,50 +34,67 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.auth import signer
 
 
+auth_opts = [
+    cfg.BoolOpt('use_deprecated_auth',
+                default=False,
+                help='This flag must be set to use old style auth'),
+    cfg.ListOpt('allowed_roles',
+                default=[
+                  'cloudadmin',
+                  'itsec',
+                  'sysadmin',
+                  'netadmin',
+                  'developer'
+                  ],
+                help='Allowed roles for project'),
+
+    # NOTE(vish): a user with one of these roles will be a superuser and
+    #             have access to all api commands
+    cfg.ListOpt('superuser_roles',
+                default=['cloudadmin'],
+                help='Roles that ignore authorization checking completely'),
+
+    # NOTE(vish): a user with one of these roles will have it for every
+    #             project, even if he or she is not a member of the project
+    cfg.ListOpt('global_roles',
+                default=['cloudadmin', 'itsec'],
+                help='Roles that apply to all projects'),
+
+    cfg.StrOpt('credentials_template',
+               default=utils.abspath('auth/novarc.template'),
+               help='Template for creating users rc file'),
+    cfg.StrOpt('vpn_client_template',
+               default=utils.abspath('cloudpipe/client.ovpn.template'),
+               help='Template for creating users vpn file'),
+    cfg.StrOpt('credential_vpn_file',
+               default='nova-vpn.conf',
+               help='Filename of certificate in credentials zip'),
+    cfg.StrOpt('credential_key_file',
+               default='pk.pem',
+               help='Filename of private key in credentials zip'),
+    cfg.StrOpt('credential_cert_file',
+               default='cert.pem',
+               help='Filename of certificate in credentials zip'),
+    cfg.StrOpt('credential_rc_file',
+               default='%src',
+               help='Filename of rc in credentials zip %s will be replaced by '
+                    'name of the region (nova by default)'),
+    cfg.StrOpt('auth_driver',
+               default='nova.auth.dbdriver.DbDriver',
+               help='Driver that auth manager uses'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_bool('use_deprecated_auth',
-                  False,
-                  'This flag must be set to use old style auth')
-
-flags.DEFINE_list('allowed_roles',
-                  ['cloudadmin', 'itsec', 'sysadmin', 'netadmin', 'developer'],
-                  'Allowed roles for project')
-# NOTE(vish): a user with one of these roles will be a superuser and
-#             have access to all api commands
-flags.DEFINE_list('superuser_roles', ['cloudadmin'],
-                  'Roles that ignore authorization checking completely')
-
-# NOTE(vish): a user with one of these roles will have it for every
-#             project, even if he or she is not a member of the project
-flags.DEFINE_list('global_roles', ['cloudadmin', 'itsec'],
-                  'Roles that apply to all projects')
-
-flags.DEFINE_string('credentials_template',
-                    utils.abspath('auth/novarc.template'),
-                    'Template for creating users rc file')
-flags.DEFINE_string('vpn_client_template',
-                    utils.abspath('cloudpipe/client.ovpn.template'),
-                    'Template for creating users vpn file')
-flags.DEFINE_string('credential_vpn_file', 'nova-vpn.conf',
-                    'Filename of certificate in credentials zip')
-flags.DEFINE_string('credential_key_file', 'pk.pem',
-                    'Filename of private key in credentials zip')
-flags.DEFINE_string('credential_cert_file', 'cert.pem',
-                    'Filename of certificate in credentials zip')
-flags.DEFINE_string('credential_rc_file', '%src',
-                    'Filename of rc in credentials zip, %s will be '
-                    'replaced by name of the region (nova by default)')
-flags.DEFINE_string('auth_driver', 'nova.auth.dbdriver.DbDriver',
-                    'Driver that auth manager uses')
+FLAGS.register_opts(auth_opts)
 
 flags.DECLARE('osapi_compute_listen_port', 'nova.service')
 
-
-LOG = logging.getLogger('nova.auth.manager')
+LOG = logging.getLogger(__name__)
 
 
 if FLAGS.memcached_servers:
@@ -313,7 +328,7 @@ class AuthManager(object):
             LOG.debug(_('user.secret: %s'), user.secret)
             LOG.debug(_('expected_signature: %s'), expected_signature)
             LOG.debug(_('signature: %s'), signature)
-            if signature != expected_signature:
+            if not utils.strcmp_const_time(signature, expected_signature):
                 LOG.audit(_("Invalid signature for user %s"), user.name)
                 raise exception.InvalidSignature(signature=signature,
                                                  user=user)
@@ -325,7 +340,7 @@ class AuthManager(object):
             LOG.debug(_('user.secret: %s'), user.secret)
             LOG.debug(_('expected_signature: %s'), expected_signature)
             LOG.debug(_('signature: %s'), signature)
-            if signature != expected_signature:
+            if not utils.strcmp_const_time(signature, expected_signature):
                 (addr_str, port_str) = utils.parse_server_string(server_string)
                 # If the given server_string contains port num, try without it.
                 if port_str != '':
@@ -334,7 +349,7 @@ class AuthManager(object):
                                                        addr_str, path)
                     LOG.debug(_('host_only_signature: %s'),
                               host_only_signature)
-                    if signature == host_only_signature:
+                    if utils.strcmp_const_time(signature, host_only_signature):
                         return (user, project)
                 LOG.audit(_("Invalid signature for user %s"), user.name)
                 raise exception.InvalidSignature(signature=signature,
@@ -386,7 +401,7 @@ class AuthManager(object):
         key_parts = ['rolecache', User.safe_id(user), str(role)]
         if project:
             key_parts.append(Project.safe_id(project))
-        return '-'.join(key_parts)
+        return utils.utf8('-'.join(key_parts))
 
     def _clear_mc_key(self, user, role, project=None):
         # NOTE(anthony): it would be better to delete the key
@@ -750,45 +765,44 @@ class AuthManager(object):
         pid = Project.safe_id(project)
         private_key, signed_cert = crypto.generate_x509_cert(user.id, pid)
 
-        tmpdir = tempfile.mkdtemp()
-        zf = os.path.join(tmpdir, "temp.zip")
-        zippy = zipfile.ZipFile(zf, 'w')
-        if use_dmz and FLAGS.region_list:
-            regions = {}
-            for item in FLAGS.region_list:
-                region, _sep, region_host = item.partition("=")
-                regions[region] = region_host
-        else:
-            regions = {'nova': FLAGS.ec2_host}
-        for region, host in regions.iteritems():
-            rc = self.__generate_rc(user,
-                                    pid,
-                                    use_dmz,
-                                    host)
-            zippy.writestr(FLAGS.credential_rc_file % region, rc)
+        with utils.tempdir() as tmpdir:
+            zf = os.path.join(tmpdir, "temp.zip")
+            zippy = zipfile.ZipFile(zf, 'w')
+            if use_dmz and FLAGS.region_list:
+                regions = {}
+                for item in FLAGS.region_list:
+                    region, _sep, region_host = item.partition("=")
+                    regions[region] = region_host
+            else:
+                regions = {'nova': FLAGS.ec2_host}
+            for region, host in regions.iteritems():
+                rc = self.__generate_rc(user,
+                                        pid,
+                                        use_dmz,
+                                        host)
+                zippy.writestr(FLAGS.credential_rc_file % region, rc)
 
-        zippy.writestr(FLAGS.credential_key_file, private_key)
-        zippy.writestr(FLAGS.credential_cert_file, signed_cert)
+            zippy.writestr(FLAGS.credential_key_file, private_key)
+            zippy.writestr(FLAGS.credential_cert_file, signed_cert)
 
-        (vpn_ip, vpn_port) = self.get_project_vpn_data(project)
-        if vpn_ip:
-            configfile = open(FLAGS.vpn_client_template, "r")
-            s = string.Template(configfile.read())
-            configfile.close()
-            config = s.substitute(keyfile=FLAGS.credential_key_file,
-                                  certfile=FLAGS.credential_cert_file,
-                                  ip=vpn_ip,
-                                  port=vpn_port)
-            zippy.writestr(FLAGS.credential_vpn_file, config)
-        else:
-            LOG.warn(_("No vpn data for project %s"), pid)
+            (vpn_ip, vpn_port) = self.get_project_vpn_data(project)
+            if vpn_ip:
+                configfile = open(FLAGS.vpn_client_template, "r")
+                s = string.Template(configfile.read())
+                configfile.close()
+                config = s.substitute(keyfile=FLAGS.credential_key_file,
+                                      certfile=FLAGS.credential_cert_file,
+                                      ip=vpn_ip,
+                                      port=vpn_port)
+                zippy.writestr(FLAGS.credential_vpn_file, config)
+            else:
+                LOG.warn(_("No vpn data for project %s"), pid)
 
-        zippy.writestr(FLAGS.ca_file, crypto.fetch_ca(pid))
-        zippy.close()
-        with open(zf, 'rb') as f:
-            read_buffer = f.read()
+            zippy.writestr(FLAGS.ca_file, crypto.fetch_ca(pid))
+            zippy.close()
+            with open(zf, 'rb') as f:
+                read_buffer = f.read()
 
-        shutil.rmtree(tmpdir)
         return read_buffer
 
     def get_environment_rc(self, user, project=None, use_dmz=True):

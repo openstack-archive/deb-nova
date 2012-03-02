@@ -1,4 +1,5 @@
 # Copyright 2011 OpenStack LLC.
+# Copyright 2012 Justin Santa Barbara
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -33,7 +34,7 @@ from nova import log as logging
 from nova import utils
 
 
-LOG = logging.getLogger("nova.api.openstack.compute.contrib.security_groups")
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 authorize = extensions.extension_authorizer('compute', 'security_groups')
 
@@ -173,12 +174,12 @@ class SecurityGroupRulesXMLDeserializer(wsgi.MetadataXMLDeserializer):
         return sg_rule
 
 
-class SecurityGroupController(object):
-    """The Security group API controller for the OpenStack API."""
+class SecurityGroupControllerBase(object):
+    """Base class for Security Group controllers."""
 
     def __init__(self):
         self.compute_api = compute.API()
-        super(SecurityGroupController, self).__init__()
+        self.sgh = utils.import_object(FLAGS.security_group_handler)
 
     def _format_security_group_rule(self, context, rule):
         sg_rule = {}
@@ -209,6 +210,10 @@ class SecurityGroupController(object):
                     context, rule)]
         return security_group
 
+
+class SecurityGroupController(SecurityGroupControllerBase):
+    """The Security group API controller for the OpenStack API."""
+
     def _get_security_group(self, context, id):
         try:
             id = int(id)
@@ -234,8 +239,13 @@ class SecurityGroupController(object):
         context = req.environ['nova.context']
         authorize(context)
         security_group = self._get_security_group(context, id)
+        if db.security_group_in_use(context, security_group.id):
+            msg = _("Security group is still in use")
+            raise exc.HTTPBadRequest(explanation=msg)
         LOG.audit(_("Delete security group %s"), id, context=context)
         db.security_group_destroy(context, security_group.id)
+        self.sgh.trigger_security_group_destroy_refresh(
+            context, security_group.id)
 
         return webob.Response(status_int=202)
 
@@ -290,6 +300,7 @@ class SecurityGroupController(object):
                  'name': group_name,
                  'description': group_description}
         group_ref = db.security_group_create(context, group)
+        self.sgh.trigger_security_group_create_refresh(context, group)
 
         return {'security_group': self._format_security_group(context,
                                                                  group_ref)}
@@ -312,7 +323,7 @@ class SecurityGroupController(object):
             raise exc.HTTPBadRequest(explanation=msg)
 
 
-class SecurityGroupRulesController(SecurityGroupController):
+class SecurityGroupRulesController(SecurityGroupControllerBase):
 
     @wsgi.serializers(xml=SecurityGroupRuleTemplate)
     @wsgi.deserializers(xml=SecurityGroupRulesXMLDeserializer)
@@ -366,7 +377,8 @@ class SecurityGroupRulesController(SecurityGroupController):
             raise exc.HTTPBadRequest(explanation=msg)
 
         security_group_rule = db.security_group_rule_create(context, values)
-
+        self.sgh.trigger_security_group_rule_create_refresh(
+            context, [security_group_rule['id']])
         self.compute_api.trigger_security_group_rules_refresh(context,
                                     security_group_id=security_group['id'])
 
@@ -379,17 +391,14 @@ class SecurityGroupRulesController(SecurityGroupController):
            defined in the given security group.
         """
         for rule in security_group.rules:
-            if 'group_id' in values:
-                if rule['group_id'] == values['group_id']:
-                    return True
-            else:
-                is_duplicate = True
-                for key in ('cidr', 'from_port', 'to_port', 'protocol'):
-                    if rule[key] != values[key]:
-                        is_duplicate = False
-                        break
-                if is_duplicate:
-                    return True
+            is_duplicate = True
+            keys = ('group_id', 'cidr', 'from_port', 'to_port', 'protocol')
+            for key in keys:
+                if rule.get(key) != values.get(key):
+                    is_duplicate = False
+                    break
+            if is_duplicate:
+                return True
         return False
 
     def _rule_args_to_dict(self, context, to_port=None, from_port=None,
@@ -498,16 +507,46 @@ class SecurityGroupRulesController(SecurityGroupController):
         LOG.audit(msg, security_group['name'], context=context)
 
         db.security_group_rule_destroy(context, rule['id'])
+        self.sgh.trigger_security_group_rule_destroy_refresh(
+            context, [rule['id']])
         self.compute_api.trigger_security_group_rules_refresh(context,
                                     security_group_id=security_group['id'])
 
         return webob.Response(status_int=202)
 
 
+class ServerSecurityGroupController(SecurityGroupControllerBase):
+
+    @wsgi.serializers(xml=SecurityGroupsTemplate)
+    def index(self, req, server_id):
+        """Returns a list of security groups for the given instance."""
+        context = req.environ['nova.context']
+        authorize(context)
+
+        self.compute_api.ensure_default_security_group(context)
+
+        try:
+            instance = self.compute_api.get(context, server_id)
+            groups = db.security_group_get_by_instance(context,
+                                                       instance['id'])
+        except exception.ApiError, e:
+            raise webob.exc.HTTPBadRequest(explanation=e.message)
+        except exception.NotAuthorized, e:
+            raise webob.exc.HTTPUnauthorized()
+
+        result = [self._format_security_group(context, group)
+                    for group in groups]
+
+        return {'security_groups':
+                list(sorted(result,
+                            key=lambda k: (k['tenant_id'], k['name'])))}
+
+
 class SecurityGroupActionController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SecurityGroupActionController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
+        self.sgh = utils.import_object(FLAGS.security_group_handler)
 
     @wsgi.action('addSecurityGroup')
     def _addSecurityGroup(self, req, id, body):
@@ -531,6 +570,8 @@ class SecurityGroupActionController(wsgi.Controller):
         try:
             instance = self.compute_api.get(context, id)
             self.compute_api.add_security_group(context, instance, group_name)
+            self.sgh.trigger_instance_add_security_group_refresh(
+                context, instance, group_name)
         except exception.SecurityGroupNotFound as exp:
             raise exc.HTTPNotFound(explanation=unicode(exp))
         except exception.InstanceNotFound as exp:
@@ -563,6 +604,8 @@ class SecurityGroupActionController(wsgi.Controller):
             instance = self.compute_api.get(context, id)
             self.compute_api.remove_security_group(context, instance,
                                                    group_name)
+            self.sgh.trigger_instance_remove_security_group_refresh(
+                context, instance, group_name)
         except exception.SecurityGroupNotFound as exp:
             raise exc.HTTPNotFound(explanation=unicode(exp))
         except exception.InstanceNotFound as exp:
@@ -597,4 +640,11 @@ class Security_groups(extensions.ExtensionDescriptor):
         res = extensions.ResourceExtension('os-security-group-rules',
                                 controller=SecurityGroupRulesController())
         resources.append(res)
+
+        res = extensions.ResourceExtension(
+            'os-security-groups',
+            controller=ServerSecurityGroupController(),
+            parent=dict(member_name='server', collection_name='servers'))
+        resources.append(res)
+
         return resources

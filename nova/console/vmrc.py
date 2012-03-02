@@ -22,16 +22,21 @@ import json
 
 from nova import exception
 from nova import flags
+from nova.openstack.common import cfg
 from nova.virt.vmwareapi import vim_util
 
 
+vmrc_opts = [
+    cfg.IntOpt('console_vmrc_port',
+               default=443,
+               help="port for VMware VMRC connections"),
+    cfg.IntOpt('console_vmrc_error_retries',
+               default=10,
+               help="number of retries for retrieving VMRC information"),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('console_vmrc_port',
-                     443,
-                     "port for VMware VMRC connections")
-flags.DEFINE_integer('console_vmrc_error_retries',
-                     10,
-                     "number of retries for retrieving VMRC information")
+FLAGS.register_opts(vmrc_opts)
 
 
 class VMRCConsole(object):
@@ -124,11 +129,10 @@ class VMRCSessionConsole(VMRCConsole):
                 vm_ref = vm.obj
         if vm_ref is None:
             raise exception.InstanceNotFound(instance_id=instance_name)
-        virtual_machine_ticket = \
-                        vim_session._call_method(
-            vim_session._get_vim(),
-            'AcquireCloneTicket',
-            vim_session._get_vim().get_service_content().sessionManager)
+        virtual_machine_ticket = vim_session._call_method(
+                vim_session._get_vim(),
+                'AcquireCloneTicket',
+                vim_session._get_vim().get_service_content().sessionManager)
         json_data = json.dumps({'vm_id': str(vm_ref.value),
                      'username': virtual_machine_ticket,
                      'password': virtual_machine_ticket})

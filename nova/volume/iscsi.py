@@ -21,12 +21,16 @@ Helper code for the iSCSI volume driver.
 """
 
 from nova import flags
+from nova.openstack.common import cfg
 from nova import utils
 
 
+iscsi_helper_opt = cfg.StrOpt('iscsi_helper',
+                              default='ietadm',
+                              help='iscsi target user-land tool to use')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('iscsi_helper', 'ietadm',
-                    'iscsi target user-land tool to use')
+FLAGS.register_opt(iscsi_helper_opt)
 
 
 class TargetAdmin(object):

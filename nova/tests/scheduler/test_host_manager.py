@@ -20,7 +20,6 @@ import datetime
 
 from nova import db
 from nova import exception
-from nova import log as logging
 from nova.scheduler import host_manager
 from nova import test
 from nova.tests.scheduler import fakes
@@ -45,14 +44,14 @@ class HostManagerTestCase(test.TestCase):
         self.host_manager = host_manager.HostManager()
 
     def test_choose_host_filters_not_found(self):
-        self.flags(default_host_filters='ComputeFilterClass3')
+        self.flags(scheduler_default_filters='ComputeFilterClass3')
         self.host_manager.filter_classes = [ComputeFilterClass1,
                 ComputeFilterClass2]
         self.assertRaises(exception.SchedulerHostFilterNotFound,
                 self.host_manager._choose_host_filters, None)
 
     def test_choose_host_filters(self):
-        self.flags(default_host_filters=['ComputeFilterClass2'])
+        self.flags(scheduler_default_filters=['ComputeFilterClass2'])
         self.host_manager.filter_classes = [ComputeFilterClass1,
                 ComputeFilterClass2]
 
@@ -249,12 +248,12 @@ class HostManagerTestCase(test.TestCase):
         topic = 'compute'
 
         self.mox.StubOutWithMock(db, 'compute_node_get_all')
-        self.mox.StubOutWithMock(logging, 'warn')
+        self.mox.StubOutWithMock(host_manager.LOG, 'warn')
         self.mox.StubOutWithMock(db, 'instance_get_all')
 
         db.compute_node_get_all(context).AndReturn(fakes.COMPUTE_NODES)
         # Invalid service
-        logging.warn("No service for compute ID 5")
+        host_manager.LOG.warn("No service for compute ID 5")
         db.instance_get_all(context).AndReturn(fakes.INSTANCES)
 
         self.mox.ReplayAll()

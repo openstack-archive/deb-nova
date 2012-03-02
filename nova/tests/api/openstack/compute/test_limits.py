@@ -315,6 +315,10 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
         response = request.get_response(self.app)
         self.assertEqual(response.status_int, 413)
 
+        self.assertTrue('Retry-After' in response.headers)
+        retry_after = int(response.headers['Retry-After'])
+        self.assertAlmostEqual(retry_after, 60, 1)
+
         body = json.loads(response.body)
         expected = "Only 1 GET request(s) can be made to * every minute."
         value = body["overLimitFault"]["details"].strip()
@@ -776,8 +780,8 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
         delay, error = self.proxy.check_for_delay("GET", "/delayed")
         error = error.strip()
 
-        expected = ("60.00", "403 Forbidden\n\nOnly 1 GET request(s) can be "\
-            "made to /delayed every minute.")
+        expected = ("60.00", "403 Forbidden\n\nOnly 1 GET request(s) can be "
+                    "made to /delayed every minute.")
 
         self.assertEqual((delay, error), expected)
 

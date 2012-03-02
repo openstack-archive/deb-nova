@@ -15,10 +15,16 @@
 #    under the License.
 
 import __builtin__
-import mox
 import datetime
+import hashlib
 import os
+import os.path
+import socket
+import StringIO
 import tempfile
+
+import iso8601
+import mox
 
 import nova
 from nova import exception
@@ -380,6 +386,23 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertTrue([c for c in password
                          if c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'])
 
+    def test_read_file_as_root(self):
+        def fake_execute(*args, **kwargs):
+            if args[1] == 'bad':
+                raise exception.ProcessExecutionError
+            return 'fakecontents', None
+
+        self.stubs.Set(utils, 'execute', fake_execute)
+        contents = utils.read_file_as_root('good')
+        self.assertEqual(contents, 'fakecontents')
+        self.assertRaises(exception.FileNotFound,
+                          utils.read_file_as_root, 'bad')
+
+    def test_strcmp_const_time(self):
+        self.assertTrue(utils.strcmp_const_time('abc123', 'abc123'))
+        self.assertFalse(utils.strcmp_const_time('a', 'aaaaa'))
+        self.assertFalse(utils.strcmp_const_time('ABC123', 'abc123'))
+
 
 class IsUUIDLikeTestCase(test.TestCase):
     def assertUUIDLike(self, val, expected):
@@ -679,3 +702,266 @@ class DeprecationTest(test.TestCase):
         self.mox.ReplayAll()
         result = utils.service_is_up(service)
         self.assertFalse(result)
+
+    def test_xhtml_escape(self):
+        self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
+        self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
+
+    def test_hash_file(self):
+        data = 'Mary had a little lamb, its fleece as white as snow'
+        flo = StringIO.StringIO(data)
+        h1 = utils.hash_file(flo)
+        h2 = hashlib.sha1(data).hexdigest()
+        self.assertEquals(h1, h2)
+
+
+class Iso8601TimeTest(test.TestCase):
+
+    def _instaneous(self, timestamp, yr, mon, day, hr, min, sec, micro):
+        self.assertEquals(timestamp.year, yr)
+        self.assertEquals(timestamp.month, mon)
+        self.assertEquals(timestamp.day, day)
+        self.assertEquals(timestamp.hour, hr)
+        self.assertEquals(timestamp.minute, min)
+        self.assertEquals(timestamp.second, sec)
+        self.assertEquals(timestamp.microsecond, micro)
+
+    def _do_test(self, str, yr, mon, day, hr, min, sec, micro, shift):
+        DAY_SECONDS = 24 * 60 * 60
+        timestamp = utils.parse_isotime(str)
+        self._instaneous(timestamp, yr, mon, day, hr, min, sec, micro)
+        offset = timestamp.tzinfo.utcoffset(None)
+        self.assertEqual(offset.seconds + offset.days * DAY_SECONDS, shift)
+
+    def test_zulu(self):
+        str = '2012-02-14T20:53:07Z'
+        self._do_test(str, 2012, 02, 14, 20, 53, 7, 0, 0)
+
+    def test_zulu_micros(self):
+        str = '2012-02-14T20:53:07.123Z'
+        self._do_test(str, 2012, 02, 14, 20, 53, 7, 123000, 0)
+
+    def test_offset_east(self):
+        str = '2012-02-14T20:53:07+04:30'
+        offset = 4.5 * 60 * 60
+        self._do_test(str, 2012, 02, 14, 20, 53, 7, 0, offset)
+
+    def test_offset_east_micros(self):
+        str = '2012-02-14T20:53:07.42+04:30'
+        offset = 4.5 * 60 * 60
+        self._do_test(str, 2012, 02, 14, 20, 53, 7, 420000, offset)
+
+    def test_offset_west(self):
+        str = '2012-02-14T20:53:07-05:30'
+        offset = -5.5 * 60 * 60
+        self._do_test(str, 2012, 02, 14, 20, 53, 7, 0, offset)
+
+    def test_offset_west_micros(self):
+        str = '2012-02-14T20:53:07.654321-05:30'
+        offset = -5.5 * 60 * 60
+        self._do_test(str, 2012, 02, 14, 20, 53, 7, 654321, offset)
+
+    def test_compare(self):
+        zulu = utils.parse_isotime('2012-02-14T20:53:07')
+        east = utils.parse_isotime('2012-02-14T20:53:07-01:00')
+        west = utils.parse_isotime('2012-02-14T20:53:07+01:00')
+        self.assertTrue(east > west)
+        self.assertTrue(east > zulu)
+        self.assertTrue(zulu > west)
+
+    def test_compare_micros(self):
+        zulu = utils.parse_isotime('2012-02-14T20:53:07.6544')
+        east = utils.parse_isotime('2012-02-14T19:53:07.654321-01:00')
+        west = utils.parse_isotime('2012-02-14T21:53:07.655+01:00')
+        self.assertTrue(east < west)
+        self.assertTrue(east < zulu)
+        self.assertTrue(zulu < west)
+
+    def test_zulu_roundtrip(self):
+        str = '2012-02-14T20:53:07Z'
+        zulu = utils.parse_isotime(str)
+        self.assertEquals(zulu.tzinfo, iso8601.iso8601.UTC)
+        self.assertEquals(utils.isotime(zulu), str)
+
+    def test_east_roundtrip(self):
+        str = '2012-02-14T20:53:07-07:00'
+        east = utils.parse_isotime(str)
+        self.assertEquals(east.tzinfo.tzname(None), '-07:00')
+        self.assertEquals(utils.isotime(east), str)
+
+    def test_west_roundtrip(self):
+        str = '2012-02-14T20:53:07+11:30'
+        west = utils.parse_isotime(str)
+        self.assertEquals(west.tzinfo.tzname(None), '+11:30')
+        self.assertEquals(utils.isotime(west), str)
+
+    def test_now_roundtrip(self):
+        str = utils.isotime()
+        now = utils.parse_isotime(str)
+        self.assertEquals(now.tzinfo, iso8601.iso8601.UTC)
+        self.assertEquals(utils.isotime(now), str)
+
+    def test_zulu_normalize(self):
+        str = '2012-02-14T20:53:07Z'
+        zulu = utils.parse_isotime(str)
+        normed = utils.normalize_time(zulu)
+        self._instaneous(normed, 2012, 2, 14, 20, 53, 07, 0)
+
+    def test_east_normalize(self):
+        str = '2012-02-14T20:53:07-07:00'
+        east = utils.parse_isotime(str)
+        normed = utils.normalize_time(east)
+        self._instaneous(normed, 2012, 2, 15, 03, 53, 07, 0)
+
+    def test_west_normalize(self):
+        str = '2012-02-14T20:53:07+21:00'
+        west = utils.parse_isotime(str)
+        normed = utils.normalize_time(west)
+        self._instaneous(normed, 2012, 2, 13, 23, 53, 07, 0)
+
+
+class TestLockCleanup(test.TestCase):
+    """unit tests for utils.cleanup_file_locks()"""
+
+    def setUp(self):
+        super(TestLockCleanup, self).setUp()
+
+        self.pid = os.getpid()
+        self.dead_pid = self._get_dead_pid()
+        self.lock_name = 'nova-testlock'
+        self.lock_file = os.path.join(FLAGS.lock_path,
+                                      self.lock_name + '.lock')
+        self.hostname = socket.gethostname()
+        print self.pid, self.dead_pid
+        try:
+            os.unlink(self.lock_file)
+        except OSError as (errno, strerror):
+            if errno == 2:
+                pass
+
+    def _get_dead_pid(self):
+        """get a pid for a process that does not exist"""
+
+        candidate_pid = self.pid - 1
+        while os.path.exists(os.path.join('/proc', str(candidate_pid))):
+            candidate_pid -= 1
+            if candidate_pid == 1:
+                return 0
+        return candidate_pid
+
+    def _get_sentinel_name(self, hostname, pid, thread='MainThread'):
+        return os.path.join(FLAGS.lock_path,
+                            '%s.%s-%d' % (hostname, thread, pid))
+
+    def _create_sentinel(self, hostname, pid, thread='MainThread'):
+        name = self._get_sentinel_name(hostname, pid, thread)
+        open(name, 'wb').close()
+        return name
+
+    def test_clean_stale_locks(self):
+        """verify locks for dead processes are cleaned up"""
+
+        # create sentinels for two processes, us and a 'dead' one
+        # no active lock
+        sentinel1 = self._create_sentinel(self.hostname, self.pid)
+        sentinel2 = self._create_sentinel(self.hostname, self.dead_pid)
+
+        utils.cleanup_file_locks()
+
+        self.assertTrue(os.path.exists(sentinel1))
+        self.assertFalse(os.path.exists(self.lock_file))
+        self.assertFalse(os.path.exists(sentinel2))
+
+        os.unlink(sentinel1)
+
+    def test_clean_stale_locks_active(self):
+        """verify locks for dead processes are cleaned with an active lock """
+
+        # create sentinels for two processes, us and a 'dead' one
+        # create an active lock for us
+        sentinel1 = self._create_sentinel(self.hostname, self.pid)
+        sentinel2 = self._create_sentinel(self.hostname, self.dead_pid)
+        os.link(sentinel1, self.lock_file)
+
+        utils.cleanup_file_locks()
+
+        self.assertTrue(os.path.exists(sentinel1))
+        self.assertTrue(os.path.exists(self.lock_file))
+        self.assertFalse(os.path.exists(sentinel2))
+
+        os.unlink(sentinel1)
+        os.unlink(self.lock_file)
+
+    def test_clean_stale_with_threads(self):
+        """verify locks for multiple threads are cleaned up """
+
+        # create sentinels for four threads in our process, and a 'dead'
+        # process.  no lock.
+        sentinel1 = self._create_sentinel(self.hostname, self.pid, 'Default-1')
+        sentinel2 = self._create_sentinel(self.hostname, self.pid, 'Default-2')
+        sentinel3 = self._create_sentinel(self.hostname, self.pid, 'Default-3')
+        sentinel4 = self._create_sentinel(self.hostname, self.pid, 'Default-4')
+        sentinel5 = self._create_sentinel(self.hostname, self.dead_pid,
+                                          'Default-1')
+
+        utils.cleanup_file_locks()
+
+        self.assertTrue(os.path.exists(sentinel1))
+        self.assertTrue(os.path.exists(sentinel2))
+        self.assertTrue(os.path.exists(sentinel3))
+        self.assertTrue(os.path.exists(sentinel4))
+        self.assertFalse(os.path.exists(self.lock_file))
+        self.assertFalse(os.path.exists(sentinel5))
+
+        os.unlink(sentinel1)
+        os.unlink(sentinel2)
+        os.unlink(sentinel3)
+        os.unlink(sentinel4)
+
+    def test_clean_stale_with_threads_active(self):
+        """verify locks for multiple threads are cleaned up """
+
+        # create sentinels for four threads in our process, and a 'dead'
+        # process
+        sentinel1 = self._create_sentinel(self.hostname, self.pid, 'Default-1')
+        sentinel2 = self._create_sentinel(self.hostname, self.pid, 'Default-2')
+        sentinel3 = self._create_sentinel(self.hostname, self.pid, 'Default-3')
+        sentinel4 = self._create_sentinel(self.hostname, self.pid, 'Default-4')
+        sentinel5 = self._create_sentinel(self.hostname, self.dead_pid,
+                                          'Default-1')
+
+        os.link(sentinel1, self.lock_file)
+
+        utils.cleanup_file_locks()
+
+        self.assertTrue(os.path.exists(sentinel1))
+        self.assertTrue(os.path.exists(sentinel2))
+        self.assertTrue(os.path.exists(sentinel3))
+        self.assertTrue(os.path.exists(sentinel4))
+        self.assertTrue(os.path.exists(self.lock_file))
+        self.assertFalse(os.path.exists(sentinel5))
+
+        os.unlink(sentinel1)
+        os.unlink(sentinel2)
+        os.unlink(sentinel3)
+        os.unlink(sentinel4)
+        os.unlink(self.lock_file)
+
+    def test_clean_bogus_lockfiles(self):
+        """verify lockfiles are cleaned """
+
+        lock1 = os.path.join(FLAGS.lock_path, 'nova-testlock1.lock')
+        lock2 = os.path.join(FLAGS.lock_path, 'nova-testlock2.lock')
+        lock3 = os.path.join(FLAGS.lock_path, 'testlock3.lock')
+
+        open(lock1, 'wb').close()
+        open(lock2, 'wb').close()
+        open(lock3, 'wb').close()
+
+        utils.cleanup_file_locks()
+
+        self.assertFalse(os.path.exists(lock1))
+        self.assertFalse(os.path.exists(lock2))
+        self.assertTrue(os.path.exists(lock3))
+
+        os.unlink(lock3)

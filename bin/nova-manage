@@ -55,6 +55,7 @@
 """
 
 import ast
+import errno
 import gettext
 import glob
 import json
@@ -89,11 +90,10 @@ from nova import rpc
 from nova import utils
 from nova import version
 from nova import vsa
-from nova.api.ec2 import admin
 from nova.api.ec2 import ec2utils
 from nova.auth import manager
-from nova.cloudpipe import pipelib
 from nova.compute import instance_types
+from nova.compute import vm_states
 from nova.db import migration
 from nova.volume import volume_types
 
@@ -106,10 +106,6 @@ flags.DECLARE('vlan_start', 'nova.network.manager')
 flags.DECLARE('vpn_start', 'nova.network.manager')
 flags.DECLARE('default_floating_pool', 'nova.network.manager')
 flags.DECLARE('public_interface', 'nova.network.linux_net')
-flags.DECLARE('libvirt_type', 'nova.virt.libvirt.connection')
-flags.DEFINE_flag(flags.HelpFlag())
-flags.DEFINE_flag(flags.HelpshortFlag())
-flags.DEFINE_flag(flags.HelpXMLFlag())
 
 
 # Decorators for actions
@@ -135,65 +131,6 @@ class VpnCommands(object):
 
     def __init__(self):
         self.manager = manager.AuthManager()
-        self.pipe = pipelib.CloudPipe()
-
-    @args('--project', dest="project", metavar='<Project name>',
-            help='Project name')
-    def list(self, project=None):
-        """Print a listing of the VPN data for one or all projects."""
-        print "WARNING: This method only works with deprecated auth"
-        print "%-12s\t" % 'project',
-        print "%-20s\t" % 'ip:port',
-        print "%-20s\t" % 'private_ip',
-        print "%s" % 'state'
-        if project:
-            projects = [self.manager.get_project(project)]
-        else:
-            projects = self.manager.get_projects()
-            # NOTE(vish): This hits the database a lot.  We could optimize
-            #             by getting all networks in one query and all vpns
-            #             in aother query, then doing lookups by project
-        for project in projects:
-            print "%-12s\t" % project.name,
-            ipport = "%s:%s" % (project.vpn_ip, project.vpn_port)
-            print "%-20s\t" % ipport,
-            ctxt = context.get_admin_context()
-            vpn = db.instance_get_project_vpn(ctxt, project.id)
-            if vpn:
-                address = None
-                state = 'down'
-                if vpn.get('fixed_ip', None):
-                    address = vpn['fixed_ip']['address']
-                if project.vpn_ip and utils.vpn_ping(project.vpn_ip,
-                                                     project.vpn_port):
-                    state = 'up'
-                print address,
-                print vpn['host'],
-                print ec2utils.id_to_ec2_id(vpn['id']),
-                print vpn['vm_state'],
-                print state
-            else:
-                print None
-
-    def spawn(self):
-        """Run all VPNs."""
-        print "WARNING: This method only works with deprecated auth"
-        ctxt = context.get_admin_context()
-        for p in reversed(self.manager.get_projects()):
-            if self._vpn_for(ctxt, p.id):
-                print 'spawning %s' % p.id
-                self.pipe.launch_vpn_instance(p.id, p.project_manager_id)
-                time.sleep(10)
-
-    @args('--project', dest="project_id", metavar='<Project name>',
-            help='Project name')
-    @args('--user', dest="user_id", metavar='<user name>', help='User name')
-    def run(self, project_id, user_id):
-        """Start the VPN for a given project and user."""
-        if not user_id:
-            print "WARNING: This method only works with deprecated auth"
-            user_id = self.manager.get_project(project_id).project_manager_id
-        self.pipe.launch_vpn_instance(project_id, user_id)
 
     @args('--project', dest="project_id", metavar='<Project name>',
             help='Project name')
@@ -215,9 +152,6 @@ class VpnCommands(object):
                               network['id'],
                               {'vpn_public_address': ip,
                                'vpn_public_port': int(port)})
-
-    def _vpn_for(self, context, project_id):
-        return admin.AdminController()._vpn_for(context, project_id)
 
 
 class ShellCommands(object):
@@ -615,7 +549,7 @@ class ProjectCommands(object):
             print e
             print _("The above error may show that the certificate db has "
                     "not been created.\nPlease create a database by running "
-                    "a nova-api server on this host.")
+                    "a nova-cert server on this host.")
 
 AccountCommands = ProjectCommands
 
@@ -650,12 +584,14 @@ class FixedIpCommands(object):
             hostname = None
             host = None
             mac_address = None
-            if fixed_ip['instance']:
+            network = db.network_get(context.get_admin_context(),
+                                     fixed_ip['network_id'])
+            if fixed_ip['instance_id']:
                 instance = instances_by_id[fixed_ip['instance_id']]
                 hostname = instance['hostname']
                 host = instance['host']
             print "%-18s\t%-15s\t%-15s\t%s" % (
-                    fixed_ip['network']['cidr'],
+                    network['cidr'],
                     fixed_ip['address'],
                     hostname, host)
 
@@ -720,10 +656,14 @@ class FloatingIpCommands(object):
         """Lists all floating ips (optionally by host)
         Note: if host is given, only active floating IPs are returned"""
         ctxt = context.get_admin_context()
-        if host is None:
-            floating_ips = db.floating_ip_get_all(ctxt)
-        else:
-            floating_ips = db.floating_ip_get_all_by_host(ctxt, host)
+        try:
+            if host is None:
+                floating_ips = db.floating_ip_get_all(ctxt)
+            else:
+                floating_ips = db.floating_ip_get_all_by_host(ctxt, host)
+        except exception.NoFloatingIpsDefined:
+            print _("No floating IP addresses have been defined.")
+            return
         for floating_ip in floating_ips:
             instance_id = None
             if floating_ip['fixed_ip_id']:
@@ -766,6 +706,8 @@ class NetworkCommands(object):
     @args('--dns2', dest="dns2", metavar="<DNS Address>", help='Second DNS')
     @args('--uuid', dest="uuid", metavar="<network uuid>",
       help='Network UUID')
+    @args('--fixed_cidr', dest="fixed_cidr", metavar='<x.x.x.x/yy>',
+            help='IPv4 subnet for fixed IPS (ex: 10.20.0.0/16)')
     @args('--project_id', dest="project_id", metavar="<project id>",
       help='Project id')
     @args('--priority', dest="priority", metavar="<number>",
@@ -775,7 +717,7 @@ class NetworkCommands(object):
                vpn_start=None, fixed_range_v6=None, gateway=None,
                gateway_v6=None, bridge=None, bridge_interface=None,
                dns1=None, dns2=None, project_id=None, priority=None,
-               uuid=None):
+               uuid=None, fixed_cidr=None):
         """Creates fixed ips for host by range"""
 
         # check for certain required inputs
@@ -827,6 +769,9 @@ class NetworkCommands(object):
         if not network_size:
             network_size = FLAGS.network_size
 
+        if fixed_cidr:
+            fixed_cidr = netaddr.IPNetwork(fixed_cidr)
+
         # create the network
         net_manager = utils.import_object(FLAGS.network_manager)
         net_manager.create_networks(context.get_admin_context(),
@@ -846,7 +791,8 @@ class NetworkCommands(object):
                                     dns2=dns2,
                                     project_id=project_id,
                                     priority=priority,
-                                    uuid=uuid)
+                                    uuid=uuid,
+                                    fixed_cidr=fixed_cidr)
 
     def list(self):
         """List all created networks"""
@@ -972,7 +918,7 @@ class VmCommands(object):
         for instance in instances:
             print "%-10s %-15s %-10s %-10s %-26s %-9s %-9s %-9s" \
                   "  %-10s %-10s %-10s %-5d" % (
-                instance['hostname'],
+                instance['display_name'],
                 instance['host'],
                 instance['instance_type'].name,
                 instance['vm_state'],
@@ -997,6 +943,7 @@ class VmCommands(object):
         ctxt = context.get_admin_context()
         instance_id = ec2utils.ec2_id_to_id(ec2_id)
 
+        flags.DECLARE('libvirt_type', 'nova.virt.libvirt.connection')
         if (FLAGS.connection_type != 'libvirt' or
            (FLAGS.connection_type == 'libvirt' and
             FLAGS.libvirt_type not in ['kvm', 'qemu'])):
@@ -1414,7 +1361,7 @@ class VsaCommands(object):
            not self.manager.is_project_member(user_id, project_id):
             msg = _("%(user_id)s must be an admin or a "
                     "member of %(project_id)s")
-            LOG.warn(msg % locals())
+            logging.warn(msg % locals())
             raise ValueError(msg % locals())
 
         # Sanity check for storage string
@@ -1589,23 +1536,24 @@ class VsaDriveTypeCommands(object):
         if capabilities is not None and capabilities != '':
             extra_specs['capabilities'] = capabilities
 
-        volume_types.create(self.context, name, extra_specs)
-        result = volume_types.get_volume_type_by_name(self.context, name)
-        self._list({name: result})
+        try:
+            volume_types.create(self.context, name, extra_specs)
+            result = volume_types.get_volume_type_by_name(self.context, name)
+            self._list({name: result})
+        except exception.VolumeTypeExists:
+            print
+            print "Volume Type Exists"
+            print "Please ensure volume_type name is unique."
+            print "Currently defined volume types:"
+            print
+            self.list()
 
     @args('--name', dest='name', metavar="<name>", help='Drive name')
-    @args('--purge', action="store_true", dest='purge', default=False,
-            help='purge record from database')
-    def delete(self, name, purge):
-        """Marks instance types / flavors as deleted"""
+    def delete(self, name):
+        """Marks volume types as deleted"""
         try:
-            if purge:
-                volume_types.purge(self.context, name)
-                verb = "purged"
-            else:
-                volume_types.destroy(self.context, name)
-                verb = "deleted"
-        except exception.ApiError:
+            volume_types.destroy(self.context, name)
+        except exception.InvalidVolumeType:
             print "Valid volume type name is required"
             sys.exit(1)
         except exception.DBError, e:
@@ -1614,7 +1562,7 @@ class VsaDriveTypeCommands(object):
         except Exception:
             sys.exit(3)
         else:
-            print "%s %s" % (name, verb)
+            print "%s deleted" % name
 
     @args('--all', dest='all', action="store_true", default=False,
         help='Show all drives (including invisible)')
@@ -1765,14 +1713,12 @@ class InstanceTypeCommands(object):
             print "Must supply valid parameters to create instance_type"
             print e
             sys.exit(1)
-        except exception.ApiError, e:
-            print "\n\n"
-            print "\n%s" % e
+        except exception.InstanceTypeExists:
+            print "Instance Type exists."
             print "Please ensure instance_type name and flavorid are unique."
-            print "To complete remove a instance_type, use the --purge flag:"
-            print "\n     # nova-manage instance_type delete <name> --purge\n"
             print "Currently defined instance_type names and flavorids:"
-            self.list("--all")
+            print
+            self.list()
             sys.exit(2)
         except Exception:
             print "Unknown error"
@@ -1782,18 +1728,11 @@ class InstanceTypeCommands(object):
 
     @args('--name', dest='name', metavar='<name>',
             help='Name of instance type/flavor')
-    @args('--purge', action="store_true", dest='purge', default=False,
-            help='purge record from database')
-    def delete(self, name, purge):
+    def delete(self, name):
         """Marks instance types / flavors as deleted"""
         try:
-            if purge:
-                instance_types.purge(name)
-                verb = "purged"
-            else:
-                instance_types.destroy(name)
-                verb = "deleted"
-        except exception.ApiError:
+            instance_types.destroy(name)
+        except exception.InstanceTypeNotFound:
             print "Valid instance type name is required"
             sys.exit(1)
         except exception.DBError, e:
@@ -1802,7 +1741,7 @@ class InstanceTypeCommands(object):
         except Exception:
             sys.exit(3)
         else:
-            print "%s %s" % (name, verb)
+            print "%s deleted" % name
 
     @args('--name', dest='name', metavar='<name>',
             help='Name of instance type/flavor')
@@ -1811,8 +1750,6 @@ class InstanceTypeCommands(object):
         try:
             if name is None:
                 inst_types = instance_types.get_all_types()
-            elif name == "--all":
-                inst_types = instance_types.get_all_types(True)
             else:
                 inst_types = instance_types.get_instance_type_by_name(name)
         except exception.DBError, e:
@@ -1965,8 +1902,7 @@ class ImageCommands(object):
                 with open(image_path) as ifile:
                     image = self.image_service.create(elevated, meta, ifile)
                 new = image['id']
-                print _("Image %(old)s converted to " \
-                        "%(new)s (%(new)08x).") % locals()
+                print _("Image %(old)s converted to %(new)s.") % locals()
             except Exception as exc:
                 print _("Failed to convert %(old)s: %(exc)s") % locals()
 
@@ -2201,7 +2137,7 @@ class ConfigCommands(object):
         pass
 
     def list(self):
-        for key, value in FLAGS.FlagValuesDict().iteritems():
+        for key, value in FLAGS.iteritems():
             if value is not None:
                 print '%s = %s' % (key, value)
 
@@ -2247,12 +2183,80 @@ class GetLogCommands(object):
             print "No nova entries in syslog!"
 
 
+class ExportCommands(object):
+    """Commands used to export data from Nova"""
+
+    def auth(self):
+        """Export Nova auth data in format that can be consumed by Keystone"""
+        print json.dumps(self._get_auth_data())
+
+    def _get_auth_data(self):
+        output = {
+            'users': [],
+            'tenants': [],
+            'user_tenant_list': [],
+            'ec2_credentials': [],
+            'roles': [],
+            'role_user_tenant_list': [],
+        }
+
+        am = manager.AuthManager()
+
+        for user in am.get_users():
+            user_dict = {
+                'id': user.id,
+                'name': user.name,
+                'password': user.access,
+            }
+            output['users'].append(user_dict)
+
+            ec2_cred = {
+                'user_id': user.id,
+                'access_key': user.access,
+                'secret_key': user.secret,
+            }
+            output['ec2_credentials'].append(ec2_cred)
+
+        for project in am.get_projects():
+            tenant = {
+                'id': project.id,
+                'name': project.name,
+                'description': project.description,
+            }
+            output['tenants'].append(tenant)
+
+            for user_id in project.member_ids:
+                membership = {
+                    'tenant_id': project.id,
+                    'user_id': user_id,
+                }
+                output['user_tenant_list'].append(membership)
+
+        for role in am.get_roles():
+            if role not in output['roles']:
+                output['roles'].append(role)
+
+        for project in am.get_projects():
+            for user_id in project.member_ids:
+                user = am.get_user(user_id)
+                for role in am.get_user_roles(user_id, project.id):
+                    role_grant = {
+                        'role': role,
+                        'user_id': user_id,
+                        'tenant_id': project.id,
+                    }
+                    output['role_user_tenant_list'].append(role_grant)
+
+        return output
+
+
 CATEGORIES = [
     ('account', AccountCommands),
     ('agent', AgentBuildCommands),
     ('config', ConfigCommands),
     ('db', DbCommands),
     ('drive', VsaDriveTypeCommands),
+    ('export', ExportCommands),
     ('fixed', FixedIpCommands),
     ('flavor', InstanceTypeCommands),
     ('floating', FloatingIpCommands),
@@ -2307,9 +2311,24 @@ def methods_of(obj):
 
 def main():
     """Parse options and call the appropriate class/method."""
-    utils.default_flagfile()
-    argv = FLAGS(sys.argv)
-    logging.setup()
+    flagfile = utils.default_flagfile()
+
+    if flagfile and not os.access(flagfile, os.R_OK):
+        st = os.stat(flagfile)
+        print "Could not read %s. Re-running with sudo" % flagfile
+        try:
+            os.execvp('sudo', ['sudo', '-u', '#%s' % st.st_uid] + sys.argv)
+        except Exception:
+            print 'sudo failed, continuing as if nothing happened'
+
+    try:
+        argv = FLAGS(sys.argv)
+        logging.setup()
+    except IOError, e:
+        if e.errno == errno.EACCES:
+            print _('Please re-run nova-manage as root.')
+            sys.exit(2)
+        raise
 
     script_name = argv.pop(0)
     if len(argv) < 1:
@@ -2358,6 +2377,7 @@ def main():
     # call the action with the remaining arguments
     try:
         fn(*fn_args, **fn_kwargs)
+        rpc.cleanup()
         sys.exit(0)
     except TypeError:
         print _("Possible wrong number of arguments supplied")

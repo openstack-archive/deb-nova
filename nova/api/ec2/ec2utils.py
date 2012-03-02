@@ -26,7 +26,7 @@ from nova.network import model as network_model
 
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger("nova.api.ec2.ec2utils")
+LOG = logging.getLogger(__name__)
 
 
 def image_type(image_type):
@@ -65,17 +65,8 @@ def image_ec2_id(image_id, image_type='ami'):
         return "ami-00000000"
 
 
-def get_ip_info_for_instance_from_cache(instance):
-    if (not instance.get('info_cache') or
-        not instance['info_cache'].get('network_info')):
-        # NOTE(jkoelker) Raising ValueError so that we trigger the
-        #                fallback lookup
-        raise ValueError
-
-    cached_info = instance['info_cache']['network_info']
-    nw_info = network_model.NetworkInfo.hydrate(cached_info)
+def get_ip_info_for_instance_from_nw_info(nw_info):
     ip_info = dict(fixed_ips=[], fixed_ip6s=[], floating_ips=[])
-
     for vif in nw_info:
         vif_fixed_ips = vif.fixed_ips()
 
@@ -92,40 +83,16 @@ def get_ip_info_for_instance_from_cache(instance):
     return ip_info
 
 
-def get_ip_for_instance_from_nwinfo(context, instance):
-    # NOTE(jkoelker) When the network_api starts returning the model, this
-    #                can be refactored out into the above function
-    network_api = network.API()
-
-    def _get_floaters(ip):
-        return network_api.get_floating_ips_by_fixed_address(context, ip)
-
-    ip_info = dict(fixed_ips=[], fixed_ip6s=[], floating_ips=[])
-    nw_info = network_api.get_instance_nw_info(context, instance)
-
-    for _net, info in nw_info:
-        for ip in info['ips']:
-            ip_info['fixed_ips'].append(ip['ip'])
-            floaters = _get_floaters(ip['ip'])
-            if floaters:
-                ip_info['floating_ips'].extend(floaters)
-        if 'ip6s' in info:
-            for ip in info['ip6s']:
-                ip_info['fixed_ip6s'].append(ip['ip'])
-    return ip_info
-
-
 def get_ip_info_for_instance(context, instance):
-    """Return a list of all fixed IPs for an instance"""
+    """Return a dictionary of IP information for an instance"""
 
-    try:
-        return get_ip_info_for_instance_from_cache(instance)
-    except (ValueError, KeyError, AttributeError):
-        # NOTE(jkoelker) If the json load (ValueError) or the
-        #                sqlalchemy FK (KeyError, AttributeError)
-        #                fail fall back to calling out to he
-        #                network api
-        return get_ip_for_instance_from_nwinfo(context, instance)
+    info_cache = instance['info_cache'] or {}
+    cached_nwinfo = info_cache.get('network_info')
+    # Make sure empty response is turned into []
+    if not cached_nwinfo:
+        cached_nwinfo = []
+    nw_info = network_model.NetworkInfo.hydrate(cached_nwinfo)
+    return get_ip_info_for_instance_from_nw_info(nw_info)
 
 
 def get_availability_zone_by_host(services, host):

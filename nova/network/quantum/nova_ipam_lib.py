@@ -25,7 +25,7 @@ from nova import log as logging
 from nova.network import manager
 
 
-LOG = logging.getLogger("nova.network.quantum.nova_ipam_lib")
+LOG = logging.getLogger(__name__)
 
 FLAGS = flags.FLAGS
 
@@ -62,7 +62,14 @@ class QuantumNovaIPAMLib(object):
         networks = manager.FlatManager.create_networks(self.net_manager,
                     admin_context, label, cidr,
                     False, 1, subnet_size, cidr_v6, gateway,
-                    gateway_v6, quantum_net_id, None, dns1, dns2)
+                    gateway_v6, quantum_net_id, None, dns1, dns2,
+                    ipam=True)
+        #TODO(tr3buchet): refactor passing in the ipam key so that
+        # it's no longer required. The reason it exists now is because
+        # nova insists on carving up IP blocks. What ends up happening is
+        # we create a v4 and an identically sized v6 block. The reason
+        # the quantum tests passed previosly is nothing prevented an
+        # incorrect v6 address from being assigned to the wrong subnet
 
         if len(networks) != 1:
             raise Exception(_("Error creating network entry"))
@@ -72,15 +79,6 @@ class QuantumNovaIPAMLib(object):
                "priority": priority,
                "uuid": quantum_net_id}
         db.network_update(admin_context, network['id'], net)
-
-    def get_network_id_by_cidr(self, context, cidr, project_id):
-        """ Grabs Quantum network UUID based on IPv4 CIDR. """
-        admin_context = context.elevated()
-        network = db.network_get_by_cidr(admin_context, cidr)
-        if not network:
-            raise Exception(_("No network with fixed_range = %s" %
-                              cidr))
-        return network['uuid']
 
     def delete_subnets_by_net_id(self, context, net_id, project_id):
         """Deletes a network based on Quantum UUID.  Uses FlatManager
@@ -122,7 +120,8 @@ class QuantumNovaIPAMLib(object):
             id_priority_map[net_id] = n['priority']
         return sorted(net_list, key=lambda x: id_priority_map[x[0]])
 
-    def allocate_fixed_ip(self, context, tenant_id, quantum_net_id, vif_rec):
+    def allocate_fixed_ips(self, context, tenant_id, quantum_net_id,
+                           network_tenant_id, vif_rec):
         """Allocates a single fixed IPv4 address for a virtual interface."""
         admin_context = context.elevated()
         network = db.network_get_by_uuid(admin_context, quantum_net_id)
@@ -134,7 +133,7 @@ class QuantumNovaIPAMLib(object):
             values = {'allocated': True,
                       'virtual_interface_id': vif_rec['id']}
             db.fixed_ip_update(admin_context, address, values)
-        return address
+        return [address]
 
     def get_tenant_id_by_net_id(self, context, net_id, vif_id, project_id):
         """Returns tenant_id for this network.  This is only necessary
@@ -147,31 +146,41 @@ class QuantumNovaIPAMLib(object):
            associated with a Quantum Network UUID.
         """
         n = db.network_get_by_uuid(context.elevated(), net_id)
-        subnet_data_v4 = {
+        subnet_v4 = {
             'network_id': n['uuid'],
             'cidr': n['cidr'],
             'gateway': n['gateway'],
             'broadcast': n['broadcast'],
             'netmask': n['netmask'],
+            'version': 4,
             'dns1': n['dns1'],
             'dns2': n['dns2']}
-        subnet_data_v6 = {
+        #TODO(tr3buchet): I'm noticing we've assumed here that all dns is v4.
+        #                 this is probably bad as there is no way to add v6
+        #                 dns to nova
+        subnet_v6 = {
             'network_id': n['uuid'],
             'cidr': n['cidr_v6'],
             'gateway': n['gateway_v6'],
             'broadcast': None,
-            'netmask': None,
+            'netmask': n['netmask_v6'],
+            'version': 6,
             'dns1': None,
             'dns2': None}
-        return (subnet_data_v4, subnet_data_v6)
+        return [subnet_v4, subnet_v6]
+
+    def get_routes_by_ip_block(self, context, block_id, project_id):
+        """Returns the list of routes for the IP block"""
+        return []
 
     def get_v4_ips_by_interface(self, context, net_id, vif_id, project_id):
         """Returns a list of IPv4 address strings associated with
            the specified virtual interface, based on the fixed_ips table.
         """
+        # TODO(tr3buchet): link fixed_ips to vif by uuid so only 1 db call
         vif_rec = db.virtual_interface_get_by_uuid(context, vif_id)
         fixed_ips = db.fixed_ips_by_virtual_interface(context,
-                                                         vif_rec['id'])
+                                                      vif_rec['id'])
         return [fixed_ip['address'] for fixed_ip in fixed_ips]
 
     def get_v6_ips_by_interface(self, context, net_id, vif_id, project_id):
@@ -228,3 +237,6 @@ class QuantumNovaIPAMLib(object):
                     ip['virtual_interface_id'])
                 allocated_ips.append((ip['address'], vif['uuid']))
         return allocated_ips
+
+    def get_floating_ips_by_fixed_address(self, context, fixed_address):
+        return db.floating_ip_get_by_fixed_address(context, fixed_address)

@@ -13,15 +13,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from sqlalchemy import *
-from migrate import *
+from sqlalchemy import MetaData, Table
+from migrate import ForeignKeyConstraint
 
 from nova import log as logging
 
-meta = MetaData()
+LOG = logging.getLogger(__name__)
 
 
 def upgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
     dialect = migrate_engine.url.get_dialect().name
 
@@ -35,13 +36,18 @@ def upgrade(migrate_engine):
             ForeignKeyConstraint(columns=[fixed_ips.c.virtual_interface_id],
                                  refcolumns=[virtual_interfaces.c.id]).create()
     except Exception:
-        logging.error(_("foreign key constraint couldn't be added"))
+        LOG.error(_("foreign key constraint couldn't be added"))
         raise
 
 
 def downgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
     dialect = migrate_engine.url.get_dialect().name
+
+    # grab tables
+    fixed_ips = Table('fixed_ips', meta, autoload=True)
+    virtual_interfaces = Table('virtual_interfaces', meta, autoload=True)
 
     # drop foreignkey if not sqlite
     try:
@@ -49,5 +55,5 @@ def downgrade(migrate_engine):
             ForeignKeyConstraint(columns=[fixed_ips.c.virtual_interface_id],
                                  refcolumns=[virtual_interfaces.c.id]).drop()
     except Exception:
-        logging.error(_("foreign key constraint couldn't be dropped"))
+        LOG.error(_("foreign key constraint couldn't be dropped"))
         raise

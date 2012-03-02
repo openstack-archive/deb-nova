@@ -19,12 +19,12 @@ from nova.api.openstack import common
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova import compute
 from nova import log as logging
 from nova import network
 
 
-LOG = logging.getLogger("nova.api.openstack.compute."
-                        "contrib.virtual_interfaces")
+LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'virtual_interfaces')
 
 
@@ -54,6 +54,7 @@ class ServerVirtualInterfaceController(object):
     """
 
     def __init__(self):
+        self.compute_api = compute.API()
         self.network_api = network.API()
         super(ServerVirtualInterfaceController, self).__init__()
 
@@ -61,7 +62,8 @@ class ServerVirtualInterfaceController(object):
         """Returns a list of VIFs, transformed through entity_maker."""
         context = req.environ['nova.context']
 
-        vifs = self.network_api.get_vifs_by_instance(context, server_id)
+        instance = self.compute_api.get(context, server_id)
+        vifs = self.network_api.get_vifs_by_instance(context, instance)
         limited_list = common.limited(vifs, req)
         res = [entity_maker(context, vif) for vif in limited_list]
         return {'virtual_interfaces': res}
@@ -79,8 +81,8 @@ class Virtual_interfaces(extensions.ExtensionDescriptor):
 
     name = "VirtualInterfaces"
     alias = "virtual_interfaces"
-    namespace = "http://docs.openstack.org/compute/ext/" \
-                "virtual_interfaces/api/v1.1"
+    namespace = ("http://docs.openstack.org/compute/ext/"
+                 "virtual_interfaces/api/v1.1")
     updated = "2011-08-17T00:00:00+00:00"
 
     def get_resources(self):

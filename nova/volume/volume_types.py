@@ -28,7 +28,7 @@ from nova import flags
 from nova import log as logging
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.volume.volume_types')
+LOG = logging.getLogger(__name__)
 
 
 def create(context, name, extra_specs={}):
@@ -39,33 +39,17 @@ def create(context, name, extra_specs={}):
                                    extra_specs=extra_specs))
     except exception.DBError, e:
         LOG.exception(_('DB error: %s') % e)
-        raise exception.ApiError(_("Cannot create volume_type with "
-                                    "name %(name)s and specs %(extra_specs)s")
-                                    % locals())
+        raise exception.VolumeTypeCreateFailed(name=name,
+                                               extra_specs=extra_specs)
 
 
 def destroy(context, name):
     """Marks volume types as deleted."""
     if name is None:
-        raise exception.InvalidVolumeType(volume_type=name)
+        msg = _("name cannot be None")
+        raise exception.InvalidVolumeType(reason=msg)
     else:
-        try:
-            db.volume_type_destroy(context, name)
-        except exception.NotFound:
-            LOG.exception(_('Volume type %s not found for deletion') % name)
-            raise exception.ApiError(_("Unknown volume type: %s") % name)
-
-
-def purge(context, name):
-    """Removes volume types from database."""
-    if name is None:
-        raise exception.InvalidVolumeType(volume_type=name)
-    else:
-        try:
-            db.volume_type_purge(context, name)
-        except exception.NotFound:
-            LOG.exception(_('Volume type %s not found for purge') % name)
-            raise exception.ApiError(_("Unknown volume type: %s") % name)
+        db.volume_type_destroy(context, name)
 
 
 def get_all_types(context, inactive=0, search_opts={}):
@@ -81,8 +65,8 @@ def get_all_types(context, inactive=0, search_opts={}):
 
         def _check_extra_specs_match(vol_type, searchdict):
             for k, v in searchdict.iteritems():
-                if k not in vol_type['extra_specs'].keys()\
-                   or vol_type['extra_specs'][k] != v:
+                if (k not in vol_type['extra_specs'].keys()
+                    or vol_type['extra_specs'][k] != v):
                     return False
             return True
 
@@ -109,26 +93,22 @@ def get_all_types(context, inactive=0, search_opts={}):
 def get_volume_type(ctxt, id):
     """Retrieves single volume type by id."""
     if id is None:
-        raise exception.InvalidVolumeType(volume_type=id)
+        msg = _("id cannot be None")
+        raise exception.InvalidVolumeType(reason=msg)
 
     if ctxt is None:
         ctxt = context.get_admin_context()
 
-    try:
-        return db.volume_type_get(ctxt, id)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown volume type: %s") % id)
+    return db.volume_type_get(ctxt, id)
 
 
 def get_volume_type_by_name(context, name):
     """Retrieves single volume type by name."""
     if name is None:
-        raise exception.InvalidVolumeType(volume_type=name)
+        msg = _("name cannot be None")
+        raise exception.InvalidVolumeType(reason=msg)
 
-    try:
-        return db.volume_type_get_by_name(context, name)
-    except exception.DBError:
-        raise exception.ApiError(_("Unknown volume type: %s") % name)
+    return db.volume_type_get_by_name(context, name)
 
 
 def is_key_value_present(volume_type_id, key, value, volume_type=None):
@@ -138,8 +118,8 @@ def is_key_value_present(volume_type_id, key, value, volume_type=None):
     if volume_type is None:
         volume_type = get_volume_type(context.get_admin_context(),
                                       volume_type_id)
-    if volume_type.get('extra_specs') is None or\
-       volume_type['extra_specs'].get(key) != value:
+    if (volume_type.get('extra_specs') is None or
+        volume_type['extra_specs'].get(key) != value):
         return False
     else:
         return True
@@ -162,5 +142,5 @@ def is_vsa_object(volume_type_id):
     volume_type = get_volume_type(context.get_admin_context(),
                                   volume_type_id)
 
-    return is_vsa_drive(volume_type_id, volume_type) or\
-           is_vsa_volume(volume_type_id, volume_type)
+    return (is_vsa_drive(volume_type_id, volume_type) or
+            is_vsa_volume(volume_type_id, volume_type))

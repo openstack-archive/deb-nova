@@ -12,20 +12,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License
 
-import urlparse
-
 import webob
 
-from nova.api.openstack import extensions
-from nova.api.openstack import wsgi
 from nova.api.openstack.compute import flavors as flavors_api
 from nova.api.openstack.compute.views import flavors as flavors_view
+from nova.api.openstack import extensions
+from nova.api.openstack import wsgi
 from nova.compute import instance_types
-from nova import log as logging
 from nova import exception
+from nova import log as logging
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.contrib.flavormanage')
+LOG = logging.getLogger(__name__)
+authorize = extensions.extension_authorizer('compute', 'flavormanage')
 
 
 class FlavorManageController(wsgi.Controller):
@@ -40,9 +39,7 @@ class FlavorManageController(wsgi.Controller):
     @wsgi.action("delete")
     def _delete(self, req, id):
         context = req.environ['nova.context']
-
-        if not context.is_admin:
-            return webob.Response(status_int=403)
+        authorize(context)
 
         try:
             flavor = instance_types.get_instance_type_by_flavor_id(id)
@@ -57,9 +54,7 @@ class FlavorManageController(wsgi.Controller):
     @wsgi.serializers(xml=flavors_api.FlavorTemplate)
     def _create(self, req, body):
         context = req.environ['nova.context']
-
-        if not context.is_admin:
-            return webob.Response(status_int=403)
+        authorize(context)
 
         vals = body['flavor']
         name = vals['name']
@@ -67,13 +62,16 @@ class FlavorManageController(wsgi.Controller):
         memory_mb = vals.get('ram')
         vcpus = vals.get('vcpus')
         root_gb = vals.get('disk')
-        ephemeral_gb = vals.get('disk')
+        ephemeral_gb = vals.get('OS-FLV-EXT-DATA:ephemeral')
         swap = vals.get('swap')
         rxtx_factor = vals.get('rxtx_factor')
 
-        flavor = instance_types.create(name, memory_mb, vcpus,
-                                       root_gb, ephemeral_gb, flavorid,
-                                       swap, rxtx_factor)
+        try:
+            flavor = instance_types.create(name, memory_mb, vcpus,
+                                           root_gb, ephemeral_gb, flavorid,
+                                           swap, rxtx_factor)
+        except exception.InstanceTypeExists as err:
+            raise webob.exc.HTTPConflict(explanation=str(err))
 
         return self._view_builder.show(req, flavor)
 

@@ -21,7 +21,7 @@ from nova import log as logging
 from nova import network
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.contrib.floating_ip_pools')
+LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'floating_ip_pools')
 
 
@@ -80,8 +80,8 @@ class Floating_ip_pools(extensions.ExtensionDescriptor):
 
     name = "Floating_ip_pools"
     alias = "os-floating-ip-pools"
-    namespace = \
-        "http://docs.openstack.org/compute/ext/floating_ip_pools/api/v1.1"
+    namespace = ("http://docs.openstack.org/compute/ext/"
+                 "floating_ip_pools/api/v1.1")
     updated = "2012-01-04T00:00:00+00:00"
 
     def get_resources(self):

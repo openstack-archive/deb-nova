@@ -30,40 +30,53 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import rpc
 from nova import utils
 from nova import version
 from nova import wsgi
 
 
-LOG = logging.getLogger('nova.service')
+LOG = logging.getLogger(__name__)
+
+service_opts = [
+    cfg.IntOpt('report_interval',
+               default=10,
+               help='seconds between nodes reporting state to datastore'),
+    cfg.IntOpt('periodic_interval',
+               default=60,
+               help='seconds between running periodic tasks'),
+    cfg.StrOpt('ec2_listen',
+               default="0.0.0.0",
+               help='IP address for EC2 API to listen'),
+    cfg.IntOpt('ec2_listen_port',
+               default=8773,
+               help='port for ec2 api to listen'),
+    cfg.StrOpt('osapi_compute_listen',
+               default="0.0.0.0",
+               help='IP address for OpenStack API to listen'),
+    cfg.IntOpt('osapi_compute_listen_port',
+               default=8774,
+               help='list port for osapi compute'),
+    cfg.StrOpt('metadata_manager',
+               default='nova.api.manager.MetadataManager',
+               help='OpenStack metadata service manager'),
+    cfg.StrOpt('metadata_listen',
+               default="0.0.0.0",
+               help='IP address for metadata api to listen'),
+    cfg.IntOpt('metadata_listen_port',
+               default=8775,
+               help='port for metadata api to listen'),
+    cfg.StrOpt('osapi_volume_listen',
+               default="0.0.0.0",
+               help='IP address for OpenStack Volume API to listen'),
+    cfg.IntOpt('osapi_volume_listen_port',
+               default=8776,
+               help='port for os volume api to listen'),
+    ]
 
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('report_interval', 10,
-                     'seconds between nodes reporting state to datastore',
-                     lower_bound=1)
-flags.DEFINE_integer('periodic_interval', 60,
-                     'seconds between running periodic tasks',
-                     lower_bound=1)
-flags.DEFINE_string('ec2_listen', "0.0.0.0",
-                    'IP address for EC2 API to listen')
-flags.DEFINE_integer('ec2_listen_port', 8773, 'port for ec2 api to listen')
-flags.DEFINE_string('osapi_compute_listen', "0.0.0.0",
-                    'IP address for OpenStack API to listen')
-flags.DEFINE_integer('osapi_compute_listen_port', 8774,
-                     'list port for osapi compute')
-flags.DEFINE_string('metadata_manager', 'nova.api.manager.MetadataManager',
-                    'OpenStack metadata service manager')
-flags.DEFINE_string('metadata_listen', "0.0.0.0",
-                    'IP address for metadata api to listen')
-flags.DEFINE_integer('metadata_listen_port', 8775,
-                     'port for metadata api to listen')
-flags.DEFINE_string('api_paste_config', "api-paste.ini",
-                    'File name for the paste.deploy config for nova-api')
-flags.DEFINE_string('osapi_volume_listen', "0.0.0.0",
-                    'IP address for OpenStack Volume API to listen')
-flags.DEFINE_integer('osapi_volume_listen_port', 8776,
-                     'port for os volume api to listen')
+FLAGS.register_opts(service_opts)
 
 
 class Launcher(object):
@@ -143,8 +156,9 @@ class Service(object):
 
     def start(self):
         vcs_string = version.version_string_with_vcs()
-        logging.audit(_('Starting %(topic)s node (version %(vcs_string)s)'),
-                      {'topic': self.topic, 'vcs_string': vcs_string})
+        LOG.audit(_('Starting %(topic)s node (version %(vcs_string)s)'),
+                  {'topic': self.topic, 'vcs_string': vcs_string})
+        utils.cleanup_file_locks()
         self.manager.init_host()
         self.model_disconnected = False
         ctxt = context.get_admin_context()
@@ -160,8 +174,8 @@ class Service(object):
             self.manager.update_available_resource(ctxt)
 
         self.conn = rpc.create_connection(new=True)
-        logging.debug("Creating Consumer connection for Service %s" %
-                      self.topic)
+        LOG.debug(_("Creating Consumer connection for Service %s") %
+                  self.topic)
 
         # Share this same connection for these Consumers
         self.conn.create_consumer(self.topic, self, fanout=False)
@@ -234,7 +248,7 @@ class Service(object):
         try:
             db.service_destroy(context.get_admin_context(), self.service_id)
         except exception.NotFound:
-            logging.warn(_('Service killed that has no database entry'))
+            LOG.warn(_('Service killed that has no database entry'))
 
     def stop(self):
         # Try to shut the connection down, but if we get any sort of
@@ -271,8 +285,8 @@ class Service(object):
             try:
                 service_ref = db.service_get(ctxt, self.service_id)
             except exception.NotFound:
-                logging.debug(_('The service database object disappeared, '
-                                'Recreating it.'))
+                LOG.debug(_('The service database object disappeared, '
+                            'Recreating it.'))
                 self._create_service_ref(ctxt)
                 service_ref = db.service_get(ctxt, self.service_id)
 
@@ -286,13 +300,13 @@ class Service(object):
             # TODO(termie): make this pattern be more elegant.
             if getattr(self, 'model_disconnected', False):
                 self.model_disconnected = False
-                logging.error(_('Recovered model server connection!'))
+                LOG.error(_('Recovered model server connection!'))
 
         # TODO(vish): this should probably only catch connection errors
         except Exception:  # pylint: disable=W0702
             if not getattr(self, 'model_disconnected', False):
                 self.model_disconnected = True
-                logging.exception(_('model server went away'))
+                LOG.exception(_('model server went away'))
 
 
 class WSGIService(object):
@@ -347,6 +361,7 @@ class WSGIService(object):
         :returns: None
 
         """
+        utils.cleanup_file_locks()
         if self.manager:
             self.manager.init_host()
         self.server.start()
@@ -384,23 +399,18 @@ def serve(*servers):
 
 
 def wait():
-    # After we've loaded up all our dynamic bits, check
-    # whether we should print help
-    flags.DEFINE_flag(flags.HelpFlag())
-    flags.DEFINE_flag(flags.HelpshortFlag())
-    flags.DEFINE_flag(flags.HelpXMLFlag())
-    FLAGS.ParseNewFlags()
-    logging.debug(_('Full set of FLAGS:'))
+    LOG.debug(_('Full set of FLAGS:'))
     for flag in FLAGS:
         flag_get = FLAGS.get(flag, None)
         # hide flag contents from log if contains a password
         # should use secret flag when switch over to openstack-common
         if ("_password" in flag or "_key" in flag or
                 (flag == "sql_connection" and "mysql:" in flag_get)):
-            logging.debug('%(flag)s : FLAG SET ' % locals())
+            LOG.debug(_('%(flag)s : FLAG SET ') % locals())
         else:
-            logging.debug('%(flag)s : %(flag_get)s' % locals())
+            LOG.debug('%(flag)s : %(flag_get)s' % locals())
     try:
         _launcher.wait()
     except KeyboardInterrupt:
         _launcher.stop()
+    rpc.cleanup()

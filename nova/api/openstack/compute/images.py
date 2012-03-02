@@ -23,11 +23,11 @@ from nova import compute
 from nova import exception
 from nova import flags
 import nova.image
-from nova import log
+from nova import log as logging
 import nova.utils
 
 
-LOG = log.getLogger('nova.api.openstack.compute.images')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 SUPPORTED_FILTERS = {
@@ -94,17 +94,15 @@ class Controller(wsgi.Controller):
 
     _view_builder_class = views_images.ViewBuilder
 
-    def __init__(self, image_service=None, compute_service=None, **kwargs):
+    def __init__(self, image_service=None, **kwargs):
         """Initialize new `ImageController`.
 
-        :param compute_service: `nova.compute.api:API`
         :param image_service: `nova.image.glance:GlancemageService`
 
         """
         super(Controller, self).__init__(**kwargs)
-        self._compute_service = compute_service or compute.API()
-        self._image_service = image_service or \
-                nova.image.get_default_image_service()
+        self._image_service = (image_service or
+                               nova.image.get_default_image_service())
 
     def _get_filters(self, req):
         """

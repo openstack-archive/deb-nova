@@ -27,6 +27,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import vm_states
 from nova.compute import task_states
+from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import network
@@ -34,7 +35,7 @@ from nova.network import model as network_model
 from nova import quota
 
 
-LOG = logging.getLogger('nova.api.openstack.common')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
@@ -66,6 +67,7 @@ _STATE_MAP = {
     },
     vm_states.RESIZING: {
         'default': 'RESIZE',
+        task_states.RESIZE_REVERTING: 'REVERT_RESIZE',
     },
     vm_states.PAUSED: {
         'default': 'PAUSED',
@@ -287,15 +289,7 @@ def dict_to_query_str(params):
     return param_str.rstrip('&')
 
 
-def get_networks_for_instance_from_cache(instance):
-    if (not instance.get('info_cache') or
-        not instance['info_cache'].get('network_info')):
-        # NOTE(jkoelker) Raising ValueError so that we trigger the
-        #                fallback lookup
-        raise ValueError
-
-    cached_info = instance['info_cache']['network_info']
-    nw_info = network_model.NetworkInfo.hydrate(cached_info)
+def get_networks_for_instance_from_nw_info(nw_info):
     networks = {}
 
     for vif in nw_info:
@@ -310,38 +304,10 @@ def get_networks_for_instance_from_cache(instance):
     return networks
 
 
-def get_networks_for_instance_from_nwinfo(context, instance):
-    # NOTE(jkoelker) When the network_api starts returning the model, this
-    #                can be refactored out into the above function
-    network_api = network.API()
-
-    def _get_floats(ip):
-        return network_api.get_floating_ips_by_fixed_address(context, ip)
-
-    def _emit_addr(ip, version):
-        return {'address': ip, 'version': version}
-
-    nw_info = network_api.get_instance_nw_info(context, instance)
-    networks = {}
-    for _net, info in nw_info:
-        net = {'ips': [], 'floating_ips': []}
-        for ip in info['ips']:
-            net['ips'].append(_emit_addr(ip['ip'], 4))
-            floaters = _get_floats(ip['ip'])
-            if floaters:
-                net['floating_ips'].extend([_emit_addr(float, 4)
-                                            for float in floaters])
-        if 'ip6s' in info:
-            for ip in info['ip6s']:
-                net['ips'].append(_emit_addr(ip['ip'], 6))
-
-        label = info['label']
-        if label not in networks:
-            networks[label] = {'ips': [], 'floating_ips': []}
-
-        networks[label]['ips'].extend(net['ips'])
-        networks[label]['floating_ips'].extend(net['floating_ips'])
-    return networks
+def get_nw_info_for_instance(context, instance):
+    info_cache = instance['info_cache'] or {}
+    cached_nwinfo = info_cache.get('network_info') or []
+    return network_model.NetworkInfo.hydrate(cached_nwinfo)
 
 
 def get_networks_for_instance(context, instance):
@@ -355,15 +321,8 @@ def get_networks_for_instance(context, instance):
                                  {'addr': '172.16.2.1', 'version': 4}]},
      ...}
     """
-
-    try:
-        return get_networks_for_instance_from_cache(instance)
-    except (ValueError, KeyError, AttributeError):
-        # NOTE(jkoelker) If the json load (ValueError) or the
-        #                sqlalchemy FK (KeyError, AttributeError)
-        #                fail fall back to calling out the the
-        #                network api
-        return get_networks_for_instance_from_nwinfo(context, instance)
+    nw_info = get_nw_info_for_instance(context, instance)
+    return get_networks_for_instance_from_nw_info(nw_info)
 
 
 def raise_http_conflict_for_instance_invalid_state(exc, action):
@@ -484,14 +443,18 @@ class ViewBuilder(object):
         """Return href string with proper limit and marker params."""
         params = request.params.copy()
         params["marker"] = identifier
-        url = os.path.join(request.application_url,
+        prefix = self._update_link_prefix(request.application_url,
+                                          FLAGS.osapi_compute_link_prefix)
+        url = os.path.join(prefix,
                            request.environ["nova.context"].project_id,
                            self._collection_name)
         return "%s?%s" % (url, dict_to_query_str(params))
 
     def _get_href_link(self, request, identifier):
         """Return an href string pointing to this object."""
-        return os.path.join(request.application_url,
+        prefix = self._update_link_prefix(request.application_url,
+                                          FLAGS.osapi_compute_link_prefix)
+        return os.path.join(prefix,
                             request.environ["nova.context"].project_id,
                             self._collection_name,
                             str(identifier))
@@ -499,6 +462,8 @@ class ViewBuilder(object):
     def _get_bookmark_link(self, request, identifier):
         """Create a URL that refers to a specific resource."""
         base_url = remove_version_from_href(request.application_url)
+        base_url = self._update_link_prefix(base_url,
+                                            FLAGS.osapi_compute_link_prefix)
         return os.path.join(base_url,
                             request.environ["nova.context"].project_id,
                             self._collection_name,
@@ -519,3 +484,11 @@ class ViewBuilder(object):
                 "href": self._get_next_link(request, last_item_id),
             })
         return links
+
+    def _update_link_prefix(self, orig_url, prefix):
+        if not prefix:
+            return orig_url
+        url_parts = list(urlparse.urlsplit(orig_url))
+        prefix_parts = list(urlparse.urlsplit(prefix))
+        url_parts[0:2] = prefix_parts[0:2]
+        return urlparse.urlunsplit(url_parts)

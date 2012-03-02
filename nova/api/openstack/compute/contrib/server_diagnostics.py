@@ -20,7 +20,6 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
-from nova.scheduler import api as scheduler_api
 
 
 authorize = extensions.extension_authorizer('compute', 'server_diagnostics')
@@ -38,8 +37,6 @@ class ServerDiagnosticsTemplate(xmlutil.TemplateBuilder):
 
 class ServerDiagnosticsController(object):
     @wsgi.serializers(xml=ServerDiagnosticsTemplate)
-    @exception.novaclient_converter
-    @scheduler_api.redirect_handler
     def index(self, req, server_id):
         context = req.environ["nova.context"]
         authorize(context)
@@ -57,8 +54,8 @@ class Server_diagnostics(extensions.ExtensionDescriptor):
 
     name = "ServerDiagnostics"
     alias = "os-server-diagnostics"
-    namespace = "http://docs.openstack.org/compute/ext/" \
-                "server-diagnostics/api/v1.1"
+    namespace = ("http://docs.openstack.org/compute/ext/"
+                 "server-diagnostics/api/v1.1")
     updated = "2011-12-21T00:00:00+00:00"
 
     def get_resources(self):

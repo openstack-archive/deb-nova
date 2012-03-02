@@ -29,7 +29,6 @@ from nova.api.openstack import xmlutil
 from nova import flags
 from nova import test
 from nova.tests.api.openstack import fakes
-from nova import wsgi as base_wsgi
 
 FLAGS = flags.FLAGS
 
@@ -153,6 +152,7 @@ class ExtensionControllerTest(ExtensionTestCase):
         self.ext_list = [
             "Accounts",
             "AdminActions",
+            "Aggregates",
             "Certificates",
             "Cloudpipe",
             "Console_output",
@@ -161,6 +161,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "DeferredDelete",
             "DiskConfig",
             "ExtendedStatus",
+            "ExtendedServerAttributes",
             "FlavorExtraSpecs",
             "FlavorExtraData",
             "FlavorManage",
@@ -171,6 +172,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "Hosts",
             "Keypairs",
             "Multinic",
+            "Networks",
             "Quotas",
             "Rescue",
             "SchedulerHints",
@@ -184,8 +186,6 @@ class ExtensionControllerTest(ExtensionTestCase):
             "VirtualInterfaces",
             "Volumes",
             "VolumeTypes",
-            "Zones",
-            "Networks",
             ]
         self.ext_list.sort()
 
@@ -215,6 +215,13 @@ class ExtensionControllerTest(ExtensionTestCase):
                 'links': []
             },
         )
+
+        for ext in data['extensions']:
+            url = '/fake/extensions/%s' % ext['alias']
+            request = webob.Request.blank(url)
+            response = request.get_response(app)
+            output = json.loads(response.body)
+            self.assertEqual(output['extension']['alias'], ext['alias'])
 
     def test_get_extension_json(self):
         app = compute.APIRouter()

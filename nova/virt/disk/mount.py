@@ -20,7 +20,7 @@ import os
 from nova import log as logging
 from nova import utils
 
-LOG = logging.getLogger('nova.compute.disk')
+LOG = logging.getLogger(__name__)
 
 
 class Mount(object):
@@ -30,13 +30,11 @@ class Mount(object):
     to be called in that order.
     """
 
-    def __init__(self, image, mount_dir, partition=None,
-                 disable_auto_fsck=False):
+    def __init__(self, image, mount_dir, partition=None):
 
         # Input
         self.image = image
         self.partition = partition
-        self.disable_auto_fsck = disable_auto_fsck
         self.mount_dir = mount_dir
 
         # Output
@@ -61,7 +59,7 @@ class Mount(object):
         assert(os.path.exists(self.device))
 
         if self.partition:
-            map_path = '/dev/mapper/%sp%s' % (self.device.split('/')[-1],
+            map_path = '/dev/mapper/%sp%s' % (os.path.basename(self.device),
                                               self.partition)
             assert(not os.path.exists(map_path))
 
@@ -83,16 +81,6 @@ class Mount(object):
         else:
             self.mapped_device = self.device
             self.mapped = True
-
-        # This is an orthogonal operation
-        # which only needs to be done once
-        if self.disable_auto_fsck and self.mapped:
-            self.disable_auto_fsck = False
-            # attempt to set ext[234] so that it doesn't auto-fsck
-            _out, err = utils.trycmd('tune2fs', '-c', 0, '-i', 0,
-                                     self.mapped_device, run_as_root=True)
-            if err:
-                LOG.info(_('Failed to disable fs check: %s') % err)
 
         return self.mapped
 

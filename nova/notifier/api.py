@@ -18,16 +18,22 @@ import uuid
 from nova import flags
 from nova import utils
 from nova import log as logging
+from nova.openstack.common import cfg
 
-LOG = logging.getLogger('nova.exception')
+
+LOG = logging.getLogger(__name__)
+
+notifier_opts = [
+    cfg.StrOpt('default_notification_level',
+               default='INFO',
+               help='Default notification level for outgoing notifications'),
+    cfg.StrOpt('default_publisher_id',
+               default='$host',
+               help='Default publisher_id for outgoing notifications'),
+    ]
 
 FLAGS = flags.FLAGS
-
-flags.DEFINE_string('default_notification_level', 'INFO',
-                    'Default notification level for outgoing notifications')
-flags.DEFINE_string('default_publisher_id', FLAGS.host,
-                    'Default publisher_id for outgoing notifications')
-
+FLAGS.register_opts(notifier_opts)
 
 WARN = 'WARN'
 INFO = 'INFO'

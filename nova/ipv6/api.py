@@ -15,18 +15,21 @@
 #    under the License.
 
 from nova import flags
+from nova.openstack.common import cfg
 from nova import utils
 
 
+ipv6_backend_opt = cfg.StrOpt('ipv6_backend',
+                              default='rfc2462',
+                              help='Backend to use for IPv6 generation')
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('ipv6_backend',
-                    'rfc2462',
-                    'Backend to use for IPv6 generation')
+FLAGS.register_opt(ipv6_backend_opt)
 
 
 def reset_backend():
     global IMPL
-    IMPL = utils.LazyPluggable(FLAGS['ipv6_backend'],
+    IMPL = utils.LazyPluggable('ipv6_backend',
                 rfc2462='nova.ipv6.rfc2462',
                 account_identifier='nova.ipv6.account_identifier')
 

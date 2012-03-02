@@ -44,18 +44,22 @@ from nova.rpc.common import LOG
 FLAGS = flags.FLAGS
 
 
-ConnectionClass = None
-
-
 class Pool(pools.Pool):
     """Class that implements a Pool of Connections."""
     def __init__(self, *args, **kwargs):
+        self.connection_cls = kwargs.pop("connection_cls", None)
+        kwargs.setdefault("max_size", FLAGS.rpc_conn_pool_size)
+        kwargs.setdefault("order_as_stack", True)
         super(Pool, self).__init__(*args, **kwargs)
 
     # TODO(comstud): Timeout connections not used in a while
     def create(self):
         LOG.debug('Pool creating new connection')
-        return ConnectionClass()
+        return self.connection_cls()
+
+    def empty(self):
+        while self.free_items:
+            self.get().close()
 
 
 class ConnectionContext(rpc_common.Connection):
@@ -69,16 +73,15 @@ class ConnectionContext(rpc_common.Connection):
     the pool.
     """
 
-    _connection_pool = Pool(max_size=FLAGS.rpc_conn_pool_size,
-                            order_as_stack=True)
-
-    def __init__(self, pooled=True):
+    def __init__(self, connection_pool, pooled=True, server_params=None):
         """Create a new connection, or get one from the pool"""
         self.connection = None
+        self.connection_pool = connection_pool
         if pooled:
-            self.connection = self._connection_pool.get()
+            self.connection = connection_pool.get()
         else:
-            self.connection = ConnectionClass()
+            self.connection = connection_pool.connection_cls(
+                    server_params=server_params)
         self.pooled = pooled
 
     def __enter__(self):
@@ -94,7 +97,7 @@ class ConnectionContext(rpc_common.Connection):
                 # Reset the connection so it's ready for the next caller
                 # to grab from the pool
                 self.connection.reset()
-                self._connection_pool.put(self.connection)
+                self.connection_pool.put(self.connection)
             else:
                 try:
                     self.connection.close()
@@ -128,13 +131,13 @@ class ConnectionContext(rpc_common.Connection):
             raise exception.InvalidRPCConnectionReuse()
 
 
-def msg_reply(msg_id, reply=None, failure=None, ending=False):
+def msg_reply(msg_id, connection_pool, reply=None, failure=None, ending=False):
     """Sends a reply or an error on the channel signified by msg_id.
 
     Failure should be a sys.exc_info() tuple.
 
     """
-    with ConnectionContext() as conn:
+    with ConnectionContext(connection_pool) as conn:
         if failure:
             message = str(failure[1])
             tb = traceback.format_exception(*failure)
@@ -156,13 +159,14 @@ def msg_reply(msg_id, reply=None, failure=None, ending=False):
 class RpcContext(context.RequestContext):
     """Context that supports replying to a rpc.call"""
     def __init__(self, *args, **kwargs):
-        msg_id = kwargs.pop('msg_id', None)
-        self.msg_id = msg_id
+        self.msg_id = kwargs.pop('msg_id', None)
         super(RpcContext, self).__init__(*args, **kwargs)
 
-    def reply(self, reply=None, failure=None, ending=False):
+    def reply(self, reply=None, failure=None, ending=False,
+              connection_pool=None):
         if self.msg_id:
-            msg_reply(self.msg_id, reply, failure, ending)
+            msg_reply(self.msg_id, connection_pool, reply, failure,
+                      ending)
             if ending:
                 self.msg_id = None
 
@@ -200,9 +204,10 @@ def pack_context(msg, context):
 class ProxyCallback(object):
     """Calls methods on a proxy object based on method and args."""
 
-    def __init__(self, proxy):
+    def __init__(self, proxy, connection_pool):
         self.proxy = proxy
         self.pool = greenpool.GreenPool(FLAGS.rpc_thread_pool_size)
+        self.connection_pool = connection_pool
 
     def __call__(self, message_data):
         """Consumer callback to call a method on a proxy object.
@@ -227,7 +232,8 @@ class ProxyCallback(object):
         args = message_data.get('args', {})
         if not method:
             LOG.warn(_('no method for message: %s') % message_data)
-            ctxt.reply(_('No method for message: %s') % message_data)
+            ctxt.reply(_('No method for message: %s') % message_data,
+                       connection_pool=self.connection_pool)
             return
         self.pool.spawn_n(self._process_data, ctxt, method, args)
 
@@ -245,21 +251,23 @@ class ProxyCallback(object):
             # Check if the result was a generator
             if inspect.isgenerator(rval):
                 for x in rval:
-                    ctxt.reply(x, None)
+                    ctxt.reply(x, None, connection_pool=self.connection_pool)
             else:
-                ctxt.reply(rval, None)
+                ctxt.reply(rval, None, connection_pool=self.connection_pool)
             # This final None tells multicall that it is done.
-            ctxt.reply(ending=True)
+            ctxt.reply(ending=True, connection_pool=self.connection_pool)
         except Exception as e:
             LOG.exception('Exception during message handling')
-            ctxt.reply(None, sys.exc_info())
+            ctxt.reply(None, sys.exc_info(),
+                       connection_pool=self.connection_pool)
         return
 
 
 class MulticallWaiter(object):
-    def __init__(self, connection):
+    def __init__(self, connection, timeout):
         self._connection = connection
-        self._iterator = connection.iterconsume()
+        self._iterator = connection.iterconsume(
+                                timeout=timeout or FLAGS.rpc_response_timeout)
         self._result = None
         self._done = False
         self._got_ending = False
@@ -297,12 +305,12 @@ class MulticallWaiter(object):
             yield result
 
 
-def create_connection(new=True):
+def create_connection(new, connection_pool):
     """Create a connection"""
-    return ConnectionContext(pooled=not new)
+    return ConnectionContext(connection_pool, pooled=not new)
 
 
-def multicall(context, topic, msg):
+def multicall(context, topic, msg, timeout, connection_pool):
     """Make a call that returns multiple times."""
     # Can't use 'with' for multicall, as it returns an iterator
     # that will continue to use the connection.  When it's done,
@@ -314,16 +322,16 @@ def multicall(context, topic, msg):
     LOG.debug(_('MSG_ID is %s') % (msg_id))
     pack_context(msg, context)
 
-    conn = ConnectionContext()
-    wait_msg = MulticallWaiter(conn)
+    conn = ConnectionContext(connection_pool)
+    wait_msg = MulticallWaiter(conn, timeout)
     conn.declare_direct_consumer(msg_id, wait_msg)
     conn.topic_send(topic, msg)
     return wait_msg
 
 
-def call(context, topic, msg):
+def call(context, topic, msg, timeout, connection_pool):
     """Sends a message on a topic and wait for a response."""
-    rv = multicall(context, topic, msg)
+    rv = multicall(context, topic, msg, timeout, connection_pool)
     # NOTE(vish): return the last result from the multicall
     rv = list(rv)
     if not rv:
@@ -331,25 +339,46 @@ def call(context, topic, msg):
     return rv[-1]
 
 
-def cast(context, topic, msg):
+def cast(context, topic, msg, connection_pool):
     """Sends a message on a topic without waiting for a response."""
     LOG.debug(_('Making asynchronous cast on %s...'), topic)
     pack_context(msg, context)
-    with ConnectionContext() as conn:
+    with ConnectionContext(connection_pool) as conn:
         conn.topic_send(topic, msg)
 
 
-def fanout_cast(context, topic, msg):
+def fanout_cast(context, topic, msg, connection_pool):
     """Sends a message on a fanout exchange without waiting for a response."""
     LOG.debug(_('Making asynchronous fanout cast...'))
     pack_context(msg, context)
-    with ConnectionContext() as conn:
+    with ConnectionContext(connection_pool) as conn:
         conn.fanout_send(topic, msg)
 
 
-def notify(context, topic, msg):
+def cast_to_server(context, server_params, topic, msg, connection_pool):
+    """Sends a message on a topic to a specific server."""
+    pack_context(msg, context)
+    with ConnectionContext(connection_pool, pooled=False,
+            server_params=server_params) as conn:
+        conn.topic_send(topic, msg)
+
+
+def fanout_cast_to_server(context, server_params, topic, msg,
+        connection_pool):
+    """Sends a message on a fanout exchange to a specific server."""
+    pack_context(msg, context)
+    with ConnectionContext(connection_pool, pooled=False,
+            server_params=server_params) as conn:
+        conn.fanout_send(topic, msg)
+
+
+def notify(context, topic, msg, connection_pool):
     """Sends a notification event on a topic."""
     LOG.debug(_('Sending notification on %s...'), topic)
     pack_context(msg, context)
-    with ConnectionContext() as conn:
-        conn.notify_send(topic, msg, durable=True)
+    with ConnectionContext(connection_pool) as conn:
+        conn.notify_send(topic, msg)
+
+
+def cleanup(connection_pool):
+    connection_pool.empty()

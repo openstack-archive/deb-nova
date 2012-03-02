@@ -39,6 +39,7 @@ from nova import compute
 from nova import flags
 from nova import log as logging
 from nova import network
+from nova.openstack.common import cfg
 from nova import service
 from nova import utils
 from nova import volume
@@ -46,12 +47,17 @@ from nova import wsgi
 from nova.api import direct
 
 
+direct_api_opts = [
+    cfg.IntOpt('direct_port',
+               default=8001,
+               help='Direct API port'),
+    cfg.StrOpt('direct_host',
+               default='0.0.0.0',
+               help='Direct API host'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('direct_port', 8001, 'Direct API port')
-flags.DEFINE_string('direct_host', '0.0.0.0', 'Direct API host')
-flags.DEFINE_flag(flags.HelpFlag())
-flags.DEFINE_flag(flags.HelpshortFlag())
-flags.DEFINE_flag(flags.HelpXMLFlag())
+FLAGS.register_cli_opts(direct_api_opts)
 
 
 # An example of an API that only exposes read-only methods.

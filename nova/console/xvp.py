@@ -27,25 +27,31 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 
 
+xvp_opts = [
+    cfg.StrOpt('console_xvp_conf_template',
+               default=utils.abspath('console/xvp.conf.template'),
+               help='XVP conf template'),
+    cfg.StrOpt('console_xvp_conf',
+               default='/etc/xvp.conf',
+               help='generated XVP conf file'),
+    cfg.StrOpt('console_xvp_pid',
+               default='/var/run/xvp.pid',
+               help='XVP master process pid file'),
+    cfg.StrOpt('console_xvp_log',
+               default='/var/log/xvp.log',
+               help='XVP log file'),
+    cfg.IntOpt('console_xvp_multiplex_port',
+               default=5900,
+               help='port for XVP to multiplex VNC connections on'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('console_xvp_conf_template',
-                    utils.abspath('console/xvp.conf.template'),
-                    'XVP conf template')
-flags.DEFINE_string('console_xvp_conf',
-                    '/etc/xvp.conf',
-                    'generated XVP conf file')
-flags.DEFINE_string('console_xvp_pid',
-                    '/var/run/xvp.pid',
-                    'XVP master process pid file')
-flags.DEFINE_string('console_xvp_log',
-                    '/var/log/xvp.log',
-                    'XVP log file')
-flags.DEFINE_integer('console_xvp_multiplex_port',
-                     5900,
-                     'port for XVP to multiplex VNC connections on')
+FLAGS.register_opts(xvp_opts)
+LOG = logging.getLogger(__name__)
 
 
 class XVPConsoleProxy(object):
@@ -89,13 +95,13 @@ class XVPConsoleProxy(object):
         return self._xvp_encrypt(password)
 
     def _rebuild_xvp_conf(self, context):
-        logging.debug(_('Rebuilding xvp conf'))
+        LOG.debug(_('Rebuilding xvp conf'))
         pools = [pool for pool in
                  db.console_pool_get_all_by_host_type(context, self.host,
                                                        self.console_type)
                   if pool['consoles']]
         if not pools:
-            logging.debug('No console pools!')
+            LOG.debug('No console pools!')
             self._xvp_stop()
             return
         conf_data = {'multiplex_port': FLAGS.console_xvp_multiplex_port,
@@ -107,12 +113,12 @@ class XVPConsoleProxy(object):
         self._xvp_restart()
 
     def _write_conf(self, config):
-        logging.debug(_('Re-wrote %s') % FLAGS.console_xvp_conf)
+        LOG.debug(_('Re-wrote %s') % FLAGS.console_xvp_conf)
         with open(FLAGS.console_xvp_conf, 'w') as cfile:
             cfile.write(config)
 
     def _xvp_stop(self):
-        logging.debug(_('Stopping xvp'))
+        LOG.debug(_('Stopping xvp'))
         pid = self._xvp_pid()
         if not pid:
             return
@@ -125,19 +131,19 @@ class XVPConsoleProxy(object):
     def _xvp_start(self):
         if self._xvp_check_running():
             return
-        logging.debug(_('Starting xvp'))
+        LOG.debug(_('Starting xvp'))
         try:
             utils.execute('xvp',
                           '-p', FLAGS.console_xvp_pid,
                           '-c', FLAGS.console_xvp_conf,
                           '-l', FLAGS.console_xvp_log)
         except exception.ProcessExecutionError, err:
-            logging.error(_('Error starting xvp: %s') % err)
+            LOG.error(_('Error starting xvp: %s') % err)
 
     def _xvp_restart(self):
-        logging.debug(_('Restarting xvp'))
+        LOG.debug(_('Restarting xvp'))
         if not self._xvp_check_running():
-            logging.debug(_('xvp not running...'))
+            LOG.debug(_('xvp not running...'))
             self._xvp_start()
         else:
             pid = self._xvp_pid()

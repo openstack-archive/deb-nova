@@ -58,14 +58,11 @@ reactor thread if the VM.get_by_name_label or VM.get_record calls block.
 """
 
 import contextlib
-import json
-import random
-import sys
 import time
 import urlparse
 import xmlrpclib
 
-from eventlet import event
+from eventlet import greenthread
 from eventlet import queue
 from eventlet import tpool
 from eventlet import timeout
@@ -73,80 +70,87 @@ from eventlet import timeout
 from nova import context
 from nova import db
 from nova import exception
-from nova import utils
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova.virt import driver
+from nova.virt.xenapi import host
+from nova.virt.xenapi import pool
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi.vmops import VMOps
 from nova.virt.xenapi.volumeops import VolumeOps
 
 
-LOG = logging.getLogger("nova.virt.xenapi")
+LOG = logging.getLogger(__name__)
 
+xenapi_opts = [
+    cfg.StrOpt('xenapi_connection_url',
+               default=None,
+               help='URL for connection to XenServer/Xen Cloud Platform. '
+                    'Required if connection_type=xenapi.'),
+    cfg.StrOpt('xenapi_connection_username',
+               default='root',
+               help='Username for connection to XenServer/Xen Cloud Platform. '
+                    'Used only if connection_type=xenapi.'),
+    cfg.StrOpt('xenapi_connection_password',
+               default=None,
+               help='Password for connection to XenServer/Xen Cloud Platform. '
+                    'Used only if connection_type=xenapi.'),
+    cfg.IntOpt('xenapi_connection_concurrent',
+               default=5,
+               help='Maximum number of concurrent XenAPI connections. '
+                    'Used only if connection_type=xenapi.'),
+    cfg.FloatOpt('xenapi_task_poll_interval',
+                 default=0.5,
+                 help='The interval used for polling of remote tasks '
+                      '(Async.VM.start, etc). '
+                      'Used only if connection_type=xenapi.'),
+    cfg.FloatOpt('xenapi_vhd_coalesce_poll_interval',
+                 default=5.0,
+                 help='The interval used for polling of coalescing vhds. '
+                      'Used only if connection_type=xenapi.'),
+    cfg.IntOpt('xenapi_vhd_coalesce_max_attempts',
+               default=5,
+               help='Max number of times to poll for VHD to coalesce. '
+                    'Used only if connection_type=xenapi.'),
+    cfg.StrOpt('xenapi_agent_path',
+               default='usr/sbin/xe-update-networking',
+               help='Specifies the path in which the xenapi guest agent '
+                    'should be located. If the agent is present, network '
+                    'configuration is not injected into the image. '
+                    'Used if connection_type=xenapi and flat_injected=True'),
+    cfg.StrOpt('xenapi_sr_base_path',
+               default='/var/run/sr-mount',
+               help='Base path to the storage repository'),
+    cfg.BoolOpt('xenapi_log_instance_actions',
+                default=False,
+                help='Log all instance calls to XenAPI in the database.'),
+    cfg.StrOpt('target_host',
+               default=None,
+               help='iSCSI Target Host'),
+    cfg.StrOpt('target_port',
+               default='3260',
+               help='iSCSI Target Port, 3260 Default'),
+    cfg.StrOpt('iqn_prefix',
+               default='iqn.2010-10.org.openstack',
+               help='IQN Prefix'),
+    # NOTE(sirp): This is a work-around for a bug in Ubuntu Maverick,
+    # when we pull support for it, we should remove this
+    cfg.BoolOpt('xenapi_remap_vbd_dev',
+                default=False,
+                help='Used to enable the remapping of VBD dev '
+                     '(Works around an issue in Ubuntu Maverick)'),
+    cfg.StrOpt('xenapi_remap_vbd_dev_prefix',
+               default='sd',
+               help='Specify prefix to remap VBD dev to '
+                    '(ex. /dev/xvdb -> /dev/sdb)'),
+    cfg.IntOpt('xenapi_login_timeout',
+               default=10,
+               help='Timeout in seconds for XenAPI login.'),
+    ]
 
 FLAGS = flags.FLAGS
-
-flags.DEFINE_string('xenapi_connection_url',
-                    None,
-                    'URL for connection to XenServer/Xen Cloud Platform.'
-                    ' Required if connection_type=xenapi.')
-flags.DEFINE_string('xenapi_connection_username',
-                    'root',
-                    'Username for connection to XenServer/Xen Cloud Platform.'
-                    ' Used only if connection_type=xenapi.')
-flags.DEFINE_string('xenapi_connection_password',
-                    None,
-                    'Password for connection to XenServer/Xen Cloud Platform.'
-                    ' Used only if connection_type=xenapi.')
-flags.DEFINE_integer('xenapi_connection_concurrent',
-                     5,
-                     'Maximum number of concurrent XenAPI connections.'
-                     ' Used only if connection_type=xenapi.')
-flags.DEFINE_float('xenapi_task_poll_interval',
-                   0.5,
-                   'The interval used for polling of remote tasks '
-                   '(Async.VM.start, etc). Used only if '
-                   'connection_type=xenapi.')
-flags.DEFINE_float('xenapi_vhd_coalesce_poll_interval',
-                   5.0,
-                   'The interval used for polling of coalescing vhds.'
-                   '  Used only if connection_type=xenapi.')
-flags.DEFINE_integer('xenapi_vhd_coalesce_max_attempts',
-                     5,
-                     'Max number of times to poll for VHD to coalesce.'
-                     '  Used only if connection_type=xenapi.')
-flags.DEFINE_string('xenapi_agent_path',
-                    'usr/sbin/xe-update-networking',
-                    'Specifies the path in which the xenapi guest agent'
-                    '  should be located. If the agent is present,'
-                    '  network configuration is not injected into the image'
-                    '  Used only if connection_type=xenapi.'
-                    '  and flat_injected=True')
-flags.DEFINE_string('xenapi_sr_base_path', '/var/run/sr-mount',
-                    'Base path to the storage repository')
-flags.DEFINE_bool('xenapi_log_instance_actions', False,
-                  'Log all instance calls to XenAPI in the database.')
-flags.DEFINE_string('target_host',
-                    None,
-                    'iSCSI Target Host')
-flags.DEFINE_string('target_port',
-                    '3260',
-                    'iSCSI Target Port, 3260 Default')
-flags.DEFINE_string('iqn_prefix',
-                    'iqn.2010-10.org.openstack',
-                    'IQN Prefix')
-# NOTE(sirp): This is a work-around for a bug in Ubuntu Maverick, when we pull
-# support for it, we should remove this
-flags.DEFINE_bool('xenapi_remap_vbd_dev', False,
-                  'Used to enable the remapping of VBD dev '
-                  '(Works around an issue in Ubuntu Maverick)')
-flags.DEFINE_string('xenapi_remap_vbd_dev_prefix', 'sd',
-                    'Specify prefix to remap VBD dev to '
-                    '(ex. /dev/xvdb -> /dev/sdb)')
-flags.DEFINE_integer('xenapi_login_timeout',
-                     10,
-                     'Timeout in seconds for XenAPI login.')
+FLAGS.register_opts(xenapi_opts)
 
 
 def get_connection(_):
@@ -171,13 +175,16 @@ class XenAPIConnection(driver.ComputeDriver):
         self._session = XenAPISession(url, user, pw)
         self._volumeops = VolumeOps(self._session)
         self._host_state = None
+        self._host = host.Host(self._session)
         self._product_version = self._session.get_product_version()
         self._vmops = VMOps(self._session, self._product_version)
+        self._initiator = None
+        self._pool = pool.ResourcePool(self._session)
 
     @property
     def host_state(self):
         if not self._host_state:
-            self._host_state = HostState(self._session)
+            self._host_state = host.HostState(self._session)
         return self._host_state
 
     def init_host(self, host):
@@ -204,8 +211,9 @@ class XenAPIConnection(driver.ComputeDriver):
         # TODO(Vek): Need to pass context in for access to auth_token
         self._vmops.confirm_migration(migration, instance, network_info)
 
-    def finish_revert_migration(self, instance):
+    def finish_revert_migration(self, instance, network_info):
         """Finish reverting a resize, powering back on the instance"""
+        # NOTE(vish): Xen currently does not use network info.
         self._vmops.finish_revert_migration(instance)
 
     def finish_migration(self, context, migration, instance, disk_info,
@@ -245,9 +253,10 @@ class XenAPIConnection(driver.ComputeDriver):
         self._vmops.unpause(instance)
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type):
+                                   instance_type, network_info):
         """Transfers the VHD of a running instance to another host, then shuts
         off the instance copies over the COW disk"""
+        # NOTE(vish): Xen currently does not use network info.
         return self._vmops.migrate_disk_and_power_off(context, instance,
                                                       dest, instance_type)
 
@@ -303,9 +312,9 @@ class XenAPIConnection(driver.ComputeDriver):
         """Unplug VIFs from networks."""
         self._vmops.unplug_vifs(instance_ref, network_info)
 
-    def get_info(self, instance_name):
+    def get_info(self, instance):
         """Return data about VM instance"""
-        return self._vmops.get_info(instance_name)
+        return self._vmops.get_info(instance)
 
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics"""
@@ -318,29 +327,35 @@ class XenAPIConnection(driver.ComputeDriver):
         start_time = time.mktime(start_time.timetuple())
         if stop_time:
             stop_time = time.mktime(stop_time.timetuple())
-        for iusage in self._vmops.get_all_bw_usage(start_time, stop_time).\
-                      values():
+        for iusage in self._vmops.get_all_bw_usage(start_time,
+                                                   stop_time).values():
             for macaddr, usage in iusage.iteritems():
-                vi = db.virtual_interface_get_by_address(
-                                    context.get_admin_context(),
-                                    macaddr)
-                if vi:
-                    bwusage.append(dict(virtual_interface=vi,
-                                        bw_in=usage['bw_in'],
-                                        bw_out=usage['bw_out']))
+                bwusage.append(dict(mac_address=macaddr,
+                                    bw_in=usage['bw_in'],
+                                    bw_out=usage['bw_out']))
         return bwusage
 
     def get_console_output(self, instance):
         """Return snapshot of console"""
         return self._vmops.get_console_output(instance)
 
-    def get_ajax_console(self, instance):
-        """Return link to instance's ajax console"""
-        return self._vmops.get_ajax_console(instance)
-
     def get_vnc_console(self, instance):
-        """Return link to instance's ajax console"""
+        """Return link to instance's VNC console"""
         return self._vmops.get_vnc_console(instance)
+
+    def get_volume_connector(self, _instance):
+        """Return volume connector information"""
+        if not self._initiator:
+            stats = self.get_host_stats(refresh=True)
+            try:
+                self._initiator = stats['host_other-config']['iscsi_iqn']
+            except (TypeError, KeyError):
+                LOG.warn(_('Could not determine iscsi initiator name'))
+                self._initiator = None
+        return {
+            'ip': self.get_host_ip_addr(),
+            'initiator': self._initiator
+        }
 
     @staticmethod
     def get_host_ip_addr():
@@ -375,7 +390,6 @@ class XenAPIConnection(driver.ComputeDriver):
         :param host: hostname that compute manager is currently running
 
         """
-
         try:
             service_ref = db.service_get_all_compute_by_host(ctxt, host)[0]
         except exception.NotFound:
@@ -397,6 +411,7 @@ class XenAPIConnection(driver.ComputeDriver):
                'local_gb_used': used_disk_gb,
                'hypervisor_type': 'xen',
                'hypervisor_version': 0,
+               'hypervisor_hostname': host_stats['host_hostname'],
                'service_id': service_ref['id'],
                'cpu_info': host_stats['host_cpu_info']['cpu_count']}
 
@@ -443,6 +458,9 @@ class XenAPIConnection(driver.ComputeDriver):
         """
         return self._vmops.refresh_security_group_members(security_group_id)
 
+    def refresh_provider_fw_rules(self):
+        return self._vmops.refresh_provider_fw_rules()
+
     def update_host_status(self):
         """Update the status info of the host, and return those values
             to the calling program."""
@@ -461,14 +479,28 @@ class XenAPIConnection(driver.ComputeDriver):
         raise an exception.
         """
         if action in ("reboot", "shutdown"):
-            return self._vmops.host_power_action(host, action)
+            return self._host.host_power_action(host, action)
         else:
             msg = _("Host startup on XenServer is not supported.")
             raise NotImplementedError(msg)
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
-        return self._vmops.set_host_enabled(host, enabled)
+        return self._host.set_host_enabled(host, enabled)
+
+    def host_maintenance_mode(self, host, mode):
+        """Start/Stop host maintenance window. On start, it triggers
+        guest VMs evacuation."""
+        return self._host.host_maintenance_mode(host, mode)
+
+    def add_to_aggregate(self, context, aggregate, host, **kwargs):
+        """Add a compute host to an aggregate."""
+        return self._pool.add_to_aggregate(context, aggregate, host, **kwargs)
+
+    def remove_from_aggregate(self, context, aggregate, host, **kwargs):
+        """Remove a compute host from an aggregate."""
+        return self._pool.remove_from_aggregate(context,
+                                                aggregate, host, **kwargs)
 
 
 class XenAPISession(object):
@@ -477,13 +509,36 @@ class XenAPISession(object):
     def __init__(self, url, user, pw):
         self.XenAPI = self.get_imported_xenapi()
         self._sessions = queue.Queue()
+        self.host_uuid = None
         exception = self.XenAPI.Failure(_("Unable to log in to XenAPI "
-                            "(is the Dom0 disk full?)"))
+                                          "(is the Dom0 disk full?)"))
+        is_slave = False
         for i in xrange(FLAGS.xenapi_connection_concurrent):
-            session = self._create_session(url)
-            with timeout.Timeout(FLAGS.xenapi_login_timeout, exception):
-                session.login_with_password(user, pw)
+            try:
+                session = self._create_session(url)
+                with timeout.Timeout(FLAGS.xenapi_login_timeout, exception):
+                    session.login_with_password(user, pw)
+            except self.XenAPI.Failure, e:
+                # if user and pw of the master are different, we're doomed!
+                if e.details[0] == 'HOST_IS_SLAVE':
+                    master = e.details[1]
+                    session = self.XenAPI.Session(pool.swap_xapi_host(url,
+                                                                      master))
+                    session.login_with_password(user, pw)
+                    is_slave = True
+                else:
+                    raise
             self._sessions.put(session)
+
+        if is_slave:
+            try:
+                aggr = db.aggregate_get_by_host(context.get_admin_context(),
+                                                FLAGS.host)
+                self.host_uuid = aggr.metadetails[FLAGS.host]
+            except exception.AggregateHostNotFound:
+                LOG.exception(_('Host is member of a pool, but DB '
+                                'says otherwise'))
+                raise
 
     def get_product_version(self):
         """Return a tuple of (major, minor, rev) for the host version"""
@@ -512,9 +567,12 @@ class XenAPISession(object):
             self._sessions.put(session)
 
     def get_xenapi_host(self):
-        """Return the xenapi host"""
+        """Return the xenapi host on which nova-compute runs on."""
         with self._get_session() as session:
-            return session.xenapi.session.get_this_host(session.handle)
+            if self.host_uuid:
+                return session.xenapi.host.get_by_uuid(self.host_uuid)
+            else:
+                return session.xenapi.session.get_this_host(session.handle)
 
     def call_xenapi(self, method, *args):
         """Call the specified XenAPI method on a background thread."""
@@ -535,62 +593,60 @@ class XenAPISession(object):
 
     def async_call_plugin(self, plugin, fn, args):
         """Call Async.host.call_plugin on a background thread."""
+        # NOTE(johannes): Fetch host before we acquire a session. Since
+        # _get_session() acquires a session too, it can result in a deadlock
+        # if multiple greenthreads race with each other. See bug 924918
+        host = self.get_xenapi_host()
+        # NOTE(armando): pass the host uuid along with the args so that
+        # the plugin gets executed on the right host when using XS pools
+        if self.host_uuid:
+            args['host_uuid'] = self.host_uuid
         with self._get_session() as session:
             return tpool.execute(self._unwrap_plugin_exceptions,
                                  session.xenapi.Async.host.call_plugin,
-                                 self.get_xenapi_host(), plugin, fn, args)
+                                 host, plugin, fn, args)
 
     def wait_for_task(self, task, uuid=None):
         """Return the result of the given task. The task is polled
         until it completes."""
-        done = event.Event()
-        loop = utils.LoopingCall(f=None)
-
-        def _poll_task():
+        while True:
             """Poll the given XenAPI task, and return the result if the
             action was completed successfully or not.
             """
-            try:
-                ctxt = context.get_admin_context()
-                name = self.call_xenapi("task.get_name_label", task)
-                status = self.call_xenapi("task.get_status", task)
+            ctxt = context.get_admin_context()
+            name = self.call_xenapi("task.get_name_label", task)
+            status = self.call_xenapi("task.get_status", task)
 
-                # Ensure action is never > 255
-                action = dict(action=name[:255], error=None)
-                log_instance_actions = (FLAGS.xenapi_log_instance_actions and
-                                        uuid)
+            # Ensure action is never > 255
+            action = dict(action=name[:255], error=None)
+            log_instance_actions = (FLAGS.xenapi_log_instance_actions and
+                                    uuid)
+            if log_instance_actions:
+                action["instance_uuid"] = uuid
+
+            if status == "pending":
+                pass
+            elif status == "success":
+                result = self.call_xenapi("task.get_result", task)
+                LOG.info(_("Task [%(name)s] %(task)s status:"
+                        " success    %(result)s") % locals())
+
                 if log_instance_actions:
-                    action["instance_uuid"] = uuid
+                    db.instance_action_create(ctxt, action)
 
-                if status == "pending":
-                    return
-                elif status == "success":
-                    result = self.call_xenapi("task.get_result", task)
-                    LOG.info(_("Task [%(name)s] %(task)s status:"
-                            " success    %(result)s") % locals())
+                return _parse_xmlrpc_value(result)
+            else:
+                error_info = self.call_xenapi("task.get_error_info", task)
+                LOG.warn(_("Task [%(name)s] %(task)s status:"
+                        " %(status)s    %(error_info)s") % locals())
 
-                    if log_instance_actions:
-                        db.instance_action_create(ctxt, action)
+                if log_instance_actions:
+                    action["error"] = str(error_info)
+                    db.instance_action_create(ctxt, action)
 
-                    done.send(_parse_xmlrpc_value(result))
-                else:
-                    error_info = self.call_xenapi("task.get_error_info", task)
-                    LOG.warn(_("Task [%(name)s] %(task)s status:"
-                            " %(status)s    %(error_info)s") % locals())
+                raise self.XenAPI.Failure(error_info)
 
-                    if log_instance_actions:
-                        action["error"] = str(error_info)
-                        db.instance_action_create(ctxt, action)
-
-                    done.send_exception(self.XenAPI.Failure(error_info))
-            except self.XenAPI.Failure, exc:
-                LOG.warn(exc)
-                done.send_exception(*sys.exc_info())
-            loop.stop()
-
-        loop.f = _poll_task
-        loop.start(FLAGS.xenapi_task_poll_interval, now=True)
-        return done.wait()
+            greenthread.sleep(FLAGS.xenapi_task_poll_interval)
 
     def _create_session(self, url):
         """Stubout point. This can be replaced with a mock session."""
@@ -616,65 +672,6 @@ class XenAPISession(object):
         except xmlrpclib.ProtocolError, exc:
             LOG.debug(_("Got exception: %s"), exc)
             raise
-
-
-class HostState(object):
-    """Manages information about the XenServer host this compute
-    node is running on.
-    """
-    def __init__(self, session):
-        super(HostState, self).__init__()
-        self._session = session
-        self._stats = {}
-        self.update_status()
-
-    def get_host_stats(self, refresh=False):
-        """Return the current state of the host. If 'refresh' is
-        True, run the update first.
-        """
-        if refresh:
-            self.update_status()
-        return self._stats
-
-    def update_status(self):
-        """Since under Xenserver, a compute node runs on a given host,
-        we can get host status information using xenapi.
-        """
-        LOG.debug(_("Updating host stats"))
-        # Make it something unlikely to match any actual instance UUID
-        task_id = random.randint(-80000, -70000)
-        task = self._session.async_call_plugin("xenhost", "host_data", {})
-        task_result = self._session.wait_for_task(task, str(task_id))
-        if not task_result:
-            task_result = json.dumps("")
-        try:
-            data = json.loads(task_result)
-        except ValueError as e:
-            # Invalid JSON object
-            LOG.error(_("Unable to get updated status: %s") % e)
-            return
-        # Get the SR usage
-        try:
-            sr_ref = vm_utils.VMHelper.safe_find_sr(self._session)
-        except exception.NotFound as e:
-            # No SR configured
-            LOG.error(_("Unable to get SR for this host: %s") % e)
-            return
-        sr_rec = self._session.call_xenapi("SR.get_record", sr_ref)
-        total = int(sr_rec["virtual_allocation"])
-        used = int(sr_rec["physical_utilisation"])
-        data["disk_total"] = total
-        data["disk_used"] = used
-        data["disk_available"] = total - used
-        host_memory = data.get('host_memory', None)
-        if host_memory:
-            data["host_memory_total"] = host_memory.get('total', 0)
-            data["host_memory_overhead"] = host_memory.get('overhead', 0)
-            data["host_memory_free"] = host_memory.get('free', 0)
-            data["host_memory_free_computed"] = \
-                        host_memory.get('free-computed', 0)
-            del data['host_memory']
-        self._stats = data
 
 
 def _parse_xmlrpc_value(val):

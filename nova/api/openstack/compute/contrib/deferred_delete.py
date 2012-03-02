@@ -25,7 +25,7 @@ from nova import exception
 from nova import log as logging
 
 
-LOG = logging.getLogger("nova.api.openstack.compute.contrib.deferred-delete")
+LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'deferred_delete')
 
 
@@ -66,8 +66,8 @@ class Deferred_delete(extensions.ExtensionDescriptor):
 
     name = "DeferredDelete"
     alias = "os-deferred-delete"
-    namespace = "http://docs.openstack.org/compute/ext/" \
-                "deferred-delete/api/v1.1"
+    namespace = ("http://docs.openstack.org/compute/ext/"
+                 "deferred-delete/api/v1.1")
     updated = "2011-09-01T00:00:00+00:00"
 
     def get_controller_extensions(self):

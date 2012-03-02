@@ -18,29 +18,44 @@ Manage hosts in the current zone.
 """
 
 import datetime
-import types
 import UserDict
 
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
+from nova.scheduler import filters
 from nova import utils
 
-FLAGS = flags.FLAGS
-flags.DEFINE_integer('reserved_host_disk_mb', 0,
-        'Amount of disk in MB to reserve for host/dom0')
-flags.DEFINE_integer('reserved_host_memory_mb', 512,
-        'Amount of memory in MB to reserve for host/dom0')
-flags.DEFINE_list('default_host_filters', [
-            'AvailabilityZoneFilter',
-            'RamFilter',
-            'ComputeFilter',
-        ],
-        'Which filters to use for filtering hosts when not specified '
-        'in the request.')
 
-LOG = logging.getLogger('nova.scheduler.host_manager')
+host_manager_opts = [
+    cfg.IntOpt('reserved_host_disk_mb',
+               default=0,
+               help='Amount of disk in MB to reserve for host/dom0'),
+    cfg.IntOpt('reserved_host_memory_mb',
+               default=512,
+               help='Amount of memory in MB to reserve for host/dom0'),
+    cfg.MultiStrOpt('scheduler_available_filters',
+            default=['nova.scheduler.filters.standard_filters'],
+            help='Filter classes available to the scheduler which may '
+                    'be specified more than once.  An entry of '
+                    '"nova.scheduler.filters.standard_filters" '
+                    'maps to all filters included with nova.'),
+    cfg.ListOpt('scheduler_default_filters',
+                default=[
+                  'AvailabilityZoneFilter',
+                  'RamFilter',
+                  'ComputeFilter'
+                  ],
+                help='Which filter class names to use for filtering hosts '
+                      'when not specified in the request.'),
+    ]
+
+FLAGS = flags.FLAGS
+FLAGS.register_opts(host_manager_opts)
+
+LOG = logging.getLogger(__name__)
 
 
 class ReadOnlyDict(UserDict.IterableUserDict):
@@ -136,8 +151,8 @@ class HostState(object):
         return True
 
     def __repr__(self):
-        return "host '%s': free_ram_mb:%s free_disk_mb:%s" % \
-                    (self.host, self.free_ram_mb, self.free_disk_mb)
+        return ("host '%s': free_ram_mb:%s free_disk_mb:%s" %
+                (self.host, self.free_ram_mb, self.free_disk_mb))
 
 
 class HostManager(object):
@@ -148,20 +163,8 @@ class HostManager(object):
 
     def __init__(self):
         self.service_states = {}  # { <host> : { <service> : { cap k : v }}}
-        self.filter_classes = self._get_filter_classes()
-
-    def _get_filter_classes(self):
-        """Get the list of possible filter classes"""
-        # Imported here to avoid circular imports
-        from nova.scheduler import filters
-
-        def get_itm(nm):
-            return getattr(filters, nm)
-
-        return [get_itm(itm) for itm in dir(filters)
-                if (type(get_itm(itm)) is types.TypeType)
-                and issubclass(get_itm(itm), filters.AbstractHostFilter)
-                and get_itm(itm) is not filters.AbstractHostFilter]
+        self.filter_classes = filters.get_filter_classes(
+                FLAGS.scheduler_available_filters)
 
     def _choose_host_filters(self, filters):
         """Since the caller may specify which filters to use we need
@@ -170,7 +173,7 @@ class HostManager(object):
         of acceptable filters.
         """
         if filters is None:
-            filters = FLAGS.default_host_filters
+            filters = FLAGS.scheduler_default_filters
         if not isinstance(filters, (list, tuple)):
             filters = [filters]
         good_filters = []
@@ -253,8 +256,8 @@ class HostManager(object):
 
     def update_service_capabilities(self, service_name, host, capabilities):
         """Update the per-service capabilities based on this notification."""
-        logging.debug(_("Received %(service_name)s service update from "
-                "%(host)s.") % locals())
+        LOG.debug(_("Received %(service_name)s service update from "
+                    "%(host)s.") % locals())
         service_caps = self.service_states.get(host, {})
         # Copy the capabilities, so we don't modify the original dict
         capab_copy = dict(capabilities)
@@ -266,8 +269,8 @@ class HostManager(object):
         """Check if host service capabilites are not recent enough."""
         allowed_time_diff = FLAGS.periodic_interval * 3
         caps = self.service_states[host][service]
-        if (utils.utcnow() - caps["timestamp"]) <= \
-            datetime.timedelta(seconds=allowed_time_diff):
+        if ((utils.utcnow() - caps["timestamp"]) <=
+            datetime.timedelta(seconds=allowed_time_diff)):
             return False
         return True
 
@@ -304,7 +307,7 @@ class HostManager(object):
         for compute in compute_nodes:
             service = compute['service']
             if not service:
-                logging.warn(_("No service for compute ID %s") % compute['id'])
+                LOG.warn(_("No service for compute ID %s") % compute['id'])
                 continue
             host = service['host']
             capabilities = self.service_states.get(host, None)

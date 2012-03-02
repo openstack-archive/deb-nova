@@ -30,43 +30,67 @@ import sys
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 
+
+ldap_opts = [
+    cfg.IntOpt('ldap_schema_version',
+               default=2,
+               help='Current version of the LDAP schema'),
+    cfg.StrOpt('ldap_url',
+               default='ldap://localhost',
+               help='Point this at your ldap server'),
+    cfg.StrOpt('ldap_password',
+               default='changeme',
+               help='LDAP password'),
+    cfg.StrOpt('ldap_user_dn',
+               default='cn=Manager,dc=example,dc=com',
+               help='DN of admin user'),
+    cfg.StrOpt('ldap_user_id_attribute',
+               default='uid',
+               help='Attribute to use as id'),
+    cfg.StrOpt('ldap_user_name_attribute',
+               default='cn',
+               help='Attribute to use as name'),
+    cfg.StrOpt('ldap_user_unit',
+               default='Users',
+               help='OID for Users'),
+    cfg.StrOpt('ldap_user_subtree',
+               default='ou=Users,dc=example,dc=com',
+               help='OU for Users'),
+    cfg.BoolOpt('ldap_user_modify_only',
+                default=False,
+                help='Modify user attributes instead of creating/deleting'),
+    cfg.StrOpt('ldap_project_subtree',
+               default='ou=Groups,dc=example,dc=com',
+               help='OU for Projects'),
+    cfg.StrOpt('role_project_subtree',
+               default='ou=Groups,dc=example,dc=com',
+               help='OU for Roles'),
+
+    # NOTE(vish): mapping with these flags is necessary because we're going
+    #             to tie in to an existing ldap schema
+    cfg.StrOpt('ldap_cloudadmin',
+               default='cn=cloudadmins,ou=Groups,dc=example,dc=com',
+               help='cn for Cloud Admins'),
+    cfg.StrOpt('ldap_itsec',
+               default='cn=itsec,ou=Groups,dc=example,dc=com',
+               help='cn for ItSec'),
+    cfg.StrOpt('ldap_sysadmin',
+               default='cn=sysadmins,ou=Groups,dc=example,dc=com',
+               help='cn for Sysadmins'),
+    cfg.StrOpt('ldap_netadmin',
+               default='cn=netadmins,ou=Groups,dc=example,dc=com',
+               help='cn for NetAdmins'),
+    cfg.StrOpt('ldap_developer',
+               default='cn=developers,ou=Groups,dc=example,dc=com',
+               help='cn for Developers'),
+    ]
 
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('ldap_schema_version', 2,
-                     'Current version of the LDAP schema')
-flags.DEFINE_string('ldap_url', 'ldap://localhost',
-                    'Point this at your ldap server')
-flags.DEFINE_string('ldap_password', 'changeme', 'LDAP password')
-flags.DEFINE_string('ldap_user_dn', 'cn=Manager,dc=example,dc=com',
-                    'DN of admin user')
-flags.DEFINE_string('ldap_user_id_attribute', 'uid', 'Attribute to use as id')
-flags.DEFINE_string('ldap_user_name_attribute', 'cn',
-                    'Attribute to use as name')
-flags.DEFINE_string('ldap_user_unit', 'Users', 'OID for Users')
-flags.DEFINE_string('ldap_user_subtree', 'ou=Users,dc=example,dc=com',
-                    'OU for Users')
-flags.DEFINE_boolean('ldap_user_modify_only', False,
-                    'Modify attributes for users instead of creating/deleting')
-flags.DEFINE_string('ldap_project_subtree', 'ou=Groups,dc=example,dc=com',
-                    'OU for Projects')
-flags.DEFINE_string('role_project_subtree', 'ou=Groups,dc=example,dc=com',
-                    'OU for Roles')
+FLAGS.register_opts(ldap_opts)
 
-# NOTE(vish): mapping with these flags is necessary because we're going
-#             to tie in to an existing ldap schema
-flags.DEFINE_string('ldap_cloudadmin',
-    'cn=cloudadmins,ou=Groups,dc=example,dc=com', 'cn for Cloud Admins')
-flags.DEFINE_string('ldap_itsec',
-    'cn=itsec,ou=Groups,dc=example,dc=com', 'cn for ItSec')
-flags.DEFINE_string('ldap_sysadmin',
-    'cn=sysadmins,ou=Groups,dc=example,dc=com', 'cn for Sysadmins')
-flags.DEFINE_string('ldap_netadmin',
-    'cn=netadmins,ou=Groups,dc=example,dc=com', 'cn for NetAdmins')
-flags.DEFINE_string('ldap_developer',
-    'cn=developers,ou=Groups,dc=example,dc=com', 'cn for Developers')
-
-LOG = logging.getLogger("nova.ldapdriver")
+LOG = logging.getLogger(__name__)
 
 
 if FLAGS.memcached_servers:
@@ -199,6 +223,8 @@ class LdapDriver(object):
     def get_user(self, uid):
         """Retrieve user by id"""
         attr = self.__get_ldap_user(uid)
+        if attr is None:
+            raise exception.LDAPUserNotFound(user_id=uid)
         return self.__to_user(attr)
 
     @sanitize
@@ -471,7 +497,10 @@ class LdapDriver(object):
 
     def __user_exists(self, uid):
         """Check if user exists"""
-        return self.get_user(uid) is not None
+        try:
+            return self.get_user(uid) is not None
+        except exception.LDAPUserNotFound:
+            return False
 
     def __ldap_user_exists(self, uid):
         """Check if the user exists in ldap"""
@@ -549,7 +578,7 @@ class LdapDriver(object):
     def __role_to_dn(self, role, project_id=None):
         """Convert role to corresponding dn"""
         if project_id is None:
-            return FLAGS.__getitem__("ldap_%s" % role).value
+            return FLAGS["ldap_%s" % role]
         else:
             project_dn = self.__project_to_dn(project_id)
             return 'cn=%s,%s' % (role, project_dn)
@@ -689,8 +718,8 @@ class LdapDriver(object):
         """Convert ldap attributes to User object"""
         if attr is None:
             return None
-        if ('accessKey' in attr.keys() and 'secretKey' in attr.keys() \
-            and LdapDriver.isadmin_attribute in attr.keys()):
+        if ('accessKey' in attr.keys() and 'secretKey' in attr.keys() and
+            LdapDriver.isadmin_attribute in attr.keys()):
             return {
                 'id': attr[FLAGS.ldap_user_id_attribute][0],
                 'name': attr[FLAGS.ldap_user_name_attribute][0],

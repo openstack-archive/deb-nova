@@ -18,10 +18,11 @@
 import inspect
 from xml.dom import minidom
 from xml.parsers import expat
+import math
+import time
 
 from lxml import etree
 import webob
-from webob import exc
 
 from nova import exception
 from nova import log as logging
@@ -34,7 +35,7 @@ XMLNS_V11 = 'http://docs.openstack.org/compute/api/v1.1'
 
 XMLNS_ATOM = 'http://www.w3.org/2005/Atom'
 
-LOG = logging.getLogger('nova.api.openstack.wsgi')
+LOG = logging.getLogger(__name__)
 
 # The vendor content types should serialize identically to the non-vendor
 # content types. So to avoid littering the code with both options, we
@@ -79,8 +80,8 @@ class Request(webob.Request):
             if not content_type:
                 content_type = self.accept.best_match(SUPPORTED_CONTENT_TYPES)
 
-            self.environ['nova.best_content_type'] = content_type or \
-                'application/json'
+            self.environ['nova.best_content_type'] = (content_type or
+                                                      'application/json')
 
         return self.environ['nova.best_content_type']
 
@@ -199,6 +200,17 @@ class XMLDeserializer(TextDeserializer):
             if child.nodeType == child.TEXT_NODE:
                 return child.nodeValue
         return ""
+
+    def find_attribute_or_element(self, parent, name):
+        """Get an attribute value; fallback to an element if not found"""
+        if parent.hasAttribute(name):
+            return parent.getAttribute(name)
+
+        node = self.find_first_child_named(parent, name)
+        if node:
+            return self.extract_text(node)
+
+        return None
 
     def default(self, datastring):
         return {'body': self._from_xml(datastring)}
@@ -335,18 +347,6 @@ class XMLDictSerializer(DictSerializer):
     def _to_xml(self, root):
         """Convert the xml object to an xml string."""
         return etree.tostring(root, encoding='UTF-8', xml_declaration=True)
-
-
-@utils.deprecated("The lazy serialization middleware is no longer necessary.")
-class LazySerializationMiddleware(wsgi.Middleware):
-    """Lazy serialization middleware.
-
-    Provided only for backwards compatibility with existing
-    api-paste.ini files.  This middleware will be removed in future
-    versions of nova.
-    """
-
-    pass
 
 
 def serializers(**serializers):
@@ -575,7 +575,9 @@ class ResourceExceptionHandler(object):
             msg = unicode(ex_value)
             raise Fault(webob.exc.HTTPForbidden(explanation=msg))
         elif isinstance(ex_value, TypeError):
-            LOG.exception(ex_value)
+            exc_info = (ex_type, ex_value, ex_traceback)
+            LOG.error(_('Exception handling resource: %s') % ex_value,
+                    exc_info=exc_info)
             raise Fault(webob.exc.HTTPBadRequest())
         elif isinstance(ex_value, Fault):
             LOG.info(_("Fault thrown: %s"), unicode(ex_value))
@@ -789,6 +791,18 @@ class Resource(wsgi.Application):
         content_type, body = self.get_body(request)
         accept = request.best_match_content_type()
 
+        # NOTE(Vek): Splitting the function up this way allows for
+        #            auditing by external tools that wrap the existing
+        #            function.  If we try to audit __call__(), we can
+        #            run into troubles due to the @webob.dec.wsgify()
+        #            decorator.
+        return self._process_stack(request, action, action_args,
+                                   content_type, body, accept)
+
+    def _process_stack(self, request, action, action_args,
+                       content_type, body, accept):
+        """Implement the processing stack."""
+
         # Get the implementing method
         try:
             meth, extensions = self.get_method(request, action,
@@ -819,8 +833,8 @@ class Resource(wsgi.Application):
         action_args.update(contents)
 
         project_id = action_args.pop("project_id", None)
-        if ('nova.context' in request.environ and project_id
-            and project_id != request.environ['nova.context'].project_id):
+        context = request.environ.get('nova.context')
+        if (context and project_id and (project_id != context.project_id)):
             msg = _("Malformed request url")
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
@@ -848,6 +862,8 @@ class Resource(wsgi.Application):
 
             # Run post-processing extensions
             if resp_obj:
+                if context:
+                    resp_obj['x-compute-request-id'] = context.request_id
                 # Do a preserialize to set up the response object
                 serializers = getattr(meth, 'wsgi_serializers', {})
                 resp_obj._bind_method_serializers(serializers)
@@ -1061,7 +1077,8 @@ class OverLimitFault(webob.exc.HTTPException):
         """
         Initialize new `OverLimitFault` with relevant information.
         """
-        self.wrapped_exc = webob.exc.HTTPRequestEntityTooLarge()
+        hdrs = OverLimitFault._retry_after(retry_time)
+        self.wrapped_exc = webob.exc.HTTPRequestEntityTooLarge(headers=hdrs)
         self.content = {
             "overLimitFault": {
                 "code": self.wrapped_exc.status_int,
@@ -1069,6 +1086,13 @@ class OverLimitFault(webob.exc.HTTPException):
                 "details": details,
             },
         }
+
+    @staticmethod
+    def _retry_after(retry_time):
+        delay = int(math.ceil(retry_time - time.time()))
+        retry_after = delay if delay > 0 else 0
+        headers = {'Retry-After': '%d' % retry_after}
+        return headers
 
     @webob.dec.wsgify(RequestClass=Request)
     def __call__(self, request):

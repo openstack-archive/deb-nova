@@ -26,35 +26,59 @@ import qpid.messaging
 import qpid.messaging.exceptions
 
 from nova import flags
+from nova.openstack.common import cfg
 from nova.rpc import amqp as rpc_amqp
+from nova.rpc import common as rpc_common
 from nova.rpc.common import LOG
 
 
-flags.DEFINE_string('qpid_hostname', 'localhost', 'Qpid broker hostname')
-flags.DEFINE_string('qpid_port', '5672', 'Qpid broker port')
-flags.DEFINE_string('qpid_username', '', 'Username for qpid connection')
-flags.DEFINE_string('qpid_password', '', 'Password for qpid connection')
-flags.DEFINE_string('qpid_sasl_mechanisms', '',
-                'Space separated list of SASL mechanisms to use for auth')
-flags.DEFINE_boolean('qpid_reconnect', True, 'Automatically reconnect')
-flags.DEFINE_integer('qpid_reconnect_timeout', 0,
-                'Reconnection timeout in seconds')
-flags.DEFINE_integer('qpid_reconnect_limit', 0,
-                'Max reconnections before giving up')
-flags.DEFINE_integer('qpid_reconnect_interval_min', 0,
-                'Minimum seconds between reconnection attempts')
-flags.DEFINE_integer('qpid_reconnect_interval_max', 0,
-                'Maximum seconds between reconnection attempts')
-flags.DEFINE_integer('qpid_reconnect_interval', 0,
-                'Equivalent to setting max and min to the same value')
-flags.DEFINE_integer('qpid_heartbeat', 5,
-                'Seconds between heartbeats used to keep the connection alive')
-flags.DEFINE_string('qpid_protocol', 'tcp',
-                "Transport to use, either 'tcp' or 'ssl'")
-flags.DEFINE_boolean('qpid_tcp_nodelay', True, 'Disable Nagle algorithm')
-
+qpid_opts = [
+    cfg.StrOpt('qpid_hostname',
+               default='localhost',
+               help='Qpid broker hostname'),
+    cfg.StrOpt('qpid_port',
+               default='5672',
+               help='Qpid broker port'),
+    cfg.StrOpt('qpid_username',
+               default='',
+               help='Username for qpid connection'),
+    cfg.StrOpt('qpid_password',
+               default='',
+               help='Password for qpid connection'),
+    cfg.StrOpt('qpid_sasl_mechanisms',
+               default='',
+               help='Space separated list of SASL mechanisms to use for auth'),
+    cfg.BoolOpt('qpid_reconnect',
+                default=True,
+                help='Automatically reconnect'),
+    cfg.IntOpt('qpid_reconnect_timeout',
+               default=0,
+               help='Reconnection timeout in seconds'),
+    cfg.IntOpt('qpid_reconnect_limit',
+               default=0,
+               help='Max reconnections before giving up'),
+    cfg.IntOpt('qpid_reconnect_interval_min',
+               default=0,
+               help='Minimum seconds between reconnection attempts'),
+    cfg.IntOpt('qpid_reconnect_interval_max',
+               default=0,
+               help='Maximum seconds between reconnection attempts'),
+    cfg.IntOpt('qpid_reconnect_interval',
+               default=0,
+               help='Equivalent to setting max and min to the same value'),
+    cfg.IntOpt('qpid_heartbeat',
+               default=5,
+               help='Seconds between connection keepalive heartbeats'),
+    cfg.StrOpt('qpid_protocol',
+               default='tcp',
+               help="Transport to use, either 'tcp' or 'ssl'"),
+    cfg.BoolOpt('qpid_tcp_nodelay',
+                default=True,
+                help='Disable Nagle algorithm'),
+    ]
 
 FLAGS = flags.FLAGS
+FLAGS.register_opts(qpid_opts)
 
 
 class ConsumerBase(object):
@@ -248,28 +272,45 @@ class NotifyPublisher(Publisher):
 class Connection(object):
     """Connection object."""
 
-    def __init__(self):
+    def __init__(self, server_params=None):
         self.session = None
         self.consumers = {}
         self.consumer_thread = None
 
-        self.broker = FLAGS.qpid_hostname + ":" + FLAGS.qpid_port
+        if server_params is None:
+            server_params = {}
+
+        default_params = dict(hostname=FLAGS.qpid_hostname,
+                port=FLAGS.qpid_port,
+                username=FLAGS.qpid_username,
+                password=FLAGS.qpid_password)
+
+        params = server_params
+        for key in default_params.keys():
+            params.setdefault(key, default_params[key])
+
+        self.broker = params['hostname'] + ":" + str(params['port'])
         # Create the connection - this does not open the connection
         self.connection = qpid.messaging.Connection(self.broker)
 
         # Check if flags are set and if so set them for the connection
         # before we call open
-        self.connection.username = FLAGS.qpid_username
-        self.connection.password = FLAGS.qpid_password
+        self.connection.username = params['username']
+        self.connection.password = params['password']
         self.connection.sasl_mechanisms = FLAGS.qpid_sasl_mechanisms
         self.connection.reconnect = FLAGS.qpid_reconnect
-        self.connection.reconnect_timeout = FLAGS.qpid_reconnect_timeout
-        self.connection.reconnect_limit = FLAGS.qpid_reconnect_limit
-        self.connection.reconnect_interval_max = \
-                                        FLAGS.qpid_reconnect_interval_max
-        self.connection.reconnect_interval_min = \
-                                        FLAGS.qpid_reconnect_interval_min
-        self.connection.reconnect_interval = FLAGS.qpid_reconnect_interval
+        if FLAGS.qpid_reconnect_timeout:
+            self.connection.reconnect_timeout = FLAGS.qpid_reconnect_timeout
+        if FLAGS.qpid_reconnect_limit:
+            self.connection.reconnect_limit = FLAGS.qpid_reconnect_limit
+        if FLAGS.qpid_reconnect_interval_max:
+            self.connection.reconnect_interval_max = (
+                    FLAGS.qpid_reconnect_interval_max)
+        if FLAGS.qpid_reconnect_interval_min:
+            self.connection.reconnect_interval_min = (
+                    FLAGS.qpid_reconnect_interval_min)
+        if FLAGS.qpid_reconnect_interval:
+            self.connection.reconnect_interval = FLAGS.qpid_reconnect_interval
         self.connection.hearbeat = FLAGS.qpid_heartbeat
         self.connection.protocol = FLAGS.qpid_protocol
         self.connection.tcp_nodelay = FLAGS.qpid_tcp_nodelay
@@ -315,7 +356,8 @@ class Connection(object):
         while True:
             try:
                 return method(*args, **kwargs)
-            except qpid.messaging.exceptions.ConnectionError, e:
+            except (qpid.messaging.exceptions.Empty,
+                    qpid.messaging.exceptions.ConnectionError), e:
                 if error_callback:
                     error_callback(e)
                 self.reconnect()
@@ -349,15 +391,20 @@ class Connection(object):
 
         return self.ensure(_connect_error, _declare_consumer)
 
-    def iterconsume(self, limit=None):
+    def iterconsume(self, limit=None, timeout=None):
         """Return an iterator that will consume from all queues/consumers"""
 
         def _error_callback(exc):
-            LOG.exception(_('Failed to consume message from queue: %s') %
-                    str(exc))
+            if isinstance(exc, qpid.messaging.exceptions.Empty):
+                LOG.exception(_('Timed out waiting for RPC response: %s') %
+                        str(exc))
+                raise rpc_common.Timeout()
+            else:
+                LOG.exception(_('Failed to consume message from queue: %s') %
+                        str(exc))
 
         def _consume():
-            nxt_receiver = self.session.next_receiver()
+            nxt_receiver = self.session.next_receiver(timeout=timeout)
             self._lookup_consumer(nxt_receiver).consume()
 
         for iteration in itertools.count(0):
@@ -444,42 +491,58 @@ class Connection(object):
         """Create a consumer that calls a method in a proxy object"""
         if fanout:
             consumer = FanoutConsumer(self.session, topic,
-                                      rpc_amqp.ProxyCallback(proxy))
+                    rpc_amqp.ProxyCallback(proxy, Connection.pool))
         else:
             consumer = TopicConsumer(self.session, topic,
-                                     rpc_amqp.ProxyCallback(proxy))
+                    rpc_amqp.ProxyCallback(proxy, Connection.pool))
         self._register_consumer(consumer)
         return consumer
 
 
-rpc_amqp.ConnectionClass = Connection
+Connection.pool = rpc_amqp.Pool(connection_cls=Connection)
 
 
 def create_connection(new=True):
     """Create a connection"""
-    return rpc_amqp.create_connection(new)
+    return rpc_amqp.create_connection(new, Connection.pool)
 
 
-def multicall(context, topic, msg):
+def multicall(context, topic, msg, timeout=None):
     """Make a call that returns multiple times."""
-    return rpc_amqp.multicall(context, topic, msg)
+    return rpc_amqp.multicall(context, topic, msg, timeout, Connection.pool)
 
 
-def call(context, topic, msg):
+def call(context, topic, msg, timeout=None):
     """Sends a message on a topic and wait for a response."""
-    return rpc_amqp.call(context, topic, msg)
+    return rpc_amqp.call(context, topic, msg, timeout, Connection.pool)
 
 
 def cast(context, topic, msg):
     """Sends a message on a topic without waiting for a response."""
-    return rpc_amqp.cast(context, topic, msg)
+    return rpc_amqp.cast(context, topic, msg, Connection.pool)
 
 
 def fanout_cast(context, topic, msg):
     """Sends a message on a fanout exchange without waiting for a response."""
-    return rpc_amqp.fanout_cast(context, topic, msg)
+    return rpc_amqp.fanout_cast(context, topic, msg, Connection.pool)
+
+
+def cast_to_server(context, server_params, topic, msg):
+    """Sends a message on a topic to a specific server."""
+    return rpc_amqp.cast_to_server(context, server_params, topic, msg,
+            Connection.pool)
+
+
+def fanout_cast_to_server(context, server_params, topic, msg):
+    """Sends a message on a fanout exchange to a specific server."""
+    return rpc_amqp.fanout_cast_to_server(context, server_params, topic,
+            msg, Connection.pool)
 
 
 def notify(context, topic, msg):
     """Sends a notification event on a topic."""
-    return rpc_amqp.notify(context, topic, msg)
+    return rpc_amqp.notify(context, topic, msg, Connection.pool)
+
+
+def cleanup():
+    return rpc_amqp.cleanup(Connection.pool)

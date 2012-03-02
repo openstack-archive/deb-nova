@@ -22,14 +22,24 @@ import copy
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 
 
-LOG = logging.getLogger('nova.rpc')
+LOG = logging.getLogger(__name__)
 
-flags.DEFINE_integer('rpc_thread_pool_size', 1024,
-                             'Size of RPC thread pool')
-flags.DEFINE_integer('rpc_conn_pool_size', 30,
-                             'Size of RPC connection pool')
+rpc_opts = [
+    cfg.IntOpt('rpc_thread_pool_size',
+               default=1024,
+               help='Size of RPC thread pool'),
+    cfg.IntOpt('rpc_conn_pool_size',
+               default=30,
+               help='Size of RPC connection pool'),
+    cfg.IntOpt('rpc_response_timeout',
+               default=3600,
+               help='Seconds to wait for a response from call or multicall'),
+    ]
+
+flags.FLAGS.register_opts(rpc_opts)
 
 
 class RemoteError(exception.NovaException):
@@ -50,6 +60,15 @@ class RemoteError(exception.NovaException):
         super(RemoteError, self).__init__(exc_type=exc_type,
                                           value=value,
                                           traceback=traceback)
+
+
+class Timeout(exception.NovaException):
+    """Signifies that a timeout has occurred.
+
+    This exception is raised if the rpc_response_timeout is reached while
+    waiting for a response from the remote side.
+    """
+    message = _("Timeout while waiting on RPC response.")
 
 
 class Connection(object):
@@ -108,7 +127,10 @@ class Connection(object):
 
 def _safe_log(log_func, msg, msg_data):
     """Sanitizes the msg_data field before logging."""
-    SANITIZE = {'set_admin_password': ('new_pass',)}
+    SANITIZE = {
+                'set_admin_password': ('new_pass',),
+                'run_instance': ('admin_password',),
+               }
     method = msg_data['method']
     if method in SANITIZE:
         msg_data = copy.deepcopy(msg_data)

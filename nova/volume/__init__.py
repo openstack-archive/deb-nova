@@ -16,4 +16,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.volume.api import API
+# Importing full names to not pollute the namespace and cause possible
+# collisions with use of 'from nova.volume import <foo>' elsewhere.
+import nova.flags
+import nova.utils
+
+API = nova.utils.import_class(nova.flags.FLAGS.volume_api_class)

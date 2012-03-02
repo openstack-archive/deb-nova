@@ -24,10 +24,10 @@ from nova.virt.vif import VIFDriver
 from nova.virt.vmwareapi import network_utils
 
 
-LOG = logging.getLogger("nova.virt.vmwareapi.vif")
+LOG = logging.getLogger(__name__)
 
 FLAGS = flags.FLAGS
-FLAGS['vmwareapi_vlan_interface'].SetDefault('vmnic0')
+FLAGS.set_default('vmwareapi_vlan_interface', 'vmnic0')
 
 
 class VMWareVlanBridgeDriver(VIFDriver):
@@ -69,9 +69,8 @@ class VMWareVlanBridgeDriver(VIFDriver):
                                             vswitch_associated, vlan_num)
         else:
             # Get the vlan id and vswitch corresponding to the port group
-            pg_vlanid, pg_vswitch = \
-                network_utils.get_vlanid_and_vswitch_for_portgroup(session,
-                                                                   bridge)
+            _get_pg_info = network_utils.get_vlanid_and_vswitch_for_portgroup
+            pg_vlanid, pg_vswitch = _get_pg_info(session, bridge)
 
             # Check if the vswitch associated is proper
             if pg_vswitch != vswitch_associated:

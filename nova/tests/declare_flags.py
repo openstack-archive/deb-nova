@@ -17,7 +17,7 @@
 #    under the License.
 
 from nova import flags
+from nova.openstack.common import cfg
 
 FLAGS = flags.FLAGS
-
-flags.DEFINE_integer('answer', 42, 'test flag')
+FLAGS.register_opt(cfg.IntOpt('answer', default=42, help='test flag'))

@@ -27,7 +27,7 @@ from nova import log as logging
 from nova import volume
 
 
-LOG = logging.getLogger("nova.api.openstack.volume.snapshots")
+LOG = logging.getLogger(__name__)
 
 
 FLAGS = flags.FLAGS
@@ -46,8 +46,9 @@ def _translate_snapshot_summary_view(context, vol):
     """Maps keys for snapshots summary view."""
     d = {}
 
-    d['id'] = vol['id']
-    d['volumeId'] = vol['volume_id']
+    # TODO(bcwaldon): remove str cast once we use uuids
+    d['id'] = str(vol['id'])
+    d['volumeId'] = str(vol['volume_id'])
     d['status'] = vol['status']
     # NOTE(gagupta): We map volume_size as the snapshot size
     d['size'] = vol['volume_size']
@@ -98,7 +99,7 @@ class SnapshotsController(object):
         try:
             vol = self.volume_api.get_snapshot(context, id)
         except exception.NotFound:
-            return exc.HTTPNotFound()
+            raise exc.HTTPNotFound()
 
         return {'snapshot': _translate_snapshot_detail_view(context, vol)}
 
@@ -112,7 +113,7 @@ class SnapshotsController(object):
             snapshot = self.volume_api.get_snapshot(context, id)
             self.volume_api.delete_snapshot(context, snapshot)
         except exception.NotFound:
-            return exc.HTTPNotFound()
+            raise exc.HTTPNotFound()
         return webob.Response(status_int=202)
 
     @wsgi.serializers(xml=SnapshotsTemplate)

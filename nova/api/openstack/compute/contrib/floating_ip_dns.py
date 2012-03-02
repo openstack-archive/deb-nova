@@ -26,7 +26,7 @@ from nova import log as logging
 from nova import network
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.contrib.floating_ip_dns')
+LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'floating_ip_dns')
 
 
@@ -293,7 +293,7 @@ class Floating_ip_dns(extensions.ExtensionDescriptor):
     name = "Floating_ip_dns"
     alias = "os-floating-ip-dns"
     namespace = "http://docs.openstack.org/ext/floating_ip_dns/api/v1.1"
-    updated = "2011-12-23:00:00+00:00"
+    updated = "2011-12-23T00:00:00+00:00"
 
     def __init__(self, ext_mgr):
         self.network_api = network.API()

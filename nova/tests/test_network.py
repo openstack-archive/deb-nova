@@ -16,6 +16,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 import mox
+import sys
 
 from nova import context
 from nova import db
@@ -30,7 +31,7 @@ from nova.network import manager as network_manager
 from nova.tests import fake_network
 
 
-LOG = logging.getLogger('nova.tests.network')
+LOG = logging.getLogger(__name__)
 
 
 HOST = "testhost"
@@ -143,45 +144,49 @@ class FlatNetworkTestCase(test.TestCase):
         nw_info = fake_get_instance_nw_info(self.stubs, 0, 2)
         self.assertFalse(nw_info)
 
+        nw_info = fake_get_instance_nw_info(self.stubs, 1, 2)
+
         for i, (nw, info) in enumerate(nw_info):
-            check = {'bridge': 'fake_br%d' % i,
-                     'cidr': '192.168.%s.0/24' % i,
-                     'cidr_v6': '2001:db8:0:%x::/64' % i,
-                     'id': i,
+            nid = i + 1
+            check = {'bridge': 'fake_br%d' % nid,
+                     'cidr': '192.168.%s.0/24' % nid,
+                     'cidr_v6': '2001:db8:0:%x::/64' % nid,
+                     'id': '00000000-0000-0000-0000-00000000000000%02d' % nid,
                      'multi_host': False,
                      'injected': False,
-                     'bridge_interface': 'fake_eth%d' % i,
+                     'bridge_interface': None,
                      'vlan': None}
 
             self.assertDictMatch(nw, check)
 
-            check = {'broadcast': '192.168.%d.255' % i,
-                     'dhcp_server': '192.168.%d.1' % i,
-                     'dns': ['192.168.%d.3' % n, '192.168.%d.4' % n],
-                     'gateway': '192.168.%d.1' % i,
-                     'gateway_v6': '2001:db8:0:%x::1' % i,
+            check = {'broadcast': '192.168.%d.255' % nid,
+                     'dhcp_server': '192.168.%d.1' % nid,
+                     'dns': ['192.168.%d.3' % nid, '192.168.%d.4' % nid],
+                     'gateway': '192.168.%d.1' % nid,
+                     'gateway_v6': 'fe80::def',
                      'ip6s': 'DONTCARE',
                      'ips': 'DONTCARE',
-                     'label': 'test%d' % i,
-                     'mac': 'DE:AD:BE:EF:00:%02x' % i,
-                     'rxtx_cap': "%d" % i * 3,
+                     'label': 'test%d' % nid,
+                     'mac': 'DE:AD:BE:EF:00:%02x' % nid,
+                     'rxtx_cap': 0,
                      'vif_uuid':
-                        '00000000-0000-0000-0000-00000000000000%02d' % i,
-                     'rxtx_cap': 3,
+                        '00000000-0000-0000-0000-00000000000000%02d' % nid,
                      'should_create_vlan': False,
                      'should_create_bridge': False}
             self.assertDictMatch(info, check)
 
             check = [{'enabled': 'DONTCARE',
-                      'ip': '2001:db8::dcad:beff:feef:%s' % i,
-                      'netmask': '64'}]
+                      'ip': '2001:db8:0:1::%x' % nid,
+                      'netmask': 64,
+                      'gateway': 'fe80::def'}]
             self.assertDictListMatch(info['ip6s'], check)
 
             num_fixed_ips = len(info['ips'])
             check = [{'enabled': 'DONTCARE',
-                      'ip': '192.168.%d.1%02d' % (i, ip_num),
-                      'netmask': '255.255.255.0'}
-                      for ip_num in xrange(num_fixed_ips)]
+                      'ip': '192.168.%d.%03d' % (nid, ip_num + 99),
+                      'netmask': '255.255.255.0',
+                      'gateway': '192.168.%d.1' % nid}
+                      for ip_num in xrange(1, num_fixed_ips + 1)]
             self.assertDictListMatch(info['ips'], check)
 
     def test_validate_networks(self):
@@ -844,7 +849,7 @@ class CommonNetworkTestCase(test.TestCase):
         super(CommonNetworkTestCase, self).setUp()
         self.context = context.RequestContext('fake', 'fake')
 
-    def fake_create_fixed_ips(self, context, network_id):
+    def fake_create_fixed_ips(self, context, network_id, fixed_cidr=None):
         return None
 
     def test_remove_fixed_ip_from_instance(self):
@@ -1166,9 +1171,9 @@ class CommonNetworkTestCase(test.TestCase):
         manager = fake_network.FakeNetworkManager()
         fake_context = context.RequestContext('user', 'project')
         self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
-        manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
-                                            mox.IgnoreArg()).\
-                                            AndReturn(networks)
+        manager.db.network_get_all_by_uuids(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn(networks)
         self.mox.ReplayAll()
         uuid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         network = manager.get_network(fake_context, uuid)
@@ -1179,8 +1184,7 @@ class CommonNetworkTestCase(test.TestCase):
         fake_context = context.RequestContext('user', 'project')
         self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
         manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
-                                            mox.IgnoreArg()).\
-                                            AndReturn([])
+                                            mox.IgnoreArg()).AndReturn([])
         self.mox.ReplayAll()
         uuid = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
         self.assertRaises(exception.NetworkNotFound,
@@ -1190,8 +1194,7 @@ class CommonNetworkTestCase(test.TestCase):
         manager = fake_network.FakeNetworkManager()
         fake_context = context.RequestContext('user', 'project')
         self.mox.StubOutWithMock(manager.db, 'network_get_all')
-        manager.db.network_get_all(mox.IgnoreArg()).\
-                                   AndReturn(networks)
+        manager.db.network_get_all(mox.IgnoreArg()).AndReturn(networks)
         self.mox.ReplayAll()
         output = manager.get_all_networks(fake_context)
         self.assertEqual(len(networks), 2)
@@ -1204,9 +1207,9 @@ class CommonNetworkTestCase(test.TestCase):
         manager = fake_network.FakeNetworkManager()
         fake_context = context.RequestContext('user', 'project')
         self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
-        manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
-                                            mox.IgnoreArg()).\
-                                            AndReturn(networks)
+        manager.db.network_get_all_by_uuids(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn(networks)
         self.mox.ReplayAll()
         uuid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         manager.disassociate_network(fake_context, uuid)
@@ -1216,8 +1219,7 @@ class CommonNetworkTestCase(test.TestCase):
         fake_context = context.RequestContext('user', 'project')
         self.mox.StubOutWithMock(manager.db, 'network_get_all_by_uuids')
         manager.db.network_get_all_by_uuids(mox.IgnoreArg(),
-                                            mox.IgnoreArg()).\
-                                            AndReturn([])
+                                            mox.IgnoreArg()).AndReturn([])
         self.mox.ReplayAll()
         uuid = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
         self.assertRaises(exception.NetworkNotFound,
@@ -1286,6 +1288,12 @@ class FloatingIPTestCase(test.TestCase):
         # If this fails in either, it does not handle having no addresses
         self.network.deallocate_for_instance(self.context,
                 instance_id=instance_ref['id'])
+        self.network.deallocate_for_instance(self.context,
+                instance_id=instance_ref['id'])
+
+    def test_deallocation_deleted_instance(self):
+        instance_ref = db.api.instance_create(self.context,
+                {"project_id": self.project_id, "deleted": True})
         self.network.deallocate_for_instance(self.context,
                 instance_id=instance_ref['id'])
 
@@ -1508,6 +1516,11 @@ class LdapDNSTestCase(test.TestCase):
     """Tests nova.network.ldapdns.LdapDNS"""
     def setUp(self):
         super(LdapDNSTestCase, self).setUp()
+
+        self.saved_ldap = sys.modules.get('ldap')
+        import nova.auth.fakeldap
+        sys.modules['ldap'] = nova.auth.fakeldap
+
         temp = utils.import_object('nova.network.ldapdns.FakeLdapDNS')
         self.driver = temp
         self.driver.create_domain(domain1)
@@ -1517,6 +1530,7 @@ class LdapDNSTestCase(test.TestCase):
         super(LdapDNSTestCase, self).tearDown()
         self.driver.delete_domain(domain1)
         self.driver.delete_domain(domain2)
+        sys.modules['ldap'] = self.saved_ldap
 
     def test_ldap_dns_domains(self):
         domains = self.driver.get_domains()

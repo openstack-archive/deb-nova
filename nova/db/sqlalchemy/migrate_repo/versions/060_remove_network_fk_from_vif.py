@@ -17,12 +17,13 @@ from migrate import ForeignKeyConstraint
 
 from nova import log as logging
 
-meta = MetaData()
+LOG = logging.getLogger(__name__)
 
 
 def upgrade(migrate_engine):
     # Upgrade operations go here. Don't create your own engine;
     # bind migrate_engine to your metadata
+    meta = MetaData()
     meta.bind = migrate_engine
     dialect = migrate_engine.url.get_dialect().name
     if dialect.startswith('sqlite'):
@@ -38,12 +39,13 @@ def upgrade(migrate_engine):
                              name=fkey_name).drop()
 
     except Exception:
-        logging.error(_("foreign key constraint couldn't be removed"))
+        LOG.error(_("foreign key constraint couldn't be removed"))
         raise
 
 
 def downgrade(migrate_engine):
     # Operations to reverse the above upgrade go here.
+    meta = MetaData()
     meta.bind = migrate_engine
     dialect = migrate_engine.url.get_dialect().name
     if dialect.startswith('sqlite'):
@@ -56,5 +58,5 @@ def downgrade(migrate_engine):
         ForeignKeyConstraint(columns=[vifs.c.network_id],
                              refcolumns=[networks.c.id]).create()
     except Exception:
-        logging.error(_("foreign key constraint couldn't be added"))
+        LOG.error(_("foreign key constraint couldn't be added"))
         raise

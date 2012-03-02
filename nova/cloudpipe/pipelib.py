@@ -27,87 +27,97 @@ import string
 import tempfile
 import zipfile
 
-from nova import context
+# NOTE(vish): cloud is only for the _gen_key functionality
+from nova.api.ec2 import cloud
+from nova import compute
+from nova.compute import instance_types
 from nova import crypto
 from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
-# TODO(eday): Eventually changes these to something not ec2-specific
-from nova.api.ec2 import cloud
-from nova.api.ec2 import ec2utils
 
+
+cloudpipe_opts = [
+    cfg.StrOpt('vpn_instance_type',
+               default='m1.tiny',
+               help=_('Instance type for vpn instances')),
+    cfg.StrOpt('boot_script_template',
+               default=utils.abspath('cloudpipe/bootscript.template'),
+               help=_('Template for cloudpipe instance boot script')),
+    cfg.StrOpt('dmz_net',
+               default='10.0.0.0',
+               help=_('Network to push into openvpn config')),
+    cfg.StrOpt('dmz_mask',
+               default='255.255.255.0',
+               help=_('Netmask to push into openvpn config')),
+    ]
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('boot_script_template',
-                    utils.abspath('cloudpipe/bootscript.template'),
-                    _('Template for script to run on cloudpipe instance boot'))
-flags.DEFINE_string('dmz_net',
-                    '10.0.0.0',
-                    _('Network to push into openvpn config'))
-flags.DEFINE_string('dmz_mask',
-                    '255.255.255.0',
-                    _('Netmask to push into openvpn config'))
+FLAGS.register_opts(cloudpipe_opts)
 
 
-LOG = logging.getLogger('nova.cloudpipe')
+LOG = logging.getLogger(__name__)
 
 
 class CloudPipe(object):
     def __init__(self):
-        self.controller = cloud.CloudController()
+        self.compute_api = compute.API()
 
     def get_encoded_zip(self, project_id):
         # Make a payload.zip
-        tmpfolder = tempfile.mkdtemp()
-        filename = "payload.zip"
-        zippath = os.path.join(tmpfolder, filename)
-        z = zipfile.ZipFile(zippath, "w", zipfile.ZIP_DEFLATED)
-        shellfile = open(FLAGS.boot_script_template, "r")
-        s = string.Template(shellfile.read())
-        shellfile.close()
-        boot_script = s.substitute(cc_dmz=FLAGS.ec2_dmz_host,
-                                   cc_port=FLAGS.ec2_port,
-                                   dmz_net=FLAGS.dmz_net,
-                                   dmz_mask=FLAGS.dmz_mask,
-                                   num_vpn=FLAGS.cnt_vpn_clients)
-        # genvpn, sign csr
-        crypto.generate_vpn_files(project_id)
-        z.writestr('autorun.sh', boot_script)
-        crl = os.path.join(crypto.ca_folder(project_id), 'crl.pem')
-        z.write(crl, 'crl.pem')
-        server_key = os.path.join(crypto.ca_folder(project_id), 'server.key')
-        z.write(server_key, 'server.key')
-        ca_crt = os.path.join(crypto.ca_path(project_id))
-        z.write(ca_crt, 'ca.crt')
-        server_crt = os.path.join(crypto.ca_folder(project_id), 'server.crt')
-        z.write(server_crt, 'server.crt')
-        z.close()
-        zippy = open(zippath, "r")
-        # NOTE(vish): run instances expects encoded userdata, it is decoded
-        # in the get_metadata_call. autorun.sh also decodes the zip file,
-        # hence the double encoding.
-        encoded = zippy.read().encode("base64").encode("base64")
-        zippy.close()
+        with utils.tempdir() as tmpdir:
+            filename = "payload.zip"
+            zippath = os.path.join(tmpdir, filename)
+            z = zipfile.ZipFile(zippath, "w", zipfile.ZIP_DEFLATED)
+            shellfile = open(FLAGS.boot_script_template, "r")
+            s = string.Template(shellfile.read())
+            shellfile.close()
+            boot_script = s.substitute(cc_dmz=FLAGS.ec2_dmz_host,
+                                       cc_port=FLAGS.ec2_port,
+                                       dmz_net=FLAGS.dmz_net,
+                                       dmz_mask=FLAGS.dmz_mask,
+                                       num_vpn=FLAGS.cnt_vpn_clients)
+            # genvpn, sign csr
+            crypto.generate_vpn_files(project_id)
+            z.writestr('autorun.sh', boot_script)
+            crl = os.path.join(crypto.ca_folder(project_id), 'crl.pem')
+            z.write(crl, 'crl.pem')
+            server_key = os.path.join(crypto.ca_folder(project_id),
+                                      'server.key')
+            z.write(server_key, 'server.key')
+            ca_crt = os.path.join(crypto.ca_path(project_id))
+            z.write(ca_crt, 'ca.crt')
+            server_crt = os.path.join(crypto.ca_folder(project_id),
+                                      'server.crt')
+            z.write(server_crt, 'server.crt')
+            z.close()
+            zippy = open(zippath, "r")
+            # NOTE(vish): run instances expects encoded userdata, it is decoded
+            # in the get_metadata_call. autorun.sh also decodes the zip file,
+            # hence the double encoding.
+            encoded = zippy.read().encode("base64").encode("base64")
+            zippy.close()
+
         return encoded
 
-    def launch_vpn_instance(self, project_id, user_id):
-        LOG.debug(_("Launching VPN for %s") % (project_id))
-        ctxt = context.RequestContext(user_id=user_id,
-                                      project_id=project_id)
-        key_name = self.setup_key_pair(ctxt)
-        group_name = self.setup_security_group(ctxt)
-
-        ec2_id = ec2utils.image_ec2_id(FLAGS.vpn_image_id)
-        reservation = self.controller.run_instances(ctxt,
-            user_data=self.get_encoded_zip(project_id),
-            max_count=1,
-            min_count=1,
-            instance_type='m1.tiny',
-            image_id=ec2_id,
-            key_name=key_name,
-            security_group=[group_name])
+    def launch_vpn_instance(self, context):
+        LOG.debug(_("Launching VPN for %s") % (context.project_id))
+        key_name = self.setup_key_pair(context)
+        group_name = self.setup_security_group(context)
+        instance_type = instance_types.get_instance_type_by_name(
+                FLAGS.vpn_instance_type)
+        instance_name = '%s%s' % (context.project_id, FLAGS.vpn_key_suffix)
+        user_data = self.get_encoded_zip(context.project_id)
+        return self.compute_api.create(context,
+                                       instance_type,
+                                       FLAGS.vpn_image_id,
+                                       display_name=instance_name,
+                                       user_data=user_data,
+                                       key_name=key_name,
+                                       security_group=[group_name])
 
     def setup_security_group(self, context):
         group_name = '%s%s' % (context.project_id, FLAGS.vpn_key_suffix)

@@ -19,8 +19,12 @@
 """Module to authenticate Consoles."""
 
 from nova import flags
+from nova.openstack.common import cfg
 
+
+consoleauth_topic_opt = cfg.StrOpt('consoleauth_topic',
+        default='consoleauth',
+        help='the topic console auth proxy nodes listen on')
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('consoleauth_topic', 'consoleauth',
-                   'the topic console auth proxy nodes listen on')
+FLAGS.register_opt(consoleauth_topic_opt)

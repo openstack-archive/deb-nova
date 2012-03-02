@@ -13,31 +13,32 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from sqlalchemy import *
-from migrate import *
+from sqlalchemy import Column, Integer, MetaData, Table
 
 from nova import log as logging
 
 
-meta = MetaData()
-
-networks = Table('networks', meta,
-    Column("id", Integer(), primary_key=True, nullable=False))
-
-# Add priority column to networks table
-priority = Column('priority', Integer())
+LOG = logging.getLogger(__name__)
 
 
 def upgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
 
+    networks = Table('networks', meta, autoload=True)
+
+    priority = Column('priority', Integer())
     try:
         networks.create_column(priority)
     except Exception:
-        logging.error(_("priority column not added to networks table"))
+        LOG.error(_("priority column not added to networks table"))
         raise
 
 
 def downgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
-    networks.drop_column(priority)
+
+    networks = Table('networks', meta, autoload=True)
+
+    networks.drop_column('priority')

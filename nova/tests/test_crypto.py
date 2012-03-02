@@ -17,11 +17,8 @@ Tests for Crypto module.
 """
 
 import os
-import shutil
-import tempfile
 
 import mox
-from M2Crypto import X509
 
 from nova import crypto
 from nova import db
@@ -48,47 +45,32 @@ class SymmetricKeyTestCase(test.TestCase):
 
         self.assertEquals(plain_text, plain)
 
-        # IV supplied ...
-        iv = '562e17996d093d28ddb3ba695a2e6f58'
-        encrypt = crypto.encryptor(key, iv)
-        cipher_text = encrypt(plain_text)
-        self.assertNotEquals(plain_text, cipher_text)
-
-        decrypt = crypto.decryptor(key, iv)
-        plain = decrypt(cipher_text)
-
-        self.assertEquals(plain_text, plain)
-
 
 class X509Test(test.TestCase):
     def test_can_generate_x509(self):
-        tmpdir = tempfile.mkdtemp()
-        self.flags(ca_path=tmpdir)
-        try:
+        with utils.tempdir() as tmpdir:
+            self.flags(ca_path=tmpdir)
             crypto.ensure_ca_filesystem()
             _key, cert_str = crypto.generate_x509_cert('fake', 'fake')
 
             project_cert = crypto.fetch_ca(project_id='fake')
-            cloud_cert = crypto.fetch_ca()
-            # TODO(vish): This will need to be replaced with something else
-            #             when we remove M2Crypto
-            signed_cert = X509.load_cert_string(cert_str)
-            project_cert = X509.load_cert_string(project_cert)
-            cloud_cert = X509.load_cert_string(cloud_cert)
-            self.assertTrue(signed_cert.verify(project_cert.get_pubkey()))
 
-            if not FLAGS.use_project_ca:
-                self.assertTrue(signed_cert.verify(cloud_cert.get_pubkey()))
-            else:
-                self.assertFalse(signed_cert.verify(cloud_cert.get_pubkey()))
-        finally:
-            shutil.rmtree(tmpdir)
+            signed_cert_file = os.path.join(tmpdir, "signed")
+            with open(signed_cert_file, 'w') as keyfile:
+                keyfile.write(cert_str)
+
+            project_cert_file = os.path.join(tmpdir, "project")
+            with open(project_cert_file, 'w') as keyfile:
+                keyfile.write(project_cert)
+
+            enc, err = utils.execute('openssl', 'verify', '-CAfile',
+                    project_cert_file, '-verbose', signed_cert_file)
+            self.assertFalse(err)
 
     def test_encrypt_decrypt_x509(self):
-        tmpdir = tempfile.mkdtemp()
-        self.flags(ca_path=tmpdir)
-        project_id = "fake"
-        try:
+        with utils.tempdir() as tmpdir:
+            self.flags(ca_path=tmpdir)
+            project_id = "fake"
             crypto.ensure_ca_filesystem()
             cert = crypto.fetch_ca(project_id)
             public_key = os.path.join(tmpdir, "public.pem")
@@ -103,8 +85,6 @@ class X509Test(test.TestCase):
                                      process_input=text)
             dec = crypto.decrypt_text(project_id, enc)
             self.assertEqual(text, dec)
-        finally:
-            shutil.rmtree(tmpdir)
 
 
 class RevokeCertsTest(test.TestCase):

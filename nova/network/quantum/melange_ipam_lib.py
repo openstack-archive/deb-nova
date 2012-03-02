@@ -23,7 +23,7 @@ from nova import log as logging
 from nova.network.quantum import melange_connection
 
 
-LOG = logging.getLogger("nova.network.quantum.melange_ipam_lib")
+LOG = logging.getLogger(__name__)
 
 FLAGS = flags.FLAGS
 
@@ -67,7 +67,7 @@ class QuantumMelangeIPAMLib(object):
                                      dns1=dns1, dns2=dns2)
 
         net = {"uuid": quantum_net_id,
-               "project_id": project_id,
+               "project_id": tenant_id,
                "priority": priority,
                "label": label}
         if FLAGS.quantum_use_dhcp:
@@ -79,25 +79,13 @@ class QuantumMelangeIPAMLib(object):
         admin_context = context.elevated()
         network = db.network_create_safe(admin_context, net)
 
-    def allocate_fixed_ip(self, context, project_id, quantum_net_id, vif_ref):
+    def allocate_fixed_ips(self, context, project_id, quantum_net_id,
+                           network_tenant_id, vif_ref):
         """Pass call to allocate fixed IP on to Melange"""
-        tenant_id = project_id or FLAGS.quantum_default_tenant_id
-        ip = self.m_conn.allocate_ip(quantum_net_id,
-                                     vif_ref['uuid'], project_id=tenant_id,
-                                     mac_address=vif_ref['address'])
-        return ip[0]['address']
-
-    def get_network_id_by_cidr(self, context, cidr, project_id):
-        """Find the Quantum UUID associated with a IPv4 CIDR
-           address for the specified tenant.
-        """
-        tenant_id = project_id or FLAGS.quantum_default_tenant_id
-        all_blocks = self.m_conn.get_blocks(tenant_id)
-        for b in all_blocks['ip_blocks']:
-            LOG.debug("block: %s" % b)
-            if b['cidr'] == cidr:
-                return b['network_id']
-        raise exception.NotFound(_("No network found for cidr %s" % cidr))
+        ips = self.m_conn.allocate_ip(quantum_net_id, network_tenant_id,
+                                      vif_ref['uuid'], project_id,
+                                      vif_ref['address'])
+        return [ip['address'] for ip in ips]
 
     def delete_subnets_by_net_id(self, context, net_id, project_id):
         """Find Melange block associated with the Quantum UUID,
@@ -114,13 +102,13 @@ class QuantumMelangeIPAMLib(object):
         db.network_delete_safe(context, network['id'])
 
     def get_networks_by_tenant(self, admin_context, tenant_id):
-        nets = []
+        nets = {}
         blocks = self.m_conn.get_blocks(tenant_id)
         for ip_block in blocks['ip_blocks']:
             network_id = ip_block['network_id']
             network = db.network_get_by_uuid(admin_context, network_id)
-            nets.append(network)
-        return nets
+            nets[network_id] = network
+        return nets.values()
 
     def get_global_networks(self, admin_context):
         return self.get_networks_by_tenant(admin_context,
@@ -164,10 +152,12 @@ class QuantumMelangeIPAMLib(object):
     def get_tenant_id_by_net_id(self, context, net_id, vif_id, project_id):
         ipam_tenant_id = None
         tenant_ids = [FLAGS.quantum_default_tenant_id, project_id, None]
+        # This is confusing, if there are IPs for the given net, vif,
+        # tenant trifecta we assume that is the tenant for that network
         for tid in tenant_ids:
             try:
-                ips = self.m_conn.get_allocated_ips(net_id, vif_id, tid)
-            except Exception, e:
+                self.m_conn.get_allocated_ips(net_id, vif_id, tid)
+            except KeyError:
                 continue
             ipam_tenant_id = tid
             break
@@ -180,14 +170,13 @@ class QuantumMelangeIPAMLib(object):
         """Returns information about the IPv4 and IPv6 subnets
            associated with a Quantum Network UUID.
         """
-        subnet_v4 = None
-        subnet_v6 = None
+        subnets = []
         ips = self.m_conn.get_allocated_ips(net_id, vif_id, tenant_id)
 
         for ip_address in ips:
             block = ip_address['ip_block']
-            print block
-            subnet = {'network_id': block['id'],
+            subnet = {'network_id': block['network_id'],
+                      'id': block['id'],
                       'cidr': block['cidr'],
                       'gateway': block['gateway'],
                       'broadcast': block['broadcast'],
@@ -195,10 +184,15 @@ class QuantumMelangeIPAMLib(object):
                       'dns1': block['dns1'],
                       'dns2': block['dns2']}
             if ip_address['version'] == 4:
-                subnet_v4 = subnet
+                subnet['version'] = 4
             else:
-                subnet_v6 = subnet
-        return (subnet_v4, subnet_v6)
+                subnet['version'] = 6
+            subnets.append(subnet)
+        return subnets
+
+    def get_routes_by_ip_block(self, context, block_id, project_id):
+        """Returns the list of routes for the IP block"""
+        return self.m_conn.get_routes(block_id, project_id)
 
     def get_v4_ips_by_interface(self, context, net_id, vif_id, project_id):
         """Returns a list of IPv4 address strings associated with
@@ -255,3 +249,7 @@ class QuantumMelangeIPAMLib(object):
         """
         tenant_id = project_id or FLAGS.quantum_default_tenant_id
         return self.m_conn.create_vif(vif_id, instance_id, tenant_id)
+
+    def get_floating_ips_by_fixed_address(self, context, fixed_address):
+        """This call is not supported in quantum yet"""
+        return []

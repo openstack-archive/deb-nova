@@ -26,7 +26,7 @@ from nova import log as logging
 from nova import utils
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.views.servers')
+LOG = logging.getLogger(__name__)
 
 
 class ViewBuilder(common.ViewBuilder):
@@ -136,7 +136,7 @@ class ViewBuilder(common.ViewBuilder):
     @staticmethod
     def _get_metadata(instance):
         metadata = instance.get("metadata", [])
-        return dict((item['key'], str(item['value'])) for item in metadata)
+        return dict((item['key'], item['value']) for item in metadata)
 
     @staticmethod
     def _get_vm_state(instance):
@@ -146,8 +146,10 @@ class ViewBuilder(common.ViewBuilder):
     @staticmethod
     def _get_host_id(instance):
         host = instance.get("host")
+        project = str(instance.get("project_id"))
         if host:
-            return hashlib.sha224(host).hexdigest()  # pylint: disable=E1101
+            sha_hash = hashlib.sha224(project + host)  # pylint: disable=E1101
+            return sha_hash.hexdigest()
 
     def _get_addresses(self, request, instance):
         context = request.environ["nova.context"]
@@ -185,9 +187,19 @@ class ViewBuilder(common.ViewBuilder):
         if not fault:
             return None
 
-        return {
+        fault_dict = {
             "code": fault["code"],
             "created": utils.isotime(fault["created_at"]),
             "message": fault["message"],
-            "details": fault["details"],
         }
+
+        if fault.get('details', None):
+            is_admin = False
+            context = getattr(request, 'context', None)
+            if context:
+                is_admin = getattr(request.context, 'is_admin', False)
+
+            if is_admin or fault['code'] != 500:
+                fault_dict['details'] = fault["details"]
+
+        return fault_dict

@@ -16,4 +16,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.compute.api import API
+from nova.compute.api import AggregateAPI
+from nova.compute.api import HostAPI
+# Importing full names to not pollute the namespace and cause possible
+# collisions with use of 'from nova.compute import <foo>' elsewhere.
+import nova.flags
+import nova.utils
+
+API = nova.utils.import_class(nova.flags.FLAGS.compute_api_class)

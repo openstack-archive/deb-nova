@@ -34,10 +34,11 @@ from nova import log as logging
 from nova import utils
 
 
-LOG = logging.getLogger('nova.image.glance')
+LOG = logging.getLogger(__name__)
 
 
 FLAGS = flags.FLAGS
+flags.DECLARE('use_deprecated_auth', 'nova.auth.manager')
 
 
 GlanceClient = utils.import_class('glance.client.Client')
@@ -135,6 +136,22 @@ class GlanceImageService(object):
         glance_host, glance_port = pick_glance_api_server()
         return _create_glance_client(context, glance_host, glance_port)
 
+    def _call_retry(self, context, name, *args, **kwargs):
+        """Retry call to glance server if there is a connection error.
+        Suitable only for idempotent calls."""
+        for i in xrange(FLAGS.glance_num_retries + 1):
+            client = self._get_client(context)
+            try:
+                return getattr(client, name)(*args, **kwargs)
+            except glance_exception.ClientConnectionError as e:
+                LOG.exception(_('Connection error contacting glance'
+                                ' server, retrying'))
+
+                time.sleep(1)
+
+        raise exception.GlanceConnectionFailed(
+                reason=_('Maximum attempts reached'))
+
     def index(self, context, **kwargs):
         """Calls out to Glance for a list of images available."""
         params = self._extract_query_params(kwargs)
@@ -215,7 +232,8 @@ class GlanceImageService(object):
     def show(self, context, image_id):
         """Returns a dict with image data for the given opaque image id."""
         try:
-            image_meta = self._get_client(context).get_image_meta(image_id)
+            image_meta = self._call_retry(context, 'get_image_meta',
+                                          image_id)
         except glance_exception.NotFound:
             raise exception.ImageNotFound(image_id=image_id)
 
@@ -227,28 +245,19 @@ class GlanceImageService(object):
 
     def show_by_name(self, context, name):
         """Returns a dict containing image data for the given name."""
-        # TODO(vish): replace this with more efficient call when glance
-        #             supports it.
-        image_metas = self.detail(context)
-        for image_meta in image_metas:
-            if name == image_meta.get('name'):
-                return image_meta
-        raise exception.ImageNotFound(image_id=name)
+        image_metas = self.detail(context, filters={'name': name})
+        try:
+            return image_metas[0]
+        except (IndexError, TypeError):
+            raise exception.ImageNotFound(image_id=name)
 
     def get(self, context, image_id, data):
         """Calls out to Glance for metadata and data and writes data."""
-        num_retries = FLAGS.glance_num_retries
-        for count in xrange(1 + num_retries):
-            client = self._get_client(context)
-            try:
-                image_meta, image_chunks = client.get_image(image_id)
-                break
-            except glance_exception.NotFound:
-                raise exception.ImageNotFound(image_id=image_id)
-            except Exception:
-                if count == num_retries:
-                    raise
-            time.sleep(1)
+        try:
+            image_meta, image_chunks = self._call_retry(context, 'get_image',
+                                                        image_id)
+        except glance_exception.NotFound:
+            raise exception.ImageNotFound(image_id=image_id)
 
         for chunk in image_chunks:
             data.write(chunk)

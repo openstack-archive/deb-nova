@@ -35,20 +35,27 @@ import stubout
 
 from nova import flags
 import nova.image.fake
-from nova import log
+from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova import service
 from nova.testing.fake import rabbit
 from nova.virt import fake
 
 
-FLAGS = flags.FLAGS
-flags.DEFINE_string('sqlite_clean_db', 'clean.sqlite',
-                    'File name of clean sqlite db')
-flags.DEFINE_bool('fake_tests', True,
-                  'should we use everything for testing')
+test_opts = [
+    cfg.StrOpt('sqlite_clean_db',
+               default='clean.sqlite',
+               help='File name of clean sqlite db'),
+    cfg.BoolOpt('fake_tests',
+                default=True,
+                help='should we use everything for testing'),
+    ]
 
-LOG = log.getLogger('nova.tests')
+FLAGS = flags.FLAGS
+FLAGS.register_opts(test_opts)
+
+LOG = logging.getLogger(__name__)
 
 
 class skip_test(object):
@@ -127,7 +134,7 @@ class TestCase(unittest.TestCase):
         self.stubs = stubout.StubOutForTesting()
         self.injected = []
         self._services = []
-        self._original_flags = FLAGS.FlagValuesDict()
+        self._overridden_opts = []
 
     def tearDown(self):
         """Runs after each test method to tear down test environment."""
@@ -169,7 +176,8 @@ class TestCase(unittest.TestCase):
     def flags(self, **kw):
         """Override flag variables for a test."""
         for k, v in kw.iteritems():
-            setattr(FLAGS, k, v)
+            FLAGS.set_override(k, v)
+            self._overridden_opts.append(k)
 
     def reset_flags(self):
         """Resets all flag variables for the test.
@@ -177,9 +185,9 @@ class TestCase(unittest.TestCase):
         Runs after each test.
 
         """
-        FLAGS.Reset()
-        for k, v in self._original_flags.iteritems():
-            setattr(FLAGS, k, v)
+        for k in self._overridden_opts:
+            FLAGS.set_override(k, None)
+        self._overridden_opts = []
 
     def start_service(self, name, host=None, **kwargs):
         host = host and host or uuid.uuid4().hex

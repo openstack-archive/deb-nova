@@ -15,16 +15,19 @@
 
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 from nova.exception import ClassNotFound
 
-flags.DEFINE_multistring('list_notifier_drivers',
-                         ['nova.notifier.no_op_notifier'],
-                         'List of drivers to send notifications')
+
+list_notifier_drivers_opt = cfg.MultiStrOpt('list_notifier_drivers',
+        default=['nova.notifier.no_op_notifier'],
+        help='List of drivers to send notifications')
 
 FLAGS = flags.FLAGS
+FLAGS.register_opt(list_notifier_drivers_opt)
 
-LOG = logging.getLogger('nova.notifier.list_notifier')
+LOG = logging.getLogger(__name__)
 
 drivers = None
 

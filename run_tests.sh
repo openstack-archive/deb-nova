@@ -15,6 +15,7 @@ function usage {
   echo "  -f, --force              Force a clean re-build of the virtual environment. Useful when dependencies have been added."
   echo "  -p, --pep8               Just run pep8"
   echo "  -P, --no-pep8            Don't run pep8"
+  echo "  -H, --hacking            Just run HACKING compliance testing"
   echo "  -c, --coverage           Generate coverage report"
   echo "  -h, --help               Print this usage message"
   echo "  --hide-elapsed           Don't print the elapsed time for each test along with slow test list"
@@ -33,9 +34,12 @@ function process_option {
     -s|--no-site-packages) no_site_packages=1;;
     -r|--recreate-db) recreate_db=1;;
     -n|--no-recreate-db) recreate_db=0;;
+    -m|--patch-migrate) patch_migrate=1;;
+    -w|--no-patch-migrate) patch_migrate=0;;
     -f|--force) force=1;;
     -p|--pep8) just_pep8=1;;
     -P|--no-pep8) no_pep8=1;;
+    -H|--hacking) just_hacking=1;;
     -c|--coverage) coverage=1;;
     -*) noseopts="$noseopts $1";;
     *) noseargs="$noseargs $1"
@@ -54,8 +58,10 @@ noseopts=
 wrapper=""
 just_pep8=0
 no_pep8=0
+just_hacking=0
 coverage=0
 recreate_db=1
+patch_migrate=1
 
 for arg in "$@"; do
   process_option $arg
@@ -71,6 +77,9 @@ if [ $no_site_packages -eq 1 ]; then
 fi
 
 function run_tests {
+  # Cleanup *pyc
+  echo "cleaning *.pyc files"
+  ${wrapper} find . -type f -name "*.pyc" -delete
   # Just run the test suites in current environment
   ${wrapper} $NOSETESTS 2> run_tests.log
   # If we get some short import error right away, print the error log directly
@@ -86,16 +95,21 @@ function run_tests {
   return $RESULT
 }
 
+# Files of interest
+# NOTE(lzyeval): Avoid selecting nova-api-paste.ini and nova.conf in nova/bin
+#                when running on devstack.
+# NOTE(lzyeval): Avoid selecting *.pyc files to reduce pep8 check-up time
+#                when running on devstack.
+xen_api_path="plugins/xenserver/xenapi/etc/xapi.d/plugins"
+xen_net_path="plugins/xenserver/networking/etc/xensource/scripts"
+srcfiles=`find nova -type f -name "*.py"`
+srcfiles+=" `find bin -type f ! -name "nova.conf*" ! -name "*api-paste.ini*"`"
+srcfiles+=" `find tools -type f -name "*.py"`"
+srcfiles+=" `find ${xen_api_path} ${xen_net_path} -type f ! -name "*.patch" ! -name "*.pyc"`"
+srcfiles+=" setup.py"
+
 function run_pep8 {
   echo "Running pep8 ..."
-  # Opt-out files from pep8
-  ignore_scripts="*.sh:*nova-debug:*clean-vlans"
-  ignore_files="*eventlet-patch:*pip-requires"
-  ignore_dirs="*ajaxterm*"
-  GLOBIGNORE="$ignore_scripts:$ignore_files:$ignore_dirs"
-  srcfiles=`find bin -type f ! -name "nova.conf*"`
-  srcfiles+=" `find tools/*`"
-  srcfiles+=" nova setup.py plugins/xenserver/xenapi/etc/xapi.d/plugins/glance"
   # Just run PEP8 in current environment
   #
   # NOTE(sirp): W602 (deprecated 3-arg raise) is being ignored for the
@@ -112,9 +126,16 @@ function run_pep8 {
   #     other than what the PEP8 tool claims. It is deprecated in Python 3, so,
   #     perhaps the mistake was thinking that the deprecation applied to Python 2
   #     as well.
-  pep8_opts="--ignore=E202,W602 --repeat"
+  pep8_opts="--ignore=W602 --repeat"
   ${wrapper} pep8 ${pep8_opts} ${srcfiles}
 }
+
+function run_hacking {
+  echo "Running hacking compliance testing..."
+  hacking_opts="--ignore=E202,W602 --repeat"
+  ${wrapper} python tools/hacking.py ${hacking_opts} ${srcfiles}
+}
+
 
 NOSETESTS="python nova/testing/runner.py $noseopts $noseargs"
 
@@ -153,6 +174,12 @@ if [ $just_pep8 -eq 1 ]; then
     run_pep8
     exit
 fi
+
+if [ $just_hacking -eq 1 ]; then
+    run_hacking
+    exit
+fi
+
 
 if [ $recreate_db -eq 1 ]; then
     rm -f tests.sqlite

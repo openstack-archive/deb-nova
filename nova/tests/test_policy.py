@@ -17,8 +17,8 @@
 
 """Test of Policy Engine For Nova"""
 
+import os.path
 import StringIO
-import tempfile
 import urllib2
 
 from nova.common import policy as common_policy
@@ -28,6 +28,7 @@ from nova import flags
 import nova.common.policy
 from nova import policy
 from nova import test
+from nova import utils
 
 FLAGS = flags.FLAGS
 
@@ -36,8 +37,6 @@ class PolicyFileTestCase(test.TestCase):
     def setUp(self):
         super(PolicyFileTestCase, self).setUp()
         policy.reset()
-        _, self.tmpfilename = tempfile.mkstemp()
-        self.flags(policy_file=self.tmpfilename)
         self.context = context.RequestContext('fake', 'fake')
         self.target = {}
 
@@ -46,16 +45,21 @@ class PolicyFileTestCase(test.TestCase):
         policy.reset()
 
     def test_modified_policy_reloads(self):
-        action = "example:test"
-        with open(self.tmpfilename, "w") as policyfile:
-            policyfile.write("""{"example:test": []}""")
-        policy.enforce(self.context, action, self.target)
-        with open(self.tmpfilename, "w") as policyfile:
-            policyfile.write("""{"example:test": ["false:false"]}""")
-        # NOTE(vish): reset stored policy cache so we don't have to sleep(1)
-        policy._POLICY_CACHE = {}
-        self.assertRaises(exception.PolicyNotAuthorized, policy.enforce,
-                          self.context, action, self.target)
+        with utils.tempdir() as tmpdir:
+            tmpfilename = os.path.join(tmpdir, 'policy')
+            self.flags(policy_file=tmpfilename)
+
+            action = "example:test"
+            with open(tmpfilename, "w") as policyfile:
+                policyfile.write("""{"example:test": []}""")
+            policy.enforce(self.context, action, self.target)
+            with open(tmpfilename, "w") as policyfile:
+                policyfile.write("""{"example:test": ["false:false"]}""")
+            # NOTE(vish): reset stored policy cache so we don't have to
+            # sleep(1)
+            policy._POLICY_CACHE = {}
+            self.assertRaises(exception.PolicyNotAuthorized, policy.enforce,
+                              self.context, action, self.target)
 
 
 class PolicyTestCase(test.TestCase):
@@ -73,15 +77,12 @@ class PolicyTestCase(test.TestCase):
                                 ["project_id:%(project_id)s"]],
             "example:early_and_fail": [["false:false", "rule:true"]],
             "example:early_or_success": [["rule:true"], ["false:false"]],
-            "example:sysadmin_allowed": [["role:admin"], ["role:sysadmin"]],
+            "example:lowercase_admin": [["role:admin"], ["role:sysadmin"]],
+            "example:uppercase_admin": [["role:ADMIN"], ["role:sysadmin"]],
         }
         # NOTE(vish): then overload underlying brain
         common_policy.set_brain(common_policy.HttpBrain(rules))
         self.context = context.RequestContext('fake', 'fake', roles=['member'])
-        self.admin_context = context.RequestContext('admin',
-                                                    'fake',
-                                                    roles=['admin'],
-                                                    is_admin=True)
         self.target = {}
 
     def tearDown(self):
@@ -138,6 +139,17 @@ class PolicyTestCase(test.TestCase):
     def test_early_OR_enforcement(self):
         action = "example:early_or_success"
         policy.enforce(self.context, action, self.target)
+
+    def test_ignore_case_role_check(self):
+        lowercase_action = "example:lowercase_admin"
+        uppercase_action = "example:uppercase_admin"
+        # NOTE(dprince) we mix case in the Admin role here to ensure
+        # case is ignored
+        admin_context = context.RequestContext('admin',
+                                                'fake',
+                                                roles=['AdMiN'])
+        policy.enforce(admin_context, lowercase_action, self.target)
+        policy.enforce(admin_context, uppercase_action, self.target)
 
 
 class DefaultPolicyTestCase(test.TestCase):

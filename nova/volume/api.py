@@ -36,7 +36,7 @@ from nova.db import base
 FLAGS = flags.FLAGS
 flags.DECLARE('storage_availability_zone', 'nova.volume.manager')
 
-LOG = logging.getLogger('nova.volume')
+LOG = logging.getLogger(__name__)
 
 
 def wrap_check_policy(func):
@@ -71,8 +71,8 @@ class API(base.Base):
         check_policy(context, 'create')
         if snapshot is not None:
             if snapshot['status'] != "available":
-                raise exception.ApiError(
-                    _("Snapshot status must be available"))
+                msg = _("status must be available")
+                raise exception.InvalidSnapshot(reason=msg)
             if not size:
                 size = snapshot['volume_size']
 
@@ -84,8 +84,7 @@ class API(base.Base):
             pid = context.project_id
             LOG.warn(_("Quota exceeded for %(pid)s, tried to create"
                     " %(size)sG volume") % locals())
-            raise exception.QuotaError(_("Volume quota exceeded. You cannot "
-                                     "create a volume of size %sG") % size)
+            raise exception.QuotaError(code="VolumeSizeTooLarge")
 
         if availability_zone is None:
             availability_zone = FLAGS.storage_availability_zone
@@ -131,7 +130,8 @@ class API(base.Base):
     def delete(self, context, volume):
         volume_id = volume['id']
         if volume['status'] != "available":
-            raise exception.ApiError(_("Volume status must be available"))
+            msg = _("Volume status must be available")
+            raise exception.InvalidVolume(reason=msg)
         now = utils.utcnow()
         self.db.volume_update(context, volume_id, {'status': 'deleting',
                                                    'terminated_at': now})
@@ -168,8 +168,8 @@ class API(base.Base):
                     volume_metadata[i['key']] = i['value']
 
                 for k, v in searchdict.iteritems():
-                    if k not in volume_metadata.keys()\
-                       or volume_metadata[k] != v:
+                    if (k not in volume_metadata.keys() or
+                        volume_metadata[k] != v):
                         return False
                 return True
 
@@ -207,15 +207,18 @@ class API(base.Base):
     def check_attach(self, context, volume):
         # TODO(vish): abstract status checking?
         if volume['status'] != "available":
-            raise exception.ApiError(_("Volume status must be available"))
+            msg = _("status must be available")
+            raise exception.InvalidVolume(reason=msg)
         if volume['attach_status'] == "attached":
-            raise exception.ApiError(_("Volume is already attached"))
+            msg = _("already attached")
+            raise exception.InvalidVolume(reason=msg)
 
     @wrap_check_policy
     def check_detach(self, context, volume):
         # TODO(vish): abstract status checking?
         if volume['status'] == "available":
-            raise exception.ApiError(_("Volume is already detached"))
+            msg = _("already detached")
+            raise exception.InvalidVolume(reason=msg)
 
     def remove_from_compute(self, context, volume, instance_id, host):
         """Remove volume from specified compute host."""
@@ -224,6 +227,15 @@ class API(base.Base):
                  {"method": "remove_volume_connection",
                   "args": {'instance_id': instance_id,
                            'volume_id': volume['id']}})
+
+    @wrap_check_policy
+    def reserve_volume(self, context, volume):
+        self.update(context, volume, {"status": "attaching"})
+
+    @wrap_check_policy
+    def unreserve_volume(self, context, volume):
+        if volume['status'] == "attaching":
+            self.update(context, volume, {"status": "available"})
 
     @wrap_check_policy
     def attach(self, context, volume, instance_id, mountpoint):
@@ -244,29 +256,31 @@ class API(base.Base):
                   "args": {"volume_id": volume['id']}})
 
     @wrap_check_policy
-    def initialize_connection(self, context, volume, address):
+    def initialize_connection(self, context, volume, connector):
         host = volume['host']
         queue = self.db.queue_get_for(context, FLAGS.volume_topic, host)
         return rpc.call(context, queue,
                         {"method": "initialize_connection",
                          "args": {"volume_id": volume['id'],
-                                  "address": address}})
+                                  "connector": connector}})
 
     @wrap_check_policy
-    def terminate_connection(self, context, volume, address):
+    def terminate_connection(self, context, volume, connector):
+        self.unreserve_volume(context, volume)
         host = volume['host']
         queue = self.db.queue_get_for(context, FLAGS.volume_topic, host)
         return rpc.call(context, queue,
                         {"method": "terminate_connection",
                          "args": {"volume_id": volume['id'],
-                                  "address": address}})
+                                  "connector": connector}})
 
     def _create_snapshot(self, context, volume, name, description,
                          force=False):
         check_policy(context, 'create_snapshot', volume)
 
         if ((not force) and (volume['status'] != "available")):
-            raise exception.ApiError(_("Volume status must be available"))
+            msg = _("must be available")
+            raise exception.InvalidVolume(reason=msg)
 
         options = {
             'volume_id': volume['id'],
@@ -298,7 +312,8 @@ class API(base.Base):
     @wrap_check_policy
     def delete_snapshot(self, context, snapshot):
         if snapshot['status'] != "available":
-            raise exception.ApiError(_("Snapshot status must be available"))
+            msg = _("must be available")
+            raise exception.InvalidVolume(reason=msg)
         self.db.snapshot_update(context, snapshot['id'],
                                 {'status': 'deleting'})
         rpc.cast(context,

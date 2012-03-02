@@ -15,17 +15,17 @@
 
 import json
 
-from sqlalchemy import *
-from migrate import *
+from sqlalchemy import select, MetaData, Table
 
 from nova import ipv6
 from nova import log as logging
 from nova import utils
 
-meta = MetaData()
+LOG = logging.getLogger(__name__)
 
 
 def upgrade(migrate_engine):
+    meta = MetaData()
     meta.bind = migrate_engine
     # grab tables
     instance_info_caches = Table('instance_info_caches', meta, autoload=True)
@@ -75,8 +75,8 @@ def upgrade(migrate_engine):
         # fixed ips have floating ips, so here they are
         for fixed_ip in fixed_ip_list:
             fixed_ip['version'] = 4
-            fixed_ip['floating_ips'] =\
-                   get_floating_ips_by_fixed_ip_id(fixed_ip['id'])
+            fixed_ip['floating_ips'] = get_floating_ips_by_fixed_ip_id(
+                                       fixed_ip['id'])
             fixed_ip['type'] = 'fixed'
             del fixed_ip['id']
 
@@ -171,8 +171,7 @@ def upgrade(migrate_engine):
             network['meta']['multi_host'] = network['multi_host']
         del network['multi_host']
         if network['bridge_interface']:
-            network['meta']['bridge_interface'] = \
-                                              network['bridge_interface']
+            network['meta']['bridge_interface'] = network['bridge_interface']
         del network['bridge_interface']
         if network['vlan']:
             network['meta']['vlan'] = network['vlan']
@@ -193,21 +192,21 @@ def upgrade(migrate_engine):
     # preload caches table
     # list is made up of a row(instance_id, nw_info_json) for each instance
     for instance in get_instances():
-        logging.info("Updating %s" % (instance['uuid']))
+        LOG.info("Updating %s" % (instance['uuid']))
         instance_id = instance['id']
         instance_uuid = instance['uuid']
 
         # instances have vifs so aninstance nw_info is
         # is a list of dicts, 1 dict for each vif
         nw_info = get_vifs_by_instance_id(instance_id)
-        logging.info("VIFs for Instance %s: \n %s" % \
-                        (instance['uuid'], nw_info))
+        LOG.info("VIFs for Instance %s: \n %s" %
+                     (instance['uuid'], nw_info))
         for vif in nw_info:
             networks_ = get_network_by_id(vif['network_id'])
             if networks_:
                 network = networks_[0]
-                logging.info("Network for Instance %s: \n %s" % \
-                        (instance['uuid'], network))
+                LOG.info("Network for Instance %s: \n %s" %
+                             (instance['uuid'], network))
                 _update_network(vif, network)
             else:
                 network = None
@@ -219,8 +218,8 @@ def upgrade(migrate_engine):
             # vif['meta'] could also be set to contain rxtx data here
             # but it isn't exposed in the api and is still being rewritten
 
-            logging.info("VIF network for instance %s: \n %s" % \
-                        (instance['uuid'], vif['network']))
+            LOG.info("VIF network for instance %s: \n %s" %
+                         (instance['uuid'], vif['network']))
 
         # jsonify nw_info
         row = {'created_at': utils.utcnow(),
@@ -235,6 +234,7 @@ def upgrade(migrate_engine):
 
 def downgrade(migrate_engine):
     # facepalm
+    meta = MetaData()
     meta.bind = migrate_engine
     instance_info_caches = Table('instance_info_caches', meta, autoload=True)
 

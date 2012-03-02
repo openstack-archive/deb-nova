@@ -23,7 +23,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 
 
-LOG = logging.getLogger('nova.api.openstack.compute.contrib.console')
+LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'consoles')
 
 
@@ -44,7 +44,7 @@ class ConsolesController(wsgi.Controller):
             raise webob.exc.HTTPBadRequest(_('Missing type specification'))
 
         try:
-            instance = self.compute_api.routing_get(context, id)
+            instance = self.compute_api.get(context, id)
         except exception.NotFound:
             raise webob.exc.HTTPNotFound(_('Instance not found'))
 
@@ -54,10 +54,10 @@ class ConsolesController(wsgi.Controller):
                                                       console_type)
         except exception.ConsoleTypeInvalid, e:
             raise webob.exc.HTTPBadRequest(_('Invalid type specification'))
-        except exception.ApiError, e:
-            raise webob.exc.HTTPBadRequest(explanation=e.message)
         except exception.NotAuthorized, e:
             raise webob.exc.HTTPUnauthorized()
+        except exception.NotFound:
+            raise webob.exc.HTTPNotFound(_('Instance not found'))
 
         return {'console': {'type': console_type, 'url': output['url']}}
 

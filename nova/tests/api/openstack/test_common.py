@@ -26,6 +26,7 @@ from webob import Request
 import xml.dom.minidom as minidom
 
 from nova import exception
+from nova import network
 from nova import test
 from nova.api.openstack import common
 from nova.api.openstack import xmlutil

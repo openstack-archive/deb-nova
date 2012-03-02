@@ -30,7 +30,7 @@ from nova.tests.integrated.api import client
 from nova import utils
 
 
-LOG = logging.getLogger('nova.tests.integrated')
+LOG = logging.getLogger(__name__)
 
 
 def generate_random_alphanumeric(length):
@@ -96,7 +96,8 @@ class _IntegratedTestBase(test.TestCase):
 
         # Auto-assign ports to allow concurrent tests
         f['ec2_listen_port'] = 0
-        f['osapi_listen_port'] = 0
+        f['osapi_compute_listen_port'] = 0
+        f['osapi_volume_listen_port'] = 0
         f['metadata_listen_port'] = 0
 
         f['image_service'] = 'nova.image.fake.FakeImageService'
@@ -134,5 +135,4 @@ class _IntegratedTestBase(test.TestCase):
         # Set a valid server name
         server_name = self.get_unused_server_name()
         server['name'] = server_name
-
         return server

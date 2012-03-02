@@ -16,6 +16,7 @@
 import stubout
 
 import nova
+import nova.notifier.no_op_notifier
 from nova import log
 import nova.notifier.api
 from nova.notifier.api import notify
@@ -26,6 +27,7 @@ class NotifierTestCase(test.TestCase):
     """Test case for notifications"""
     def setUp(self):
         super(NotifierTestCase, self).setUp()
+        self.flags(notification_driver='nova.notifier.no_op_notifier')
         self.stubs = stubout.StubOutForTesting()
 
     def tearDown(self):
@@ -86,8 +88,8 @@ class NotifierTestCase(test.TestCase):
     def test_rabbit_priority_queue(self):
         self.stubs.Set(nova.flags.FLAGS, 'notification_driver',
                 'nova.notifier.rabbit_notifier')
-        self.stubs.Set(nova.flags.FLAGS, 'notification_topic',
-                'testnotify')
+        self.stubs.Set(nova.flags.FLAGS, 'notification_topics',
+                       ['testnotify', ])
 
         self.test_topic = None
 
@@ -103,7 +105,7 @@ class NotifierTestCase(test.TestCase):
             'nova.notifier.rabbit_notifier')
         self.stubs.Set(nova.flags.FLAGS, 'publish_errors', True)
         LOG = log.getLogger('nova')
-        LOG.setup_from_flags()
+        log.setup()
         msgs = []
 
         def mock_notify(context, topic, data):

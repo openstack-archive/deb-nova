@@ -28,10 +28,11 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import log as logging
+from nova.openstack.common import cfg
 from nova import utils
 
 
-LOG = logging.getLogger("nova.linux_net")
+LOG = logging.getLogger(__name__)
 
 
 def _bin_file(script):
@@ -39,37 +40,56 @@ def _bin_file(script):
     return os.path.abspath(os.path.join(__file__, '../../../bin', script))
 
 
+linux_net_opts = [
+    cfg.StrOpt('dhcpbridge_flagfile',
+               default='/etc/nova/nova-dhcpbridge.conf',
+               help='location of flagfile for dhcpbridge'),
+    cfg.StrOpt('networks_path',
+               default='$state_path/networks',
+               help='Location to keep network config files'),
+    cfg.StrOpt('public_interface',
+               default='eth0',
+               help='Interface for public IP addresses'),
+    cfg.StrOpt('network_device_mtu',
+               default=None,
+               help='MTU setting for vlan'),
+    cfg.StrOpt('dhcpbridge',
+               default=_bin_file('nova-dhcpbridge'),
+               help='location of nova-dhcpbridge'),
+    cfg.StrOpt('routing_source_ip',
+               default='$my_ip',
+               help='Public IP of network host'),
+    cfg.IntOpt('dhcp_lease_time',
+               default=120,
+               help='Lifetime of a DHCP lease in seconds'),
+    cfg.StrOpt('dns_server',
+               default=None,
+               help='if set, uses specific dns server for dnsmasq'),
+    cfg.StrOpt('dmz_cidr',
+               default='10.128.0.0/24',
+               help='dmz range that should be accepted'),
+    cfg.StrOpt('dnsmasq_config_file',
+               default="",
+               help='Override the default dnsmasq settings with this file'),
+    cfg.StrOpt('linuxnet_interface_driver',
+               default='nova.network.linux_net.LinuxBridgeInterfaceDriver',
+               help='Driver used to create ethernet devices.'),
+    cfg.StrOpt('linuxnet_ovs_integration_bridge',
+               default='br-int',
+               help='Name of Open vSwitch bridge used with linuxnet'),
+    cfg.BoolOpt('send_arp_for_ha',
+                default=False,
+                help='send gratuitous ARPs for HA setup'),
+    cfg.BoolOpt('use_single_default_gateway',
+                default=False,
+                help='Use single default gateway. Only first nic of vm will '
+                     'get default gateway from dhcp server'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('dhcpbridge_flagfile',
-                    '/etc/nova/nova-dhcpbridge.conf',
-                    'location of flagfile for dhcpbridge')
-flags.DEFINE_string('networks_path', '$state_path/networks',
-                    'Location to keep network config files')
-flags.DEFINE_string('public_interface', 'eth0',
-                    'Interface for public IP addresses')
-flags.DEFINE_string('network_device_mtu', None, 'MTU setting for vlan')
-flags.DEFINE_string('dhcpbridge', _bin_file('nova-dhcpbridge'),
-                        'location of nova-dhcpbridge')
-flags.DEFINE_string('routing_source_ip', '$my_ip',
-                    'Public IP of network host')
-flags.DEFINE_integer('dhcp_lease_time', 120,
-                     'Lifetime of a DHCP lease in seconds')
-flags.DEFINE_string('dns_server', None,
-                    'if set, uses specific dns server for dnsmasq')
-flags.DEFINE_string('dmz_cidr', '10.128.0.0/24',
-                    'dmz range that should be accepted')
-flags.DEFINE_string('dnsmasq_config_file', "",
-                    'Override the default dnsmasq settings with this file')
-flags.DEFINE_string('linuxnet_interface_driver',
-                    'nova.network.linux_net.LinuxBridgeInterfaceDriver',
-                    'Driver used to create ethernet devices.')
-flags.DEFINE_string('linuxnet_ovs_integration_bridge',
-                    'br-int', 'Name of Open vSwitch bridge used with linuxnet')
-flags.DEFINE_bool('send_arp_for_ha', False,
-                  'send gratuitous ARPs for HA setup')
-flags.DEFINE_bool('use_single_default_gateway',
-                   False, 'Use single default gateway. Only first nic of vm'
-                          ' will get default gateway from dhcp server')
+FLAGS.register_opts(linux_net_opts)
+
+
 binary_name = os.path.basename(inspect.stack()[-1][1])
 
 
@@ -303,16 +323,17 @@ class IptablesManager(object):
 
         for cmd, tables in s:
             for table in tables:
-                current_table, _ = self.execute('%s-save' % (cmd,),
-                                                '-t', '%s' % (table,),
-                                                run_as_root=True,
-                                                attempts=5)
+                current_table, _err = self.execute('%s-save' % (cmd,),
+                                                   '-t', '%s' % (table,),
+                                                   run_as_root=True,
+                                                   attempts=5)
                 current_lines = current_table.split('\n')
                 new_filter = self._modify_rules(current_lines,
                                                 tables[table])
                 self.execute('%s-restore' % (cmd,), run_as_root=True,
                              process_input='\n'.join(new_filter),
                              attempts=5)
+        LOG.debug(_("IPTablesManager.apply completed with success"))
 
     def _modify_rules(self, current_lines, table, binary=None):
         unwrapped_chains = table.unwrapped_chains
@@ -346,11 +367,10 @@ class IptablesManager(object):
 
         new_filter[rules_index:rules_index] = our_rules
 
-        new_filter[rules_index:rules_index] = [':%s - [0:0]' % \
-                                               (name,) \
+        new_filter[rules_index:rules_index] = [':%s - [0:0]' % (name,)
                                                for name in unwrapped_chains]
-        new_filter[rules_index:rules_index] = [':%s-%s - [0:0]' % \
-                                               (binary_name, name,) \
+        new_filter[rules_index:rules_index] = [':%s-%s - [0:0]' %
+                                               (binary_name, name,)
                                                for name in chains]
 
         seen_lines = set()
@@ -388,7 +408,7 @@ def metadata_forward():
     iptables_manager.ipv4['nat'].add_rule('PREROUTING',
                                           '-s 0.0.0.0/0 -d 169.254.169.254/32 '
                                           '-p tcp -m tcp --dport 80 -j DNAT '
-                                          '--to-destination %s:%s' % \
+                                          '--to-destination %s:%s' %
                                           (FLAGS.metadata_host,
                                            FLAGS.metadata_port))
     iptables_manager.apply()
@@ -399,7 +419,7 @@ def metadata_accept():
     iptables_manager.ipv4['filter'].add_rule('INPUT',
                                              '-s 0.0.0.0/0 -d %s '
                                              '-p tcp -m tcp --dport %s '
-                                             '-j ACCEPT' % \
+                                             '-j ACCEPT' %
                                              (FLAGS.metadata_host,
                                               FLAGS.metadata_port))
     iptables_manager.apply()
@@ -407,7 +427,7 @@ def metadata_accept():
 
 def add_snat_rule(ip_range):
     iptables_manager.ipv4['nat'].add_rule('snat',
-                                          '-s %s -j SNAT --to-source %s' % \
+                                          '-s %s -j SNAT --to-source %s' %
                                            (ip_range,
                                             FLAGS.routing_source_ip))
     iptables_manager.apply()
@@ -423,12 +443,13 @@ def init_host(ip_range=None):
     add_snat_rule(ip_range)
 
     iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
-                                          '-s %s -d %s -j ACCEPT' % \
+                                          '-s %s -d %s -j ACCEPT' %
                                           (ip_range, FLAGS.dmz_cidr))
 
     iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
                                           '-s %(range)s -d %(range)s '
-                                          '-j ACCEPT' % \
+                                          '-m conntrack ! --ctstate DNAT '
+                                          '-j ACCEPT' %
                                           {'range': ip_range})
     iptables_manager.apply()
 
@@ -437,7 +458,7 @@ def bind_floating_ip(floating_ip, device):
     """Bind ip to public interface."""
     _execute('ip', 'addr', 'add', str(floating_ip) + '/32',
              'dev', device,
-             run_as_root=True, check_exit_code=[0, 254])
+             run_as_root=True, check_exit_code=[0, 2, 254])
     if FLAGS.send_arp_for_ha:
         _execute('arping', '-U', floating_ip,
                  '-A', '-I', device,
@@ -448,14 +469,14 @@ def unbind_floating_ip(floating_ip, device):
     """Unbind a public ip from public interface."""
     _execute('ip', 'addr', 'del', str(floating_ip) + '/32',
              'dev', device,
-             run_as_root=True, check_exit_code=[0, 254])
+             run_as_root=True, check_exit_code=[0, 2, 254])
 
 
 def ensure_metadata_ip():
     """Sets up local metadata ip."""
     _execute('ip', 'addr', 'add', '169.254.169.254/32',
              'scope', 'link', 'dev', 'lo',
-             run_as_root=True, check_exit_code=[0, 254])
+             run_as_root=True, check_exit_code=[0, 2, 254])
 
 
 def ensure_vpn_forward(public_ip, port, private_ip):
@@ -520,18 +541,17 @@ def initialize_gateway_device(dev, network_ref):
         out, err = _execute('route', '-n', run_as_root=True)
         for line in out.split('\n'):
             fields = line.split()
-            if fields and fields[0] == '0.0.0.0' and \
-                            fields[-1] == dev:
+            if fields and fields[0] == '0.0.0.0' and fields[-1] == dev:
                 gateway = fields[1]
                 _execute('route', 'del', 'default', 'gw', gateway,
                          'dev', dev, run_as_root=True,
                          check_exit_code=[0, 7])
         for ip_params in old_ip_params:
             _execute(*_ip_bridge_cmd('del', ip_params, dev),
-                        run_as_root=True, check_exit_code=[0, 254])
+                        run_as_root=True, check_exit_code=[0, 2, 254])
         for ip_params in new_ip_params:
             _execute(*_ip_bridge_cmd('add', ip_params, dev),
-                        run_as_root=True, check_exit_code=[0, 254])
+                        run_as_root=True, check_exit_code=[0, 2, 254])
         if gateway:
             _execute('route', 'add', 'default', 'gw', gateway,
                      run_as_root=True, check_exit_code=[0, 7])
@@ -923,10 +943,11 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
 
     def plug(self, network, mac_address, gateway=True):
         if network.get('vlan', None) is not None:
+            iface = FLAGS.vlan_interface or network['bridge_interface']
             LinuxBridgeInterfaceDriver.ensure_vlan_bridge(
                            network['vlan'],
                            network['bridge'],
-                           network['bridge_interface'],
+                           iface,
                            network,
                            mac_address)
         else:
@@ -1013,8 +1034,8 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             out, err = _execute('route', '-n', run_as_root=True)
             for line in out.split('\n'):
                 fields = line.split()
-                if fields and fields[0] == '0.0.0.0' and \
-                                fields[-1] == interface:
+                if (fields and fields[0] == '0.0.0.0' and
+                    fields[-1] == interface):
                     old_gateway = fields[1]
                     _execute('route', 'del', 'default', 'gw', old_gateway,
                              'dev', interface, run_as_root=True,
@@ -1026,9 +1047,9 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                 if fields and fields[0] == 'inet':
                     params = fields[1:-1]
                     _execute(*_ip_bridge_cmd('del', params, fields[-1]),
-                                run_as_root=True, check_exit_code=[0, 254])
+                                run_as_root=True, check_exit_code=[0, 2, 254])
                     _execute(*_ip_bridge_cmd('add', params, bridge),
-                                run_as_root=True, check_exit_code=[0, 254])
+                                run_as_root=True, check_exit_code=[0, 2, 254])
             if old_gateway:
                 _execute('route', 'add', 'default', 'gw', old_gateway,
                          run_as_root=True, check_exit_code=[0, 7])
@@ -1038,20 +1059,17 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                 raise exception.Error('Failed to add interface: %s' % err)
 
         # Don't forward traffic unless we were told to be a gateway
+        ipv4_filter = iptables_manager.ipv4['filter']
         if gateway:
-            iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                                             '--in-interface %s -j ACCEPT' % \
-                                             bridge)
-            iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                                             '--out-interface %s -j ACCEPT' % \
-                                             bridge)
+            ipv4_filter.add_rule('FORWARD',
+                                 '--in-interface %s -j ACCEPT' % bridge)
+            ipv4_filter.add_rule('FORWARD',
+                                 '--out-interface %s -j ACCEPT' % bridge)
         else:
-            iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                                             '--in-interface %s -j DROP' % \
-                                             bridge)
-            iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                                             '--out-interface %s -j DROP' % \
-                                             bridge)
+            ipv4_filter.add_rule('FORWARD',
+                                 '--in-interface %s -j DROP' % bridge)
+            ipv4_filter.add_rule('FORWARD',
+                                 '--out-interface %s -j DROP' % bridge)
 
 
 # plugs interfaces using Open vSwitch
@@ -1081,10 +1099,11 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
                 # If we weren't instructed to act as a gateway then add the
                 # appropriate flows to block all non-dhcp traffic.
                 _execute('ovs-ofctl',
-                    'add-flow', bridge, "priority=1,actions=drop")
+                    'add-flow', bridge, "priority=1,actions=drop",
+                     run_as_root=True)
                 _execute('ovs-ofctl', 'add-flow', bridge,
                     "udp,tp_dst=67,dl_dst=%s,priority=2,actions=normal" %
-                    mac_address)
+                    mac_address, run_as_root=True)
                 # .. and make sure iptbles won't forward it as well.
                 iptables_manager.ipv4['filter'].add_rule('FORWARD',
                         '--in-interface %s -j DROP' % bridge)

@@ -21,22 +21,34 @@
 
 import os
 import random
-import shutil
 
 from nova import exception
 from nova import flags
+from nova.openstack.common import cfg
 from nova import utils
-from nova.virt.disk import api as disk
 from nova.virt import images
 
-FLAGS = flags.FLAGS
 
-flags.DEFINE_string('qemu_img', 'qemu-img',
-                    'binary to use for qemu-img commands')
+qemu_img_opt = cfg.StrOpt('qemu_img',
+                          default='qemu-img',
+                          help='binary to use for qemu-img commands')
+
+FLAGS = flags.FLAGS
+FLAGS.register_opt(qemu_img_opt)
 
 
 def execute(*args, **kwargs):
     return utils.execute(*args, **kwargs)
+
+
+def get_iscsi_initiator():
+    """Get iscsi initiator name for this machine"""
+    # NOTE(vish) openiscsi stores initiator name in a file that
+    #            needs root permission to read.
+    contents = utils.read_file_as_root('/etc/iscsi/initiatorname.iscsi')
+    for l in contents.split('\n'):
+        if l.startswith('InitiatorName='):
+            return l[l.index('=') + 1:].strip()
 
 
 def create_image(disk_format, path, size):
@@ -88,7 +100,8 @@ def get_disk_backing_file(path):
     out, err = execute(FLAGS.qemu_img, 'info', path)
     backing_file = [i.split('actual path:')[1].strip()[:-1]
         for i in out.split('\n') if 0 <= i.find('backing file')]
-    backing_file = os.path.basename(backing_file[0])
+    if backing_file:
+        backing_file = os.path.basename(backing_file[0])
     return backing_file
 
 
@@ -98,20 +111,29 @@ def copy_image(src, dest):
     :param src: Source image
     :param dest: Destination path
     """
-    shutil.copyfile(src, dest)
+    # We shell out to cp because that will intelligently copy
+    # sparse files.  I.E. holes will not be written to DEST,
+    # rather recreated efficiently.  In addition, since
+    # coreutils 8.11, holes can be read efficiently too.
+    execute('cp', src, dest)
 
 
-def mkfs(fs, path):
+def mkfs(fs, path, label=None):
     """Format a file or block device
 
     :param fs: Filesystem type (examples include 'swap', 'ext3', 'ext4'
                'btrfs', etc.)
     :param path: Path to file or block device to format
+    :param label: Volume label to use
     """
     if fs == 'swap':
         execute('mkswap', path)
     else:
-        execute('mkfs', '-t', fs, path)
+        args = ['mkfs', '-t', fs]
+        if label:
+            args.extend(['-n', label])
+        args.append(path)
+        execute(*args)
 
 
 def ensure_tree(path):
@@ -218,18 +240,6 @@ def get_open_port(start_port, end_port):
     raise Exception(_('Unable to find an open port'))
 
 
-def run_ajaxterm(cmd, token, port):
-    """Run ajaxterm
-
-    :param cmd: Command to connect to
-    :param token: Token to require for authentication
-    :param port: Port to run on
-    """
-    cmd = ['%s/tools/ajaxterm/ajaxterm.py' % utils.novadir(),
-           '--command', cmd, '-t', token, '-p', port]
-    execute(*cmd)
-
-
 def get_fs_info(path):
     """Get free/used/total space info for a filesystem
 
@@ -249,9 +259,6 @@ def get_fs_info(path):
             'used': used}
 
 
-def fetch_image(context, target, image_id, user_id, project_id,
-                 size=None):
-    """Grab image and optionally attempt to resize it"""
-    images.fetch(context, image_id, target, user_id, project_id)
-    if size:
-        disk.extend(target, size)
+def fetch_image(context, target, image_id, user_id, project_id):
+    """Grab image"""
+    images.fetch_to_raw(context, image_id, target, user_id, project_id)

@@ -21,7 +21,9 @@
 
 This module adds to logging functionality by adding the option to specify
 a context object when calling the various log methods.  If the context object
-is not specified, default formatting is used.
+is not specified, default formatting is used. Additionally, an instance uuid
+may be passed as part of the log message, which is intended to make it easier
+for admins to find messages related to a specific instance.
 
 It also allows setting of formatting information through flags.
 
@@ -29,8 +31,10 @@ It also allows setting of formatting information through flags.
 
 import cStringIO
 import inspect
+import itertools
 import json
 import logging
+import logging.config
 import logging.handlers
 import os
 import stat
@@ -40,80 +44,73 @@ import traceback
 import nova
 from nova import flags
 from nova import local
+from nova.openstack.common import cfg
 from nova import version
 
 
+log_opts = [
+    cfg.StrOpt('logging_context_format_string',
+               default='%(asctime)s %(levelname)s %(name)s [%(request_id)s '
+                       '%(user_id)s %(project_id)s] %(instance)s'
+                       '%(message)s',
+               help='format string to use for log messages with context'),
+    cfg.StrOpt('logging_default_format_string',
+               default='%(asctime)s %(levelname)s %(name)s [-] %(instance)s'
+                       '%(message)s',
+               help='format string to use for log messages without context'),
+    cfg.StrOpt('logging_debug_format_suffix',
+               default='from (pid=%(process)d) %(funcName)s '
+                       '%(pathname)s:%(lineno)d',
+               help='data to append to log format when level is DEBUG'),
+    cfg.StrOpt('logging_exception_prefix',
+               default='(%(name)s): TRACE: ',
+               help='prefix each line of exception output with this format'),
+    cfg.StrOpt('instance_format',
+               default='[instance: %(uuid)s] ',
+               help='If an instance is passed with the log message, format '
+                    'it like this'),
+    cfg.ListOpt('default_log_levels',
+                default=[
+                  'amqplib=WARN',
+                  'sqlalchemy=WARN',
+                  'boto=WARN',
+                  'suds=INFO',
+                  'eventlet.wsgi.server=WARN'
+                  ],
+                help='list of logger=LEVEL pairs'),
+    cfg.BoolOpt('publish_errors',
+                default=False,
+                help='publish error events'),
+    ]
+
 FLAGS = flags.FLAGS
-flags.DEFINE_string('logging_context_format_string',
-                    '%(asctime)s %(levelname)s %(name)s '
-                    '[%(request_id)s %(user_id)s '
-                    '%(project_id)s] %(message)s',
-                    'format string to use for log messages with context')
-flags.DEFINE_string('logging_default_format_string',
-                    '%(asctime)s %(levelname)s %(name)s [-] '
-                    '%(message)s',
-                    'format string to use for log messages without context')
-flags.DEFINE_string('logging_debug_format_suffix',
-                    'from (pid=%(process)d) %(funcName)s'
-                    ' %(pathname)s:%(lineno)d',
-                    'data to append to log format when level is DEBUG')
-flags.DEFINE_string('logging_exception_prefix',
-                    '(%(name)s): TRACE: ',
-                    'prefix each line of exception output with this format')
-flags.DEFINE_list('default_log_levels',
-                  ['amqplib=WARN',
-                   'sqlalchemy=WARN',
-                   'boto=WARN',
-                   'suds=INFO',
-                   'eventlet.wsgi.server=WARN'],
-                  'list of logger=LEVEL pairs')
-flags.DEFINE_bool('use_syslog', False, 'output to syslog')
-flags.DEFINE_bool('publish_errors', False, 'publish error events')
-flags.DEFINE_string('logfile', None, 'output to named file')
-flags.DEFINE_bool('use_stderr', True, 'log to standard error')
-
-
-# A list of things we want to replicate from logging.
-# levels
-CRITICAL = logging.CRITICAL
-FATAL = logging.FATAL
-ERROR = logging.ERROR
-WARNING = logging.WARNING
-WARN = logging.WARN
-INFO = logging.INFO
-DEBUG = logging.DEBUG
-NOTSET = logging.NOTSET
-
-
-# methods
-getLogger = logging.getLogger
-debug = logging.debug
-info = logging.info
-warning = logging.warning
-warn = logging.warn
-error = logging.error
-exception = logging.exception
-critical = logging.critical
-log = logging.log
-
-
-# handlers
-StreamHandler = logging.StreamHandler
-WatchedFileHandler = logging.handlers.WatchedFileHandler
-# logging.SysLogHandler is nicer than logging.logging.handler.SysLogHandler.
-SysLogHandler = logging.handlers.SysLogHandler
-
+FLAGS.register_opts(log_opts)
 
 # our new audit level
-AUDIT = logging.INFO + 1
-logging.addLevelName(AUDIT, 'AUDIT')
+# NOTE(jkoelker) Since we synthesized an audit level, make the logging
+#                module aware of it so it acts like other levels.
+logging.AUDIT = logging.INFO + 1
+logging.addLevelName(logging.AUDIT, 'AUDIT')
+
+
+try:
+    NullHandler = logging.NullHandler
+except AttributeError:  # NOTE(jkoelker) NullHandler added in Python 2.7
+    class NullHandler(logging.Handler):
+        def handle(self, record):
+            pass
+
+        def emit(self, record):
+            pass
+
+        def createLock(self):
+            self.lock = None
 
 
 def _dictify_context(context):
     if context is None:
         return None
-    if not isinstance(context, dict) \
-    and getattr(context, 'to_dict', None):
+    if not isinstance(context, dict) and getattr(context, 'to_dict', None):
         context = context.to_dict()
     return context
 
@@ -123,115 +120,101 @@ def _get_binary_name():
 
 
 def _get_log_file_path(binary=None):
-    if FLAGS.logfile:
-        return FLAGS.logfile
-    if FLAGS.logdir:
+    logfile = FLAGS.log_file or FLAGS.logfile
+    logdir = FLAGS.log_dir or FLAGS.logdir
+
+    if logfile and not logdir:
+        return logfile
+
+    if logfile and logdir:
+        return os.path.join(logdir, logfile)
+
+    if logdir:
         binary = binary or _get_binary_name()
-        return '%s.log' % (os.path.join(FLAGS.logdir, binary),)
+        return '%s.log' % (os.path.join(logdir, binary),)
 
 
-class NovaLogger(logging.Logger):
-    """NovaLogger manages request context and formatting.
+class NovaContextAdapter(logging.LoggerAdapter):
+    warn = logging.LoggerAdapter.warning
 
-    This becomes the class that is instantiated by logging.getLogger.
+    def __init__(self, logger):
+        self.logger = logger
 
-    """
+    def audit(self, msg, *args, **kwargs):
+        self.log(logging.AUDIT, msg, *args, **kwargs)
 
-    def __init__(self, name, level=NOTSET):
-        logging.Logger.__init__(self, name, level)
-        self.setup_from_flags()
+    def process(self, msg, kwargs):
+        if 'extra' not in kwargs:
+            kwargs['extra'] = {}
+        extra = kwargs['extra']
 
-    def setup_from_flags(self):
-        """Setup logger from flags."""
-        level = NOTSET
-        for pair in FLAGS.default_log_levels:
-            logger, _sep, level_name = pair.partition('=')
-            # NOTE(todd): if we set a.b, we want a.b.c to have the same level
-            #             (but not a.bc, so we check the dot)
-            if self.name == logger or self.name.startswith("%s." % logger):
-                level = globals()[level_name]
-        self.setLevel(level)
-
-    def _update_extra(self, params):
-        if 'extra' not in params:
-            params['extra'] = {}
-        extra = params['extra']
-        context = None
-        if 'context' in params:
-            context = params['context']
-            del params['context']
+        context = kwargs.pop('context', None)
         if not context:
             context = getattr(local.store, 'context', None)
         if context:
             extra.update(_dictify_context(context))
+
+        instance = kwargs.pop('instance', None)
+        instance_extra = ''
+        if instance:
+            instance_extra = FLAGS.instance_format % instance
+        extra.update({'instance': instance_extra})
+
         extra.update({"nova_version": version.version_string_with_vcs()})
-
-    def log(self, lvl, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.log(self, lvl, msg, *args, **kwargs)
-
-    def debug(self, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.debug(self, msg, *args, **kwargs)
-
-    def info(self, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.info(self, msg, *args, **kwargs)
-
-    def warn(self, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.warn(self, msg, *args, **kwargs)
-
-    def warning(self, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.warning(self, msg, *args, **kwargs)
-
-    def error(self, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.error(self, msg, *args, **kwargs)
-
-    def critical(self, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.critical(self, msg, *args, **kwargs)
-
-    def fatal(self, msg, *args, **kwargs):
-        self._update_extra(kwargs)
-        logging.Logger.fatal(self, msg, *args, **kwargs)
-
-    def audit(self, msg, *args, **kwargs):
-        """Shortcut for our AUDIT level."""
-        self._update_extra(kwargs)
-        self.log(AUDIT, msg, *args, **kwargs)
-
-    def addHandler(self, handler):
-        """Each handler gets our custom formatter."""
-        handler.setFormatter(_formatter)
-        return logging.Logger.addHandler(self, handler)
-
-    def exception(self, msg, *args, **kwargs):
-        """Logging.exception doesn't handle kwargs, so breaks context."""
-        if not kwargs.get('exc_info'):
-            kwargs['exc_info'] = 1
-        self.error(msg, *args, **kwargs)
-        # NOTE(todd): does this really go here, or in _log ?
-        extra = kwargs.get('extra')
-        if not extra:
-            return
-        env = extra.get('environment')
-        if env:
-            env = env.copy()
-            for k in env.keys():
-                if not isinstance(env[k], str):
-                    env.pop(k)
-            message = 'Environment: %s' % json.dumps(env)
-            kwargs.pop('exc_info')
-            self.error(message, **kwargs)
+        extra['extra'] = extra.copy()
+        return msg, kwargs
 
 
-class NovaFormatter(logging.Formatter):
+class JSONFormatter(logging.Formatter):
+    def __init__(self, fmt=None, datefmt=None):
+        # NOTE(jkoelker) we ignore the fmt argument, but its still there
+        #                since logging.config.fileConfig passes it.
+        self.datefmt = datefmt
+
+    def formatException(self, ei, strip_newlines=True):
+        lines = traceback.format_exception(*ei)
+        if strip_newlines:
+            lines = [itertools.ifilter(lambda x: x,
+                                      line.rstrip().splitlines())
+                    for line in lines]
+            lines = list(itertools.chain(*lines))
+        return lines
+
+    def format(self, record):
+        message = {'message': record.getMessage(),
+                   'asctime': self.formatTime(record, self.datefmt),
+                   'name': record.name,
+                   'msg': record.msg,
+                   'args': record.args,
+                   'levelname': record.levelname,
+                   'levelno': record.levelno,
+                   'pathname': record.pathname,
+                   'filename': record.filename,
+                   'module': record.module,
+                   'lineno': record.lineno,
+                   'funcname': record.funcName,
+                   'created': record.created,
+                   'msecs': record.msecs,
+                   'relative_created': record.relativeCreated,
+                   'thread': record.thread,
+                   'thread_name': record.threadName,
+                   'process_name': record.processName,
+                   'process': record.process,
+                   'traceback': None}
+
+        if hasattr(record, 'extra'):
+            message['extra'] = record.extra
+
+        if record.exc_info:
+            message['traceback'] = self.formatException(record.exc_info)
+
+        return json.dumps(message)
+
+
+class LegacyNovaFormatter(logging.Formatter):
     """A nova.context.RequestContext aware formatter configured through flags.
 
-    The flags used to set format strings are: logging_context_foramt_string
+    The flags used to set format strings are: logging_context_format_string
     and logging_default_format_string.  You can also specify
     logging_debug_format_suffix to append extra formatting if the log level is
     debug.
@@ -243,13 +226,18 @@ class NovaFormatter(logging.Formatter):
 
     def format(self, record):
         """Uses contextstring if request_id is set, otherwise default."""
+        if 'instance' not in record.__dict__:
+            record.__dict__['instance'] = ''
+
         if record.__dict__.get('request_id', None):
             self._fmt = FLAGS.logging_context_format_string
         else:
             self._fmt = FLAGS.logging_default_format_string
-        if record.levelno == logging.DEBUG \
-        and FLAGS.logging_debug_format_suffix:
+
+        if (record.levelno == logging.DEBUG and
+            FLAGS.logging_debug_format_suffix):
             self._fmt += " " + FLAGS.logging_debug_format_suffix
+
         # Cache this on the record, Logger will respect our formated copy
         if record.exc_info:
             record.exc_text = self.formatException(record.exc_info, record)
@@ -272,56 +260,11 @@ class NovaFormatter(logging.Formatter):
         return '\n'.join(formatted_lines)
 
 
-_formatter = NovaFormatter()
-
-
-class NovaRootLogger(NovaLogger):
-    def __init__(self, name, level=NOTSET):
-        self.logpath = None
-        self.filelog = None
-        self.streamlog = None
-        self.syslog = None
-        NovaLogger.__init__(self, name, level)
-
-    def setup_from_flags(self):
-        """Setup logger from flags."""
-        global _filelog
-        if self.syslog:
-            self.removeHandler(self.syslog)
-            self.syslog = None
-        if FLAGS.use_syslog:
-            self.syslog = SysLogHandler(address='/dev/log')
-            self.addHandler(self.syslog)
-        logpath = _get_log_file_path()
-        if logpath:
-            if logpath != self.logpath:
-                self.removeHandler(self.filelog)
-                self.filelog = WatchedFileHandler(logpath)
-                self.addHandler(self.filelog)
-                self.logpath = logpath
-
-                mode = int(FLAGS.logfile_mode, 8)
-                st = os.stat(self.logpath)
-                if st.st_mode != (stat.S_IFREG | mode):
-                    os.chmod(self.logpath, mode)
-        else:
-            self.removeHandler(self.filelog)
-        if self.streamlog:
-            self.removeHandler(self.streamlog)
-            self.streamlog = None
-        if FLAGS.use_stderr:
-            self.streamlog = StreamHandler()
-            self.addHandler(self.streamlog)
-        if FLAGS.publish_errors:
-            self.addHandler(PublishErrorsHandler(ERROR))
-        if FLAGS.verbose:
-            self.setLevel(DEBUG)
-        else:
-            self.setLevel(INFO)
-
-
 class PublishErrorsHandler(logging.Handler):
     def emit(self, record):
+        if 'list_notifier_drivers' in FLAGS:
+            if 'nova.notifier.log_notifier' in FLAGS.list_notifier_drivers:
+                return
         nova.notifier.api.notify('nova.error.publisher', 'error_notification',
             nova.notifier.api.ERROR, dict(error=record.msg))
 
@@ -330,42 +273,116 @@ def handle_exception(type, value, tb):
     extra = {}
     if FLAGS.verbose:
         extra['exc_info'] = (type, value, tb)
-    logging.root.critical(str(value), **extra)
-
-
-def reset():
-    """Resets logging handlers.  Should be called if FLAGS changes."""
-    for logger in NovaLogger.manager.loggerDict.itervalues():
-        if isinstance(logger, NovaLogger):
-            logger.setup_from_flags()
+    getLogger().critical(str(value), **extra)
 
 
 def setup():
     """Setup nova logging."""
-    if not isinstance(logging.root, NovaRootLogger):
-        logging._acquireLock()
-        for handler in logging.root.handlers:
-            logging.root.removeHandler(handler)
-        logging.root = NovaRootLogger("nova")
-        NovaLogger.root = logging.root
-        NovaLogger.manager.root = logging.root
-        for logger in NovaLogger.manager.loggerDict.itervalues():
-            logger.root = logging.root
-            if isinstance(logger, logging.Logger):
-                NovaLogger.manager._fixupParents(logger)
-        NovaLogger.manager.loggerDict["nova"] = logging.root
-        logging._releaseLock()
-        sys.excepthook = handle_exception
-        reset()
+    sys.excepthook = handle_exception
+
+    if FLAGS.log_config:
+        try:
+            logging.config.fileConfig(FLAGS.log_config)
+        except Exception:
+            traceback.print_exc()
+            raise
+    else:
+        _setup_logging_from_flags()
 
 
-root = logging.root
-logging.setLoggerClass(NovaLogger)
+def _find_facility_from_flags():
+    facility_names = logging.handlers.SysLogHandler.facility_names
+    facility = getattr(logging.handlers.SysLogHandler,
+                       FLAGS.syslog_log_facility,
+                       None)
+
+    if facility is None and FLAGS.syslog_log_facility in facility_names:
+        facility = facility_names.get(FLAGS.syslog_log_facility)
+
+    if facility is None:
+        valid_facilities = facility_names.keys()
+        consts = ['LOG_AUTH', 'LOG_AUTHPRIV', 'LOG_CRON', 'LOG_DAEMON',
+                  'LOG_FTP', 'LOG_KERN', 'LOG_LPR', 'LOG_MAIL', 'LOG_NEWS',
+                  'LOG_AUTH', 'LOG_SYSLOG', 'LOG_USER', 'LOG_UUCP',
+                  'LOG_LOCAL0', 'LOG_LOCAL1', 'LOG_LOCAL2', 'LOG_LOCAL3',
+                  'LOG_LOCAL4', 'LOG_LOCAL5', 'LOG_LOCAL6', 'LOG_LOCAL7']
+        valid_facilities.extend(consts)
+        raise TypeError(_('syslog facility must be one of: %s') %
+                        ', '.join("'%s'" % fac
+                                  for fac in valid_facilities))
+
+    return facility
 
 
-def audit(msg, *args, **kwargs):
-    """Shortcut for logging to root log with severity 'AUDIT'."""
-    logging.root.audit(msg, *args, **kwargs)
+def _setup_logging_from_flags():
+    nova_root = getLogger().logger
+    for handler in nova_root.handlers:
+        nova_root.removeHandler(handler)
+
+    if FLAGS.use_syslog:
+        facility = _find_facility_from_flags()
+        syslog = logging.handlers.SysLogHandler(address='/dev/log',
+                                                facility=facility)
+        nova_root.addHandler(syslog)
+
+    logpath = _get_log_file_path()
+    if logpath:
+        filelog = logging.handlers.WatchedFileHandler(logpath)
+        nova_root.addHandler(filelog)
+
+        mode = int(FLAGS.logfile_mode, 8)
+        st = os.stat(logpath)
+        if st.st_mode != (stat.S_IFREG | mode):
+            os.chmod(logpath, mode)
+
+    if FLAGS.use_stderr:
+        streamlog = logging.StreamHandler()
+        nova_root.addHandler(streamlog)
+
+    elif not FLAGS.log_file:
+        streamlog = logging.StreamHandler(stream=sys.stdout)
+        nova_root.addHandler(streamlog)
+
+    if FLAGS.publish_errors:
+        nova_root.addHandler(PublishErrorsHandler(logging.ERROR))
+
+    for handler in nova_root.handlers:
+        datefmt = FLAGS.log_date_format
+        if FLAGS.log_format:
+            handler.setFormatter(logging.Formatter(fmt=FLAGS.log_format,
+                                                   datefmt=datefmt))
+        handler.setFormatter(LegacyNovaFormatter(datefmt=datefmt))
+
+    if FLAGS.verbose or FLAGS.debug:
+        nova_root.setLevel(logging.DEBUG)
+    else:
+        nova_root.setLevel(logging.INFO)
+
+    level = logging.NOTSET
+    for pair in FLAGS.default_log_levels:
+        mod, _sep, level_name = pair.partition('=')
+        level = logging.getLevelName(level_name)
+        logger = logging.getLogger(mod)
+        logger.setLevel(level)
+
+    # NOTE(jkoelker) Clear the handlers for the root logger that was setup
+    #                by basicConfig in nova/__init__.py and install the
+    #                NullHandler.
+    root = logging.getLogger()
+    for handler in root.handlers:
+        root.removeHandler(handler)
+    handler = NullHandler()
+    handler.setFormatter(logging.Formatter())
+    root.addHandler(handler)
+
+
+_loggers = {}
+
+
+def getLogger(name='nova'):
+    if name not in _loggers:
+        _loggers[name] = NovaContextAdapter(logging.getLogger(name))
+    return _loggers[name]
 
 
 class WritableLogger(object):

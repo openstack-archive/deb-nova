@@ -32,7 +32,7 @@ import webob.exc
 
 from nova import log as logging
 
-LOG = logging.getLogger('nova.exception')
+LOG = logging.getLogger(__name__)
 
 
 class ConvertedException(webob.exc.WSGIHTTPException):
@@ -41,19 +41,6 @@ class ConvertedException(webob.exc.WSGIHTTPException):
         self.title = title
         self.explanation = explanation
         super(ConvertedException, self).__init__()
-
-
-def novaclient_converter(f):
-    """Convert novaclient ClientException HTTP codes to webob exceptions.
-    Has to be the outer-most decorator.
-    """
-    def new_f(*args, **kwargs):
-        try:
-            ret = f(*args, **kwargs)
-            return ret
-        except novaclient.exceptions.ClientException, e:
-            raise ConvertedException(e.code, e.message, e.details)
-    return new_f
 
 
 class ProcessExecutionError(IOError):
@@ -76,11 +63,10 @@ class ProcessExecutionError(IOError):
 
 
 class Error(Exception):
-    def __init__(self, message=None):
-        super(Error, self).__init__(message)
+    pass
 
 
-class ApiError(Error):
+class EC2APIError(Error):
     def __init__(self, message='Unknown', code=None):
         self.msg = message
         self.code = code
@@ -88,7 +74,7 @@ class ApiError(Error):
             outstr = '%s: %s' % (code, message)
         else:
             outstr = '%s' % message
-        super(ApiError, self).__init__(outstr)
+        super(EC2APIError, self).__init__(outstr)
 
 
 class DBError(Error):
@@ -168,6 +154,13 @@ class NovaException(Exception):
 
     def __init__(self, message=None, **kwargs):
         self.kwargs = kwargs
+
+        if 'code' not in self.kwargs:
+            try:
+                self.kwargs['code'] = self.code
+            except AttributeError:
+                pass
+
         if not message:
             try:
                 message = self.message % kwargs
@@ -196,11 +189,17 @@ class VirtualInterfaceMacAddressException(NovaException):
                 "with unique mac address failed")
 
 
+class GlanceConnectionFailed(NovaException):
+    message = _("Connection to glance failed") + ": %(reason)s"
+
+
+class MelangeConnectionFailed(NovaException):
+    message = _("Connection to melange failed") + ": %(reason)s"
+
+
 class NotAuthorized(NovaException):
     message = _("Not authorized.")
-
-    def __init__(self, *args, **kwargs):
-        super(NotAuthorized, self).__init__(*args, **kwargs)
+    code = 401
 
 
 class AdminRequired(NotAuthorized):
@@ -213,6 +212,23 @@ class PolicyNotAuthorized(NotAuthorized):
 
 class Invalid(NovaException):
     message = _("Unacceptable parameters.")
+    code = 400
+
+
+class InvalidSnapshot(Invalid):
+    message = _("Invalid snapshot") + ": %(reason)s"
+
+
+class VolumeUnattached(Invalid):
+    message = _("Volume %(volume_id)s is not attached to anything")
+
+
+class InvalidKeypair(Invalid):
+    message = _("Keypair data is invalid")
+
+
+class SfJsonEncodeFailure(NovaException):
+    message = _("Failed to load data into json format")
 
 
 class InvalidRequest(Invalid):
@@ -232,7 +248,11 @@ class InvalidInstanceType(Invalid):
 
 
 class InvalidVolumeType(Invalid):
-    message = _("Invalid volume type %(volume_type)s.")
+    message = _("Invalid volume type") + ": %(reason)s"
+
+
+class InvalidVolume(Invalid):
+    message = _("Invalid volume") + ": %(reason)s"
 
 
 class InvalidPortRange(Invalid):
@@ -259,6 +279,15 @@ class InvalidRPCConnectionReuse(Invalid):
 # msg needs to be constructed when raised.
 class InvalidParameterValue(Invalid):
     message = _("%(err)s")
+
+
+class InvalidAggregateAction(Invalid):
+    message = _("Cannot perform action '%(action)s' on aggregate "
+                "%(aggregate_id)s. Reason: %(reason)s.")
+
+
+class InvalidGroup(Invalid):
+    message = _("Group not valid. Reason: %(reason)s")
 
 
 class InstanceInvalidState(Invalid):
@@ -333,6 +362,10 @@ class InvalidDevicePath(Invalid):
     message = _("The supplied device path (%(path)s) is invalid.")
 
 
+class DeviceIsBusy(Invalid):
+    message = _("The supplied device (%(device)s) is busy.")
+
+
 class InvalidCPUInfo(Invalid):
     message = _("Unacceptable CPU info") + ": %(reason)s"
 
@@ -359,11 +392,11 @@ class InvalidDiskFormat(Invalid):
 
 
 class ImageUnacceptable(Invalid):
-    message = _("Image %(image_id)s is unacceptable") + ": %(reason)s"
+    message = _("Image %(image_id)s is unacceptable: %(reason)s")
 
 
 class InstanceUnacceptable(Invalid):
-    message = _("Instance %(instance_id)s is unacceptable") + ": %(reason)s"
+    message = _("Instance %(instance_id)s is unacceptable: %(reason)s")
 
 
 class InvalidEc2Id(Invalid):
@@ -372,21 +405,19 @@ class InvalidEc2Id(Invalid):
 
 class NotFound(NovaException):
     message = _("Resource could not be found.")
-
-    def __init__(self, *args, **kwargs):
-        super(NotFound, self).__init__(*args, **kwargs)
+    code = 404
 
 
 class FlagNotSet(NotFound):
     message = _("Required flag %(flag)s not set.")
 
 
-class InstanceNotFound(NotFound):
-    message = _("Instance %(instance_id)s could not be found.")
-
-
 class VolumeNotFound(NotFound):
     message = _("Volume %(volume_id)s could not be found.")
+
+
+class SfAccountNotFound(NotFound):
+    message = _("Unable to locate account %(account_name) on Solidfire device")
 
 
 class VolumeNotFoundForInstance(VolumeNotFound):
@@ -422,6 +453,11 @@ class SnapshotNotFound(NotFound):
 
 class VolumeIsBusy(NovaException):
     message = _("deleting volume %(volume_name)s that has snapshot")
+
+
+class SnapshotIsBusy(NovaException):
+    message = _("deleting snapshot %(snapshot_name)s that has "
+                "dependent volumes")
 
 
 class ISCSITargetNotFoundForVolume(NotFound):
@@ -651,12 +687,12 @@ class SecurityGroupNotFoundForRule(SecurityGroupNotFound):
 
 class SecurityGroupExistsForInstance(Invalid):
     message = _("Security group %(security_group_id)s is already associated"
-                 " with the instance %(instance_id)s")
+                " with the instance %(instance_id)s")
 
 
 class SecurityGroupNotExistsForInstance(Invalid):
     message = _("Security group %(security_group_id)s is not associated with"
-                 " the instance %(instance_id)s")
+                " the instance %(instance_id)s")
 
 
 class MigrationNotFound(NotFound):
@@ -712,8 +748,8 @@ class FlavorNotFound(NotFound):
     message = _("Flavor %(flavor_id)s could not be found.")
 
 
-class ZoneNotFound(NotFound):
-    message = _("Zone %(zone_id)s could not be found.")
+class CellNotFound(NotFound):
+    message = _("Cell %(cell_id)s could not be found.")
 
 
 class SchedulerHostFilterNotFound(NotFound):
@@ -826,6 +862,14 @@ class InstanceExists(Duplicate):
     message = _("Instance %(name)s already exists.")
 
 
+class InstanceTypeExists(Duplicate):
+    message = _("Instance Type %(name)s already exists.")
+
+
+class VolumeTypeExists(Duplicate):
+    message = _("Volume Type %(name)s already exists.")
+
+
 class InvalidSharedStorage(NovaException):
     message = _("%(path)s is on shared storage: %(reason)s")
 
@@ -866,11 +910,8 @@ class ImageTooLarge(NovaException):
     message = _("Image is larger than instance type allows")
 
 
-class ZoneRequestError(Error):
-    def __init__(self, message=None):
-        if message is None:
-            message = _("1 or more Zones could not complete the request")
-        super(ZoneRequestError, self).__init__(message=message)
+class ZoneRequestError(NovaException):
+    message = _("1 or more Zones could not complete the request")
 
 
 class InstanceTypeMemoryTooSmall(NovaException):
@@ -897,9 +938,13 @@ class WillNotSchedule(NovaException):
     message = _("Host %(host)s is not up or doesn't exist.")
 
 
-class QuotaError(ApiError):
-    """Quota Exceeded."""
-    pass
+class QuotaError(NovaException):
+    message = _("Quota exceeded") + ": code=%(code)s"
+
+
+class AggregateError(NovaException):
+    message = _("Aggregate %(aggregate_id)s: action '%(action)s' "
+                "caused an error: %(reason)s.")
 
 
 class AggregateNotFound(NotFound):
@@ -925,3 +970,40 @@ class AggregateHostConflict(Duplicate):
 
 class AggregateHostExists(Duplicate):
     message = _("Aggregate %(aggregate_id)s already has host %(host)s.")
+
+
+class DuplicateSfVolumeNames(Duplicate):
+    message = _("Detected more than one volume with name %(vol_name)")
+
+
+class VolumeTypeCreateFailed(NovaException):
+    message = _("Cannot create volume_type with "
+                "name %(name)s and specs %(extra_specs)s")
+
+
+class InstanceTypeCreateFailed(NovaException):
+    message = _("Unable to create instance type")
+
+
+class SolidFireAPIException(NovaException):
+    message = _("Bad response from SolidFire API")
+
+
+class SolidFireAPIStatusException(SolidFireAPIException):
+    message = _("Error in SolidFire API response: status=%(status)s")
+
+
+class SolidFireAPIDataException(SolidFireAPIException):
+    message = _("Error in SolidFire API response: data=%(data)s")
+
+
+class DuplicateVlan(Duplicate):
+    message = _("Detected existing vlan with id %(vlan)")
+
+
+class InstanceNotFound(NotFound):
+    message = _("Instance %(instance_id)s could not be found.")
+
+
+class InvalidInstanceIDMalformed(Invalid):
+    message = _("Invalid id: %(val) (expecting \"i-...\").")

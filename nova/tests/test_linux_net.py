@@ -30,7 +30,7 @@ from nova.network import linux_net
 
 FLAGS = flags.FLAGS
 
-LOG = logging.getLogger('nova.tests.network')
+LOG = logging.getLogger(__name__)
 
 
 HOST = "testhost"
@@ -206,21 +206,19 @@ class LinuxNetworkTestCase(test.TestCase):
         self.mox.StubOutWithMock(self.driver, 'ensure_path')
         self.mox.StubOutWithMock(os, 'chmod')
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[0],
-                                                        fixed_ips[3]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[0], fixed_ips[3]])
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[0],
-                                                        fixed_ips[3]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[0], vifs[1]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[2], vifs[3]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[0], fixed_ips[3]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[0], vifs[1]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[2], vifs[3]])
         self.driver.write_to_file(mox.IgnoreArg(), mox.IgnoreArg())
         self.driver.write_to_file(mox.IgnoreArg(), mox.IgnoreArg())
         self.driver.ensure_path(mox.IgnoreArg())
@@ -254,21 +252,19 @@ class LinuxNetworkTestCase(test.TestCase):
         self.mox.StubOutWithMock(self.driver, 'ensure_path')
         self.mox.StubOutWithMock(os, 'chmod')
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[1],
-                                                        fixed_ips[2]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[1], fixed_ips[2]])
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[1],
-                                                        fixed_ips[2]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[0], vifs[1]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[2], vifs[3]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[1], fixed_ips[2]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[0], vifs[1]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[2], vifs[3]])
         self.driver.write_to_file(mox.IgnoreArg(), mox.IgnoreArg())
         self.driver.write_to_file(mox.IgnoreArg(), mox.IgnoreArg())
         self.driver.ensure_path(mox.IgnoreArg())
@@ -298,17 +294,15 @@ class LinuxNetworkTestCase(test.TestCase):
         self.stubs.Set(db, 'instance_get', get_instance)
         self.mox.StubOutWithMock(db, 'network_get_associated_fixed_ips')
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[0],
-                                                        fixed_ips[3]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[0], fixed_ips[3]])
         self.mox.ReplayAll()
 
-        expected = \
-        "DE:AD:BE:EF:00:00,fake_instance00.novalocal,"\
-            "192.168.0.100,net:NW-i00000000-0\n"\
-        "DE:AD:BE:EF:00:03,fake_instance01.novalocal,"\
-            "192.168.1.101,net:NW-i00000001-0"
+        expected = ("DE:AD:BE:EF:00:00,fake_instance00.novalocal,"
+                    "192.168.0.100,net:NW-i00000000-0\n"
+                    "DE:AD:BE:EF:00:03,fake_instance01.novalocal,"
+                    "192.168.1.101,net:NW-i00000001-0")
         actual_hosts = self.driver.get_dhcp_hosts(self.context, networks[1])
 
         self.assertEquals(actual_hosts, expected)
@@ -326,17 +320,15 @@ class LinuxNetworkTestCase(test.TestCase):
         self.stubs.Set(db, 'instance_get', get_instance)
         self.mox.StubOutWithMock(db, 'network_get_associated_fixed_ips')
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[1],
-                                                        fixed_ips[2]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[1], fixed_ips[2]])
         self.mox.ReplayAll()
 
-        expected = \
-        "DE:AD:BE:EF:00:01,fake_instance00.novalocal,"\
-            "192.168.1.100,net:NW-i00000000-1\n"\
-        "DE:AD:BE:EF:00:02,fake_instance01.novalocal,"\
-            "192.168.0.101,net:NW-i00000001-1"
+        expected = ("DE:AD:BE:EF:00:01,fake_instance00.novalocal,"
+                    "192.168.1.100,net:NW-i00000000-1\n"
+                    "DE:AD:BE:EF:00:02,fake_instance01.novalocal,"
+                    "192.168.0.101,net:NW-i00000001-1")
         actual_hosts = self.driver.get_dhcp_hosts(self.context, networks[0])
 
         self.assertEquals(actual_hosts, expected)
@@ -349,21 +341,16 @@ class LinuxNetworkTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'network_get_associated_fixed_ips')
         self.mox.StubOutWithMock(db, 'virtual_interface_get_by_instance')
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[0],
-                                                        fixed_ips[3],
-                                                        fixed_ips[4]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[0],
-                                                         vifs[1],
-                                                         vifs[4]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[2],
-                                                         vifs[3],
-                                                         vifs[5]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[0], fixed_ips[3],
+                                            fixed_ips[4]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[0], vifs[1], vifs[4]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[2], vifs[3], vifs[5]])
         self.mox.ReplayAll()
 
         expected_opts = 'NW-i00000001-0,3'
@@ -380,21 +367,16 @@ class LinuxNetworkTestCase(test.TestCase):
         self.mox.StubOutWithMock(db, 'network_get_associated_fixed_ips')
         self.mox.StubOutWithMock(db, 'virtual_interface_get_by_instance')
 
-        db.network_get_associated_fixed_ips(mox.IgnoreArg(),
-                                            mox.IgnoreArg())\
-                                            .AndReturn([fixed_ips[1],
-                                                        fixed_ips[2],
-                                                        fixed_ips[5]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[0],
-                                                         vifs[1],
-                                                         vifs[4]])
-        db.virtual_interface_get_by_instance(mox.IgnoreArg(),
-                                             mox.IgnoreArg())\
-                                             .AndReturn([vifs[2],
-                                                         vifs[3],
-                                                         vifs[5]])
+        db.network_get_associated_fixed_ips(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([fixed_ips[1], fixed_ips[2],
+                                            fixed_ips[5]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[0], vifs[1], vifs[4]])
+        db.virtual_interface_get_by_instance(
+                mox.IgnoreArg(),
+                mox.IgnoreArg()).AndReturn([vifs[2], vifs[3], vifs[5]])
         self.mox.ReplayAll()
 
         expected_opts = "NW-i00000000-1,3"
@@ -431,6 +413,31 @@ class LinuxNetworkTestCase(test.TestCase):
         driver = linux_net.LinuxBridgeInterfaceDriver()
         driver.plug({"bridge": "br100", "bridge_interface": "eth0"},
                     "fakemac")
+
+    def test_vlan_override(self):
+        """Makes sure vlan_interface flag overrides network bridge_interface.
+
+        Allows heterogeneous networks a la bug 833426"""
+
+        driver = linux_net.LinuxBridgeInterfaceDriver()
+
+        @classmethod
+        def test_ensure(_self, vlan, bridge, interface, network, mac_address):
+            self.passed_interface = interface
+
+        self.stubs.Set(linux_net.LinuxBridgeInterfaceDriver,
+                       'ensure_vlan_bridge', test_ensure)
+
+        network = {
+                "bridge": "br100",
+                "bridge_interface": "base_interface",
+                "vlan": "fake"
+        }
+        driver.plug(network, "fakemac")
+        self.assertEqual(self.passed_interface, "base_interface")
+        self.flags(vlan_interface="override_interface")
+        driver.plug(network, "fakemac")
+        self.assertEqual(self.passed_interface, "override_interface")
 
     def _test_initialize_gateway(self, existing, expected, routes=''):
         self.flags(fake_network=False)
@@ -473,8 +480,8 @@ class LinuxNetworkTestCase(test.TestCase):
         self._test_initialize_gateway(existing, expected)
 
     def test_initialize_gateway_resets_route(self):
-        routes = "0.0.0.0         192.68.0.1        0.0.0.0         " \
-                "UG    100    0        0 eth0"
+        routes = ("0.0.0.0         192.68.0.1        0.0.0.0         "
+                  "UG    100    0        0 eth0")
         existing = ("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> "
             "    mtu 1500 qdisc pfifo_fast state UNKNOWN qlen 1000\n"
             "    link/ether de:ad:be:ef:be:ef brd ff:ff:ff:ff:ff:ff\n"

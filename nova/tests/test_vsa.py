@@ -30,7 +30,7 @@ from nova.vsa import utils as vsa_utils
 import nova.image.fake
 
 FLAGS = flags.FLAGS
-LOG = logging.getLogger('nova.tests.vsa')
+LOG = logging.getLogger(__name__)
 
 
 class VsaTestCase(test.TestCase):
@@ -40,8 +40,7 @@ class VsaTestCase(test.TestCase):
         self.stubs = stubout.StubOutForTesting()
         self.vsa_api = vsa.API()
 
-        FLAGS.quota_volumes = 100
-        FLAGS.quota_gigabytes = 10000
+        self.flags(quota_volumes=100, quota_gigabytes=10000)
 
         self.context = context.get_admin_context()
 
@@ -91,7 +90,7 @@ class VsaTestCase(test.TestCase):
 
     def test_vsa_create_wrong_image_name(self):
         param = {'image_name': 'wrong_image_name'}
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.ImageNotFound,
                           self.vsa_api.create, self.context, **param)
 
     def test_vsa_create_db_error(self):
@@ -101,25 +100,25 @@ class VsaTestCase(test.TestCase):
             raise exception.Error
 
         self.stubs.Set(nova.db, 'vsa_create', fake_vsa_create)
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.Error,
                           self.vsa_api.create, self.context)
 
     def test_vsa_create_wrong_storage_params(self):
         vsa_list1 = self.vsa_api.get_all(self.context)
         param = {'storage': [{'stub': 1}]}
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.InvalidVolumeType,
                           self.vsa_api.create, self.context, **param)
         vsa_list2 = self.vsa_api.get_all(self.context)
         self.assertEqual(len(vsa_list2), len(vsa_list1))
 
         param = {'storage': [{'drive_name': 'wrong name'}]}
-        self.assertRaises(exception.ApiError,
+        self.assertRaises(exception.InvalidVolumeType,
                           self.vsa_api.create, self.context, **param)
 
     def test_vsa_create_with_storage(self, multi_vol_creation=True):
         """Test creation of VSA with BE storage"""
 
-        FLAGS.vsa_multi_vol_creation = multi_vol_creation
+        self.flags(vsa_multi_vol_creation=multi_vol_creation)
 
         param = {'storage': [{'drive_name': 'SATA_500_7200',
                               'num_drives': 3}]}
@@ -152,7 +151,7 @@ class VsaTestCase(test.TestCase):
 
     def test_vsa_generate_user_data(self):
 
-        FLAGS.vsa_multi_vol_creation = False
+        self.flags(vsa_multi_vol_creation=False)
         param = {'display_name': 'VSA name test',
                  'display_description': 'VSA desc test',
                  'vc_count': 2,
