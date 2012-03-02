@@ -32,7 +32,8 @@ Cmnd_Alias NOVACMDS = /bin/chown,                               \
                       /bin/netcat,				\
                       /usr/bin/dhcp_release, 			\
                       /usr/bin/ovs-vsctl,			\
-                      /usr/bin/ovs-ofctl
+                      /usr/bin/ovs-ofctl			\
+		      /usr/bin/guestmount
 
 nova ALL = (root) NOPASSWD: SETENV: NOVACMDS
 

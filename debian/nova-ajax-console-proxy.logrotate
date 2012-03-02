@@ -1,4 +1,0 @@
-/var/log/nova/nova-ajax-console-proxy.log {
-    daily
-    missingok
-}

@@ -36,7 +36,9 @@ Build-Depends: debhelper (>= 7.0.50),
  python-xenapi,
  euca2ools,
  ipython,
- bpython
+ bpython,
+ python-qpid,
+ python-iso8601
 Build-Depends-Indep:
  python-setuptools,
  python-sphinx (>> 1.0)
@@ -99,7 +101,9 @@ Description: OpenStack Compute - libraries
 
 Package: nova-common
 Architecture: all
-Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends}, adduser
+Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends},
+ adduser,
+ python-iso8601
 Description: OpenStack Compute - common files
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -121,7 +125,6 @@ Package: nova-compute
 Architecture: all
 Depends: lsb-base (>= 3.0.6), adduser, qemu-utils, nova-common (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
  ${python:Depends}, ${misc:Depends}
-Recommends: ajaxterm
 Description: OpenStack Compute - compute node
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -266,28 +269,6 @@ Description: OpenStack Compute - storage
  databases (LDAP or SQL), etc.
  .
  This is the package you will install on your storage nodes.
-
-Package: nova-ajax-console-proxy
-Architecture: all
-Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Description: OpenStack Compute - AJAX console proxy
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller. In
- addition to its "native" API (the OpenStack API), it also supports the Amazon
- EC2 API.
- .
- Nova is intended to be modular and easy to extend and adapt. It supports many
- different hypervisors (KVM and Xen to name a few), different database backends
- (SQLite, MySQL, and PostgreSQL, for instance), different types of user
- databases (LDAP or SQL), etc.
- .
- This package provides the AJAX proxy. It is a publically reachable
- component which proxies access to ajaxterm's running on compute
- nodes.
 
 Package: nova-api
 Architecture: all

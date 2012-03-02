@@ -1,15 +1,14 @@
 --- a/bin/nova-manage
 +++ b/bin/nova-manage
-@@ -2307,7 +2307,11 @@
+@@ -2301,7 +2301,10 @@
  
  def main():
      """Parse options and call the appropriate class/method."""
--    utils.default_flagfile()
+-    flagfile = utils.default_flagfile()
 +    cfg = "/etc/nova/nova.conf"
 +    if not (os.path.exists(cfg) and os.access(cfg, os.R_OK)):
-+	cfg = "nova.conf"
-+    utils.default_flagfile(cfg)
-+
-     argv = FLAGS(sys.argv)
-     logging.setup()
++        cfg = "nova.conf"
++    flagfile = utils.default_flagfile(cfg)
  
+     if flagfile and not os.access(flagfile, os.R_OK):
+         st = os.stat(flagfile)
