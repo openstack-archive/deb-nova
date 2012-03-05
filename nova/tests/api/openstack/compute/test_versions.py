@@ -19,13 +19,11 @@ import json
 
 import feedparser
 from lxml import etree
-import stubout
 import webob
 
 from nova.api.openstack.compute import versions
 from nova.api.openstack.compute import views
 from nova.api.openstack import xmlutil
-from nova import context
 from nova import test
 from nova.tests.api.openstack import common
 from nova.tests.api.openstack import fakes
@@ -82,16 +80,8 @@ VERSIONS = {
 class VersionsTest(test.TestCase):
     def setUp(self):
         super(VersionsTest, self).setUp()
-        self.context = context.get_admin_context()
-        self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_auth(self.stubs)
-        #Stub out VERSIONS
-        self.old_versions = versions.VERSIONS
-        versions.VERSIONS = VERSIONS
-
-    def tearDown(self):
-        versions.VERSIONS = self.old_versions
-        super(VersionsTest, self).tearDown()
+        self.stubs.Set(versions, 'VERSIONS', VERSIONS)
 
     def test_get_version_list(self):
         req = webob.Request.blank('/')

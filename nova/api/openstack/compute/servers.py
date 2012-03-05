@@ -807,9 +807,8 @@ class Controller(wsgi.Controller):
                     body['server']['auto_disk_config'])
             update_dict['auto_disk_config'] = auto_disk_config
 
-        instance = self.compute_api.get(ctxt, id)
-
         try:
+            instance = self.compute_api.get(ctxt, id)
             self.compute_api.update(ctxt, instance, **update_dict)
         except exception.NotFound:
             raise exc.HTTPNotFound()
@@ -968,7 +967,7 @@ class Controller(wsgi.Controller):
         """Ensure that we can work with the metadata given."""
         try:
             metadata.iteritems()
-        except AttributeError as ex:
+        except AttributeError:
             msg = _("Unable to parse metadata key/value pairs.")
             LOG.debug(msg)
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1060,7 +1059,7 @@ class Controller(wsgi.Controller):
         except exception.InstanceNotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
-        except exception.ImageNotFound as error:
+        except exception.ImageNotFound:
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
 

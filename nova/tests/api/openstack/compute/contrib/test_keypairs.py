@@ -20,7 +20,6 @@ from lxml import etree
 
 from nova.api.openstack import wsgi
 from nova.api.openstack.compute.contrib import keypairs
-from nova import context
 from nova import db
 from nova import exception
 from nova import test
@@ -54,7 +53,6 @@ class KeypairsTest(test.TestCase):
 
     def setUp(self):
         super(KeypairsTest, self).setUp()
-        self.controller = keypairs.KeypairController()
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
         self.stubs.Set(db, "key_pair_get_all_by_user",
@@ -63,7 +61,6 @@ class KeypairsTest(test.TestCase):
                        db_key_pair_create)
         self.stubs.Set(db, "key_pair_destroy",
                        db_key_pair_destroy)
-        self.context = context.get_admin_context()
 
     def test_keypair_list(self):
         req = webob.Request.blank('/v2/fake/os-keypairs')
@@ -105,6 +102,20 @@ class KeypairsTest(test.TestCase):
         req.body = json.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 400)
+
+    def test_keypair_create_with_non_alphanumeric_name(self):
+        body = {
+            'keypair': {
+                'name': 'test/keypair'
+            }
+        }
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        res_dict = json.loads(res.body)
         self.assertEqual(res.status_int, 400)
 
     def test_keypair_import(self):

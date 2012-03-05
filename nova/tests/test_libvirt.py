@@ -349,8 +349,6 @@ class LibvirtConnTestCase(test.TestCase):
         self.flags(fake_call=True)
         self.user_id = 'fake'
         self.project_id = 'fake'
-        self.context = context.RequestContext(self.user_id, self.project_id)
-        self.network = utils.import_object(FLAGS.network_manager)
         self.context = context.get_admin_context()
         self.flags(instances_path='')
         self.call_libvirt_dependant_setup = False
@@ -1368,7 +1366,6 @@ class IptablesFirewallTestCase(test.TestCase):
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
-        self.network = utils.import_object(FLAGS.network_manager)
 
         class FakeLibvirtConnection(object):
             def nwfilterDefineXML(*args, **kwargs):
@@ -2046,7 +2043,6 @@ class LibvirtConnectionTestCase(test.TestCase):
 
         self.libvirtconnection = connection.LibvirtConnection(read_only=True)
         self.platform = sys.platform
-        self.exe_flag = False
 
         self.temp_path = os.path.join(flags.FLAGS.instances_path,
                                       'instance-00000001/', '')
@@ -2126,7 +2122,7 @@ class LibvirtConnectionTestCase(test.TestCase):
         self.counter = 0
 
         def fake_get_instance_disk_info(instance):
-            return []
+            return '[]'
 
         def fake_destroy(instance, network_info, cleanup=True):
             pass
@@ -2137,8 +2133,7 @@ class LibvirtConnectionTestCase(test.TestCase):
         def fake_execute(*args, **kwargs):
             self.counter += 1
             if self.counter == 1:
-                raise Exception()
-            pass
+                assert False, "intentional failure"
 
         def fake_os_path_exists(path):
             return True
@@ -2152,9 +2147,10 @@ class LibvirtConnectionTestCase(test.TestCase):
         self.stubs.Set(os.path, 'exists', fake_os_path_exists)
 
         ins_ref = self._create_instance()
-        self.assertRaises(Exception,
-                        self.libvirtconnection.migrate_disk_and_power_off,
-                        None, ins_ref, [], '10.0.0.2', None, None)
+
+        self.assertRaises(AssertionError,
+                          self.libvirtconnection.migrate_disk_and_power_off,
+                          None, ins_ref, '10.0.0.2', None, None)
 
     def test_migrate_disk_and_power_off(self):
         """Test for nova.virt.libvirt.connection.LivirtConnection

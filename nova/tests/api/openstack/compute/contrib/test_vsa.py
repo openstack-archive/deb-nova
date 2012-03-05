@@ -21,7 +21,6 @@ import webob
 
 from nova.api.openstack.compute.contrib import (virtual_storage_arrays as
                                                 vsa_ext)
-from nova import context
 import nova.db
 from nova import exception
 from nova import flags
@@ -104,11 +103,6 @@ class VSAApiTest(test.TestCase):
         self.stubs.Set(vsa.api.API, "delete", stub_vsa_delete)
         self.stubs.Set(vsa.api.API, "get", stub_vsa_get)
         self.stubs.Set(vsa.api.API, "get_all", stub_vsa_get_all)
-
-        self.context = context.get_admin_context()
-
-    def tearDown(self):
-        super(VSAApiTest, self).tearDown()
 
     def test_vsa_create(self):
         global last_param
@@ -253,12 +247,8 @@ class VSAVolumeApiTest(test.TestCase):
         self.stubs.Set(volume.api.API, "get", fakes.stub_volume_get)
         self.stubs.Set(volume.api.API, "get_all", fakes.stub_volume_get_all)
 
-        self.context = context.get_admin_context()
         self.test_obj = test_obj if test_obj else "volume"
         self.test_objs = test_objs if test_objs else "volumes"
-
-    def tearDown(self):
-        super(VSAVolumeApiTest, self).tearDown()
 
     def test_vsa_volume_create(self):
         self.stubs.Set(volume.api.API, "create", fakes.stub_volume_create)
@@ -383,10 +373,6 @@ class VSADriveApiTest(VSAVolumeApiTest):
     def setUp(self):
         super(VSADriveApiTest, self).setUp(test_obj="drive",
                                            test_objs="drives")
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        super(VSADriveApiTest, self).tearDown()
 
 
 class SerializerTestCommon(test.TestCase):

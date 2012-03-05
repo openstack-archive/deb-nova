@@ -88,6 +88,8 @@ def wrap_db_error(f):
     def _wrap(*args, **kwargs):
         try:
             return f(*args, **kwargs)
+        except UnicodeEncodeError:
+            raise InvalidUnicodeParameter()
         except Exception, e:
             LOG.exception(_('DB exception wrapped.'))
             raise DBError(e)
@@ -275,6 +277,11 @@ class InvalidRPCConnectionReuse(Invalid):
     message = _("Invalid reuse of an RPC connection.")
 
 
+class InvalidUnicodeParameter(Invalid):
+    message = _("Invalid Parameter: "
+                "Unicode is not supported by the current database.")
+
+
 # Cannot be templated as the error syntax varies.
 # msg needs to be constructed when raised.
 class InvalidParameterValue(Invalid):
@@ -417,7 +424,8 @@ class VolumeNotFound(NotFound):
 
 
 class SfAccountNotFound(NotFound):
-    message = _("Unable to locate account %(account_name) on Solidfire device")
+    message = _("Unable to locate account %(account_name)s on "
+                "Solidfire device")
 
 
 class VolumeNotFoundForInstance(VolumeNotFound):
@@ -544,6 +552,10 @@ class NetworkNotFoundForProject(NotFound):
 
 class NetworkHostNotSet(NovaException):
     message = _("Host is not set to the network (%(network_id)s).")
+
+
+class NetworkBusy(NovaException):
+    message = _("Network %(network)s has active ports, cannot delete.")
 
 
 class DatastoreNotFound(NotFound):
@@ -973,7 +985,7 @@ class AggregateHostExists(Duplicate):
 
 
 class DuplicateSfVolumeNames(Duplicate):
-    message = _("Detected more than one volume with name %(vol_name)")
+    message = _("Detected more than one volume with name %(vol_name)s")
 
 
 class VolumeTypeCreateFailed(NovaException):
@@ -998,7 +1010,7 @@ class SolidFireAPIDataException(SolidFireAPIException):
 
 
 class DuplicateVlan(Duplicate):
-    message = _("Detected existing vlan with id %(vlan)")
+    message = _("Detected existing vlan with id %(vlan)d")
 
 
 class InstanceNotFound(NotFound):
@@ -1006,4 +1018,4 @@ class InstanceNotFound(NotFound):
 
 
 class InvalidInstanceIDMalformed(Invalid):
-    message = _("Invalid id: %(val) (expecting \"i-...\").")
+    message = _("Invalid id: %(val)s (expecting \"i-...\").")

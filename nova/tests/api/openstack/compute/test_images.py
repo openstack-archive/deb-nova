@@ -23,7 +23,6 @@ and as a WSGI layer
 import urlparse
 
 from lxml import etree
-import stubout
 import webob
 
 from nova import flags
@@ -51,8 +50,6 @@ class ImagesControllerTest(test.TestCase):
     def setUp(self):
         """Run before each test."""
         super(ImagesControllerTest, self).setUp()
-        self.maxDiff = None
-        self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
@@ -61,11 +58,6 @@ class ImagesControllerTest(test.TestCase):
         fakes.stub_out_glance(self.stubs)
 
         self.controller = images.Controller()
-
-    def tearDown(self):
-        """Run after each test."""
-        self.stubs.UnsetAll()
-        super(ImagesControllerTest, self).tearDown()
 
     def test_get_image(self):
         fake_req = fakes.HTTPRequest.blank('/v2/fake/images/123')
@@ -831,7 +823,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_min_ram(self):
         image_service = self.mox.CreateMockAnything()
@@ -842,7 +833,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_min_disk(self):
         image_service = self.mox.CreateMockAnything()
@@ -853,7 +843,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_status(self):
         image_service = self.mox.CreateMockAnything()
@@ -864,7 +853,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_property(self):
         image_service = self.mox.CreateMockAnything()
@@ -875,7 +863,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_server(self):
         image_service = self.mox.CreateMockAnything()
@@ -888,7 +875,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_changes_since(self):
         image_service = self.mox.CreateMockAnything()
@@ -900,7 +886,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_type(self):
         image_service = self.mox.CreateMockAnything()
@@ -911,7 +896,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_not_supported(self):
         image_service = self.mox.CreateMockAnything()
@@ -923,7 +907,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_no_filters(self):
         image_service = self.mox.CreateMockAnything()
@@ -934,7 +917,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_with_name(self):
         image_service = self.mox.CreateMockAnything()
@@ -946,7 +928,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_with_status(self):
         image_service = self.mox.CreateMockAnything()
@@ -958,7 +939,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_with_property(self):
         image_service = self.mox.CreateMockAnything()
@@ -970,7 +950,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_server_href(self):
         image_service = self.mox.CreateMockAnything()
@@ -984,7 +963,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_server_uuid(self):
         image_service = self.mox.CreateMockAnything()
@@ -997,7 +975,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_changes_since(self):
         image_service = self.mox.CreateMockAnything()
@@ -1009,7 +986,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_with_type(self):
         image_service = self.mox.CreateMockAnything()
@@ -1020,7 +996,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_not_supported(self):
         image_service = self.mox.CreateMockAnything()
@@ -1032,7 +1007,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_no_filters(self):
         image_service = self.mox.CreateMockAnything()
@@ -1043,7 +1017,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_generate_alternate_link(self):
         view = images_view.ViewBuilder()

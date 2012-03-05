@@ -16,12 +16,10 @@
 import base64
 
 import mox
-import stubout
 import webob
 
 from nova.api.openstack.compute import servers
 from nova.compute import vm_states
-from nova import context
 import nova.db
 from nova import exception
 from nova import flags
@@ -55,10 +53,8 @@ class MockSetAdminPassword(object):
 class ServerActionsControllerTest(test.TestCase):
 
     def setUp(self):
-        self.maxDiff = None
         super(ServerActionsControllerTest, self).setUp()
 
-        self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_auth(self.stubs)
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
                 fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
@@ -72,7 +68,6 @@ class ServerActionsControllerTest(test.TestCase):
         fakes.stub_out_image_service(self.stubs)
         service_class = 'nova.image.glance.GlanceImageService'
         self.service = utils.import_object(service_class)
-        self.context = context.RequestContext(1, None)
         self.service.delete_all()
         self.sent_to_glance = {}
         fakes.stub_out_glance_add_image(self.stubs, self.sent_to_glance)
@@ -83,10 +78,6 @@ class ServerActionsControllerTest(test.TestCase):
         self._image_href = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
 
         self.controller = servers.Controller()
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        super(ServerActionsControllerTest, self).tearDown()
 
     def test_server_change_password(self):
         mock_method = MockSetAdminPassword()
@@ -422,7 +413,6 @@ class ServerActionsControllerTest(test.TestCase):
         self.mox.ReplayAll()
 
         self.controller._action_rebuild(req, FAKE_UUID, body)
-        self.mox.VerifyAll()
 
     def test_resize_server(self):
 
@@ -668,10 +658,8 @@ class ServerActionsControllerTest(test.TestCase):
 class TestServerActionXMLDeserializer(test.TestCase):
 
     def setUp(self):
+        super(TestServerActionXMLDeserializer, self).setUp()
         self.deserializer = servers.ActionDeserializer()
-
-    def tearDown(self):
-        pass
 
     def test_create_image(self):
         serial_request = """

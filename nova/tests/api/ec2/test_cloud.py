@@ -94,13 +94,14 @@ class CloudTestCase(test.TestCase):
         self.stubs.Set(utils, 'usage_from_instance', dumb)
         # set up our cloud
         self.cloud = cloud.CloudController()
+        self.flags(compute_scheduler_driver='nova.scheduler.'
+                'chance.ChanceScheduler')
 
         # set up services
         self.compute = self.start_service('compute')
         self.scheduler = self.start_service('scheduler')
         self.network = self.start_service('network')
         self.volume = self.start_service('volume')
-        self.image_service = utils.import_object(FLAGS.image_service)
 
         self.user_id = 'fake'
         self.project_id = 'fake'

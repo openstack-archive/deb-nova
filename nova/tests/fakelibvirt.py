@@ -288,8 +288,12 @@ class Domain(object):
     def suspend(self):
         self._state = VIR_DOMAIN_PAUSED
 
+    def shutdown(self):
+        self._state = VIR_DOMAIN_SHUTDOWN
+        self._connection._mark_not_running(self)
+
     def info(self):
-        return [VIR_DOMAIN_RUNNING,
+        return [self._state,
                 long(self._def['memory']),
                 long(self._def['memory']),
                 self._def['vcpu'],
@@ -416,8 +420,8 @@ class Connection(object):
             if allow_default_uri_connection:
                 uri = 'qemu:///session'
             else:
-                raise Exception("URI was None, but fake libvirt is configured"
-                                " to not accept this.")
+                raise ValueError("URI was None, but fake libvirt is "
+                                 "configured to not accept this.")
 
         uri_whitelist = ['qemu:///system',
                          'qemu:///session',

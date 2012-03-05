@@ -574,6 +574,9 @@ class ResourceExceptionHandler(object):
         if isinstance(ex_value, exception.NotAuthorized):
             msg = unicode(ex_value)
             raise Fault(webob.exc.HTTPForbidden(explanation=msg))
+        elif isinstance(ex_value, exception.Invalid):
+            raise Fault(exception.ConvertedException(
+                code=ex_value.code, explanation=unicode(ex_value)))
         elif isinstance(ex_value, TypeError):
             exc_info = (ex_type, ex_value, ex_traceback)
             LOG.error(_('Exception handling resource: %s') % ex_value,
@@ -862,8 +865,7 @@ class Resource(wsgi.Application):
 
             # Run post-processing extensions
             if resp_obj:
-                if context:
-                    resp_obj['x-compute-request-id'] = context.request_id
+                _set_request_id_header(request, resp_obj)
                 # Do a preserialize to set up the response object
                 serializers = getattr(meth, 'wsgi_serializers', {})
                 resp_obj._bind_method_serializers(serializers)
@@ -899,7 +901,7 @@ class Resource(wsgi.Application):
                 meth = getattr(self, action)
             else:
                 meth = getattr(self.controller, action)
-        except AttributeError as ex:
+        except AttributeError:
             if (not self.wsgi_actions or
                 action not in ['action', 'create', 'delete']):
                 # Propagate the error
@@ -1061,6 +1063,7 @@ class Fault(webob.exc.HTTPException):
 
         self.wrapped_exc.body = serializer.serialize(fault_data)
         self.wrapped_exc.content_type = content_type
+        _set_request_id_header(req, self.wrapped_exc.headers)
 
         return self.wrapped_exc
 
@@ -1113,3 +1116,9 @@ class OverLimitFault(webob.exc.HTTPException):
         self.wrapped_exc.body = content
 
         return self.wrapped_exc
+
+
+def _set_request_id_header(req, headers):
+    context = req.environ.get('nova.context')
+    if context:
+        headers['x-compute-request-id'] = context.request_id

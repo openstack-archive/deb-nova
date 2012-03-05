@@ -120,8 +120,6 @@ class BaseTestCase(test.TestCase):
         self.context = context.RequestContext(self.user_id,
                                               self.project_id)
         test_notifier.NOTIFICATIONS = []
-        self.mox = mox.Mox()
-        self.total_waits = 0
 
         def fake_show(meh, context, id):
             return {'id': 1, 'min_disk': None, 'min_ram': None,
@@ -132,7 +130,6 @@ class BaseTestCase(test.TestCase):
         self.stubs.Set(rpc, 'cast', rpc_cast_wrapper)
 
     def tearDown(self):
-        self.mox.UnsetStubs()
         instances = db.instance_get_all(self.context.elevated())
         for instance in instances:
             db.instance_destroy(self.context.elevated(), instance['id'])
@@ -332,11 +329,11 @@ class ComputeTestCase(BaseTestCase):
         the instance goes to ERROR state, keeping the task state
         """
         def fake(*args, **kwargs):
-            raise Exception("Failed to block device mapping")
+            raise test.TestingException()
         self.stubs.Set(nova.compute.manager.ComputeManager,
                        '_setup_block_device_mapping', fake)
         instance_uuid = self._create_instance()
-        self.assertRaises(Exception, self.compute.run_instance,
+        self.assertRaises(test.TestingException, self.compute.run_instance,
                           self.context, instance_uuid)
         #check state is failed even after the periodic poll
         self._assert_state({'vm_state': vm_states.ERROR,
@@ -351,10 +348,10 @@ class ComputeTestCase(BaseTestCase):
         Make sure that when there is a spawning problem,
         the instance goes to ERROR state, keeping the task state"""
         def fake(*args, **kwargs):
-            raise Exception("Failed to spawn")
+            raise test.TestingException()
         self.stubs.Set(self.compute.driver, 'spawn', fake)
         instance_uuid = self._create_instance()
-        self.assertRaises(Exception, self.compute.run_instance,
+        self.assertRaises(test.TestingException, self.compute.run_instance,
                           self.context, instance_uuid)
         #check state is failed even after the periodic poll
         self._assert_state({'vm_state': vm_states.ERROR,
@@ -721,13 +718,14 @@ class ComputeTestCase(BaseTestCase):
     def test_snapshot_fails(self):
         """Ensure task_state is set to None if snapshot fails"""
         def fake_snapshot(*args, **kwargs):
-            raise Exception("I don't want to create a snapshot")
+            raise test.TestingException()
 
         self.stubs.Set(self.compute.driver, 'snapshot', fake_snapshot)
 
         instance = self._create_fake_instance()
         self.compute.run_instance(self.context, instance['uuid'])
-        self.assertRaises(Exception, self.compute.snapshot_instance,
+        self.assertRaises(test.TestingException,
+                          self.compute.snapshot_instance,
                           self.context, instance['uuid'], "failing_snapshot")
         self._assert_state({'task_state': None})
         self.compute.terminate_instance(self.context, instance['uuid'])
@@ -889,7 +887,7 @@ class ComputeTestCase(BaseTestCase):
         test_notifier.NOTIFICATIONS = []
         self.compute.terminate_instance(self.context, inst_ref['uuid'])
 
-        self.assertEquals(len(test_notifier.NOTIFICATIONS), 3)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 5)
         msg = test_notifier.NOTIFICATIONS[0]
         self.assertEquals(msg['priority'], 'INFO')
         self.assertEquals(msg['event_type'], 'compute.instance.exists')
@@ -898,6 +896,11 @@ class ComputeTestCase(BaseTestCase):
         self.assertEquals(msg['priority'], 'INFO')
         self.assertEquals(msg['event_type'], 'compute.instance.delete.start')
         msg1 = test_notifier.NOTIFICATIONS[2]
+        self.assertEquals(msg1['event_type'],
+                                            'compute.instance.shutdown.start')
+        msg1 = test_notifier.NOTIFICATIONS[3]
+        self.assertEquals(msg1['event_type'], 'compute.instance.shutdown.end')
+        msg1 = test_notifier.NOTIFICATIONS[4]
         self.assertEquals(msg1['event_type'], 'compute.instance.delete.end')
         payload = msg['payload']
         self.assertEquals(payload['tenant_id'], self.project_id)
@@ -1033,12 +1036,12 @@ class ComputeTestCase(BaseTestCase):
         context = self.context.elevated()
 
         instance = self._create_fake_instance()
-        self.compute.prep_resize(context, instance['uuid'], 1,
+        self.compute.prep_resize(context, instance['uuid'], 1, {},
                                  filter_properties={})
         migration_ref = db.migration_get_by_instance_and_status(context,
                 instance['uuid'], 'pre-migrating')
         self.compute.finish_resize(context, instance['uuid'],
-                                   int(migration_ref['id']), {})
+                                   int(migration_ref['id']), {}, {})
         self.compute.terminate_instance(self.context, instance['uuid'])
 
     def test_finish_resize_handles_error(self):
@@ -1048,7 +1051,7 @@ class ComputeTestCase(BaseTestCase):
                                                          spectacular=True)
 
         def throw_up(*args, **kwargs):
-            raise Exception()
+            raise test.TestingException()
 
         def fake(*args, **kwargs):
             pass
@@ -1070,14 +1073,14 @@ class ComputeTestCase(BaseTestCase):
                                                           func=fake_nw_info)
         context = self.context.elevated()
         instance = self._create_fake_instance()
-        self.compute.prep_resize(context, instance['uuid'], 1,
+        self.compute.prep_resize(context, instance['uuid'], 1, {},
                                  filter_properties={})
         migration_ref = db.migration_get_by_instance_and_status(context,
                 instance['uuid'], 'pre-migrating')
 
-        self.assertRaises(Exception, self.compute.finish_resize,
+        self.assertRaises(test.TestingException, self.compute.finish_resize,
                           context, instance['uuid'],
-                          int(migration_ref['id']), {})
+                          int(migration_ref['id']), {}, {})
 
         instance = db.instance_get_by_uuid(context, instance['uuid'])
         self.assertEqual(instance['vm_state'], vm_states.ERROR)
@@ -1100,7 +1103,7 @@ class ComputeTestCase(BaseTestCase):
         test_notifier.NOTIFICATIONS = []
 
         db.instance_update(self.context, instance_uuid, {'host': 'foo'})
-        self.compute.prep_resize(context, instance_uuid, 1,
+        self.compute.prep_resize(context, instance_uuid, 1, {},
                                  filter_properties={})
         db.migration_get_by_instance_and_status(context,
                                                 instance_uuid,
@@ -1143,14 +1146,14 @@ class ComputeTestCase(BaseTestCase):
         db.instance_update(self.context, instance_uuid, {'host': 'foo'})
 
         self.assertRaises(exception.MigrationError, self.compute.prep_resize,
-                          context, instance_uuid, 1)
+                          context, instance_uuid, 1, {})
         self.compute.terminate_instance(context, instance_uuid)
 
     def test_resize_instance_driver_error(self):
         """Ensure instance status set to Error on resize error"""
 
         def throw_up(*args, **kwargs):
-            raise Exception()
+            raise test.TestingException()
 
         self.stubs.Set(self.compute.driver, 'migrate_disk_and_power_off',
                        throw_up)
@@ -1161,14 +1164,14 @@ class ComputeTestCase(BaseTestCase):
 
         self.compute.run_instance(self.context, instance_uuid)
         db.instance_update(self.context, instance_uuid, {'host': 'foo'})
-        self.compute.prep_resize(context, instance_uuid, 1,
+        self.compute.prep_resize(context, instance_uuid, 1, {},
                                  filter_properties={})
         migration_ref = db.migration_get_by_instance_and_status(context,
                 instance_uuid, 'pre-migrating')
 
         #verify
-        self.assertRaises(Exception, self.compute.resize_instance, context,
-                          instance_uuid, migration_ref['id'])
+        self.assertRaises(test.TestingException, self.compute.resize_instance,
+                          context, instance_uuid, migration_ref['id'], {})
         instance = db.instance_get_by_uuid(context, instance_uuid)
         self.assertEqual(instance['vm_state'], vm_states.ERROR)
 
@@ -1183,12 +1186,12 @@ class ComputeTestCase(BaseTestCase):
         self.compute.run_instance(self.context, instance_uuid)
         db.instance_update(self.context, instance_uuid,
                            {'host': 'foo'})
-        self.compute.prep_resize(context, instance_uuid, 1,
+        self.compute.prep_resize(context, instance_uuid, 1, {},
                                  filter_properties={})
         migration_ref = db.migration_get_by_instance_and_status(context,
                 instance_uuid, 'pre-migrating')
         self.compute.resize_instance(context, instance_uuid,
-                migration_ref['id'])
+                migration_ref['id'], {})
         self.compute.terminate_instance(context, instance_uuid)
 
     def test_finish_revert_resize(self):
@@ -1235,16 +1238,16 @@ class ComputeTestCase(BaseTestCase):
 
         new_instance_type_ref = db.instance_type_get_by_flavor_id(context, 3)
         self.compute.prep_resize(context, inst_ref['uuid'],
-                                 new_instance_type_ref['id'],
+                                 new_instance_type_ref['id'], {},
                                  filter_properties={})
 
         migration_ref = db.migration_get_by_instance_and_status(context,
                 inst_ref['uuid'], 'pre-migrating')
 
         self.compute.resize_instance(context, inst_ref['uuid'],
-                migration_ref['id'])
+                migration_ref['id'], {})
         self.compute.finish_resize(context, inst_ref['uuid'],
-                    int(migration_ref['id']), {})
+                    int(migration_ref['id']), {}, {})
 
         # Prove that the instance size is now the new size
         inst_ref = db.instance_get_by_uuid(context, instance_uuid)
@@ -1281,13 +1284,13 @@ class ComputeTestCase(BaseTestCase):
         self.compute.run_instance(self.context, instance['uuid'])
         instance = db.instance_get_by_uuid(self.context, instance['uuid'])
         self.assertRaises(exception.MigrationError, self.compute.prep_resize,
-                self.context, instance['uuid'], 1)
+                self.context, instance['uuid'], 1, {})
         self.compute.terminate_instance(self.context, instance['uuid'])
 
     def test_resize_instance_handles_migration_error(self):
         """Ensure vm_state is ERROR when error occurs"""
         def raise_migration_failure(*args):
-            raise Exception(reason='test failure')
+            raise test.TestingException()
         self.stubs.Set(self.compute.driver,
                 'migrate_disk_and_power_off',
                 raise_migration_failure)
@@ -1297,20 +1300,15 @@ class ComputeTestCase(BaseTestCase):
 
         self.compute.run_instance(self.context, inst_ref['uuid'])
         db.instance_update(self.context, inst_ref['uuid'], {'host': 'foo'})
-        self.compute.prep_resize(context, inst_ref['uuid'], 1,
+        self.compute.prep_resize(context, inst_ref['uuid'], 1, {},
                                  filter_properties={})
         migration_ref = db.migration_get_by_instance_and_status(context,
                 inst_ref['uuid'], 'pre-migrating')
-        self.assertRaises(Exception, self.compute.resize_instance,
-                          context, inst_ref['uuid'], migration_ref['id'])
+        self.assertRaises(test.TestingException, self.compute.resize_instance,
+                          context, inst_ref['uuid'], migration_ref['id'], {})
         inst_ref = db.instance_get_by_uuid(context, inst_ref['uuid'])
         self.assertEqual(inst_ref['vm_state'], vm_states.ERROR)
         self.compute.terminate_instance(context, inst_ref['uuid'])
-
-    def _setup_other_managers(self):
-        self.volume_manager = utils.import_object(FLAGS.volume_manager)
-        self.network_manager = utils.import_object(FLAGS.network_manager)
-        self.compute_driver = utils.import_object(FLAGS.compute_driver)
 
     def test_pre_live_migration_instance_has_no_fixed_ip(self):
         """Confirm raising exception if instance doesn't have fixed_ip."""
@@ -2577,7 +2575,6 @@ class ComputeAPITestCase(BaseTestCase):
 
     def test_get(self):
         """Test get instance"""
-        self.maxDiff = None
         c = context.get_admin_context()
         exp_instance = self._create_fake_instance()
         expected = dict(exp_instance.iteritems())
@@ -2593,7 +2590,6 @@ class ComputeAPITestCase(BaseTestCase):
 
     def test_get_with_integer_id(self):
         """Test get instance with an integer id"""
-        self.maxDiff = None
         c = context.get_admin_context()
         exp_instance = self._create_fake_instance()
         expected = dict(exp_instance.iteritems())
@@ -3297,9 +3293,6 @@ class ComputeAPIAggrTestCase(test.TestCase):
         self.stubs.Set(rpc, 'call', fake_rpc_method)
         self.stubs.Set(rpc, 'cast', fake_rpc_method)
 
-    def tearDown(self):
-        super(ComputeAPIAggrTestCase, self).tearDown()
-
     def test_create_invalid_availability_zone(self):
         """Ensure InvalidAggregateAction is raised with wrong avail_zone."""
         self.assertRaises(exception.InvalidAggregateAction,
@@ -3515,9 +3508,6 @@ class ComputeAggrTestCase(BaseTestCase):
                   'availability_zone': 'test_zone', }
         self.aggr = db.aggregate_create(self.context, values)
 
-    def tearDown(self):
-        super(ComputeAggrTestCase, self).tearDown()
-
     def test_add_aggregate_host(self):
         def fake_driver_add_to_aggregate(context, aggregate, host):
             fake_driver_add_to_aggregate.called = True
@@ -3596,8 +3586,6 @@ class ComputePolicyTestCase(BaseTestCase):
         nova.policy.enforce(self.context, 'compute:reboot', {})
         self.mox.ReplayAll()
         nova.compute.api.check_policy(self.context, 'reboot', {})
-        self.mox.UnsetStubs()
-        self.mox.VerifyAll()
 
     def test_wrapped_method(self):
         instance = self._create_fake_instance()
