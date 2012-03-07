@@ -1,3 +1,4 @@
+setup
 nova-manage_flagfile_location.patch
 path-to-the-xenhost.conf-fixup.patch
 

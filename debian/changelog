@@ -1,3 +1,9 @@
+nova (2012.1~e4+1794-g855aae0-1) unstable; urgency=low
+
+  * Non-maintainer upload.
+
+ -- Ghe Rivero <ghe@debian.org>  Wed, 07 Mar 2012 20:39:04 +0100
+
 nova (2012.1~e4-1) unstable; urgency=low
 
   * New upstream version
