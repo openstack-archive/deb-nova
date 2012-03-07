@@ -611,8 +611,8 @@ class CloudController(object):
     def revoke_security_group_ingress(self, context, group_name=None,
                                       group_id=None, **kwargs):
         if not group_name and not group_id:
-            err = "Not enough parameters, need group_name or group_id"
-            raise exception.EC2APIError(_(err))
+            err = _("Not enough parameters, need group_name or group_id")
+            raise exception.EC2APIError(err)
         self.compute_api.ensure_default_security_group(context)
         notfound = exception.SecurityGroupNotFound
         if group_name:
@@ -626,8 +626,8 @@ class CloudController(object):
             if not security_group:
                 raise notfound(security_group_id=group_id)
 
-        msg = "Revoke security group ingress %s"
-        LOG.audit(_(msg), security_group['name'], context=context)
+        msg = _("Revoke security group ingress %s")
+        LOG.audit(msg, security_group['name'], context=context)
         prevalues = []
         try:
             prevalues = kwargs['ip_permissions']
@@ -638,8 +638,8 @@ class CloudController(object):
         for values in prevalues:
             rulesvalues = self._rule_args_to_dict(context, values)
             if not rulesvalues:
-                err = "%s Not enough parameters to build a valid rule"
-                raise exception.EC2APIError(_(err % rulesvalues))
+                err = _("%s Not enough parameters to build a valid rule")
+                raise exception.EC2APIError(err % rulesvalues)
 
             for values_for_rule in rulesvalues:
                 values_for_rule['parent_group_id'] = security_group.id
@@ -665,8 +665,8 @@ class CloudController(object):
     def authorize_security_group_ingress(self, context, group_name=None,
                                          group_id=None, **kwargs):
         if not group_name and not group_id:
-            err = "Not enough parameters, need group_name or group_id"
-            raise exception.EC2APIError(_(err))
+            err = _("Not enough parameters, need group_name or group_id")
+            raise exception.EC2APIError(err)
         self.compute_api.ensure_default_security_group(context)
         notfound = exception.SecurityGroupNotFound
         if group_name:
@@ -680,8 +680,8 @@ class CloudController(object):
             if not security_group:
                 raise notfound(security_group_id=group_id)
 
-        msg = "Authorize security group ingress %s"
-        LOG.audit(_(msg), security_group['name'], context=context)
+        msg = _("Authorize security group ingress %s")
+        LOG.audit(msg, security_group['name'], context=context)
         prevalues = []
         try:
             prevalues = kwargs['ip_permissions']
@@ -691,14 +691,14 @@ class CloudController(object):
         for values in prevalues:
             rulesvalues = self._rule_args_to_dict(context, values)
             if not rulesvalues:
-                err = "%s Not enough parameters to build a valid rule"
-                raise exception.EC2APIError(_(err % rulesvalues))
+                err = _("%s Not enough parameters to build a valid rule")
+                raise exception.EC2APIError(err % rulesvalues)
             for values_for_rule in rulesvalues:
                 values_for_rule['parent_group_id'] = security_group.id
                 if self._security_group_rule_exists(security_group,
                                                     values_for_rule):
-                    err = '%s - This rule already exists in group'
-                    raise exception.EC2APIError(_(err) % values_for_rule)
+                    err = _('%s - This rule already exists in group')
+                    raise exception.EC2APIError(err % values_for_rule)
                 postvalues.append(values_for_rule)
 
         rule_ids = []
@@ -772,8 +772,8 @@ class CloudController(object):
     def delete_security_group(self, context, group_name=None, group_id=None,
                               **kwargs):
         if not group_name and not group_id:
-            err = "Not enough parameters, need group_name or group_id"
-            raise exception.EC2APIError(_(err))
+            err = _("Not enough parameters, need group_name or group_id")
+            raise exception.EC2APIError(err)
         notfound = exception.SecurityGroupNotFound
         if group_name:
             security_group = db.security_group_get_by_name(context,
@@ -1365,11 +1365,18 @@ class CloudController(object):
         if ramdisk_id:
             i['ramdiskId'] = ec2utils.image_ec2_id(ramdisk_id, 'ari')
         i['imageOwnerId'] = image['properties'].get('owner_id')
-        if name:
-            i['imageLocation'] = "%s (%s)" % (image['properties'].
-                                              get('image_location'), name)
+
+        img_loc = image['properties'].get('image_location')
+        if img_loc:
+            i['imageLocation'] = img_loc
         else:
-            i['imageLocation'] = image['properties'].get('image_location')
+            i['imageLocation'] = "%s (%s)" % (img_loc, name)
+
+        i['name'] = name
+        if not name and img_loc:
+            # This should only occur for images registered with ec2 api
+            # prior to that api populating the glance name
+            i['name'] = img_loc
 
         i['imageState'] = self._get_image_state(image)
         i['description'] = image.get('description')
@@ -1425,9 +1432,17 @@ class CloudController(object):
         return image_id
 
     def register_image(self, context, image_location=None, **kwargs):
-        if image_location is None and 'name' in kwargs:
+        if image_location is None and kwargs.get('name'):
             image_location = kwargs['name']
+        if image_location is None:
+            raise exception.EC2APIError(_('imageLocation is required'))
+
         metadata = {'properties': {'image_location': image_location}}
+
+        if kwargs.get('name'):
+            metadata['name'] = kwargs['name']
+        else:
+            metadata['name'] = image_location
 
         if 'root_device_name' in kwargs:
             metadata['properties']['root_device_name'] = kwargs.get(
@@ -1501,7 +1516,11 @@ class CloudController(object):
         del(image['id'])
 
         image['is_public'] = (operation_type == 'add')
-        return self.image_service.update(context, internal_id, image)
+        try:
+            return self.image_service.update(context, internal_id, image)
+        except exception.ImageNotAuthorized:
+            msg = _('Not allowed to modify attributes for image %s')
+            raise exception.EC2APIError(msg % image_id)
 
     def update_image(self, context, image_id, **kwargs):
         internal_id = ec2utils.ec2_id_to_id(image_id)

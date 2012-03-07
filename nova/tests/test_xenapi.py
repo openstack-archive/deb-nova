@@ -202,10 +202,10 @@ class XenAPIVolumeTestCase(test.TestCase):
         volume = self._create_volume()
         instance = db.instance_create(self.context, self.instance_values)
         xenapi_fake.create_vm(instance.name, 'Running')
-        self.assertRaises(Exception,
+        self.assertRaises(exception.VolumeDriverNotFound,
                           conn.attach_volume,
+                          {'driver_volume_type': 'nonexist'},
                           instance.name,
-                          volume['id'],
                           '/dev/sdc')
 
 
@@ -633,8 +633,8 @@ class XenAPIVMTestCase(test.TestCase):
 
             # mount point will be the last item of the command list
             self._tmpdir = cmd[len(cmd) - 1]
-            LOG.debug(_('Creating files in %s to simulate guest agent' %
-                self._tmpdir))
+            LOG.debug(_('Creating files in %s to simulate guest agent') %
+                self._tmpdir)
             os.makedirs(os.path.join(self._tmpdir, 'usr', 'sbin'))
             # Touch the file using open
             open(os.path.join(self._tmpdir, 'usr', 'sbin',
@@ -644,8 +644,8 @@ class XenAPIVMTestCase(test.TestCase):
         def _umount_handler(cmd, *ignore_args, **ignore_kwargs):
             # Umount would normall make files in the m,ounted filesystem
             # disappear, so do that here
-            LOG.debug(_('Removing simulated guest agent files in %s' %
-                self._tmpdir))
+            LOG.debug(_('Removing simulated guest agent files in %s') %
+                self._tmpdir)
             os.remove(os.path.join(self._tmpdir, 'usr', 'sbin',
                 'xe-update-networking'))
             os.rmdir(os.path.join(self._tmpdir, 'usr', 'sbin'))
@@ -1364,7 +1364,7 @@ class XenAPIBWUsageTestCase(test.TestCase):
         self.conn = xenapi_conn.get_connection(False)
 
     @classmethod
-    def _fake_compile_metrics(cls, session, start_time, stop_time=None):
+    def _fake_compile_metrics(cls, start_time, stop_time=None):
         raise exception.CouldNotFetchMetrics()
 
     def test_get_all_bw_usage_in_failure_case(self):
@@ -1790,7 +1790,7 @@ class XenAPIAggregateTestCase(test.TestCase):
 
     def test_join_slave(self):
         """Ensure join_slave gets called when the request gets to master."""
-        def fake_join_slave(id, compute_uuid, host, url, user, password):
+        def fake_join_slave(id, compute_uuid, url, user, password):
             fake_join_slave.called = True
         self.stubs.Set(self.conn._pool, "_join_slave", fake_join_slave)
 

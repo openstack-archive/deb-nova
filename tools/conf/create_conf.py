@@ -16,9 +16,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Generates a nova.conf file.
-
-"""
+"""Generates a nova.conf file."""
 
 import os
 import re
@@ -26,7 +24,6 @@ import sys
 
 
 _PY_EXT = ".py"
-_SCREEN_WIDTH = 72
 _FLAGS = "FLAGS"
 
 _STROPT = "StrOpt"
@@ -53,9 +50,12 @@ def main(srcfiles):
                   "console", "consoleauth", "image"]
         return prefer.index(pkg_str) if pkg_str in prefer else ord(pkg_str[0])
 
-    print '#', 'nova.conf sample\n'
+    print '#' * 20 + '\n# nova.conf sample #\n' + '#' * 20
     # NOTE(lzyeval): sort top level modules and packages
     #                to process modules first
+    print
+    print '[DEFAULT]'
+    print
     mods_by_pkg = dict()
     for filepath in srcfiles:
         pkg_name = filepath.split(os.sep)[3]
@@ -93,25 +93,18 @@ def print_module(mod_str):
         return
     except Exception, e:
         return
-    for opt_name, opt_dict in sorted(flags._opts.items(),
-                                     key=lambda (x, y): x):
+    for opt_name in sorted(flags.keys()):
         # check if option was processed
         if opt_name in _OPTION_CACHE:
             continue
+        opt_dict = flags._get_opt_info(opt_name)
         opts.append(opt_dict['opt'])
         _OPTION_CACHE.append(opt_name)
     # return if flags has no unique options
     if not opts:
         return
     # print out module info
-    remain_width = _SCREEN_WIDTH - len(mod_str) - 5
-    print '#' * _SCREEN_WIDTH
-    print '#', mod_str,
-    if remain_width > 0:
-        print " " * remain_width, "#"
-    else:
-        print
-    print '#' * _SCREEN_WIDTH
+    print '######### defined in %s #########' % mod_str
     print
     for opt in opts:
         print_opt(opt)
@@ -126,22 +119,21 @@ def print_opt(opt):
         sys.stderr.write("%s\n" % str(err))
         sys.exit(1)
     # print out option info
-    print "#", "".join(["(", opt_type, ")"]), opt.help
-    if opt_type == _BOOLOPT:
-        if opt.default is True:
-            print "# Comment line to disable"
-        else:
-            print "# Uncomment line to enable"
-            print "#",
-        print ''.join(["--", opt.name])
+    print "######", "".join(["(", opt_type, ")"]), opt.help
+    if opt.default is None:
+        print '# %s=<None>' % opt.name
     else:
-        opt_value = str(opt.default)
-        if (opt.default is None or
-            (isinstance(opt.default, str) and not opt.default)):
-            opt_value = "<%s>" % opt.name
-            print "#",
-        print ''.join(["--", opt.name, "=", opt_value])
-    print
+        if opt_type == 'StrOpt':
+            print '# %s="%s"' % (opt.name, opt.default)
+        elif opt_type == 'ListOpt':
+            print '# %s="%s"' % (opt.name, ','.join(opt.default))
+        elif opt_type == 'MultiStrOpt':
+            for default in opt.default:
+                print '# %s="%s"' % (opt.name, default)
+        elif opt_type == 'BoolOpt':
+            print '# %s=%s' % (opt.name, str(opt.default).lower())
+        else:
+            print '# %s=%s' % (opt.name, opt.default)
 
 
 if __name__ == '__main__':

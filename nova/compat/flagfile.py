@@ -97,6 +97,10 @@ def _read_flagfile(arg, next_arg, tempdir=None):
 
     args = _read_lines(flagfile)
 
+    if args and not args[0].startswith('--'):
+        # This is a config file, not a flagfile, so return it.
+        return ['--config-file=' + flagfile] + argp[1:]
+
     #
     # We're recursing here to convert any --flagfile arguments
     # read from this flagfile into --config-file arguments
@@ -169,7 +173,7 @@ def handle_flagfiles(args, tempdir=None):
 def handle_flagfiles_managed(args):
     '''A context manager for handle_flagfiles() which removes temp files.
 
-    For use with the 'with' statement, i.e.
+    For use with the 'with' statement, i.e.::
 
         with handle_flagfiles_managed(args) as args:
              # Do stuff

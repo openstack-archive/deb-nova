@@ -116,23 +116,25 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
     Returns False on a failure. Basic packet structure is below.
 
     Client packet (14 bytes)::
-     0 1      8 9  13
-    +-+--------+-----+
-    |x| cli_id |?????|
-    +-+--------+-----+
-    x = packet identifier 0x38
-    cli_id = 64 bit identifier
-    ? = unknown, probably flags/padding
+
+         0 1      8 9  13
+        +-+--------+-----+
+        |x| cli_id |?????|
+        +-+--------+-----+
+        x = packet identifier 0x38
+        cli_id = 64 bit identifier
+        ? = unknown, probably flags/padding
 
     Server packet (26 bytes)::
-     0 1      8 9  13 14    21 2225
-    +-+--------+-----+--------+----+
-    |x| srv_id |?????| cli_id |????|
-    +-+--------+-----+--------+----+
-    x = packet identifier 0x40
-    cli_id = 64 bit identifier
-    ? = unknown, probably flags/padding
-    bit 9 was 1 and the rest were 0 in testing
+
+         0 1      8 9  13 14    21 2225
+        +-+--------+-----+--------+----+
+        |x| srv_id |?????| cli_id |????|
+        +-+--------+-----+--------+----+
+        x = packet identifier 0x40
+        cli_id = 64 bit identifier
+        ? = unknown, probably flags/padding
+        bit 9 was 1 and the rest were 0 in testing
 
     """
     if session_id is None:
@@ -162,27 +164,29 @@ def fetchfile(url, target):
 
 
 def execute(*cmd, **kwargs):
-    """
-    Helper method to execute command with optional retry.
+    """Helper method to execute command with optional retry.
+
     If you add a run_as_root=True command, don't forget to add the
     corresponding filter to nova.rootwrap !
 
-    :cmd                Passed to subprocess.Popen.
-    :process_input      Send to opened process.
-    :check_exit_code    Single bool, int, or list of allowed exit codes.
-                        Defaults to [0].  Raise exception.ProcessExecutionError
-                        unless program exits with one of these code.
-    :delay_on_retry     True | False. Defaults to True. If set to True, wait a
-                        short amount of time before retrying.
-    :attempts           How many times to retry cmd.
-    :run_as_root        True | False. Defaults to False. If set to True,
-                        the command is prefixed by the command specified
-                        in the root_helper FLAG.
+    :param cmd:                Passed to subprocess.Popen.
+    :param process_input:      Send to opened process.
+    :param check_exit_code:    Single bool, int, or list of allowed exit
+                               codes.  Defaults to [0].  Raise
+                               exception.ProcessExecutionError unless
+                               program exits with one of these code.
+    :param delay_on_retry:     True | False. Defaults to True. If set to
+                               True, wait a short amount of time
+                               before retrying.
+    :param attempts:           How many times to retry cmd.
+    :param run_as_root:        True | False. Defaults to False. If set to True,
+                               the command is prefixed by the command specified
+                               in the root_helper FLAG.
 
-    :raises exception.Error on receiving unknown arguments
-    :raises exception.ProcessExecutionError
+    :raises exception.Error: on receiving unknown arguments
+    :raises exception.ProcessExecutionError:
 
-    :returns a tuple, (stdout, stderr) from the spawned process, or None if
+    :returns: a tuple, (stdout, stderr) from the spawned process, or None if
              the command fails.
     """
 
@@ -795,21 +799,23 @@ _semaphores = {}
 def synchronized(name, external=False):
     """Synchronization decorator.
 
-    Decorating a method like so:
-    @synchronized('mylock')
-    def foo(self, *args):
-       ...
+    Decorating a method like so::
+
+        @synchronized('mylock')
+        def foo(self, *args):
+           ...
 
     ensures that only one thread will execute the bar method at a time.
 
-    Different methods can share the same lock:
-    @synchronized('mylock')
-    def foo(self, *args):
-       ...
+    Different methods can share the same lock::
 
-    @synchronized('mylock')
-    def bar(self, *args):
-       ...
+        @synchronized('mylock')
+        def foo(self, *args):
+           ...
+
+        @synchronized('mylock')
+        def bar(self, *args):
+           ...
 
     This way only one of either foo or bar can be executing at a time.
 
@@ -830,23 +836,23 @@ def synchronized(name, external=False):
                 _semaphores[name] = semaphore.Semaphore()
             sem = _semaphores[name]
             LOG.debug(_('Attempting to grab semaphore "%(lock)s" for method '
-                        '"%(method)s"...' % {'lock': name,
-                                             'method': f.__name__}))
+                        '"%(method)s"...') % {'lock': name,
+                                              'method': f.__name__})
             with sem:
                 LOG.debug(_('Got semaphore "%(lock)s" for method '
-                            '"%(method)s"...' % {'lock': name,
-                                                 'method': f.__name__}))
+                            '"%(method)s"...') % {'lock': name,
+                                                  'method': f.__name__})
                 if external and not FLAGS.disable_process_locking:
                     LOG.debug(_('Attempting to grab file lock "%(lock)s" for '
-                                'method "%(method)s"...' %
-                                {'lock': name, 'method': f.__name__}))
+                                'method "%(method)s"...') %
+                              {'lock': name, 'method': f.__name__})
                     lock_file_path = os.path.join(FLAGS.lock_path,
                                                   'nova-%s' % name)
                     lock = lockfile.FileLock(lock_file_path)
                     with lock:
                         LOG.debug(_('Got file lock "%(lock)s" for '
-                                    'method "%(method)s"...' %
-                                    {'lock': name, 'method': f.__name__}))
+                                    'method "%(method)s"...') %
+                                  {'lock': name, 'method': f.__name__})
                         retval = f(*args, **kwargs)
                 else:
                     retval = f(*args, **kwargs)
@@ -903,15 +909,15 @@ def cleanup_file_locks():
         if match is None:
             continue
         pid = match.group(1)
-        LOG.debug(_('Found sentinel %(filename)s for pid %(pid)s' %
-                    {'filename': filename, 'pid': pid}))
+        LOG.debug(_('Found sentinel %(filename)s for pid %(pid)s') %
+                  {'filename': filename, 'pid': pid})
         try:
             os.kill(int(pid), 0)
         except OSError, e:
             # PID wasn't found
             delete_if_exists(os.path.join(FLAGS.lock_path, filename))
-            LOG.debug(_('Cleaned sentinel %(filename)s for pid %(pid)s' %
-                    {'filename': filename, 'pid': pid}))
+            LOG.debug(_('Cleaned sentinel %(filename)s for pid %(pid)s') %
+                      {'filename': filename, 'pid': pid})
 
     # cleanup lock files
     for filename in files:
@@ -925,13 +931,13 @@ def cleanup_file_locks():
                 continue
             else:
                 raise
-        msg = _('Found lockfile %(file)s with link count %(count)d' %
-                {'file': filename, 'count': stat_info.st_nlink})
+        msg = (_('Found lockfile %(file)s with link count %(count)d') %
+               {'file': filename, 'count': stat_info.st_nlink})
         LOG.debug(msg)
         if stat_info.st_nlink == 1:
             delete_if_exists(os.path.join(FLAGS.lock_path, filename))
-            msg = _('Cleaned lockfile %(file)s with link count %(count)d' %
-                    {'file': filename, 'count': stat_info.st_nlink})
+            msg = (_('Cleaned lockfile %(file)s with link count %(count)d') %
+                   {'file': filename, 'count': stat_info.st_nlink})
             LOG.debug(msg)
 
 
@@ -1071,7 +1077,7 @@ def parse_server_string(server_str):
         return (address, port)
 
     except Exception:
-        LOG.debug(_('Invalid server_string: %s' % server_str))
+        LOG.debug(_('Invalid server_string: %s') % server_str)
         return ('', '')
 
 
@@ -1601,7 +1607,8 @@ class UndoManager(object):
     def rollback_and_reraise(self, msg=None):
         """Rollback a series of actions then re-raise the exception.
 
-        NOTE(sirp): This should only be called within an exception handler.
+        .. note:: (sirp) This should only be called within an
+                  exception handler.
         """
         with save_and_reraise_exception():
             if msg:

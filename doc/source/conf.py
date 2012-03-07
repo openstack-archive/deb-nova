@@ -78,7 +78,11 @@ version = nova_version.canonical_version_string()
 #today_fmt = '%B %d, %Y'
 
 # List of documents that shouldn't be included in the build.
-#unused_docs = []
+unused_docs = [
+    'api_ext/rst_extension_template',
+    'vmwareapi_readme',
+    'installer',
+    ]
 
 # List of directories, relative to source directory, that shouldn't be searched
 # for source files.
@@ -92,7 +96,7 @@ exclude_trees = []
 
 # If true, the current module name will be prepended to all description
 # unit titles (such as .. function::).
-#add_module_names = True
+add_module_names = False
 
 # If true, sectionauthor and moduleauthor directives will be shown in the
 # output. They are ignored by default.
@@ -106,7 +110,7 @@ modindex_common_prefix = ['nova.']
 
 # -- Options for man page output -----------------------------------------------
 
-# Grouping the document tree for man pages. 
+# Grouping the document tree for man pages.
 # List of tuples 'sourcefile', 'target', u'title', u'Authors name', 'manual'
 
 man_pages = [

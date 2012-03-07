@@ -562,8 +562,8 @@ def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
                               with_lockmode('update').\
                               first()
         if compute_node is None:
-            raise exception.NotFound(_("No ComputeNode for %(host)s" %
-                                 locals()))
+            raise exception.NotFound(_("No ComputeNode for %(host)s") %
+                                     locals())
 
         # This table thingy is how we get atomic UPDATE x = x + 1
         # semantics.
@@ -597,8 +597,8 @@ def compute_node_utilization_set(context, host, free_ram_mb=None,
                               with_lockmode('update').\
                               first()
         if compute_node is None:
-            raise exception.NotFound(_("No ComputeNode for %(host)s" %
-                                 locals()))
+            raise exception.NotFound(_("No ComputeNode for %(host)s") %
+                                     locals())
 
         if free_ram_mb != None:
             compute_node.free_ram_mb = free_ram_mb
@@ -993,16 +993,12 @@ def fixed_ip_associate(context, address, instance_id, network_id=None,
         if fixed_ip_ref is None:
             raise exception.FixedIpNotFoundForNetwork(address=address,
                                             network_id=network_id)
-        if fixed_ip_ref.instance is not None:
+        if fixed_ip_ref.instance_id:
             raise exception.FixedIpAlreadyInUse(address=address)
 
-        if not fixed_ip_ref.network:
-            fixed_ip_ref.network = network_get(context,
-                                           network_id,
-                                           session=session)
-        fixed_ip_ref.instance = instance_get(context,
-                                             instance_id,
-                                             session=session)
+        if not fixed_ip_ref.network_id:
+            fixed_ip_ref.network_id = network_id
+        fixed_ip_ref.instance_id = instance_id
         session.add(fixed_ip_ref)
     return fixed_ip_ref['address']
 

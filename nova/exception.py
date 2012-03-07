@@ -201,7 +201,7 @@ class MelangeConnectionFailed(NovaException):
 
 class NotAuthorized(NovaException):
     message = _("Not authorized.")
-    code = 401
+    code = 403
 
 
 class AdminRequired(NotAuthorized):
@@ -210,6 +210,10 @@ class AdminRequired(NotAuthorized):
 
 class PolicyNotAuthorized(NotAuthorized):
     message = _("Policy doesn't allow %(action)s to be performed.")
+
+
+class ImageNotAuthorized(NovaException):
+    message = _("Not authorized for image %(image_id)s.")
 
 
 class Invalid(NovaException):
@@ -1019,3 +1023,7 @@ class InstanceNotFound(NotFound):
 
 class InvalidInstanceIDMalformed(Invalid):
     message = _("Invalid id: %(val)s (expecting \"i-...\").")
+
+
+class CouldNotFetchImage(NovaException):
+    message = _("Could not fetch image %(image)s")

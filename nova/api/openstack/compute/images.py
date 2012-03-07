@@ -124,6 +124,11 @@ class Controller(wsgi.Controller):
         except (AttributeError, IndexError, KeyError):
             pass
 
+        filter_name = 'status'
+        if filter_name in filters:
+            # The Image API expects us to use lowercase strings for status
+            filters[filter_name] = filters[filter_name].lower()
+
         return filters
 
     @wsgi.serializers(xml=ImageTemplate)
@@ -171,8 +176,11 @@ class Controller(wsgi.Controller):
         for key, val in page_params.iteritems():
             params[key] = val
 
-        images = self._image_service.index(context, filters=filters,
-                                           **page_params)
+        try:
+            images = self._image_service.index(context, filters=filters,
+                                               **page_params)
+        except exception.Invalid as e:
+            raise webob.exc.HTTPBadRequest(explanation=str(e))
         return self._view_builder.index(req, images)
 
     @wsgi.serializers(xml=ImagesTemplate)
@@ -188,8 +196,11 @@ class Controller(wsgi.Controller):
         page_params = common.get_pagination_params(req)
         for key, val in page_params.iteritems():
             params[key] = val
-        images = self._image_service.detail(context, filters=filters,
-                                            **page_params)
+        try:
+            images = self._image_service.detail(context, filters=filters,
+                                                **page_params)
+        except exception.Invalid as e:
+            raise webob.exc.HTTPBadRequest(explanation=str(e))
 
         return self._view_builder.detail(req, images)
 

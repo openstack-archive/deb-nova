@@ -216,9 +216,13 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self.db.instance_update(context, instance_id, kwargs)
 
     def _set_instance_error_state(self, context, instance_uuid):
-        self._instance_update(context,
-                              instance_uuid,
-                              vm_state=vm_states.ERROR)
+        try:
+            self._instance_update(context,
+                    instance_uuid, vm_state=vm_states.ERROR)
+        except exception.InstanceNotFound:
+            LOG.debug(_("Instance %(instance_uuid)s has been destroyed "
+                    "from under us while trying to set it to ERROR") %
+                    locals())
 
     def init_host(self):
         """Initialization for a standalone compute service."""
@@ -389,20 +393,18 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     def _shutdown_instance_even_if_deleted(self, context, instance_uuid):
         """Call terminate_instance even for already deleted instances"""
-        LOG.info(_("Going to force the deletion of the vm %(instance_uuid)s, "
-                   "even if it is deleted") % locals())
         try:
             try:
                 self.terminate_instance(context, instance_uuid)
             except exception.InstanceNotFound:
-                LOG.info(_("Instance %(instance_uuid)s did not exist in the "
-                         "DB, but I will shut it down anyway using a special "
-                         "context") % locals())
-                ctxt = nova.context.get_admin_context('yes')
+                LOG.info(_("Instance %s already deleted from database. "
+                           "Attempting forceful vm deletion")
+                            % instance_uuid)
+                ctxt = nova.context.get_admin_context(read_deleted='yes')
                 self.terminate_instance(ctxt, instance_uuid)
         except Exception as ex:
-            LOG.info(_("exception terminating the instance "
-                     "%(instance_uuid)s") % locals())
+            LOG.exception(_("Exception encountered while terminating the "
+                            "instance %s") % instance_uuid)
 
     def _run_instance(self, context, instance_uuid,
                       requested_networks=None,
@@ -989,17 +991,17 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         images = fetch_images()
         num_images = len(images)
-        LOG.debug(_("Found %(num_images)d images (rotation: %(rotation)d)"
-                    % locals()))
+        LOG.debug(_("Found %(num_images)d images (rotation: %(rotation)d)")
+                  % locals())
         if num_images > rotation:
             # NOTE(sirp): this deletes all backups that exceed the rotation
             # limit
             excess = len(images) - rotation
-            LOG.debug(_("Rotating out %d backups" % excess))
+            LOG.debug(_("Rotating out %d backups") % excess)
             for i in xrange(excess):
                 image = images.pop()
                 image_id = image['id']
-                LOG.debug(_("Deleting image %s" % image_id))
+                LOG.debug(_("Deleting image %s") % image_id)
                 image_service.delete(context, image_id)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -1164,6 +1166,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         self._notify_about_instance_usage(instance_ref,
                                           "resize.confirm.start")
 
+        # NOTE(tr3buchet): tear down networks on source host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                             migration_ref['source_compute'], teardown=True)
+
         network_info = self._get_instance_nw_info(context, instance_ref)
         self.driver.confirm_migration(migration_ref, instance_ref,
                                       self._legacy_nw_info(network_info))
@@ -1184,6 +1190,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         migration_ref = self.db.migration_get(context, migration_id)
         instance_ref = self.db.instance_get_by_uuid(context,
                 migration_ref.instance_uuid)
+
+        # NOTE(tr3buchet): tear down networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         teardown=True)
 
         network_info = self._get_instance_nw_info(context, instance_ref)
         self.driver.destroy(instance_ref, self._legacy_nw_info(network_info))
@@ -1218,7 +1228,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         # Just roll back the record. There's no need to resize down since
         # the 'old' VM already has the preferred attributes
         self._instance_update(context,
-                              instance_ref["uuid"],
+                              instance_ref['uuid'],
                               memory_mb=instance_type['memory_mb'],
                               host=migration_ref['source_compute'],
                               vcpus=instance_type['vcpus'],
@@ -1353,6 +1363,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                     root_gb=instance_type['root_gb'],
                     ephemeral_gb=instance_type['ephemeral_gb'])
             resize_instance = True
+
+        # NOTE(tr3buchet): setup networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                migration_ref['dest_compute'])
 
         network_info = self._get_instance_nw_info(context, instance_ref)
 
@@ -1867,6 +1881,10 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         self.driver.pre_live_migration(block_device_info)
 
+        # NOTE(tr3buchet): setup networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         self.host)
+
         # Bridge settings.
         # Call this method prior to ensure_filtering_rules_for_instance,
         # since bridge is not set up, ensure_filtering_rules_for instance
@@ -1930,8 +1948,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             if self._get_instance_volume_bdms(context, instance_id):
                 rpc.call(context,
                           FLAGS.volume_topic,
-                          {"method": "check_for_export",
-                           "args": {'instance_id': instance_id}})
+                          {'method': 'check_for_export',
+                           'args': {'instance_id': instance_id}})
 
             if block_migration:
                 disk = self.driver.get_instance_disk_info(instance_ref.name)
@@ -1940,8 +1958,8 @@ class ComputeManager(manager.SchedulerDependentManager):
 
             rpc.call(context,
                      self.db.queue_get_for(context, FLAGS.compute_topic, dest),
-                     {"method": "pre_live_migration",
-                      "args": {'instance_id': instance_id,
+                     {'method': 'pre_live_migration',
+                      'args': {'instance_id': instance_id,
                                'block_migration': block_migration,
                                'disk': disk}})
 
@@ -1989,6 +2007,10 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         # Releasing vlan.
         # (not necessary in current implementation?)
+
+        # NOTE(tr3buchet): tear down networks on source host
+        self.network_api.setup_networks_on_host(ctxt, instance_ref,
+                                                self.host, teardown=True)
 
         network_info = self._get_instance_nw_info(ctxt, instance_ref)
         # Releasing security group ingress rule.
@@ -2072,6 +2094,14 @@ class ComputeManager(manager.SchedulerDependentManager):
         instance_ref = self.db.instance_get(context, instance_id)
         LOG.info(_('Post operation of migraton started'),
                  instance=instance_ref)
+
+        # NOTE(tr3buchet): setup networks on destination host
+        #                  this is called a second time because
+        #                  multi_host does not create the bridge in
+        #                  plug_vifs
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         self.host)
+
         network_info = self._get_instance_nw_info(context, instance_ref)
         self.driver.post_live_migration_at_destination(context, instance_ref,
                                             self._legacy_nw_info(network_info),
@@ -2095,6 +2125,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                               host=host,
                               vm_state=vm_states.ACTIVE,
                               task_state=None)
+
+        # NOTE(tr3buchet): setup networks on source host (really it's re-setup)
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         self.host)
 
         for bdm in self._get_instance_volume_bdms(context, instance_ref['id']):
             volume_id = bdm['volume_id']
@@ -2122,6 +2156,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         """
         instance_ref = self.db.instance_get(context, instance_id)
         network_info = self._get_instance_nw_info(context, instance_ref)
+
+        # NOTE(tr3buchet): tear down networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                self.host, teardown=True)
 
         # NOTE(vish): The mapping is passed in so the driver can disconnect
         #             from remote volumes if necessary

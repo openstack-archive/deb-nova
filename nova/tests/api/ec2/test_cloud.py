@@ -33,6 +33,7 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova.image import fake
+from nova.image import s3
 from nova import log as logging
 from nova import rpc
 from nova import test
@@ -217,7 +218,8 @@ class CloudTestCase(test.TestCase):
                                         public_ip=address)
         self.cloud.release_address(self.context,
                                   public_ip=address)
-        self.network.deallocate_fixed_ip(self.context, fixed_ips[0]['address'])
+        self.network.deallocate_fixed_ip(self.context, fixed_ips[0]['address'],
+                                         inst['host'])
         db.instance_destroy(self.context, inst['id'])
         db.floating_ip_destroy(self.context, address)
 
@@ -1155,7 +1157,7 @@ class CloudTestCase(test.TestCase):
         modify_image_attribute = self.cloud.modify_image_attribute
 
         fake_metadata = {
-            'id': 1,
+            'id': 'cedef40a-ed67-4d10-800e-17455edce175',
             'container_format': 'ami',
             'properties': {
                 'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
@@ -1164,11 +1166,17 @@ class CloudTestCase(test.TestCase):
             'is_public': False}
 
         def fake_show(meh, context, id):
-            return fake_metadata
+            return copy.deepcopy(fake_metadata)
 
         def fake_update(meh, context, image_id, metadata, data=None):
-            fake_metadata.update(metadata)
-            return fake_metadata
+            self.assertEqual(metadata['properties']['kernel_id'],
+                             fake_metadata['properties']['kernel_id'])
+            self.assertEqual(metadata['properties']['ramdisk_id'],
+                             fake_metadata['properties']['ramdisk_id'])
+            self.assertTrue(metadata['is_public'])
+            image = copy.deepcopy(fake_metadata)
+            image.update(metadata)
+            return image
 
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
         self.stubs.Set(fake._FakeImageService, 'show_by_name', fake_show)
@@ -1176,7 +1184,88 @@ class CloudTestCase(test.TestCase):
         result = modify_image_attribute(self.context, 'ami-00000001',
                                           'launchPermission', 'add',
                                            user_group=['all'])
-        self.assertEqual(True, result['is_public'])
+        self.assertTrue(result['is_public'])
+
+    def test_register_image(self):
+        register_image = self.cloud.register_image
+
+        def fake_create(*args, **kwargs):
+            # NOTE(vish): We are mocking s3 so make sure we have converted
+            #             to ids instead of uuids.
+            return {'id': 1,
+            'container_format': 'ami',
+            'properties': {
+                'kernel_id': 1,
+                'ramdisk_id': 1,
+                'type': 'machine'},
+            'is_public': False}
+
+        self.stubs.Set(s3.S3ImageService, 'create', fake_create)
+        image_location = 'fake_bucket/fake.img.manifest.xml'
+        result = register_image(self.context, image_location)
+        self.assertEqual(result['imageId'], 'ami-00000001')
+
+    def test_register_image_empty(self):
+        register_image = self.cloud.register_image
+        self.assertRaises(exception.EC2APIError, register_image, self.context,
+                          image_location=None)
+
+    def test_register_image_name(self):
+        register_image = self.cloud.register_image
+
+        def fake_create(_self, context, metadata, data=None):
+            self.assertEqual(metadata['name'], self.expected_name)
+            metadata['id'] = 1
+            metadata['container_format'] = 'ami'
+            metadata['is_public'] = False
+            return metadata
+
+        self.stubs.Set(s3.S3ImageService, 'create', fake_create)
+        self.expected_name = 'fake_bucket/fake.img.manifest.xml'
+        result = register_image(self.context,
+                                image_location=self.expected_name,
+                                name=None)
+        self.expected_name = 'an image name'
+        result = register_image(self.context,
+                                image_location='some_location',
+                                name=self.expected_name)
+
+    def test_format_image(self):
+        image = {
+            'id': 1,
+            'container_format': 'ami',
+            'name': 'name',
+            'properties': {
+                'image_location': 'location',
+                'kernel_id': 1,
+                'ramdisk_id': 1,
+                'type': 'machine'},
+            'is_public': False}
+        expected = {'name': 'name',
+                    'imageOwnerId': None,
+                    'isPublic': False,
+                    'imageId': 'ami-00000001',
+                    'imageState': None,
+                    'rootDeviceType': 'instance-store',
+                    'architecture': None,
+                    'imageLocation': 'location',
+                    'kernelId': 'aki-00000001',
+                    'ramdiskId': 'ari-00000001',
+                    'rootDeviceName': '/dev/sda1',
+                    'imageType': 'machine',
+                    'description': None}
+        result = self.cloud._format_image(image)
+        self.assertDictMatch(result, expected)
+        image['properties']['image_location'] = None
+        expected['imageLocation'] = 'None (name)'
+        result = self.cloud._format_image(image)
+        self.assertDictMatch(result, expected)
+        image['name'] = None
+        image['properties']['image_location'] = 'location'
+        expected['imageLocation'] = 'location'
+        expected['name'] = 'location'
+        result = self.cloud._format_image(image)
+        self.assertDictMatch(result, expected)
 
     def test_deregister_image(self):
         deregister_image = self.cloud.deregister_image

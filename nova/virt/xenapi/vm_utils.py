@@ -21,6 +21,7 @@ their attributes like VDIs, VIFs, as well as their lookup functions.
 """
 
 import contextlib
+from decimal import Decimal, InvalidOperation
 import json
 import os
 import pickle
@@ -29,8 +30,8 @@ import time
 import urllib
 import urlparse
 import uuid
-from decimal import Decimal, InvalidOperation
 from xml.dom import minidom
+from xml.parsers import expat
 
 from eventlet import greenthread
 
@@ -94,15 +95,15 @@ KERNEL_DIR = '/boot/guest'
 
 
 class ImageType:
-    """
-    Enumeration class for distinguishing different image types
-        0 - kernel image (goes on dom0's filesystem)
-        1 - ramdisk image (goes on dom0's filesystem)
-        2 - disk image (local SR, partitioned by objectstore plugin)
-        3 - raw disk image (local SR, NOT partitioned by plugin)
-        4 - vhd disk image (local SR, NOT inspected by XS, PV assumed for
-            linux, HVM assumed for Windows)
-        5 - ISO disk image (local SR, NOT partitioned by plugin)
+    """Enumeration class for distinguishing different image types
+
+    | 0 - kernel image (goes on dom0's filesystem)
+    | 1 - ramdisk image (goes on dom0's filesystem)
+    | 2 - disk image (local SR, partitioned by objectstore plugin)
+    | 3 - raw disk image (local SR, NOT partitioned by plugin)
+    | 4 - vhd disk image (local SR, NOT inspected by XS, PV assumed for
+    |     linux, HVM assumed for Windows)
+    | 5 - ISO disk image (local SR, NOT partitioned by plugin)
     """
 
     KERNEL = 0
@@ -437,7 +438,6 @@ class VMHelper(HelperBase):
         # NOTE(jerdfelt): Would be nice to just set vdi_ref to read/write
         sr_ref = cls.safe_find_sr(session)
         copy_ref = session.call_xenapi('VDI.copy', vdi_ref, sr_ref)
-        copy_uuid = session.call_xenapi('VDI.get_uuid', copy_ref)
 
         try:
             # Resize partition and filesystem down
@@ -481,7 +481,7 @@ class VMHelper(HelperBase):
             if len(partitions) != 1:
                 return
 
-            num, start, old_sectors, ptype = partitions[0]
+            _num, start, old_sectors, ptype = partitions[0]
             if ptype in ('ext3', 'ext4'):
                 new_sectors = new_gb * 1024 * 1024 * 1024 / SECTOR_SIZE
                 _resize_part_and_fs(dev, start, old_sectors, new_sectors)
@@ -677,8 +677,8 @@ class VMHelper(HelperBase):
         return vdi_return_list
 
     @classmethod
-    def fetch_image(cls, context, session, instance, image, user_id,
-                    project_id, image_type):
+    def fetch_image(cls, context, session, instance, image, _user_id,
+                    _project_id, image_type):
         """Fetch image from glance based on image type.
 
         Returns: A single filename if image_type is KERNEL or RAMDISK
@@ -692,8 +692,50 @@ class VMHelper(HelperBase):
                 session, instance, image, image_type)
 
     @classmethod
+    def _retry_glance_download_vhd(cls, context, session, instance, image):
+        # NOTE(sirp): The Glance plugin runs under Python 2.4
+        # which does not have the `uuid` module. To work around this,
+        # we generate the uuids here (under Python 2.6+) and
+        # pass them as arguments
+        uuid_stack = [str(uuid.uuid4()) for i in xrange(3)]
+
+        max_attempts = FLAGS.glance_num_retries + 1
+        sleep_time = 0.5
+        for attempt_num in xrange(1, max_attempts + 1):
+            glance_host, glance_port = glance.pick_glance_api_server()
+            params = {'image_id': image,
+                      'glance_host': glance_host,
+                      'glance_port': glance_port,
+                      'uuid_stack': uuid_stack,
+                      'sr_path': cls.get_sr_path(session),
+                      'num_retries': 0,
+                      'auth_token': getattr(context, 'auth_token', None)}
+            kwargs = {'params': pickle.dumps(params)}
+
+            LOG.info(_('download_vhd %(image)s '
+                       'attempt %(attempt_num)d/%(max_attempts)d '
+                       'from %(glance_host)s:%(glance_port)s') % locals())
+
+            task = session.async_call_plugin('glance', 'download_vhd', kwargs)
+            try:
+                result = session.wait_for_task(task, instance['uuid'])
+                return json.loads(result)
+            except cls.XenAPI.Failure as exc:
+                _type, _method, error = exc.details[:3]
+                if error == 'RetryableError':
+                    LOG.error(_('download_vhd failed: %r') %
+                              (exc.details[3:],))
+                else:
+                    raise
+
+            time.sleep(sleep_time)
+            sleep_time = min(2 * sleep_time, 15)
+
+        raise exception.CouldNotFetchImage(image=image)
+
+    @classmethod
     def _fetch_image_glance_vhd(cls, context, session, instance, image,
-                                image_type):
+                                _image_type):
         """Tell glance to download an image and put the VHDs into the SR
 
         Returns: A list of dictionaries that describe VDIs
@@ -703,32 +745,15 @@ class VMHelper(HelperBase):
                     % locals())
         sr_ref = cls.safe_find_sr(session)
 
-        # NOTE(sirp): The Glance plugin runs under Python 2.4
-        # which does not have the `uuid` module. To work around this,
-        # we generate the uuids here (under Python 2.6+) and
-        # pass them as arguments
-        uuid_stack = [str(uuid.uuid4()) for i in xrange(3)]
+        vdis = cls._retry_glance_download_vhd(context, session, instance,
+                                              image)
 
-        glance_host, glance_port = glance.pick_glance_api_server()
-        params = {'image_id': image,
-                  'glance_host': glance_host,
-                  'glance_port': glance_port,
-                  'uuid_stack': uuid_stack,
-                  'sr_path': cls.get_sr_path(session),
-                  'num_retries': FLAGS.glance_num_retries,
-                  'auth_token': getattr(context, 'auth_token', None)}
-
-        kwargs = {'params': pickle.dumps(params)}
-        task = session.async_call_plugin('glance', 'download_vhd', kwargs)
-        result = session.wait_for_task(task, instance['uuid'])
-        # 'download_vhd' will return a json encoded string containing
-        # a list of dictionaries describing VDIs.  The dictionary will
-        # contain 'vdi_type' and 'vdi_uuid' keys.  'vdi_type' can be
-        # 'os' or 'swap' right now.
-        vdis = json.loads(result)
+        # 'download_vhd' will return a list of dictionaries describing VDIs.
+        # The dictionary will contain 'vdi_type' and 'vdi_uuid' keys.
+        # 'vdi_type' can be 'os' or 'swap' right now.
         for vdi in vdis:
             LOG.debug(_("xapi 'download_vhd' returned VDI of "
-                    "type '%(vdi_type)s' with UUID '%(vdi_uuid)s'" % vdi))
+                    "type '%(vdi_type)s' with UUID '%(vdi_uuid)s'") % vdi)
 
         cls.scan_sr(session, instance, sr_ref)
 
@@ -744,7 +769,7 @@ class VMHelper(HelperBase):
         return vdis
 
     @classmethod
-    def _get_vdi_chain_size(cls, context, session, vdi_uuid):
+    def _get_vdi_chain_size(cls, session, vdi_uuid):
         """Compute the total size of a VDI chain, starting with the specified
         VDI UUID.
 
@@ -756,13 +781,13 @@ class VMHelper(HelperBase):
             cur_vdi_uuid = vdi_rec['uuid']
             vdi_size_bytes = int(vdi_rec['physical_utilisation'])
             LOG.debug(_('vdi_uuid=%(cur_vdi_uuid)s vdi_size_bytes='
-                        '%(vdi_size_bytes)d' % locals()))
+                        '%(vdi_size_bytes)d') % locals())
             size_bytes += vdi_size_bytes
         return size_bytes
 
     @classmethod
     def _check_vdi_size(cls, context, session, instance, vdi_uuid):
-        size_bytes = cls._get_vdi_chain_size(context, session, vdi_uuid)
+        size_bytes = cls._get_vdi_chain_size(session, vdi_uuid)
 
         # FIXME(jk0): this was copied directly from compute.manager.py, let's
         # refactor this to a common area
@@ -905,8 +930,7 @@ class VMHelper(HelperBase):
         return image_type
 
     @classmethod
-    def determine_is_pv(cls, session, instance_id, vdi_ref, disk_image_type,
-                        os_type):
+    def determine_is_pv(cls, session, vdi_ref, disk_image_type, os_type):
         """
         Determine whether the VM will use a paravirtualized kernel or if it
         will use hardware virtualization.
@@ -1039,7 +1063,7 @@ class VMHelper(HelperBase):
                 'cpu_time': 0}
 
     @classmethod
-    def compile_diagnostics(cls, session, record):
+    def compile_diagnostics(cls, record):
         """Compile VM diagnostics data"""
         try:
             diags = {}
@@ -1061,7 +1085,7 @@ class VMHelper(HelperBase):
             return {"Unable to retrieve diagnostics": e}
 
     @classmethod
-    def compile_metrics(cls, session, start_time, stop_time=None):
+    def compile_metrics(cls, start_time, stop_time=None):
         """Compile bandwidth usage, cpu, and disk metrics for all VMs on
            this host"""
         start_time = int(start_time)
@@ -1237,17 +1261,17 @@ def parse_rrd_update(doc, start, until=None):
     meta = parse_rrd_meta(doc)
     data = parse_rrd_data(doc)
     for col, collabel in enumerate(meta['legend']):
-        datatype, objtype, uuid, name = collabel.split(':')
+        _datatype, _objtype, uuid, name = collabel.split(':')
         vm_data = sum_data.get(uuid, dict())
         if name.startswith('vif'):
             vm_data[name] = integrate_series(data, col, start, until)
         else:
-            vm_data[name] = average_series(data, col, start, until)
+            vm_data[name] = average_series(data, col, until)
         sum_data[uuid] = vm_data
     return sum_data
 
 
-def average_series(data, col, start, until=None):
+def average_series(data, col, until=None):
     vals = [row['values'][col] for row in data
             if (not until or (row['time'] <= until)) and
                 row['values'][col].is_finite()]
@@ -1325,7 +1349,7 @@ def get_vhd_parent_uuid(session, vdi_ref):
     vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
     ret = get_vhd_parent(session, vdi_rec)
     if ret:
-        parent_ref, parent_rec = ret
+        _parent_ref, parent_rec = ret
         return parent_rec["uuid"]
     else:
         return None
@@ -1367,7 +1391,7 @@ def _wait_for_vhd_coalesce(session, instance, sr_ref, vdi_ref,
         # in the active vm/instance vdi chain.
         vdi_uuid = session.call_xenapi('VDI.get_record', vdi_ref)['uuid']
         parent_vdi_uuid = get_vhd_parent_uuid(session, vdi_ref)
-        for ref, rec in _get_all_vdis_in_sr(session, sr_ref):
+        for _ref, rec in _get_all_vdis_in_sr(session, sr_ref):
             if ((rec['uuid'] != vdi_uuid) and
                (rec['uuid'] != parent_vdi_uuid) and
                (rec['sm_config'].get('vhd-parent') == original_parent_uuid)):
@@ -1541,7 +1565,7 @@ def _is_vdi_pv(dev):
 def _get_partitions(dev):
     """Return partition information (num, size, type) for a device."""
     dev_path = utils.make_dev_path(dev)
-    out, err = utils.execute('parted', '--script', '--machine',
+    out, _err = utils.execute('parted', '--script', '--machine',
                              dev_path, 'unit s', 'print',
                              run_as_root=True)
     lines = [line for line in out.split('\n') if line]
@@ -1708,7 +1732,7 @@ def _copy_partition(session, src_ref, dst_ref, partition, virtual_size):
 def _mount_filesystem(dev_path, dir):
     """mounts the device specified by dev_path in dir"""
     try:
-        out, err = utils.execute('mount',
+        _out, err = utils.execute('mount',
                                  '-t', 'ext2,ext3,ext4,reiserfs',
                                  dev_path, dir, run_as_root=True)
     except exception.ProcessExecutionError as e:

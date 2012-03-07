@@ -2054,7 +2054,7 @@ class StorageManagerCommands(object):
 
             try:
                 db.sm_backend_conf_create(ctxt,
-                                          dict(flavor_id=flavors[0]['id'],
+                                          dict(flavor_id=flavors['id'],
                                                sr_uuid=None,
                                                sr_type=sr_type,
                                                config_params=config_params))
@@ -2373,6 +2373,10 @@ def main():
     for k, v in fn_kwargs.items():
         if v is None:
             del fn_kwargs[k]
+        else:
+            fn_kwargs[k] = v.decode('utf-8')
+
+    fn_args = [arg.decode('utf-8') for arg in fn_args]
 
     # call the action with the remaining arguments
     try:

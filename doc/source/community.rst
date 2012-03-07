@@ -1,6 +1,6 @@
 ..
       Copyright 2010-2011 United States Government as represented by the
-      Administrator of the National Aeronautics and Space Administration. 
+      Administrator of the National Aeronautics and Space Administration.
       All Rights Reserved.
 
       Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -27,14 +27,14 @@ How to Join the OpenStack Community
 
 Our community welcomes all people interested in open source cloud computing, and there are no formal
 membership requirements. The best way to join the community is to talk with others online or at a meetup
-and offer contributions through Launchpad, the wiki, or blogs. We welcome all types of contributions, 
-from blueprint designs to documentation to testing to deployment scripts. 
+and offer contributions through Launchpad, the wiki, or blogs. We welcome all types of contributions,
+from blueprint designs to documentation to testing to deployment scripts.
 
 Contributing Code
 -----------------
 
 To contribute code, sign up for a Launchpad account and sign a contributor license agreement,
-available on the `OpenStack Wiki <http://wiki.openstack.org/CLA>`_. Once the CLA is signed you
+available on the `OpenStack Wiki`_. Once the CLA is signed you
 can contribute code through the Bazaar version control system which is related to your Launchpad
 account.  See the :doc:`devref/development.environment` page to get started.
 
@@ -54,7 +54,9 @@ The wiki is a living source of knowledge.  It is edited by the community, and
 has collections of links and other sources of information. Typically the pages are a good place
 to write drafts for specs or documentation, describe a blueprint, or collaborate with others.
 
-* `OpenStack Wiki <http://wiki.openstack.org/>`_
+* `OpenStack Wiki`_
+
+.. _OpenStack Wiki: http://wiki.openstack.org/
 
 
 Nova on Github
@@ -87,14 +89,14 @@ aggregation with your blog posts, there are instructions for `adding your blog <
 Twitter
 -------
 
-Because all the cool kids do it: `@openstack <http://twitter.com/openstack>`_. Also follow the 
+Because all the cool kids do it: `@openstack <http://twitter.com/openstack>`_. Also follow the
 `#openstack <http://search.twitter.com/search?q=%23openstack>`_ tag for relevant tweets.
 
 OpenStack Docs Site
 -------------------
 
-The `nova.openstack.org <http://nova.openstack.org>`_ site is geared towards developer documentation, 
-and the `docs.openstack.org <http://docs.openstack.org>`_  site is intended for cloud administrators 
+The `nova.openstack.org <http://nova.openstack.org>`_ site is geared towards developer documentation,
+and the `docs.openstack.org <http://docs.openstack.org>`_  site is intended for cloud administrators
 who are standing up and running OpenStack Compute in production. You can contribute to the Docs Site
 by using git and Gerrit and contributing to the openstack-manuals project at http://github.com/openstack/openstack-manuals.
 

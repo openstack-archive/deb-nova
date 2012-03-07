@@ -25,7 +25,7 @@ Programming HowTos and Tutorials
 --------------------------------
 .. toctree::
     :maxdepth: 3
-    
+
     development.environment
     unit_tests
     addmethod.openstackapi
@@ -36,12 +36,12 @@ Background Concepts for Nova
 .. toctree::
    :maxdepth: 3
 
+   architecture
    threading
    il8n
-   distributed_scheduler
+   filter_scheduler
    multinic
-   zone
-   rabbit
+   rpc
 
 Other Resources
 ---------------

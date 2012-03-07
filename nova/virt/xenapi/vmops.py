@@ -99,7 +99,7 @@ def make_step_decorator(context, instance):
     """Factory to create a decorator that records instance progress as a series
     of discrete steps.
 
-    Each time the decorator is invoked we bump the total-step-count, so after:
+    Each time the decorator is invoked we bump the total-step-count, so after::
 
         @step
         def step1():
@@ -112,11 +112,12 @@ def make_step_decorator(context, instance):
     we have a total-step-count of 2.
 
     Each time the step-function (not the step-decorator!) is invoked, we bump
-    the current-step-count by 1, so after:
+    the current-step-count by 1, so after::
 
         step1()
 
-    the current-step-count would be 1 giving a progress of 1 / 2 * 100 or 50%.
+    the current-step-count would be 1 giving a progress of ``1 / 2 *
+    100`` or 50%.
     """
     instance_uuid = instance['uuid']
 
@@ -402,8 +403,7 @@ class VMOps(object):
             vm_mode = 'hvm'  # Normalize
         else:
             use_pv_kernel = VMHelper.determine_is_pv(self._session,
-                    instance.id, first_vdi_ref, disk_image_type,
-                    instance.os_type)
+                    first_vdi_ref, disk_image_type, instance.os_type)
             vm_mode = use_pv_kernel and 'pv' or 'hvm'
 
         if instance.vm_mode != vm_mode:
@@ -651,18 +651,18 @@ class VMOps(object):
         Steps involved in a XenServer snapshot:
 
         1. XAPI-Snapshot: Snapshotting the instance using XenAPI. This
-            creates: Snapshot (Template) VM, Snapshot VBD, Snapshot VDI,
-            Snapshot VHD
+           creates: Snapshot (Template) VM, Snapshot VBD, Snapshot VDI,
+           Snapshot VHD
 
         2. Wait-for-coalesce: The Snapshot VDI and Instance VDI both point to
-            a 'base-copy' VDI.  The base_copy is immutable and may be chained
-            with other base_copies.  If chained, the base_copies
-            coalesce together, so, we must wait for this coalescing to occur to
-            get a stable representation of the data on disk.
+           a 'base-copy' VDI.  The base_copy is immutable and may be chained
+           with other base_copies.  If chained, the base_copies
+           coalesce together, so, we must wait for this coalescing to occur to
+           get a stable representation of the data on disk.
 
         3. Push-to-glance: Once coalesced, we call a plugin on the XenServer
-            that will bundle the VHDs together and then push the bundle into
-            Glance.
+           that will bundle the VHDs together and then push the bundle into
+           Glance.
 
         """
         template_vm_ref = None
@@ -1269,8 +1269,8 @@ class VMOps(object):
         rescue_vm_ref = VMHelper.lookup(self._session,
                                         "%s-rescue" % instance.name)
         if rescue_vm_ref:
-            raise RuntimeError(_(
-                "Instance is already in Rescue Mode: %s" % instance.name))
+            raise RuntimeError(_("Instance is already in Rescue Mode: %s")
+                               % instance.name)
 
         vm_ref = VMHelper.lookup(self._session, instance.name)
         self._shutdown(instance, vm_ref)
@@ -1432,15 +1432,13 @@ class VMOps(object):
         """Return data about VM diagnostics."""
         vm_ref = self._get_vm_opaque_ref(instance)
         vm_rec = self._session.call_xenapi("VM.get_record", vm_ref)
-        return VMHelper.compile_diagnostics(self._session, vm_rec)
+        return VMHelper.compile_diagnostics(vm_rec)
 
     def get_all_bw_usage(self, start_time, stop_time=None):
         """Return bandwidth usage info for each interface on each
            running VM"""
         try:
-            metrics = VMHelper.compile_metrics(self._session,
-                                               start_time,
-                                               stop_time)
+            metrics = VMHelper.compile_metrics(start_time, stop_time)
         except exception.CouldNotFetchMetrics:
             LOG.exception(_("Could not get bandwidth info."))
             return {}
