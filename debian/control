@@ -78,6 +78,7 @@ Depends: ${python:Depends},
  python-simplejson,
  python-lxml,
  sudo,
+ guestmount,
  ${misc:Depends}
 Suggests: python-suds (>= 0.4.0),
 Conflicts: python-cjson
