@@ -1,3 +1,18 @@
+nova (2012.1~e4+git1809-g0193d12-1) experimental; urgency=low
+
+  [ Ghe Rivero ]
+  * Use nova-rootwrap instead of sudo
+
+ -- Ghe Rivero <ghe@debian.org>  Thu, 08 Mar 2012 11:39:54 +0100
+
+nova (2012.1~e4-2) unstable; urgency=low
+
+  [ Thomas Goirand ]
+  * nova-xcp-network.init now has a Required-Start: xcp-networkd, as otherwise,
+  the boot process is simply stuck.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 07 Mar 2012 05:58:21 -0500
+
 nova (2012.1~e4-1) unstable; urgency=low
 
   * New upstream version
