@@ -4,7 +4,10 @@ nova (2012.1~e4-2) unstable; urgency=low
   * nova-xcp-network.init now has a Required-Start: xcp-networkd, as otherwise,
   the boot process is simply stuck.
 
- -- Thomas Goirand <zigo@debian.org>  Wed, 07 Mar 2012 05:58:21 -0500
+  [ Julien Danjou ]
+  * Add dbconfig support
+
+ -- Julien Danjou <acid@debian.org>  Fri, 09 Mar 2012 12:52:12 +0100
 
 nova (2012.1~e4-1) unstable; urgency=low
 
