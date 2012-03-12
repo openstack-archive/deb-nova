@@ -23,6 +23,14 @@ if [ "$1" = "configure" ]; then
     . /usr/share/debconf/confmodule
     . /usr/share/dbconfig-common/dpkg/postinst
 
+
+    db_get nova-common/database-type
+    if [ $RET = "sqlite3" ]
+    then
+        dbc_name="nova.sqlite"
+        db_set nova-common/db/dbname $dbc_name
+    fi
+
     dbc_dbfile_owner="nova:nova"
     dbc_go nova-common $@
 
@@ -38,7 +46,7 @@ if [ "$1" = "configure" ]; then
                 SQL_CONNECTION="pgsql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
                 ;;
             *)
-                SQL_CONNECTION="sqlite:////$dbc_basepath/$dbc_dbname.sqlite"
+                SQL_CONNECTION="sqlite:////$dbc_basepath/$dbc_dbname"
                 ;;
         esac
 
