@@ -10,7 +10,7 @@ if [ "$1" = "configure" ] ; then
 
 	# Make sure all our plugins are executable
 	for i in	/usr/lib/xcp/plugins/migration \
-			/usr/lib/xcp/plugins/xenstore.py
+			/usr/lib/xcp/plugins/xenstore.py \
 			/usr/lib/xcp/plugins/glance \
 			/usr/lib/xcp/plugins/agent
 			/usr/lib/xcp/plugins/xenhost \

@@ -4,7 +4,7 @@ set -e
 
 if [ "$1" = "configure" ] ; then
 	# Make sure all our plugins are executable
-	for i in	/usr/lib/xcp/plugins/ovs_configure_vif_flows.py
+	for i in	/usr/lib/xcp/plugins/ovs_configure_vif_flows.py \
 			/usr/lib/xcp/plugins/novalib.py \
 			/usr/lib/xcp/plugins/vif_rules.py \
 			/usr/lib/xcp/plugins/ovs_configure_base_flows.py ; do
