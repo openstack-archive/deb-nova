@@ -134,15 +134,6 @@ def service_get_all_compute_sorted(context):
     return IMPL.service_get_all_compute_sorted(context)
 
 
-def service_get_all_network_sorted(context):
-    """Get all network services sorted by network count.
-
-    :returns: a list of (Service, network_count) tuples.
-
-    """
-    return IMPL.service_get_all_network_sorted(context)
-
-
 def service_get_all_volume_sorted(context):
     """Get all volume services sorted by volume count.
 
@@ -184,11 +175,6 @@ def compute_node_get_all(context):
     return IMPL.compute_node_get_all(context)
 
 
-def compute_node_get_for_service(context, service_id):
-    """Get all computeNodes."""
-    return IMPL.compute_node_get_for_service(context, service_id)
-
-
 def compute_node_create(context, values):
     """Create a computeNode from the values dictionary."""
     return IMPL.compute_node_create(context, values)
@@ -204,11 +190,6 @@ def compute_node_update(context, compute_id, values, auto_adjust=True):
 
 def compute_node_get_by_host(context, host):
     return IMPL.compute_node_get_by_host(context, host)
-
-
-def compute_node_capacity_find(context, minimum_ram_mb, minimum_disk_gb):
-    return IMPL.compute_node_capacity_find(context, minimum_ram_mb,
-                                           minimum_disk_gb)
 
 
 def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
@@ -505,11 +486,6 @@ def virtual_interface_create(context, values):
     return IMPL.virtual_interface_create(context, values)
 
 
-def virtual_interface_update(context, vif_id, values):
-    """Update a virtual interface record in the database."""
-    return IMPL.virtual_interface_update(context, vif_id, values)
-
-
 def virtual_interface_get(context, vif_id):
     """Gets a virtual interface from the table,"""
     return IMPL.virtual_interface_get(context, vif_id)
@@ -536,11 +512,6 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
     return IMPL.virtual_interface_get_by_instance_and_network(context,
                                                               instance_id,
                                                               network_id)
-
-
-def virtual_interface_get_by_network(context, network_id):
-    """Gets all virtual interfaces on network."""
-    return IMPL.virtual_interface_get_by_network(context, network_id)
 
 
 def virtual_interface_delete(context, vif_id):
@@ -574,11 +545,6 @@ def instance_data_get_for_project(context, project_id):
 def instance_destroy(context, instance_id):
     """Destroy the instance or raise if it does not exist."""
     return IMPL.instance_destroy(context, instance_id)
-
-
-def instance_stop(context, instance_id):
-    """Stop the instance or raise if it does not exist."""
-    return IMPL.instance_stop(context, instance_id)
 
 
 def instance_get_by_uuid(context, uuid):
@@ -617,11 +583,6 @@ def instance_get_active_by_window_joined(context, begin, end=None,
                                               project_id)
 
 
-def instance_get_all_by_user(context, user_id):
-    """Get all instances."""
-    return IMPL.instance_get_all_by_user(context, user_id)
-
-
 def instance_get_all_by_project(context, project_id):
     """Get all instance belonging to a project."""
     return IMPL.instance_get_all_by_project(context, project_id)
@@ -645,6 +606,15 @@ def instance_get_floating_address(context, instance_id):
 def instance_get_all_hung_in_rebooting(context, reboot_window):
     """Get all instances stuck in a rebooting state."""
     return IMPL.instance_get_all_hung_in_rebooting(context, reboot_window)
+
+
+def instance_test_and_set(context, instance_id, attr, ok_states,
+                          new_state):
+    """Atomically check if an instance is in a valid state, and if it is, set
+    the instance into a new state.
+    """
+    return IMPL.instance_test_and_set(
+            context, instance_id, attr, ok_states, new_state)
 
 
 def instance_update(context, instance_id, values):
@@ -761,16 +731,6 @@ def network_count(context):
     return IMPL.network_count(context)
 
 
-def network_count_allocated_ips(context, network_id):
-    """Return the number of allocated non-reserved ips in the network."""
-    return IMPL.network_count_allocated_ips(context, network_id)
-
-
-def network_count_available_ips(context, network_id):
-    """Return the number of available ips in the network."""
-    return IMPL.network_count_available_ips(context, network_id)
-
-
 def network_count_reserved_ips(context, network_id):
     """Return the number of reserved ips in the network."""
     return IMPL.network_count_reserved_ips(context, network_id)
@@ -803,11 +763,6 @@ def network_create_fixed_ips(context, network_id, num_vpn_clients):
 def network_disassociate(context, network_id):
     """Disassociate the network from project or raise if it does not exist."""
     return IMPL.network_disassociate(context, network_id)
-
-
-def network_disassociate_all(context):
-    """Disassociate all networks from projects."""
-    return IMPL.network_disassociate_all(context)
 
 
 def network_get(context, network_id):
@@ -1173,11 +1128,6 @@ def security_group_destroy(context, security_group_id):
     return IMPL.security_group_destroy(context, security_group_id)
 
 
-def security_group_destroy_all(context):
-    """Deletes a security group."""
-    return IMPL.security_group_destroy_all(context)
-
-
 ####################
 
 
@@ -1220,11 +1170,6 @@ def provider_fw_rule_create(context, rule):
 def provider_fw_rule_get_all(context):
     """Get all provider-level firewall rules."""
     return IMPL.provider_fw_rule_get_all(context)
-
-
-def provider_fw_rule_get_all_by_cidr(context, cidr):
-    """Get all provider-level firewall rules."""
-    return IMPL.provider_fw_rule_get_all_by_cidr(context, cidr)
 
 
 def provider_fw_rule_destroy(context, rule_id):
@@ -1351,10 +1296,6 @@ def project_get_networks(context, project_id, associate=True):
 
     """
     return IMPL.project_get_networks(context, project_id, associate)
-
-
-def project_get_networks_v6(context, project_id):
-    return IMPL.project_get_networks_v6(context, project_id)
 
 
 ###################
@@ -1526,11 +1467,6 @@ def agent_build_update(context, agent_build_id, values):
 def bw_usage_get_by_macs(context, macs, start_period):
     """Return bw usages for an instance in a given audit period."""
     return IMPL.bw_usage_get_by_macs(context, macs, start_period)
-
-
-def bw_usage_get_all_by_filters(context, filters):
-    """Return bandwidth usage that matches all filters."""
-    return IMPL.bw_usage_get_all_by_filters(context, filters)
 
 
 def bw_usage_update(context,
@@ -1709,7 +1645,7 @@ def sm_backend_conf_get(context, sm_backend_conf_id):
 
 def sm_backend_conf_get_by_sr(context, sr_uuid):
     """Get a specific SM Backend Config."""
-    return IMPL.sm_backend_conf_get(context, sr_uuid)
+    return IMPL.sm_backend_conf_get_by_sr(context, sr_uuid)
 
 
 def sm_backend_conf_get_all(context):

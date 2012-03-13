@@ -369,6 +369,17 @@ class CloudController(object):
         return {'keySet': result}
 
     def create_key_pair(self, context, key_name, **kwargs):
+        if not re.match('^[a-zA-Z0-9_\- ]+$', str(key_name)):
+            err = _("Value (%s) for KeyName is invalid."
+                    " Content limited to Alphanumeric character, "
+                    "spaces, dashes, and underscore.") % key_name
+            raise exception.EC2APIError(err)
+
+        if len(str(key_name)) > 255:
+            err = _("Value (%s) for Keyname is invalid."
+                    " Length exceeds maximum of 255.") % key_name
+            raise exception.EC2APIError(err)
+
         LOG.audit(_("Create key pair %s"), key_name, context=context)
         data = _gen_key(context, context.user_id, key_name)
         return {'keyName': key_name,
@@ -543,6 +554,18 @@ class CloudController(object):
             values['cidr'] = cidr_ip
         else:
             values['cidr'] = '0.0.0.0/0'
+
+        if source_security_group_name:
+            # Open everything if an explicit port range or type/code are not
+            # specified, but only if a source group was specified.
+            ip_proto_upper = ip_protocol.upper() if ip_protocol else ''
+            if ip_proto_upper == 'ICMP' and not from_port and not to_port:
+                from_port = -1
+                to_port = -1
+            elif (ip_proto_upper in ['TCP', 'UDP'] and not from_port
+                  and not to_port):
+                from_port = 1
+                to_port = 65535
 
         if ip_protocol and from_port and to_port:
 
@@ -888,8 +911,13 @@ class CloudController(object):
     def delete_volume(self, context, volume_id, **kwargs):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_id_to_id(volume_id)
-        volume = self.volume_api.get(context, volume_id)
-        self.volume_api.delete(context, volume)
+
+        try:
+            volume = self.volume_api.get(context, volume_id)
+            self.volume_api.delete(context, volume)
+        except exception.InvalidVolume:
+            raise exception.EC2APIError(_('Delete Failed'))
+
         return True
 
     def attach_volume(self, context, volume_id, instance_id, device, **kwargs):
@@ -901,7 +929,13 @@ class CloudController(object):
         msg = _("Attach volume %(volume_id)s to instance %(instance_id)s"
                 " at %(device)s") % locals()
         LOG.audit(msg, context=context)
-        self.compute_api.attach_volume(context, instance, volume_id, device)
+
+        try:
+            self.compute_api.attach_volume(context, instance,
+                                           volume_id, device)
+        except exception.InvalidVolume:
+            raise exception.EC2APIError(_('Attach Failed.'))
+
         volume = self.volume_api.get(context, volume_id)
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
@@ -915,7 +949,13 @@ class CloudController(object):
         volume_id = ec2utils.ec2_id_to_id(volume_id)
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
         volume = self.volume_api.get(context, volume_id)
-        instance = self.compute_api.detach_volume(context, volume_id=volume_id)
+
+        try:
+            instance = self.compute_api.detach_volume(context,
+                                                      volume_id=volume_id)
+        except exception.InvalidVolume:
+            raise exception.EC2APIError(_('Detach Volume Failed.'))
+
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
                 'instanceId': ec2utils.id_to_ec2_id(instance['id']),
@@ -1364,7 +1404,7 @@ class CloudController(object):
         ramdisk_id = image['properties'].get('ramdisk_id')
         if ramdisk_id:
             i['ramdiskId'] = ec2utils.image_ec2_id(ramdisk_id, 'ari')
-        i['imageOwnerId'] = image['properties'].get('owner_id')
+        i['imageOwnerId'] = image.get('owner')
 
         img_loc = image['properties'].get('image_location')
         if img_loc:

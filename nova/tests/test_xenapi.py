@@ -32,6 +32,7 @@ from nova import utils
 from nova.compute import aggregate_states
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import utils as compute_utils
 from nova import exception
 from nova.virt import xenapi_conn
 from nova.virt.xenapi import fake as xenapi_fake
@@ -184,15 +185,12 @@ class XenAPIVolumeTestCase(test.TestCase):
         result = conn.attach_volume(self._make_info(),
                                     instance.name, '/dev/sdc')
 
-        def check():
-            # check that the VM has a VBD attached to it
-            # Get XenAPI record for VBD
-            vbds = xenapi_fake.get_all('VBD')
-            vbd = xenapi_fake.get_record('VBD', vbds[0])
-            vm_ref = vbd['VM']
-            self.assertEqual(vm_ref, vm)
-
-        check()
+        # check that the VM has a VBD attached to it
+        # Get XenAPI record for VBD
+        vbds = xenapi_fake.get_all('VBD')
+        vbd = xenapi_fake.get_record('VBD', vbds[0])
+        vm_ref = vbd['VM']
+        self.assertEqual(vm_ref, vm)
 
     def test_attach_volume_raise_exception(self):
         """This shows how to test when exceptions are raised."""
@@ -210,10 +208,6 @@ class XenAPIVolumeTestCase(test.TestCase):
 
 
 def configure_instance(*args):
-    pass
-
-
-def _find_rescue_vbd_ref(*args):
     pass
 
 
@@ -238,8 +232,6 @@ class XenAPIVMTestCase(test.TestCase):
         stubs.stubout_is_vdi_pv(self.stubs)
         self.stubs.Set(vmops.VMOps, '_configure_instance',
                 configure_instance)
-        self.stubs.Set(vmops.VMOps, '_find_rescue_vbd_ref',
-                _find_rescue_vbd_ref)
         stubs.stub_out_vm_methods(self.stubs)
         glance_stubs.stubout_glance_client(self.stubs)
         fake_utils.stub_out_utils_execute(self.stubs)
@@ -311,35 +303,28 @@ class XenAPIVMTestCase(test.TestCase):
         name = "MySnapshot"
         template_vm_ref = self.conn.snapshot(self.context, instance, name)
 
-        def ensure_vm_was_torn_down():
-            vm_labels = []
-            for vm_ref in xenapi_fake.get_all('VM'):
-                vm_rec = xenapi_fake.get_record('VM', vm_ref)
-                if not vm_rec["is_control_domain"]:
-                    vm_labels.append(vm_rec["name_label"])
+        # Ensure VM was torn down
+        vm_labels = []
+        for vm_ref in xenapi_fake.get_all('VM'):
+            vm_rec = xenapi_fake.get_record('VM', vm_ref)
+            if not vm_rec["is_control_domain"]:
+                vm_labels.append(vm_rec["name_label"])
 
-            self.assertEquals(vm_labels, ['1'])
+        self.assertEquals(vm_labels, [instance.name])
 
-        def ensure_vbd_was_torn_down():
-            vbd_labels = []
-            for vbd_ref in xenapi_fake.get_all('VBD'):
-                vbd_rec = xenapi_fake.get_record('VBD', vbd_ref)
-                vbd_labels.append(vbd_rec["vm_name_label"])
+        # Ensure VBDs were torn down
+        vbd_labels = []
+        for vbd_ref in xenapi_fake.get_all('VBD'):
+            vbd_rec = xenapi_fake.get_record('VBD', vbd_ref)
+            vbd_labels.append(vbd_rec["vm_name_label"])
 
-            self.assertEquals(vbd_labels, ['1'])
+        self.assertEquals(vbd_labels, [instance.name])
 
-        def ensure_vdi_was_torn_down():
-            for vdi_ref in xenapi_fake.get_all('VDI'):
-                vdi_rec = xenapi_fake.get_record('VDI', vdi_ref)
-                name_label = vdi_rec["name_label"]
-                self.assert_(not name_label.endswith('snapshot'))
-
-        def check():
-            ensure_vm_was_torn_down()
-            ensure_vbd_was_torn_down()
-            ensure_vdi_was_torn_down()
-
-        check()
+        # Ensure VDIs were torn down
+        for vdi_ref in xenapi_fake.get_all('VDI'):
+            vdi_rec = xenapi_fake.get_record('VDI', vdi_ref)
+            name_label = vdi_rec["name_label"]
+            self.assert_(not name_label.endswith('snapshot'))
 
     def create_vm_record(self, conn, os_type, instance_id=1):
         instances = conn.list_instances()
@@ -709,7 +694,15 @@ class XenAPIVMTestCase(test.TestCase):
                               str(3 * 1024))
 
     def test_rescue(self):
+        def _find_rescue_vbd_ref(*args):
+            return vbd
+
+        self.stubs.Set(vmops.VMOps, '_find_rescue_vbd_ref',
+                _find_rescue_vbd_ref)
         instance = self._create_instance()
+        session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass')
+        vm = vm_utils.VMHelper.lookup(session, instance.name)
+        vbd = xenapi_fake.create_vbd(vm, None)
         conn = xenapi_conn.get_connection(False)
         conn.rescue(self.context, instance, [], None)
 
@@ -1209,10 +1202,10 @@ class XenAPIAutoDiskConfigTestCase(test.TestCase):
 
         @classmethod
         def fake_create_vbd(cls, session, vm_ref, vdi_ref, userdevice,
-                bootable=True):
+                            vbd_type='disk', read_only=False, bootable=True):
             pass
 
-        self.stubs.Set(volume_utils.VolumeHelper,
+        self.stubs.Set(vm_utils.VMHelper,
                        "create_vbd",
                        fake_create_vbd)
 
@@ -1302,10 +1295,10 @@ class XenAPIGenerateLocal(test.TestCase):
 
         @classmethod
         def fake_create_vbd(cls, session, vm_ref, vdi_ref, userdevice,
-                            bootable=True):
+                            vbd_type='disk', read_only=False, bootable=True):
             pass
 
-        self.stubs.Set(volume_utils.VolumeHelper,
+        self.stubs.Set(vm_utils.VMHelper,
                        "create_vbd",
                        fake_create_vbd)
 
@@ -1535,27 +1528,23 @@ class XenAPIDom0IptablesFirewallTestCase(test.TestCase):
         instance_ref = db.instance_get(admin_ctxt, instance_ref['id'])
         src_instance_ref = db.instance_get(admin_ctxt, src_instance_ref['id'])
 
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs, 1)
-
-        def get_fixed_ips(*args, **kwargs):
-            ips = []
-            for _n, info in network_info:
-                ips.extend(info['ips'])
-            return [ip['ip'] for ip in ips]
-
-        def nw_info(*args, **kwargs):
-            return network_info
+        network_model = fake_network.fake_get_instance_nw_info(self.stubs,
+                                                      1, spectacular=True)
 
         fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
-                                                          nw_info)
+                                      lambda *a, **kw: network_model)
+
+        network_info = compute_utils.legacy_network_info(network_model)
         self.fw.prepare_instance_filter(instance_ref, network_info)
         self.fw.apply_instance_filter(instance_ref, network_info)
 
         self._validate_security_group()
         # Extra test for TCP acceptance rules
-        for ip in get_fixed_ips():
+        for ip in network_model.fixed_ips():
+            if ip['version'] != 4:
+                continue
             regex = re.compile('-A .* -j ACCEPT -p tcp'
-                               ' --dport 80:81 -s %s' % ip)
+                               ' --dport 80:81 -s %s' % ip['address'])
             self.assertTrue(len(filter(regex.match, self._out_rules)) > 0,
                             "TCP port 80/81 acceptance rule wasn't added")
 
@@ -1790,7 +1779,7 @@ class XenAPIAggregateTestCase(test.TestCase):
 
     def test_join_slave(self):
         """Ensure join_slave gets called when the request gets to master."""
-        def fake_join_slave(id, compute_uuid, url, user, password):
+        def fake_join_slave(id, compute_uuid, host, url, user, password):
             fake_join_slave.called = True
         self.stubs.Set(self.conn._pool, "_join_slave", fake_join_slave)
 

@@ -35,11 +35,6 @@ from nova import utils
 LOG = logging.getLogger(__name__)
 
 
-def _bin_file(script):
-    """Return the absolute path to scipt in the bin directory."""
-    return os.path.abspath(os.path.join(__file__, '../../../bin', script))
-
-
 linux_net_opts = [
     cfg.StrOpt('dhcpbridge_flagfile',
                default='/etc/nova/nova-dhcpbridge.conf',
@@ -54,7 +49,7 @@ linux_net_opts = [
                default=None,
                help='MTU setting for vlan'),
     cfg.StrOpt('dhcpbridge',
-               default=_bin_file('nova-dhcpbridge'),
+               default='$bindir/nova-dhcpbridge',
                help='location of nova-dhcpbridge'),
     cfg.StrOpt('routing_source_ip',
                default='$my_ip',
@@ -912,18 +907,26 @@ def _ip_bridge_cmd(action, params, device):
 # of creating ethernet interfaces and attaching them to the network.
 # In the case of a network host, these interfaces
 # act as gateway/dhcp/vpn/etc. endpoints not VM interfaces.
+interface_driver = None
+
+
+def _get_interface_driver():
+    global interface_driver
+    if not interface_driver:
+        interface_driver = utils.import_object(FLAGS.linuxnet_interface_driver)
+    return interface_driver
 
 
 def plug(network, mac_address, gateway=True):
-    return interface_driver.plug(network, mac_address, gateway)
+    return _get_interface_driver().plug(network, mac_address, gateway)
 
 
 def unplug(network):
-    return interface_driver.unplug(network)
+    return _get_interface_driver().unplug(network)
 
 
 def get_dev(network):
-    return interface_driver.get_dev(network)
+    return _get_interface_driver().get_dev(network)
 
 
 class LinuxNetInterfaceDriver(object):
@@ -1082,7 +1085,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
 class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
 
     def plug(self, network, mac_address, gateway=True):
-        dev = "gw-" + str(network['uuid'][0:11])
+        dev = self.get_dev(network)
         if not _device_exists(dev):
             bridge = FLAGS.linuxnet_ovs_integration_bridge
             _execute('ovs-vsctl',
@@ -1124,7 +1127,11 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
         return dev
 
     def unplug(self, network):
-        return self.get_dev(network)
+        dev = self.get_dev(network)
+        bridge = FLAGS.linuxnet_ovs_integration_bridge
+        _execute('ovs-vsctl', '--', '--if-exists', 'del-port',
+                               bridge, dev, run_as_root=True)
+        return dev
 
     def get_dev(self, network):
         dev = "gw-" + str(network['uuid'][0:11])
@@ -1213,4 +1220,3 @@ class QuantumLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         return bridge
 
 iptables_manager = IptablesManager()
-interface_driver = utils.import_object(FLAGS.linuxnet_interface_driver)

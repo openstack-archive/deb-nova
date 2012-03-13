@@ -20,6 +20,7 @@ import hashlib
 import os
 import os.path
 import socket
+import shutil
 import StringIO
 import tempfile
 
@@ -401,6 +402,17 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertTrue(utils.strcmp_const_time('abc123', 'abc123'))
         self.assertFalse(utils.strcmp_const_time('a', 'aaaaa'))
         self.assertFalse(utils.strcmp_const_time('ABC123', 'abc123'))
+
+    def test_temporary_chown(self):
+        def fake_execute(*args, **kwargs):
+            if args[0] == 'chown':
+                fake_execute.uid = args[1]
+        self.stubs.Set(utils, 'execute', fake_execute)
+
+        with tempfile.NamedTemporaryFile() as f:
+            with utils.temporary_chown(f.name, owner_uid=2):
+                self.assertEqual(fake_execute.uid, 2)
+            self.assertEqual(fake_execute.uid, os.getuid())
 
 
 class IsUUIDLikeTestCase(test.TestCase):
@@ -828,6 +840,8 @@ class TestLockCleanup(test.TestCase):
 
         self.pid = os.getpid()
         self.dead_pid = self._get_dead_pid()
+        self.tempdir = tempfile.mkdtemp()
+        self.flags(lock_path=self.tempdir)
         self.lock_name = 'nova-testlock'
         self.lock_file = os.path.join(FLAGS.lock_path,
                                       self.lock_name + '.lock')
@@ -838,6 +852,10 @@ class TestLockCleanup(test.TestCase):
         except OSError as (errno, strerror):
             if errno == 2:
                 pass
+
+    def tearDown(self):
+        shutil.rmtree(self.tempdir)
+        super(TestLockCleanup, self).tearDown()
 
     def _get_dead_pid(self):
         """get a pid for a process that does not exist"""

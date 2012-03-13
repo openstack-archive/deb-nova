@@ -153,6 +153,12 @@ def stub_out_rate_limiting(stubs):
         '__call__', fake_wsgi)
 
 
+def stub_out_instance_quota(stubs, allowed):
+    def fake_allowed_instances(context, max_count, instance_type):
+        return allowed
+    stubs.Set(nova.quota, 'allowed_instances', fake_allowed_instances)
+
+
 def stub_out_networking(stubs):
     def get_my_ip():
         return '127.0.0.1'
@@ -275,15 +281,14 @@ def stub_out_glance(stubs):
 
 
 class FakeToken(object):
-    # FIXME(sirp): let's not use id here
-    id = 0
+    id_count = 0
 
     def __getitem__(self, key):
         return getattr(self, key)
 
     def __init__(self, **kwargs):
-        FakeToken.id += 1
-        self.id = FakeToken.id
+        FakeToken.id_count += 1
+        self.id = FakeToken.id_count
         for k, v in kwargs.iteritems():
             setattr(self, k, v)
 

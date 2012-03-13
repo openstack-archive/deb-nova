@@ -349,24 +349,6 @@ def service_get_all_compute_sorted(context):
 
 
 @require_admin_context
-def service_get_all_network_sorted(context):
-    session = get_session()
-    with session.begin():
-        topic = 'network'
-        label = 'network_count'
-        subq = model_query(context, models.Network.host,
-                           func.count(models.Network.id).label(label),
-                           session=session, read_deleted="no").\
-                       group_by(models.Network.host).\
-                       subquery()
-        return _service_get_all_topic_subquery(context,
-                                               session,
-                                               topic,
-                                               subq,
-                                               label)
-
-
-@require_admin_context
 def service_get_all_volume_sorted(context):
     session = get_session()
     with session.begin():
@@ -432,33 +414,10 @@ def compute_node_get(context, compute_id, session=None):
 
 
 @require_admin_context
-def compute_node_get_by_service(context, service_id, session=None):
-    if not session:
-        session = get_session()
-
-    result = model_query(context, models.ComputeNode, session=session).\
-                     filter_by(service_id=service_id).\
-                     first()
-
-    if not result:
-        raise exception.ComputeHostNotFound(host="ServiceID=%s" % service_id)
-
-    return result
-
-
-@require_admin_context
 def compute_node_get_all(context, session=None):
     return model_query(context, models.ComputeNode, session=session).\
                     options(joinedload('service')).\
                     all()
-
-
-@require_admin_context
-def compute_node_get_for_service(context, service_id):
-    return model_query(context, models.ComputeNode).\
-                    options(joinedload('service')).\
-                    filter_by(service_id=service_id).\
-                    first()
 
 
 def _get_host_utilization(context, host, ram_mb, disk_gb):
@@ -518,10 +477,6 @@ def compute_node_update(context, compute_id, values, auto_adjust):
         compute_ref.save(session=session)
 
 
-# Note: these operations use with_lockmode() ... so this will only work
-# reliably with engines that support row-level locking
-# (postgres, mysql+innodb and above).
-
 def compute_node_get_by_host(context, host):
     """Get all capacity entries for the given host."""
     session = get_session()
@@ -529,22 +484,8 @@ def compute_node_get_by_host(context, host):
         node = session.query(models.ComputeNode).\
                              options(joinedload('service')).\
                              filter(models.Service.host == host).\
-                             filter_by(deleted=False).\
-                             with_lockmode('update')
+                             filter_by(deleted=False)
         return node.first()
-
-
-def compute_node_capacity_find(context, minimum_ram_mb, minimum_disk_gb):
-    """Get all enabled hosts with enough ram and disk."""
-    session = get_session()
-    with session.begin():
-        return session.query(models.ComputeNode).\
-                  options(joinedload('service')).\
-                  filter(models.ComputeNode.free_ram_mb >= minimum_ram_mb).\
-                  filter(models.ComputeNode.free_disk_gb >= minimum_disk_gb).\
-                  filter(models.Service.disabled == False).\
-                  filter_by(deleted=False).\
-                  with_lockmode('update').all()
 
 
 def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
@@ -1207,21 +1148,6 @@ def virtual_interface_create(context, values):
 
 
 @require_context
-def virtual_interface_update(context, vif_id, values):
-    """Update a virtual interface record in the database.
-
-    :param vif_id: = id of virtual interface to update
-    :param values: = values to update
-    """
-    session = get_session()
-    with session.begin():
-        vif_ref = virtual_interface_get(context, vif_id, session=session)
-        vif_ref.update(values)
-        vif_ref.save(session=session)
-        return vif_ref
-
-
-@require_context
 def _virtual_interface_query(context, session=None):
     return model_query(context, models.VirtualInterface, session=session,
                        read_deleted="yes")
@@ -1285,18 +1211,6 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
                       filter_by(network_id=network_id).\
                       first()
     return vif_ref
-
-
-@require_admin_context
-def virtual_interface_get_by_network(context, network_id):
-    """Gets all virtual_interface on network.
-
-    :param network_id: = network to retrieve vifs for
-    """
-    vif_refs = _virtual_interface_query(context).\
-                       filter_by(network_id=network_id).\
-                       all()
-    return vif_refs
 
 
 @require_context
@@ -1420,32 +1334,12 @@ def instance_destroy(context, instance_id):
 
 
 @require_context
-def instance_stop(context, instance_id):
-    session = get_session()
-    with session.begin():
-        session.query(models.Instance).\
-                filter_by(id=instance_id).\
-                update({'host': None,
-                        'vm_state': vm_states.STOPPED,
-                        'task_state': None,
-                        'updated_at': literal_column('updated_at')})
-        session.query(models.SecurityGroupInstanceAssociation).\
-                filter_by(instance_id=instance_id).\
-                update({'updated_at': literal_column('updated_at')})
-        session.query(models.InstanceMetadata).\
-                filter_by(instance_id=instance_id).\
-                update({'updated_at': literal_column('updated_at')})
-
-
-@require_context
 def instance_get_by_uuid(context, uuid, session=None):
     result = _build_instance_get(context, session=session).\
                 filter_by(uuid=uuid).\
                 first()
 
     if not result:
-        # FIXME(sirp): it would be nice if InstanceNotFound would accept a
-        # uuid parameter as well
         raise exception.InstanceNotFound(instance_id=uuid)
 
     return result
@@ -1631,11 +1525,6 @@ def _instance_get_all_query(context, project_only=False):
 
 
 @require_admin_context
-def instance_get_all_by_user(context, user_id):
-    return _instance_get_all_query(context).filter_by(user_id=user_id).all()
-
-
-@require_admin_context
 def instance_get_all_by_host(context, host):
     return _instance_get_all_query(context).filter_by(host=host).all()
 
@@ -1688,6 +1577,40 @@ def instance_get_all_hung_in_rebooting(context, reboot_window, session=None):
             filter_by(task_state="rebooting").all()
 
     return results
+
+
+@require_context
+def instance_test_and_set(context, instance_id, attr, ok_states,
+                          new_state, session=None):
+    """Atomically check if an instance is in a valid state, and if it is, set
+    the instance into a new state.
+    """
+    if not session:
+        session = get_session()
+
+    with session.begin():
+        query = model_query(context, models.Instance, session=session,
+                            project_only=True)
+
+        if utils.is_uuid_like(instance_id):
+            query = query.filter_by(uuid=instance_id)
+        else:
+            query = query.filter_by(id=instance_id)
+
+        # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
+        #             then this has concurrency issues
+        instance = query.with_lockmode('update').first()
+
+        state = instance[attr]
+        if state not in ok_states:
+            raise exception.InstanceInvalidState(
+                attr=attr,
+                instance_uuid=instance['uuid'],
+                state=state,
+                method='instance_test_and_set')
+
+        instance[attr] = new_state
+        instance.save(session=session)
 
 
 @require_context
@@ -1960,21 +1883,6 @@ def _network_ips_query(context, network_id):
 
 
 @require_admin_context
-def network_count_allocated_ips(context, network_id):
-    return _network_ips_query(context, network_id).\
-                    filter_by(allocated=True).\
-                    count()
-
-
-@require_admin_context
-def network_count_available_ips(context, network_id):
-    return _network_ips_query(context, network_id).\
-                    filter_by(allocated=False).\
-                    filter_by(reserved=False).\
-                    count()
-
-
-@require_admin_context
 def network_count_reserved_ips(context, network_id):
     return _network_ips_query(context, network_id).\
                     filter_by(reserved=True).\
@@ -2013,14 +1921,6 @@ def network_delete_safe(context, network_id):
 def network_disassociate(context, network_id):
     network_update(context, network_id, {'project_id': None,
                                          'host': None})
-
-
-@require_admin_context
-def network_disassociate_all(context):
-    session = get_session()
-    session.query(models.Network).\
-            update({'project_id': None,
-                    'updated_at': literal_column('updated_at')})
 
 
 @require_context
@@ -2091,6 +1991,7 @@ def network_get_associated_fixed_ips(context, network_id):
     # fixed_ip_get_all_by_network.
     return model_query(context, models.FixedIp, read_deleted="no").\
                     filter_by(network_id=network_id).\
+                    filter_by(allocated=True).\
                     filter(models.FixedIp.instance_id != None).\
                     filter(models.FixedIp.virtual_interface_id != None).\
                     all()
@@ -2889,21 +2790,6 @@ def security_group_destroy(context, security_group_id):
                         'updated_at': literal_column('updated_at')})
 
 
-@require_context
-def security_group_destroy_all(context, session=None):
-    if not session:
-        session = get_session()
-    with session.begin():
-        session.query(models.SecurityGroup).\
-                update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
-                        'updated_at': literal_column('updated_at')})
-        session.query(models.SecurityGroupIngressRule).\
-                update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
-                        'updated_at': literal_column('updated_at')})
-
-
 ###################
 
 
@@ -2976,13 +2862,6 @@ def provider_fw_rule_create(context, rule):
 @require_admin_context
 def provider_fw_rule_get_all(context):
     return model_query(context, models.ProviderFirewallRule).all()
-
-
-@require_admin_context
-def provider_fw_rule_get_all_by_cidr(context, cidr):
-    return model_query(context, models.ProviderFirewallRule).\
-                   filter_by(cidr=cidr).\
-                   all()
 
 
 @require_admin_context
@@ -3214,11 +3093,6 @@ def project_get_networks(context, project_id, associate=True):
         return [network_associate(context, project_id)]
 
     return result
-
-
-@require_context
-def project_get_networks_v6(context, project_id):
-    return project_get_networks(context, project_id)
 
 
 ###################
@@ -3724,29 +3598,6 @@ def bw_usage_get_by_macs(context, macs, start_period):
 
 
 @require_context
-def bw_usage_get_all_by_filters(context, filters):
-    """Return bandwidth usage that matches all filters."""
-
-    session = get_session()
-    query_prefix = session.query(models.BandwidthUsage).\
-            order_by(desc(models.BandwidthUsage.created_at))
-
-    # Make a copy of the filters dictionary to use going forward, as we'll
-    # be modifying it and we shouldn't affect the caller's use of it.
-    filters = filters.copy()
-
-    # Filters for exact matches that we can do along with the SQL query.
-    exact_match_filter_names = ["instance_id", "mac",
-            "start_period", "last_refreshed", "bw_in", "bw_out"]
-
-    # Filter the query
-    query_prefix = exact_filter(query_prefix, models.BandwidthUsage,
-                                filters, exact_match_filter_names)
-
-    return query_prefix.all()
-
-
-@require_context
 def bw_usage_update(context,
                     mac,
                     start_period,
@@ -4182,9 +4033,9 @@ def sm_backend_conf_get(context, sm_backend_id):
 @require_admin_context
 def sm_backend_conf_get_by_sr(context, sr_uuid):
     session = get_session()
-    # FIXME(sirp): shouldn't this have a `first()` qualifier attached?
     return model_query(context, models.SMBackendConf, read_deleted="yes").\
-                    filter_by(sr_uuid=sr_uuid)
+                    filter_by(sr_uuid=sr_uuid).\
+                    first()
 
 
 @require_admin_context
@@ -4302,15 +4153,15 @@ def aggregate_create(context, values, metadata=None):
                                      values['name'],
                                      session=session,
                                      read_deleted='yes').first()
+    values.setdefault('operational_state', aggregate_states.CREATED)
     if not aggregate:
         aggregate = models.Aggregate()
-        values.setdefault('operational_state', aggregate_states.CREATED)
         aggregate.update(values)
         aggregate.save(session=session)
     elif aggregate.deleted:
-        aggregate.update({'deleted': False,
-                          'deleted_at': None,
-                          'availability_zone': values['availability_zone']})
+        values['deleted'] = False
+        values['deleted_at'] = None
+        aggregate.update(values)
         aggregate.save(session=session)
     else:
         raise exception.AggregateNameExists(aggregate_name=values['name'])
@@ -4379,6 +4230,7 @@ def aggregate_delete(context, aggregate_id):
     if query.first():
         query.update({'deleted': True,
                       'deleted_at': utils.utcnow(),
+                      'operational_state': aggregate_states.DISMISSED,
                       'updated_at': literal_column('updated_at')})
     else:
         raise exception.AggregateNotFound(aggregate_id=aggregate_id)

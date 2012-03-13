@@ -1,7 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010 United States Government as represented by the
-# Administrator of the National Aeronautics and Space Administration.
+# Copyright 2012 Openstack LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,19 +14,4 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-"""
-Unit Tests for remote procedure calls using fake_impl
-"""
-
-from nova import log as logging
-from nova.rpc import impl_fake
-from nova.tests.rpc import common
-
-
-LOG = logging.getLogger(__name__)
-
-
-class RpcFakeTestCase(common.BaseRpcTestCase):
-    def setUp(self):
-        self.rpc = impl_fake
-        super(RpcFakeTestCase, self).setUp()
+from nova.tests import *

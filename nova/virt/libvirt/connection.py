@@ -87,7 +87,7 @@ libvirt_opts = [
                default=None,
                help='Rescue ari image'),
     cfg.StrOpt('libvirt_xml_template',
-               default=utils.abspath('virt/libvirt.xml.template'),
+               default='$pybasedir/nova/virt/libvirt.xml.template',
                help='Libvirt XML Template'),
     cfg.StrOpt('libvirt_type',
                default='kvm',
@@ -105,7 +105,7 @@ libvirt_opts = [
                 default=True,
                 help='Sync virtual and real mouse cursors in Windows VMs'),
     cfg.StrOpt('cpuinfo_xml_template',
-               default=utils.abspath('virt/cpuinfo.xml.template'),
+               default='$pybasedir/nova/virt/cpuinfo.xml.template',
                help='CpuInfo XML Template (Used only live migration now)'),
     cfg.StrOpt('live_migration_uri',
                default="qemu+tcp://%s/system",
@@ -616,20 +616,19 @@ class LibvirtConnection(driver.ComputeDriver):
         if 'container_format' in base:
             metadata['container_format'] = base['container_format']
 
-        # Make the snapshot
-        snapshot_name = uuid.uuid4().hex
-        snapshot_xml = """
-        <domainsnapshot>
-            <name>%s</name>
-        </domainsnapshot>
-        """ % snapshot_name
-        snapshot_ptr = virt_dom.snapshotCreateXML(snapshot_xml, 0)
-
         # Find the disk
         xml_desc = virt_dom.XMLDesc(0)
         domain = ElementTree.fromstring(xml_desc)
         source = domain.find('devices/disk/source')
         disk_path = source.get('file')
+
+        snapshot_name = uuid.uuid4().hex
+
+        (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
+        if state == power_state.RUNNING:
+            virt_dom.managedSave(0)
+        # Make the snapshot
+        libvirt_utils.create_snapshot(disk_path, snapshot_name)
 
         # Export the snapshot to a raw image
         with utils.tempdir() as tmpdir:
@@ -638,15 +637,17 @@ class LibvirtConnection(driver.ComputeDriver):
                 libvirt_utils.extract_snapshot(disk_path, source_format,
                                                snapshot_name, out_path,
                                                image_format)
-                # Upload that image to the image service
-                with libvirt_utils.file_open(out_path) as image_file:
-                    image_service.update(context,
-                                         image_href,
-                                         metadata,
-                                         image_file)
-
             finally:
-                snapshot_ptr.delete(0)
+                libvirt_utils.delete_snapshot(disk_path, snapshot_name)
+                if state == power_state.RUNNING:
+                    virt_dom.create()
+
+            # Upload that image to the image service
+            with libvirt_utils.file_open(out_path) as image_file:
+                image_service.update(context,
+                                     image_href,
+                                     metadata,
+                                     image_file)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type='SOFT'):
@@ -674,13 +675,19 @@ class LibvirtConnection(driver.ComputeDriver):
         :returns: True if the reboot succeeded
         """
         dom = self._lookup_by_name(instance.name)
-        dom.shutdown()
+        (state, _max_mem, _mem, _cpus, _t) = dom.info()
+        # NOTE(vish): This check allows us to reboot an instance that
+        #             is already shutdown.
+        if state == power_state.RUNNING:
+            dom.shutdown()
         # NOTE(vish): This actually could take slighty longer than the
         #             FLAG defines depending on how long the get_info
         #             call takes to return.
         for x in xrange(FLAGS.libvirt_wait_soft_reboot_seconds):
-            state = self.get_info(instance)['state']
-            if state == power_state.SHUTDOWN:
+            (state, _max_mem, _mem, _cpus, _t) = dom.info()
+            if state in [power_state.SHUTDOWN,
+                         power_state.SHUTOFF,
+                         power_state.CRASHED]:
                 LOG.info(_("Instance shutdown successfully."),
                          instance=instance)
                 dom.create()
@@ -875,20 +882,13 @@ class LibvirtConnection(driver.ComputeDriver):
         timer = utils.LoopingCall(_wait_for_boot)
         return timer.start(interval=0.5, now=True)
 
-    def _flush_libvirt_console(self, virsh_output):
-        LOG.info(_('virsh said: %r'), virsh_output)
-        virsh_output = virsh_output[0].strip()
-
-        if virsh_output.startswith('/dev/'):
-            LOG.info(_("cool, it's a device"))
-            out, err = utils.execute('dd',
-                                     'if=%s' % virsh_output,
-                                     'iflag=nonblock',
-                                     run_as_root=True,
-                                     check_exit_code=False)
-            return out
-        else:
-            return ''
+    def _flush_libvirt_console(self, pty):
+        out, err = utils.execute('dd',
+                                 'if=%s' % pty,
+                                 'iflag=nonblock',
+                                 run_as_root=True,
+                                 check_exit_code=False)
+        return out
 
     def _append_to_file(self, data, fpath):
         LOG.info(_('data: %(data)r, fpath: %(fpath)r') % locals())
@@ -904,29 +904,49 @@ class LibvirtConnection(driver.ComputeDriver):
 
     @exception.wrap_exception()
     def get_console_output(self, instance):
+        virt_dom = self._lookup_by_name(instance['name'])
+        xml = virt_dom.XMLDesc(0)
+        tree = ElementTree.fromstring(xml)
+
+        console_types = {}
+
+        # NOTE(comstud): We want to try 'file' types first, then try 'pty'
+        # types.  We can't use Python 2.7 syntax of:
+        # tree.find("./devices/console[@type='file']/source")
+        # because we need to support 2.6.
+        console_nodes = tree.findall('./devices/console')
+        for console_node in console_nodes:
+            console_type = console_node.get('type')
+            console_types.setdefault(console_type, [])
+            console_types[console_type].append(console_node)
+
+        # If the guest has a console logging to a file prefer to use that
+        for file_console in console_types.get('file'):
+            source_node = file_console.find('./source')
+            if source_node is None:
+                continue
+            path = source_node.get("path")
+            if not path:
+                continue
+            return libvirt_utils.load_file(path)
+
+        # Try 'pty' types
+        for pty_console in console_types.get('pty'):
+            source_node = pty_console.find('./source')
+            if source_node is None:
+                continue
+            pty = source_node.get("path")
+            if not pty:
+                continue
+            break
+        else:
+            raise exception.Error(_("Guest does not have a console available"))
+
         console_log = os.path.join(FLAGS.instances_path, instance['name'],
                                    'console.log')
-
         libvirt_utils.chown(console_log, os.getuid())
-
-        if FLAGS.libvirt_type == 'xen':
-            # Xen is special
-            virsh_output = utils.execute('virsh',
-                                         'ttyconsole',
-                                         instance['name'])
-            data = self._flush_libvirt_console(virsh_output)
-            fpath = self._append_to_file(data, console_log)
-        elif FLAGS.libvirt_type == 'lxc':
-            # LXC is also special
-            virsh_output = utils.execute('virsh',
-                                         '-c',
-                                         'lxc:///',
-                                         'ttyconsole',
-                                         instance['name'])
-            data = self._flush_libvirt_console(virsh_output)
-            fpath = self._append_to_file(data, console_log)
-        else:
-            fpath = console_log
+        data = self._flush_libvirt_console(pty)
+        fpath = self._append_to_file(data, console_log)
 
         return libvirt_utils.load_file(fpath)
 
@@ -2008,13 +2028,13 @@ class LibvirtConnection(driver.ComputeDriver):
         # if image has kernel and ramdisk, just download
         # following normal way.
         if instance_ref['kernel_id']:
-            libvirt_utils.fetch_image(nova_context.get_admin_context(),
+            libvirt_utils.fetch_image(ctxt,
                               os.path.join(instance_dir, 'kernel'),
                               instance_ref['kernel_id'],
                               instance_ref['user_id'],
                               instance_ref['project_id'])
             if instance_ref['ramdisk_id']:
-                libvirt_utils.fetch_image(nova_context.get_admin_context(),
+                libvirt_utils.fetch_image(ctxt,
                                   os.path.join(instance_dir, 'ramdisk'),
                                   instance_ref['ramdisk_id'],
                                   instance_ref['user_id'],

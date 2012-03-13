@@ -66,7 +66,7 @@ filterlist = [
     # nova/virt/libvirt/connection.py: 'chown', os.getuid(), console_log
     # nova/virt/libvirt/connection.py: 'chown', os.getuid(), console_log
     # nova/virt/libvirt/connection.py: 'chown', 'root', basepath('disk')
-    # nova/virt/xenapi/vm_utils.py: 'chown', os.getuid(), dev_path
+    # nova/utils.py: 'chown', owner_uid, path
     filters.CommandFilter("/bin/chown", "root"),
 
     # nova/virt/disk/api.py: 'chmod', '700', sshdir
@@ -179,6 +179,10 @@ filterlist = [
     # nova/virt/xenapi/vm_utils.py: 'mkfs'
     filters.CommandFilter("/sbin/mkfs", "root"),
 
+    # nova/virt/libvirt/utils.py: 'qemu-img'
+    filters.CommandFilter("/usr/bin/qemu-img", "root"),
+
     # nova/virt/libvirt/connection.py:
     filters.ReadFileFilter("/etc/iscsi/initiatorname.iscsi"),
+
     ]

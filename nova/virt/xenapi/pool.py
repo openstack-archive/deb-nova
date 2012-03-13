@@ -76,7 +76,7 @@ class ResourcePool(object):
                 # this is the master ->  do a pool-join
                 # To this aim, nova compute on the slave has to go down.
                 # NOTE: it is assumed that ONLY nova compute is running now
-                self._join_slave(aggregate.id,
+                self._join_slave(aggregate.id, host,
                                  kwargs.get('compute_uuid'),
                                  kwargs.get('url'), kwargs.get('user'),
                                  kwargs.get('passwd'))
@@ -127,7 +127,7 @@ class ResourcePool(object):
                                            'from the pool; No master found')
                                            % locals())
 
-    def _join_slave(self, aggregate_id, compute_uuid, url, user, passwd):
+    def _join_slave(self, aggregate_id, host, compute_uuid, url, user, passwd):
         """Joins a slave into a XenServer resource pool."""
         try:
             args = {'compute_uuid': compute_uuid,
@@ -138,9 +138,7 @@ class ResourcePool(object):
                     'master_addr': self._host_addr,
                     'master_user': FLAGS.xenapi_connection_username,
                     'master_pass': FLAGS.xenapi_connection_password, }
-            task = self._session.async_call_plugin('xenhost',
-                                                   'host_join', args)
-            self._session.wait_for_task(task)
+            self._session.call_plugin('xenhost', 'host_join', args)
         except self.XenAPI.Failure as e:
             LOG.error(_("Pool-Join failed: %(e)s") % locals())
             raise exception.AggregateError(aggregate_id=aggregate_id,

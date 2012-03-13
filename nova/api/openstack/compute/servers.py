@@ -410,7 +410,7 @@ class Controller(wsgi.Controller):
         """
 
         search_opts = {}
-        search_opts.update(req.str_GET)
+        search_opts.update(req.GET)
 
         context = req.environ['nova.context']
         remove_invalid_options(context, search_opts,
@@ -491,7 +491,8 @@ class Controller(wsgi.Controller):
             "InstanceLimitExceeded": error.message,
         }
 
-        expl = code_mappings.get(error.kwargs['code'], error.message)
+        code = error.kwargs['code']
+        expl = code_mappings.get(code, error.message) % error.kwargs
         raise exc.HTTPRequestEntityTooLarge(explanation=expl,
                                             headers={'Retry-After': 0})
 

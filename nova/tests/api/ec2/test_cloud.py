@@ -20,8 +20,9 @@
 import base64
 import copy
 import functools
-import tempfile
 import os
+import string
+import tempfile
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
@@ -433,6 +434,60 @@ class CloudTestCase(test.TestCase):
         authz(self.context, group_name=sec['name'], **kwargs)
         self.assertRaises(exception.EC2APIError, authz, self.context,
                           group_name=sec['name'], **kwargs)
+
+    def _test_authorize_security_group_no_ports_with_source_group(self, proto):
+        kwargs = {'project_id': self.context.project_id, 'name': 'test'}
+        sec = db.security_group_create(self.context, kwargs)
+
+        authz = self.cloud.authorize_security_group_ingress
+        auth_kwargs = {'ip_protocol': proto,
+                       'groups': {'1': {'user_id': self.context.user_id,
+                                        'group_name': u'test'}}}
+        self.assertTrue(authz(self.context, group_name=sec['name'],
+                        **auth_kwargs))
+
+        describe = self.cloud.describe_security_groups
+        groups = describe(self.context, group_name=['test'])
+        self.assertEquals(len(groups['securityGroupInfo']), 1)
+        actual_rules = groups['securityGroupInfo'][0]['ipPermissions']
+        expected_rules = [{'groups': [{'groupName': 'test',
+                                       'userId': self.context.user_id}],
+                           'ipProtocol': proto,
+                           'ipRanges': []}]
+        if proto == 'icmp':
+            expected_rules[0]['fromPort'] = -1
+            expected_rules[0]['toPort'] = -1
+        else:
+            expected_rules[0]['fromPort'] = 1
+            expected_rules[0]['toPort'] = 65535
+        self.assertTrue(expected_rules == actual_rules)
+        describe = self.cloud.describe_security_groups
+        groups = describe(self.context, group_name=['test'])
+
+        db.security_group_destroy(self.context, sec['id'])
+
+    def _test_authorize_security_group_no_ports_no_source_group(self, proto):
+        kwargs = {'project_id': self.context.project_id, 'name': 'test'}
+        sec = db.security_group_create(self.context, kwargs)
+
+        authz = self.cloud.authorize_security_group_ingress
+        auth_kwargs = {'ip_protocol': proto}
+        self.assertRaises(exception.EC2APIError, authz, self.context,
+                          group_name=sec['name'], **auth_kwargs)
+
+        db.security_group_destroy(self.context, sec['id'])
+
+    def test_authorize_security_group_no_ports_icmp(self):
+        self._test_authorize_security_group_no_ports_with_source_group('icmp')
+        self._test_authorize_security_group_no_ports_no_source_group('icmp')
+
+    def test_authorize_security_group_no_ports_tcp(self):
+        self._test_authorize_security_group_no_ports_with_source_group('tcp')
+        self._test_authorize_security_group_no_ports_no_source_group('tcp')
+
+    def test_authorize_security_group_no_ports_udp(self):
+        self._test_authorize_security_group_no_ports_with_source_group('udp')
+        self._test_authorize_security_group_no_ports_no_source_group('udp')
 
     def test_revoke_security_group_ingress_missing_group_name_or_id(self):
         kwargs = {'to_port': '999', 'from_port': '999', 'ip_protocol': 'tcp'}
@@ -1235,6 +1290,7 @@ class CloudTestCase(test.TestCase):
             'id': 1,
             'container_format': 'ami',
             'name': 'name',
+            'owner': 'someone',
             'properties': {
                 'image_location': 'location',
                 'kernel_id': 1,
@@ -1242,7 +1298,7 @@ class CloudTestCase(test.TestCase):
                 'type': 'machine'},
             'is_public': False}
         expected = {'name': 'name',
-                    'imageOwnerId': None,
+                    'imageOwnerId': 'someone',
                     'isPublic': False,
                     'imageId': 'ami-00000001',
                     'imageState': None,
@@ -1362,6 +1418,21 @@ class CloudTestCase(test.TestCase):
                                   key_name)
         self.assertEqual(dummypub, keydata['public_key'])
         self.assertEqual(dummyfprint, keydata['fingerprint'])
+
+    def test_create_key_pair(self):
+        good_names = ('a', 'a' * 255, string.ascii_letters + ' -_')
+        bad_names = ('', 'a' * 256, '*', '/')
+
+        for key_name in good_names:
+            result = self.cloud.create_key_pair(self.context,
+                                                key_name)
+            self.assertEqual(result['keyName'], key_name)
+
+        for key_name in bad_names:
+            self.assertRaises(exception.EC2APIError,
+                              self.cloud.create_key_pair,
+                              self.context,
+                              key_name)
 
     def test_delete_key_pair(self):
         self._create_key('test')

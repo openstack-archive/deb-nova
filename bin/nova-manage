@@ -584,9 +584,13 @@ class FixedIpCommands(object):
             network = db.network_get(context.get_admin_context(),
                                      fixed_ip['network_id'])
             if fixed_ip['instance_id']:
-                instance = instances_by_id[fixed_ip['instance_id']]
-                hostname = instance['hostname']
-                host = instance['host']
+                instance = instances_by_id.get(fixed_ip['instance_id'])
+                if instance:
+                    hostname = instance['hostname']
+                    host = instance['host']
+                else:
+                    print 'WARNING: fixed ip %s allocated to missing' \
+                    ' instance' % str(fixed_ip['address'])
             print "%-18s\t%-15s\t%-15s\t%s" % (
                     network['cidr'],
                     fixed_ip['address'],
@@ -624,18 +628,17 @@ class FloatingIpCommands(object):
     """Class for managing floating ip."""
 
     @staticmethod
-    def network_to_host_list(network):
-        """Return the list of host of a network.
-
-        If the network is empty and only has one host, then we consider it
-        has the host in the network.
+    def address_to_hosts(addresses):
         """
+        Iterate over hosts within a address range.
 
-        if network.size == 1:
-            yield network.ip
-        else:
-            for host in network.iter_hosts():
-                yield host
+        If an explicit range specifier is missing, the parameter is
+        interpreted as a specific individual address.
+        """
+        try:
+            return [netaddr.IPAddress(addresses)]
+        except ValueError:
+            return netaddr.IPNetwork(addresses).iter_hosts()
 
     @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
     @args('--pool', dest="pool", metavar='<pool>', help='Optional pool')
@@ -643,13 +646,12 @@ class FloatingIpCommands(object):
           help='Optional interface')
     def create(self, ip_range, pool=None, interface=None):
         """Creates floating ips for zone by range"""
-        addresses = netaddr.IPNetwork(ip_range)
         admin_context = context.get_admin_context()
         if not pool:
             pool = FLAGS.default_floating_pool
         if not interface:
             interface = FLAGS.public_interface
-        for address in self.network_to_host_list(addresses):
+        for address in self.address_to_hosts(ip_range):
             db.floating_ip_create(admin_context,
                                   {'address': str(address),
                                    'pool': pool,
@@ -1793,58 +1795,54 @@ class StorageManagerCommands(object):
         # TODO Add backend_introduce.
         ctxt = context.get_admin_context()
         params = dict(map(self._splitfun, args))
+        sr_uuid = utils.gen_uuid()
+
+        if flavor_label is None:
+            print "error: backend needs to be associated with flavor"
+            sys.exit(2)
+
+        try:
+            flavors = db.sm_flavor_get(ctxt, flavor_label)
+
+        except exception.NotFound as ex:
+            print "error: %s" % ex
+            sys.exit(2)
+
+        config_params = " ".join(['%s=%s' %
+                               (key, params[key]) for key in params])
 
         if 'sr_uuid' in params:
+            sr_uuid = params['sr_uuid']
             try:
-                backend = db.sm_backend_conf_get_by_sr(ctxt,
-                                                       params['sr_uuid'])
+                backend = db.sm_backend_conf_get_by_sr(ctxt, sr_uuid)
             except exception.DBError, e:
                 _db_error(e)
 
             if backend:
-                if len(backend) > 1:
-                    print 'error: Multiple backends found with given sr_uuid'
-                    sys.exit(2)
-
                 print 'Backend config found. Would you like to recreate this?'
                 print '(WARNING:Recreating will destroy all VDIs on backend!!)'
                 c = raw_input('Proceed? (y/n) ')
                 if c == 'y' or c == 'Y':
                     try:
                         db.sm_backend_conf_update(ctxt, backend['id'],
-                                                  dict(created=False))
+                                        dict(created=False,
+                                             flavor_id=flavors['id'],
+                                             sr_type=sr_type,
+                                             config_params=config_params))
                     except exception.DBError, e:
                         _db_error(e)
                 return
 
             else:
                 print 'Backend config not found. Would you like to create it?'
-                print '(WARNING: Creating will destroy all data on backend!!!)'
-                c = raw_input('Proceed? (y/n) ')
-                if c != 'y' and c != 'Y':
-                    return
 
         print '(WARNING: Creating will destroy all data on backend!!!)'
         c = raw_input('Proceed? (y/n) ')
         if c == 'y' or c == 'Y':
-            if flavor_label is None:
-                print "error: backend needs to be associated with flavor"
-                sys.exit(2)
-
-            try:
-                flavors = db.sm_flavor_get(ctxt, flavor_label)
-
-            except exception.NotFound as ex:
-                print "error: %s" % ex
-                sys.exit(2)
-
-            config_params = "".join(['%s=%s ' %
-                                   (key, params[key]) for key in params])
-
             try:
                 db.sm_backend_conf_create(ctxt,
                                           dict(flavor_id=flavors['id'],
-                                               sr_uuid=None,
+                                               sr_uuid=sr_uuid,
                                                sr_type=sr_type,
                                                config_params=config_params))
             except exception.DBError, e:
@@ -1975,7 +1973,15 @@ class GetLogCommands(object):
         """Get <num_entries> of the nova syslog events"""
         entries = int(num_entries)
         count = 0
-        lines = [line.strip() for line in open('/var/log/syslog', "r")]
+        log_file = ''
+        if os.path.exists('/var/log/syslog'):
+            log_file = '/var/log/syslog'
+        elif os.path.exists('/var/log/messages'):
+            log_file = '/var/log/messages'
+        else:
+            print "Unable to find system log file!"
+            sys.exit(1)
+        lines = [line.strip() for line in open(log_file, "r")]
         lines.reverse()
         print "Last %s nova syslog entries:-" % (entries)
         for line in lines:
