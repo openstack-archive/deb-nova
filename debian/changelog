@@ -3,6 +3,9 @@ nova (2012.1~e4-2) unstable; urgency=low
   [ Thomas Goirand ]
   * nova-xcp-network.init now has a Required-Start: xcp-networkd, as otherwise,
   the boot process is simply stuck.
+  * Added a chmod +x of all Nova XCP plugins in the postinst: otherwise,
+  there's a XENAPI_PLUGIN_FAILURE when starting nova-compute, and the Git seems
+  to have wrong Unix rights.
 
   [ Julien Danjou ]
   * Add dbconfig support
