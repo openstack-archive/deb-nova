@@ -1,4 +1,4 @@
-nova (2012.1~e4+git1809-g0193d12-1) experimental; urgency=low
+nova (2012.1~e4+git1953-g4e3c9ea-1) experimental; urgency=low
 
   [ Ghe Rivero ]
   * Use nova-rootwrap instead of sudo
