@@ -17,7 +17,6 @@ override_dh_auto_clean:
 override_dh_auto_build:
 	dh_auto_build
 	python setup.py build_sphinx
-	mv doc/build/man/novamanage.1 doc/build/man/nova-manage.1
 
 override_dh_install:
 	dh_install
