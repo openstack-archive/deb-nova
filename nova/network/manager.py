@@ -36,8 +36,6 @@ topologies.  All of the network commands are issued to a subclass of
 :network_size:  Number of addresses in each private subnet
 :floating_range:  Floating IP address block
 :fixed_range:  Fixed IP address block
-:date_dhcp_on_disassociate:  Whether to update dhcp when fixed_ip
-                             is disassociated
 :fixed_ip_disassociate_timeout:  Seconds after which a deallocated ip
                                  is disassociated
 :create_unique_mac_address_attempts:  Number of times to attempt creating
@@ -1123,12 +1121,13 @@ class NetworkManager(manager.SchedulerDependentManager):
         self._allocate_fixed_ips(context, instance_id, host, networks)
 
     @wrap_check_policy
-    def remove_fixed_ip_from_instance(self, context, instance_id, address):
+    def remove_fixed_ip_from_instance(self, context, instance_id, host,
+                                      address):
         """Removes a fixed ip from an instance from specified network."""
         fixed_ips = self.db.fixed_ip_get_by_instance(context, instance_id)
         for fixed_ip in fixed_ips:
             if fixed_ip['address'] == address:
-                self.deallocate_fixed_ip(context, address)
+                self.deallocate_fixed_ip(context, address, host)
                 return
         raise exception.FixedIpNotFoundForSpecificInstance(
                                     instance_id=instance_id, ip=address)

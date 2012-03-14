@@ -40,6 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import joinedload_all
 from sqlalchemy.sql import func
+from sqlalchemy.sql.expression import asc
 from sqlalchemy.sql.expression import desc
 from sqlalchemy.sql.expression import literal_column
 
@@ -1379,7 +1380,7 @@ def instance_get_all(context):
 
 
 @require_context
-def instance_get_all_by_filters(context, filters):
+def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
     """Return instances that match all filters.  Deleted instances
     will be returned by default, unless there's a filter that says
     otherwise"""
@@ -1406,13 +1407,15 @@ def instance_get_all_by_filters(context, filters):
             return True
         return False
 
+    sort_fn = {'desc': desc, 'asc': asc}
+
     session = get_session()
     query_prefix = session.query(models.Instance).\
             options(joinedload('info_cache')).\
             options(joinedload('security_groups')).\
             options(joinedload('metadata')).\
             options(joinedload('instance_type')).\
-            order_by(desc(models.Instance.created_at))
+            order_by(sort_fn[sort_dir](getattr(models.Instance, sort_key)))
 
     # Make a copy of the filters dictionary to use going forward, as we'll
     # be modifying it and we shouldn't affect the caller's use of it.
@@ -2064,11 +2067,15 @@ def network_get_all_by_instance(context, instance_id):
 
 @require_admin_context
 def network_get_all_by_host(context, host):
+    session = get_session()
+    fixed_ip_query = model_query(context, models.FixedIp.network_id,
+                                 session=session).\
+                        filter(models.FixedIp.host == host)
     # NOTE(vish): return networks that have host set
     #             or that have a fixed ip with host set
     host_filter = or_(models.Network.host == host,
-                      models.FixedIp.host == host)
-    return _network_get_query(context).\
+                      models.Network.id.in_(fixed_ip_query.subquery()))
+    return _network_get_query(context, session=session).\
                        filter(host_filter).\
                        all()
 
