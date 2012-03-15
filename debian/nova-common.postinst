@@ -16,13 +16,8 @@ if [ "$1" = "configure" ]; then
             -group nogroup -a -user nova -exec chown nova:nova {} \;
     fi
 
-    chmod 0640 /etc/nova/nova.conf
-    chmod 0440 /etc/sudoers.d/nova_sudoers
-    chmod 0750 /var/log/nova
-
     . /usr/share/debconf/confmodule
     . /usr/share/dbconfig-common/dpkg/postinst
-
 
     db_get nova-common/database-type
     if [ $RET = "sqlite3" ]
@@ -58,5 +53,10 @@ if [ "$1" = "configure" ]; then
         fi
     fi
 fi
+
+chmod 0640 /etc/nova/nova.conf
+chmod 0440 /etc/sudoers.d/nova_sudoers
+chmod 0750 /var/log/nova
+chmod 0755 /var/lib/nova
 
 #DEBHELPER#
