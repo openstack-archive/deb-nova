@@ -11,8 +11,9 @@ nova (2012.1~e4-2) unstable; urgency=low
   * Add dbconfig support
   * Bump standard version
   * Add logrotate entry for nova-dhcpbridge.log in nova-network
+  * Add nova-cert package, providing the nova-cert daemon
 
- -- Julien Danjou <acid@debian.org>  Mon, 19 Mar 2012 10:42:28 +0100
+ -- Julien Danjou <acid@debian.org>  Mon, 19 Mar 2012 14:27:26 +0100
 
 nova (2012.1~e4-1) unstable; urgency=low
 
