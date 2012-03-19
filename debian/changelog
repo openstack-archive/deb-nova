@@ -10,8 +10,9 @@ nova (2012.1~e4-2) unstable; urgency=low
   [ Julien Danjou ]
   * Add dbconfig support
   * Bump standard version
+  * Add logrotate entry for nova-dhcpbridge.log in nova-network
 
- -- Julien Danjou <acid@debian.org>  Fri, 09 Mar 2012 15:35:37 +0100
+ -- Julien Danjou <acid@debian.org>  Mon, 19 Mar 2012 10:42:28 +0100
 
 nova (2012.1~e4-1) unstable; urgency=low
 

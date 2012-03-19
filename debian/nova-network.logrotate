@@ -2,3 +2,8 @@
     daily
     missingok
 }
+
+/var/log/nova/nova-dhcpbridge.log {
+    daily
+    missingok
+}
