@@ -16,7 +16,7 @@
 
 from nova import test
 
-from xml.etree.ElementTree import fromstring as xml_to_tree
+from xml.etree import ElementTree
 
 import fakelibvirt as libvirt
 
@@ -89,7 +89,7 @@ class FakeLibvirtTests(test.TestCase):
 
     def _test_connect_method_can_refuse_None_uri(self, conn_method):
         libvirt.allow_default_uri_connection = False
-        self.assertRaises(Exception, conn_method, None)
+        self.assertRaises(ValueError, conn_method, None)
 
     def test_openReadOnly_can_refuse_None_uri(self):
         conn_method = self.get_openReadOnly_curry_func()
@@ -252,7 +252,7 @@ class FakeLibvirtTests(test.TestCase):
         conn.defineXML(get_vm_xml())
         dom = conn.lookupByName('testname')
         xml = dom.XMLDesc(0)
-        xml_to_tree(xml)
+        ElementTree.fromstring(xml)
 
     def _test_accepts_source_type(self, source_type):
         conn = self.get_openAuth_curry_func()('qemu:///system')
@@ -260,7 +260,7 @@ class FakeLibvirtTests(test.TestCase):
         conn.defineXML(get_vm_xml(source_type=source_type))
         dom = conn.lookupByName('testname')
         xml = dom.XMLDesc(0)
-        tree = xml_to_tree(xml)
+        tree = ElementTree.fromstring(xml)
         elem = tree.find('./devices/disk/source')
         self.assertEquals(elem.get('file'), '/somefile')
 
@@ -282,7 +282,7 @@ class FakeLibvirtTests(test.TestCase):
         conn.defineXML(get_vm_xml(interface_type=network_type))
         dom = conn.lookupByName('testname')
         xml = dom.XMLDesc(0)
-        tree = xml_to_tree(xml)
+        tree = ElementTree.fromstring(xml)
         elem = tree.find('./devices/interface')
         self.assertEquals(elem.get('type'), network_type)
         elem = elem.find('./source')
@@ -298,7 +298,7 @@ class FakeLibvirtTests(test.TestCase):
 
     def test_getCapabilities(self):
         conn = self.get_openAuth_curry_func()('qemu:///system')
-        xml_to_tree(conn.getCapabilities())
+        ElementTree.fromstring(conn.getCapabilities())
 
     def test_nwfilter_define_undefine(self):
         conn = self.get_openAuth_curry_func()('qemu:///system')

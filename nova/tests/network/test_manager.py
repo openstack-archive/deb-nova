@@ -16,7 +16,9 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 import mox
+import shutil
 import sys
+import tempfile
 
 from nova import context
 from nova import db
@@ -126,6 +128,8 @@ vifs = [{'id': 0,
 class FlatNetworkTestCase(test.TestCase):
     def setUp(self):
         super(FlatNetworkTestCase, self).setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.flags(logdir=self.tempdir)
         self.network = network_manager.FlatManager(host=HOST)
         temp = utils.import_object('nova.network.minidns.MiniDNS')
         self.network.instance_dns_manager = temp
@@ -135,8 +139,8 @@ class FlatNetworkTestCase(test.TestCase):
                                               is_admin=False)
 
     def tearDown(self):
+        shutil.rmtree(self.tempdir)
         super(FlatNetworkTestCase, self).tearDown()
-        self.network.instance_dns_manager.delete_dns_file()
 
     def test_get_instance_nw_info(self):
         fake_get_instance_nw_info = fake_network.fake_get_instance_nw_info
@@ -838,7 +842,7 @@ class VlanNetworkTestCase(test.TestCase):
         # Clean up the ip addresses
         self.network.disassociate_floating_ip(context1, float_addr)
         self.network.deallocate_floating_ip(context1, float_addr)
-        self.network.deallocate_fixed_ip(context1, fix_addr)
+        self.network.deallocate_fixed_ip(context1, fix_addr, 'fake')
         db.floating_ip_destroy(context1.elevated(), float_addr)
         db.fixed_ip_disassociate(context1.elevated(), fix_addr)
 
@@ -854,7 +858,8 @@ class CommonNetworkTestCase(test.TestCase):
 
     def test_remove_fixed_ip_from_instance(self):
         manager = fake_network.FakeNetworkManager()
-        manager.remove_fixed_ip_from_instance(self.context, 99, '10.0.0.1')
+        manager.remove_fixed_ip_from_instance(self.context, 99, HOST,
+                                              '10.0.0.1')
 
         self.assertEquals(manager.deallocate_called, '10.0.0.1')
 
@@ -862,7 +867,7 @@ class CommonNetworkTestCase(test.TestCase):
         manager = fake_network.FakeNetworkManager()
         self.assertRaises(exception.FixedIpNotFoundForSpecificInstance,
                           manager.remove_fixed_ip_from_instance,
-                          self.context, 99, 'bad input')
+                          self.context, 99, HOST, 'bad input')
 
     def test_validate_cidrs(self):
         manager = fake_network.FakeNetworkManager()
@@ -1264,10 +1269,52 @@ class TestFloatingIPManager(network_manager.FloatingIP,
     """Dummy manager that implements FloatingIP"""
 
 
+class AllocateTestCase(test.TestCase):
+    def test_allocate_for_instance(self):
+        address = "10.10.10.10"
+        self.flags(auto_assign_floating_ip=True)
+        self.compute = self.start_service('compute')
+        self.network = self.start_service('network')
+
+        self.user_id = 'fake'
+        self.project_id = 'fake'
+        self.context = context.RequestContext(self.user_id,
+                                              self.project_id,
+                                              is_admin=True)
+
+        db.floating_ip_create(self.context,
+                              {'address': address,
+                               'pool': 'nova'})
+        inst = db.instance_create(self.context, {'host': self.compute.host,
+                                                 'instance_type_id': 1})
+        networks = db.network_get_all(self.context)
+        for network in networks:
+            db.network_update(self.context, network['id'],
+                              {'host': self.network.host})
+        project_id = self.context.project_id
+        nw_info = self.network.allocate_for_instance(self.context,
+                                                 instance_id=inst['id'],
+                                                 instance_uuid='',
+                                                 host=inst['host'],
+                                                 vpn=None,
+                                                 rxtx_factor=3,
+                                                 project_id=project_id)
+        self.assertEquals(1, len(nw_info))
+        fixed_ip = nw_info.fixed_ips()[0]['address']
+        self.assertTrue(utils.is_valid_ipv4(fixed_ip))
+        self.network.deallocate_for_instance(self.context,
+                                             instance_id=inst['id'],
+                                             fixed_ips=fixed_ip,
+                                             host=self.network.host,
+                                             project_id=project_id)
+
+
 class FloatingIPTestCase(test.TestCase):
     """Tests nova.network.manager.FloatingIP"""
     def setUp(self):
         super(FloatingIPTestCase, self).setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.flags(logdir=self.tempdir)
         self.network = TestFloatingIPManager()
         temp = utils.import_object('nova.network.minidns.MiniDNS')
         self.network.floating_dns_manager = temp
@@ -1277,8 +1324,8 @@ class FloatingIPTestCase(test.TestCase):
             is_admin=False)
 
     def tearDown(self):
+        shutil.rmtree(self.tempdir)
         super(FloatingIPTestCase, self).tearDown()
-        self.network.floating_dns_manager.delete_dns_file()
 
     def test_double_deallocation(self):
         instance_ref = db.api.instance_create(self.context,
@@ -1463,14 +1510,14 @@ class NetworkPolicyTestCase(test.TestCase):
         nova.policy.enforce(self.context, 'network:get_all', target)
         self.mox.ReplayAll()
         network_manager.check_policy(self.context, 'get_all')
-        self.mox.UnsetStubs()
-        self.mox.VerifyAll()
 
 
 class InstanceDNSTestCase(test.TestCase):
     """Tests nova.network.manager instance DNS"""
     def setUp(self):
         super(InstanceDNSTestCase, self).setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.flags(logdir=self.tempdir)
         self.network = TestFloatingIPManager()
         temp = utils.import_object('nova.network.minidns.MiniDNS')
         self.network.instance_dns_manager = temp
@@ -1482,8 +1529,8 @@ class InstanceDNSTestCase(test.TestCase):
             is_admin=False)
 
     def tearDown(self):
+        shutil.rmtree(self.tempdir)
         super(InstanceDNSTestCase, self).tearDown()
-        self.network.instance_dns_manager.delete_dns_file()
 
     def test_dns_domains_private(self):
         zone1 = 'testzone'
@@ -1527,10 +1574,10 @@ class LdapDNSTestCase(test.TestCase):
         self.driver.create_domain(domain2)
 
     def tearDown(self):
-        super(LdapDNSTestCase, self).tearDown()
         self.driver.delete_domain(domain1)
         self.driver.delete_domain(domain2)
         sys.modules['ldap'] = self.saved_ldap
+        super(LdapDNSTestCase, self).tearDown()
 
     def test_ldap_dns_domains(self):
         domains = self.driver.get_domains()

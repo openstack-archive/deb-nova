@@ -19,23 +19,21 @@
 import glob
 import os
 
-from setuptools import find_packages
-
-from setuptools import setup
+import setuptools
 
 from nova import version
 
 nova_cmdclass = {}
 
 try:
-    from sphinx.setup_command import BuildDoc
+    from sphinx import setup_command
 
-    class local_BuildDoc(BuildDoc):
+    class local_BuildDoc(setup_command.BuildDoc):
         def run(self):
             for builder in ['html', 'man']:
                 self.builder = builder
                 self.finalize_options()
-                BuildDoc.run(self)
+                setup_command.BuildDoc.run(self)
     nova_cmdclass['build_sphinx'] = local_BuildDoc
 
 except Exception:
@@ -55,14 +53,14 @@ def find_data_files(destdir, srcdir):
     return package_data
 
 
-setup(name='nova',
+setuptools.setup(name='nova',
       version=version.canonical_version_string(),
       description='cloud computing fabric controller',
       author='OpenStack',
       author_email='nova@lists.launchpad.net',
       url='http://www.openstack.org/',
       cmdclass=nova_cmdclass,
-      packages=find_packages(exclude=['bin', 'smoketests']),
+      packages=setuptools.find_packages(exclude=['bin', 'smoketests']),
       include_package_data=True,
       test_suite='nose.collector',
       scripts=['bin/clear_rabbit_queues',
@@ -79,13 +77,11 @@ setup(name='nova',
                'bin/nova-consoleauth',
                'bin/nova-dhcpbridge',
                'bin/nova-direct-api',
-               'bin/nova-logspool',
                'bin/nova-manage',
                'bin/nova-network',
                'bin/nova-objectstore',
                'bin/nova-rootwrap',
                'bin/nova-scheduler',
-               'bin/nova-spoolsentry',
                'bin/nova-volume',
                'bin/nova-vsa',
                'bin/nova-xvpvncproxy',

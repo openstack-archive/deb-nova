@@ -44,17 +44,16 @@ TEST_LIMITS = [
 ]
 NS = {
     'atom': 'http://www.w3.org/2005/Atom',
-    'ns': 'http://docs.openstack.org/compute/api/v1.1'
+    'ns': 'http://docs.openstack.org/common/api/v1.0'
 }
 
 
-class BaseLimitTestSuite(unittest.TestCase):
+class BaseLimitTestSuite(test.TestCase):
     """Base test suite which provides relevant stubs and time abstraction."""
 
     def setUp(self):
-        """Run before each test."""
+        super(BaseLimitTestSuite, self).setUp()
         self.time = 0.0
-        self.stubs = stubout.StubOutForTesting()
         self.stubs.Set(limits.Limit, "_get_time", self._get_time)
         self.absolute_limits = {}
 
@@ -63,10 +62,6 @@ class BaseLimitTestSuite(unittest.TestCase):
 
         self.stubs.Set(nova.quota, "get_project_quotas",
                        stub_get_project_quotas)
-
-    def tearDown(self):
-        """Run after each test."""
-        self.stubs.UnsetAll()
 
     def _get_time(self):
         """Return the "time" according to this test suite."""
@@ -80,9 +75,8 @@ class LimitsControllerTest(BaseLimitTestSuite):
 
     def setUp(self):
         """Run before each test."""
-        BaseLimitTestSuite.setUp(self)
+        super(LimitsControllerTest, self).setUp()
         self.controller = limits.create_resource()
-        self.maxDiff = None
 
     def _get_index_request(self, accept_header="application/json"):
         """Helper to set routing arguments."""
@@ -289,7 +283,7 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
 
     def setUp(self):
         """Prepare middleware for use through fake WSGI app."""
-        BaseLimitTestSuite.setUp(self)
+        super(LimitMiddlewareTest, self).setUp()
         _limits = '(GET, *, .*, 1, MINUTE)'
         self.app = limits.RateLimitingMiddleware(self._empty_app, _limits,
                                                  "%s.TestLimiter" %
@@ -450,7 +444,7 @@ class LimiterTest(BaseLimitTestSuite):
 
     def setUp(self):
         """Run before each test."""
-        BaseLimitTestSuite.setUp(self)
+        super(LimiterTest, self).setUp()
         userlimits = {'user:user3': ''}
         self.limiter = limits.Limiter(TEST_LIMITS, **userlimits)
 
@@ -604,7 +598,7 @@ class WsgiLimiterTest(BaseLimitTestSuite):
 
     def setUp(self):
         """Run before each test."""
-        BaseLimitTestSuite.setUp(self)
+        super(WsgiLimiterTest, self).setUp()
         self.app = limits.WsgiLimiter(TEST_LIMITS)
 
     def _request_data(self, verb, path):
@@ -762,7 +756,7 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
         Do some nifty HTTP/WSGI magic which allows for WSGI to be called
         directly by something like the `httplib` library.
         """
-        BaseLimitTestSuite.setUp(self)
+        super(WsgiLimiterProxyTest, self).setUp()
         self.app = limits.WsgiLimiter(TEST_LIMITS)
         wire_HTTPConnection_to_WSGI("169.254.0.1:80", self.app)
         self.proxy = limits.WsgiLimiterProxy("169.254.0.1:80")
@@ -787,8 +781,8 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
 
 
 class LimitsViewBuilderTest(test.TestCase):
-
     def setUp(self):
+        super(LimitsViewBuilderTest, self).setUp()
         self.view_builder = views.limits.ViewBuilder()
         self.rate_limits = [{"URI": "*",
                              "regex": ".*",
@@ -807,9 +801,6 @@ class LimitsViewBuilderTest(test.TestCase):
         self.absolute_limits = {"metadata_items": 1,
                                 "injected_files": 5,
                                 "injected_file_content_bytes": 5}
-
-    def tearDown(self):
-        pass
 
     def test_build_limits(self):
         expected_limits = {"limits": {
@@ -848,13 +839,6 @@ class LimitsViewBuilderTest(test.TestCase):
 
 
 class LimitsXMLSerializationTest(test.TestCase):
-
-    def setUp(self):
-        self.maxDiff = None
-
-    def tearDown(self):
-        pass
-
     def test_xml_declaration(self):
         serializer = limits.LimitsTemplate()
 

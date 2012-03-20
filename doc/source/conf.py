@@ -54,7 +54,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'nova'
-copyright = u'2010, United States Government as represented by the Administrator of the National Aeronautics and Space Administration.'
+copyright = u'2010-present, OpenStack, LLC'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -78,7 +78,11 @@ version = nova_version.canonical_version_string()
 #today_fmt = '%B %d, %Y'
 
 # List of documents that shouldn't be included in the build.
-#unused_docs = []
+unused_docs = [
+    'api_ext/rst_extension_template',
+    'vmwareapi_readme',
+    'installer',
+    ]
 
 # List of directories, relative to source directory, that shouldn't be searched
 # for source files.
@@ -92,7 +96,7 @@ exclude_trees = []
 
 # If true, the current module name will be prepended to all description
 # unit titles (such as .. function::).
-#add_module_names = True
+add_module_names = False
 
 # If true, sectionauthor and moduleauthor directives will be shown in the
 # output. They are ignored by default.
@@ -106,11 +110,11 @@ modindex_common_prefix = ['nova.']
 
 # -- Options for man page output -----------------------------------------------
 
-# Grouping the document tree for man pages. 
+# Grouping the document tree for man pages.
 # List of tuples 'sourcefile', 'target', u'title', u'Authors name', 'manual'
 
 man_pages = [
-    ('man/novamanage', 'novamanage', u'Cloud controller fabric',
+    ('man/nova-manage', 'nova-manage', u'Cloud controller fabric',
      [u'OpenStack'], 1)
  ]
 
@@ -153,6 +157,8 @@ html_static_path = ['_static']
 # If not '', a 'Last updated on:' timestamp is inserted at every page bottom,
 # using the given strftime format.
 #html_last_updated_fmt = '%b %d, %Y'
+git_cmd = "git log --pretty=format:'%ad, commit %h' --date=local -n1"
+html_last_updated_fmt = os.popen(git_cmd).read()
 
 # If true, SmartyPants will be used to convert quotes and dashes to
 # typographically correct entities.

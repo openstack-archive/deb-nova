@@ -107,13 +107,10 @@ compute_opts = [
                help="Number of periodic scheduler ticks to wait between "
                     "runs of the cleanup task."),
     cfg.StrOpt("running_deleted_instance_action",
-               default="noop",
+               default="log",
                help="Action to take if a running deleted instance is detected."
                     "Valid options are 'noop', 'log' and 'reap'. "
                     "Set to 'noop' to disable."),
-    cfg.BoolOpt("use_image_cache_manager",
-                default=False,
-                help="Whether to manage images in the local cache."),
     cfg.IntOpt("image_cache_manager_interval",
                default=3600,
                help="Number of periodic scheduler ticks to wait between "
@@ -219,9 +216,13 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self.db.instance_update(context, instance_id, kwargs)
 
     def _set_instance_error_state(self, context, instance_uuid):
-        self._instance_update(context,
-                              instance_uuid,
-                              vm_state=vm_states.ERROR)
+        try:
+            self._instance_update(context,
+                    instance_uuid, vm_state=vm_states.ERROR)
+        except exception.InstanceNotFound:
+            LOG.debug(_("Instance %(instance_uuid)s has been destroyed "
+                    "from under us while trying to set it to ERROR") %
+                    locals())
 
     def init_host(self):
         """Initialization for a standalone compute service."""
@@ -392,20 +393,18 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     def _shutdown_instance_even_if_deleted(self, context, instance_uuid):
         """Call terminate_instance even for already deleted instances"""
-        LOG.info(_("Going to force the deletion of the vm %(instance_uuid)s, "
-                   "even if it is deleted") % locals())
         try:
             try:
                 self.terminate_instance(context, instance_uuid)
             except exception.InstanceNotFound:
-                LOG.info(_("Instance %(instance_uuid)s did not exist in the "
-                         "DB, but I will shut it down anyway using a special "
-                         "context") % locals())
-                ctxt = nova.context.get_admin_context(True)
+                LOG.info(_("Instance %s already deleted from database. "
+                           "Attempting forceful vm deletion")
+                            % instance_uuid)
+                ctxt = nova.context.get_admin_context(read_deleted='yes')
                 self.terminate_instance(ctxt, instance_uuid)
         except Exception as ex:
-            LOG.info(_("exception terminating the instance "
-                     "%(instance_uuid)s") % locals())
+            LOG.exception(_("Exception encountered while terminating the "
+                            "instance %s") % instance_uuid)
 
     def _run_instance(self, context, instance_uuid,
                       requested_networks=None,
@@ -667,6 +666,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         LOG.audit(_('%(action_str)s instance') % {'action_str': action_str},
                   context=context, instance=instance)
 
+        self._notify_about_instance_usage(instance, "shutdown.start")
+
         # get network info before tearing down
         network_info = self._get_instance_nw_info(context, instance)
         # tear down allocated network structure
@@ -698,6 +699,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             except exception.DiskNotFound as exc:
                 LOG.warn(_('Ignoring DiskNotFound: %s') % exc,
                          instance=instance)
+
+        self._notify_about_instance_usage(instance, "shutdown.end")
 
     def _cleanup_volumes(self, context, instance_id):
         bdms = self.db.block_device_mapping_get_all_by_instance(context,
@@ -755,12 +758,14 @@ class ComputeManager(manager.SchedulerDependentManager):
     def power_off_instance(self, context, instance_uuid):
         """Power off an instance on this host."""
         instance = self.db.instance_get_by_uuid(context, instance_uuid)
+        self._notify_about_instance_usage(instance, "power_off.start")
         self.driver.power_off(instance)
         current_power_state = self._get_power_state(context, instance)
         self._instance_update(context,
                               instance_uuid,
                               power_state=current_power_state,
                               task_state=None)
+        self._notify_about_instance_usage(instance, "power_off.end")
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
@@ -768,12 +773,14 @@ class ComputeManager(manager.SchedulerDependentManager):
     def power_on_instance(self, context, instance_uuid):
         """Power on an instance on this host."""
         instance = self.db.instance_get_by_uuid(context, instance_uuid)
+        self._notify_about_instance_usage(instance, "power_on.start")
         self.driver.power_on(instance)
         current_power_state = self._get_power_state(context, instance)
         self._instance_update(context,
                               instance_uuid,
                               power_state=current_power_state,
                               task_state=None)
+        self._notify_about_instance_usage(instance, "power_on.end")
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
@@ -905,13 +912,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         :param rotation: int representing how many backups to keep around;
             None if rotation shouldn't be used (as in the case of snapshots)
         """
-        if image_type == "snapshot":
-            task_state = task_states.IMAGE_SNAPSHOT
-        elif image_type == "backup":
-            task_state = task_states.IMAGE_BACKUP
-        else:
-            raise Exception(_('Image type not recognized %s') % image_type)
-
         context = context.elevated()
         instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
 
@@ -919,8 +919,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         self._instance_update(context,
                               instance_ref['id'],
                               power_state=current_power_state,
-                              vm_state=vm_states.ACTIVE,
-                              task_state=task_state)
+                              vm_state=vm_states.ACTIVE)
 
         LOG.audit(_('instance %s: snapshotting'), instance_uuid,
                   context=context)
@@ -931,6 +930,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             LOG.warn(_('trying to snapshot a non-running '
                        'instance: %(instance_uuid)s (state: %(state)s '
                        'expected: %(running)s)') % locals())
+
+        self._notify_about_instance_usage(instance_ref, "snapshot.start")
 
         try:
             self.driver.snapshot(context, instance_ref, image_id)
@@ -945,6 +946,8 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         elif image_type == 'backup':
             raise exception.RotationRequiredForBackup()
+
+        self._notify_about_instance_usage(instance_ref, "snapshot.end")
 
     @wrap_instance_fault
     def rotate_backups(self, context, instance_uuid, backup_type, rotation):
@@ -980,17 +983,17 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         images = fetch_images()
         num_images = len(images)
-        LOG.debug(_("Found %(num_images)d images (rotation: %(rotation)d)"
-                    % locals()))
+        LOG.debug(_("Found %(num_images)d images (rotation: %(rotation)d)")
+                  % locals())
         if num_images > rotation:
             # NOTE(sirp): this deletes all backups that exceed the rotation
             # limit
             excess = len(images) - rotation
-            LOG.debug(_("Rotating out %d backups" % excess))
+            LOG.debug(_("Rotating out %d backups") % excess)
             for i in xrange(excess):
                 image = images.pop()
                 image_id = image['id']
-                LOG.debug(_("Deleting image %s" % image_id))
+                LOG.debug(_("Deleting image %s") % image_id)
                 image_service.delete(context, image_id)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
@@ -1155,6 +1158,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         self._notify_about_instance_usage(instance_ref,
                                           "resize.confirm.start")
 
+        # NOTE(tr3buchet): tear down networks on source host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                             migration_ref['source_compute'], teardown=True)
+
         network_info = self._get_instance_nw_info(context, instance_ref)
         self.driver.confirm_migration(migration_ref, instance_ref,
                                       self._legacy_nw_info(network_info))
@@ -1175,6 +1182,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         migration_ref = self.db.migration_get(context, migration_id)
         instance_ref = self.db.instance_get_by_uuid(context,
                 migration_ref.instance_uuid)
+
+        # NOTE(tr3buchet): tear down networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         teardown=True)
 
         network_info = self._get_instance_nw_info(context, instance_ref)
         self.driver.destroy(instance_ref, self._legacy_nw_info(network_info))
@@ -1209,7 +1220,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         # Just roll back the record. There's no need to resize down since
         # the 'old' VM already has the preferred attributes
         self._instance_update(context,
-                              instance_ref["uuid"],
+                              instance_ref['uuid'],
                               memory_mb=instance_type['memory_mb'],
                               host=migration_ref['source_compute'],
                               vcpus=instance_type['vcpus'],
@@ -1229,7 +1240,8 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     @wrap_instance_fault
-    def prep_resize(self, context, instance_uuid, instance_type_id, **kwargs):
+    def prep_resize(self, context, instance_uuid, instance_type_id, image,
+                    **kwargs):
         """Initiates the process of moving a running instance to another host.
 
         Possibly changes the RAM and disk size in the process.
@@ -1269,7 +1281,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         rpc.cast(context, topic,
                 {'method': 'resize_instance',
                  'args': {'instance_uuid': instance_ref['uuid'],
-                          'migration_id': migration_ref['id']}})
+                          'migration_id': migration_ref['id'],
+                          'image': image}})
 
         usage_info = utils.usage_from_instance(instance_ref,
                               new_instance_type=new_instance_type['name'],
@@ -1280,7 +1293,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     @wrap_instance_fault
-    def resize_instance(self, context, instance_uuid, migration_id):
+    def resize_instance(self, context, instance_uuid, migration_id, image):
         """Starts the migration of a running instance to another host."""
         migration_ref = self.db.migration_get(context, migration_id)
         instance_ref = self.db.instance_get_by_uuid(context,
@@ -1292,6 +1305,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.migration_update(context,
                                  migration_id,
                                  {'status': 'migrating'})
+
+        self._notify_about_instance_usage(instance_ref, "resize.start",
+                                          network_info=network_info)
 
         try:
             disk_info = self.driver.migrate_disk_and_power_off(
@@ -1314,11 +1330,16 @@ class ComputeManager(manager.SchedulerDependentManager):
                                       migration_ref['dest_compute'])
         params = {'migration_id': migration_id,
                   'disk_info': disk_info,
-                  'instance_uuid': instance_ref['uuid']}
+                  'instance_uuid': instance_ref['uuid'],
+                  'image': image}
         rpc.cast(context, topic, {'method': 'finish_resize',
                                   'args': params})
 
-    def _finish_resize(self, context, instance_ref, migration_ref, disk_info):
+        self._notify_about_instance_usage(instance_ref, "resize.end",
+                                          network_info=network_info)
+
+    def _finish_resize(self, context, instance_ref, migration_ref, disk_info,
+                       image):
         resize_instance = False
         old_instance_type_id = migration_ref['old_instance_type_id']
         new_instance_type_id = migration_ref['new_instance_type_id']
@@ -1335,15 +1356,19 @@ class ComputeManager(manager.SchedulerDependentManager):
                     ephemeral_gb=instance_type['ephemeral_gb'])
             resize_instance = True
 
+        # NOTE(tr3buchet): setup networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                migration_ref['dest_compute'])
+
         network_info = self._get_instance_nw_info(context, instance_ref)
 
-        # Have to look up image here since we depend on disk_format later
-        image_meta = _get_image_meta(context, instance_ref['image_ref'])
+        self._notify_about_instance_usage(instance_ref, "finish_resize.start",
+                                          network_info=network_info)
 
         self.driver.finish_migration(context, migration_ref, instance_ref,
                                      disk_info,
                                      self._legacy_nw_info(network_info),
-                                     image_meta, resize_instance)
+                                     image, resize_instance)
 
         self._instance_update(context,
                               instance_ref.uuid,
@@ -1354,10 +1379,14 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.migration_update(context, migration_ref.id,
                                  {'status': 'finished'})
 
+        self._notify_about_instance_usage(instance_ref, "finish_resize.end",
+                                          network_info=network_info)
+
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @checks_instance_lock
     @wrap_instance_fault
-    def finish_resize(self, context, instance_uuid, migration_id, disk_info):
+    def finish_resize(self, context, instance_uuid, migration_id, disk_info,
+                      image):
         """Completes the migration process.
 
         Sets up the newly transferred disk and turns on the instance at its
@@ -1371,7 +1400,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         try:
             self._finish_resize(context, instance_ref, migration_ref,
-                                disk_info)
+                                disk_info, image)
         except Exception, error:
             with utils.save_and_reraise_exception():
                 msg = _('%s. Setting instance vm_state to ERROR')
@@ -1390,8 +1419,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         self._notify_about_instance_usage(instance_ref, "create_ip.start")
 
         instance_id = instance_ref['id']
-        self.network_api.add_fixed_ip_to_instance(context, instance_id,
-                                                  self.host, network_id)
+        self.network_api.add_fixed_ip_to_instance(context,
+                                                  instance_ref,
+                                                  network_id)
 
         network_info = self.inject_network_info(context,
                                                 instance_ref['uuid'])
@@ -1412,7 +1442,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         self._notify_about_instance_usage(instance_ref, "delete_ip.start")
 
         instance_id = instance_ref['id']
-        self.network_api.remove_fixed_ip_from_instance(context, instance_id,
+        self.network_api.remove_fixed_ip_from_instance(context,
+                                                       instance_ref,
                                                        address)
 
         network_info = self.inject_network_info(context,
@@ -1844,6 +1875,10 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         self.driver.pre_live_migration(block_device_info)
 
+        # NOTE(tr3buchet): setup networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         self.host)
+
         # Bridge settings.
         # Call this method prior to ensure_filtering_rules_for_instance,
         # since bridge is not set up, ensure_filtering_rules_for instance
@@ -1907,8 +1942,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             if self._get_instance_volume_bdms(context, instance_id):
                 rpc.call(context,
                           FLAGS.volume_topic,
-                          {"method": "check_for_export",
-                           "args": {'instance_id': instance_id}})
+                          {'method': 'check_for_export',
+                           'args': {'instance_id': instance_id}})
 
             if block_migration:
                 disk = self.driver.get_instance_disk_info(instance_ref.name)
@@ -1917,8 +1952,8 @@ class ComputeManager(manager.SchedulerDependentManager):
 
             rpc.call(context,
                      self.db.queue_get_for(context, FLAGS.compute_topic, dest),
-                     {"method": "pre_live_migration",
-                      "args": {'instance_id': instance_id,
+                     {'method': 'pre_live_migration',
+                      'args': {'instance_id': instance_id,
                                'block_migration': block_migration,
                                'disk': disk}})
 
@@ -2004,15 +2039,6 @@ class ComputeManager(manager.SchedulerDependentManager):
                       "args": {'instance_id': instance_ref['id'],
                                'block_migration': block_migration}})
 
-        # Restore instance state
-        current_power_state = self._get_power_state(ctxt, instance_ref)
-        self._instance_update(ctxt,
-                              instance_ref["id"],
-                              host=dest,
-                              power_state=current_power_state,
-                              vm_state=vm_states.ACTIVE,
-                              task_state=None)
-
         # Restore volume state
         for volume_ref in instance_ref['volumes']:
             self.volume_api.update(ctxt, volume_ref, {'status': 'in-use'})
@@ -2029,6 +2055,10 @@ class ComputeManager(manager.SchedulerDependentManager):
             # torn down
             self.driver.unplug_vifs(instance_ref,
                                     self._legacy_nw_info(network_info))
+
+        # NOTE(tr3buchet): tear down networks on source host
+        self.network_api.setup_networks_on_host(ctxt, instance_ref,
+                                                self.host, teardown=True)
 
         LOG.info(_('Migrating instance to %(dest)s finished successfully.'),
                  locals(), instance=instance_ref)
@@ -2049,10 +2079,31 @@ class ComputeManager(manager.SchedulerDependentManager):
         instance_ref = self.db.instance_get(context, instance_id)
         LOG.info(_('Post operation of migraton started'),
                  instance=instance_ref)
+
+        # NOTE(tr3buchet): setup networks on destination host
+        #                  this is called a second time because
+        #                  multi_host does not create the bridge in
+        #                  plug_vifs
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         self.host)
+
         network_info = self._get_instance_nw_info(context, instance_ref)
         self.driver.post_live_migration_at_destination(context, instance_ref,
                                             self._legacy_nw_info(network_info),
                                             block_migration)
+        # Restore instance state
+        current_power_state = self._get_power_state(context, instance_ref)
+        self._instance_update(context,
+                              instance_ref['id'],
+                              host=self.host,
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              task_state=None)
+
+        # NOTE(vish): this is necessary to update dhcp
+        self.network_api.setup_networks_on_host(context,
+                                                instance_ref,
+                                                self.host)
 
     def rollback_live_migration(self, context, instance_ref,
                                 dest, block_migration):
@@ -2072,6 +2123,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                               host=host,
                               vm_state=vm_states.ACTIVE,
                               task_state=None)
+
+        # NOTE(tr3buchet): setup networks on source host (really it's re-setup)
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                         self.host)
 
         for bdm in self._get_instance_volume_bdms(context, instance_ref['id']):
             volume_id = bdm['volume_id']
@@ -2099,6 +2154,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         """
         instance_ref = self.db.instance_get(context, instance_id)
         network_info = self._get_instance_nw_info(context, instance_ref)
+
+        # NOTE(tr3buchet): tear down networks on destination host
+        self.network_api.setup_networks_on_host(context, instance_ref,
+                                                self.host, teardown=True)
 
         # NOTE(vish): The mapping is passed in so the driver can disconnect
         #             from remote volumes if necessary
@@ -2242,17 +2301,58 @@ class ComputeManager(manager.SchedulerDependentManager):
             db_power_state = db_instance['power_state']
             try:
                 vm_instance = self.driver.get_info(db_instance)
-                vm_power_state = vm_instance.state
+                vm_power_state = vm_instance['state']
             except exception.InstanceNotFound:
-                LOG.warn(_("Instance found in database but not known by "
-                           "hypervisor. Setting power state to NOSTATE"),
-                         locals(), instance=db_instance)
-                vm_power_state = power_state.NOSTATE
+                # This exception might have been caused by a race condition
+                # between _sync_power_states and live migrations. Two cases
+                # are possible as documented below. To this aim, refresh the
+                # DB instance state.
+                try:
+                    u = self.db.instance_get_by_uuid(context,
+                                                     db_instance['uuid'])
+                    if self.host != u['host']:
+                        # on the sending end of nova-compute _sync_power_state
+                        # may have yielded to the greenthread performing a live
+                        # migration; this in turn has changed the resident-host
+                        # for the VM; However, the instance is still active, it
+                        # is just in the process of migrating to another host.
+                        # This implies that the compute source must relinquish
+                        # control to the compute destination.
+                        LOG.info(_("During the sync_power process the "
+                                   "instance %(uuid)s has moved from "
+                                   "host %(src)s to host %(dst)s") %
+                                   {'uuid': db_instance['uuid'],
+                                    'src': self.host,
+                                    'dst': u['host']})
+                    elif (u['host'] == self.host and
+                          u['vm_state'] == vm_states.MIGRATING):
+                        # on the receiving end of nova-compute, it could happen
+                        # that the DB instance already report the new resident
+                        # but the actual VM has not showed up on the hypervisor
+                        # yet. In this case, let's allow the loop to continue
+                        # and run the state sync in a later round
+                        LOG.info(_("Instance %s is in the process of "
+                                   "migrating to this host. Wait next "
+                                   "sync_power cycle before setting "
+                                   "power state to NOSTATE")
+                                   % db_instance['uuid'])
+                    else:
+                        LOG.warn(_("Instance found in database but not "
+                                   "known by hypervisor. Setting power "
+                                   "state to NOSTATE"), locals(),
+                                   instance=db_instance)
+                        vm_power_state = power_state.NOSTATE
+                except exception.InstanceNotFound:
+                    # no need to update vm_state for deleted instances
+                    continue
 
             if vm_power_state == db_power_state:
                 continue
 
-            if (vm_power_state in (power_state.NOSTATE, power_state.SHUTOFF)
+            if (vm_power_state in (power_state.NOSTATE,
+                                   power_state.SHUTOFF,
+                                   power_state.SHUTDOWN,
+                                   power_state.CRASHED)
                 and db_instance['vm_state'] == vm_states.ACTIVE):
                 self._instance_update(context,
                                       db_instance["id"],
@@ -2436,7 +2536,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     def _run_image_cache_manager_pass(self, context):
         """Run a single pass of the image cache manager."""
 
-        if not FLAGS.use_image_cache_manager:
+        if FLAGS.image_cache_manager_interval == 0:
             return
 
         try:

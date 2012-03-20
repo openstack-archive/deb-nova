@@ -115,6 +115,10 @@ def skip_if_fake(func):
     return _skipper
 
 
+class TestingException(Exception):
+    pass
+
+
 class TestCase(unittest.TestCase):
     """Test case base class for all unit tests."""
 
@@ -172,6 +176,12 @@ class TestCase(unittest.TestCase):
                     x.kill()
                 except Exception:
                     pass
+
+            # Delete attributes that don't start with _ so they don't pin
+            # memory around unnecessarily for the duration of the test
+            # suite
+            for key in [k for k in self.__dict__.keys() if k[0] != '_']:
+                del self.__dict__[key]
 
     def flags(self, **kw):
         """Override flag variables for a test."""

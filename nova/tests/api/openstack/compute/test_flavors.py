@@ -96,10 +96,6 @@ class FlavorsTest(test.TestCase):
 
         self.controller = flavors.Controller()
 
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        super(FlavorsTest, self).tearDown()
-
     def test_get_flavor_by_invalid_id(self):
         self.stubs.Set(nova.compute.instance_types,
                        "get_instance_type_by_flavor_id",
@@ -335,7 +331,6 @@ class FlavorsTest(test.TestCase):
 
     def test_get_flavor_list_filter_min_ram(self):
         """Flavor lists may be filtered by minRam"""
-        self.maxDiff = None
         req = fakes.HTTPRequest.blank('/v2/fake/flavors?minRam=512')
         flavor = self.controller.index(req)
         expected = {

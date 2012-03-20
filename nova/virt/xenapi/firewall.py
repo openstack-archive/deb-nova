@@ -25,7 +25,7 @@ from nova import flags
 from nova import log as logging
 from nova.db import api as db
 from nova.virt import netutils
-from nova.virt.firewall import IptablesFirewallDriver
+from nova.virt import firewall
 
 
 LOG = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ drivers = ['nova.virt.firewall.IptablesFirewallDriver',
            'nova.virt.xenapi.firewall.Dom0IptablesFirewallDriver', ]
 
 
-class Dom0IptablesFirewallDriver(IptablesFirewallDriver):
+class Dom0IptablesFirewallDriver(firewall.IptablesFirewallDriver):
     """ Dom0IptablesFirewallDriver class
 
     This class provides an implementation for nova.virt.Firewall
@@ -50,9 +50,7 @@ class Dom0IptablesFirewallDriver(IptablesFirewallDriver):
         args = {}
         args.update(map(lambda x: (x, str(kwargs[x])), kwargs))
         args['cmd_args'] = json.dumps(cmd)
-        task = self._session.async_call_plugin(
-            'xenhost', 'iptables_config', args)
-        ret = self._session.wait_for_task(task)
+        ret = self._session.call_plugin('xenhost', 'iptables_config', args)
         json_ret = json.loads(ret)
         return (json_ret['out'], json_ret['err'])
 

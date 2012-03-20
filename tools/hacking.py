@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2012, Cloudscaling
@@ -24,9 +25,9 @@ import inspect
 import os
 import re
 import sys
-import traceback
 
 import pep8
+
 
 #N1xx comments
 #N2xx except
@@ -57,6 +58,16 @@ def nova_except_format(logical_line):
     """
     if logical_line.startswith("except:"):
         return 6, "NOVA N201: no 'except:' at least use 'except Exception:'"
+
+
+def nova_except_format(logical_line):
+    """
+    nova HACKING guide recommends not using assertRaises(Exception...):
+    Do not use overly broad Exception type
+    N202
+    """
+    if logical_line.startswith("self.assertRaises(Exception"):
+        return 1, "NOVA N202: assertRaises Exception too broad"
 
 
 def nova_one_import_per_line(logical_line):
@@ -108,14 +119,14 @@ def nova_import_module_only(logical_line):
                 return logical_line.find(mod), ("NOVA N302: import only "
                     "modules. '%s' does not import a module" % logical_line)
 
-        except (ImportError, NameError):
+        except (ImportError, NameError) as exc:
             if not added:
                 added = True
                 sys.path.append(current_path)
                 return importModuleCheck(mod, parent, added)
             else:
-                print >> sys.stderr, ("ERROR: import '%s' failed, couldn't "
-                    "find module" % logical_line)
+                print >> sys.stderr, ("ERROR: import '%s' failed: %s" %
+                                                       (logical_line, exc))
                 added = False
                 sys.path.pop()
                 return
@@ -139,6 +150,7 @@ def nova_import_module_only(logical_line):
     # handle "from x import y as z"
     elif (logical_line.startswith("from ") and "," not in logical_line and
            split_line[2] == "import" and split_line[3] != "*" and
+           split_line[1] != "__future__" and
            (len(split_line) == 4 or
            (len(split_line) == 6  and split_line[4] == "as"))):
         mod = split_line[3]

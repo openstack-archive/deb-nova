@@ -21,6 +21,7 @@
 # XenAPI plugin for managing glance images
 #
 
+import cPickle as pickle
 import httplib
 try:
     import json
@@ -30,7 +31,6 @@ except ImportError:
 import md5
 import os
 import os.path
-import pickle
 import shlex
 import shutil
 import subprocess
@@ -48,7 +48,7 @@ CHUNK_SIZE = 8192
 KERNEL_DIR = '/boot/guest'
 
 
-class RetryException(Exception):
+class RetryableError(Exception):
     pass
 
 
@@ -86,18 +86,17 @@ def _copy_kernel_vdi(dest, copy_args):
     return filename
 
 
-def _download_tarball(request, staging_path):
-    """Make one attempt to download and extract the image tarball"""
+def _download_tarball_and_verify(request, staging_path):
     try:
         response = urllib2.urlopen(request)
     except urllib2.HTTPError, error:
-        raise RetryException(error)
+        raise RetryableError(error)
     except urllib2.URLError, error:
-        raise RetryException(error)
+        raise RetryableError(error)
     except httplib.HTTPException, error:
         # httplib.HTTPException and derivatives (BadStatusLine in particular)
         # don't have a useful __repr__ or __str__
-        raise RetryException('%s: %s' % (error.__class__.__name__, error))
+        raise RetryableError('%s: %s' % (error.__class__.__name__, error))
 
     tar_cmd = "tar -zx --directory=%(staging_path)s" % locals()
     tar_proc = _make_subprocess(tar_cmd, stderr=True, stdin=True)
@@ -124,7 +123,7 @@ def _download_tarball(request, staging_path):
     try:
         _finish_subprocess(tar_proc, tar_cmd)
     except Exception, error:
-        raise RetryException(error)
+        raise RetryableError(error)
 
     checksum = checksum.hexdigest()
     if etag is None:
@@ -132,16 +131,13 @@ def _download_tarball(request, staging_path):
         logging.info(msg % locals())
     elif checksum != etag:
         msg = 'ETag %(etag)s does not match computed md5sum %(checksum)s'
-        raise RetryException(msg % locals())
+        raise RetryableError(msg % locals())
     else:
         msg = "Verified image checksum %(checksum)s"
         logging.info(msg % locals())
 
-    return
 
-
-def _download_tarball_with_retry(sr_path, image_id, glance_host,
-                                 glance_port, auth_token, num_retries):
+def _download_tarball(sr_path, image_id, glance_host, glance_port, auth_token):
     """Download the tarball image from Glance and extract it into the staging
     area. Retry if there is any failure.
     """
@@ -155,24 +151,15 @@ def _download_tarball_with_retry(sr_path, image_id, glance_host,
     logging.info("Downloading %s" % url)
 
     request = urllib2.Request(url, headers=headers)
-    sleep_time = 0.5
-
-    for try_num in xrange(1, num_retries + 2):
-        try:
-            staging_path = _make_staging_area(sr_path)
-            _download_tarball(request, staging_path)
-            return staging_path
-        except RetryException, error:
-            msg = "Downloading %(url)s attempt %(try_num)d error: %(error)s"
-            logging.error(msg % locals())
-
+    staging_path = _make_staging_area(sr_path)
+    try:
+        _download_tarball_and_verify(request, staging_path)
+    except Exception:
+        logging.exception('Failed to retrieve %(url)s' % locals())
         _cleanup_staging_area(staging_path)
-        time.sleep(sleep_time)
-        sleep_time = min(2 * sleep_time, 15)
+        raise
 
-    msg = "Unable to retrieve %(url)s after %(try_num)d attempt(s)." % locals()
-    logging.error(msg)
-    raise Exception(msg)
+    return staging_path
 
 
 def _import_vhds(sr_path, staging_path, uuid_stack):
@@ -278,6 +265,34 @@ def _import_vhds(sr_path, staging_path, uuid_stack):
             link_vhds(new_path, parent_path)
         return (new_path, vdi_uuid)
 
+    def validate_vdi_chain(vdi_path):
+        """
+        This check ensures that the parent pointers on the VHDs are valid
+        before we move the VDI chain to the SR. This is *very* important
+        because a bad parent pointer will corrupt the SR causing a cascade of
+        failures.
+        """
+        def get_parent_path(path):
+            query_cmd = "vhd-util query -n %(path)s -p" % locals()
+            query_proc = _make_subprocess(query_cmd, stdout=True, stderr=True)
+            out, err = _finish_subprocess(
+                    query_proc, query_cmd, ok_exit_codes=[0, 22])
+            first_line = out.splitlines()[0].strip()
+            if first_line.endswith(".vhd"):
+                return first_line
+            elif 'has no parent' in first_line:
+                return None
+            elif 'query failed' in first_line:
+                raise Exception("VDI '%(path)s' not present which breaks"
+                                " the VDI chain, bailing out" % locals())
+            else:
+                raise Exception("Unexpected output '%(out)s' from vhd-util" %
+                                locals())
+
+        cur_path = vdi_path
+        while cur_path:
+            cur_path = get_parent_path(cur_path)
+
     vdi_return_list = []
     paths_to_move = []
 
@@ -296,6 +311,7 @@ def _import_vhds(sr_path, staging_path, uuid_stack):
     snap_info = prepare_if_exists(staging_path, 'snap.vhd',
             image_info[0])
     if snap_info:
+        validate_vdi_chain(snap_info[0])
         # NOTE(sirp): this is an insert rather than an append since the
         # 'snapshot' vhd needs to be copied into the SR before the base copy.
         # If it doesn't, then there is a possibliity that snapwatchd will
@@ -304,6 +320,7 @@ def _import_vhds(sr_path, staging_path, uuid_stack):
         # We return this snap as the VDI instead of image.vhd
         vdi_return_list.append(dict(vdi_type="os", vdi_uuid=snap_info[1]))
     else:
+        validate_vdi_chain(image_info[0])
         assert_vhd_not_hidden(image_info[0])
         # If there's no snap, we return the image.vhd UUID
         vdi_return_list.append(dict(vdi_type="os", vdi_uuid=image_info[1]))
@@ -337,6 +354,8 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
     Create a tarball of the image and then stream that into Glance
     using chunked-transfer-encoded HTTP.
     """
+    url = 'http://%s:%s/v1/images/%s' % (glance_host, glance_port, image_id)
+    logging.info("Writing image data to %s" % url)
     conn = httplib.HTTPConnection(glance_host, glance_port)
 
     # NOTE(sirp): httplib under python2.4 won't accept a file-like object
@@ -378,17 +397,25 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
     tar_cmd = "tar -zc --directory=%(staging_path)s ." % locals()
     tar_proc = _make_subprocess(tar_cmd, stdout=True, stderr=True)
 
+    length = 0
     chunk = tar_proc.stdout.read(CHUNK_SIZE)
     while chunk:
+        length += len(chunk)
         conn.send("%x\r\n%s\r\n" % (len(chunk), chunk))
         chunk = tar_proc.stdout.read(CHUNK_SIZE)
     conn.send("0\r\n\r\n")
+    logging.info("Wrote %s bytes to %s" % (length, url))
 
     _finish_subprocess(tar_proc, tar_cmd)
 
     resp = conn.getresponse()
     if resp.status != httplib.OK:
-        raise Exception("Unexpected response from Glance %i" % resp.status)
+        logging.error("Unexpected response while writing image data to %s: "
+                      "Response Status: %i, Response body: %s"
+                      % (url, resp.status, resp.read()))
+        raise Exception("Unexpected response [%i] while uploading image [%s] "
+                        "to glance host [%s:%s]"
+                        % (resp.status, image_id, glance_host, glance_port))
     conn.close()
 
 
@@ -452,14 +479,18 @@ def _make_subprocess(cmdline, stdout=False, stderr=False, stdin=False):
     return proc
 
 
-def _finish_subprocess(proc, cmdline):
+def _finish_subprocess(proc, cmdline, ok_exit_codes=None):
     """Ensure that the process returned a zero exit code indicating success
     """
+    if ok_exit_codes is None:
+        ok_exit_codes = [0]
+
     out, err = proc.communicate()
     ret = proc.returncode
-    if ret != 0:
+    if ret not in ok_exit_codes:
         raise Exception("'%(cmdline)s' returned non-zero exit code: "
-                        "retcode=%(ret)i,  stderr='%(err)s'" % locals())
+                        "retcode=%(ret)i, out='%(out)s', stderr='%(err)s'"
+                        % locals())
     return out, err
 
 
@@ -492,13 +523,11 @@ def download_vhd(session, args):
     uuid_stack = params["uuid_stack"]
     sr_path = params["sr_path"]
     auth_token = params["auth_token"]
-    num_retries = params["num_retries"]
 
     staging_path = None
     try:
-        staging_path = _download_tarball_with_retry(sr_path, image_id,
-                                                    glance_host, glance_port,
-                                                    auth_token, num_retries)
+        staging_path = _download_tarball(sr_path, image_id, glance_host,
+                                         glance_port, auth_token)
         # Right now, it's easier to return a single string via XenAPI,
         # so we'll json encode the list of VHDs.
         return json.dumps(_import_vhds(sr_path, staging_path, uuid_stack))

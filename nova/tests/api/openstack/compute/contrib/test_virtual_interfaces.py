@@ -44,14 +44,10 @@ class ServerVirtualInterfaceTest(test.TestCase):
 
     def setUp(self):
         super(ServerVirtualInterfaceTest, self).setUp()
-        self.controller = virtual_interfaces.ServerVirtualInterfaceController()
         self.stubs.Set(compute.api.API, "get",
                        compute_api_get)
         self.stubs.Set(network.api.API, "get_vifs_by_instance",
                        get_vifs_by_instance)
-
-    def tearDown(self):
-        super(ServerVirtualInterfaceTest, self).tearDown()
 
     def test_get_virtual_interfaces_list(self):
         url = '/v2/fake/servers/abcd/os-virtual-interfaces'

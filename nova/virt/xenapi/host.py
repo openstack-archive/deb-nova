@@ -21,8 +21,8 @@ Management class for host-related functions (start, reboot, etc).
 
 import logging
 import json
-import random
 
+from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
@@ -39,7 +39,7 @@ class Host(object):
         self.XenAPI = session.get_imported_xenapi()
         self._session = session
 
-    def host_power_action(self, host, action):
+    def host_power_action(self, _host, action):
         """Reboots or shuts down the host."""
         args = {"action": json.dumps(action)}
         methods = {"reboot": "host_reboot", "shutdown": "host_shutdown"}
@@ -73,17 +73,22 @@ class Host(object):
                         instance = db.instance_get_by_uuid(ctxt, uuid)
                         vm_counter = vm_counter + 1
 
+                        dest = _host_find(ctxt, self._session, host, host_ref)
+                        db.instance_update(ctxt, instance.id,
+                                           {'host': dest,
+                                            'vm_state': vm_states.MIGRATING})
                         self._session.call_xenapi('VM.pool_migrate',
                                                   vm_ref, host_ref, {})
-                        new_host = _host_find(ctxt, self._session,
-                                              host, host_ref)
-                        db.instance_update(ctxt,
-                                           instance.id, {'host': new_host})
                         migrations_counter = migrations_counter + 1
+                        db.instance_update(ctxt, instance.id,
+                                           {'vm_state': vm_states.ACTIVE})
                         break
                     except self.XenAPI.Failure:
                         LOG.exception('Unable to migrate VM %(vm_ref)s'
                                       'from %(host)s' % locals())
+                        db.instance_update(ctxt, instance.id,
+                                           {'host': host,
+                                            'vm_state': vm_states.ACTIVE})
             if vm_counter == migrations_counter:
                 return 'on_maintenance'
             else:
@@ -92,7 +97,7 @@ class Host(object):
         else:
             return 'off_maintenance'
 
-    def set_host_enabled(self, host, enabled):
+    def set_host_enabled(self, _host, enabled):
         """Sets the specified host's ability to accept new instances."""
         args = {"enabled": json.dumps(enabled)}
         response = call_xenhost(self._session, "set_host_enabled", args)
@@ -154,14 +159,12 @@ def call_xenhost(session, method, arg_dict):
     out that behavior.
     """
     # Create a task ID as something that won't match any instance ID
-    task_id = random.randint(-80000, -70000)
     XenAPI = session.get_imported_xenapi()
     try:
-        task = session.async_call_plugin("xenhost", method, args=arg_dict)
-        task_result = session.wait_for_task(task, str(task_id))
-        if not task_result:
-            task_result = json.dumps("")
-        return json.loads(task_result)
+        result = session.call_plugin('xenhost', method, args=arg_dict)
+        if not result:
+            return ''
+        return json.loads(result)
     except ValueError:
         LOG.exception(_("Unable to get updated status"))
         return None

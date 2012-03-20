@@ -15,10 +15,12 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import mox
+
 from nova import context
 from nova import db
 from nova.db.sqlalchemy import models
-from nova.db.sqlalchemy.session import get_session
+from nova.db.sqlalchemy import session as sql_session
 from nova import exception
 from nova import flags
 from nova import log as logging
@@ -196,7 +198,7 @@ class QuantumNovaTestCase(test.TestCase):
         # habit of of creating fixed IPs and not cleaning up, which
         # can confuse these tests, so we remove all existing fixed
         # ips before starting.
-        session = get_session()
+        session = sql_session.get_session()
         result = session.query(models.FixedIp).all()
         with session.begin():
             for fip_ref in result:
@@ -265,11 +267,39 @@ class QuantumDeallocationTestCase(QuantumNovaTestCase):
         self.net_man.deallocate_port('interface_id', 'net_id', 'q_tenant_id',
                                      'instance_id')
 
+    def test_deallocate_port_logs_error(self):
+        quantum = self.mox.CreateMock(
+            quantum_connection.QuantumClientConnection)
+        quantum.get_port_by_attachment('q_tenant_id', 'net_id',
+                            'interface_id').AndRaise(Exception)
+        self.net_man.q_conn = quantum
+
+        self.mox.StubOutWithMock(quantum_manager.LOG, 'exception')
+        quantum_manager.LOG.exception(mox.Regex(r'port deallocation failed'))
+
+        self.mox.ReplayAll()
+
+        self.net_man.deallocate_port('interface_id', 'net_id', 'q_tenant_id',
+                                     'instance_id')
+
     def test_deallocate_ip_address(self):
         ipam = self.mox.CreateMock(melange_ipam_lib.QuantumMelangeIPAMLib)
         ipam.get_tenant_id_by_net_id('context', 'net_id', {'uuid': 1},
                                      'project_id').AndReturn('ipam_tenant_id')
         self.net_man.ipam = ipam
+        self.mox.ReplayAll()
+        self.net_man.deallocate_ip_address('context', 'net_id', 'project_id',
+                {'uuid': 1}, 'instance_id')
+
+    def test_deallocate_ip_address(self):
+        ipam = self.mox.CreateMock(melange_ipam_lib.QuantumMelangeIPAMLib)
+        ipam.get_tenant_id_by_net_id('context', 'net_id', {'uuid': 1},
+                                     'project_id').AndRaise(Exception())
+        self.net_man.ipam = ipam
+
+        self.mox.StubOutWithMock(quantum_manager.LOG, 'exception')
+        quantum_manager.LOG.exception(mox.Regex(r'ipam deallocation failed'))
+
         self.mox.ReplayAll()
         self.net_man.deallocate_ip_address('context', 'net_id', 'project_id',
                 {'uuid': 1}, 'instance_id')
@@ -328,8 +358,9 @@ class QuantumManagerTestCase(QuantumNovaTestCase):
 
             # make sure we aren't allowed to delete network with
             # active port
-            self.assertRaises(Exception, self.net_man.delete_network,
-                                        ctx, None, n['uuid'])
+            self.assertRaises(exception.NetworkBusy,
+                              self.net_man.delete_network,
+                              ctx, None, n['uuid'])
 
     def _check_vifs(self, expect_num_vifs):
         ctx = context.RequestContext('user1', "").elevated()

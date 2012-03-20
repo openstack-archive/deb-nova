@@ -20,10 +20,8 @@ from nova import flags
 from nova import test
 from nova import utils
 from nova.virt import firewall
-from nova.virt import vif
+from nova.virt.libvirt import vif
 from nova.virt.libvirt import connection
-from nova.virt.libvirt.vif import LibvirtBridgeDriver, \
-                LibvirtOpenVswitchDriver, LibvirtOpenVswitchVirtualPortDriver
 
 FLAGS = flags.FLAGS
 
@@ -99,7 +97,7 @@ class LibvirtVifTestCase(test.TestCase):
         return xml
 
     def test_bridge_driver(self):
-        d = LibvirtBridgeDriver()
+        d = vif.LibvirtBridgeDriver()
         xml = self._get_instance_xml(d, 'bridge')
 
         doc = ElementTree.fromstring(xml)
@@ -115,7 +113,7 @@ class LibvirtVifTestCase(test.TestCase):
         d.unplug(None, self.net, self.mapping)
 
     def test_ovs_ethernet_driver(self):
-        d = LibvirtOpenVswitchDriver()
+        d = vif.LibvirtOpenVswitchDriver()
         xml = self._get_instance_xml(d, 'ethernet')
 
         doc = ElementTree.fromstring(xml)
@@ -133,7 +131,7 @@ class LibvirtVifTestCase(test.TestCase):
         d.unplug(None, self.net, self.mapping)
 
     def test_ovs_virtualport_driver(self):
-        d = LibvirtOpenVswitchVirtualPortDriver()
+        d = vif.LibvirtOpenVswitchVirtualPortDriver()
         xml = self._get_instance_xml(d, 'ovs_virtualport')
 
         doc = ElementTree.fromstring(xml)
@@ -156,4 +154,22 @@ class LibvirtVifTestCase(test.TestCase):
                 iface_id_found = True
 
         self.assertTrue(iface_id_found)
+        d.unplug(None, self.net, self.mapping)
+
+    def test_quantum_bridge_ethernet_driver(self):
+        d = vif.QuantumLinuxBridgeVIFDriver()
+        xml = self._get_instance_xml(d, 'ethernet')
+
+        doc = ElementTree.fromstring(xml)
+        ret = doc.findall('./devices/interface')
+        self.assertEqual(len(ret), 1)
+        node = ret[0]
+        self.assertEqual(node.get("type"), "ethernet")
+        dev_name = node.find("target").get("dev")
+        self.assertTrue(dev_name.startswith("tap"))
+        mac = node.find("mac").get("address")
+        self.assertEqual(mac, self.mapping['mac'])
+        script = node.find("script").get("path")
+        self.assertEquals(script, "")
+
         d.unplug(None, self.net, self.mapping)

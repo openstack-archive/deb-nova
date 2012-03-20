@@ -23,9 +23,9 @@ and as a WSGI layer
 import urlparse
 
 from lxml import etree
-import stubout
 import webob
 
+from nova import exception
 from nova import flags
 from nova.api.openstack.compute import images
 from nova.api.openstack.compute.views import images as images_view
@@ -51,8 +51,6 @@ class ImagesControllerTest(test.TestCase):
     def setUp(self):
         """Run before each test."""
         super(ImagesControllerTest, self).setUp()
-        self.maxDiff = None
-        self.stubs = stubout.StubOutForTesting()
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
@@ -61,11 +59,6 @@ class ImagesControllerTest(test.TestCase):
         fakes.stub_out_glance(self.stubs)
 
         self.controller = images.Controller()
-
-    def tearDown(self):
-        """Run after each test."""
-        self.stubs.UnsetAll()
-        super(ImagesControllerTest, self).tearDown()
 
     def test_get_image(self):
         fake_req = fakes.HTTPRequest.blank('/v2/fake/images/123')
@@ -130,8 +123,8 @@ class ImagesControllerTest(test.TestCase):
         bookmark = "https://zoo.com:42/fake/images/124"
         alternate = "http://circus.com:34/fake/images/124"
         server_uuid = "aa640691-d1a7-4a67-9d3c-d35ee6b3cc74"
-        server_href = "http://localhost/v2/servers/" + server_uuid
-        server_bookmark = "http://localhost/servers/" + server_uuid
+        server_href = "https://zoo.com:42/v2/servers/" + server_uuid
+        server_bookmark = "https://zoo.com:42/servers/" + server_uuid
 
         expected_image = {
             "image": {
@@ -831,7 +824,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_min_ram(self):
         image_service = self.mox.CreateMockAnything()
@@ -842,7 +834,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_min_disk(self):
         image_service = self.mox.CreateMockAnything()
@@ -853,18 +844,16 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_status(self):
         image_service = self.mox.CreateMockAnything()
-        filters = {'status': 'ACTIVE'}
+        filters = {'status': 'active'}
         request = fakes.HTTPRequest.blank('/v2/images?status=ACTIVE')
         context = request.environ['nova.context']
         image_service.index(context, filters=filters).AndReturn([])
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_property(self):
         image_service = self.mox.CreateMockAnything()
@@ -875,7 +864,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_server(self):
         image_service = self.mox.CreateMockAnything()
@@ -888,7 +876,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_changes_since(self):
         image_service = self.mox.CreateMockAnything()
@@ -900,7 +887,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_with_type(self):
         image_service = self.mox.CreateMockAnything()
@@ -911,19 +897,17 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_filter_not_supported(self):
         image_service = self.mox.CreateMockAnything()
-        filters = {'status': 'ACTIVE'}
+        filters = {'status': 'active'}
         request = fakes.HTTPRequest.blank('/v2/images?status=ACTIVE&'
                                           'UNSUPPORTEDFILTER=testname')
         context = request.environ['nova.context']
-        image_service.detail(context, filters=filters).AndReturn([])
+        image_service.index(context, filters=filters).AndReturn([])
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
-        controller.detail(request)
-        self.mox.VerifyAll()
+        controller.index(request)
 
     def test_image_no_filters(self):
         image_service = self.mox.CreateMockAnything()
@@ -934,7 +918,16 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
+
+    def test_image_invalid_marker(self):
+        class InvalidImageService(object):
+
+            def index(self, *args, **kwargs):
+                raise exception.Invalid('meow')
+
+        request = fakes.HTTPRequest.blank('/v2/images?marker=invalid')
+        controller = images.Controller(image_service=InvalidImageService())
+        self.assertRaises(webob.exc.HTTPBadRequest, controller.index, request)
 
     def test_image_detail_filter_with_name(self):
         image_service = self.mox.CreateMockAnything()
@@ -946,11 +939,10 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_with_status(self):
         image_service = self.mox.CreateMockAnything()
-        filters = {'status': 'ACTIVE'}
+        filters = {'status': 'active'}
         request = fakes.HTTPRequest.blank('/v2/fake/images/detail'
                                           '?status=ACTIVE')
         context = request.environ['nova.context']
@@ -958,7 +950,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_with_property(self):
         image_service = self.mox.CreateMockAnything()
@@ -970,7 +961,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_server_href(self):
         image_service = self.mox.CreateMockAnything()
@@ -984,7 +974,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_server_uuid(self):
         image_service = self.mox.CreateMockAnything()
@@ -997,7 +986,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_changes_since(self):
         image_service = self.mox.CreateMockAnything()
@@ -1009,7 +997,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_with_type(self):
         image_service = self.mox.CreateMockAnything()
@@ -1020,11 +1007,10 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.index(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_filter_not_supported(self):
         image_service = self.mox.CreateMockAnything()
-        filters = {'status': 'ACTIVE'}
+        filters = {'status': 'active'}
         request = fakes.HTTPRequest.blank('/v2/fake/images/detail?status='
                                           'ACTIVE&UNSUPPORTEDFILTER=testname')
         context = request.environ['nova.context']
@@ -1032,7 +1018,6 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
 
     def test_image_detail_no_filters(self):
         image_service = self.mox.CreateMockAnything()
@@ -1043,7 +1028,16 @@ class ImagesControllerTest(test.TestCase):
         self.mox.ReplayAll()
         controller = images.Controller(image_service=image_service)
         controller.detail(request)
-        self.mox.VerifyAll()
+
+    def test_image_detail_invalid_marker(self):
+        class InvalidImageService(object):
+
+            def detail(self, *args, **kwargs):
+                raise exception.Invalid('meow')
+
+        request = fakes.HTTPRequest.blank('/v2/images?marker=invalid')
+        controller = images.Controller(image_service=InvalidImageService())
+        self.assertRaises(webob.exc.HTTPBadRequest, controller.detail, request)
 
     def test_generate_alternate_link(self):
         view = images_view.ViewBuilder()

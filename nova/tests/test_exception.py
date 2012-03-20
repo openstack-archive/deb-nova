@@ -60,7 +60,7 @@ def bad_function_error():
 
 
 def bad_function_exception():
-    raise Exception()
+    raise test.TestingException()
 
 
 class WrapExceptionTestCase(test.TestCase):
@@ -74,13 +74,15 @@ class WrapExceptionTestCase(test.TestCase):
 
     def test_wrap_exception_throws_exception(self):
         wrapped = exception.wrap_exception()
-        self.assertRaises(Exception, wrapped(bad_function_exception))
+        self.assertRaises(test.TestingException,
+                          wrapped(bad_function_exception))
 
     def test_wrap_exception_with_notifier(self):
         notifier = FakeNotifier()
         wrapped = exception.wrap_exception(notifier, "publisher", "event",
                                            "level")
-        self.assertRaises(Exception, wrapped(bad_function_exception))
+        self.assertRaises(test.TestingException,
+                          wrapped(bad_function_exception))
         self.assertEquals(notifier.provided_publisher, "publisher")
         self.assertEquals(notifier.provided_event, "event")
         self.assertEquals(notifier.provided_priority, "level")
@@ -90,7 +92,8 @@ class WrapExceptionTestCase(test.TestCase):
     def test_wrap_exception_with_notifier_defaults(self):
         notifier = FakeNotifier()
         wrapped = exception.wrap_exception(notifier)
-        self.assertRaises(Exception, wrapped(bad_function_exception))
+        self.assertRaises(test.TestingException,
+                          wrapped(bad_function_exception))
         self.assertEquals(notifier.provided_publisher, None)
         self.assertEquals(notifier.provided_event, "bad_function_exception")
         self.assertEquals(notifier.provided_priority, notifier.ERROR)
@@ -102,8 +105,7 @@ class NovaExceptionTestCase(test.TestCase):
             message = "default message"
 
         exc = FakeNovaException()
-        self.assertEquals(unicode(exc),
-                          'default message')
+        self.assertEquals(unicode(exc), 'default message')
 
     def test_error_msg(self):
         self.assertEquals(unicode(exception.NovaException('test')),
@@ -114,5 +116,18 @@ class NovaExceptionTestCase(test.TestCase):
             message = "default message: %(code)s"
 
         exc = FakeNovaException(code=500)
-        self.assertEquals(unicode(exc),
-                          'default message: 500')
+        self.assertEquals(unicode(exc), 'default message: 500')
+
+    def test_default_error_code(self):
+        class FakeNovaException(exception.NovaException):
+            code = 404
+
+        exc = FakeNovaException()
+        self.assertEquals(exc.kwargs['code'], 404)
+
+    def test_error_code_from_kwarg(self):
+        class FakeNovaException(exception.NovaException):
+            code = 500
+
+        exc = FakeNovaException(code=404)
+        self.assertEquals(exc.kwargs['code'], 404)

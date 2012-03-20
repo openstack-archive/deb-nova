@@ -27,10 +27,8 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import vm_states
 from nova.compute import task_states
-from nova import exception
 from nova import flags
 from nova import log as logging
-from nova import network
 from nova.network import model as network_model
 from nova import quota
 
@@ -146,17 +144,16 @@ def _get_marker_param(request):
 
 
 def limited(items, request, max_limit=FLAGS.osapi_max_limit):
-    """
-    Return a slice of items according to requested offset and limit.
+    """Return a slice of items according to requested offset and limit.
 
-    @param items: A sliceable entity
-    @param request: `wsgi.Request` possibly containing 'offset' and 'limit'
+    :param items: A sliceable entity
+    :param request: ``wsgi.Request`` possibly containing 'offset' and 'limit'
                     GET variables. 'offset' is where to start in the list,
                     and 'limit' is the maximum number of items to return. If
                     'limit' is not specified, 0, or > max_limit, we default
                     to max_limit. Negative values for either offset or limit
                     will cause exc.HTTPBadRequest() exceptions to be raised.
-    @kwarg max_limit: The maximum number of items to return from 'items'
+    :kwarg max_limit: The maximum number of items to return from 'items'
     """
     try:
         offset = int(request.GET.get('offset', 0))
@@ -291,7 +288,7 @@ def dict_to_query_str(params):
 
 def get_networks_for_instance_from_nw_info(nw_info):
     networks = {}
-
+    LOG.debug(_('Converting nw_info: %s') % nw_info)
     for vif in nw_info:
         ips = vif.fixed_ips()
         floaters = vif.floating_ips()
@@ -301,6 +298,7 @@ def get_networks_for_instance_from_nw_info(nw_info):
 
         networks[label]['ips'].extend(ips)
         networks[label]['floating_ips'].extend(floaters)
+        LOG.debug(_('Converted networks: %s') % networks)
     return networks
 
 
@@ -311,15 +309,15 @@ def get_nw_info_for_instance(context, instance):
 
 
 def get_networks_for_instance(context, instance):
-    """Returns a prepared nw_info list for passing into the view
-    builders
+    """Returns a prepared nw_info list for passing into the view builders
 
-    We end up with a data structure like:
-    {'public': {'ips': [{'addr': '10.0.0.1', 'version': 4},
-                        {'addr': '2001::1', 'version': 6}],
-                'floating_ips': [{'addr': '172.16.0.1', 'version': 4},
-                                 {'addr': '172.16.2.1', 'version': 4}]},
-     ...}
+    We end up with a data structure like::
+
+        {'public': {'ips': [{'addr': '10.0.0.1', 'version': 4},
+                            {'addr': '2001::1', 'version': 6}],
+                    'floating_ips': [{'addr': '172.16.0.1', 'version': 4},
+                                     {'addr': '172.16.2.1', 'version': 4}]},
+         ...}
     """
     nw_info = get_nw_info_for_instance(context, instance)
     return get_networks_for_instance_from_nw_info(nw_info)

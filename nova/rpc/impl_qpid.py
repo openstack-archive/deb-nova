@@ -26,11 +26,12 @@ import qpid.messaging
 import qpid.messaging.exceptions
 
 from nova import flags
+from nova import log as logging
 from nova.openstack.common import cfg
 from nova.rpc import amqp as rpc_amqp
 from nova.rpc import common as rpc_common
-from nova.rpc.common import LOG
 
+LOG = logging.getLogger(__name__)
 
 qpid_opts = [
     cfg.StrOpt('qpid_hostname',
@@ -337,12 +338,12 @@ class Connection(object):
             try:
                 self.connection.open()
             except qpid.messaging.exceptions.ConnectionError, e:
-                LOG.error(_('Unable to connect to AMQP server: %s ' % str(e)))
+                LOG.error(_('Unable to connect to AMQP server: %s ') % e)
                 time.sleep(FLAGS.qpid_reconnect_interval or 1)
             else:
                 break
 
-        LOG.info(_('Connected to AMQP server on %s' % self.broker))
+        LOG.info(_('Connected to AMQP server on %s') % self.broker)
 
         self.session = self.connection.session()
 
@@ -405,7 +406,10 @@ class Connection(object):
 
         def _consume():
             nxt_receiver = self.session.next_receiver(timeout=timeout)
-            self._lookup_consumer(nxt_receiver).consume()
+            try:
+                self._lookup_consumer(nxt_receiver).consume()
+            except Exception:
+                LOG.exception(_("Error processing message.  Skipping it."))
 
         for iteration in itertools.count(0):
             if limit and iteration >= limit:

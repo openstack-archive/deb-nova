@@ -15,7 +15,6 @@
 
 import datetime
 import json
-import stubout
 
 from lxml import etree
 import webob
@@ -60,12 +59,12 @@ def stub_snapshot_create(self, context, volume_id, name, description):
     return snapshot
 
 
-def stub_snapshot_delete(self, context, snapshot_id):
+def stub_snapshot_delete(self, context, snapshot):
     global _last_param
-    _last_param = dict(snapshot_id=snapshot_id)
+    _last_param = snapshot
 
     LOG.debug(_("_delete: %s"), locals())
-    if snapshot_id != '123':
+    if snapshot['id'] != '123':
         raise exception.NotFound
 
 
@@ -92,7 +91,6 @@ def stub_snapshot_get_all(self, context):
 class SnapshotApiTest(test.TestCase):
     def setUp(self):
         super(SnapshotApiTest, self).setUp()
-        self.stubs = stubout.StubOutForTesting()
         fakes.FakeAuthManager.reset_fake_data()
         fakes.FakeAuthDatabase.data = {}
         fakes.stub_out_networking(self.stubs)
@@ -108,10 +106,6 @@ class SnapshotApiTest(test.TestCase):
         self.stubs.Set(volume.api.API, "get", fakes.stub_volume_get)
 
         self.context = context.get_admin_context()
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
-        super(SnapshotApiTest, self).tearDown()
 
     def test_snapshot_create(self):
         global _last_param
@@ -185,7 +179,7 @@ class SnapshotApiTest(test.TestCase):
 
         resp = req.get_response(fakes.wsgi_app())
         self.assertEqual(resp.status_int, 202)
-        self.assertEqual(str(_last_param['snapshot_id']), str(snapshot_id))
+        self.assertEqual(str(_last_param['id']), str(snapshot_id))
 
     def test_snapshot_delete_invalid_id(self):
         global _last_param

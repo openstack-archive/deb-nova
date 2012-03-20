@@ -15,7 +15,7 @@
 
 from nova import exception
 from nova import flags
-from nova import vsa
+from nova.vsa import api as vsa_api
 from nova import volume
 from nova import context
 from nova import test
@@ -30,7 +30,7 @@ class VsaVolumesTestCase(test.TestCase):
 
     def setUp(self):
         super(VsaVolumesTestCase, self).setUp()
-        self.vsa_api = vsa.API()
+        self.vsa_api = vsa_api.API()
         self.volume_api = volume.API()
         self.context = context.get_admin_context()
 
@@ -50,7 +50,6 @@ class VsaVolumesTestCase(test.TestCase):
     def tearDown(self):
         if self.vsa_id:
             self.vsa_api.delete(self.context, self.vsa_id)
-        self.stubs.UnsetAll()
         super(VsaVolumesTestCase, self).tearDown()
 
     def _default_volume_param(self):
@@ -94,9 +93,8 @@ class VsaVolumesTestCase(test.TestCase):
         self.assertEqual(volume_ref['status'],
                          'creating')
 
-        self.volume_api.update(self.context,
-                               volume_ref,
-                               {'status': 'available'})
+        self.volume_api.update(self.context, volume_ref,
+                               {'status': 'available', 'host': 'fake'})
         volume_ref = self.volume_api.get(self.context, volume_ref['id'])
         self.volume_api.delete(self.context, volume_ref)
 
@@ -111,9 +109,9 @@ class VsaVolumesTestCase(test.TestCase):
         volume_param = self._default_volume_param()
         volume_ref = self.volume_api.create(self.context, **volume_param)
 
-        self.volume_api.update(self.context,
-                               volume_ref,
-                               {'status': 'in-use'})
+        self.volume_api.update(self.context, volume_ref,
+                               {'status': 'in-use', 'host': 'fake'})
+        volume_ref = self.volume_api.get(self.context, volume_ref['id'])
         self.assertRaises(exception.InvalidVolume,
                             self.volume_api.delete,
                             self.context, volume_ref)

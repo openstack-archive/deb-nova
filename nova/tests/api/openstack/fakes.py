@@ -32,7 +32,7 @@ from nova.api.openstack.compute import limits
 from nova.api.openstack import urlmap
 from nova.api.openstack.compute import versions
 from nova.api.openstack import wsgi as os_wsgi
-from nova.auth.manager import User, Project
+import nova.auth.manager as auth_manager
 from nova.compute import instance_types
 from nova.compute import vm_states
 from nova import context
@@ -151,6 +151,12 @@ def stub_out_rate_limiting(stubs):
 
     stubs.Set(nova.api.openstack.compute.limits.RateLimitingMiddleware,
         '__call__', fake_wsgi)
+
+
+def stub_out_instance_quota(stubs, allowed):
+    def fake_allowed_instances(context, max_count, instance_type):
+        return allowed
+    stubs.Set(nova.quota, 'allowed_instances', fake_allowed_instances)
 
 
 def stub_out_networking(stubs):
@@ -275,15 +281,14 @@ def stub_out_glance(stubs):
 
 
 class FakeToken(object):
-    # FIXME(sirp): let's not use id here
-    id = 0
+    id_count = 0
 
     def __getitem__(self, key):
         return getattr(self, key)
 
     def __init__(self, **kwargs):
-        FakeToken.id += 1
-        self.id = FakeToken.id
+        FakeToken.id_count += 1
+        self.id = FakeToken.id_count
         for k, v in kwargs.iteritems():
             setattr(self, k, v)
 
@@ -349,9 +354,9 @@ class FakeAuthManager(object):
 
     @classmethod
     def reset_fake_data(cls):
-        u1 = User('id1', 'guy1', 'acc1', 'secret1', False)
+        u1 = auth_manager.User('id1', 'guy1', 'acc1', 'secret1', False)
         cls.auth_data = [u1]
-        cls.projects = dict(testacct=Project('testacct',
+        cls.projects = dict(testacct=auth_manager.Project('testacct',
                                              'testacct',
                                              'id1',
                                              'test',
@@ -382,7 +387,7 @@ class FakeAuthManager(object):
         return None
 
     def create_user(self, name, access=None, secret=None, admin=False):
-        u = User(name, name, access, secret, admin)
+        u = auth_manager.User(name, name, access, secret, admin)
         FakeAuthManager.auth_data.append(u)
         return u
 
@@ -399,7 +404,7 @@ class FakeAuthManager(object):
         return user.admin
 
     def is_project_member(self, user_id, project):
-        if not isinstance(project, Project):
+        if not isinstance(project, auth_manager.Project):
             try:
                 project = self.get_project(project)
             except exc.NotFound:
@@ -409,9 +414,10 @@ class FakeAuthManager(object):
 
     def create_project(self, name, manager_user, description=None,
                        member_users=None):
-        member_ids = ([User.safe_id(m) for m in member_users]
+        member_ids = ([auto_manager.User.safe_id(m) for m in member_users]
                       if member_users else [])
-        p = Project(name, name, User.safe_id(manager_user),
+        p = auth_manager.Project(name, name,
+                                 auth_manager.User.safe_id(manager_user),
                                  description, member_ids)
         FakeAuthManager.projects[name] = p
         return p
@@ -422,7 +428,7 @@ class FakeAuthManager(object):
 
     def modify_project(self, project, manager_user=None, description=None):
         p = FakeAuthManager.projects.get(project)
-        p.project_manager_id = User.safe_id(manager_user)
+        p.project_manager_id = auth_manager.User.safe_id(manager_user)
         p.description = description
 
     def get_project(self, pid):

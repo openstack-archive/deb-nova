@@ -18,6 +18,8 @@
 import json
 import random
 
+from eventlet import tpool
+
 from nova.virt import xenapi_conn
 from nova.virt.xenapi import fake
 from nova.virt.xenapi import volume_utils
@@ -67,6 +69,11 @@ def stubout_session(stubs, cls, product_version=None, **opt_args):
         product_version = (5, 6, 2)
     stubs.Set(xenapi_conn.XenAPISession, 'get_product_version',
             lambda s: product_version)
+    # NOTE(johannes): logging can't be used reliably from a thread
+    # since it can deadlock with eventlet. It's safe for our faked
+    # sessions to be called synchronously in the unit tests. (see
+    # bug 946687)
+    stubs.Set(tpool, 'execute', lambda m, *a, **kw: m(*a, **kw))
 
 
 def stub_out_get_target(stubs):
@@ -124,14 +131,28 @@ def stubout_lookup_image(stubs):
     stubs.Set(vm_utils, 'lookup_image', f)
 
 
-def stubout_fetch_image_glance_disk(stubs):
+def stubout_fetch_image_glance_disk(stubs, raise_failure=False):
     """Simulates a failure in fetch image_glance_disk."""
 
     @classmethod
-    def f(cls, *args):
-        raise fake.Failure("Test Exception raised by " +
-                           "fake fetch_image_glance_disk")
-    stubs.Set(vm_utils.VMHelper, '_fetch_image_glance_disk', f)
+    def _fake_fetch_image_glance_disk(cls, context, session, instance, image,
+                                      image_type):
+        if raise_failure:
+            raise fake.Failure("Test Exception raised by "
+                               "fake fetch_image_glance_disk")
+        elif image_type == vm_utils.ImageType.KERNEL:
+            filename = "kernel"
+        elif image_type == vm_utils.ImageType.RAMDISK:
+            filename = "ramdisk"
+        else:
+            filename = "unknown"
+
+        return [dict(vdi_type=vm_utils.ImageType.to_string(image_type),
+                     vdi_uuid=None,
+                     file=filename)]
+
+    stubs.Set(vm_utils.VMHelper, '_fetch_image_glance_disk',
+              _fake_fetch_image_glance_disk)
 
 
 def stubout_create_vm(stubs):
@@ -391,7 +412,6 @@ def stub_out_migration_methods(stubs):
     stubs.Set(vm_utils.VMHelper, 'scan_sr', fake_sr)
     stubs.Set(vmops.VMOps, '_create_snapshot', fake_create_snapshot)
     stubs.Set(vm_utils.VMHelper, 'get_vdi_for_vm_safely', fake_get_vdi)
-    stubs.Set(xenapi_conn.XenAPISession, 'wait_for_task', lambda x, y, z: None)
     stubs.Set(vm_utils.VMHelper, 'get_sr_path', fake_get_sr_path)
     stubs.Set(vmops.VMOps, 'reset_network', fake_reset_network)
     stubs.Set(vmops.VMOps, '_shutdown', fake_shutdown)

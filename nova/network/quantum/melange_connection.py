@@ -21,6 +21,7 @@ import socket
 import time
 import urllib
 
+from nova import exception
 from nova import flags
 from nova import log as logging
 from nova.openstack.common import cfg
@@ -92,7 +93,7 @@ class MelangeConnection(object):
                 response_str = response.read()
                 if response.status < 400:
                     return response_str
-                raise Exception(_("Server returned error: %s" % response_str))
+                raise Exception(_("Server returned error: %s") % response_str)
             except (socket.error, IOError), e:
                 LOG.exception(_('Connection error contacting melange'
                                 ' service, retrying'))

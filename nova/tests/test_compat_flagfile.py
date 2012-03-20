@@ -18,17 +18,16 @@ import contextlib
 import os
 import shutil
 import StringIO
-import stubout
 import textwrap
 import tempfile
 import unittest
 import uuid
 
 from nova.compat import flagfile
+from nova import test
 
 
 class ThatLastTwoPercentCoverageTestCase(unittest.TestCase):
-
     def test_open_file_for_reading(self):
         with flagfile._open_file_for_reading(__file__):
             pass
@@ -42,10 +41,9 @@ class ThatLastTwoPercentCoverageTestCase(unittest.TestCase):
             os.remove(path)
 
 
-class CompatFlagfileTestCase(unittest.TestCase):
-
+class CompatFlagfileTestCase(test.TestCase):
     def setUp(self):
-        self.stubs = stubout.StubOutForTesting()
+        super(CompatFlagfileTestCase, self).setUp()
         self.files = {}
         self.tempdir = str(uuid.uuid4())
         self.tempfiles = []
@@ -55,9 +53,6 @@ class CompatFlagfileTestCase(unittest.TestCase):
         self.stubs.Set(tempfile, 'mkdtemp', self._fake_mkdtemp)
         self.stubs.Set(tempfile, 'mkstemp', self._fake_mkstemp)
         self.stubs.Set(shutil, 'rmtree', self._fake_rmtree)
-
-    def tearDown(self):
-        self.stubs.UnsetAll()
 
     def _fake_open(self, *args):
         @contextlib.contextmanager
@@ -154,8 +149,14 @@ class CompatFlagfileTestCase(unittest.TestCase):
         self._do_test_flagfile('--noverbose', 'verbose=false\n')
 
     def test_flagfile_comments(self):
-        self._do_test_flagfile('--bar=foo\n#foo\n--foo=bar\n//bar',
+        self._do_test_flagfile(' \n\n#foo\n--bar=foo\n--foo=bar\n//bar',
                                'bar=foo\nfoo=bar\n')
+
+    def test_flagfile_is_config(self):
+        self.files['foo.flags'] = '\n\n#foo\n//bar\n[DEFAULT]\nbar=foo'
+        before = ['--flagfile=foo.flags']
+        after = flagfile.handle_flagfiles(before, tempdir=self.tempdir)
+        self.assertEquals(after, ['--config-file=foo.flags'])
 
     def test_flagfile_nested(self):
         self.files['bar.flags'] = '--foo=bar'

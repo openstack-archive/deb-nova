@@ -1,3 +1,10 @@
+nova (2012.1~e4+git1953-g4e3c9ea-1) experimental; urgency=low
+
+  [ Ghe Rivero ]
+  * Use nova-rootwrap instead of sudo
+
+ -- Ghe Rivero <ghe@debian.org>  Thu, 08 Mar 2012 11:39:54 +0100
+
 nova (2012.1~e4-2) unstable; urgency=low
 
   [ Thomas Goirand ]

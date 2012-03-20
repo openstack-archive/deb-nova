@@ -20,6 +20,7 @@ import hashlib
 import os
 import os.path
 import socket
+import shutil
 import StringIO
 import tempfile
 
@@ -374,7 +375,6 @@ class GenericUtilsTestCase(test.TestCase):
 
         data = utils.read_cached_file("/this/is/a/fake", cache_data,
                                                 reload_func=test_reload)
-        self.mox.UnsetStubs()
         self.assertEqual(data, fake_contents)
         self.assertTrue(self.reload_called)
 
@@ -402,6 +402,17 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertTrue(utils.strcmp_const_time('abc123', 'abc123'))
         self.assertFalse(utils.strcmp_const_time('a', 'aaaaa'))
         self.assertFalse(utils.strcmp_const_time('ABC123', 'abc123'))
+
+    def test_temporary_chown(self):
+        def fake_execute(*args, **kwargs):
+            if args[0] == 'chown':
+                fake_execute.uid = args[1]
+        self.stubs.Set(utils, 'execute', fake_execute)
+
+        with tempfile.NamedTemporaryFile() as f:
+            with utils.temporary_chown(f.name, owner_uid=2):
+                self.assertEqual(fake_execute.uid, 2)
+            self.assertEqual(fake_execute.uid, os.getuid())
 
 
 class IsUUIDLikeTestCase(test.TestCase):
@@ -529,7 +540,8 @@ class MonkeyPatchTestCase(test.TestCase):
     def test_monkey_patch(self):
         utils.monkey_patch()
         nova.tests.monkey_patch_example.CALLED_FUNCTION = []
-        from nova.tests.monkey_patch_example import example_a, example_b
+        from nova.tests.monkey_patch_example import example_a
+        from nova.tests.monkey_patch_example import example_b
 
         self.assertEqual('Example function', example_a.example_function_a())
         exampleA = example_a.ExampleClassA()
@@ -828,6 +840,8 @@ class TestLockCleanup(test.TestCase):
 
         self.pid = os.getpid()
         self.dead_pid = self._get_dead_pid()
+        self.tempdir = tempfile.mkdtemp()
+        self.flags(lock_path=self.tempdir)
         self.lock_name = 'nova-testlock'
         self.lock_file = os.path.join(FLAGS.lock_path,
                                       self.lock_name + '.lock')
@@ -838,6 +852,10 @@ class TestLockCleanup(test.TestCase):
         except OSError as (errno, strerror):
             if errno == 2:
                 pass
+
+    def tearDown(self):
+        shutil.rmtree(self.tempdir)
+        super(TestLockCleanup, self).tearDown()
 
     def _get_dead_pid(self):
         """get a pid for a process that does not exist"""
@@ -965,3 +983,167 @@ class TestLockCleanup(test.TestCase):
         self.assertTrue(os.path.exists(lock3))
 
         os.unlink(lock3)
+
+
+class AuditPeriodTest(test.TestCase):
+
+    def setUp(self):
+        super(AuditPeriodTest, self).setUp()
+        #a fairly random time to test with
+        self.test_time = datetime.datetime(second=23,
+                                           minute=12,
+                                           hour=8,
+                                           day=5,
+                                           month=3,
+                                           year=2012)
+        utils.set_time_override(override_time=self.test_time)
+
+    def tearDown(self):
+        utils.clear_time_override()
+        super(AuditPeriodTest, self).tearDown()
+
+    def test_hour(self):
+        begin, end = utils.current_audit_period(unit='hour')
+        self.assertEquals(begin, datetime.datetime(
+                                           hour=7,
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           hour=8,
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+
+    def test_hour_with_offset_before_current(self):
+        begin, end = utils.current_audit_period(unit='hour@10')
+        self.assertEquals(begin, datetime.datetime(
+                                           minute=10,
+                                           hour=7,
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           minute=10,
+                                           hour=8,
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+
+    def test_hour_with_offset_after_current(self):
+        begin, end = utils.current_audit_period(unit='hour@30')
+        self.assertEquals(begin, datetime.datetime(
+                                           minute=30,
+                                           hour=6,
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           minute=30,
+                                           hour=7,
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+
+    def test_day(self):
+        begin, end = utils.current_audit_period(unit='day')
+        self.assertEquals(begin, datetime.datetime(
+                                           day=4,
+                                           month=3,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+
+    def test_day_with_offset_before_current(self):
+        begin, end = utils.current_audit_period(unit='day@6')
+        self.assertEquals(begin, datetime.datetime(
+                                           hour=6,
+                                           day=4,
+                                           month=3,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           hour=6,
+                                           day=5,
+                                           month=3,
+                                           year=2012))
+
+    def test_day_with_offset_after_current(self):
+        begin, end = utils.current_audit_period(unit='day@10')
+        self.assertEquals(begin, datetime.datetime(
+                                           hour=10,
+                                           day=3,
+                                           month=3,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           hour=10,
+                                           day=4,
+                                           month=3,
+                                           year=2012))
+
+    def test_month(self):
+        begin, end = utils.current_audit_period(unit='month')
+        self.assertEquals(begin, datetime.datetime(
+                                           day=1,
+                                           month=2,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           day=1,
+                                           month=3,
+                                           year=2012))
+
+    def test_month_with_offset_before_current(self):
+        begin, end = utils.current_audit_period(unit='month@2')
+        self.assertEquals(begin, datetime.datetime(
+                                           day=2,
+                                           month=2,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           day=2,
+                                           month=3,
+                                           year=2012))
+
+    def test_month_with_offset_after_current(self):
+        begin, end = utils.current_audit_period(unit='month@15')
+        self.assertEquals(begin, datetime.datetime(
+                                           day=15,
+                                           month=1,
+                                           year=2012))
+        self.assertEquals(end, datetime.datetime(
+                                           day=15,
+                                           month=2,
+                                           year=2012))
+
+    def test_year(self):
+        begin, end = utils.current_audit_period(unit='year')
+        self.assertEquals(begin, datetime.datetime(
+                                           day=1,
+                                           month=1,
+                                           year=2011))
+        self.assertEquals(end, datetime.datetime(
+                                           day=1,
+                                           month=1,
+                                           year=2012))
+
+    def test_year_with_offset_before_current(self):
+        begin, end = utils.current_audit_period(unit='year@2')
+        self.assertEquals(begin, datetime.datetime(
+                                           day=1,
+                                           month=2,
+                                           year=2011))
+        self.assertEquals(end, datetime.datetime(
+                                           day=1,
+                                           month=2,
+                                           year=2012))
+
+    def test_year_with_offset_after_current(self):
+        begin, end = utils.current_audit_period(unit='year@6')
+        self.assertEquals(begin, datetime.datetime(
+                                           day=1,
+                                           month=6,
+                                           year=2010))
+        self.assertEquals(end, datetime.datetime(
+                                           day=1,
+                                           month=6,
+                                           year=2011))

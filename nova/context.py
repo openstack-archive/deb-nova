@@ -22,7 +22,11 @@
 import copy
 
 from nova import local
+from nova import log as logging
 from nova import utils
+
+
+LOG = logging.getLogger(__name__)
 
 
 def generate_request_id():
@@ -38,8 +42,7 @@ class RequestContext(object):
 
     def __init__(self, user_id, project_id, is_admin=None, read_deleted="no",
                  roles=None, remote_address=None, timestamp=None,
-                 request_id=None, auth_token=None, strategy='noauth',
-                 overwrite=True):
+                 request_id=None, auth_token=None, overwrite=True, **kwargs):
         """
         :param read_deleted: 'no' indicates deleted records are hidden, 'yes'
             indicates deleted records are visible, 'only' indicates that
@@ -47,7 +50,17 @@ class RequestContext(object):
 
         :param overwrite: Set to False to ensure that the greenthread local
             copy of the index is not overwritten.
+
+        :param kwargs: Extra arguments that might be present, but we ignore
+            because they possibly came in from older rpc messages.
         """
+        if read_deleted not in ('no', 'yes', 'only'):
+            raise ValueError(_("read_deleted can only be one of 'no', "
+                               "'yes' or 'only', not %r") % read_deleted)
+        if kwargs:
+            LOG.warn(_('Arguments dropped when creating context: %s') %
+                    str(kwargs))
+
         self.user_id = user_id
         self.project_id = project_id
         self.roles = roles or []
@@ -67,7 +80,6 @@ class RequestContext(object):
             request_id = generate_request_id()
         self.request_id = request_id
         self.auth_token = auth_token
-        self.strategy = strategy
         if overwrite or not hasattr(local.store, 'context'):
             local.store.context = self
 
@@ -80,8 +92,7 @@ class RequestContext(object):
                 'remote_address': self.remote_address,
                 'timestamp': utils.strtime(self.timestamp),
                 'request_id': self.request_id,
-                'auth_token': self.auth_token,
-                'strategy': self.strategy}
+                'auth_token': self.auth_token}
 
     @classmethod
     def from_dict(cls, values):

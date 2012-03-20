@@ -34,7 +34,7 @@ from nova.compute import instance_types
 from nova.compute import task_states
 from nova.compute import vm_states
 import nova.db
-from nova.db.sqlalchemy.models import InstanceMetadata
+from nova.db.sqlalchemy import models
 from nova import flags
 import nova.image.fake
 import nova.rpc
@@ -91,7 +91,6 @@ class MockSetAdminPassword(object):
 
 class ServersControllerTest(test.TestCase):
     def setUp(self):
-        self.maxDiff = None
         super(ServersControllerTest, self).setUp()
         self.flags(verbose=True, use_ipv6=False)
         fakes.stub_out_rate_limiting(self.stubs)
@@ -108,8 +107,6 @@ class ServersControllerTest(test.TestCase):
         self.stubs.Set(nova.db, 'instance_add_security_group',
                        return_security_group)
         self.stubs.Set(nova.db, 'instance_update', instance_update)
-
-        self.config_drive = None
 
         self.controller = servers.Controller()
         self.ips_controller = ips.Controller()
@@ -570,7 +567,8 @@ class ServersControllerTest(test.TestCase):
     def test_get_servers_with_bad_option(self):
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             return [fakes.stub_instance(100, uuid=server_uuid)]
 
         self.stubs.Set(nova.compute.API, 'get_all', fake_get_all)
@@ -584,7 +582,8 @@ class ServersControllerTest(test.TestCase):
     def test_get_servers_allows_image(self):
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('image' in search_opts)
             self.assertEqual(search_opts['image'], '12345')
@@ -599,7 +598,8 @@ class ServersControllerTest(test.TestCase):
         self.assertEqual(servers[0]['id'], server_uuid)
 
     def test_tenant_id_filter_converts_to_project_id_for_admin(self):
-        def fake_get_all(context, filters=None, instances=None):
+        def fake_get_all(context, filters=None, sort_key=None,
+                         sort_dir='desc'):
             self.assertNotEqual(filters, None)
             self.assertEqual(filters['project_id'], 'fake')
             self.assertFalse(filters.get('tenant_id'))
@@ -615,7 +615,8 @@ class ServersControllerTest(test.TestCase):
         self.assertTrue('servers' in res)
 
     def test_admin_restricted_tenant(self):
-        def fake_get_all(context, filters=None, instances=None):
+        def fake_get_all(context, filters=None, sort_key=None,
+                         sort_dir='desc'):
             self.assertNotEqual(filters, None)
             self.assertEqual(filters['project_id'], 'fake')
             return [fakes.stub_instance(100)]
@@ -630,7 +631,8 @@ class ServersControllerTest(test.TestCase):
         self.assertTrue('servers' in res)
 
     def test_admin_all_tenants(self):
-        def fake_get_all(context, filters=None, instances=None):
+        def fake_get_all(context, filters=None, sort_key=None,
+                         sort_dir='desc'):
             self.assertNotEqual(filters, None)
             self.assertTrue('project_id' not in filters)
             return [fakes.stub_instance(100)]
@@ -645,7 +647,8 @@ class ServersControllerTest(test.TestCase):
         self.assertTrue('servers' in res)
 
     def test_all_tenants(self):
-        def fake_get_all(context, filters=None, instances=None):
+        def fake_get_all(context, filters=None, sort_key=None,
+                         sort_dir='desc'):
             self.assertNotEqual(filters, None)
             self.assertEqual(filters['project_id'], 'fake')
             return [fakes.stub_instance(100)]
@@ -661,7 +664,8 @@ class ServersControllerTest(test.TestCase):
     def test_get_servers_allows_flavor(self):
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('flavor' in search_opts)
             # flavor is an integer ID
@@ -679,7 +683,8 @@ class ServersControllerTest(test.TestCase):
     def test_get_servers_allows_status(self):
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('vm_state' in search_opts)
             self.assertEqual(search_opts['vm_state'], vm_states.ACTIVE)
@@ -702,7 +707,8 @@ class ServersControllerTest(test.TestCase):
     def test_get_servers_allows_name(self):
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('name' in search_opts)
             self.assertEqual(search_opts['name'], 'whee.*')
@@ -719,7 +725,8 @@ class ServersControllerTest(test.TestCase):
     def test_get_servers_allows_changes_since(self):
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('changes-since' in search_opts)
             changes_since = datetime.datetime(2011, 1, 24, 17, 8, 1,
@@ -749,7 +756,8 @@ class ServersControllerTest(test.TestCase):
         """
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             # Allowed by user
             self.assertTrue('name' in search_opts)
@@ -776,7 +784,8 @@ class ServersControllerTest(test.TestCase):
         """
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             # Allowed by user
             self.assertTrue('name' in search_opts)
@@ -803,7 +812,8 @@ class ServersControllerTest(test.TestCase):
         """
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('ip' in search_opts)
             self.assertEqual(search_opts['ip'], '10\..*')
@@ -824,7 +834,8 @@ class ServersControllerTest(test.TestCase):
         """
         server_uuid = str(utils.gen_uuid())
 
-        def fake_get_all(compute_self, context, search_opts=None):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc'):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('ip6' in search_opts)
             self.assertEqual(search_opts['ip6'], 'ffff.*')
@@ -953,6 +964,32 @@ class ServersControllerTest(test.TestCase):
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
         self.assertEqual(res_dict['server']['name'], 'server_test')
+
+    def test_update_server_not_found(self):
+        def fake_get(*args, **kwargs):
+            raise nova.exception.InstanceNotFound()
+
+        self.stubs.Set(nova.compute.API, 'get', fake_get)
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'name': 'server_test'}}
+        req.body = json.dumps(body)
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
+                          req, FAKE_UUID, body)
+
+    def test_update_server_not_found_on_update(self):
+        def fake_update(*args, **kwargs):
+            raise nova.exception.InstanceNotFound()
+
+        self.stubs.Set(nova.compute.API, 'update', fake_update)
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'name': 'server_test'}}
+        req.body = json.dumps(body)
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
+                          req, FAKE_UUID, body)
 
     def test_rebuild_instance_with_access_ipv4_bad_format(self):
         self.stubs.Set(nova.db, 'instance_get',
@@ -1200,10 +1237,8 @@ class ServersControllerCreateTest(test.TestCase):
         """Shared implementation for tests below that create instance"""
         super(ServersControllerCreateTest, self).setUp()
 
-        self.maxDiff = None
         self.flags(verbose=True,
                    enable_instance_password=True)
-        self.config_drive = None
         self.instance_cache_num = 0
         self.instance_cache = {}
 
@@ -1227,7 +1262,7 @@ class ServersControllerCreateTest(test.TestCase):
                 'reservation_id': inst['reservation_id'],
                 "created_at": datetime.datetime(2010, 10, 10, 12, 0, 0),
                 "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
-                "config_drive": self.config_drive,
+                "config_drive": None,
                 "progress": 0,
                 "fixed_ips": []
             }
@@ -1703,6 +1738,36 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
                           self.controller.create, req, body)
 
+    def test_create_instance_metadata_key_too_long(self):
+        self.flags(quota_metadata_items=1)
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/images/%s' % image_uuid
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {
+                    ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'): '12345',
+                },
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
+                          self.controller.create, req, body)
+
     def test_create_instance_invalid_key_name(self):
         image_href = 'http://localhost/v2/images/2'
         flavor_ref = 'http://localhost/flavors/3'
@@ -1778,7 +1843,6 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create, req, body)
 
     def test_create_instance_with_config_drive(self):
-        self.config_drive = True
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -1805,7 +1869,6 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_config_drive_as_id(self):
-        self.config_drive = 2
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -1832,7 +1895,6 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_bad_config_drive(self):
-        self.config_drive = "asdf"
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -2019,6 +2081,25 @@ class ServersControllerCreateTest(test.TestCase):
         robj = self.controller.create(req, body)
 
         self.assertEqual(robj['Location'], selfhref)
+
+    def test_create_instance_above_quota(self):
+        fakes.stub_out_instance_quota(self.stubs, 0)
+        image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
+        body = dict(server=dict(
+            name='server_test', imageRef=image_uuid, flavorRef=2,
+            metadata={'hello': 'world', 'open': 'stack'},
+            personality={}))
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = json.dumps(body)
+        req.headers["content-type"] = "application/json"
+        try:
+            server = self.controller.create(req, body).obj['server']
+            fail('excepted quota to be exceeded')
+        except webob.exc.HTTPRequestEntityTooLarge as e:
+            code = {'code': 'InstanceLimitExceeded'}
+            self.assertEquals(e.explanation,
+                              _('Quota exceeded: code=%(code)s') % code)
 
 
 class TestServerCreateRequestXMLDeserializer(test.TestCase):
@@ -2960,7 +3041,7 @@ class ServersViewBuilderTest(test.TestCase):
     def test_build_server_detail_with_metadata(self):
 
         metadata = []
-        metadata.append(InstanceMetadata(key="Open", value="Stack"))
+        metadata.append(models.InstanceMetadata(key="Open", value="Stack"))
         self.instance['metadata'] = metadata
 
         image_bookmark = "http://localhost/fake/images/5"
@@ -3032,10 +3113,6 @@ class ServerXMLSerializationTest(test.TestCase):
     SERVER_BOOKMARK = 'http://localhost/servers/%s' % FAKE_UUID
     IMAGE_BOOKMARK = 'http://localhost/images/5'
     FLAVOR_BOOKMARK = 'http://localhost/flavors/1'
-
-    def setUp(self):
-        self.maxDiff = None
-        test.TestCase.setUp(self)
 
     def test_xml_declaration(self):
         serializer = servers.ServerTemplate()

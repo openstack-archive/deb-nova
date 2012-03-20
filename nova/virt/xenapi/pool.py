@@ -138,9 +138,7 @@ class ResourcePool(object):
                     'master_addr': self._host_addr,
                     'master_user': FLAGS.xenapi_connection_username,
                     'master_pass': FLAGS.xenapi_connection_password, }
-            task = self._session.async_call_plugin('xenhost',
-                                                   'host_join', args)
-            self._session.wait_for_task(task)
+            self._session.call_plugin('xenhost', 'host_join', args)
         except self.XenAPI.Failure as e:
             LOG.error(_("Pool-Join failed: %(e)s") % locals())
             raise exception.AggregateError(aggregate_id=aggregate_id,
@@ -212,5 +210,5 @@ def forward_request(context, request_type, master, aggregate_id,
 def swap_xapi_host(url, host_addr):
     """Replace the XenServer address present in 'url' with 'host_addr'."""
     temp_url = urlparse.urlparse(url)
-    _, sep, port = temp_url.netloc.partition(':')
+    _netloc, sep, port = temp_url.netloc.partition(':')
     return url.replace(temp_url.netloc, '%s%s%s' % (host_addr, sep, port))

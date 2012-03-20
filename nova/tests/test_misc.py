@@ -26,7 +26,6 @@ from eventlet import greenthread
 from nova import exception
 from nova import test
 from nova import utils
-from nova.utils import parse_mailmap, str_dict_replace
 
 
 class ExceptionTestCase(test.TestCase):
@@ -46,7 +45,7 @@ class ProjectTestCase(test.TestCase):
         topdir = os.path.normpath(os.path.dirname(__file__) + '/../../')
         missing = set()
         contributors = set()
-        mailmap = parse_mailmap(os.path.join(topdir, '.mailmap'))
+        mailmap = utils.parse_mailmap(os.path.join(topdir, '.mailmap'))
         authors_file = open(os.path.join(topdir,
                                          'Authors'), 'r').read().lower()
 
@@ -57,7 +56,7 @@ class ProjectTestCase(test.TestCase):
                 if "jenkins" in email and "openstack.org" in email:
                     continue
                 email = '<' + email.lower() + '>'
-                contributors.add(str_dict_replace(email, mailmap))
+                contributors.add(utils.str_dict_replace(email, mailmap))
         else:
             return
 
@@ -70,28 +69,7 @@ class ProjectTestCase(test.TestCase):
         self.assertTrue(len(missing) == 0,
                         '%r not listed in Authors' % missing)
 
-    def test_all_new_migrations_have_downgrade(self):
-        # NOTE(sirp): These migrations are old enough so that a downgrade
-        # isn't a hard requirement. Would be nice to have, in these cases,
-        # though, too.
-        EXEMPT = """
-        002_bexar.py
-        003_add_label_to_networks.py
-        004_add_zone_tables.py
-        005_add_instance_metadata.py
-        006_add_provider_data_to_volumes.py
-        007_add_ipv6_to_fixed_ips.py
-        009_add_instance_migrations.py
-        011_live_migration.py
-        012_add_ipv6_flatmanager.py
-        015_add_auto_assign_to_floating_ips.py
-        020_add_snapshot_id_to_volumes.py
-        026_add_agent_table.py
-        027_add_provider_firewall_rules.py
-        """
-
-        exempt = [e.strip() for e in EXEMPT.splitlines() if e.strip()]
-
+    def test_all_migrations_have_downgrade(self):
         topdir = os.path.normpath(os.path.dirname(__file__) + '/../../')
         py_glob = os.path.join(topdir, "nova", "db", "sqlalchemy",
                                "migrate_repo", "versions", "*.py")
@@ -108,8 +86,7 @@ class ProjectTestCase(test.TestCase):
 
                 if has_upgrade and not has_downgrade:
                     fname = os.path.basename(path)
-                    if fname not in exempt:
-                        missing_downgrade.append(fname)
+                    missing_downgrade.append(fname)
 
         helpful_msg = (_("The following migrations are missing a downgrade:"
                          "\n\t%s") % '\n\t'.join(sorted(missing_downgrade)))
@@ -170,7 +147,7 @@ class LockTestCase(test.TestCase):
                 self.assertEquals(e.errno, errno.EPIPE)
                 return
 
-            rfds, _, __ = select.select([rpipe], [], [], 1)
+            rfds, _wfds, _efds = select.select([rpipe], [], [], 1)
             self.assertEquals(len(rfds), 0, "The other process, which was"
                                             " supposed to be locked, "
                                             "wrote on its end of the "

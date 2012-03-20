@@ -24,7 +24,7 @@ from nova import flags
 from nova import log as logging
 from nova import test
 from nova.volume import volume_types
-from nova.db.sqlalchemy.session import get_session
+from nova.db.sqlalchemy import session as sql_session
 from nova.db.sqlalchemy import models
 
 FLAGS = flags.FLAGS
@@ -44,8 +44,6 @@ class VolumeTypeTestCase(test.TestCase):
                     size="300",
                     rpm="7200",
                     visible="True")
-        self.vol_type1 = dict(name=self.vol_type1_name,
-                              extra_specs=self.vol_type1_specs)
 
     def test_volume_type_create_then_destroy(self):
         """Ensure volume types can be created and deleted"""
@@ -77,7 +75,7 @@ class VolumeTypeTestCase(test.TestCase):
 
     def test_get_all_volume_types(self):
         """Ensures that all volume types can be retrieved"""
-        session = get_session()
+        session = sql_session.get_session()
         total_volume_types = session.query(models.VolumeTypes).count()
         vol_types = volume_types.get_all_types(self.ctxt)
         self.assertEqual(total_volume_types, len(vol_types))

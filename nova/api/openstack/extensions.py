@@ -16,9 +16,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import functools
 import os
-import routes
 
 import webob.dec
 import webob.exc
@@ -31,7 +29,6 @@ from nova import flags
 from nova import log as logging
 import nova.policy
 from nova import utils
-from nova import wsgi as base_wsgi
 
 
 LOG = logging.getLogger(__name__)
@@ -115,7 +112,7 @@ def make_ext(elem):
     xmlutil.make_links(elem, 'links')
 
 
-ext_nsmap = {None: xmlutil.XMLNS_V11, 'atom': xmlutil.XMLNS_ATOM}
+ext_nsmap = {None: xmlutil.XMLNS_COMMON_V10, 'atom': xmlutil.XMLNS_ATOM}
 
 
 class ExtensionTemplate(xmlutil.TemplateBuilder):
@@ -304,7 +301,9 @@ def wrap_errors(fn):
     def wrapped(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except Exception, e:
+        except webob.exc.HTTPException:
+            raise
+        except Exception:
             raise webob.exc.HTTPInternalServerError()
     return wrapped
 

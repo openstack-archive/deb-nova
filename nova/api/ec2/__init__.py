@@ -56,6 +56,10 @@ ec2_opts = [
     cfg.StrOpt('keystone_ec2_url',
                default='http://localhost:5000/v2.0/ec2tokens',
                help='URL to get token from ec2 request.'),
+    cfg.BoolOpt('ec2_private_dns_show_ip',
+                default=False,
+                help='Return the IP address as private dns hostname in '
+                     'describe instances'),
     ]
 
 FLAGS = flags.FLAGS
@@ -152,7 +156,7 @@ class Lockout(wsgi.Middleware):
         if FLAGS.memcached_servers:
             import memcache
         else:
-            from nova.testing.fake import memcache
+            from nova.common import memorycache as memcache
         self.mc = memcache.Client(FLAGS.memcached_servers,
                                   debug=0)
         super(Lockout, self).__init__(application)
@@ -323,7 +327,6 @@ class EC2KeystoneAuth(wsgi.Middleware):
                                       project_id,
                                       roles=roles,
                                       auth_token=token_id,
-                                      strategy='keystone',
                                       remote_address=remote_address)
 
         req.environ['nova.context'] = ctxt

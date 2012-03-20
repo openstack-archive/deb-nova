@@ -28,7 +28,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 from nova import utils
-from nova.virt.xenapi import HelperBase
+from nova.virt import xenapi
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class StorageError(Exception):
         super(StorageError, self).__init__(message)
 
 
-class VolumeHelper(HelperBase):
+class VolumeHelper(xenapi.HelperBase):
     """
     The class that wraps the helper methods together.
     """
@@ -185,30 +185,6 @@ class VolumeHelper(HelperBase):
             LOG.exception(exc)
             raise StorageError(_('Unable to find SR from VBD %s') % vbd_ref)
         return sr_ref
-
-    @classmethod
-    def create_vbd(cls, session, vm_ref, vdi_ref, userdevice, bootable):
-        """Create a VBD record.  Returns a Deferred that gives the new
-        VBD reference."""
-        vbd_rec = {}
-        vbd_rec['VM'] = vm_ref
-        vbd_rec['VDI'] = vdi_ref
-        vbd_rec['userdevice'] = str(userdevice)
-        vbd_rec['bootable'] = bootable
-        vbd_rec['mode'] = 'RW'
-        vbd_rec['type'] = 'disk'
-        vbd_rec['unpluggable'] = True
-        vbd_rec['empty'] = False
-        vbd_rec['other_config'] = {}
-        vbd_rec['qos_algorithm_type'] = ''
-        vbd_rec['qos_algorithm_params'] = {}
-        vbd_rec['qos_supported_algorithms'] = []
-        LOG.debug(_('Creating VBD for VM %(vm_ref)s,'
-                ' VDI %(vdi_ref)s ... ') % locals())
-        vbd_ref = session.call_xenapi('VBD.create', vbd_rec)
-        LOG.debug(_('Created VBD %(vbd_ref)s for VM %(vm_ref)s,'
-                ' VDI %(vdi_ref)s.') % locals())
-        return vbd_ref
 
     @classmethod
     def create_pbd(cls, session, sr_ref, params):

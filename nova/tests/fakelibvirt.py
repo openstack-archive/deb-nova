@@ -14,11 +14,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from xml.etree.ElementTree import fromstring as xml_to_tree
+from xml.etree import ElementTree
 try:
-    from xml.etree.ElementTree import ParseError
-except ImportError:
-    from xml.parsers.expat import ExpatError as ParseError
+    ParseError = ElementTree.ParseError
+except AttributeError:
+    from xml.parsers import expat
+    ParseError = expat.ExpatError
 
 import uuid
 
@@ -140,7 +141,7 @@ class NWFilter(object):
         self._parse_xml(xml)
 
     def _parse_xml(self, xml):
-        tree = xml_to_tree(xml)
+        tree = ElementTree.fromstring(xml)
         root = tree.find('.')
         self._name = root.get('name')
 
@@ -162,7 +163,7 @@ class Domain(object):
 
     def _parse_definition(self, xml):
         try:
-            tree = xml_to_tree(xml)
+            tree = ElementTree.fromstring(xml)
         except ParseError:
             raise libvirtError(VIR_ERR_XML_DETAIL, VIR_FROM_DOMAIN,
                                "Invalid XML.")
@@ -288,21 +289,25 @@ class Domain(object):
     def suspend(self):
         self._state = VIR_DOMAIN_PAUSED
 
+    def shutdown(self):
+        self._state = VIR_DOMAIN_SHUTDOWN
+        self._connection._mark_not_running(self)
+
     def info(self):
-        return [VIR_DOMAIN_RUNNING,
+        return [self._state,
                 long(self._def['memory']),
                 long(self._def['memory']),
                 self._def['vcpu'],
                 123456789L]
 
     def attachDevice(self, xml):
-        disk_info = _parse_disk_info(xml_to_tree(xml))
+        disk_info = _parse_disk_info(ElementTree.fromstring(xml))
         disk_info['_attached'] = True
         self._def['devices']['disks'] += [disk_info]
         return True
 
     def detachDevice(self, xml):
-        disk_info = _parse_disk_info(xml_to_tree(xml))
+        disk_info = _parse_disk_info(ElementTree.fromstring(xml))
         disk_info['_attached'] = True
         return disk_info in self._def['devices']['disks']
 
@@ -352,12 +357,17 @@ class Domain(object):
                function='0x1'/>
     </controller>
     %(nics)s
-    <serial type='pty'>
-      <source pty='/dev/pts/27'/>
+    <serial type='file'>
+      <source path='dummy.log'/>
       <target port='0'/>
     </serial>
-    <console type='pty'>
-      <target type='serial' port='0'/>
+    <serial type='pty'>
+      <source pty='/dev/pts/27'/>
+      <target port='1'/>
+    </serial>
+    <console type='file'>
+      <source path='dummy.log'/>
+      <target port='0'/>
     </console>
     <input type='tablet' bus='usb'/>
     <input type='mouse' bus='ps2'/>
@@ -394,7 +404,7 @@ class Domain(object):
         self._state = VIR_DOMAIN_RUNNING
 
     def snapshotCreateXML(self, xml, flags):
-        tree = xml_to_tree(xml)
+        tree = ElementTree.fromstring(xml)
         name = tree.find('./name').text
         snapshot = DomainSnapshot(name, self)
         self._snapshots[name] = snapshot
@@ -416,8 +426,8 @@ class Connection(object):
             if allow_default_uri_connection:
                 uri = 'qemu:///session'
             else:
-                raise Exception("URI was None, but fake libvirt is configured"
-                                " to not accept this.")
+                raise ValueError("URI was None, but fake libvirt is "
+                                 "configured to not accept this.")
 
         uri_whitelist = ['qemu:///system',
                          'qemu:///session',
@@ -731,7 +741,7 @@ class Connection(object):
 </capabilities>'''
 
     def compareCPU(self, xml, flags):
-        tree = xml_to_tree(xml)
+        tree = ElementTree.fromstring(xml)
 
         arch_node = tree.find('./arch')
         if arch_node is not None:

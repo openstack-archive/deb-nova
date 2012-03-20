@@ -297,9 +297,7 @@ class InstanceInfoCache(BASE, NovaBase):
     instance = relationship(Instance,
                             backref=backref('info_cache', uselist=False),
                             foreign_keys=instance_id,
-                            primaryjoin='and_('
-                              'InstanceInfoCache.instance_id == Instance.uuid,'
-                              'InstanceInfoCache.deleted == False)')
+                            primaryjoin=instance_id == Instance.uuid)
 
 
 class VirtualStorageArray(BASE, NovaBase):
@@ -638,8 +636,10 @@ class Migration(BASE, NovaBase):
     """Represents a running host-to-host migration."""
     __tablename__ = 'migrations'
     id = Column(Integer, primary_key=True, nullable=False)
+    # NOTE(tr3buchet): the ____compute variables are instance['host']
     source_compute = Column(String(255))
     dest_compute = Column(String(255))
+    # NOTE(tr3buchet): dest_host, btw, is an ip address
     dest_host = Column(String(255))
     old_instance_type_id = Column(Integer())
     new_instance_type_id = Column(Integer())
@@ -1024,6 +1024,7 @@ def register_models():
               AggregateMetadata,
               AuthToken,
               Certificate,
+              Cell,
               Console,
               ConsolePool,
               FixedIp,
@@ -1051,7 +1052,6 @@ def register_models():
               VolumeMetadata,
               VolumeTypeExtraSpecs,
               VolumeTypes,
-              Zone,
               )
     engine = create_engine(FLAGS.sql_connection, echo=False)
     for model in models:

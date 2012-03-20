@@ -35,11 +35,15 @@ from nova import network
 from nova import volume
 from nova import wsgi
 
-
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 flags.DECLARE('use_forwarded_for', 'nova.api.auth')
 flags.DECLARE('dhcp_domain', 'nova.network.manager')
+
+if FLAGS.memcached_servers:
+    import memcache
+else:
+    from nova.common import memorycache as memcache
 
 _DEFAULT_MAPPINGS = {'ami': 'sda1',
                      'ephemeral0': 'sda2',
@@ -75,23 +79,7 @@ class MetadataRequestHandler(wsgi.Application):
         self.compute_api = compute.API(
                 network_api=self.network_api,
                 volume_api=volume.API())
-
-    def _get_mpi_data(self, context, project_id):
-        result = {}
-        search_opts = {'project_id': project_id, 'deleted': False}
-        for instance in self.compute_api.get_all(context,
-                search_opts=search_opts):
-            ip_info = ec2utils.get_ip_info_for_instance(context, instance)
-            # only look at ipv4 addresses
-            fixed_ips = ip_info['fixed_ips']
-            if fixed_ips:
-                line = '%s slots=%d' % (fixed_ips[0], instance['vcpus'])
-                key = str(instance['key_name'])
-                if key in result:
-                    result[key].append(line)
-                else:
-                    result[key] = [line]
-        return result
+        self._cache = memcache.Client(FLAGS.memcached_servers, debug=0)
 
     def _format_instance_mapping(self, ctxt, instance_ref):
         root_device_name = instance_ref['root_device_name']
@@ -143,6 +131,11 @@ class MetadataRequestHandler(wsgi.Application):
         if not address:
             raise exception.FixedIpNotFoundForAddress(address=address)
 
+        cache_key = 'metadata-%s' % address
+        data = self._cache.get(cache_key)
+        if data:
+            return data
+
         ctxt = context.get_admin_context()
         try:
             fixed_ip = self.network_api.get_fixed_ip_by_address(ctxt, address)
@@ -150,7 +143,6 @@ class MetadataRequestHandler(wsgi.Application):
         except exception.NotFound:
             return None
 
-        mpi = self._get_mpi_data(ctxt, instance_ref['project_id'])
         hostname = "%s.%s" % (instance_ref['hostname'], FLAGS.dhcp_domain)
         host = instance_ref['host']
         services = db.service_get_all_by_host(ctxt.elevated(), host)
@@ -162,7 +154,9 @@ class MetadataRequestHandler(wsgi.Application):
         floating_ip = floating_ips and floating_ips[0] or ''
 
         ec2_id = ec2utils.id_to_ec2_id(instance_ref['id'])
-        image_ec2_id = ec2utils.image_ec2_id(instance_ref['image_ref'])
+        image_id = instance_ref['image_ref']
+        ctxt = context.get_admin_context()
+        image_ec2_id = ec2utils.glance_id_to_ec2_id(ctxt, image_id)
         security_groups = db.security_group_get_by_instance(ctxt,
                                                             instance_ref['id'])
         security_groups = [x['name'] for x in security_groups]
@@ -184,8 +178,7 @@ class MetadataRequestHandler(wsgi.Application):
                 'public-hostname': hostname,
                 'public-ipv4': floating_ip,
                 'reservation-id': instance_ref['reservation_id'],
-                'security-groups': security_groups,
-                'mpi': mpi}}
+                'security-groups': security_groups}}
 
         # public-keys should be in meta-data only if user specified one
         if instance_ref['key_name']:
@@ -195,15 +188,20 @@ class MetadataRequestHandler(wsgi.Application):
 
         for image_type in ['kernel', 'ramdisk']:
             if instance_ref.get('%s_id' % image_type):
-                ec2_id = ec2utils.image_ec2_id(
-                        instance_ref['%s_id' % image_type],
-                        ec2utils.image_type(image_type))
+                image_id = instance_ref['%s_id' % image_type]
+                image_type = ec2utils.image_type(image_type)
+                ec2_id = ec2utils.glance_id_to_ec2_id(ctxt,
+                                                      image_id,
+                                                      image_type)
                 data['meta-data']['%s-id' % image_type] = ec2_id
 
         if False:  # TODO(vish): store ancestor ids
             data['ancestor-ami-ids'] = []
         if False:  # TODO(vish): store product codes
             data['product-codes'] = []
+
+        self._cache.set(cache_key, data, 15)
+
         return data
 
     def print_data(self, data):

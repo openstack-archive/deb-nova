@@ -104,8 +104,11 @@ class ConsumerBase(object):
 
         def _callback(raw_message):
             message = self.channel.message_to_python(raw_message)
-            callback(message.payload)
-            message.ack()
+            try:
+                callback(message.payload)
+                message.ack()
+            except Exception:
+                LOG.exception(_("Failed to process message... skipping it."))
 
         self.queue.consume(*args, callback=_callback, **options)
 
@@ -425,7 +428,7 @@ class Connection(object):
         for consumer in self.consumers:
             consumer.reconnect(self.channel)
         LOG.info(_('Connected to AMQP server on '
-                '%(hostname)s:%(port)d' % self.params))
+                '%(hostname)s:%(port)d') % self.params)
 
     def reconnect(self):
         """Handles reconnecting and re-establishing queues.
