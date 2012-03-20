@@ -1182,6 +1182,12 @@ class VMOps(object):
         """
         instance_uuid = instance['uuid']
         LOG.info(_("Destroying VM for Instance %(instance_uuid)s") % locals())
+
+        rescue_vm_ref = VMHelper.lookup(self._session,
+                                        "%s-rescue" % instance.name)
+        if rescue_vm_ref:
+            self._destroy_rescue_instance(rescue_vm_ref)
+
         vm_ref = VMHelper.lookup(self._session, instance.name)
         return self._destroy(instance, vm_ref, network_info, shutdown=True)
 
@@ -1442,7 +1448,7 @@ class VMOps(object):
 
     def get_console_output(self, instance):
         """Return snapshot of console."""
-        # TODO: implement this to fix pylint!
+        # TODO(armando-migliaccio): implement this to fix pylint!
         return 'FAKE CONSOLE OUTPUT of instance'
 
     def get_vnc_console(self, instance):

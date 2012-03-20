@@ -1990,15 +1990,49 @@ def network_get_all_by_uuids(context, network_uuids, project_id=None):
 
 
 @require_admin_context
-def network_get_associated_fixed_ips(context, network_id):
+def network_get_associated_fixed_ips(context, network_id, host=None):
     # FIXME(sirp): since this returns fixed_ips, this would be better named
     # fixed_ip_get_all_by_network.
-    return model_query(context, models.FixedIp, read_deleted="no").\
-                    filter_by(network_id=network_id).\
-                    filter_by(allocated=True).\
-                    filter(models.FixedIp.instance_id != None).\
-                    filter(models.FixedIp.virtual_interface_id != None).\
-                    all()
+    # NOTE(vish): The ugly joins here are to solve a performance issue and
+    #             should be removed once we can add and remove leases
+    #             without regenerating the whole list
+    vif_and = and_(models.VirtualInterface.id ==
+                   models.FixedIp.virtual_interface_id,
+                   models.VirtualInterface.deleted == False)
+    inst_and = and_(models.Instance.id == models.FixedIp.instance_id,
+                    models.Instance.deleted == False)
+    session = get_session()
+    query = session.query(models.FixedIp.address,
+                          models.FixedIp.instance_id,
+                          models.FixedIp.network_id,
+                          models.FixedIp.virtual_interface_id,
+                          models.VirtualInterface.address,
+                          models.Instance.hostname,
+                          models.Instance.updated_at,
+                          models.Instance.created_at).\
+                          filter(models.FixedIp.deleted == False).\
+                          filter(models.FixedIp.network_id == network_id).\
+                          filter(models.FixedIp.allocated == True).\
+                          join((models.VirtualInterface, vif_and)).\
+                          join((models.Instance, inst_and)).\
+                          filter(models.FixedIp.instance_id != None).\
+                          filter(models.FixedIp.virtual_interface_id != None)
+    if host:
+        query = query.filter(models.Instance.host == host)
+    result = query.all()
+    data = []
+    for datum in result:
+        cleaned = {}
+        cleaned['address'] = datum[0]
+        cleaned['instance_id'] = datum[1]
+        cleaned['network_id'] = datum[2]
+        cleaned['vif_id'] = datum[3]
+        cleaned['vif_address'] = datum[4]
+        cleaned['instance_hostname'] = datum[5]
+        cleaned['instance_updated'] = datum[6]
+        cleaned['instance_created'] = datum[7]
+        data.append(cleaned)
+    return data
 
 
 @require_admin_context
@@ -2735,20 +2769,6 @@ def security_group_exists(context, project_id, group_name):
 def security_group_in_use(context, group_id):
     session = get_session()
     with session.begin():
-        # Are there any other groups that haven't been deleted
-        # that include this group in their rules?
-        rules = session.query(models.SecurityGroupIngressRule).\
-                filter_by(group_id=group_id).\
-                filter_by(deleted=False).\
-                all()
-        for r in rules:
-            num_groups = session.query(models.SecurityGroup).\
-                        filter_by(deleted=False).\
-                        filter_by(id=r.parent_group_id).\
-                        count()
-            if num_groups:
-                return True
-
         # Are there any instances that haven't been deleted
         # that include this group?
         inst_assoc = session.query(models.SecurityGroupInstanceAssociation).\
@@ -3860,88 +3880,6 @@ def volume_type_extra_specs_update_or_create(context, volume_type_id,
                          "deleted": 0})
         spec_ref.save(session=session)
     return specs
-
-
-####################
-
-
-def _vsa_get_query(context, session=None, project_only=False):
-    return model_query(context, models.VirtualStorageArray, session=session,
-                       project_only=project_only).\
-                         options(joinedload('vsa_instance_type'))
-
-
-@require_admin_context
-def vsa_create(context, values):
-    """
-    Creates Virtual Storage Array record.
-    """
-    try:
-        vsa_ref = models.VirtualStorageArray()
-        vsa_ref.update(values)
-        vsa_ref.save()
-    except Exception, e:
-        raise exception.DBError(e)
-    return vsa_ref
-
-
-@require_admin_context
-def vsa_update(context, vsa_id, values):
-    """
-    Updates Virtual Storage Array record.
-    """
-    session = get_session()
-    with session.begin():
-        vsa_ref = vsa_get(context, vsa_id, session=session)
-        vsa_ref.update(values)
-        vsa_ref.save(session=session)
-    return vsa_ref
-
-
-@require_admin_context
-def vsa_destroy(context, vsa_id):
-    """
-    Deletes Virtual Storage Array record.
-    """
-    session = get_session()
-    with session.begin():
-        session.query(models.VirtualStorageArray).\
-                filter_by(id=vsa_id).\
-                update({'deleted': True,
-                        'deleted_at': utils.utcnow(),
-                        'updated_at': literal_column('updated_at')})
-
-
-@require_context
-def vsa_get(context, vsa_id, session=None):
-    """
-    Get Virtual Storage Array record by ID.
-    """
-    result = _vsa_get_query(context, session=session, project_only=True).\
-                filter_by(id=vsa_id).\
-                first()
-
-    if not result:
-        raise exception.VirtualStorageArrayNotFound(id=vsa_id)
-
-    return result
-
-
-@require_admin_context
-def vsa_get_all(context):
-    """
-    Get all Virtual Storage Array records.
-    """
-    return _vsa_get_query(context).all()
-
-
-@require_context
-def vsa_get_all_by_project(context, project_id):
-    """
-    Get all Virtual Storage Array records by project ID.
-    """
-    authorize_project_context(context, project_id)
-    return _vsa_get_query(context).filter_by(project_id=project_id).all()
 
 
 ####################

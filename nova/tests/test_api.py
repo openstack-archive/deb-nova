@@ -242,14 +242,14 @@ class ApiEc2TestCase(test.TestCase):
                             "%Y-%m-%d %H:%M:%S.%f")
         self.assertEqual(
                         conv(time_to_convert),
-                        '2011-02-21T20:14:10Z')
+                        '2011-02-21T20:14:10.634Z')
         # mysqlite database representation
         time_to_convert = datetime.datetime.strptime(
                             "2011-02-21 19:56:18",
                             "%Y-%m-%d %H:%M:%S")
         self.assertEqual(
                         conv(time_to_convert),
-                        '2011-02-21T19:56:18Z')
+                        '2011-02-21T19:56:18.000Z')
 
     def test_xmlns_version_matches_request_version(self):
         self.expect_http(api_version='2010-10-30')
@@ -568,15 +568,6 @@ class ApiEc2TestCase(test.TestCase):
                 self.assertEquals(len(group.rules[0].grants), 1)
                 self.assertEquals(str(group.rules[0].grants[0]), '%s-%s' %
                                   (other_security_group_name, 'fake'))
-
-        self.expect_http()
-        self.mox.ReplayAll()
-
-        # Can not delete the group while it is still used by
-        # another group.
-        self.assertRaises(boto_exc.EC2ResponseError,
-                          self.ec2.delete_security_group,
-                          other_security_group_name)
 
         self.expect_http()
         self.mox.ReplayAll()

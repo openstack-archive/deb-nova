@@ -144,7 +144,13 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
         if callable(xml):
             xml = xml()
         # execute in a native thread and block current greenthread until done
-        tpool.execute(self._conn.nwfilterDefineXML, xml)
+        if not FLAGS.libvirt_nonblocking:
+            # NOTE(maoy): the original implementation is to have the API called
+            # in the thread pool no matter what.
+            tpool.execute(self._conn.nwfilterDefineXML, xml)
+        else:
+            # NOTE(maoy): self._conn is a eventlet.tpool.Proxy object
+            self._conn.nwfilterDefineXML(xml)
 
     def unfilter_instance(self, instance, network_info):
         """Clear out the nwfilter rules."""
@@ -156,7 +162,12 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             try:
                 _nw = self._conn.nwfilterLookupByName(instance_filter_name)
                 _nw.undefine()
-            except libvirt.libvirtError:
+            except libvirt.libvirtError as e:
+                errcode = e.get_error_code()
+                if errcode == libvirt.VIR_ERR_OPERATION_INVALID:
+                    # This happens when the instance filter is still in
+                    # use (ie. when the instance has not terminated properly)
+                    raise
                 LOG.debug(_('The nwfilter(%(instance_filter_name)s) '
                             'is not found.') % locals(),
                           instance=instance)

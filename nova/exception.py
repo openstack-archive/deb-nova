@@ -330,6 +330,10 @@ class InstanceRebootFailure(Invalid):
     message = _("Failed to reboot instance") + ": %(reason)s"
 
 
+class InstanceTerminationFailure(Invalid):
+    message = _("Failed to terminate instance") + ": %(reason)s"
+
+
 class ServiceUnavailable(Invalid):
     message = _("Service is unavailable at this time.")
 
@@ -904,18 +908,6 @@ class ConfigNotFound(NotFound):
 
 class PasteAppNotFound(NotFound):
     message = _("Could not load paste app '%(name)s' from %(path)s")
-
-
-class VSANovaAccessParamNotFound(Invalid):
-    message = _("Nova access parameters were not specified.")
-
-
-class VirtualStorageArrayNotFound(NotFound):
-    message = _("Virtual Storage Array %(id)d could not be found.")
-
-
-class VirtualStorageArrayNotFoundByName(NotFound):
-    message = _("Virtual Storage Array %(name)s could not be found.")
 
 
 class CannotResizeToSameSize(NovaException):

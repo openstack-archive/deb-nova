@@ -39,6 +39,7 @@ Supports KVM, LXC, QEMU, UML, and XEN.
 
 """
 
+import errno
 import hashlib
 import functools
 import glob
@@ -50,6 +51,8 @@ import time
 import uuid
 
 from eventlet import greenthread
+from eventlet import tpool
+
 from xml.dom import minidom
 from xml.etree import ElementTree
 
@@ -154,6 +157,10 @@ libvirt_opts = [
                help='Number of seconds to wait for instance to shut down after'
                     ' soft reboot request is made. We fall back to hard reboot'
                     ' if instance does not shutdown within this window.'),
+    cfg.BoolOpt('libvirt_nonblocking',
+                default=False,
+                help='Use a separated OS thread pool to realize non-blocking'
+                     ' libvirt calls')
     ]
 
 FLAGS = flags.FLAGS
@@ -249,9 +256,16 @@ class LibvirtConnection(driver.ComputeDriver):
     def _get_connection(self):
         if not self._wrapped_conn or not self._test_connection():
             LOG.debug(_('Connecting to libvirt: %s'), self.uri)
-            self._wrapped_conn = self._connect(self.uri,
+            if not FLAGS.libvirt_nonblocking:
+                self._wrapped_conn = self._connect(self.uri,
                                                self.read_only)
+            else:
+                self._wrapped_conn = tpool.proxy_call(
+                    (libvirt.virDomain, libvirt.virConnect),
+                    self._connect, self.uri, self.read_only)
+
         return self._wrapped_conn
+
     _conn = property(_get_connection)
 
     def _test_connection(self):
@@ -406,8 +420,16 @@ class LibvirtConnection(driver.ComputeDriver):
         timer = utils.LoopingCall(_wait_for_destroy)
         timer.start(interval=0.5, now=True)
 
-        self.firewall_driver.unfilter_instance(instance,
-                                               network_info=network_info)
+        try:
+            self.firewall_driver.unfilter_instance(instance,
+                                                   network_info=network_info)
+        except libvirt.libvirtError as e:
+            errcode = e.get_error_code()
+            LOG.warning(_("Error from libvirt during unfilter. "
+                          "Code=%(errcode)s Error=%(e)s") %
+                        locals(), instance=instance)
+            reason = "Error unfiltering instance."
+            raise exception.InstanceTerminationFailure(reason=reason)
 
         # NOTE(vish): we disconnect from volumes regardless
         block_device_mapping = driver.block_device_info_get_mapping(
@@ -843,8 +865,6 @@ class LibvirtConnection(driver.ComputeDriver):
         for interface in interfaces:
             utils.execute('tee',
                           '/sys/class/net/%s/brport/hairpin_mode' % interface,
-                          '>',
-                          '/dev/null',
                           process_input='1',
                           run_as_root=True,
                           check_exit_code=[0, 1])
@@ -922,25 +942,27 @@ class LibvirtConnection(driver.ComputeDriver):
             console_types[console_type].append(console_node)
 
         # If the guest has a console logging to a file prefer to use that
-        for file_console in console_types.get('file'):
-            source_node = file_console.find('./source')
-            if source_node is None:
-                continue
-            path = source_node.get("path")
-            if not path:
-                continue
-            libvirt_utils.chown(path, os.getuid())
-            return libvirt_utils.load_file(path)
+        if console_types.get('file'):
+            for file_console in console_types.get('file'):
+                source_node = file_console.find('./source')
+                if source_node is None:
+                    continue
+                path = source_node.get("path")
+                if not path:
+                    continue
+                libvirt_utils.chown(path, os.getuid())
+                return libvirt_utils.load_file(path)
 
         # Try 'pty' types
-        for pty_console in console_types.get('pty'):
-            source_node = pty_console.find('./source')
-            if source_node is None:
-                continue
-            pty = source_node.get("path")
-            if not pty:
-                continue
-            break
+        if console_types.get('pty'):
+            for pty_console in console_types.get('pty'):
+                source_node = pty_console.find('./source')
+                if source_node is None:
+                    continue
+                pty = source_node.get("path")
+                if not pty:
+                    continue
+                break
         else:
             raise exception.Error(_("Guest does not have a console available"))
 
@@ -961,7 +983,7 @@ class LibvirtConnection(driver.ComputeDriver):
         def get_vnc_port_for_instance(instance_name):
             virt_dom = self._lookup_by_name(instance_name)
             xml = virt_dom.XMLDesc(0)
-            # TODO: use etree instead of minidom
+            # TODO(sleepsonthefloor): use etree instead of minidom
             dom = minidom.parseString(xml)
 
             for graphic in dom.getElementsByTagName('graphics'):
@@ -2112,6 +2134,10 @@ class LibvirtConnection(driver.ComputeDriver):
                           locals())
                 continue
 
+            # get the real disk size or
+            # raise a localized error if image is unavailable
+            dk_size = int(os.path.getsize(path))
+
             disk_type = driver_nodes[cnt].get('type')
             if disk_type == "qcow2":
                 out, err = utils.execute('qemu-img', 'info', path)
@@ -2121,13 +2147,9 @@ class LibvirtConnection(driver.ComputeDriver):
                     if i.strip().find('virtual size') >= 0]
                 virt_size = int(size[0])
 
-                # real disk size:
-                dk_size = int(os.path.getsize(path))
-
                 # backing file:(actual path:)
                 backing_file = libvirt_utils.get_disk_backing_file(path)
             else:
-                dk_size = int(os.path.getsize(path))
                 backing_file = ""
                 virt_size = 0
 
@@ -2155,11 +2177,18 @@ class LibvirtConnection(driver.ComputeDriver):
         instances_name = self.list_instances()
         instances_sz = 0
         for i_name in instances_name:
-            disk_infos = utils.loads(self.get_instance_disk_info(i_name))
-            for info in disk_infos:
-                i_vt_sz = int(info['virt_disk_size'])
-                i_dk_sz = int(info['disk_size'])
-                instances_sz += i_vt_sz - i_dk_sz
+            try:
+                disk_infos = utils.loads(self.get_instance_disk_info(i_name))
+                for info in disk_infos:
+                    i_vt_sz = int(info['virt_disk_size'])
+                    i_dk_sz = int(info['disk_size'])
+                    instances_sz += i_vt_sz - i_dk_sz
+            except OSError as e:
+                if e.errno == errno.ENOENT:
+                    LOG.error(_("Getting disk size of %(i_name)s: %(e)s") %
+                              locals())
+                else:
+                    raise
 
         # Disk available least size
         available_least_size = dk_sz_gb * (1024 ** 3) - instances_sz

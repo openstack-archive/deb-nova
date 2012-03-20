@@ -36,12 +36,14 @@ import socket
 import struct
 import sys
 import tempfile
+import threading
 import time
 import types
 import uuid
 import warnings
 from xml.sax import saxutils
 
+from eventlet import corolocal
 from eventlet import event
 from eventlet import greenthread
 from eventlet import semaphore
@@ -838,6 +840,33 @@ else:
     anyjson.force_implementation("nova.utils")
 
 
+class GreenLockFile(lockfile.FileLock):
+    """Implementation of lockfile that allows for a lock per greenthread.
+
+    Simply implements lockfile:LockBase init with an addiontall suffix
+    on the unique name of the greenthread identifier
+    """
+    def __init__(self, path, threaded=True):
+        self.path = path
+        self.lock_file = os.path.abspath(path) + ".lock"
+        self.hostname = socket.gethostname()
+        self.pid = os.getpid()
+        if threaded:
+            t = threading.current_thread()
+            # Thread objects in Python 2.4 and earlier do not have ident
+            # attrs.  Worm around that.
+            ident = getattr(t, "ident", hash(t))
+            gident = corolocal.get_ident()
+            self.tname = "-%x-%x" % (ident & 0xffffffff, gident & 0xffffffff)
+        else:
+            self.tname = ""
+        dirname = os.path.dirname(self.lock_file)
+        self.unique_name = os.path.join(dirname,
+                                        "%s%s.%s" % (self.hostname,
+                                                     self.tname,
+                                                     self.pid))
+
+
 _semaphores = {}
 
 
@@ -869,6 +898,19 @@ def synchronized(name, external=False):
     a method decorated with @synchronized('mylock', external=True), only one
     of them will execute at a time.
 
+    Important limitation: you can only have one external lock running per
+    thread at a time. For example the following will fail:
+
+        @utils.synchronized('testlock1', external=True)
+        def outer_lock():
+
+            @utils.synchronized('testlock2', external=True)
+            def inner_lock():
+                pass
+            inner_lock()
+
+        outer_lock()
+
     """
 
     def wrap(f):
@@ -893,7 +935,7 @@ def synchronized(name, external=False):
                               {'lock': name, 'method': f.__name__})
                     lock_file_path = os.path.join(FLAGS.lock_path,
                                                   'nova-%s' % name)
-                    lock = lockfile.FileLock(lock_file_path)
+                    lock = GreenLockFile(lock_file_path)
                     with lock:
                         LOG.debug(_('Got file lock "%(lock)s" for '
                                     'method "%(method)s"...') %
@@ -940,7 +982,7 @@ def cleanup_file_locks():
     #    reliably tell which sentinels refer to which lock in the
     #    lockfile implementation.
 
-    if  FLAGS.disable_process_locking:
+    if FLAGS.disable_process_locking:
         return
 
     hostname = socket.gethostname()
@@ -1266,7 +1308,7 @@ def save_and_reraise_exception():
     In some cases the exception context can be cleared, resulting in None
     being attempted to be reraised after an exception handler is run. This
     can happen when eventlet switches greenthreads or when running an
-    exception handler, code raises and catches and exception. In both
+    exception handler, code raises and catches an exception. In both
     cases the exception context will be cleared.
 
     To work around this, we save the exception state, run handler code, and
@@ -1567,7 +1609,13 @@ def service_is_up(service):
 
 def generate_mac_address():
     """Generate an Ethernet MAC address."""
-    mac = [0xfe, 0x16, 0x3e,
+    # NOTE(vish): We would prefer to use 0xfe here to ensure that linux
+    #             bridge mac addresses don't change, but it appears to
+    #             conflict with libvirt, so we use the next highest octet
+    #             that has the unicast and locally administered bits set
+    #             properly: 0xfa.
+    #             Discussion: https://bugs.launchpad.net/nova/+bug/921838
+    mac = [0xfa, 0x16, 0x3e,
            random.randint(0x00, 0x7f),
            random.randint(0x00, 0xff),
            random.randint(0x00, 0xff)]

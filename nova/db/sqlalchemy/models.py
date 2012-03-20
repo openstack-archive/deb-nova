@@ -278,7 +278,7 @@ class Instance(BASE, NovaBase):
     # EC2 disable_api_termination
     disable_terminate = Column(Boolean(), default=False, nullable=False)
 
-    # Openstack compute cell name
+    # OpenStack compute cell name
     cell_name = Column(String(255))
 
 
@@ -298,32 +298,6 @@ class InstanceInfoCache(BASE, NovaBase):
                             backref=backref('info_cache', uselist=False),
                             foreign_keys=instance_id,
                             primaryjoin=instance_id == Instance.uuid)
-
-
-class VirtualStorageArray(BASE, NovaBase):
-    """
-    Represents a virtual storage array supplying block storage to instances.
-    """
-    __tablename__ = 'virtual_storage_arrays'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    @property
-    def name(self):
-        return FLAGS.vsa_name_template % self.id
-
-    # User editable field for display in user-facing UIs
-    display_name = Column(String(255))
-    display_description = Column(String(255))
-
-    project_id = Column(String(255))
-    availability_zone = Column(String(255))
-
-    instance_type_id = Column(Integer, ForeignKey('instance_types.id'))
-    image_ref = Column(String(255))
-    vc_count = Column(Integer, default=0)   # number of requested VC instances
-    vol_count = Column(Integer, default=0)  # total number of BE volumes
-    status = Column(String(255))
 
 
 class InstanceActions(BASE, NovaBase):
@@ -356,13 +330,6 @@ class InstanceTypes(BASE, NovaBase):
                                'Instance.instance_type_id == '
                                'InstanceTypes.id, '
                                'InstanceTypes.deleted == False)')
-
-    vsas = relationship(VirtualStorageArray,
-                       backref=backref('vsa_instance_type', uselist=False),
-                       foreign_keys=id,
-                       primaryjoin='and_('
-                           'VirtualStorageArray.instance_type_id == '
-                           'InstanceTypes.id, InstanceTypes.deleted == False)')
 
 
 class Volume(BASE, NovaBase):
@@ -1047,7 +1014,6 @@ def register_models():
               SMFlavors,
               SMVolume,
               User,
-              VirtualStorageArray,
               Volume,
               VolumeMetadata,
               VolumeTypeExtraSpecs,

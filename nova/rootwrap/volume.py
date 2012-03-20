@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2011 Openstack, LLC.
+# Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -42,7 +42,4 @@ filterlist = [
     # nova/volume/driver.py: 'iscsiadm', '-m', 'discovery', '-t',...
     # nova/volume/driver.py: 'iscsiadm', '-m', 'node', '-T', ...
     filters.CommandFilter("/sbin/iscsiadm", "root"),
-
-    # nova/volume/driver.py:'/var/lib/zadara/bin/zadara_sncfg', *
-    # sudoers does not allow zadara_sncfg yet
     ]
