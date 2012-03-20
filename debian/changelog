@@ -1,11 +1,7 @@
-nova (2012.1~e4+git1953-g4e3c9ea-1) experimental; urgency=low
+nova (2012.1~rc1-1) unstable; urgency=low
 
   [ Ghe Rivero ]
   * Use nova-rootwrap instead of sudo
-
- -- Ghe Rivero <ghe@debian.org>  Thu, 08 Mar 2012 11:39:54 +0100
-
-nova (2012.1~e4-2) unstable; urgency=low
 
   [ Thomas Goirand ]
   * nova-xcp-network.init now has a Required-Start: xcp-networkd, as otherwise,
@@ -20,7 +16,7 @@ nova (2012.1~e4-2) unstable; urgency=low
   * Add logrotate entry for nova-dhcpbridge.log in nova-network
   * Add nova-cert package, providing the nova-cert daemon
 
- -- Julien Danjou <acid@debian.org>  Mon, 19 Mar 2012 14:27:26 +0100
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Tue, 20 Mar 2012 12:46:47 +0100
 
 nova (2012.1~e4-1) unstable; urgency=low
 
