@@ -57,7 +57,7 @@ Extension Query Response: XML::
     N/A
 
 Extension Query Response: JSON::
-
+    	
 
 Document Change History
 ~~~~~~~~~~~~~~~~~~~~~~~

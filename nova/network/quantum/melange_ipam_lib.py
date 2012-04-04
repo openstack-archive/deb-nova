@@ -158,7 +158,7 @@ class QuantumMelangeIPAMLib(object):
         for tid in tenant_ids:
             try:
                 self.m_conn.get_allocated_ips(net_id, vif_id, tid)
-            except KeyError:
+            except Exception:
                 continue
             ipam_tenant_id = tid
             break
@@ -218,6 +218,11 @@ class QuantumMelangeIPAMLib(object):
         ip_list = self.m_conn.get_allocated_ips(net_id, vif_id, tenant_id)
         return [ip['address'] for ip in ip_list
                 if netaddr.IPNetwork(ip['address']).version == ip_version]
+
+    def get_instance_ids_by_ip_address(self, context, address):
+        ips = self.m_conn.get_allocated_ips_by_address(address)
+        # TODO (aaron.lee) melange should be storing & returning instance_uuid!
+        return [ip.get('used_by_device') for ip in ips]
 
     def verify_subnet_exists(self, context, project_id, quantum_net_id):
         """Confirms that a subnet exists that is associated with the

@@ -5,7 +5,7 @@ About this Extension
 The Floating IP DNS extension provides an interface for managing DNS records associated with IP addresses
 allocated by the Floating Ips extension.  Requests are dispatched to a DNS driver selected at startup.
 
-To obtain current information the extensions available to you, issue an EXTENSION query on the OpenStack system where it is installed, such as http://mycloud.com/v1.1/tenant/extension.
+To obtain current information the extensions available to you, issue an EXTENSION query on the OpenStack system where it is installed, such as http://example.com/v1.1/tenant/extension.
 
 Extension Overview
 ~~~~~~~~~~~~~~~~~~

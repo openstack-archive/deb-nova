@@ -56,10 +56,10 @@ xenapi_vm_utils_opts = [
                help='Default OS type'),
     cfg.IntOpt('block_device_creation_timeout',
                default=10,
-               help='time to wait for a block device to be created'),
+               help='Time to wait for a block device to be created'),
     cfg.IntOpt('max_kernel_ramdisk_size',
                default=16 * 1024 * 1024,
-               help='maximum size in bytes of kernel or ramdisk images'),
+               help='Maximum size in bytes of kernel or ramdisk images'),
     cfg.StrOpt('sr_matching_filter',
                default='other-config:i18n-key=local-storage',
                help='Filter for finding the SR to be used to install guest '
@@ -74,7 +74,10 @@ xenapi_vm_utils_opts = [
                 help='Whether to use sparse_copy for copying data on a '
                      'resize down (False will use standard dd). This speeds '
                      'up resizes down considerably since large runs of zeros '
-                     'won\'t have to be rsynced')
+                     'won\'t have to be rsynced'),
+    cfg.IntOpt('xenapi_num_vbd_unplug_retries',
+               default=10,
+               help='Maximum number of retries to unplug VBD'),
     ]
 
 FLAGS = flags.FLAGS
@@ -140,13 +143,12 @@ class VMHelper(xenapi.HelperBase):
     @classmethod
     def create_vm(cls, session, instance, kernel, ramdisk,
                   use_pv_kernel=False):
-        """Create a VM record.  Returns a Deferred that gives the new
-        VM reference.
+        """Create a VM record.  Returns new VM reference.
         the use_pv_kernel flag indicates whether the guest is HVM or PV
 
         There are 3 scenarios:
 
-            1. Using paravirtualization,  kernel passed in
+            1. Using paravirtualization, kernel passed in
 
             2. Using paravirtualization, kernel within the image
 
@@ -247,13 +249,33 @@ class VMHelper(xenapi.HelperBase):
     @classmethod
     def unplug_vbd(cls, session, vbd_ref):
         """Unplug VBD from VM"""
-        try:
-            vbd_ref = session.call_xenapi('VBD.unplug', vbd_ref)
-        except cls.XenAPI.Failure, exc:
-            LOG.exception(exc)
-            if exc.details[0] != 'DEVICE_ALREADY_DETACHED':
-                raise volume_utils.StorageError(
-                        _('Unable to unplug VBD %s') % vbd_ref)
+        # Call VBD.unplug on the given VBD, with a retry if we get
+        # DEVICE_DETACH_REJECTED.  For reasons which we don't understand,
+        # we're seeing the device still in use, even when all processes
+        # using the device should be dead.
+        max_attempts = FLAGS.xenapi_num_vbd_unplug_retries + 1
+        for num_attempt in xrange(1, max_attempts + 1):
+            try:
+                session.call_xenapi('VBD.unplug', vbd_ref)
+                return
+            except cls.XenAPI.Failure, exc:
+                err = len(exc.details) > 0 and exc.details[0]
+                if err == 'DEVICE_ALREADY_DETACHED':
+                    LOG.info(_('VBD %s already detached'), vbd_ref)
+                    return
+                elif err == 'DEVICE_DETACH_REJECTED':
+                    LOG.info(_('VBD %(vbd_ref)s detach rejected, attempt'
+                               ' %(num_attempt)d/%(max_attempts)d'), locals())
+                else:
+                    LOG.exception(exc)
+                    raise volume_utils.StorageError(
+                            _('Unable to unplug VBD %s') % vbd_ref)
+
+            greenthread.sleep(1)
+
+        raise volume_utils.StorageError(
+                _('Reached maximum number of retries trying to unplug VBD %s')
+                % vbd_ref)
 
     @classmethod
     def destroy_vbd(cls, session, vbd_ref):
@@ -283,10 +305,10 @@ class VMHelper(xenapi.HelperBase):
         vbd_rec['qos_algorithm_params'] = {}
         vbd_rec['qos_supported_algorithms'] = []
         LOG.debug(_('Creating %(vbd_type)s-type VBD for VM %(vm_ref)s,'
-                ' VDI %(vdi_ref)s ... ') % locals())
+                    ' VDI %(vdi_ref)s ... '), locals())
         vbd_ref = session.call_xenapi('VBD.create', vbd_rec)
         LOG.debug(_('Created VBD %(vbd_ref)s for VM %(vm_ref)s,'
-                ' VDI %(vdi_ref)s.') % locals())
+                    ' VDI %(vdi_ref)s.'), locals())
         return vbd_ref
 
     @classmethod
@@ -314,8 +336,8 @@ class VMHelper(xenapi.HelperBase):
               'sm_config': {},
               'tags': []})
         LOG.debug(_('Created VDI %(vdi_ref)s (%(name_label)s,'
-                ' %(virtual_size)s, %(read_only)s) on %(sr_ref)s.')
-                % locals())
+                    ' %(virtual_size)s, %(read_only)s) on %(sr_ref)s.'),
+                  locals())
         return vdi_ref
 
     @classmethod
@@ -349,8 +371,8 @@ class VMHelper(xenapi.HelperBase):
             if vbd_rec['userdevice'] == '0':
                 vdi_rec = session.call_xenapi("VDI.get_record", vbd_rec['VDI'])
                 return vbd_rec['VDI'], vdi_rec
-        raise exception.Error(_("No primary VDI found for"
-                "%(vm_ref)s") % locals())
+        raise exception.Error(_("No primary VDI found for %(vm_ref)s") %
+                              locals())
 
     @classmethod
     def create_snapshot(cls, session, instance, vm_ref, label):
@@ -370,7 +392,7 @@ class VMHelper(xenapi.HelperBase):
         template_vdi_uuid = template_vdi_rec["uuid"]
 
         LOG.debug(_('Created snapshot %(template_vm_ref)s from'
-                ' VM %(vm_ref)s.') % locals())
+                    ' VM %(vm_ref)s.') % locals())
 
         parent_uuid, base_uuid = _wait_for_vhd_coalesce(
             session, instance, sr_ref, vm_vdi_ref, original_parent_uuid)
@@ -829,8 +851,7 @@ class VMHelper(xenapi.HelperBase):
         meta, image_file = glance_client.get_image(image_id)
         virtual_size = int(meta['size'])
         vdi_size = virtual_size
-        LOG.debug(_("Size for image %(image)s:" +
-                    "%(virtual_size)d") % locals())
+        LOG.debug(_("Size for image %(image)s: %(virtual_size)d"), locals())
         if image_type == ImageType.DISK:
             # Make room for MBR.
             vdi_size += MBR_SIZE_BYTES
@@ -1004,10 +1025,7 @@ class VMHelper(xenapi.HelperBase):
                     LOG.exception(exc)
                 else:
                     vdi_refs.append(vdi_ref)
-            if len(vdi_refs) > 0:
-                return vdi_refs
-            else:
-                return None
+        return vdi_refs
 
     @classmethod
     def preconfigure_instance(cls, session, instance, vdi_ref, network_info):
@@ -1181,7 +1199,7 @@ class VMHelper(xenapi.HelperBase):
                     LOG.debug(_("ISO: PBD %(pbd_ref)s disappeared") % locals())
                     continue
                 pbd_rec_host = pbd_rec['host']
-                LOG.debug(_("ISO: PBD matching, want %(pbd_rec)s, " +
+                LOG.debug(_("ISO: PBD matching, want %(pbd_rec)s, "
                             "have %(host)s") % locals())
                 if pbd_rec_host == host:
                     LOG.debug(_("ISO: SR with local PBD"))
@@ -1362,7 +1380,7 @@ def walk_vdi_chain(session, vdi_uuid):
 
 def _wait_for_vhd_coalesce(session, instance, sr_ref, vdi_ref,
                            original_parent_uuid):
-    """ Spin until the parent VHD is coalesced into its parent VHD
+    """Spin until the parent VHD is coalesced into its parent VHD
 
     Before coalesce:
         * original_parent_vhd
@@ -1477,7 +1495,7 @@ def vdi_attached_here(session, vdi_ref, read_only=False):
             yield dev
         finally:
             LOG.debug(_('Destroying VBD for VDI %s ... '), vdi_ref)
-            vbd_unplug_with_retry(session, vbd_ref)
+            VMHelper.unplug_vbd(session, vbd_ref)
     finally:
         try:
             VMHelper.destroy_vbd(session, vbd_ref)
@@ -1485,32 +1503,6 @@ def vdi_attached_here(session, vdi_ref, read_only=False):
             # destroy_vbd() will log error
             pass
         LOG.debug(_('Destroying VBD for VDI %s done.'), vdi_ref)
-
-
-def vbd_unplug_with_retry(session, vbd_ref):
-    """Call VBD.unplug on the given VBD, with a retry if we get
-    DEVICE_DETACH_REJECTED.  For reasons which I don't understand, we're
-    seeing the device still in use, even when all processes using the device
-    should be dead."""
-    while True:
-        try:
-            VMHelper.unplug_vbd(session, vbd_ref)
-            LOG.debug(_('VBD.unplug successful first time.'))
-            return
-        except VMHelper.XenAPI.Failure, e:
-            if (len(e.details) > 0 and
-                e.details[0] == 'DEVICE_DETACH_REJECTED'):
-                LOG.debug(_('VBD.unplug rejected: retrying...'))
-                greenthread.sleep(1)
-                LOG.debug(_('Not sleeping anymore!'))
-            elif (len(e.details) > 0 and
-                  e.details[0] == 'DEVICE_ALREADY_DETACHED'):
-                LOG.debug(_('VBD.unplug successful eventually.'))
-                return
-            else:
-                LOG.error(_('Ignoring XenAPI.Failure in VBD.unplug: %s'),
-                              e)
-                return
 
 
 def get_this_vm_uuid():

@@ -89,6 +89,15 @@ def authorize_user_context(context, user_id):
             raise exception.NotAuthorized()
 
 
+def authorize_quota_class_context(context, class_name):
+    """Ensures a request has permission to access the given quota class."""
+    if is_user_context(context):
+        if not context.quota_class:
+            raise exception.NotAuthorized()
+        elif context.quota_class != class_name:
+            raise exception.NotAuthorized()
+
+
 def require_admin_context(f):
     """Decorator to require admin request context.
 
@@ -2279,6 +2288,80 @@ def quota_destroy_all_by_project(context, project_id):
 ###################
 
 
+@require_context
+def quota_class_get(context, class_name, resource, session=None):
+    result = model_query(context, models.QuotaClass, session=session,
+                         read_deleted="no").\
+                     filter_by(class_name=class_name).\
+                     filter_by(resource=resource).\
+                     first()
+
+    if not result:
+        raise exception.QuotaClassNotFound(class_name=class_name)
+
+    return result
+
+
+@require_context
+def quota_class_get_all_by_name(context, class_name):
+    authorize_quota_class_context(context, class_name)
+
+    rows = model_query(context, models.QuotaClass, read_deleted="no").\
+                   filter_by(class_name=class_name).\
+                   all()
+
+    result = {'class_name': class_name}
+    for row in rows:
+        result[row.resource] = row.hard_limit
+
+    return result
+
+
+@require_admin_context
+def quota_class_create(context, class_name, resource, limit):
+    quota_class_ref = models.QuotaClass()
+    quota_class_ref.class_name = class_name
+    quota_class_ref.resource = resource
+    quota_class_ref.hard_limit = limit
+    quota_class_ref.save()
+    return quota_class_ref
+
+
+@require_admin_context
+def quota_class_update(context, class_name, resource, limit):
+    session = get_session()
+    with session.begin():
+        quota_class_ref = quota_class_get(context, class_name, resource,
+                                          session=session)
+        quota_class_ref.hard_limit = limit
+        quota_class_ref.save(session=session)
+
+
+@require_admin_context
+def quota_class_destroy(context, class_name, resource):
+    session = get_session()
+    with session.begin():
+        quota_class_ref = quota_class_get(context, class_name, resource,
+                                          session=session)
+        quota_class_ref.delete(session=session)
+
+
+@require_admin_context
+def quota_class_destroy_all_by_name(context, class_name):
+    session = get_session()
+    with session.begin():
+        quota_classes = model_query(context, models.QuotaClass,
+                                    session=session, read_deleted="no").\
+                                filter_by(class_name=class_name).\
+                                all()
+
+        for quota_class_ref in quota_classes:
+            quota_class_ref.delete(session=session)
+
+
+###################
+
+
 @require_admin_context
 def volume_allocate_iscsi_target(context, volume_id, host):
     session = get_session()
@@ -4079,10 +4162,8 @@ def sm_volume_get_all(context):
 ################
 
 
-def _aggregate_get_query(context, model_class, id_field, id,
-                         session=None, read_deleted='yes'):
-    return model_query(context, model_class, session=session,
-                       read_deleted=read_deleted).filter(id_field == id)
+def _aggregate_get_query(context, model_class, id_field, id, **kwargs):
+    return model_query(context, model_class, **kwargs).filter(id_field == id)
 
 
 @require_admin_context
@@ -4112,11 +4193,12 @@ def aggregate_create(context, values, metadata=None):
 
 
 @require_admin_context
-def aggregate_get(context, aggregate_id, read_deleted='no'):
+def aggregate_get(context, aggregate_id, **kwargs):
     aggregate = _aggregate_get_query(context,
                                      models.Aggregate,
-                                     models.Aggregate.id, aggregate_id,
-                                     read_deleted=read_deleted).first()
+                                     models.Aggregate.id,
+                                     aggregate_id,
+                                     **kwargs).first()
 
     if not aggregate:
         raise exception.AggregateNotFound(aggregate_id=aggregate_id)
@@ -4125,17 +4207,18 @@ def aggregate_get(context, aggregate_id, read_deleted='no'):
 
 
 @require_admin_context
-def aggregate_get_by_host(context, host, read_deleted='no'):
+def aggregate_get_by_host(context, host, **kwargs):
     aggregate_host = _aggregate_get_query(context,
                                           models.AggregateHost,
                                           models.AggregateHost.host,
                                           host,
-                                          read_deleted='no').first()
+                                          **kwargs).first()
 
     if not aggregate_host:
         raise exception.AggregateHostNotFound(host=host)
 
-    return aggregate_get(context, aggregate_host.aggregate_id, read_deleted)
+    return aggregate_get(context, aggregate_host.aggregate_id,
+                         **kwargs)
 
 
 @require_admin_context
@@ -4178,19 +4261,20 @@ def aggregate_delete(context, aggregate_id):
 
 
 @require_admin_context
-def aggregate_get_all(context, read_deleted='yes'):
+def aggregate_get_all(context, **kwargs):
+    if 'read_deleted' not in kwargs:
+        kwargs['read_deleted'] = 'yes'
     return model_query(context,
                        models.Aggregate,
-                       read_deleted=read_deleted).all()
+                       **kwargs).all()
 
 
 @require_admin_context
 @require_aggregate_exists
-def aggregate_metadata_get(context, aggregate_id, read_deleted='no'):
+def aggregate_metadata_get(context, aggregate_id, **kwargs):
     rows = model_query(context,
                        models.AggregateMetadata,
-                       read_deleted=read_deleted).\
-                       filter_by(aggregate_id=aggregate_id).all()
+                       **kwargs).filter_by(aggregate_id=aggregate_id).all()
 
     return dict([(r['key'], r['value']) for r in rows])
 
@@ -4215,12 +4299,12 @@ def aggregate_metadata_delete(context, aggregate_id, key):
 @require_admin_context
 @require_aggregate_exists
 def aggregate_metadata_get_item(context, aggregate_id, key,
-                                session=None, read_deleted='yes'):
+                                session=None):
     result = _aggregate_get_query(context,
                                   models.AggregateMetadata,
                                   models.AggregateMetadata.aggregate_id,
                                   aggregate_id, session=session,
-                                  read_deleted=read_deleted).\
+                                  read_deleted='yes').\
                                   filter_by(key=key).first()
 
     if not result:
@@ -4265,11 +4349,12 @@ def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False):
 
 @require_admin_context
 @require_aggregate_exists
-def aggregate_host_get_all(context, aggregate_id, read_deleted='yes'):
+def aggregate_host_get_all(context, aggregate_id, **kwargs):
+    if 'read_deleted' not in kwargs:
+        kwargs['read_deleted'] = 'yes'
     rows = model_query(context,
                        models.AggregateHost,
-                       read_deleted=read_deleted).\
-                       filter_by(aggregate_id=aggregate_id).all()
+                       **kwargs).filter_by(aggregate_id=aggregate_id).all()
 
     return [r.host for r in rows]
 

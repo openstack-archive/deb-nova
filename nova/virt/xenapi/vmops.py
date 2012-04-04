@@ -32,6 +32,8 @@ from eventlet import greenthread
 
 from nova.compute import api as compute
 from nova.compute import power_state
+from nova.compute import task_states
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import db
 from nova import exception
@@ -265,17 +267,17 @@ class VMOps(object):
             vdis = self._create_disks(context, instance, image_meta)
 
             def undo_create_disks():
+                vdi_refs = []
                 for vdi in vdis:
-                    vdi_uuid = vdi['vdi_uuid']
                     try:
-                        vdi_ref = self._session.call_xenapi('VDI.get_by_uuid',
-                                vdi_uuid)
-                        LOG.debug(_('Removing VDI %(vdi_ref)s'
-                                    '(uuid:%(vdi_uuid)s)'), locals())
-                        VMHelper.destroy_vdi(self._session, vdi_ref)
+                        vdi_ref = self._session.call_xenapi(
+                                'VDI.get_by_uuid', vdi['vdi_uuid'])
                     except self.XenAPI.Failure:
-                        # VDI has already been deleted
-                        LOG.debug(_("Skipping VDI destroy for %s"), vdi_uuid)
+                        continue
+
+                    vdi_refs.append(vdi_ref)
+
+                self._safe_destroy_vdis(vdi_refs)
 
             undo_mgr.undo_with(undo_create_disks)
             return vdis
@@ -1058,8 +1060,11 @@ class VMOps(object):
         except self.XenAPI.Failure, exc:
             LOG.exception(exc)
 
-    def _find_rescue_vbd_ref(self, vm_ref, rescue_vm_ref):
-        """Find and return the rescue VM's vbd_ref."""
+    def _find_root_vdi_ref(self, vm_ref):
+        """Find and return the root vdi ref for a VM."""
+        if not vm_ref:
+            return None
+
         vbd_refs = self._session.call_xenapi("VM.get_VBDs", vm_ref)
 
         if len(vbd_refs) == 0:
@@ -1072,48 +1077,15 @@ class VMOps(object):
             # with the root fs coming second
             vbd_ref = vbd_refs[1]
 
-        vdi_ref = self._session.call_xenapi("VBD.get_record", vbd_ref)["VDI"]
+        return self._session.call_xenapi("VBD.get_record", vbd_ref)["VDI"]
 
-        return VMHelper.create_vbd(self._session, rescue_vm_ref, vdi_ref,
-                                   1, bootable=False)
-
-    def _shutdown_rescue(self, rescue_vm_ref):
-        """Shutdown a rescue instance."""
-        self._session.call_xenapi("VM.hard_shutdown", rescue_vm_ref)
-
-    def _destroy_vdis(self, instance, vm_ref):
-        """Destroys all VDIs associated with a VM."""
-        instance_uuid = instance['uuid']
-        LOG.debug(_("Destroying VDIs for Instance %(instance_uuid)s")
-                  % locals())
-        vdi_refs = VMHelper.lookup_vm_vdis(self._session, vm_ref)
-
-        if not vdi_refs:
-            return
-
+    def _safe_destroy_vdis(self, vdi_refs):
+        """Destroys the requested VDIs, logging any StorageError exceptions."""
         for vdi_ref in vdi_refs:
             try:
                 VMHelper.destroy_vdi(self._session, vdi_ref)
             except volume_utils.StorageError as exc:
                 LOG.error(exc)
-
-    def _destroy_rescue_vdis(self, rescue_vm_ref):
-        """Destroys all VDIs associated with a rescued VM."""
-        vdi_refs = VMHelper.lookup_vm_vdis(self._session, rescue_vm_ref)
-        for vdi_ref in vdi_refs:
-            try:
-                VMHelper.destroy_vdi(self._session, vdi_ref)
-            except volume_utils.StorageError as exc:
-                LOG.error(exc)
-
-    def _destroy_rescue_vbds(self, rescue_vm_ref):
-        """Destroys all VBDs tied to a rescue VM."""
-        vbd_refs = self._session.call_xenapi("VM.get_VBDs", rescue_vm_ref)
-        for vbd_ref in vbd_refs:
-            vbd_rec = self._session.call_xenapi("VBD.get_record", vbd_ref)
-            if vbd_rec.get("userdevice", None) == "1":  # VBD is always 1
-                VMHelper.unplug_vbd(self._session, vbd_ref)
-                VMHelper.destroy_vbd(self._session, vbd_ref)
 
     def _destroy_kernel_ramdisk_plugin_call(self, kernel, ramdisk):
         args = {}
@@ -1165,12 +1137,21 @@ class VMOps(object):
 
         LOG.debug(_("Instance %(instance_uuid)s VM destroyed") % locals())
 
-    def _destroy_rescue_instance(self, rescue_vm_ref):
+    def _destroy_rescue_instance(self, rescue_vm_ref, original_vm_ref):
         """Destroy a rescue instance."""
-        self._destroy_rescue_vbds(rescue_vm_ref)
-        self._shutdown_rescue(rescue_vm_ref)
-        self._destroy_rescue_vdis(rescue_vm_ref)
+        # Shutdown Rescue VM
+        vm_rec = self._session.call_xenapi("VM.get_record", rescue_vm_ref)
+        state = VMHelper.compile_info(vm_rec)['state']
+        if state != power_state.SHUTDOWN:
+            self._session.call_xenapi("VM.hard_shutdown", rescue_vm_ref)
 
+        # Destroy Rescue VDIs
+        vdi_refs = VMHelper.lookup_vm_vdis(self._session, rescue_vm_ref)
+        root_vdi_ref = self._find_root_vdi_ref(original_vm_ref)
+        vdi_refs = [vdi_ref for vdi_ref in vdi_refs if vdi_ref != root_vdi_ref]
+        self._safe_destroy_vdis(vdi_refs)
+
+        # Destroy Rescue VM
         self._session.call_xenapi("VM.destroy", rescue_vm_ref)
 
     def destroy(self, instance, network_info):
@@ -1183,12 +1164,13 @@ class VMOps(object):
         instance_uuid = instance['uuid']
         LOG.info(_("Destroying VM for Instance %(instance_uuid)s") % locals())
 
+        vm_ref = VMHelper.lookup(self._session, instance.name)
+
         rescue_vm_ref = VMHelper.lookup(self._session,
                                         "%s-rescue" % instance.name)
         if rescue_vm_ref:
-            self._destroy_rescue_instance(rescue_vm_ref)
+            self._destroy_rescue_instance(rescue_vm_ref, vm_ref)
 
-        vm_ref = VMHelper.lookup(self._session, instance.name)
         return self._destroy(instance, vm_ref, network_info, shutdown=True)
 
     def _destroy(self, instance, vm_ref, network_info=None, shutdown=True,
@@ -1208,7 +1190,10 @@ class VMOps(object):
         if shutdown:
             self._shutdown(instance, vm_ref)
 
-        self._destroy_vdis(instance, vm_ref)
+        # Destroy VDIs
+        vdi_refs = VMHelper.lookup_vm_vdis(self._session, vm_ref)
+        self._safe_destroy_vdis(vdi_refs)
+
         if destroy_kernel_ramdisk:
             self._destroy_kernel_ramdisk(instance, vm_ref)
 
@@ -1260,8 +1245,10 @@ class VMOps(object):
         instance._rescue = True
         self.spawn_rescue(context, instance, image_meta, network_info)
         rescue_vm_ref = VMHelper.lookup(self._session, instance.name)
-        rescue_vbd_ref = self._find_rescue_vbd_ref(vm_ref, rescue_vm_ref)
+        vdi_ref = self._find_root_vdi_ref(vm_ref)
 
+        rescue_vbd_ref = VMHelper.create_vbd(self._session, rescue_vm_ref,
+                                             vdi_ref, 1, bootable=False)
         self._session.call_xenapi('VBD.plug', rescue_vbd_ref)
 
     def unrescue(self, instance):
@@ -1281,7 +1268,7 @@ class VMOps(object):
         original_vm_ref = VMHelper.lookup(self._session, instance.name)
         instance._rescue = False
 
-        self._destroy_rescue_instance(rescue_vm_ref)
+        self._destroy_rescue_instance(rescue_vm_ref, original_vm_ref)
         self._release_bootlock(original_vm_ref)
         self._start(instance, original_vm_ref)
 
@@ -1360,10 +1347,10 @@ class VMOps(object):
         for vm in rescue_vms:
             rescue_vm_ref = vm["vm_ref"]
 
-            self._destroy_rescue_instance(rescue_vm_ref)
-
             original_name = vm["name"].split("-rescue", 1)[0]
             original_vm_ref = VMHelper.lookup(self._session, original_name)
+
+            self._destroy_rescue_instance(rescue_vm_ref, original_vm_ref)
 
             self._release_bootlock(original_vm_ref)
             self._session.call_xenapi("VM.start", original_vm_ref, False,
@@ -1373,36 +1360,59 @@ class VMOps(object):
         """Poll for unconfirmed resizes.
 
         Look for any unconfirmed resizes that are older than
-        `resize_confirm_window` and automatically confirm them.
+        `resize_confirm_window` and automatically confirm them.  Check
+        all migrations despite exceptions when trying to confirm and
+        yield to other greenthreads on each iteration.
         """
         ctxt = nova_context.get_admin_context()
         migrations = db.migration_get_all_unconfirmed(ctxt,
             resize_confirm_window)
 
         migrations_info = dict(migration_count=len(migrations),
-                confirm_window=FLAGS.resize_confirm_window)
+                confirm_window=resize_confirm_window)
 
         if migrations_info["migration_count"] > 0:
             LOG.info(_("Found %(migration_count)d unconfirmed migrations "
                     "older than %(confirm_window)d seconds") % migrations_info)
 
+        def _set_migration_to_error(migration_id, reason):
+            msg = _("Setting migration %(migration_id)s to error: "
+                   "%(reason)s") % locals()
+            LOG.warn(msg)
+            db.migration_update(
+                    ctxt, migration_id, {'status': 'error'})
+
         for migration in migrations:
-            LOG.info(_("Automatically confirming migration %d"),
-                     migration['id'])
+            # NOTE(comstud): Yield to other greenthreads.  Putting this
+            # at the top so we make sure to do it on each iteration.
+            greenthread.sleep(0)
+            migration_id = migration['id']
+            instance_uuid = migration['instance_uuid']
+            msg = _("Automatically confirming migration %(migration_id)s "
+                    "for instance %(instance_uuid)s")
+            LOG.info(msg % locals())
             try:
-                instance = self.compute_api.get(ctxt, migration.instance_uuid)
+                instance = db.instance_get_by_uuid(ctxt, instance_uuid)
             except exception.InstanceNotFound:
-                LOG.warn(_("Instance for migration %d not found, skipping"),
-                         migration.id)
-
-                # NOTE(sirp): setting to error so we don't keep trying to auto
-                # confirm this resize
-                db.migration_update(
-                    ctxt, migration['id'], {'status': 'error'})
-
+                reason = _("Instance %(instance_uuid)s not found")
+                _set_migration_to_error(migration_id, reason % locals())
                 continue
-            else:
+            if instance['vm_state'] == vm_states.ERROR:
+                reason = _("Instance %(instance_uuid)s in ERROR state")
+                _set_migration_to_error(migration_id, reason % locals())
+                continue
+            if instance['task_state'] != task_states.RESIZE_VERIFY:
+                task_state = instance['task_state']
+                reason = _("Instance %(instance_uuid)s in %(task_state)s "
+                        "task_state, not RESIZE_VERIFY.")
+                _set_migration_to_error(migration_id, reason % locals())
+                continue
+            try:
                 self.compute_api.confirm_resize(ctxt, instance)
+            except Exception, e:
+                msg = _("Error auto-confirming resize for instance "
+                        "%(instance_uuid)s: %(e)s.  Will retry later.")
+                LOG.error(msg % locals())
 
     def get_info(self, instance):
         """Return data about VM instance."""

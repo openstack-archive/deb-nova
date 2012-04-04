@@ -42,6 +42,7 @@ from nova.compute import vm_states
 from nova.virt import images
 from nova.virt import driver
 from nova.virt import firewall as base_firewall
+from nova.virt.libvirt import config
 from nova.virt.libvirt import connection
 from nova.virt.libvirt import firewall
 from nova.virt.libvirt import volume
@@ -157,8 +158,8 @@ class LibvirtVolumeTestCase(test.TestCase):
                'provider_location': '%s,fake %s' % (location, iqn)}
         connection_info = vol_driver.initialize_connection(vol, self.connr)
         mount_device = "vde"
-        xml = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = ElementTree.fromstring(xml)
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
         dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
         self.assertEqual(tree.get('type'), 'block')
         self.assertEqual(tree.find('./source').get('dev'), dev_str)
@@ -196,8 +197,8 @@ class LibvirtVolumeTestCase(test.TestCase):
                'provider_location': '%s,fake %s' % (location, iqn)}
         connection_info = vol_driver.initialize_connection(vol, self.connr)
         mount_device = "vde"
-        xml = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = ElementTree.fromstring(xml)
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
         dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
         self.assertEqual(tree.get('type'), 'block')
         self.assertEqual(tree.find('./source').get('dev'), dev_str)
@@ -219,8 +220,8 @@ class LibvirtVolumeTestCase(test.TestCase):
         vol = {'id': 1, 'name': name}
         connection_info = vol_driver.initialize_connection(vol, self.connr)
         mount_device = "vde"
-        xml = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = ElementTree.fromstring(xml)
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
         self.assertEqual(tree.get('type'), 'network')
         self.assertEqual(tree.find('./source').get('protocol'), 'sheepdog')
         self.assertEqual(tree.find('./source').get('name'), name)
@@ -234,12 +235,65 @@ class LibvirtVolumeTestCase(test.TestCase):
         vol = {'id': 1, 'name': name}
         connection_info = vol_driver.initialize_connection(vol, self.connr)
         mount_device = "vde"
-        xml = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = ElementTree.fromstring(xml)
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
         self.assertEqual(tree.get('type'), 'network')
         self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
         rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
         self.assertEqual(tree.find('./source').get('name'), rbd_name)
+        self.assertEqual(tree.find('./source/auth'), None)
+        libvirt_driver.disconnect_volume(connection_info, mount_device)
+        connection_info = vol_driver.terminate_connection(vol, self.connr)
+
+    def test_libvirt_rbd_driver_auth_enabled(self):
+        vol_driver = volume_driver.RBDDriver()
+        libvirt_driver = volume.LibvirtNetVolumeDriver(self.fake_conn)
+        name = 'volume-00000001'
+        vol = {'id': 1, 'name': name}
+        connection_info = vol_driver.initialize_connection(vol, self.connr)
+        uuid = '875a8070-d0b9-4949-8b31-104d125c9a64'
+        user = 'foo'
+        secret_type = 'ceph'
+        connection_info['data']['auth_enabled'] = True
+        connection_info['data']['auth_username'] = user
+        connection_info['data']['secret_type'] = secret_type
+        connection_info['data']['secret_uuid'] = uuid
+
+        mount_device = "vde"
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
+        self.assertEqual(tree.get('type'), 'network')
+        self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
+        rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
+        self.assertEqual(tree.find('./source').get('name'), rbd_name)
+        self.assertEqual(tree.find('./auth').get('username'), user)
+        self.assertEqual(tree.find('./auth/secret').get('type'), secret_type)
+        self.assertEqual(tree.find('./auth/secret').get('uuid'), uuid)
+        libvirt_driver.disconnect_volume(connection_info, mount_device)
+        connection_info = vol_driver.terminate_connection(vol, self.connr)
+
+    def test_libvirt_rbd_driver_auth_disabled(self):
+        vol_driver = volume_driver.RBDDriver()
+        libvirt_driver = volume.LibvirtNetVolumeDriver(self.fake_conn)
+        name = 'volume-00000001'
+        vol = {'id': 1, 'name': name}
+        connection_info = vol_driver.initialize_connection(vol, self.connr)
+        uuid = '875a8070-d0b9-4949-8b31-104d125c9a64'
+        user = 'foo'
+        secret_type = 'ceph'
+        connection_info['data']['auth_enabled'] = False
+        connection_info['data']['auth_username'] = user
+        connection_info['data']['secret_type'] = secret_type
+        connection_info['data']['secret_uuid'] = uuid
+
+        mount_device = "vde"
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
+        self.assertEqual(tree.get('type'), 'network')
+        self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
+        rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
+        self.assertEqual(tree.find('./source').get('name'), rbd_name)
+        self.assertEqual(tree.find('./auth'), None)
         libvirt_driver.disconnect_volume(connection_info, mount_device)
         connection_info = vol_driver.terminate_connection(vol, self.connr)
 
@@ -256,8 +310,8 @@ class LibvirtVolumeTestCase(test.TestCase):
                'provider_location': '%s,fake %s' % (location, iqn)}
         connection_info = vol_driver.initialize_connection(vol, self.connr)
         mount_device = "vde"
-        xml = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = ElementTree.fromstring(xml)
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
         dev_str = '/dev/disk/by-path/ip-%s-iscsi-%s-lun-0' % (location, iqn)
         self.assertEqual(tree.get('type'), 'block')
         self.assertEqual(tree.find('./source').get('dev'), dev_str)
@@ -436,19 +490,86 @@ class LibvirtConnTestCase(test.TestCase):
         result = conn.get_volume_connector(volume)
         self.assertDictMatch(expected, result)
 
-    def test_preparing_xml_info(self):
+    def test_get_guest_config(self):
         conn = connection.LibvirtConnection(True)
         instance_ref = db.instance_create(self.context, self.test_instance)
 
-        result = conn._prepare_xml_info(instance_ref,
-                                        _fake_network_info(self.stubs, 1),
-                                        None, False)
-        self.assertTrue(len(result['nics']) == 1)
+        cfg = conn.get_guest_config(instance_ref,
+                                    _fake_network_info(self.stubs, 1),
+                                    None, False)
+        self.assertEquals(cfg.acpi, True)
+        self.assertEquals(cfg.memory, 1024 * 1024 * 2)
+        self.assertEquals(cfg.vcpus, 1)
+        self.assertEquals(cfg.os_type, "hvm")
+        self.assertEquals(cfg.os_boot_dev, "hd")
+        self.assertEquals(cfg.os_root, None)
+        self.assertEquals(len(cfg.devices), 7)
+        self.assertEquals(type(cfg.devices[0]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(type(cfg.devices[1]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(type(cfg.devices[2]),
+                          config.LibvirtConfigGuestInterface)
+        self.assertEquals(type(cfg.devices[3]),
+                          config.LibvirtConfigGuestSerial)
+        self.assertEquals(type(cfg.devices[4]),
+                          config.LibvirtConfigGuestSerial)
+        self.assertEquals(type(cfg.devices[5]),
+                          config.LibvirtConfigGuestInput)
+        self.assertEquals(type(cfg.devices[6]),
+                          config.LibvirtConfigGuestGraphics)
 
-        result = conn._prepare_xml_info(instance_ref,
-                                        _fake_network_info(self.stubs, 2),
-                                        None, False)
-        self.assertTrue(len(result['nics']) == 2)
+    def test_get_guest_config_with_two_nics(self):
+        conn = connection.LibvirtConnection(True)
+        instance_ref = db.instance_create(self.context, self.test_instance)
+
+        cfg = conn.get_guest_config(instance_ref,
+                                    _fake_network_info(self.stubs, 2),
+                                    None, False)
+        self.assertEquals(cfg.acpi, True)
+        self.assertEquals(cfg.memory, 1024 * 1024 * 2)
+        self.assertEquals(cfg.vcpus, 1)
+        self.assertEquals(cfg.os_type, "hvm")
+        self.assertEquals(cfg.os_boot_dev, "hd")
+        self.assertEquals(cfg.os_root, None)
+        self.assertEquals(len(cfg.devices), 8)
+        self.assertEquals(type(cfg.devices[0]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(type(cfg.devices[1]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(type(cfg.devices[2]),
+                          config.LibvirtConfigGuestInterface)
+        self.assertEquals(type(cfg.devices[3]),
+                          config.LibvirtConfigGuestInterface)
+        self.assertEquals(type(cfg.devices[4]),
+                          config.LibvirtConfigGuestSerial)
+        self.assertEquals(type(cfg.devices[5]),
+                          config.LibvirtConfigGuestSerial)
+        self.assertEquals(type(cfg.devices[6]),
+                          config.LibvirtConfigGuestInput)
+        self.assertEquals(type(cfg.devices[7]),
+                          config.LibvirtConfigGuestGraphics)
+
+    def test_get_guest_config_with_root_device_name(self):
+        self.flags(libvirt_type='uml')
+        conn = connection.LibvirtConnection(True)
+        instance_ref = db.instance_create(self.context, self.test_instance)
+
+        cfg = conn.get_guest_config(instance_ref, [], None, False,
+                                    {'root_device_name': 'dev/vdb'})
+        self.assertEquals(cfg.acpi, False)
+        self.assertEquals(cfg.memory, 1024 * 1024 * 2)
+        self.assertEquals(cfg.vcpus, 1)
+        self.assertEquals(cfg.os_type, "uml")
+        self.assertEquals(cfg.os_boot_dev, None)
+        self.assertEquals(cfg.os_root, 'dev/vdb')
+        self.assertEquals(len(cfg.devices), 3)
+        self.assertEquals(type(cfg.devices[0]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(type(cfg.devices[1]),
+                          config.LibvirtConfigGuestDisk)
+        self.assertEquals(type(cfg.devices[2]),
+                          config.LibvirtConfigGuestConsole)
 
     def test_xml_and_uri_no_ramdisk_no_kernel(self):
         instance_data = dict(self.test_instance)
@@ -847,6 +968,12 @@ class LibvirtConnTestCase(test.TestCase):
             return os_open(path, flags, *args, **kwargs)
 
         self.stubs.Set(os, 'open', os_open_stub)
+
+        def connection_supports_direct_io_stub(*args, **kwargs):
+            return directio_supported
+
+        self.stubs.Set(connection.LibvirtConnection,
+            '_supports_direct_io', connection_supports_direct_io_stub)
 
         user_context = context.RequestContext(self.user_id, self.project_id)
         instance_ref = db.instance_create(user_context, self.test_instance)
