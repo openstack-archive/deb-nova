@@ -15,6 +15,7 @@
 #    under the License.
 
 import copy
+import errno
 import eventlet
 import mox
 import os
@@ -711,6 +712,40 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEquals(snapshot['status'], 'active')
         self.assertEquals(snapshot['name'], snapshot_name)
 
+    @test.skip_if(missing_libvirt(), "Test requires libvirt")
+    def test_snapshot_no_original_image(self):
+        self.flags(image_service='nova.image.fake.FakeImageService')
+
+        # Start test
+        image_service = utils.import_object(FLAGS.image_service)
+
+        # Assign a non-existent image
+        test_instance = copy.deepcopy(self.test_instance)
+        test_instance["image_ref"] = '661122aa-1234-dede-fefe-babababababa'
+
+        instance_ref = db.instance_create(self.context, test_instance)
+        properties = {'instance_id': instance_ref['id'],
+                      'user_id': str(self.context.user_id)}
+        snapshot_name = 'test-snap'
+        sent_meta = {'name': snapshot_name, 'is_public': False,
+                     'status': 'creating', 'properties': properties}
+        recv_meta = image_service.create(context, sent_meta)
+
+        self.mox.StubOutWithMock(connection.LibvirtConnection, '_conn')
+        connection.LibvirtConnection._conn.lookupByName = self.fake_lookup
+        self.mox.StubOutWithMock(connection.utils, 'execute')
+        connection.utils.execute = self.fake_execute
+
+        self.mox.ReplayAll()
+
+        conn = connection.LibvirtConnection(False)
+        conn.snapshot(self.context, instance_ref, recv_meta['id'])
+
+        snapshot = image_service.show(context, recv_meta['id'])
+        self.assertEquals(snapshot['properties']['image_state'], 'available')
+        self.assertEquals(snapshot['status'], 'active')
+        self.assertEquals(snapshot['name'], snapshot_name)
+
     def test_attach_invalid_volume_type(self):
         self.create_fake_libvirt_mock()
         connection.LibvirtConnection._conn.lookupByName = self.fake_lookup
@@ -800,6 +835,19 @@ class LibvirtConnTestCase(test.TestCase):
                                  (check(tree), expected_result, i))
 
     def _check_xml_and_disk_driver(self, image_meta):
+        os_open = os.open
+        directio_supported = True
+
+        def os_open_stub(path, flags, *args, **kwargs):
+            if flags & os.O_DIRECT:
+                if not directio_supported:
+                    raise OSError(errno.EINVAL,
+                                  '%s: %s' % (os.strerror(errno.EINVAL), path))
+                flags &= ~os.O_DIRECT
+            return os_open(path, flags, *args, **kwargs)
+
+        self.stubs.Set(os, 'open', os_open_stub)
+
         user_context = context.RequestContext(self.user_id, self.project_id)
         instance_ref = db.instance_create(user_context, self.test_instance)
         network_info = _fake_network_info(self.stubs, 1)
@@ -811,6 +859,18 @@ class LibvirtConnTestCase(test.TestCase):
         disks = tree.findall('./devices/disk/driver')
         for disk in disks:
             self.assertEqual(disk.get("cache"), "none")
+
+        directio_supported = False
+
+        # The O_DIRECT availability is cached on first use in
+        # LibvirtConnection, hence we re-create it here
+        xml = connection.LibvirtConnection(True).to_xml(instance_ref,
+                                                        network_info,
+                                                        image_meta)
+        tree = ElementTree.fromstring(xml)
+        disks = tree.findall('./devices/disk/driver')
+        for disk in disks:
+            self.assertEqual(disk.get("cache"), "writethrough")
 
     def _check_xml_and_disk_bus(self, image_meta, device_type, bus):
         user_context = context.RequestContext(self.user_id, self.project_id)
@@ -1304,6 +1364,22 @@ class LibvirtConnTestCase(test.TestCase):
         instance = {"name": "instancename", "id": "instanceid",
                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
         conn.destroy(instance, [])
+
+    def test_available_least_handles_missing(self):
+        """Ensure destroy calls managedSaveRemove for saved instance"""
+        conn = connection.LibvirtConnection(False)
+
+        def list_instances():
+            return ['fake']
+        self.stubs.Set(conn, 'list_instances', list_instances)
+
+        def get_info(instance_name):
+            raise exception.InstanceNotFound()
+        self.stubs.Set(conn, 'get_instance_disk_info', get_info)
+
+        result = conn.get_disk_available_least()
+        space = fake_libvirt_utils.get_fs_info(FLAGS.instances_path)['free']
+        self.assertEqual(result, space / 1024 ** 3)
 
 
 class HostStateTestCase(test.TestCase):

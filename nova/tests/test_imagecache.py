@@ -77,6 +77,7 @@ class ImageCacheManagerTestCase(test.TestCase):
                    'e97222e91fc4241f49a7f520d1dcf446751129b3',
                    '17d1b00b81642842e514494a78e804e9a511637c',
                    '17d1b00b81642842e514494a78e804e9a511637c_5368709120',
+                   '17d1b00b81642842e514494a78e804e9a511637c_5368709120.sha1',
                    '17d1b00b81642842e514494a78e804e9a511637c_10737418240',
                    '00000004']
 
@@ -562,6 +563,10 @@ class ImageCacheManagerTestCase(test.TestCase):
 
         self.stubs.Set(os.path, 'exists', lambda x: exists(x))
 
+        # We need to stub utime as well
+        orig_utime = os.utime
+        self.stubs.Set(os, 'utime', lambda x, y: None)
+
         # Fake up some instances in the instances directory
         orig_listdir = os.listdir
 
@@ -659,6 +664,9 @@ class ImageCacheManagerTestCase(test.TestCase):
                     fq_path(hashed_42),
                     fq_path('%s_10737418240' % hashed_1)]:
             self.assertTrue(rem in image_cache_manager.removable_base_files)
+
+        # Ensure there are no "corrupt" images as well
+        self.assertTrue(len(image_cache_manager.corrupt_base_files), 0)
 
     def test_verify_base_images_no_base(self):
         self.flags(instances_path='/tmp/no/such/dir/name/please')

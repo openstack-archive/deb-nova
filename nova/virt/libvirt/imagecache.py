@@ -134,7 +134,9 @@ class ImageCacheManager(object):
             if len(ent) == digest_size:
                 self._store_image(base_dir, ent, original=True)
 
-            elif len(ent) > digest_size + 2 and ent[digest_size] == '_':
+            elif (len(ent) > digest_size + 2 and
+                  ent[digest_size] == '_' and
+                  not ent.endswith('.sha1')):
                 self._store_image(base_dir, ent, original=False)
 
     def _list_running_instances(self, context):
@@ -303,8 +305,11 @@ class ImageCacheManager(object):
 
         if (base_file and os.path.exists(base_file)
             and os.path.isfile(base_file)):
-            # _verify_checksum returns True if the checksum is ok.
-            image_bad = not self._verify_checksum(img_id, base_file)
+            # _verify_checksum returns True if the checksum is ok, and None if
+            # there is no checksum file
+            checksum_result = self._verify_checksum(img_id, base_file)
+            if not checksum_result is None:
+                image_bad = not checksum_result
 
         instances = []
         if img_id in self.used_images:
@@ -349,6 +354,8 @@ class ImageCacheManager(object):
                 LOG.debug(_('%(id)s (%(base_file)s): image is in use'),
                           {'id': img_id,
                            'base_file': base_file})
+                if os.path.exists(base_file):
+                    os.utime(base_file, None)
 
     def verify_base_images(self, context):
         """Verify that base images are in a reasonable state."""

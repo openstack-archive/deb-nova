@@ -442,6 +442,10 @@ def init_host(ip_range=None):
     add_snat_rule(ip_range)
 
     iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
+                                          '-s %s -d %s/32 -j ACCEPT' %
+                                          (ip_range, FLAGS.metadata_host))
+
+    iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
                                           '-s %s -d %s -j ACCEPT' %
                                           (ip_range, FLAGS.dmz_cidr))
 
@@ -687,7 +691,7 @@ def restart_dhcp(context, dev, network_ref):
                 _execute('kill', '-HUP', pid, run_as_root=True)
                 return
             except Exception as exc:  # pylint: disable=W0703
-                LOG.debug(_('Hupping dnsmasq threw %s'), exc)
+                LOG.error(_('Hupping dnsmasq threw %s'), exc)
         else:
             LOG.debug(_('Pid %d is stale, relaunching dnsmasq'), pid)
 

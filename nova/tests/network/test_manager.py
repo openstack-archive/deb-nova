@@ -692,6 +692,33 @@ class VlanNetworkTestCase(test.TestCase):
                                                  mox.IgnoreArg())
         self.assertTrue(self.local)
 
+    def test_floating_ip_init_host(self):
+
+        def get_all_by_host(_context, _host):
+            return [{'interface': 'foo',
+                     'address': 'foo'},
+                    {'interface': 'fakeiface',
+                     'address': 'fakefloat',
+                     'fixed_ip_id': 1},
+                    {'interface': 'bar',
+                     'address': 'bar',
+                     'fixed_ip_id': 2}]
+        self.stubs.Set(self.network.db, 'floating_ip_get_all_by_host',
+                       get_all_by_host)
+
+        def fixed_ip_get(_context, fixed_ip_id):
+            if fixed_ip_id == 1:
+                return {'address': 'fakefixed'}
+            raise exception.FixedIpNotFound()
+        self.stubs.Set(self.network.db, 'fixed_ip_get', fixed_ip_get)
+
+        self.mox.StubOutWithMock(self.network.l3driver, 'add_floating_ip')
+        self.network.l3driver.add_floating_ip('fakefloat',
+                                              'fakefixed',
+                                              'fakeiface')
+        self.mox.ReplayAll()
+        self.network.init_host_floating_ips()
+
     def test_disassociate_floating_ip(self):
         ctxt = context.RequestContext('testuser', 'testproject',
                                       is_admin=False)
@@ -845,6 +872,31 @@ class VlanNetworkTestCase(test.TestCase):
         self.network.deallocate_fixed_ip(context1, fix_addr, 'fake')
         db.floating_ip_destroy(context1.elevated(), float_addr)
         db.fixed_ip_disassociate(context1.elevated(), fix_addr)
+
+    def test_deallocate_fixed_no_vif(self):
+        """Verify that deallocate doesn't raise when no vif is returned.
+
+        Ensures https://bugs.launchpad.net/nova/+bug/968457 doesn't return"""
+
+        def network_get(_context, network_id):
+            return networks[network_id]
+
+        self.stubs.Set(db, 'network_get', network_get)
+
+        def vif_get(_context, _vif_id):
+            return None
+
+        self.stubs.Set(db, 'virtual_interface_get', vif_get)
+        context1 = context.RequestContext('user', 'project1')
+
+        instance = db.instance_create(context1,
+                {'project_id': 'project1'})
+
+        fix_addr = db.fixed_ip_associate_pool(context1.elevated(),
+                1, instance['id'])
+
+        self.flags(force_dhcp_release=True)
+        self.network.deallocate_fixed_ip(context1, fix_addr, 'fake')
 
 
 class CommonNetworkTestCase(test.TestCase):

@@ -136,6 +136,12 @@ class API(base.Base):
         if volume['status'] not in ["available", "error"]:
             msg = _("Volume status must be available or error")
             raise exception.InvalidVolume(reason=msg)
+
+        snapshots = self.db.snapshot_get_all_for_volume(context, volume_id)
+        if len(snapshots):
+            msg = _("Volume still has %d dependent snapshots" % len(snapshots))
+            raise exception.InvalidVolume(reason=msg)
+
         now = utils.utcnow()
         self.db.volume_update(context, volume_id, {'status': 'deleting',
                                                    'terminated_at': now})
@@ -297,11 +303,11 @@ class API(base.Base):
             'display_description': description}
 
         snapshot = self.db.snapshot_create(context, options)
+        host = volume['host']
         rpc.cast(context,
-                 FLAGS.scheduler_topic,
+                 self.db.queue_get_for(context, FLAGS.volume_topic, host),
                  {"method": "create_snapshot",
-                  "args": {"topic": FLAGS.volume_topic,
-                           "volume_id": volume['id'],
+                  "args": {"volume_id": volume['id'],
                            "snapshot_id": snapshot['id']}})
         return snapshot
 
@@ -315,16 +321,17 @@ class API(base.Base):
 
     @wrap_check_policy
     def delete_snapshot(self, context, snapshot):
-        if snapshot['status'] != "available":
-            msg = _("must be available")
+        if snapshot['status'] not in ["available", "error"]:
+            msg = _("Volume Snapshot status must be available or error")
             raise exception.InvalidVolume(reason=msg)
         self.db.snapshot_update(context, snapshot['id'],
                                 {'status': 'deleting'})
+        volume = self.db.volume_get(context, snapshot['volume_id'])
+        host = volume['host']
         rpc.cast(context,
-                 FLAGS.scheduler_topic,
+                 self.db.queue_get_for(context, FLAGS.volume_topic, host),
                  {"method": "delete_snapshot",
-                  "args": {"topic": FLAGS.volume_topic,
-                           "snapshot_id": snapshot['id']}})
+                  "args": {"snapshot_id": snapshot['id']}})
 
     @wrap_check_policy
     def get_volume_metadata(self, context, volume):

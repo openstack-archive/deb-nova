@@ -112,7 +112,7 @@ compute_opts = [
                     "Valid options are 'noop', 'log' and 'reap'. "
                     "Set to 'noop' to disable."),
     cfg.IntOpt("image_cache_manager_interval",
-               default=3600,
+               default=40,
                help="Number of periodic scheduler ticks to wait between "
                     "runs of the image cache manager."),
     cfg.IntOpt("heal_instance_info_cache_interval",
@@ -1226,6 +1226,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         old_instance_type = migration_ref['old_instance_type_id']
         instance_type = instance_types.get_instance_type(old_instance_type)
 
+        self.driver.finish_revert_migration(instance_ref,
+                                   self._legacy_nw_info(network_info))
+
         # Just roll back the record. There's no need to resize down since
         # the 'old' VM already has the preferred attributes
         self._instance_update(context,
@@ -1239,8 +1242,6 @@ class ComputeManager(manager.SchedulerDependentManager):
                               vm_state=vm_states.ACTIVE,
                               task_state=None)
 
-        self.driver.finish_revert_migration(instance_ref,
-                                   self._legacy_nw_info(network_info))
         self.db.migration_update(context, migration_id,
                 {'status': 'reverted'})
 
@@ -2453,8 +2454,9 @@ class ComputeManager(manager.SchedulerDependentManager):
         with utils.temporary_mutation(context, read_deleted="yes"):
             for instance in self._running_deleted_instances(context):
                 if action == "log":
-                    LOG.warning(_("Detected instance  with name label "
-                                  "'%(name_label)s' which is marked as "
+                    name = instance['name']
+                    LOG.warning(_("Detected instance with name label "
+                                  "'%(name)s' which is marked as "
                                   "DELETED but still present on host."),
                                 locals(), instance=instance)
 
