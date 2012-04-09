@@ -1,3 +1,9 @@
+nova (2012.1-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Mon, 09 Apr 2012 09:19:38 +0200
+
 nova (2012.1~rc3-1) unstable; urgency=low
 
   * New upstream release
