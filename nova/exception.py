@@ -168,6 +168,11 @@ class NovaException(Exception):
                 message = self.message % kwargs
 
             except Exception as e:
+                # kwargs doesn't match a variable in the message
+                # log the issue and the kwargs
+                LOG.exception(_('Exception in string format operation'))
+                for name, value in kwargs.iteritems():
+                    LOG.error("%s: %s" % (name, value))
                 # at least get the core message out if something happened
                 message = self.message
 
@@ -494,7 +499,7 @@ class InvalidImageRef(Invalid):
 
 class ListingImageRefsNotSupported(Invalid):
     message = _("Some images have been stored via hrefs."
-        + " This version of the api does not support displaying image hrefs.")
+          " This version of the api does not support displaying image hrefs.")
 
 
 class ImageNotFound(NotFound):
@@ -523,6 +528,10 @@ class UserRoleNotFound(NotFound):
 
 class StorageRepositoryNotFound(NotFound):
     message = _("Cannot find SR to read/write VDI.")
+
+
+class NetworkInUse(NovaException):
+    message = _("Network %(network_id)s is still in use.")
 
 
 class NetworkNotCreated(NovaException):

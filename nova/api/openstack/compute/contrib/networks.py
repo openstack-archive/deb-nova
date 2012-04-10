@@ -40,7 +40,10 @@ def network_dict(network):
                   'netmask', 'injected', 'cidr', 'vpn_public_address',
                   'multi_host', 'dns1', 'host', 'gateway_v6', 'netmask_v6',
                   'created_at')
-        return dict((field, network[field]) for field in fields)
+        result = dict((field, network[field]) for field in fields)
+        if 'uuid' in network:
+            result['id'] = network['uuid']
+        return result
     else:
         return {}
 
@@ -67,7 +70,7 @@ class NetworkController(object):
     def _disassociate(self, request, network_id, body):
         context = request.environ['nova.context']
         authorize(context)
-        LOG.debug(_("Disassociating network with id %s") % network_id)
+        LOG.debug(_("Disassociating network with id %s"), network_id)
         try:
             self.network_api.disassociate(context, network_id)
         except exception.NetworkNotFound:

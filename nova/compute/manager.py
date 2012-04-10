@@ -136,24 +136,24 @@ def checks_instance_lock(function):
     @functools.wraps(function)
     def decorated_function(self, context, instance_uuid, *args, **kwargs):
         LOG.info(_("check_instance_lock: decorating: |%s|"), function,
-                 context=context)
-        LOG.info(_("check_instance_lock: arguments: |%(self)s| |%(context)s|"
-                " |%(instance_uuid)s|") % locals(), context=context)
+                 context=context, instance_uuid=instance_uuid)
+        LOG.info(_("check_instance_lock: arguments: |%(self)s| |%(context)s|")
+                 % locals(), context=context, instance_uuid=instance_uuid)
         locked = self.get_lock(context, instance_uuid)
         admin = context.is_admin
         LOG.info(_("check_instance_lock: locked: |%s|"), locked,
-                 context=context)
+                 context=context, instance_uuid=instance_uuid)
         LOG.info(_("check_instance_lock: admin: |%s|"), admin,
-                 context=context)
+                 context=context, instance_uuid=instance_uuid)
 
         # if admin or unlocked call function otherwise log error
         if admin or not locked:
             LOG.info(_("check_instance_lock: executing: |%s|"), function,
-                     context=context)
+                     context=context, instance_uuid=instance_uuid)
             function(self, context, instance_uuid, *args, **kwargs)
         else:
             LOG.error(_("check_instance_lock: not executing |%s|"),
-                      function, context=context)
+                      function, context=context, instance_uuid=instance_uuid)
             return False
 
     return decorated_function
@@ -246,7 +246,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                          locals(), instance=instance)
                 self.reboot_instance(context, instance['uuid'])
             elif drv_state == power_state.RUNNING:
-                # Hyper-V and VMWareAPI drivers will raise an exception
+                # VMWareAPI drivers will raise an exception
                 try:
                     net_info = self._get_instance_nw_info(context, instance)
                     self.driver.ensure_filtering_rules_for_instance(instance,
@@ -992,17 +992,17 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         images = fetch_images()
         num_images = len(images)
-        LOG.debug(_("Found %(num_images)d images (rotation: %(rotation)d)")
-                  % locals())
+        LOG.debug(_("Found %(num_images)d images (rotation: %(rotation)d)"),
+                  locals())
         if num_images > rotation:
             # NOTE(sirp): this deletes all backups that exceed the rotation
             # limit
             excess = len(images) - rotation
-            LOG.debug(_("Rotating out %d backups") % excess)
+            LOG.debug(_("Rotating out %d backups"), excess)
             for i in xrange(excess):
                 image = images.pop()
                 image_id = image['id']
-                LOG.debug(_("Deleting image %s") % image_id)
+                LOG.debug(_("Deleting image %s"), image_id)
                 image_service.delete(context, image_id)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())

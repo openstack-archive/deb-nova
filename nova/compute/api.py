@@ -106,17 +106,10 @@ def check_policy(context, action, target):
     nova.policy.enforce(context, _action, target)
 
 
-class API(base.Base):
-    """API for interacting with the compute manager."""
-
-    def __init__(self, image_service=None, network_api=None, volume_api=None,
-                 **kwargs):
-        self.image_service = (image_service or
-                              nova.image.get_default_image_service())
-
-        self.network_api = network_api or network.API()
-        self.volume_api = volume_api or volume.API()
-        super(API, self).__init__(**kwargs)
+class BaseAPI(base.Base):
+    """Base API class."""
+    def __init__(self, **kwargs):
+        super(BaseAPI, self).__init__(**kwargs)
 
     def _cast_or_call_compute_message(self, rpc_method, compute_method,
             context, instance=None, host=None, params=None):
@@ -157,9 +150,23 @@ class API(base.Base):
         """Generic handler for RPC calls to compute."""
         return self._cast_or_call_compute_message(rpc.call, *args, **kwargs)
 
-    def _cast_scheduler_message(self, context, args):
+    @staticmethod
+    def _cast_scheduler_message(context, args):
         """Generic handler for RPC calls to the scheduler."""
         rpc.cast(context, FLAGS.scheduler_topic, args)
+
+
+class API(BaseAPI):
+    """API for interacting with the compute manager."""
+
+    def __init__(self, image_service=None, network_api=None, volume_api=None,
+                 **kwargs):
+        self.image_service = (image_service or
+                              nova.image.get_default_image_service())
+
+        self.network_api = network_api or network.API()
+        self.volume_api = volume_api or volume.API()
+        super(API, self).__init__(**kwargs)
 
     def _check_injected_file_quota(self, context, injected_files):
         """Enforce quota limits on injected files.
@@ -259,7 +266,7 @@ class API(base.Base):
                 msg = (_("Can only run %s more instances of this type.") %
                        num_instances)
             LOG.warn(_("Quota exceeded for %(pid)s,"
-                  " tried to run %(min_count)s instances. " + msg) % locals())
+                  " tried to run %(min_count)s instances. %(msg)s"), locals())
             raise exception.QuotaError(code="InstanceLimitExceeded")
 
         self._check_metadata_properties_quota(context, metadata)
@@ -1691,11 +1698,8 @@ class API(base.Base):
         return self.db.instance_fault_get_by_instance_uuids(context, uuids)
 
 
-class HostAPI(base.Base):
+class HostAPI(BaseAPI):
     """Sub-set of the Compute Manager API for managing host operations."""
-    def __init__(self, **kwargs):
-        super(HostAPI, self).__init__(**kwargs)
-
     def set_host_enabled(self, context, host, enabled):
         """Sets the specified host's ability to accept new instances."""
         # NOTE(comstud): No instance_uuid argument to this compute manager
@@ -1744,7 +1748,7 @@ class AggregateAPI(base.Base):
 
     def get_aggregate_list(self, context):
         """Get all the aggregates for this zone."""
-        aggregates = self.db.aggregate_get_all(context, read_deleted="no")
+        aggregates = self.db.aggregate_get_all(context)
         return [self._get_aggregate_info(context, a) for a in aggregates]
 
     def update_aggregate(self, context, aggregate_id, values):
@@ -1775,8 +1779,7 @@ class AggregateAPI(base.Base):
 
     def delete_aggregate(self, context, aggregate_id):
         """Deletes the aggregate."""
-        hosts = self.db.aggregate_host_get_all(context, aggregate_id,
-                                               read_deleted="no")
+        hosts = self.db.aggregate_host_get_all(context, aggregate_id)
         if len(hosts) > 0:
             raise exception.InvalidAggregateAction(action='delete',
                                                    aggregate_id=aggregate_id,
@@ -1841,9 +1844,7 @@ class AggregateAPI(base.Base):
     def _get_aggregate_info(self, context, aggregate):
         """Builds a dictionary with aggregate props, metadata and hosts."""
         metadata = self.db.aggregate_metadata_get(context, aggregate.id)
-        hosts = self.db.aggregate_host_get_all(context, aggregate.id,
-                                               read_deleted="no")
-
+        hosts = self.db.aggregate_host_get_all(context, aggregate.id)
         result = dict(aggregate.iteritems())
         result["metadata"] = metadata
         result["hosts"] = hosts

@@ -89,7 +89,7 @@ class DbApiTestCase(test.TestCase):
 
         # Ensure one migration older than 10 seconds is returned.
         updated_at = datetime.datetime(2000, 01, 01, 12, 00, 00)
-        values = {"status": "FINISHED", "updated_at": updated_at}
+        values = {"status": "finished", "updated_at": updated_at}
         migration = db.migration_create(ctxt, values)
         results = db.migration_get_all_unconfirmed(ctxt, 10)
         self.assertEqual(1, len(results))
@@ -97,7 +97,7 @@ class DbApiTestCase(test.TestCase):
 
         # Ensure the new migration is not returned.
         updated_at = datetime.datetime.utcnow()
-        values = {"status": "FINISHED", "updated_at": updated_at}
+        values = {"status": "finished", "updated_at": updated_at}
         migration = db.migration_create(ctxt, values)
         results = db.migration_get_all_unconfirmed(ctxt, 10)
         self.assertEqual(0, len(results))
@@ -135,6 +135,25 @@ class DbApiTestCase(test.TestCase):
         self.assertEqual(36, len(network.uuid))
         db_network = db.network_get(ctxt, network.id)
         self.assertEqual(network.uuid, db_network.uuid)
+
+    def test_network_delete_safe(self):
+        ctxt = context.get_admin_context()
+        values = {'host': 'localhost', 'project_id': 'project1'}
+        network = db.network_create_safe(ctxt, values)
+        db_network = db.network_get(ctxt, network.id)
+        values = {'network_id': network['id'], 'address': 'fake1'}
+        address1 = db.fixed_ip_create(ctxt, values)
+        values = {'network_id': network['id'],
+                  'address': 'fake2',
+                  'allocated': True}
+        address2 = db.fixed_ip_create(ctxt, values)
+        self.assertRaises(exception.NetworkInUse,
+                          db.network_delete_safe, ctxt, network['id'])
+        db.fixed_ip_update(ctxt, address2, {'allocated': False})
+        network = db.network_delete_safe(ctxt, network['id'])
+        ctxt = ctxt.elevated(read_deleted='yes')
+        fixed_ip = db.fixed_ip_get_by_address(ctxt, address1)
+        self.assertTrue(fixed_ip['deleted'])
 
     def test_network_create_with_duplicate_vlan(self):
         ctxt = context.get_admin_context()
@@ -484,11 +503,10 @@ class AggregateDBApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt, metadata=None)
         db.aggregate_delete(ctxt, result['id'])
-        expected = db.aggregate_get_all(ctxt, read_deleted='no')
+        expected = db.aggregate_get_all(ctxt)
         self.assertEqual(0, len(expected))
-
-        ctxt = context.get_admin_context(read_deleted='yes')
-        aggregate = db.aggregate_get(ctxt, result['id'])
+        aggregate = db.aggregate_get(ctxt.elevated(read_deleted='yes'),
+                                     result['id'])
         self.assertEqual(aggregate["operational_state"], "dismissed")
 
     def test_aggregate_update(self):
@@ -556,7 +574,7 @@ class AggregateDBApiTestCase(test.TestCase):
                                                 values=values, metadata=None))
         for c in xrange(1, remove_counter):
             db.aggregate_delete(ctxt, aggregates[c - 1].id)
-        results = db.aggregate_get_all(ctxt, read_deleted='no')
+        results = db.aggregate_get_all(ctxt)
         self.assertEqual(len(results), add_counter - remove_counter)
 
     def test_aggregate_metadata_add(self):
@@ -614,8 +632,7 @@ class AggregateDBApiTestCase(test.TestCase):
         host = _get_fake_aggr_hosts()[0]
         db.aggregate_host_delete(ctxt, result.id, host)
         db.aggregate_host_add(ctxt, result.id, host)
-        expected = db.aggregate_host_get_all(ctxt, result.id,
-                                             read_deleted='no')
+        expected = db.aggregate_host_get_all(ctxt, result.id)
         self.assertEqual(len(expected), 1)
 
     def test_aggregate_host_add_duplicate_raise_conflict(self):
@@ -652,8 +669,7 @@ class AggregateDBApiTestCase(test.TestCase):
         result = _create_aggregate_with_hosts(context=ctxt, metadata=None)
         db.aggregate_host_delete(ctxt, result.id,
                                  _get_fake_aggr_hosts()[0])
-        expected = db.aggregate_host_get_all(ctxt, result.id,
-                                             read_deleted='no')
+        expected = db.aggregate_host_get_all(ctxt, result.id)
         self.assertEqual(0, len(expected))
 
     def test_aggregate_host_delete_raise_not_found(self):

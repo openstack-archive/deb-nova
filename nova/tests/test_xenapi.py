@@ -366,6 +366,7 @@ class XenAPIVMTestCase(test.TestCase):
 
         if check_injection:
             xenstore_data = self.vm['xenstore_data']
+            self.assertEquals(xenstore_data['vm-data/hostname'], 'test')
             key = 'vm-data/networking/DEADBEEF0000'
             xenstore_value = xenstore_data[key]
             tcpip_data = ast.literal_eval(xenstore_value)
@@ -622,8 +623,8 @@ class XenAPIVMTestCase(test.TestCase):
 
             # mount point will be the last item of the command list
             self._tmpdir = cmd[len(cmd) - 1]
-            LOG.debug(_('Creating files in %s to simulate guest agent') %
-                self._tmpdir)
+            LOG.debug(_('Creating files in %s to simulate guest agent'),
+                      self._tmpdir)
             os.makedirs(os.path.join(self._tmpdir, 'usr', 'sbin'))
             # Touch the file using open
             open(os.path.join(self._tmpdir, 'usr', 'sbin',
@@ -633,8 +634,8 @@ class XenAPIVMTestCase(test.TestCase):
         def _umount_handler(cmd, *ignore_args, **ignore_kwargs):
             # Umount would normall make files in the m,ounted filesystem
             # disappear, so do that here
-            LOG.debug(_('Removing simulated guest agent files in %s') %
-                self._tmpdir)
+            LOG.debug(_('Removing simulated guest agent files in %s'),
+                      self._tmpdir)
             os.remove(os.path.join(self._tmpdir, 'usr', 'sbin',
                 'xe-update-networking'))
             os.rmdir(os.path.join(self._tmpdir, 'usr', 'sbin'))
@@ -894,11 +895,11 @@ class XenAPIMigrateInstance(test.TestCase):
         db.migration_get_all_unconfirmed(fake_context,
                 resize_confirm_window).AndReturn(migrations)
         # Found unconfirmed migrations message
-        vmops.LOG.info(mox.IgnoreArg())
+        vmops.LOG.info(mox.IgnoreArg(), mox.IgnoreArg())
 
         # test success (ACTIVE/RESIZE_VERIFY)
         instance = instances.pop(0)
-        vmops.LOG.info(mox.IgnoreArg())
+        vmops.LOG.info(mox.IgnoreArg(), mox.IgnoreArg())
         db.instance_get_by_uuid(fake_context,
                 instance['uuid']).AndReturn(instance)
         conn._vmops.compute_api.confirm_resize(fake_context,
@@ -907,7 +908,7 @@ class XenAPIMigrateInstance(test.TestCase):
         # test instance that doesn't exist anymore sets migration to
         # error
         instance = instances.pop(0)
-        vmops.LOG.info(mox.IgnoreArg())
+        vmops.LOG.info(mox.IgnoreArg(), mox.IgnoreArg())
         db.instance_get_by_uuid(fake_context,
                 instance['uuid']).AndRaise(exception.InstanceNotFound)
         vmops.LOG.warn(mox.IgnoreArg())
@@ -915,32 +916,32 @@ class XenAPIMigrateInstance(test.TestCase):
 
         # test instance in ERROR/RESIZE_VERIFY sets migration to error
         instance = instances.pop(0)
-        vmops.LOG.info(mox.IgnoreArg())
+        vmops.LOG.info(mox.IgnoreArg(), mox.IgnoreArg())
         db.instance_get_by_uuid(fake_context,
                 instance['uuid']).AndReturn(instance)
-        vmops.LOG.warn(mox.IgnoreArg())
+        vmops.LOG.warn(mox.IgnoreArg(), instance=instance)
         db.migration_update(fake_context, 3, {'status': 'error'})
 
         # test instance in ACTIVE/REBOOTING sets migration to error
         instance = instances.pop(0)
-        vmops.LOG.info(mox.IgnoreArg())
+        vmops.LOG.info(mox.IgnoreArg(), mox.IgnoreArg())
         db.instance_get_by_uuid(fake_context,
                 instance['uuid']).AndReturn(instance)
-        vmops.LOG.warn(mox.IgnoreArg())
+        vmops.LOG.warn(mox.IgnoreArg(), instance=instance)
         db.migration_update(fake_context, 4, {'status': 'error'})
 
         # test confirm_resize raises and doesn't set migration to error
         instance = instances.pop(0)
-        vmops.LOG.info(mox.IgnoreArg())
+        vmops.LOG.info(mox.IgnoreArg(), mox.IgnoreArg())
         db.instance_get_by_uuid(fake_context,
                 instance['uuid']).AndReturn(instance)
         conn._vmops.compute_api.confirm_resize(fake_context,
                 instance).AndRaise(test.TestingException)
-        vmops.LOG.error(mox.IgnoreArg())
+        vmops.LOG.error(mox.IgnoreArg(), instance=instance)
 
         # test succeeds again (ACTIVE/RESIZE_VERIFY)
         instance = instances.pop(0)
-        vmops.LOG.info(mox.IgnoreArg())
+        vmops.LOG.info(mox.IgnoreArg(), mox.IgnoreArg())
         db.instance_get_by_uuid(fake_context,
                 instance['uuid']).AndReturn(instance)
         conn._vmops.compute_api.confirm_resize(fake_context,

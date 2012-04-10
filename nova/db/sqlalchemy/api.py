@@ -1542,7 +1542,7 @@ def instance_get_all_by_reservation(context, reservation_id):
 # NOTE(jkoelker) This is only being left here for compat with floating
 #                ips. Currently the network_api doesn't return floaters
 #                in network_info. Once it starts return the model. This
-#                function and it's call in compute/manager.py on 1829 can
+#                function and its call in compute/manager.py on 1829 can
 #                go away
 @require_context
 def instance_get_floating_address(context, instance_id):
@@ -1907,8 +1907,21 @@ def network_create_safe(context, values):
 def network_delete_safe(context, network_id):
     session = get_session()
     with session.begin():
+        result = session.query(models.FixedIp).\
+                         filter_by(network_id=network_id).\
+                         filter_by(deleted=False).\
+                         filter_by(allocated=True).\
+                         all()
+        if result:
+            raise exception.NetworkInUse(network_id=network_id)
         network_ref = network_get(context, network_id=network_id,
                                   session=session)
+        session.query(models.FixedIp).\
+                filter_by(network_id=network_id).\
+                filter_by(deleted=False).\
+                update({'deleted': True,
+                        'updated_at': literal_column('updated_at'),
+                        'deleted_at': utils.utcnow()})
         session.delete(network_ref)
 
 
@@ -2241,9 +2254,6 @@ def quota_get_all_by_project(context, project_id):
 
 @require_admin_context
 def quota_create(context, project_id, resource, limit):
-    # NOTE: Treat -1 as unlimited for consistency w/ flags
-    if limit == -1:
-        limit = None
     quota_ref = models.Quota()
     quota_ref.project_id = project_id
     quota_ref.resource = resource
@@ -2254,9 +2264,6 @@ def quota_create(context, project_id, resource, limit):
 
 @require_admin_context
 def quota_update(context, project_id, resource, limit):
-    # NOTE: Treat -1 as unlimited for consistency w/ flags
-    if limit == -1:
-        limit = None
     session = get_session()
     with session.begin():
         quota_ref = quota_get(context, project_id, resource, session=session)
@@ -3257,7 +3264,7 @@ def migration_get_all_unconfirmed(context, confirm_window, session=None):
     return model_query(context, models.Migration, session=session,
                        read_deleted="yes").\
             filter(models.Migration.updated_at <= confirm_window).\
-            filter_by(status="FINISHED").\
+            filter_by(status="finished").\
             all()
 
 
@@ -4162,8 +4169,10 @@ def sm_volume_get_all(context):
 ################
 
 
-def _aggregate_get_query(context, model_class, id_field, id, **kwargs):
-    return model_query(context, model_class, **kwargs).filter(id_field == id)
+def _aggregate_get_query(context, model_class, id_field, id,
+                         session=None, read_deleted=None):
+    return model_query(context, model_class, session=session,
+                       read_deleted=read_deleted).filter(id_field == id)
 
 
 @require_admin_context
@@ -4193,12 +4202,11 @@ def aggregate_create(context, values, metadata=None):
 
 
 @require_admin_context
-def aggregate_get(context, aggregate_id, **kwargs):
+def aggregate_get(context, aggregate_id):
     aggregate = _aggregate_get_query(context,
                                      models.Aggregate,
                                      models.Aggregate.id,
-                                     aggregate_id,
-                                     **kwargs).first()
+                                     aggregate_id).first()
 
     if not aggregate:
         raise exception.AggregateNotFound(aggregate_id=aggregate_id)
@@ -4207,18 +4215,16 @@ def aggregate_get(context, aggregate_id, **kwargs):
 
 
 @require_admin_context
-def aggregate_get_by_host(context, host, **kwargs):
+def aggregate_get_by_host(context, host):
     aggregate_host = _aggregate_get_query(context,
                                           models.AggregateHost,
                                           models.AggregateHost.host,
-                                          host,
-                                          **kwargs).first()
+                                          host).first()
 
     if not aggregate_host:
         raise exception.AggregateHostNotFound(host=host)
 
-    return aggregate_get(context, aggregate_host.aggregate_id,
-                         **kwargs)
+    return aggregate_get(context, aggregate_host.aggregate_id)
 
 
 @require_admin_context
@@ -4226,9 +4232,9 @@ def aggregate_update(context, aggregate_id, values):
     session = get_session()
     aggregate = _aggregate_get_query(context,
                                      models.Aggregate,
-                                     models.Aggregate.id, aggregate_id,
-                                     session=session,
-                                     read_deleted='no').first()
+                                     models.Aggregate.id,
+                                     aggregate_id,
+                                     session=session).first()
     if aggregate:
         metadata = values.get('metadata')
         if metadata is not None:
@@ -4249,8 +4255,8 @@ def aggregate_update(context, aggregate_id, values):
 def aggregate_delete(context, aggregate_id):
     query = _aggregate_get_query(context,
                                  models.Aggregate,
-                                 models.Aggregate.id, aggregate_id,
-                                 read_deleted='no')
+                                 models.Aggregate.id,
+                                 aggregate_id)
     if query.first():
         query.update({'deleted': True,
                       'deleted_at': utils.utcnow(),
@@ -4261,20 +4267,16 @@ def aggregate_delete(context, aggregate_id):
 
 
 @require_admin_context
-def aggregate_get_all(context, **kwargs):
-    if 'read_deleted' not in kwargs:
-        kwargs['read_deleted'] = 'yes'
-    return model_query(context,
-                       models.Aggregate,
-                       **kwargs).all()
+def aggregate_get_all(context):
+    return model_query(context, models.Aggregate).all()
 
 
 @require_admin_context
 @require_aggregate_exists
-def aggregate_metadata_get(context, aggregate_id, **kwargs):
+def aggregate_metadata_get(context, aggregate_id):
     rows = model_query(context,
-                       models.AggregateMetadata,
-                       **kwargs).filter_by(aggregate_id=aggregate_id).all()
+                       models.AggregateMetadata).\
+                       filter_by(aggregate_id=aggregate_id).all()
 
     return dict([(r['key'], r['value']) for r in rows])
 
@@ -4285,7 +4287,7 @@ def aggregate_metadata_delete(context, aggregate_id, key):
     query = _aggregate_get_query(context,
                                  models.AggregateMetadata,
                                  models.AggregateMetadata.aggregate_id,
-                                 aggregate_id, read_deleted='no').\
+                                 aggregate_id).\
                                  filter_by(key=key)
     if query.first():
         query.update({'deleted': True,
@@ -4298,8 +4300,7 @@ def aggregate_metadata_delete(context, aggregate_id, key):
 
 @require_admin_context
 @require_aggregate_exists
-def aggregate_metadata_get_item(context, aggregate_id, key,
-                                session=None):
+def aggregate_metadata_get_item(context, aggregate_id, key, session=None):
     result = _aggregate_get_query(context,
                                   models.AggregateMetadata,
                                   models.AggregateMetadata.aggregate_id,
@@ -4349,12 +4350,10 @@ def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False):
 
 @require_admin_context
 @require_aggregate_exists
-def aggregate_host_get_all(context, aggregate_id, **kwargs):
-    if 'read_deleted' not in kwargs:
-        kwargs['read_deleted'] = 'yes'
+def aggregate_host_get_all(context, aggregate_id):
     rows = model_query(context,
-                       models.AggregateHost,
-                       **kwargs).filter_by(aggregate_id=aggregate_id).all()
+                       models.AggregateHost).\
+                       filter_by(aggregate_id=aggregate_id).all()
 
     return [r.host for r in rows]
 
@@ -4365,8 +4364,7 @@ def aggregate_host_delete(context, aggregate_id, host):
     query = _aggregate_get_query(context,
                                  models.AggregateHost,
                                  models.AggregateHost.aggregate_id,
-                                 aggregate_id,
-                                 read_deleted='no').filter_by(host=host)
+                                 aggregate_id).filter_by(host=host)
     if query.first():
         query.update({'deleted': True,
                       'deleted_at': utils.utcnow(),

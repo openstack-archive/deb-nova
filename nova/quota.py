@@ -45,13 +45,13 @@ quota_opts = [
     cfg.IntOpt('quota_metadata_items',
                default=128,
                help='number of metadata items allowed per instance'),
-    cfg.IntOpt('quota_max_injected_files',
+    cfg.IntOpt('quota_injected_files',
                default=5,
                help='number of injected files allowed'),
-    cfg.IntOpt('quota_max_injected_file_content_bytes',
+    cfg.IntOpt('quota_injected_file_content_bytes',
                default=10 * 1024,
                help='number of bytes allowed per injected file'),
-    cfg.IntOpt('quota_max_injected_file_path_bytes',
+    cfg.IntOpt('quota_injected_file_path_bytes',
                default=255,
                help='number of bytes allowed per injected file path'),
     ]
@@ -74,14 +74,11 @@ def _get_default_quotas():
         'gigabytes': FLAGS.quota_gigabytes,
         'floating_ips': FLAGS.quota_floating_ips,
         'metadata_items': FLAGS.quota_metadata_items,
-        'injected_files': FLAGS.quota_max_injected_files,
+        'injected_files': FLAGS.quota_injected_files,
         'injected_file_content_bytes':
-            FLAGS.quota_max_injected_file_content_bytes,
+            FLAGS.quota_injected_file_content_bytes,
     }
     # -1 in the quota flags means unlimited
-    for key in defaults.keys():
-        if defaults[key] == -1:
-            defaults[key] = None
     return defaults
 
 
@@ -111,7 +108,7 @@ def get_project_quotas(context, project_id):
 
 
 def _get_request_allotment(requested, used, quota):
-    if quota is None:
+    if quota == -1:
         return requested
     return quota - used
 
@@ -200,4 +197,4 @@ def allowed_injected_file_content_bytes(context, requested_bytes):
 
 def allowed_injected_file_path_bytes(context):
     """Return the number of bytes allowed in an injected file path."""
-    return FLAGS.quota_max_injected_file_path_bytes
+    return FLAGS.quota_injected_file_path_bytes

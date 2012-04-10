@@ -42,8 +42,8 @@ class GetQuotaTestCase(test.TestCase):
                    quota_gigabytes=1000,
                    quota_floating_ips=10,
                    quota_metadata_items=128,
-                   quota_max_injected_files=5,
-                   quota_max_injected_file_content_bytes=10 * 1024)
+                   quota_injected_files=5,
+                   quota_injected_file_content_bytes=10 * 1024)
         self.context = context.RequestContext('admin', 'admin', is_admin=True)
 
     def _stub_class(self):
@@ -110,19 +110,19 @@ class GetQuotaTestCase(test.TestCase):
                    quota_gigabytes=-1,
                    quota_floating_ips=-1,
                    quota_metadata_items=-1,
-                   quota_max_injected_files=-1,
-                   quota_max_injected_file_content_bytes=-1)
+                   quota_injected_files=-1,
+                   quota_injected_file_content_bytes=-1)
         result = quota._get_default_quotas()
         self.assertEqual(result, dict(
-                instances=None,
-                cores=None,
-                ram=None,
-                volumes=None,
-                gigabytes=None,
-                floating_ips=None,
-                metadata_items=None,
-                injected_files=None,
-                injected_file_content_bytes=None,
+                instances=-1,
+                cores=-1,
+                ram=-1,
+                volumes=-1,
+                gigabytes=-1,
+                floating_ips=-1,
+                metadata_items=-1,
+                injected_files=-1,
+                injected_file_content_bytes=-1,
                 ))
 
     def test_class_quotas_noclass(self):
@@ -338,10 +338,6 @@ class QuotaTestCase(test.TestCase):
         num_instances = quota.allowed_instances(self.context, 100,
                                                 instance_type)
         self.assertEqual(num_instances, 2)
-        db.quota_create(self.context, self.project_id, 'instances', None)
-        num_instances = quota.allowed_instances(self.context, 100,
-                                                instance_type)
-        self.assertEqual(num_instances, 100)
         db.quota_create(self.context, self.project_id, 'instances', -1)
         num_instances = quota.allowed_instances(self.context, 100,
                                                 instance_type)
@@ -356,10 +352,6 @@ class QuotaTestCase(test.TestCase):
         num_instances = quota.allowed_instances(self.context, 100,
                                                 instance_type)
         self.assertEqual(num_instances, 2)
-        db.quota_create(self.context, self.project_id, 'ram', None)
-        num_instances = quota.allowed_instances(self.context, 100,
-                                                instance_type)
-        self.assertEqual(num_instances, 100)
         db.quota_create(self.context, self.project_id, 'ram', -1)
         num_instances = quota.allowed_instances(self.context, 100,
                                                 instance_type)
@@ -374,10 +366,6 @@ class QuotaTestCase(test.TestCase):
         num_instances = quota.allowed_instances(self.context, 100,
                                                 instance_type)
         self.assertEqual(num_instances, 2)
-        db.quota_create(self.context, self.project_id, 'cores', None)
-        num_instances = quota.allowed_instances(self.context, 100,
-                                                instance_type)
-        self.assertEqual(num_instances, 100)
         db.quota_create(self.context, self.project_id, 'cores', -1)
         num_instances = quota.allowed_instances(self.context, 100,
                                                 instance_type)
@@ -390,9 +378,6 @@ class QuotaTestCase(test.TestCase):
         self.flags(quota_volumes=10, quota_gigabytes=-1)
         volumes = quota.allowed_volumes(self.context, 100, 1)
         self.assertEqual(volumes, 10)
-        db.quota_create(self.context, self.project_id, 'volumes', None)
-        volumes = quota.allowed_volumes(self.context, 100, 1)
-        self.assertEqual(volumes, 100)
         db.quota_create(self.context, self.project_id, 'volumes', -1)
         volumes = quota.allowed_volumes(self.context, 100, 1)
         self.assertEqual(volumes, 100)
@@ -403,9 +388,6 @@ class QuotaTestCase(test.TestCase):
         self.flags(quota_volumes=-1, quota_gigabytes=10)
         volumes = quota.allowed_volumes(self.context, 100, 1)
         self.assertEqual(volumes, 10)
-        db.quota_create(self.context, self.project_id, 'gigabytes', None)
-        volumes = quota.allowed_volumes(self.context, 100, 1)
-        self.assertEqual(volumes, 100)
         db.quota_create(self.context, self.project_id, 'gigabytes', -1)
         volumes = quota.allowed_volumes(self.context, 100, 1)
         self.assertEqual(volumes, 100)
@@ -416,9 +398,6 @@ class QuotaTestCase(test.TestCase):
         self.flags(quota_floating_ips=10)
         floating_ips = quota.allowed_floating_ips(self.context, 100)
         self.assertEqual(floating_ips, 10)
-        db.quota_create(self.context, self.project_id, 'floating_ips', None)
-        floating_ips = quota.allowed_floating_ips(self.context, 100)
-        self.assertEqual(floating_ips, 100)
         db.quota_create(self.context, self.project_id, 'floating_ips', -1)
         floating_ips = quota.allowed_floating_ips(self.context, 100)
         self.assertEqual(floating_ips, 100)
@@ -429,9 +408,6 @@ class QuotaTestCase(test.TestCase):
         self.flags(quota_metadata_items=10)
         items = quota.allowed_metadata_items(self.context, 100)
         self.assertEqual(items, 10)
-        db.quota_create(self.context, self.project_id, 'metadata_items', None)
-        items = quota.allowed_metadata_items(self.context, 100)
-        self.assertEqual(items, 100)
         db.quota_create(self.context, self.project_id, 'metadata_items', -1)
         items = quota.allowed_metadata_items(self.context, 100)
         self.assertEqual(items, 100)
@@ -516,44 +492,44 @@ class QuotaTestCase(test.TestCase):
                                             metadata=metadata)
 
     def test_default_allowed_injected_files(self):
-        self.flags(quota_max_injected_files=55)
+        self.flags(quota_injected_files=55)
         self.assertEqual(quota.allowed_injected_files(self.context, 100), 55)
 
     def test_overridden_allowed_injected_files(self):
-        self.flags(quota_max_injected_files=5)
+        self.flags(quota_injected_files=5)
         db.quota_create(self.context, self.project_id, 'injected_files', 77)
         self.assertEqual(quota.allowed_injected_files(self.context, 100), 77)
 
     def test_unlimited_default_allowed_injected_files(self):
-        self.flags(quota_max_injected_files=-1)
+        self.flags(quota_injected_files=-1)
         self.assertEqual(quota.allowed_injected_files(self.context, 100), 100)
 
     def test_unlimited_db_allowed_injected_files(self):
-        self.flags(quota_max_injected_files=5)
-        db.quota_create(self.context, self.project_id, 'injected_files', None)
+        self.flags(quota_injected_files=5)
+        db.quota_create(self.context, self.project_id, 'injected_files', -1)
         self.assertEqual(quota.allowed_injected_files(self.context, 100), 100)
 
     def test_default_allowed_injected_file_content_bytes(self):
-        self.flags(quota_max_injected_file_content_bytes=12345)
+        self.flags(quota_injected_file_content_bytes=12345)
         limit = quota.allowed_injected_file_content_bytes(self.context, 23456)
         self.assertEqual(limit, 12345)
 
     def test_overridden_allowed_injected_file_content_bytes(self):
-        self.flags(quota_max_injected_file_content_bytes=12345)
+        self.flags(quota_injected_file_content_bytes=12345)
         db.quota_create(self.context, self.project_id,
                         'injected_file_content_bytes', 5678)
         limit = quota.allowed_injected_file_content_bytes(self.context, 23456)
         self.assertEqual(limit, 5678)
 
     def test_unlimited_default_allowed_injected_file_content_bytes(self):
-        self.flags(quota_max_injected_file_content_bytes=-1)
+        self.flags(quota_injected_file_content_bytes=-1)
         limit = quota.allowed_injected_file_content_bytes(self.context, 23456)
         self.assertEqual(limit, 23456)
 
     def test_unlimited_db_allowed_injected_file_content_bytes(self):
-        self.flags(quota_max_injected_file_content_bytes=12345)
+        self.flags(quota_injected_file_content_bytes=12345)
         db.quota_create(self.context, self.project_id,
-                        'injected_file_content_bytes', None)
+                        'injected_file_content_bytes', -1)
         limit = quota.allowed_injected_file_content_bytes(self.context, 23456)
         self.assertEqual(limit, 23456)
 
@@ -577,25 +553,25 @@ class QuotaTestCase(test.TestCase):
 
     def test_max_injected_files(self):
         files = []
-        for i in xrange(FLAGS.quota_max_injected_files):
+        for i in xrange(FLAGS.quota_injected_files):
             files.append(('/my/path%d' % i, 'config = test\n'))
         self._create_with_injected_files(files)  # no QuotaError
 
     def test_too_many_injected_files(self):
         files = []
-        for i in xrange(FLAGS.quota_max_injected_files + 1):
+        for i in xrange(FLAGS.quota_injected_files + 1):
             files.append(('/my/path%d' % i, 'my\ncontent%d\n' % i))
         self.assertRaises(exception.QuotaError,
                           self._create_with_injected_files, files)
 
     def test_max_injected_file_content_bytes(self):
-        max = FLAGS.quota_max_injected_file_content_bytes
+        max = FLAGS.quota_injected_file_content_bytes
         content = ''.join(['a' for i in xrange(max)])
         files = [('/test/path', content)]
         self._create_with_injected_files(files)  # no QuotaError
 
     def test_too_many_injected_file_content_bytes(self):
-        max = FLAGS.quota_max_injected_file_content_bytes
+        max = FLAGS.quota_injected_file_content_bytes
         content = ''.join(['a' for i in xrange(max + 1)])
         files = [('/test/path', content)]
         self.assertRaises(exception.QuotaError,
@@ -604,17 +580,26 @@ class QuotaTestCase(test.TestCase):
     def test_allowed_injected_file_path_bytes(self):
         self.assertEqual(
                 quota.allowed_injected_file_path_bytes(self.context),
-                FLAGS.quota_max_injected_file_path_bytes)
+                FLAGS.quota_injected_file_path_bytes)
 
     def test_max_injected_file_path_bytes(self):
-        max = FLAGS.quota_max_injected_file_path_bytes
+        max = FLAGS.quota_injected_file_path_bytes
         path = ''.join(['a' for i in xrange(max)])
         files = [(path, 'config = quotatest')]
         self._create_with_injected_files(files)  # no QuotaError
 
     def test_too_many_injected_file_path_bytes(self):
-        max = FLAGS.quota_max_injected_file_path_bytes
+        max = FLAGS.quota_injected_file_path_bytes
         path = ''.join(['a' for i in xrange(max + 1)])
         files = [(path, 'config = quotatest')]
         self.assertRaises(exception.QuotaError,
                           self._create_with_injected_files, files)
+
+    def test_quota_class_unlimited(self):
+        self.flags(quota_floating_ips=10)
+        items = quota.allowed_floating_ips(self.context, 10)
+        self.assertEqual(items, 10)
+        self.context.quota_class = 'foo'
+        db.quota_class_create(self.context, 'foo', 'floating_ips', -1)
+        items = quota.allowed_floating_ips(self.context, 100)
+        self.assertEqual(items, 100)
