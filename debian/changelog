@@ -1,3 +1,9 @@
+nova (2012.1-2) unstable; urgency=low
+
+  * Fixed CVE-2012-2101. Closes: #670637
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Wed, 02 May 2012 11:29:53 +0200
+
 nova (2012.1-1) unstable; urgency=low
 
   * New upstream release
