@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -e
+
+. /usr/share/debconf/confmodule
+. /usr/share/dbconfig-common/dpkg/postrm
+dbc_go nova-common $@
+
+if [ "$1" = "purge" ] ; then
+    rm -f /var/log/nova/nova-manage.log
+fi
+
+
+#DEBHELPER#
