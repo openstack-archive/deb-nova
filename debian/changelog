@@ -4,6 +4,7 @@ nova (2012.1-3) unstable; urgency=low
   nova-volumes, add Replaces and Breaks statements to enable smooth upgrade of
   version in testing. Closes: #665375 
   * Call dbconfig postrm script and remove nova-manage log. Closes: #670435
+  * Remove doc/sourc/api on dh_autoclean 
 
  -- Mehdi Abaakouk <sileht@sileht.net>  Wed, 09 May 2012 11:55:04 +0200
 
