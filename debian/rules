@@ -9,7 +9,9 @@
 override_dh_auto_clean:
 	dh_auto_clean
 	rm -fr doc/source/api
-	rm -fr doc/build/{doctress,html,man}
+	rm -fr doc/build/man
+	rm -fr doc/build/html
+	rm -fr doc/build/doctress
 	rm -rf tests.sqlite clean.sqlite run_tests.log
 	rm -rf CA
 	rm -rf nova.egg-info
