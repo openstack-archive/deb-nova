@@ -36,19 +36,6 @@ chown ${NOVA_USER} ${LOCK_DIR}
 
 do_start()
 {
-	# Guess the VG by getting the first one we see in "vgdisplay -c -A"
-	# if nothing was set in the default file
-	VGDISPLAY=/sbin/vgdisplay
-	if [ -z "${nova_volume_group}" -a -x "$VGDISPLAY" ]
-	then
-		nova_volume_group=`$VGDISPLAY -c -A | head -n 1 | cut -d":" -f1 | awk '{print $1}'`
-	fi
-
-	# Adds what has been configured in /etc/default/nova-volume
-	if [ -n ${nova_volume_group} ] ; then
-		DAEMON_ARGS="${DAEMON_ARGS} --volume_group=${nova_volume_group}"
-	fi
-
 	start-stop-daemon --start --quiet --background --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --startas $DAEMON --test > /dev/null \
 		|| return 1
 	start-stop-daemon --start --quiet --background --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --startas $DAEMON -- \

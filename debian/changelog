@@ -1,6 +1,8 @@
 nova (2012.1-4) unstable; urgency=low
 
   * Handle purge of dbconfig correctly. Closes: #673986
+  * Remove obsolete volume_group option in nova-volume init script. Closes:
+    #674030
 
  -- Mehdi Abaakouk <sileht@sileht.net>  Tue, 22 May 2012 23:11:23 +0200
 
