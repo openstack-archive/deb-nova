@@ -1,10 +1,14 @@
 nova (2012.1-4) unstable; urgency=low
 
-  * Handle purge of dbconfig correctly. Closes: #673986
+  [ Ghe Rivero ]
+  * Properly use dbconfig postrm at nova-common. Closes: #673986
+  * Added python db modules to suggests. Closes: #672888
+
+  [ Mehdi Abaakou ]
   * Remove obsolete volume_group option in nova-volume init script. Closes:
     #674030
 
- -- Mehdi Abaakouk <sileht@sileht.net>  Tue, 22 May 2012 23:11:23 +0200
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Thu, 24 May 2012 08:50:35 +0200
 
 nova (2012.1-3) unstable; urgency=low
 
