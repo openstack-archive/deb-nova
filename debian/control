@@ -106,6 +106,7 @@ Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, $
  adduser,
  python-iso8601,
  dbconfig-common
+Suggests: python-pysqlite2 | python-mysqldb | python-pygresql
 Description: OpenStack Compute - common files
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
