@@ -2,4 +2,4 @@
 
 # start nova daemons from init.d script?
 #  only allowed values are "true" and "false"
-NOVA_ENABLE=false
+NOVA_ENABLE=true

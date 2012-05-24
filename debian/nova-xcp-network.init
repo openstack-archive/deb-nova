@@ -37,7 +37,7 @@ OVS_CONFIGURE_BASE_FLOWS=/usr/lib/xcp/plugins/ovs_configure_base_flows.py
 IPTABLES=/sbin/iptables
 EBTABLES=/sbin/ebtables
 ARPTABLES=/sbin/arptables
-DEFAULTS_FILE=/etc/default/nova
+DEFAULTS_FILE=/etc/default/nova-common
 
 . /lib/lsb/init-functions
 
