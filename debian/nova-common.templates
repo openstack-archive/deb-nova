@@ -1,6 +1,6 @@
 Template: nova-common/start_services
 Type: boolean
 Default: true
-Description: Start nova services
- Do you want to start related nova services after being installed?
+Description: Start nova services?
+ Nova related services will be started after being installed by default
 
