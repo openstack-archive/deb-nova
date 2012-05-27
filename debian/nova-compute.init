@@ -76,7 +76,6 @@ case "$1" in
             log_warning_msg "nova daemons not enabled in $DEFAULTS_FILE, not starting..."
         fi
         ;;
-  ;;
   stop)
 	log_daemon_msg "Stopping $DESC" "$NAME"
 	do_stop
