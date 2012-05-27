@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2012-05-28 00:57+0200\n"
+"POT-Creation-Date: 2012-05-28 01:35+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -27,4 +27,44 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:1001
 msgid "Nova related services will be started after being installed by default"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid "Set up a database for nova?"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+"No database has been set up for nova to use. Before continuing, you should "
+"make sure you have:"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+" - the server host name (that server must allow TCP connections\n"
+"   from this machine);\n"
+" - a username and password to access the database.\n"
+" - A database type that you want to use."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+"If some of these requirements are missing, reject this option and run with "
+"regular sqlite support."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+"You can change this setting later on by running 'dpkg-reconfigure -plow nova-"
+"common"
 msgstr ""

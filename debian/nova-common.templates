@@ -4,3 +4,20 @@ Default: true
 _Description: Start nova services?
  Nova related services will be started after being installed by default
 
+Template: nova-common/configure_db
+Type: boolean
+Default: false
+_Description: Set up a database for nova?
+ No database has been set up for nova to use. Before
+ continuing, you should make sure you have:
+ .
+  - the server host name (that server must allow TCP connections
+    from this machine);
+  - a username and password to access the database.
+  - A database type that you want to use.
+ .
+ If some of these requirements are missing, reject this option and
+ run with regular sqlite support.
+ .
+ You can change this setting later on by running 'dpkg-reconfigure
+ -plow nova-common
