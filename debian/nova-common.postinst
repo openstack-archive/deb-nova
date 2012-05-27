@@ -52,6 +52,10 @@ if [ "$1" = "configure" ]; then
             nova-manage db sync || true
         fi
     fi
+    db_get nova-common/start_services
+    if [ " $RET" = "false" ]; then
+	sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova
+    fi
 fi
 
 chmod 0640 /etc/nova/nova.conf
