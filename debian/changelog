@@ -1,3 +1,13 @@
+nova (2012.1-5) unstable; urgency=low
+
+  [ Ghe Rivero ]
+  * Not start daemons from init by default. Added /etc/default/nova file
+  * Added some new packages: api-os-compute, api-os-volume, api-ec2,
+  compute-qemu, api-metadata
+  * Instal api-paste.ini from nova-common
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Mon, 28 May 2012 15:27:57 +0200
+
 nova (2012.1-4) unstable; urgency=low
 
   [ Ghe Rivero ]
