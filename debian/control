@@ -477,6 +477,7 @@ Description: OpenStack Compute - documentation
  This package contains the documentation for Nova.
 
 Package: nova-xvpvncproxy
+Provides: nova-vncproxy
 Architecture: all
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - XVP VNC proxy
