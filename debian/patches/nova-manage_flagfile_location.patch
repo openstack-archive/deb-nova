@@ -1,3 +1,7 @@
+Description: Fixe path to nova.conf in nova-manage
+Author: unkonwn
+Forwarded: no
+
 --- a/bin/nova-manage
 +++ b/bin/nova-manage
 @@ -1659,7 +1659,10 @@
