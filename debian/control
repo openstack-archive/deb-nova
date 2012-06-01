@@ -126,7 +126,7 @@ Description: OpenStack Compute - common files
 
 Package: nova-compute
 Architecture: all
-Depends: lsb-base (>= 3.0.6), adduser, qemu-utils, nova-common (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
+Depends: lsb-base (>= 3.0.6), adduser, qemu-utils, nova-common (= ${binary:Version}), nova-api-os-compute (= ${binary:Version}), nova-api-ec2 (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
  ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
@@ -282,7 +282,7 @@ Description: OpenStack Compute - virtual machine scheduler
 
 Package: nova-volume
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), lvm2, tgt, ${python:Depends}, ${misc:Depends}
+Depends: lsb-base, nova-api-os-volume (= ${binary:Version}), nova-common (= ${binary:Version}), lvm2, tgt, ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
 Suggests: sheepdog
@@ -506,7 +506,8 @@ Description: OpenStack Compute - XVP VNC proxy
 Package: nova-api-metadata
 Architecture: all
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Breaks: nova-api
+Breaks: nova-api (<< 2012.1-6)
+Replaces: nova-api
 Description: OpenStack Compute - metadata API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -522,7 +523,8 @@ Description: OpenStack Compute - metadata API frontend
 Package: nova-api-os-compute
 Architecture: all
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Breaks: nova-api
+Breaks: nova-api (<< 2012.1-6)
+Replaces: nova-api
 Description: OpenStack Compute - OpenStack Compute API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -538,7 +540,8 @@ Description: OpenStack Compute - OpenStack Compute API frontend
 Package: nova-api-os-volume
 Architecture: all
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Breaks: nova-api
+Breaks: nova-api (<< 2012.1-6)
+Replaces: nova-api
 Description: OpenStack Compute - OpenStack Volume API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -554,7 +557,8 @@ Description: OpenStack Compute - OpenStack Volume API frontend
 Package: nova-api-ec2
 Architecture: all
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Breaks: nova-api
+Breaks: nova-api (<< 2012.1-6)
+Replaces: nova-api
 Description: OpenStack Compute - EC2 API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
