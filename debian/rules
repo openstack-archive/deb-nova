@@ -51,3 +51,9 @@ override_dh_installdocs:
 override_dh_python2:
 	dh_python2
 	dh_python2  /usr/lib/xcp
+	rm debian/python-nova/usr/lib/python2.6/dist-packages/nova/CA/.gitignore
+	rm debian/python-nova/usr/lib/python2.6/dist-packages/nova/CA/projects/.gitignore
+	rm debian/python-nova/usr/lib/python2.6/dist-packages/nova/CA/reqs/.gitignore
+	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/.gitignore
+	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/projects/.gitignore
+	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/reqs/.gitignore
