@@ -22,12 +22,12 @@ override_dh_auto_build:
 	python setup.py build_sphinx
 
 override_dh_install:
-        dh_install
-        chmod 440 $(CURDIR)/debian/nova-common/etc/sudoers.d/nova_sudoers
-        install -D -m 0664 $(CURDIR)/debian/nova-volume.default $(CURDIR)/debian/nova-volume/etc/default/nova-volume
-        for hypervisor in qemu kvm xen uml lxc; do \
-                install -D -m 0600 $(CURDIR)/debian/nova-compute-$${hypervisor}.conf $(CURDIR)/debian/nova-compute-$${hypervisor}/etc/nova/nova-compute.conf; \
-        done
+	dh_install
+	chmod 440 $(CURDIR)/debian/nova-common/etc/sudoers.d/nova_sudoers
+	install -D -m 0664 $(CURDIR)/debian/nova-volume.default $(CURDIR)/debian/nova-volume/etc/default/nova-volume
+	for hypervisor in qemu kvm xen uml lxc; do \
+		install -D -m 0600 $(CURDIR)/debian/nova-compute-$${hypervisor}.conf $(CURDIR)/debian/nova-compute-$${hypervisor}/etc/nova/nova-compute.conf; \
+	done
 
 override_dh_fixperms:
 	dh_fixperms -Xnova_sudoers
