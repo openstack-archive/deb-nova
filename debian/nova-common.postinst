@@ -1,5 +1,7 @@
 #!/bin/sh -e
 
+set -e
+
 if [ "$1" = "configure" ]; then
     addgroup --quiet --system nova
     adduser --quiet --system --home /var/lib/nova --ingroup nova --no-create-home --shell /bin/bash nova
