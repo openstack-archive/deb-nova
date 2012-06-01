@@ -4,8 +4,6 @@ nova (2012.1-6) unstable; urgency=low
   * Now depends on sqlite3 (Closes: #674510).
   * nova-compute-{hypervisor} are now conflicting each others.
   * Fixed URL to the format 1.0 for the debian/copyright file.
-  * Added missing set -e in debian/nova-compute-kvm.postinst and
-  nova-common.postinst.
   * nova-api is now split into multiple nova-api-* packages.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 01 Jun 2012 06:39:15 +0000
