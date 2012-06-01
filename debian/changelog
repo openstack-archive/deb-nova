@@ -1,3 +1,10 @@
+nova (2012.1-6) unstable; urgency=low
+
+  [ Thomas Goirand ]
+  * Now depends on sqlite3 (Closes: #674510).
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 01 Jun 2012 06:39:15 +0000
+
 nova (2012.1-5) unstable; urgency=low
 
   [ Ghe Rivero ]

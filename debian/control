@@ -102,7 +102,7 @@ Description: OpenStack Compute - libraries
 
 Package: nova-common
 Architecture: all
-Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends},
+Depends: sqlite3, python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends},
  adduser,
  python-iso8601,
  dbconfig-common
