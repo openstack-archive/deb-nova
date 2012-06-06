@@ -6,6 +6,9 @@ nova (2012.1-6) unstable; urgency=low
   * Fixed URL to the format 1.0 for the debian/copyright file.
   * nova-api is now split into multiple nova-api-* packages.
 
+  [ Mehdi Abaakouk ]
+  * Add nodocs support in DEB_BUILD_OPTIONS
+
  -- Thomas Goirand <zigo@debian.org>  Fri, 01 Jun 2012 06:39:15 +0000
 
 nova (2012.1-5) unstable; urgency=low
