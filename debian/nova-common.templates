@@ -20,4 +20,4 @@ _Description: Set up a database for nova?
  run with regular sqlite support.
  .
  You can change this setting later on by running 'dpkg-reconfigure
- -plow nova-common
+ -phigh nova-common

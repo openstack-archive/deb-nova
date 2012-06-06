@@ -2,7 +2,8 @@
 
 set -e
 
-if [ "$1" = "configure" ]; then
+if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
+
     addgroup --quiet --system nova
     adduser --quiet --system --home /var/lib/nova --ingroup nova --no-create-home --shell /bin/bash nova
     chown nova:nova /var/log/nova /etc/nova/nova.conf
@@ -19,34 +20,35 @@ if [ "$1" = "configure" ]; then
     fi
 
     . /usr/share/debconf/confmodule
-    . /usr/share/dbconfig-common/dpkg/postinst
 
     db_get nova-common/configure_db
 
     if [ "$RET" = "true" ]; then
+        . /usr/share/dbconfig-common/dpkg/postinst
 
-	db_get nova-common/database-type
-	if [ $RET = "sqlite3" ]
-	then
+        db_get nova-common/database-type
+        if [ "$RET" = "sqlite3" ]
+        then
             dbc_name="nova.sqlite"
             db_set nova-common/db/dbname $dbc_name
-	fi
+        fi
 
-	dbc_dbfile_owner="nova:nova"
-	dbc_go nova-common $@
+        dbc_dbfile_owner="nova:nova"
+        dbc_go nova-common $@
 
-	if [ "$dbc_install" = "true" ]
-	then
+        if [ "$dbc_install" = "true" ]
+        then
+
             case "$dbc_dbtype" in
-		mysql)
+                mysql)
                     [ -n "$dbc_dbport" ] && dbport=:$dbc_dbport
                     SQL_CONNECTION="mysql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
                     ;;
-		pgsql)
+                pgsql)
                     [ -n "$dbc_dbport" ] && dbport=:$dbc_dbport
                     SQL_CONNECTION="pgsql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
                     ;;
-		*)
+                *)
                     SQL_CONNECTION="sqlite:////$dbc_basepath/$dbc_dbname"
                     ;;
             esac
@@ -55,13 +57,13 @@ if [ "$1" = "configure" ]; then
 
             if [ "$dbc_upgrade" = "true" ]
             then
-		nova-manage db sync || true
+                nova-manage db sync || true
             fi
-	fi
+        fi
     fi
     db_get nova-common/start_services
     if [ " $RET" = "false" ]; then
-	sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova
+        sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova
     fi
 fi
 

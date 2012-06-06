@@ -6,14 +6,18 @@ if [ -f /usr/share/debconf/confmodule ]; then
     . /usr/share/debconf/confmodule
 fi
 
-if [ -f /usr/share/dbconfig-common/dpkg/postrm ]; then
-    . /usr/share/dbconfig-common/dpkg/postrm
-    dbc_go nova-common $@
-else
-    rm -f /etc/dbconfig-common/nova-common.conf
-    if which ucf >/dev/null 2>&1; then
-        ucf --purge /etc/dbconfig-common/nova-common.conf
-        ucfr --purge bley /etc/dbconfig-common/nova-common.conf
+db_get nova-common/configure_db
+if [ "$RET" = "true" ]; then
+
+    if [ -f /usr/share/dbconfig-common/dpkg/postrm ]; then
+        . /usr/share/dbconfig-common/dpkg/postrm
+        dbc_go nova-common $@
+    else
+        rm -f /etc/dbconfig-common/nova-common.conf
+        if which ucf >/dev/null 2>&1; then
+            ucf --purge /etc/dbconfig-common/nova-common.conf
+            ucfr --purge nova-common /etc/dbconfig-common/nova-common.conf
+        fi
     fi
 fi
 
