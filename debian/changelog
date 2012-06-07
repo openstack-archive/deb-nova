@@ -7,8 +7,9 @@ nova (2012.1-6) unstable; urgency=low
   * nova-api is now split into multiple nova-api-* packages.
 
   [ Mehdi Abaakouk ]
-  * Add nodocs support in DEB_BUILD_OPTIONS
+  * Add nodocs support in DEB_BUILD_OPTIONS.
   * Do not use dbconfig if configure_db is false. Closes: #675271
+  * Fixed CVE-2012-2654. (Closes: #676465)
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 01 Jun 2012 06:39:15 +0000
 
