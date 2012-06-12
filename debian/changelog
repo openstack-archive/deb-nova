@@ -11,7 +11,11 @@ nova (2012.1-6) unstable; urgency=low
   * Do not use dbconfig if configure_db is false. Closes: #675271
   * Fixed CVE-2012-2654. (Closes: #676465)
 
- -- Thomas Goirand <zigo@debian.org>  Fri, 01 Jun 2012 06:39:15 +0000
+  [ Loic Dachary (OuoU) ]
+  * Fix broken init file for nova-bojectstore (Closes: #676638)
+  * Add Loic Dachary in uploaders
+  
+ -- Loic Dachary (OuoU) <loic@debian.org>  Tue, 12 Jun 2012 17:51:01 +0200
 
 nova (2012.1-5) unstable; urgency=low
 

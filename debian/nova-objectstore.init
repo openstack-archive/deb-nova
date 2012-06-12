@@ -21,7 +21,7 @@ PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
 LOCK_DIR=/var/lock/nova/
-EFAULTS_FILE=/etc/default/nova
+DEFAULTS_FILE=/etc/default/nova-common
 
 # Exit if the package is not installed
 [ -x $DAEMON ] || exit 0
