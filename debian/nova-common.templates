@@ -1,23 +1,34 @@
+# These templates have been reviewed by the debian-l10n-english
+# team
+#
+# If modifications/additions/rewording are needed, please ask
+# debian-l10n-english@lists.debian.org for advice.
+#
+# Even minor modifications require translation updates and such
+# changes should be coordinated with translators and reviewers.
+
 Template: nova-common/start_services
 Type: boolean
 Default: true
-_Description: Start nova services?
- Nova related services will be started after being installed by default
+_Description: Start nova services at boot?
+ Please choose whether you want to start Nova services when the
+ machine is booted up.
 
 Template: nova-common/configure_db
 Type: boolean
 Default: false
-_Description: Set up a database for nova?
- No database has been set up for nova to use. Before
- continuing, you should make sure you have:
+_Description: Set up a database for Nova?
+ No database has been set up for Nova to use. If you want
+ to set one up now, please make sure you have all needed
+ information:
  .
-  - the server host name (that server must allow TCP connections
-    from this machine);
-  - a username and password to access the database.
-  - A database type that you want to use.
+  * the host name of the database server (which must allow TCP
+    connections from this machine);
+  * a username and password to access the database;
+  * the type of database management software you want to use.
  .
- If some of these requirements are missing, reject this option and
- run with regular sqlite support.
+ If you don't choose this option, no database will be set up and Nova
+ will use regular SQLite support.
  .
- You can change this setting later on by running 'dpkg-reconfigure
- -phigh nova-common
+ You can change this setting later on by running "dpkg-reconfigure
+ -plow nova-common".
