@@ -1,0 +1,21 @@
+Template: nova-compute-xen/xenapi_url
+Type: string
+Default: https://my-dom0.example.com
+_Description: Address of the XenAPI dom0:
+ Nova Compute Xen needs to know the address of the server running XenAPI. This
+ can be a server running XenServer, the Citrix CentOS XCP appliance installed
+ from Citrix ISO image, or even a Debian server running Xen Cloud Platform
+ (XCP / Kronos project), which is available directly in Debian under the
+ package name xcp-xapi. You can enter an IP address or a fully qualified domain
+ name if it resolves correctly.
+
+Template: nova-compute-xen/xenapi_username
+Type: string
+Default: root
+_Description: Username to connect to XenAPI:
+ Please enter the username used to connect to your XenAPI (XCP server).
+
+Template: nova-compute-xen/xenapi_password
+Type: password
+_Description: Password to connect to XenAPI:
+ Please enter the password used to connect to your XenAPI (XCP server).
