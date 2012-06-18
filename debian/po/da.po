@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2012-06-11 08:21+0200\n"
+"POT-Creation-Date: 2012-06-18 17:35+0000\n"
 "PO-Revision-Date: 2012-06-16 23:51+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
@@ -19,7 +19,9 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-msgid "Start Nova services at boot?"
+#, fuzzy
+#| msgid "Start Nova services at boot?"
+msgid "Start nova services at boot?"
 msgstr "Start Novatjenester ved opstart?"
 
 #. Type: boolean
@@ -69,8 +71,8 @@ msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
 msgstr ""
-"Hvis du ikke vælger denne indstilling, så vil der ikke blive sat en "
-"database op og Nova vil bruge normal SQLite-understøttelse."
+"Hvis du ikke vælger denne indstilling, så vil der ikke blive sat en database "
+"op og Nova vil bruge normal SQLite-understøttelse."
 
 #. Type: boolean
 #. Description
@@ -82,3 +84,44 @@ msgstr ""
 "Du kan ændre denne indstilling senere ved at køre »dpkg-reconfigure -plow "
 "nova-common«."
 
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:1001
+msgid "Address of the XenAPI dom0:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:1001
+msgid ""
+"Nova Compute Xen needs to know the address of the server running XenAPI. "
+"This can be a server running XenServer, the Citrix CentOS XCP appliance "
+"installed from Citrix ISO image, or even a Debian server running Xen Cloud "
+"Platform (XCP / Kronos project), which is available directly in Debian under "
+"the package name xcp-xapi. You can enter an IP address or a fully qualified "
+"domain name if it resolves correctly."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Username to connect to XenAPI:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Please enter the username used to connect to your XenAPI (XCP server)."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Password to connect to XenAPI:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Please enter the password used to connect to your XenAPI (XCP server)."
+msgstr ""

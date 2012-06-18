@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2012-05-28 01:35+0200\n"
+"POT-Creation-Date: 2012-06-18 17:35+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,52 +19,96 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:1001
-msgid "Start nova services?"
-msgstr ""
-
-#. Type: boolean
-#. Description
-#: ../nova-common.templates:1001
-msgid "Nova related services will be started after being installed by default"
-msgstr ""
-
-#. Type: boolean
-#. Description
 #: ../nova-common.templates:2001
-msgid "Set up a database for nova?"
+msgid "Start nova services at boot?"
 msgstr ""
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
 msgid ""
-"No database has been set up for nova to use. Before continuing, you should "
-"make sure you have:"
+"Please choose whether you want to start Nova services when the machine is "
+"booted up."
 msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:2001
-msgid ""
-" - the server host name (that server must allow TCP connections\n"
-"   from this machine);\n"
-" - a username and password to access the database.\n"
-" - A database type that you want to use."
+#: ../nova-common.templates:3001
+msgid "Set up a database for Nova?"
 msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:2001
+#: ../nova-common.templates:3001
 msgid ""
-"If some of these requirements are missing, reject this option and run with "
-"regular sqlite support."
+"No database has been set up for Nova to use. If you want to set one up now, "
+"please make sure you have all needed information:"
 msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:2001
+#: ../nova-common.templates:3001
 msgid ""
-"You can change this setting later on by running 'dpkg-reconfigure -plow nova-"
-"common"
+" * the host name of the database server (which must allow TCP\n"
+"   connections from this machine);\n"
+" * a username and password to access the database;\n"
+" * the type of database management software you want to use."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"If you don't choose this option, no database will be set up and Nova will "
+"use regular SQLite support."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-common\"."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:1001
+msgid "Address of the XenAPI dom0:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:1001
+msgid ""
+"Nova Compute Xen needs to know the address of the server running XenAPI. "
+"This can be a server running XenServer, the Citrix CentOS XCP appliance "
+"installed from Citrix ISO image, or even a Debian server running Xen Cloud "
+"Platform (XCP / Kronos project), which is available directly in Debian under "
+"the package name xcp-xapi. You can enter an IP address or a fully qualified "
+"domain name if it resolves correctly."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Username to connect to XenAPI:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Please enter the username used to connect to your XenAPI (XCP server)."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Password to connect to XenAPI:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Please enter the password used to connect to your XenAPI (XCP server)."
 msgstr ""
