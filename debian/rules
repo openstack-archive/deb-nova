@@ -65,3 +65,8 @@ override_dh_python2:
 	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/.gitignore
 	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/projects/.gitignore
 	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/reqs/.gitignore
+
+get-vcs-source:
+	git remote add upstream git://github.com/openstack/nova.git || true
+	git fetch upstream
+	git archive --prefix=nova-2012.1/ 2012.1 | xz >../nova_2012.1.orig.tar.xz
