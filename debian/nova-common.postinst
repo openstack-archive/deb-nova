@@ -14,13 +14,6 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
     if ! [ -e /etc/nova/nova.conf ] ; then
         cp /usr/share/doc/nova-common/nova.conf.dist /etc/nova/nova.conf
     fi
-    if ! [ -f /etc/default/nova-common ] ; then
-        echo "# defaults file for nova daemons
-
-# start nova daemons from init.d script?
-#  only allowed values are "true" and "false"
-NOVA_ENABLE=true" >/etc/default/nova-common
-    fi
 
     chown nova:nova /var/log/nova /etc/nova/nova.conf
     if [ -z "$2" ]; then
