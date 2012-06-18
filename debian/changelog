@@ -1,6 +1,7 @@
 nova (2012.1-7) unstable; urgency=low
 
   * Fixes "prompting due to modified conffiles" (Closes: #677400).
+  * File /etc/default/nova-common isn't a conffile anymore as well.
   * Removed libvirt-type flag in nova-compute-xen nova-compute.conf, since we
   are using XenAPI and not libvirt.
   * Now configuring XenAPI URL, user and password through Debconf.

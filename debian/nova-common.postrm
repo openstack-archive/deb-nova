@@ -26,6 +26,7 @@ if [ "$1" = "purge" ] ; then
     rm -rf /var/lib/nova/CA
     rm -f /var/lib/nova/.rnd
     rm -f /etc/nova/nova.conf
+    rm -f /etc/default/nova-common
 fi
 
 #DEBHELPER#

@@ -1,5 +1,0 @@
-# defaults file for nova daemons
-
-# start nova daemons from init.d script?
-#  only allowed values are "true" and "false"
-NOVA_ENABLE=true
