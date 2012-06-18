@@ -59,7 +59,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
                     ;;
             esac
 
-            sed -e "s,^sql_connection=.\+,sql_connection=$SQL_CONNECTION," -i /etc/nova/nova.conf
+            sed -e "s,^[- \t]*sql_connection=.\+,sql_connection=$SQL_CONNECTION," -i /etc/nova/nova.conf
 
             if [ "$dbc_upgrade" = "true" ]
             then
