@@ -6,6 +6,12 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 
     addgroup --quiet --system nova
     adduser --quiet --system --home /var/lib/nova --ingroup nova --no-create-home --shell /bin/bash nova
+    if ! [ -e /etc/nova/nova.conf ] ; then
+        if ! [ -d /etc/nova ] ; then
+            mkdir /etc/nova
+        fi
+        cp /usr/share/doc/nova-common/nova.conf.dist /etc/nova/nova.conf
+    fi
     chown nova:nova /var/log/nova /etc/nova/nova.conf
     if [ -z "$2" ]; then
         # New install - blanket permissions

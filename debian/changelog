@@ -1,3 +1,9 @@
+nova (2012.1-7) unstable; urgency=low
+
+  * Fixes "prompting due to modified conffiles" (Closes: #677400).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 18 Jun 2012 12:34:40 +0000
+
 nova (2012.1-6) unstable; urgency=low
 
   [ Thomas Goirand ]
