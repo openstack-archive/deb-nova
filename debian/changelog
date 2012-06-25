@@ -1,5 +1,6 @@
 nova (2012.1-8) unstable; urgency=low
 
+  [ Thomas Goirand ]
   * Fixes "Cannot disassociate network from project" critical error 'bool'
   object has no attribute decode (Closes: #672350).
   * Added new debconf translations (with thanks to):
@@ -12,6 +13,9 @@ nova (2012.1-8) unstable; urgency=low
     - fr: Julien Patriarca <patriarcaj@gmail.com> (Closes: #678234).
     - pl: "Michał Kułach" <michalkulach@gmail.com> (Closes: #678154).
     - sk: helix84 <helix84@centrum.sk> (Closes: #677284).
+
+  [ Ghe Rivero ]
+  * remove extra slash on sql_connection nova.conf
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 25 Jun 2012 09:13:57 +0000
 
