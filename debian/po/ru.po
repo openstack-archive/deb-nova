@@ -1,27 +1,30 @@
-# SOME DESCRIPTIVE TITLE.
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the PACKAGE package.
-# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+# This file is distributed under the same license as the nova package.
 #
-#, fuzzy
+# Yuri Kozlov <yuray@komyakino.ru>, 2012.
 msgid ""
 msgstr ""
-"Project-Id-Version: nova\n"
+"Project-Id-Version: nova 2012.1-6\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2012-06-25 10:00+0000\n"
-"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
-"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
-"Language-Team: LANGUAGE <LL@li.org>\n"
-"Language: \n"
+"PO-Revision-Date: 2012-06-21 21:10+0400\n"
+"Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
+"Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
+"Language: ru\n"
 "MIME-Version: 1.0\n"
-"Content-Type: text/plain; charset=CHARSET\n"
+"Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Lokalize 1.2\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n"
+"%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
+#, fuzzy
+#| msgid "Start Nova services at boot?"
 msgid "Start nova services at boot?"
-msgstr ""
+msgstr "Запускать службы Nova при включении машины?"
 
 #. Type: boolean
 #. Description
@@ -29,13 +32,13 @@ msgstr ""
 msgid ""
 "Please choose whether you want to start Nova services when the machine is "
 "booted up."
-msgstr ""
+msgstr "Укажите, нужно ли запускать службы Nova при включении машины."
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
 msgid "Set up a database for Nova?"
-msgstr ""
+msgstr "Настроить базу данных для Nova?"
 
 #. Type: boolean
 #. Description
@@ -44,6 +47,8 @@ msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
 msgstr ""
+"Для использования Nova требуется настроить базу данных. Если вы хотите "
+"сделать это сейчас, то проверьте, что у вас есть вся необходимая информация:"
 
 #. Type: boolean
 #. Description
@@ -54,6 +59,10 @@ msgid ""
 " * a username and password to access the database;\n"
 " * the type of database management software you want to use."
 msgstr ""
+" * имя узла сервера базы данных (этот сервер должен принимать\n"
+"   TCP-соединения с этой машины);\n"
+" * имя пользователя и пароль для доступа к базе данных;\n"
+" * тип базы данных, которую вы хотите использовать."
 
 #. Type: boolean
 #. Description
@@ -62,6 +71,8 @@ msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
 msgstr ""
+"Если вы ответите отрицательно, то база данных настроена не будет, и Nova "
+"будет использоваться SQLite."
 
 #. Type: boolean
 #. Description
@@ -70,6 +81,8 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
 msgstr ""
+"Позднее, вы можете изменить эту настройку, запустив «dpkg-reconfigure -plow "
+"nova-common»."
 
 #. Type: string
 #. Description

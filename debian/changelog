@@ -2,6 +2,16 @@ nova (2012.1-8) unstable; urgency=low
 
   * Fixes "Cannot disassociate network from project" critical error 'bool'
   object has no attribute decode (Closes: #672350).
+  * Added new debconf translations (with thanks to):
+    - es: jathan <jathanblackred@gmail.com> (Closes: #678479).
+    - de: Pfannenstein Erik <epfannenstein@gmx.de> (Closes: #678034).
+    - gl: Jorge Barreiro <yortx.barry@gmail.com> (Closes: #678908).
+    - pt: Traduz <traduz@debianpt.org> (Closes: #678735).
+    - cs: Michal Simunek <michal.simunek@gmail.com> (Closes: #678667).
+    - ru: Yuri Kozlov <yuray@komyakino.ru> (Closes: #678429).
+    - fr: Julien Patriarca <patriarcaj@gmail.com> (Closes: #678234).
+    - pl: "Michał Kułach" <michalkulach@gmail.com> (Closes: #678154).
+    - sk: helix84 <helix84@centrum.sk> (Closes: #677284).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 25 Jun 2012 09:13:57 +0000
 

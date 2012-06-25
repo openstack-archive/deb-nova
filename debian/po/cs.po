@@ -1,27 +1,28 @@
-# SOME DESCRIPTIVE TITLE.
-# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the PACKAGE package.
-# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+# Czech PO debconf template translation of nova.
+# Copyright (C) 2012 Michal Simunek <michal.simunek@gmail.com>
+# This file is distributed under the same license as the nova package.
+# Michal Simunek <michal.simunek@gmail.com>, 2012.
 #
-#, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: nova\n"
+"Project-Id-Version: nova 2012.1-6\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2012-06-25 10:00+0000\n"
-"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
-"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
-"Language-Team: LANGUAGE <LL@li.org>\n"
-"Language: \n"
+"PO-Revision-Date: 2012-06-23 12:31+0200\n"
+"Last-Translator: Michal Simunek <michal.simunek@gmail.com>\n"
+"Language-Team: Czech <debian-l10n-czech@lists.debian.org>\n"
+"Language: cs\n"
 "MIME-Version: 1.0\n"
-"Content-Type: text/plain; charset=CHARSET\n"
+"Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
+#, fuzzy
+#| msgid "Start Nova services at boot?"
 msgid "Start nova services at boot?"
-msgstr ""
+msgstr "Spouštět služby Nova při zavádění?"
 
 #. Type: boolean
 #. Description
@@ -30,12 +31,14 @@ msgid ""
 "Please choose whether you want to start Nova services when the machine is "
 "booted up."
 msgstr ""
+"Zvolte si prosím, zda chcete, aby se služby Nova spouštěly při zavádění "
+"systému."
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
 msgid "Set up a database for Nova?"
-msgstr ""
+msgstr "Nastavit databázi pro Nova?"
 
 #. Type: boolean
 #. Description
@@ -44,6 +47,8 @@ msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
 msgstr ""
+"Nebyla nastavena žádná databáze k použití s Nova. Chcete-li ji nyní "
+"nastavit, ujistěte se prosím, že máte všechny potřebné údaje:"
 
 #. Type: boolean
 #. Description
@@ -54,6 +59,10 @@ msgid ""
 " * a username and password to access the database;\n"
 " * the type of database management software you want to use."
 msgstr ""
+" * název hostitele databázového serveru (který musí přijímat TCP\n"
+"   spojení z tohoto počítače);\n"
+" * uživatelské jméno a heslo pro přístup k databázi;\n"
+" * typ softwaru pro správu databáze, který chcete používat."
 
 #. Type: boolean
 #. Description
@@ -62,6 +71,8 @@ msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
 msgstr ""
+"Pokud tuto volbu nezadáte, databáze nebude vytvořena a Nova bude používat "
+"běžnou podporu pro SQLite."
 
 #. Type: boolean
 #. Description
@@ -70,6 +81,8 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
 msgstr ""
+"Toto nastavení můžete později změnit spuštěním \"dpkg-reconfigure -plow nova-"
+"common\"."
 
 #. Type: string
 #. Description
