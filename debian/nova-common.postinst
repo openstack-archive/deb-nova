@@ -58,7 +58,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
                     SQL_CONNECTION="pgsql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
                     ;;
                 *)
-                    SQL_CONNECTION="sqlite:////$dbc_basepath/$dbc_dbname"
+                    SQL_CONNECTION="sqlite:///$dbc_basepath/$dbc_dbname"
                     ;;
             esac
 
