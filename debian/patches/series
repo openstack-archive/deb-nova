@@ -2,3 +2,4 @@ cve-2012-2101
 cve-2012-2654
 nova-manage_flagfile_location.patch
 path-to-the-xenhost.conf-fixup.patch
+fixes-nova-manage-network-modify.patch
