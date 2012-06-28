@@ -42,6 +42,7 @@ from nova.image import s3
 from nova import log as logging
 from nova import network
 from nova.rpc import common as rpc_common
+from nova import quota
 from nova import utils
 from nova import volume
 
@@ -356,6 +357,11 @@ class CloudController(object):
         if not key_name is None:
             key_pairs = [x for x in key_pairs if x['name'] in key_name]
 
+        #If looking for non existent key pair
+        if key_name != None and key_pairs == []:
+            msg = _('Could not find key pair(s): %s') % ','.join(key_name)
+            raise exception.EC2APIError(msg)
+
         result = []
         for key_pair in key_pairs:
             # filter out the vpn keys
@@ -609,7 +615,7 @@ class CloudController(object):
                       to_port=to_port, msg="For ICMP, the"
                                            " type:code must be valid")
 
-            values['protocol'] = ip_protocol
+            values['protocol'] = ip_protocol.lower()
             values['from_port'] = from_port
             values['to_port'] = to_port
         else:
@@ -727,6 +733,13 @@ class CloudController(object):
                     raise exception.EC2APIError(err % values_for_rule)
                 postvalues.append(values_for_rule)
 
+        allowed = quota.allowed_security_group_rules(context,
+                                                   security_group['id'],
+                                                   1)
+        if allowed < 1:
+            msg = _("Quota exceeded, too many security group rules.")
+            raise exception.EC2APIError(msg)
+
         rule_ids = []
         for values_for_rule in postvalues:
             security_group_rule = db.security_group_rule_create(
@@ -783,6 +796,10 @@ class CloudController(object):
         if db.security_group_exists(context, context.project_id, group_name):
             msg = _('group %s already exists')
             raise exception.EC2APIError(msg % group_name)
+
+        if quota.allowed_security_groups(context, 1) < 1:
+            msg = _("Quota exceeded, too many security groups.")
+            raise exception.EC2APIError(msg)
 
         group = {'user_id': context.user_id,
                  'project_id': context.project_id,
@@ -1398,7 +1415,11 @@ class CloudController(object):
         ramdisk_id = image['properties'].get('ramdisk_id')
         if ramdisk_id:
             i['ramdiskId'] = ec2utils.image_ec2_id(ramdisk_id, 'ari')
-        i['imageOwnerId'] = image.get('owner')
+
+        if FLAGS.auth_strategy == 'deprecated':
+            i['imageOwnerId'] = image['properties'].get('project_id')
+        else:
+            i['imageOwnerId'] = image.get('owner')
 
         img_loc = image['properties'].get('image_location')
         if img_loc:
@@ -1598,7 +1619,7 @@ class CloudController(object):
                 # NOTE(yamahata): timeout and error. 1 hour for now for safety.
                 #                 Is it too short/long?
                 #                 Or is there any better way?
-                timeout = 1 * 60 * 60 * 60
+                timeout = 1 * 60 * 60
                 if time.time() > start_time + timeout:
                     raise exception.EC2APIError(
                         _('Couldn\'t stop instance with in %d sec') % timeout)

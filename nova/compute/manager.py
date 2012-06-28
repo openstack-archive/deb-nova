@@ -28,6 +28,7 @@ terminating it.
 **Related Flags**
 
 :instances_path:  Where instances are kept on disk
+:base_dir_name:  Where cached images are stored under instances_path
 :compute_driver:  Name of class that is used to handle virtualization, loaded
                   by :func:`nova.utils.import_object`
 
@@ -72,6 +73,11 @@ compute_opts = [
     cfg.StrOpt('instances_path',
                default='$state_path/instances',
                help='where instances are stored on disk'),
+    cfg.StrOpt('base_dir_name',
+               default='_base',
+               help="where cached images are stored under $instances_path"
+                    "This is NOT full path - just a folder name"
+                    "For per-compute-host cached images, Set to _base_$my_ip"),
     cfg.StrOpt('compute_driver',
                default='nova.virt.connection.get_connection',
                help='Driver to use for controlling virtualization'),
@@ -240,15 +246,21 @@ class ComputeManager(manager.SchedulerDependentManager):
             LOG.debug(_('Current state is %(drv_state)s, state in DB is '
                         '%(db_state)s.'), locals(), instance=instance)
 
+            net_info = compute_utils.get_nw_info_for_instance(instance)
             if ((expect_running and FLAGS.resume_guests_state_on_host_boot) or
                 FLAGS.start_guests_on_host_boot):
                 LOG.info(_('Rebooting instance after nova-compute restart.'),
                          locals(), instance=instance)
-                self.reboot_instance(context, instance['uuid'])
+                try:
+                    self.driver.resume_state_on_host_boot(context, instance,
+                                self._legacy_nw_info(net_info))
+                except NotImplementedError:
+                    LOG.warning(_('Hypervisor driver does not support '
+                                  'resume guests'), instance=instance)
+
             elif drv_state == power_state.RUNNING:
                 # Hyper-V and VMWareAPI drivers will raise an exception
                 try:
-                    net_info = self._get_instance_nw_info(context, instance)
                     self.driver.ensure_filtering_rules_for_instance(instance,
                                                 self._legacy_nw_info(net_info))
                 except NotImplementedError:
