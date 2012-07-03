@@ -1,3 +1,15 @@
+nova (2012.1.1-2) unstable; urgency=high
+
+  * Fixes CVE-2012-3360, CVE-2012-3361 (Closes: #680110).
+  * Debconf translation updates with thanks to:
+    - cs.po Michal Simunek <michal.simunek@gmail.com> (Closes: #679670).
+    - pt.po Miguel Figueiredo <elmig@debianpt.org> (Closes: #679497).
+    - sk.po helix84 <helix84@centrum.sk> (Closes: #679445).
+    - fr.po Julien Patriarca <patriarcaj@gmail.com> (Closes: #679422).
+    - sv.po Martin Bagge <brother@bsnet.se> (Closes: #679009).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 03 Jul 2012 18:18:38 +0000
+
 nova (2012.1.1-1) unstable; urgency=low
 
   * New upstream release.

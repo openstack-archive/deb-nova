@@ -1,4 +1,4 @@
-# Translation to of nova debconf templates to french.
+# Translation of nova debconf templates to french.
 # Copyright (C) 2012, French l10n team <debian-l10n-french@lists.debian.org>
 # This file is distributed under the same license as the nova package.
 # Julien Patriarca <patriarcaj@gmail.com>, 2012.
@@ -8,7 +8,7 @@ msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2012-06-25 10:00+0000\n"
-"PO-Revision-Date: 2012-06-11 08:42+0100\n"
+"PO-Revision-Date: 2012-06-26 06:58+0200\n"
 "Last-Translator: Julien Patriarca <patriarcaj@gmail.com>\n"
 "Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
 "Language: \n"
@@ -19,10 +19,9 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-#, fuzzy
 #| msgid "Start Nova services at boot?"
 msgid "Start nova services at boot?"
-msgstr "Faut-il démarrer les services Nova au démarrage ?"
+msgstr "Faut-il démarrer les services nova au démarrage ?"
 
 #. Type: boolean
 #. Description
@@ -38,7 +37,7 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:3001
 msgid "Set up a database for Nova?"
-msgstr "Installer une base de données pour Nova ?"
+msgstr "Faut-il installer une base de données pour Nova ?"
 
 #. Type: boolean
 #. Description
@@ -75,7 +74,7 @@ msgid ""
 "use regular SQLite support."
 msgstr ""
 "Si vous ne choisissez pas cette option, aucune base de données ne sera "
-"installée et Nova utilisera le support SQLite de base."
+"installée et Nova utilisera la gestion SQLite de base."
 
 #. Type: boolean
 #. Description
@@ -91,7 +90,7 @@ msgstr ""
 #. Description
 #: ../nova-compute-xen.templates:2001
 msgid "Address of the XenAPI dom0:"
-msgstr ""
+msgstr "Adresse pour le dom0 de XenAPI :"
 
 #. Type: string
 #. Description
@@ -101,6 +100,9 @@ msgid ""
 "can enter an IP address, or a fully qualified domain name if it resolves "
 "correctly."
 msgstr ""
+"Nova Compute Xen a besoin de connaître l'adresse du serveur qui exécute "
+"XenAPI. Vous pouvez indiquer l'adresse IP, ou un nom de domaine pleinement "
+"qualifié s'il peut être résolu correctement."
 
 #. Type: string
 #. Description
@@ -110,6 +112,10 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
+"Cela peut être un serveur exécutant Citrix XenServer, le serveur CentOS Xen "
+"Cloud Platform (XCP) installé depuis une image ISO, ou même la version XCP "
+"du project Kronos (disponible dans Debian et Ubuntu en tant que paquet xcp-"
+"api)."
 
 #. Type: string
 #. Description
@@ -121,27 +127,33 @@ msgstr ""
 #: ../nova-compute-xen.templates:4001
 msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgstr ""
+"Ce choix peut être modifié ultérieurement en modifiant le fichier /etc/nova/"
+"nova-compute.conf."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Username to connect to XenAPI:"
-msgstr ""
+msgstr "Identifiant de connexion à XenAPI :"
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Please enter the username used to connect to your XenAPI (XCP server)."
 msgstr ""
+"Veuillez indiquer l'identifiant à utiliser pour se connecter à  XenAPI "
+"(serveur XCP)."
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Password to connect to XenAPI:"
-msgstr ""
+msgstr "Mot de passe de connexion à XenAPI :"
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Please enter the password used to connect to your XenAPI (XCP server)."
 msgstr ""
+"Veuillez indiquer le mot de passe à utiliser pour la connexion à XenAPI "
+"(serveur XCP)."

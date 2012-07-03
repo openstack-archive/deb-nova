@@ -8,28 +8,26 @@ msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2012-06-25 10:00+0000\n"
-"PO-Revision-Date: 2012-06-11 11:14+0100\n"
+"PO-Revision-Date: 2012-06-27 20:48+0100\n"
 "Last-Translator: Martin Bagge / brother <brother@bsnet.se>\n"
 "Language-Team: Swedish <debian-l10n-swedish@lists.debian.org>\n"
 "Language: \n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"X-Poedit-Language: Swedish\n"
+"X-Poedit-Country: Sweden\n"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-#, fuzzy
-#| msgid "Start Nova services at boot?"
 msgid "Start nova services at boot?"
-msgstr "Ska Nova-tjänsterna startas vid systemets uppstart?"
+msgstr "Starta nova-tjänsterna vid systemets uppstart?"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-msgid ""
-"Please choose whether you want to start Nova services when the machine is "
-"booted up."
+msgid "Please choose whether you want to start Nova services when the machine is booted up."
 msgstr "Ange om du vill att Nova-tjänsterna startar när systemet startar."
 
 #. Type: boolean
@@ -41,12 +39,8 @@ msgstr "Installera en databas för Nova?"
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
-msgid ""
-"No database has been set up for Nova to use. If you want to set one up now, "
-"please make sure you have all needed information:"
-msgstr ""
-"Ingen databas har installerats för Nova. Om du vill installera en sådan nu "
-"behöver ha följande information redo:"
+msgid "No database has been set up for Nova to use. If you want to set one up now, please make sure you have all needed information:"
+msgstr "Ingen databas har installerats för Nova. Om du vill installera en sådan nu behöver ha följande information redo:"
 
 #. Type: boolean
 #. Description
@@ -65,46 +59,32 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
-msgid ""
-"If you don't choose this option, no database will be set up and Nova will "
-"use regular SQLite support."
-msgstr ""
-"Om du inte väljer detta alternativ kommer ingen databas att installeras, "
-"Nova kommer då använda SQLite-stödet."
+msgid "If you don't choose this option, no database will be set up and Nova will use regular SQLite support."
+msgstr "Om du inte väljer detta alternativ kommer ingen databas att installeras, Nova kommer då använda SQLite-stödet."
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
-msgid ""
-"You can change this setting later on by running \"dpkg-reconfigure -plow "
-"nova-common\"."
-msgstr ""
-"Detta kan ändras senare genom att köra \"dpkg-reconfigure -plow nova-common"
-"\"."
+msgid "You can change this setting later on by running \"dpkg-reconfigure -plow nova-common\"."
+msgstr "Detta kan ändras senare genom att köra \"dpkg-reconfigure -plow nova-common\"."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:2001
 msgid "Address of the XenAPI dom0:"
-msgstr ""
+msgstr "Adress till XenAPI dom0:"
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:2001
-msgid ""
-"Nova Compute Xen needs to know the address of the server running XenAPI. You "
-"can enter an IP address, or a fully qualified domain name if it resolves "
-"correctly."
-msgstr ""
+msgid "Nova Compute Xen needs to know the address of the server running XenAPI. You can enter an IP address, or a fully qualified domain name if it resolves correctly."
+msgstr "Nova Compute Xen behöver veta adressen till servern som kör XenAPI. Du kan ange en IP-adress eller ett komplett kvalificerat domännamn om det kan slås upp korrekt."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:2001
-msgid ""
-"This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform "
-"(XCP) appliance installed from an ISO image, or even the Kronos Project's "
-"XCP (available in Debian and Ubuntu as the package xcp-xapi)."
-msgstr ""
+msgid "This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform (XCP) appliance installed from an ISO image, or even the Kronos Project's XCP (available in Debian and Ubuntu as the package xcp-xapi)."
+msgstr "Det kan vara en server som kör Citrix XenServer,  CentOS Xen Cloud Platform installerad från en ISO-avbildning eller tom Kronos Projects XCP (tillgängligt i Debian och Ubuntu i paketet xcp-xapi)."
 
 #. Type: string
 #. Description
@@ -112,31 +92,47 @@ msgstr ""
 #. Description
 #. Type: password
 #. Description
-#: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
+#: ../nova-compute-xen.templates:2001
+#: ../nova-compute-xen.templates:3001
 #: ../nova-compute-xen.templates:4001
 msgid "This can later be edited in /etc/nova/nova-compute.conf."
-msgstr ""
+msgstr "Detta kan senare justeras i /etc/nova/nova-compute.conf."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Username to connect to XenAPI:"
-msgstr ""
+msgstr "Användarnamn för att ansluta till XenAPI:"
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Please enter the username used to connect to your XenAPI (XCP server)."
-msgstr ""
+msgstr "Ange användarnamnet som ska användas för att ansluta till din XenAPI (XCP-server)."
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Password to connect to XenAPI:"
-msgstr ""
+msgstr "Lösenord för att ansluta till XenAPI:"
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Please enter the password used to connect to your XenAPI (XCP server)."
-msgstr ""
+msgstr "Ange lösenordet som ska användas för att ansluta till din XenAPI (XCP-server)."
+
+#~ msgid ""
+#~ "Nova Compute Xen needs to know the address of the server running XenAPI. "
+#~ "This can be a server running XenServer, the Citrix CentOS XCP appliance "
+#~ "installed from Citrix ISO image, or even a Debian server running Xen "
+#~ "Cloud Platform (XCP / Kronos project), which is available directly in "
+#~ "Debian under the package name xcp-xapi. You can enter an IP address or a "
+#~ "fully qualified domain name if it resolves correctly."
+#~ msgstr ""
+#~ "Nova Compute Xen behöver veta adressen till servern som kör XenAPI. Det "
+#~ "kan vara adressen till servern som kör XenServer, Citrix CentOS XCP-"
+#~ "installationen från en Citrix ISO-avbildning eller tom en Debian-server "
+#~ "som kör Xen Cloud Platform (XCP/Kronos project), XCP är tillgängligt i "
+#~ "Debian i paketet xcp-xapi. Du kan ange en IP-adresse eller ett komplett "
+#~ "kvalificerat domännamn om det kan slås upp korrekt."

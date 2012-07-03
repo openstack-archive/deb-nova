@@ -8,7 +8,7 @@ msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2012-06-25 10:00+0000\n"
-"PO-Revision-Date: 2012-06-17 09:16+0100\n"
+"PO-Revision-Date: 2012-06-25 20:07+0100\n"
 "Last-Translator: Miguel Figueiredo <elmig@debianpt.org>\n"
 "Language-Team: Portuguese <traduz@debianpt.org>\n"
 "Language: \n"
@@ -19,10 +19,9 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-#, fuzzy
 #| msgid "Start Nova services at boot?"
 msgid "Start nova services at boot?"
-msgstr "Iniciar os serviços Nova no arranque?"
+msgstr "Iniciar os serviços nova no arranque?"
 
 #. Type: boolean
 #. Description
@@ -89,7 +88,7 @@ msgstr ""
 #. Description
 #: ../nova-compute-xen.templates:2001
 msgid "Address of the XenAPI dom0:"
-msgstr ""
+msgstr "Endereço da dom0 XenAPI:"
 
 #. Type: string
 #. Description
@@ -99,6 +98,9 @@ msgid ""
 "can enter an IP address, or a fully qualified domain name if it resolves "
 "correctly."
 msgstr ""
+"O Nova Compute Xen necessita saber qual o endereço do servidor que corre a "
+"XenAPI. Pode introduzir um endereço IP ou um nome completo de domínio, se "
+"resolver correctamente."
 
 #. Type: string
 #. Description
@@ -108,6 +110,9 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
+"Isto pode ser um servidor que corre Citrix XenServer, um appliance CentOS "
+"Cloud Plataform (XCP) instalado a partir de uma imagem ISO, ou mesmo o XCP "
+"da Kronos Project (disponível em Debian e Ubuntu como o pacote xcp-xapi)."
 
 #. Type: string
 #. Description
@@ -118,28 +123,30 @@ msgstr ""
 #: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
 #: ../nova-compute-xen.templates:4001
 msgid "This can later be edited in /etc/nova/nova-compute.conf."
-msgstr ""
+msgstr "Isto pode ser editado posteriormente em /etc/nova/nova-compute.conf."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Username to connect to XenAPI:"
-msgstr ""
+msgstr "Nome de utilizador para ligar a XenAPI:"
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Please enter the username used to connect to your XenAPI (XCP server)."
-msgstr ""
+msgstr "Por favor introduza o nome do utilizador para ligar à sua XenAPI "
+"(servidor XCP)."
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Password to connect to XenAPI:"
-msgstr ""
+msgstr "Palavra-passe para ligar à XenAPI:"
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Please enter the password used to connect to your XenAPI (XCP server)."
-msgstr ""
+msgstr "Por favor introduza a palavra-passe utilizada para ligar à sua "
+"XenAPI (servidor XCP)."
