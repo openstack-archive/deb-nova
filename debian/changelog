@@ -1,6 +1,7 @@
 nova (2012.1.1-3) unstable; urgency=low
 
   * Added a display-po-stats target in debian/rules
+  * Added a call-for-po-trans target in debian/rules
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 04 Jul 2012 17:15:47 +0000
 

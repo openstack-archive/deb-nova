@@ -81,3 +81,6 @@ display-po-stats:
 		echo -n $$i": " ; \
 		msgfmt -o /dev/null --statistic $$i ; \
 	done
+
+call-for-po-trans:
+	podebconf-report-po --call --withtranslators --languageteam
