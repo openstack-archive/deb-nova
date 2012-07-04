@@ -75,3 +75,9 @@ get-vcs-source:
 		git checkout -b master upstream/master ; \
 	fi
 	git checkout debian/unstable
+
+display-po-stats:
+	cd $(CURDIR)/debian/po ; for i in *.po ; do \
+		echo -n $$i": " ; \
+		msgfmt -o /dev/null --statistic $$i ; \
+	done
