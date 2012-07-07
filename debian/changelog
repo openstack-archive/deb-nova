@@ -7,6 +7,8 @@ nova (2012.1.1-3) unstable; urgency=low
     - pl.po: "Michał Kułach" <michalkulach@gmail.com> (Closes: #680524).
     - da.po: Joe Dalton <joedalton2@yahoo.dk> (Closes: #680354).
     - ru.po: Yuri Kozlov <yuray@komyakino.ru> (Closes: #680267).
+  * Do not rm -r /var/lib/nova/instances in the nova-compute postrm, because
+  it has files from nova-common. Same with nova-network (Closes: #680642).
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 04 Jul 2012 17:15:47 +0000
 

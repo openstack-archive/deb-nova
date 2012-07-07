@@ -4,8 +4,6 @@ set -e
 
 if [ "$1" = "purge" ] ; then
     rm -f /var/log/nova/nova-compute.log*
-    rm -fr /var/lib/nova/instances
 fi
-
 
 #DEBHELPER#

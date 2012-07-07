@@ -5,8 +5,6 @@ set -e
 if [ "$1" = "purge" ] ; then
     rm -f /var/log/nova/nova-network.log*
     rm -f /var/log/nova/nova-dhcpbridge.log*
-    rm -fr /var/lib/nova/networks
 fi
-
 
 #DEBHELPER#
