@@ -8,7 +8,7 @@ msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2012-06-25 10:00+0000\n"
-"PO-Revision-Date: 2012-06-16 23:51+0200\n"
+"PO-Revision-Date: 2012-07-05 23:51+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
 "Language: \n"
@@ -19,8 +19,6 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-#, fuzzy
-#| msgid "Start Nova services at boot?"
 msgid "Start nova services at boot?"
 msgstr "Start Novatjenester ved opstart?"
 
@@ -47,7 +45,7 @@ msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
 msgstr ""
-"Ingen database er blevet opsat som Nova kan bruge. Hvis du ønsker at opsætte "
+"Ingen database er blevet opsat, som Nova kan bruge. Hvis du ønsker at opsætte "
 "en nu så sikr dig, at du har den krævede information:"
 
 #. Type: boolean
@@ -88,7 +86,7 @@ msgstr ""
 #. Description
 #: ../nova-compute-xen.templates:2001
 msgid "Address of the XenAPI dom0:"
-msgstr ""
+msgstr "Adresse for XenAPI dom0:"
 
 #. Type: string
 #. Description
@@ -98,6 +96,9 @@ msgid ""
 "can enter an IP address, or a fully qualified domain name if it resolves "
 "correctly."
 msgstr ""
+"Nova Compute Xen skal kende adressen for serveren, der kører XenAPI. Du kan "
+"indtaste en IP-adresse eller et fuldt kvalificeret domænenavn, hvis det "
+"bliver slået korrekt op."
 
 #. Type: string
 #. Description
@@ -107,6 +108,9 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
+"Dette kan være en server der kører Citrix XenServer, CentOS Xen Cloud Platform- "
+"apparatet (XCP) installeret fra et ISO-aftryk, eller endda Kronosprojektets "
+"XCP (tilgængelig i Debian og Ubuntu som pakken xcp-xapi)."
 
 #. Type: string
 #. Description
@@ -117,28 +121,33 @@ msgstr ""
 #: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
 #: ../nova-compute-xen.templates:4001
 msgid "This can later be edited in /etc/nova/nova-compute.conf."
-msgstr ""
+msgstr "Dette kan senere redigeres i /etc/nova/nova-compute.conf."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Username to connect to XenAPI:"
-msgstr ""
+msgstr "Brugernavn til at forbinde til XenAPI:"
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Please enter the username used to connect to your XenAPI (XCP server)."
 msgstr ""
+"Indtast venligst brugernavnet brugt til at forbinde til din XenAPI "
+"XCP-server)."
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Password to connect to XenAPI:"
-msgstr ""
+msgstr "Adgangskode til at forbinde til XenAPI:"
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Please enter the password used to connect to your XenAPI (XCP server)."
 msgstr ""
+"Indtast venligst adgangskoden brugt til at forbinde til din XenAPI "
+"(XCP-server)."
+
