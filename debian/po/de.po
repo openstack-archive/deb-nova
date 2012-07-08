@@ -32,14 +32,14 @@ msgid ""
 "Please choose whether you want to start Nova services when the machine is "
 "booted up."
 msgstr ""
-"Bitte wÃ¤hlen Sie, ob die Nova-Dienste automatisch gestartet werden sollen, "
+"Bitte wählen Sie, ob die Nova-Dienste automatisch gestartet werden sollen, "
 "wenn die Maschine hochgefahren wird."
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
 msgid "Set up a database for Nova?"
-msgstr "Datenbank fÃ¼r Nova einrichten?"
+msgstr "Datenbank für Nova einrichten?"
 
 #. Type: boolean
 #. Description
@@ -50,7 +50,7 @@ msgid ""
 msgstr ""
 "Bisher ist noch keine Datenbank eingerichtet worden, die Nova benutzen kann. "
 "Falls Sie das jetzt tun wollen, stellen Sie bitte sicher, dass Sie alle "
-"benÃ¶tigten Informationen haben:"
+"benötigten Informationen haben:"
 
 #. Type: boolean
 #. Description
@@ -73,8 +73,8 @@ msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
 msgstr ""
-"Wenn Sie diese Option nicht auswÃ¤hlen, wird keine Datenbank eingerichtet und "
-"Nova wird auf die normale SQLite-UnterstÃ¼tzung zurÃ¼ckgreifen."
+"Wenn Sie diese Option nicht auswählen, wird keine Datenbank eingerichtet und "
+"Nova wird auf die normale SQLite-Unterstützung zurückgreifen."
 
 #. Type: boolean
 #. Description
@@ -83,8 +83,8 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
 msgstr ""
-"Sie kÃ¶nnen diese Einstellung spÃ¤ter durch AusfÃ¼hren von Â»dpkg-reconfigure -"
-"plow nova-commonÂ« Ã¤ndern."
+"Sie können diese Einstellung später durch Ausführen von »dpkg-reconfigure -"
+"plow nova-common« ändern."
 
 #. Type: string
 #. Description
@@ -100,9 +100,9 @@ msgid ""
 "can enter an IP address, or a fully qualified domain name if it resolves "
 "correctly."
 msgstr ""
-"Nova Compute Xen muss die Adresse des Servers kennen, der XenAPI ausfÃ¼hrt. "
-"Sie kÃ¶nnen wahlweise eine IP-Adresse oder einen vollqualifizierten Domain-"
-"Namen eingeben, wenn er korrekt aufgelÃ¶st wird."
+"Nova Compute Xen muss die Adresse des Servers kennen, der XenAPI ausführt. "
+"Sie können wahlweise eine IP-Adresse oder einen vollqualifizierten Domain-"
+"Namen eingeben, wenn er korrekt aufgelöst wird."
 
 #. Type: string
 #. Description
@@ -114,7 +114,7 @@ msgid ""
 msgstr ""
 "Das kann ein Server mit Citrix XenServer, die von einem ISO-Image "
 "installierte CentOS Xen-Cloud-Platform-(XCP)-Anwendung oder sogar das XCP des "
-"Kronos-Projekts sein (in Debian und Ubuntu als Paket xcp-xapi verfÃ¼gbar)."
+"Kronos-Projekts sein (in Debian und Ubuntu als Paket xcp-xapi verfügbar)."
 
 #. Type: string
 #. Description
@@ -126,14 +126,14 @@ msgstr ""
 #: ../nova-compute-xen.templates:4001
 msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgstr ""
-"Dies kann spÃ¤ter in /etc/nova/nova-compute.conf geÃ¤ndert werden."
+"Dies kann später in /etc/nova/nova-compute.conf geändert werden."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Username to connect to XenAPI:"
 msgstr ""
-"Benutzername fÃ¼r die Verbindung mit XenAPI:"
+"Benutzername für die Verbindung mit XenAPI:"
 
 #. Type: string
 #. Description
@@ -148,7 +148,7 @@ msgstr ""
 #: ../nova-compute-xen.templates:4001
 msgid "Password to connect to XenAPI:"
 msgstr ""
-"Passwort fÃ¼r die Verbindung mit XenAPI:"
+"Passwort für die Verbindung mit XenAPI:"
 
 #. Type: password
 #. Description
