@@ -40,7 +40,9 @@ Build-Depends: debhelper (>= 7.0.50),
  ipython,
  bpython,
  python-qpid,
- python-iso8601
+ python-iso8601,
+ openssh-client,
+ pep8
 Build-Depends-Indep:
  python-setuptools,
  python-sphinx (>> 1.0)
