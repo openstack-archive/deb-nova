@@ -2,3 +2,4 @@ nova-manage_flagfile_location.patch
 path-to-the-xenhost.conf-fixup.patch
 CVE-2012-3360_CVE-2012-3361.patch
 stable_essex_20120710.patch
+iscsiadm_path.patch
