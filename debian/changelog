@@ -1,3 +1,9 @@
+nova (2012.1.1-5) unstable; urgency=high
+
+  * Fix CVE-2012-3371. Closes: #681301
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Thu, 12 Jul 2012 10:14:32 +0200
+
 nova (2012.1.1-4) unstable; urgency=low
 
   * fix the iscsiadm path (Closes: #681175).
