@@ -19,7 +19,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute"
 NAME=nova-compute
 DAEMON=/usr/bin/nova-compute
-DAEMON_ARGS="--flagfile=/etc/nova/nova.conf"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
@@ -33,6 +33,8 @@ mkdir -p ${LOCK_DIR}
 chown ${NOVA_USER} ${LOCK_DIR}
 
 . /lib/lsb/init-functions
+
+test -f '/etc/nova/nova-compute.conf' && DAEMON_ARGS=${DAEMON_ARGS}" --config-file=/etc/nova/nova-compute.conf"
 
 # Read configuration variable file if it is present
 if [ -s $DEFAULTS_FILE ]; then
