@@ -30,8 +30,8 @@ msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2012-06-25 10:00+0000\n"
-"PO-Revision-Date: 2012-06-24 10:09-0500\n"
-"Last-Translator: Jathan <jathanblackred@gmail.com>\n"
+"PO-Revision-Date: 2012-07-13 01:32-0500\n"
+"Last-Translator: Jonathan Bustillos <jathanblackred@gmail.com>\n"
 "Language-Team: Debian Spanish <debian-l10n-spanish@lists.debian.org>\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
@@ -42,16 +42,15 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-#, fuzzy
-#| msgid "Start Nova services at boot?"
+#| msgid "Start nova services at boot?"
 msgid "Start nova services at boot?"
-msgstr "¿Desea iniciar los servicios de nova durante el arranque del sistema?"
+msgstr "¿Desea iniciar los servicios de nova en el arranque del sistema?"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
 msgid ""
-"Please choose whether you want to start Nova services when the machine is "
+"Please choose whether you want to start nova services when the machine is "
 "booted up."
 msgstr ""
 "Elija si desea iniciar los servicios de nova cuando la máquina está "
@@ -60,19 +59,18 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
-msgid "Set up a database for Nova?"
+msgid "Set up a database for nova?"
 msgstr "¿Desea configurar una base de datos para nova?"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
 msgid ""
-"No database has been set up for Nova to use. If you want to set one up now, "
+"No database has been set up for nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
 msgstr ""
-"No se ha configurado ninguna base de datos para utilizar con nova. Si \n"
-"desea configurar una ahora, asegúrese de que tiene toda la información\n"
-"necesaria:"
+"No se ha configurado ninguna base de datos para utilizar con nova. Si desea "
+"configurar una ahora, asegúrese de que tiene toda la información necesaria:"
 
 #. Type: boolean
 #. Description
@@ -83,16 +81,16 @@ msgid ""
 " * a username and password to access the database;\n"
 " * the type of database management software you want to use."
 msgstr ""
-"* El nombre del servidor de la base de datos (el cual debe permitir\n"
-"conexiones TCP desde esta máquina);\n"
-"* Un nombre de usuario y una contraseña para acceder a la base de datos;\n"
-"* El software para gestión de bases de datos que desea utilizar."
+".* El nombre del servidor de la base de datos (el cual debe permitir\n"
+"   conexiones TCP desde esta máquina);\n"
+" * Un nombre de usuario y una contraseña para acceder a la base de datos;\n"
+" * El software para gestión de bases de datos que desea utilizar."
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
 msgid ""
-"If you don't choose this option, no database will be set up and Nova will "
+"If you don't choose this option, no database will be set up and nova will "
 "use regular SQLite support."
 msgstr ""
 "Si no elige esta opción, no se configurará ninguna base de datos y nova\n"
@@ -112,16 +110,19 @@ msgstr ""
 #. Description
 #: ../nova-compute-xen.templates:2001
 msgid "Address of the XenAPI dom0:"
-msgstr ""
+msgstr "Dirección de la XenAPI dom0:"
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:2001
 msgid ""
-"Nova Compute Xen needs to know the address of the server running XenAPI. You "
+"nova Compute Xen needs to know the address of the server running XenAPI. You "
 "can enter an IP address, or a fully qualified domain name if it resolves "
 "correctly."
 msgstr ""
+"nova Compute Xen necesita saber la dirección del servidor que ejecuta "
+"XenAPI. Puede introducir una dirección IP o un nombre de dominio completo si "
+"se resuelve correctamente."
 
 #. Type: string
 #. Description
@@ -131,6 +132,10 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
+"Esto puede ser un servidor que ejecuta Citrix XenServer, el dispositivo "
+"CentOS Xen Cloud Platform (XCP), instalado desde una imagen ISO, o incluso "
+"el Proyecto Kronos de XCP (disponible en Debian y Ubuntu como el paquete de "
+"XCP-XAPI)."
 
 #. Type: string
 #. Description
@@ -141,28 +146,31 @@ msgstr ""
 #: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
 #: ../nova-compute-xen.templates:4001
 msgid "This can later be edited in /etc/nova/nova-compute.conf."
-msgstr ""
+msgstr "Esto puede ser editado después en /etc/nova/nova-compute.conf."
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Username to connect to XenAPI:"
-msgstr ""
+msgstr "Nombre de usuario para conectarse a XenAPI"
 
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:3001
 msgid "Please enter the username used to connect to your XenAPI (XCP server)."
 msgstr ""
+"Introduzca el nombre de usuario utilizado para conectarse a su XenAPI "
+"(servidor XCP)."
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Password to connect to XenAPI:"
-msgstr ""
+msgstr "Contraseña para conectarse a XenAPI:"
 
 #. Type: password
 #. Description
 #: ../nova-compute-xen.templates:4001
 msgid "Please enter the password used to connect to your XenAPI (XCP server)."
 msgstr ""
+"Introduzca la contraseña para conectarse a su servidor XenAPI (servidor XCP)."
