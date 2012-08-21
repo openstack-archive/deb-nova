@@ -2,6 +2,8 @@ nova (2012.1.1-7) unstable; urgency=low
 
   * Updated Spanish debconf translation thanks to Jathan
   <jathanblackred@gmail.com> (Closes: #678479).
+  * Added Italian debconf translation thanks to Beatrice Torracca
+  <beatricet@libero.it> (Closes: #681250).
   * Added missing [DEFAULT] in nova-compute.conf for xen.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 10 Aug 2012 06:17:03 +0000
