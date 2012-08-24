@@ -44,7 +44,7 @@ msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
 msgstr ""
-"Non Ë stato impostato alcun database per l'uso da parte di Nova. Se si "
+"Non √® stato impostato alcun database per l'uso da parte di Nova. Se si "
 "desidera impostarne uno ora assicurarsi di avere tutte le informazioni "
 "necessarie:"
 
@@ -69,8 +69,8 @@ msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
 msgstr ""
-"Se non si sceglie questa opzione, non verr‡ impostato alcun database e Nova "
-"user‡ il regolare supporto SQLite."
+"Se non si sceglie questa opzione, non verr√† impostato alcun database e Nova "
+"user√† il regolare supporto SQLite."
 
 #. Type: boolean
 #. Description
@@ -79,7 +79,7 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
 msgstr ""
-"» possibile cambiare questa impostazione successivamente eseguendo \"dpkg-"
+"√à possibile cambiare questa impostazione successivamente eseguendo \"dpkg-"
 "reconfigure -plow nova-common\"."
 
 #. Type: string
@@ -96,8 +96,8 @@ msgid ""
 "can enter an IP address, or a fully qualified domain name if it resolves "
 "correctly."
 msgstr ""
-"» necessario che Nova Compute Xen conosca l'indirizzo del server che esegue "
-"XenAPI. Si puÚ inserire un indirizzo IP o un nome di dominio pienamente "
+"√à necessario che Nova Compute Xen conosca l'indirizzo del server che esegue "
+"XenAPI. Si pu√≤ inserire un indirizzo IP o un nome di dominio pienamente "
 "qualificato se viene risolto in modo corretto."
 
 #. Type: string
@@ -108,7 +108,7 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
-"PuÚ essere un server con in esecuzione Citrix XenServer, l'appliance CentOS "
+"Pu√≤ essere un server con in esecuzione Citrix XenServer, l'appliance CentOS "
 "Xen Cloud Platform (XCP) installata da un'immagine ISO o persino l'XCP del "
 "Kronos Project (disponibile in Debian e Ubuntu come pacchetto xcp-xapi)."
 
@@ -121,7 +121,7 @@ msgstr ""
 #: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
 #: ../nova-compute-xen.templates:4001
 msgid "This can later be edited in /etc/nova/nova-compute.conf."
-msgstr "PuÚ essere modificato in seguito in /etc/nova/nova-compute.conf."
+msgstr "Pu√≤ essere modificato in seguito in /etc/nova/nova-compute.conf."
 
 #. Type: string
 #. Description

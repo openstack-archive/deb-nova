@@ -1,3 +1,9 @@
+nova (2012.1.1-8) unstable; urgency=low
+
+  * Corrected wrong encoding in the it.po (Closes: #685576).
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 24 Aug 2012 05:30:21 +0000
+
 nova (2012.1.1-7) unstable; urgency=low
 
   * Updated Spanish debconf translation thanks to Jathan
