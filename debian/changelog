@@ -1,3 +1,9 @@
+nova (2012.1.1-9) unstable; urgency=low
+
+  * Added Debconf Chinese translation thanks to ben <duyujie.dyj@gmail.com>.
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 27 Aug 2012 12:00:28 +0000
+
 nova (2012.1.1-8) unstable; urgency=low
 
   * Corrected wrong encoding in the it.po (Closes: #685576).
