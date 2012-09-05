@@ -1,8 +1,18 @@
 nova (2012.1.1-9) unstable; urgency=low
 
+  [ Thomas Goirand ]
   * Added Debconf Chinese translation thanks to ben <duyujie.dyj@gmail.com>.
 
- -- Thomas Goirand <zigo@debian.org>  Mon, 27 Aug 2012 12:00:28 +0000
+  [ Loic Dachary (OuoU) ]
+  * revert to using --flagfile instead of --config-file in
+    nova-compute.init because --flagfile supports both configuration file
+    formats. Using --config-file forces to use the newest configuration
+    file format and is not backward compatible. If upgrading from
+    nova-compute-2012.1.1-4 to all versions until nova-compute-2012.1.1-8
+    when using the old format in nova.conf, nova-compute will no longer
+    run. It will silently fail to parse the older format and abort.
+  
+ -- Loic Dachary (OuoU) <loic@debian.org>  Mon, 03 Sep 2012 13:24:09 +0200
 
 nova (2012.1.1-8) unstable; urgency=low
 
