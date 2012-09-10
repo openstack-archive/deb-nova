@@ -3,6 +3,7 @@
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2011 Piston Cloud Computing, Inc.
+# Copyright 2012 Red Hat, Inc.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,49 +18,52 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Handles all requests relating to compute resources (e.g. guest vms,
-networking and storage of vms, and compute hosts on which they run)."""
+"""Handles all requests relating to compute resources (e.g. guest VMs,
+networking and storage of VMs, and compute hosts on which they run)."""
 
+import base64
 import functools
 import re
+import string
 import time
-
-import novaclient
-import webob.exc
+import urllib
 
 from nova import block_device
-from nova.compute import aggregate_states
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import vm_states
+from nova.consoleauth import rpcapi as consoleauth_rpcapi
+from nova import crypto
 from nova.db import base
 from nova import exception
 from nova import flags
-import nova.image
-from nova import log as logging
+from nova.image import glance
 from nova import network
-from nova.openstack.common import cfg
+from nova import notifications
+from nova.openstack.common import excutils
+from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 import nova.policy
 from nova import quota
-from nova import rpc
-from nova.scheduler import api as scheduler_api
+from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova import utils
 from nova import volume
 
 
 LOG = logging.getLogger(__name__)
 
-find_host_timeout_opt = cfg.StrOpt('find_host_timeout',
-        default=30,
-        help='Timeout after NN seconds when looking for a host.')
-
 FLAGS = flags.FLAGS
-FLAGS.register_opt(find_host_timeout_opt)
 flags.DECLARE('consoleauth_topic', 'nova.consoleauth')
 
+MAX_USERDATA_SIZE = 65535
+QUOTAS = quota.QUOTAS
 
-def check_instance_state(vm_state=None, task_state=None):
+
+def check_instance_state(vm_state=None, task_state=(None,)):
     """Decorator to check VM and/or task state before entry to API functions.
 
     If the instance is in the wrong state, the wrapper will raise an exception.
@@ -92,81 +96,65 @@ def check_instance_state(vm_state=None, task_state=None):
     return outer
 
 
-def wrap_check_policy(func):
+def check_instance_lock(function):
+    @functools.wraps(function)
+    def inner(self, context, instance, *args, **kwargs):
+        if instance['locked'] and not context.is_admin:
+            raise exception.InstanceIsLocked(instance_uuid=instance['uuid'])
+        # NOTE(danms): at this point, we have verified that either
+        # theinstance is not locked, or the user is suffiently endowed
+        # that it doesn't matter. While the following statement may be
+        # interpreted as the "the instance is not locked", it actually
+        # refers to the whole condition.
+        context.instance_lock_checked = True
+        return function(self, context, instance, *args, **kwargs)
+    return inner
+
+
+def policy_decorator(scope):
     """Check corresponding policy prior of wrapped method to execution"""
-    @functools.wraps(func)
-    def wrapped(self, context, target, *args, **kwargs):
-        check_policy(context, func.__name__, target)
-        return func(self, context, target, *args, **kwargs)
-    return wrapped
+    def outer(func):
+        @functools.wraps(func)
+        def wrapped(self, context, target, *args, **kwargs):
+            check_policy(context, func.__name__, target, scope)
+            return func(self, context, target, *args, **kwargs)
+        return wrapped
+    return outer
+
+wrap_check_policy = policy_decorator(scope='compute')
+wrap_check_security_groups_policy = policy_decorator(
+                                     scope='compute:security_groups')
 
 
-def check_policy(context, action, target):
-    _action = 'compute:%s' % action
+def check_policy(context, action, target, scope='compute'):
+    _action = '%s:%s' % (scope, action)
     nova.policy.enforce(context, _action, target)
 
 
-class BaseAPI(base.Base):
-    """Base API class."""
-    def __init__(self, **kwargs):
-        super(BaseAPI, self).__init__(**kwargs)
-
-    def _cast_or_call_compute_message(self, rpc_method, compute_method,
-            context, instance=None, host=None, params=None):
-        """Generic handler for RPC casts and calls to compute.
-
-        :param rpc_method: RPC method to use (rpc.call or rpc.cast)
-        :param compute_method: Compute manager method to call
-        :param context: RequestContext of caller
-        :param instance: The instance object to use to find host to send to
-                         Can be None to not include instance_uuid in args
-        :param host: Optional host to send to instead of instance['host']
-                     Must be specified if 'instance' is None
-        :param params: Optional dictionary of arguments to be passed to the
-                       compute worker
-
-        :returns: None
-        """
-        if not params:
-            params = {}
-        if not host:
-            if not instance:
-                raise exception.Error(_("No compute host specified"))
-            host = instance['host']
-            if not host:
-                raise exception.Error(_("Unable to find host for "
-                                        "Instance %s") % instance['uuid'])
-        queue = self.db.queue_get_for(context, FLAGS.compute_topic, host)
-        if instance:
-            params['instance_uuid'] = instance['uuid']
-        kwargs = {'method': compute_method, 'args': params}
-        return rpc_method(context, queue, kwargs)
-
-    def _cast_compute_message(self, *args, **kwargs):
-        """Generic handler for RPC casts to compute."""
-        self._cast_or_call_compute_message(rpc.cast, *args, **kwargs)
-
-    def _call_compute_message(self, *args, **kwargs):
-        """Generic handler for RPC calls to compute."""
-        return self._cast_or_call_compute_message(rpc.call, *args, **kwargs)
-
-    @staticmethod
-    def _cast_scheduler_message(context, args):
-        """Generic handler for RPC calls to the scheduler."""
-        rpc.cast(context, FLAGS.scheduler_topic, args)
-
-
-class API(BaseAPI):
+class API(base.Base):
     """API for interacting with the compute manager."""
 
     def __init__(self, image_service=None, network_api=None, volume_api=None,
-                 **kwargs):
+                 security_group_api=None, **kwargs):
         self.image_service = (image_service or
-                              nova.image.get_default_image_service())
+                              glance.get_default_image_service())
 
         self.network_api = network_api or network.API()
         self.volume_api = volume_api or volume.API()
+        self.security_group_api = security_group_api or SecurityGroupAPI()
+        self.consoleauth_rpcapi = consoleauth_rpcapi.ConsoleAuthAPI()
+        self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         super(API, self).__init__(**kwargs)
+
+    def _instance_update(self, context, instance_uuid, **kwargs):
+        """Update an instance in the database using kwargs as value."""
+
+        (old_ref, instance_ref) = self.db.instance_update_and_get_original(
+                context, instance_uuid, kwargs)
+        notifications.send_update(context, old_ref, instance_ref)
+
+        return instance_ref
 
     def _check_injected_file_quota(self, context, injected_files):
         """Enforce quota limits on injected files.
@@ -175,42 +163,122 @@ class API(BaseAPI):
         """
         if injected_files is None:
             return
-        limit = quota.allowed_injected_files(context, len(injected_files))
-        if len(injected_files) > limit:
-            raise exception.QuotaError(code="OnsetFileLimitExceeded")
-        path_limit = quota.allowed_injected_file_path_bytes(context)
+
+        # Check number of files first
+        try:
+            QUOTAS.limit_check(context, injected_files=len(injected_files))
+        except exception.OverQuota:
+            raise exception.OnsetFileLimitExceeded()
+
+        # OK, now count path and content lengths; we're looking for
+        # the max...
+        max_path = 0
+        max_content = 0
         for path, content in injected_files:
-            if len(path) > path_limit:
-                raise exception.QuotaError(code="OnsetFilePathLimitExceeded")
-            content_limit = quota.allowed_injected_file_content_bytes(
-                                                    context, len(content))
-            if len(content) > content_limit:
-                code = "OnsetFileContentLimitExceeded"
-                raise exception.QuotaError(code=code)
+            max_path = max(max_path, len(path))
+            max_content = max(max_content, len(content))
+
+        try:
+            QUOTAS.limit_check(context, injected_file_path_bytes=max_path,
+                               injected_file_content_bytes=max_content)
+        except exception.OverQuota as exc:
+            # Favor path limit over content limit for reporting
+            # purposes
+            if 'injected_file_path_bytes' in exc.kwargs['overs']:
+                raise exception.OnsetFilePathLimitExceeded()
+            else:
+                raise exception.OnsetFileContentLimitExceeded()
+
+    def _check_num_instances_quota(self, context, instance_type, min_count,
+                                   max_count):
+        """Enforce quota limits on number of instances created."""
+
+        # Determine requested cores and ram
+        req_cores = max_count * instance_type['vcpus']
+        req_ram = max_count * instance_type['memory_mb']
+
+        # Check the quota
+        try:
+            reservations = QUOTAS.reserve(context, instances=max_count,
+                                          cores=req_cores, ram=req_ram)
+        except exception.OverQuota as exc:
+            # OK, we exceeded quota; let's figure out why...
+            quotas = exc.kwargs['quotas']
+            usages = exc.kwargs['usages']
+            overs = exc.kwargs['overs']
+
+            headroom = dict((res, quotas[res] -
+                             (usages[res]['in_use'] + usages[res]['reserved']))
+                            for res in quotas.keys())
+
+            allowed = headroom['instances']
+            # Reduce 'allowed' instances in line with the cores & ram headroom
+            if instance_type['vcpus']:
+                allowed = min(allowed,
+                              headroom['cores'] // instance_type['vcpus'])
+            if instance_type['memory_mb']:
+                allowed = min(allowed,
+                              headroom['ram'] // instance_type['memory_mb'])
+
+            # Convert to the appropriate exception message
+            if allowed <= 0:
+                msg = _("Cannot run any more instances of this type.")
+                allowed = 0
+            elif min_count <= allowed <= max_count:
+                # We're actually OK, but still need reservations
+                return self._check_num_instances_quota(context, instance_type,
+                                                       min_count, allowed)
+            else:
+                msg = (_("Can only run %s more instances of this type.") %
+                       allowed)
+
+            resource = overs[0]
+            used = quotas[resource] - headroom[resource]
+            total_allowed = used + headroom[resource]
+            overs = ','.join(overs)
+
+            pid = context.project_id
+            LOG.warn(_("%(overs)s quota exceeded for %(pid)s,"
+                       " tried to run %(min_count)s instances. %(msg)s"),
+                     locals())
+            requested = dict(instances=min_count, cores=req_cores, ram=req_ram)
+            raise exception.TooManyInstances(overs=overs,
+                                             req=requested[resource],
+                                             used=used, allowed=total_allowed,
+                                             resource=resource)
+
+        return max_count, reservations
 
     def _check_metadata_properties_quota(self, context, metadata=None):
         """Enforce quota limits on metadata properties."""
         if not metadata:
             metadata = {}
         num_metadata = len(metadata)
-        quota_metadata = quota.allowed_metadata_items(context, num_metadata)
-        if quota_metadata < num_metadata:
+        try:
+            QUOTAS.limit_check(context, metadata_items=num_metadata)
+        except exception.OverQuota as exc:
             pid = context.project_id
-            msg = _("Quota exceeded for %(pid)s, tried to set "
-                    "%(num_metadata)s metadata properties") % locals()
-            LOG.warn(msg)
-            raise exception.QuotaError(code="MetadataLimitExceeded")
+            LOG.warn(_("Quota exceeded for %(pid)s, tried to set "
+                       "%(num_metadata)s metadata properties") % locals())
+            quota_metadata = exc.kwargs['quotas']['metadata_items']
+            raise exception.MetadataLimitExceeded(allowed=quota_metadata)
 
         # Because metadata is stored in the DB, we hard-code the size limits
         # In future, we may support more variable length strings, so we act
         #  as if this is quota-controlled for forwards compatibility
         for k, v in metadata.iteritems():
-            if len(k) > 255 or len(v) > 255:
-                pid = context.project_id
-                msg = _("Quota exceeded for %(pid)s, metadata property "
-                        "key or value too long") % locals()
+            if len(k) == 0:
+                msg = _("Metadata property key blank")
                 LOG.warn(msg)
-                raise exception.QuotaError(code="MetadataLimitExceeded")
+                raise exception.InvalidMetadata(reason=msg)
+            if len(k) > 255:
+                msg = _("Metadata property key greater than 255 characters")
+                LOG.warn(msg)
+                raise exception.InvalidMetadata(reason=msg)
+            if len(v) > 255:
+                msg = _("Metadata property value greater than 255 characters")
+                LOG.warn(msg)
+                raise exception.InvalidMetadata(reason=msg)
 
     def _check_requested_networks(self, context, requested_networks):
         """ Check if the networks requested belongs to the project
@@ -221,6 +289,79 @@ class API(BaseAPI):
             return
 
         self.network_api.validate_networks(context, requested_networks)
+
+    @staticmethod
+    def _handle_kernel_and_ramdisk(context, kernel_id, ramdisk_id, image,
+                                   image_service):
+        """Choose kernel and ramdisk appropriate for the instance.
+
+        The kernel and ramdisk can be chosen in one of three ways:
+
+            1. Passed in with create-instance request.
+
+            2. Inherited from image.
+
+            3. Forced to None by using `null_kernel` FLAG.
+        """
+        # Inherit from image if not specified
+        if kernel_id is None:
+            kernel_id = image['properties'].get('kernel_id')
+
+        if ramdisk_id is None:
+            ramdisk_id = image['properties'].get('ramdisk_id')
+
+        # Force to None if using null_kernel
+        if kernel_id == str(FLAGS.null_kernel):
+            kernel_id = None
+            ramdisk_id = None
+
+        # Verify kernel and ramdisk exist (fail-fast)
+        if kernel_id is not None:
+            image_service.show(context, kernel_id)
+
+        if ramdisk_id is not None:
+            image_service.show(context, ramdisk_id)
+
+        return kernel_id, ramdisk_id
+
+    @staticmethod
+    def _handle_availability_zone(availability_zone):
+        # NOTE(vish): We have a legacy hack to allow admins to specify hosts
+        #             via az using az:host. It might be nice to expose an
+        #             api to specify specific hosts to force onto, but for
+        #             now it just supports this legacy hack.
+        forced_host = None
+        if availability_zone and ':' in availability_zone:
+            availability_zone, forced_host = availability_zone.split(':')
+
+        if not availability_zone:
+            availability_zone = FLAGS.default_schedule_zone
+
+        return availability_zone, forced_host
+
+    @staticmethod
+    def _inherit_properties_from_image(image, auto_disk_config):
+        def prop(prop_, prop_type=None):
+            """Return the value of an image property."""
+            value = image['properties'].get(prop_)
+
+            if value is not None:
+                if prop_type == 'bool':
+                    value = utils.bool_from_str(value)
+
+            return value
+
+        options_from_image = {'os_type': prop('os_type'),
+                              'architecture': prop('arch'),
+                              'vm_mode': prop('vm_mode')}
+
+        # If instance doesn't have auto_disk_config overridden by request, use
+        # whatever the image indicates
+        if auto_disk_config is None:
+            auto_disk_config = prop('auto_disk_config', prop_type='bool')
+
+        options_from_image['auto_disk_config'] = auto_disk_config
+        return options_from_image
 
     def _create_instance(self, context, instance_type,
                image_href, kernel_id, ramdisk_id,
@@ -240,8 +381,6 @@ class API(BaseAPI):
 
         if not metadata:
             metadata = {}
-        if not display_description:
-            display_description = ''
         if not security_group:
             security_group = 'default'
 
@@ -251,81 +390,43 @@ class API(BaseAPI):
             min_count = 1
         if not max_count:
             max_count = min_count
-        if not metadata:
-            metadata = {}
 
         block_device_mapping = block_device_mapping or []
 
-        num_instances = quota.allowed_instances(context, max_count,
-                                                instance_type)
-        if num_instances < min_count:
-            pid = context.project_id
-            if num_instances <= 0:
-                msg = _("Cannot run any more instances of this type.")
-            else:
-                msg = (_("Can only run %s more instances of this type.") %
-                       num_instances)
-            LOG.warn(_("Quota exceeded for %(pid)s,"
-                  " tried to run %(min_count)s instances. %(msg)s"), locals())
-            raise exception.QuotaError(code="InstanceLimitExceeded")
+        if instance_type['disabled']:
+            raise exception.InstanceTypeNotFound(
+                    instance_type_id=instance_type['id'])
 
+        # Check quotas
+        num_instances, quota_reservations = self._check_num_instances_quota(
+                context, instance_type, min_count, max_count)
         self._check_metadata_properties_quota(context, metadata)
         self._check_injected_file_quota(context, injected_files)
         self._check_requested_networks(context, requested_networks)
 
-        (image_service, image_id) = nova.image.get_image_service(context,
-                                                                 image_href)
+        (image_service, image_id) = glance.get_remote_image_service(context,
+                                                                    image_href)
         image = image_service.show(context, image_id)
 
         if instance_type['memory_mb'] < int(image.get('min_ram') or 0):
+            QUOTAS.rollback(context, quota_reservations)
             raise exception.InstanceTypeMemoryTooSmall()
         if instance_type['root_gb'] < int(image.get('min_disk') or 0):
+            QUOTAS.rollback(context, quota_reservations)
             raise exception.InstanceTypeDiskTooSmall()
 
+        # Handle config_drive
         config_drive_id = None
         if config_drive and config_drive is not True:
             # config_drive is volume id
-            config_drive, config_drive_id = None, config_drive
+            config_drive_id = config_drive
+            config_drive = None
 
-        os_type = None
-        if 'properties' in image and 'os_type' in image['properties']:
-            os_type = image['properties']['os_type']
-        architecture = None
-        if 'properties' in image and 'arch' in image['properties']:
-            architecture = image['properties']['arch']
-        vm_mode = None
-        if 'properties' in image and 'vm_mode' in image['properties']:
-            vm_mode = image['properties']['vm_mode']
-
-        # If instance doesn't have auto_disk_config overridden by request, use
-        # whatever the image indicates
-        if auto_disk_config is None:
-            if ('properties' in image and
-                'auto_disk_config' in image['properties']):
-                auto_disk_config = utils.bool_from_str(
-                    image['properties']['auto_disk_config'])
-
-        if kernel_id is None:
-            kernel_id = image['properties'].get('kernel_id', None)
-        if ramdisk_id is None:
-            ramdisk_id = image['properties'].get('ramdisk_id', None)
-        # FIXME(sirp): is there a way we can remove null_kernel?
-        # No kernel and ramdisk for raw images
-        if kernel_id == str(FLAGS.null_kernel):
-            kernel_id = None
-            ramdisk_id = None
-            LOG.debug(_("Creating a raw instance"))
-        # Make sure we have access to kernel and ramdisk (if not raw)
-        LOG.debug(_("Using Kernel=%(kernel_id)s, Ramdisk=%(ramdisk_id)s")
-                  % locals())
-        if kernel_id:
-            image_service.show(context, kernel_id)
-        if ramdisk_id:
-            image_service.show(context, ramdisk_id)
-        if config_drive_id:
+            # Ensure config_drive image exists
             image_service.show(context, config_drive_id)
 
-        self.ensure_default_security_group(context)
+        kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
+                context, kernel_id, ramdisk_id, image, image_service)
 
         if key_data is None and key_name:
             key_pair = self.db.key_pair_get(context, context.user_id, key_name)
@@ -334,24 +435,14 @@ class API(BaseAPI):
         if reservation_id is None:
             reservation_id = utils.generate_uid('r')
 
+        # grab the architecture from glance
+        architecture = image['properties'].get('architecture', 'Unknown')
+
         root_device_name = block_device.properties_root_device_name(
             image['properties'])
 
-        # NOTE(vish): We have a legacy hack to allow admins to specify hosts
-        #             via az using az:host. It might be nice to expose an
-        #             api to specify specific hosts to force onto, but for
-        #             now it just supports this legacy hack.
-        host = None
-        if availability_zone:
-            availability_zone, _x, host = availability_zone.partition(':')
-        if not availability_zone:
-            availability_zone = FLAGS.default_schedule_zone
-        if context.is_admin and host:
-            filter_properties = {'force_hosts': [host]}
-        else:
-            filter_properties = {}
-
-        filter_properties['scheduler_hints'] = scheduler_hints
+        availability_zone, forced_host = self._handle_availability_zone(
+                availability_zone)
 
         base_options = {
             'reservation_id': reservation_id,
@@ -371,7 +462,7 @@ class API(BaseAPI):
             'root_gb': instance_type['root_gb'],
             'ephemeral_gb': instance_type['ephemeral_gb'],
             'display_name': display_name,
-            'display_description': display_description,
+            'display_description': display_description or '',
             'user_data': user_data or '',
             'key_name': key_name,
             'key_data': key_data,
@@ -380,27 +471,51 @@ class API(BaseAPI):
             'access_ip_v4': access_ip_v4,
             'access_ip_v6': access_ip_v6,
             'availability_zone': availability_zone,
-            'os_type': os_type,
-            'architecture': architecture,
-            'vm_mode': vm_mode,
             'root_device_name': root_device_name,
-            'progress': 0,
-            'auto_disk_config': auto_disk_config}
+            'architecture': architecture,
+            'progress': 0}
+
+        if user_data:
+            l = len(user_data)
+            if l > MAX_USERDATA_SIZE:
+                # NOTE(mikal): user_data is stored in a text column, and the
+                # database might silently truncate if its over length.
+                raise exception.InstanceUserDataTooLarge(
+                    length=l, maxsize=MAX_USERDATA_SIZE)
+
+            try:
+                base64.decodestring(user_data)
+            except base64.binascii.Error:
+                raise exception.InstanceUserDataMalformed()
+
+        options_from_image = self._inherit_properties_from_image(
+                image, auto_disk_config)
+
+        base_options.update(options_from_image)
 
         LOG.debug(_("Going to run %s instances...") % num_instances)
 
         if create_instance_here:
             instance = self.create_db_entry_for_new_instance(
                     context, instance_type, image, base_options,
-                    security_group, block_device_mapping)
+                    security_group, block_device_mapping,
+                    quota_reservations)
+
+            # Reservations committed; don't double-commit
+            quota_reservations = None
+
             # Tells scheduler we created the instance already.
             base_options['uuid'] = instance['uuid']
-            rpc_method = rpc.cast
+            use_call = False
         else:
             # We need to wait for the scheduler to create the instance
             # DB entries, because the instance *could* be # created in
             # a child zone.
-            rpc_method = rpc.call
+            use_call = True
+
+        filter_properties = dict(scheduler_hints=scheduler_hints)
+        if context.is_admin and forced_host:
+            filter_properties['force_hosts'] = [forced_host]
 
         # TODO(comstud): We should use rpc.multicall when we can
         # retrieve the full instance dictionary from the scheduler.
@@ -408,14 +523,14 @@ class API(BaseAPI):
         # This would require the schedulers' schedule_run_instances
         # methods to return an iterator vs a list.
         instances = self._schedule_run_instance(
-                rpc_method,
+                use_call,
                 context, base_options,
                 instance_type,
                 availability_zone, injected_files,
                 admin_password, image,
                 num_instances, requested_networks,
                 block_device_mapping, security_group,
-                filter_properties)
+                filter_properties, quota_reservations)
 
         if create_instance_here:
             return ([instance], reservation_id)
@@ -442,16 +557,13 @@ class API(BaseAPI):
         return size
 
     def _update_image_block_device_mapping(self, elevated_context,
-                                           instance_type, instance_id,
+                                           instance_type, instance_uuid,
                                            mappings):
         """tell vm driver to create ephemeral/swap device at boot time by
         updating BlockDeviceMapping
         """
-        instance_type = (instance_type or
-                         instance_types.get_default_instance_type())
-
         for bdm in block_device.mappings_prepend_dev(mappings):
-            LOG.debug(_("bdm %s"), bdm)
+            LOG.debug(_("bdm %s"), bdm, instance_uuid=instance_uuid)
 
             virtual_name = bdm['virtual']
             if virtual_name == 'ami' or virtual_name == 'root':
@@ -465,7 +577,7 @@ class API(BaseAPI):
                 continue
 
             values = {
-                'instance_id': instance_id,
+                'instance_uuid': instance_uuid,
                 'device_name': bdm['device'],
                 'virtual_name': virtual_name,
                 'volume_size': size}
@@ -473,16 +585,17 @@ class API(BaseAPI):
                                                           values)
 
     def _update_block_device_mapping(self, elevated_context,
-                                     instance_type, instance_id,
+                                     instance_type, instance_uuid,
                                      block_device_mapping):
         """tell vm driver to attach volume at boot time by updating
         BlockDeviceMapping
         """
-        LOG.debug(_("block_device_mapping %s"), block_device_mapping)
+        LOG.debug(_("block_device_mapping %s"), block_device_mapping,
+                  instance_uuid=instance_uuid)
         for bdm in block_device_mapping:
             assert 'device_name' in bdm
 
-            values = {'instance_id': instance_id}
+            values = {'instance_uuid': instance_uuid}
             for key in ('device_name', 'delete_on_termination', 'virtual_name',
                         'snapshot_id', 'volume_id', 'volume_size',
                         'no_device'):
@@ -501,18 +614,91 @@ class API(BaseAPI):
             #                 (--block-device-mapping)
             if virtual_name == 'NoDevice':
                 values['no_device'] = True
-                for k in ('delete_on_termination', 'volume_id',
-                          'snapshot_id', 'volume_id', 'volume_size',
-                          'virtual_name'):
+                for k in ('delete_on_termination', 'virtual_name',
+                          'snapshot_id', 'volume_id', 'volume_size'):
                     values[k] = None
 
             self.db.block_device_mapping_update_or_create(elevated_context,
                                                           values)
 
+    def _populate_instance_for_bdm(self, context, instance, instance_type,
+            image, block_device_mapping):
+        """Populate instance block device mapping information."""
+        # FIXME(comstud): Why do the block_device_mapping DB calls
+        # require elevated context?
+        elevated = context.elevated()
+        instance_uuid = instance['uuid']
+        mappings = image['properties'].get('mappings', [])
+        if mappings:
+            self._update_image_block_device_mapping(elevated,
+                    instance_type, instance_uuid, mappings)
+
+        image_bdm = image['properties'].get('block_device_mapping', [])
+        for mapping in (image_bdm, block_device_mapping):
+            if not mapping:
+                continue
+            self._update_block_device_mapping(elevated,
+                    instance_type, instance_uuid, mapping)
+
+    def _populate_instance_shutdown_terminate(self, instance, image,
+                                              block_device_mapping):
+        """Populate instance shutdown_terminate information."""
+        if (block_device_mapping or
+            image['properties'].get('mappings') or
+            image['properties'].get('block_device_mapping')):
+            instance['shutdown_terminate'] = False
+
+    def _populate_instance_names(self, instance):
+        """Populate instance display_name and hostname."""
+        display_name = instance.get('display_name')
+        hostname = instance.get('hostname')
+
+        if display_name is None:
+            display_name = self._default_display_name(instance['uuid'])
+            instance['display_name'] = display_name
+        if hostname is None:
+            hostname = display_name
+        instance['hostname'] = utils.sanitize_hostname(hostname)
+
+    def _default_display_name(self, instance_uuid):
+        return "Server %s" % instance_uuid
+
+    def _populate_instance_for_create(self, base_options, image,
+            security_groups):
+        """Build the beginning of a new instance."""
+
+        instance = base_options
+        if not instance.get('uuid'):
+            # Generate the instance_uuid here so we can use it
+            # for additional setup before creating the DB entry.
+            instance['uuid'] = str(utils.gen_uuid())
+
+        instance['launch_index'] = 0
+        instance['vm_state'] = vm_states.BUILDING
+        instance['task_state'] = task_states.SCHEDULING
+        instance['architecture'] = image['properties'].get('architecture')
+        instance['info_cache'] = {'network_info': '[]'}
+
+        # Store image properties so we can use them later
+        # (for notifications, etc).  Only store what we can.
+        instance.setdefault('system_metadata', {})
+        for key, value in image['properties'].iteritems():
+            new_value = str(value)[:255]
+            instance['system_metadata']['image_%s' % key] = new_value
+
+        # Use 'default' security_group if none specified.
+        if security_groups is None:
+            security_groups = ['default']
+        elif not isinstance(security_groups, list):
+            security_groups = [security_groups]
+        instance['security_groups'] = security_groups
+
+        return instance
+
     #NOTE(bcwaldon): No policy check since this is only used by scheduler and
     # the compute api. That should probably be cleaned up, though.
     def create_db_entry_for_new_instance(self, context, instance_type, image,
-            base_options, security_group, block_device_mapping):
+            base_options, security_group, block_device_mapping, reservations):
         """Create an entry in the DB for this new instance,
         including any related table updates (such as security group,
         etc).
@@ -520,67 +706,32 @@ class API(BaseAPI):
         This is called by the scheduler after a location for the
         instance has been determined.
         """
-        elevated = context.elevated()
-        if security_group is None:
-            security_group = ['default']
-        if not isinstance(security_group, list):
-            security_group = [security_group]
+        instance = self._populate_instance_for_create(base_options,
+                image, security_group)
 
-        security_groups = []
-        for security_group_name in security_group:
-            group = self.db.security_group_get_by_name(context,
-                    context.project_id,
-                    security_group_name)
-            security_groups.append(group['id'])
+        self._populate_instance_names(instance)
 
-        base_options.setdefault('launch_index', 0)
-        instance = self.db.instance_create(context, base_options)
-        instance_id = instance['id']
-        instance_uuid = instance['uuid']
+        self._populate_instance_shutdown_terminate(instance, image,
+                                                   block_device_mapping)
 
-        for security_group_id in security_groups:
-            self.db.instance_add_security_group(elevated,
-                                                instance_uuid,
-                                                security_group_id)
+        instance = self.db.instance_create(context, instance)
 
-        # BlockDeviceMapping table
-        self._update_image_block_device_mapping(elevated, instance_type,
-            instance_id, image['properties'].get('mappings', []))
-        self._update_block_device_mapping(elevated, instance_type, instance_id,
-            image['properties'].get('block_device_mapping', []))
-        # override via command line option
-        self._update_block_device_mapping(elevated, instance_type, instance_id,
-                                          block_device_mapping)
+        self._populate_instance_for_bdm(context, instance,
+                instance_type, image, block_device_mapping)
 
-        # Set sane defaults if not specified
-        updates = {}
+        # send a state update notification for the initial create to
+        # show it going from non-existent to BUILDING
+        notifications.send_update_with_states(context, instance, None,
+                vm_states.BUILDING, None, None, service="api")
 
-        display_name = instance.get('display_name')
-        if display_name is None:
-            display_name = self._default_display_name(instance_id)
+        # Commit the reservations
+        if reservations:
+            QUOTAS.commit(context, reservations)
 
-        hostname = instance.get('hostname')
-        if hostname is None:
-            hostname = display_name
-
-        updates['display_name'] = display_name
-        updates['hostname'] = utils.sanitize_hostname(hostname)
-        updates['vm_state'] = vm_states.BUILDING
-        updates['task_state'] = task_states.SCHEDULING
-
-        if (image['properties'].get('mappings', []) or
-            image['properties'].get('block_device_mapping', []) or
-            block_device_mapping):
-            updates['shutdown_terminate'] = False
-
-        instance = self.update(context, instance, **updates)
         return instance
 
-    def _default_display_name(self, instance_id):
-        return "Server %s" % instance_id
-
     def _schedule_run_instance(self,
-            rpc_method,
+            use_call,
             context, base_options,
             instance_type,
             availability_zone, injected_files,
@@ -589,17 +740,18 @@ class API(BaseAPI):
             requested_networks,
             block_device_mapping,
             security_group,
-            filter_properties):
+            filter_properties,
+            quota_reservations):
         """Send a run_instance request to the schedulers for processing."""
 
         pid = context.project_id
         uid = context.user_id
 
         LOG.debug(_("Sending create to scheduler for %(pid)s/%(uid)s's") %
-                locals())
+                  locals())
 
         request_spec = {
-            'image': utils.to_primitive(image),
+            'image': jsonutils.to_primitive(image),
             'instance_properties': base_options,
             'instance_type': instance_type,
             'num_instances': num_instances,
@@ -607,16 +759,12 @@ class API(BaseAPI):
             'security_group': security_group,
         }
 
-        return rpc_method(context,
-                FLAGS.scheduler_topic,
-                {"method": "run_instance",
-                 "args": {"topic": FLAGS.compute_topic,
-                          "request_spec": request_spec,
-                          "admin_password": admin_password,
-                          "injected_files": injected_files,
-                          "requested_networks": requested_networks,
-                          "is_first_time": True,
-                          "filter_properties": filter_properties}})
+        return self.scheduler_rpcapi.run_instance(context,
+                request_spec=request_spec,
+                admin_password=admin_password, injected_files=injected_files,
+                requested_networks=requested_networks, is_first_time=True,
+                filter_properties=filter_properties,
+                reservations=quota_reservations, call=use_call)
 
     def _check_create_policies(self, context, availability_zone,
             requested_networks, block_device_mapping):
@@ -659,7 +807,7 @@ class API(BaseAPI):
         # only going to create 1 instance.
         # This speeds up API responses for builds
         # as we don't need to wait for the scheduler.
-        create_instance_here = max_count == 1
+        create_instance_here = max_count == 1 or max_count is None
 
         (instances, reservation_id) = self._create_instance(
                                context, instance_type,
@@ -690,170 +838,13 @@ class API(BaseAPI):
 
         return (inst_ret_list, reservation_id)
 
-    def ensure_default_security_group(self, context):
-        """Ensure that a context has a security group.
-
-        Creates a security group for the security context if it does not
-        already exist.
-
-        :param context: the security context
-        """
-        try:
-            self.db.security_group_get_by_name(context,
-                                               context.project_id,
-                                               'default')
-        except exception.NotFound:
-            values = {'name': 'default',
-                      'description': 'default',
-                      'user_id': context.user_id,
-                      'project_id': context.project_id}
-            self.db.security_group_create(context, values)
-
-    def trigger_security_group_rules_refresh(self, context, security_group_id):
-        """Called when a rule is added to or removed from a security_group."""
-
-        security_group = self.db.security_group_get(context, security_group_id)
-
-        hosts = set()
-        for instance in security_group['instances']:
-            if instance['host'] is not None:
-                hosts.add(instance['host'])
-
-        for host in hosts:
-            rpc.cast(context,
-                     self.db.queue_get_for(context, FLAGS.compute_topic, host),
-                     {"method": "refresh_security_group_rules",
-                      "args": {"security_group_id": security_group.id}})
-
-    def trigger_security_group_members_refresh(self, context, group_ids):
-        """Called when a security group gains a new or loses a member.
-
-        Sends an update request to each compute node for whom this is
-        relevant.
-        """
-        # First, we get the security group rules that reference these groups as
-        # the grantee..
-        security_group_rules = set()
-        for group_id in group_ids:
-            security_group_rules.update(
-                self.db.security_group_rule_get_by_security_group_grantee(
-                                                                     context,
-                                                                     group_id))
-
-        # ..then we distill the security groups to which they belong..
-        security_groups = set()
-        for rule in security_group_rules:
-            security_group = self.db.security_group_get(
-                                                    context,
-                                                    rule['parent_group_id'])
-            security_groups.add(security_group)
-
-        # ..then we find the instances that are members of these groups..
-        instances = set()
-        for security_group in security_groups:
-            for instance in security_group['instances']:
-                instances.add(instance)
-
-        # ...then we find the hosts where they live...
-        hosts = set()
-        for instance in instances:
-            if instance['host']:
-                hosts.add(instance['host'])
-
-        # ...and finally we tell these nodes to refresh their view of this
-        # particular security group.
-        for host in hosts:
-            rpc.cast(context,
-                     self.db.queue_get_for(context, FLAGS.compute_topic, host),
-                     {"method": "refresh_security_group_members",
-                      "args": {"security_group_id": group_id}})
-
     def trigger_provider_fw_rules_refresh(self, context):
         """Called when a rule is added/removed from a provider firewall"""
 
         hosts = [x['host'] for (x, idx)
                            in self.db.service_get_all_compute_sorted(context)]
         for host in hosts:
-            rpc.cast(context,
-                     self.db.queue_get_for(context, FLAGS.compute_topic, host),
-                     {'method': 'refresh_provider_fw_rules', 'args': {}})
-
-    def _is_security_group_associated_with_server(self, security_group,
-                                                  instance_uuid):
-        """Check if the security group is already associated
-           with the instance. If Yes, return True.
-        """
-
-        if not security_group:
-            return False
-
-        instances = security_group.get('instances')
-        if not instances:
-            return False
-
-        for inst in instances:
-            if (instance_uuid == inst['uuid']):
-                return True
-
-        return False
-
-    @wrap_check_policy
-    def add_security_group(self, context, instance, security_group_name):
-        """Add security group to the instance"""
-        security_group = self.db.security_group_get_by_name(context,
-                context.project_id,
-                security_group_name)
-
-        instance_uuid = instance['uuid']
-
-        #check if the security group is associated with the server
-        if self._is_security_group_associated_with_server(security_group,
-                                                          instance_uuid):
-            raise exception.SecurityGroupExistsForInstance(
-                                        security_group_id=security_group['id'],
-                                        instance_id=instance_uuid)
-
-        #check if the instance is in running state
-        if instance['power_state'] != power_state.RUNNING:
-            raise exception.InstanceNotRunning(instance_id=instance_uuid)
-
-        self.db.instance_add_security_group(context.elevated(),
-                                            instance_uuid,
-                                            security_group['id'])
-        params = {"security_group_id": security_group['id']}
-        # NOTE(comstud): No instance_uuid argument to this compute manager
-        # call
-        self._cast_compute_message('refresh_security_group_rules',
-                context, host=instance['host'], params=params)
-
-    @wrap_check_policy
-    def remove_security_group(self, context, instance, security_group_name):
-        """Remove the security group associated with the instance"""
-        security_group = self.db.security_group_get_by_name(context,
-                context.project_id,
-                security_group_name)
-
-        instance_uuid = instance['uuid']
-
-        #check if the security group is associated with the server
-        if not self._is_security_group_associated_with_server(security_group,
-                                                              instance_uuid):
-            raise exception.SecurityGroupNotExistsForInstance(
-                                    security_group_id=security_group['id'],
-                                    instance_id=instance_uuid)
-
-        #check if the instance is in running state
-        if instance['power_state'] != power_state.RUNNING:
-            raise exception.InstanceNotRunning(instance_id=instance_uuid)
-
-        self.db.instance_remove_security_group(context.elevated(),
-                                               instance_uuid,
-                                               security_group['id'])
-        params = {"security_group_id": security_group['id']}
-        # NOTE(comstud): No instance_uuid argument to this compute manager
-        # call
-        self._cast_compute_message('refresh_security_group_rules',
-                context, host=instance['host'], params=params)
+            self.compute_rpcapi.refresh_provider_fw_rules(context, host)
 
     @wrap_check_policy
     def update(self, context, instance, **kwargs):
@@ -867,12 +858,22 @@ class API(BaseAPI):
 
         :returns: None
         """
-        rv = self.db.instance_update(context, instance["id"], kwargs)
-        return dict(rv.iteritems())
+        _, updated = self._update(context, instance, **kwargs)
+        return updated
+
+    def _update(self, context, instance, **kwargs):
+        # Update the instance record and send a state update notification
+        # if task or vm state changed
+        old_ref, instance_ref = self.db.instance_update_and_get_original(
+                context, instance['uuid'], kwargs)
+        notifications.send_update(context, old_ref, instance_ref,
+                service="api")
+
+        return dict(old_ref.iteritems()), dict(instance_ref.iteritems())
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
-                                    vm_states.ERROR])
+    @check_instance_lock
+    @check_instance_state(vm_state=None, task_state=None)
     def soft_delete(self, context, instance):
         """Terminate an instance."""
         LOG.debug(_('Going to try to soft delete instance'),
@@ -884,63 +885,94 @@ class API(BaseAPI):
         # NOTE(jerdfelt): The compute daemon handles reclaiming instances
         # that are in soft delete. If there is no host assigned, there is
         # no daemon to reclaim, so delete it immediately.
-        host = instance['host']
-        if host:
-            self.update(context,
-                        instance,
-                        vm_state=vm_states.SOFT_DELETE,
-                        task_state=task_states.POWERING_OFF,
-                        deleted_at=utils.utcnow())
+        if instance['host']:
+            instance = self.update(context, instance,
+                                   task_state=task_states.POWERING_OFF,
+                                   deleted_at=timeutils.utcnow())
 
-            self._cast_compute_message('power_off_instance',
-                    context, instance)
+            self.compute_rpcapi.power_off_instance(context, instance)
         else:
             LOG.warning(_('No host for instance, deleting immediately'),
                         instance=instance)
             try:
-                self.db.instance_destroy(context, instance['id'])
+                self.db.instance_destroy(context, instance['uuid'])
             except exception.InstanceNotFound:
                 # NOTE(comstud): Race condition.  Instance already gone.
                 pass
 
     def _delete(self, context, instance):
         host = instance['host']
+        reservations = None
         try:
-            if not host:
+            old, updated = self._update(context,
+                                        instance,
+                                        task_state=task_states.DELETING,
+                                        progress=0)
+
+            # Avoid double-counting the quota usage reduction
+            # where delete is already in progress
+            if old['task_state'] != task_states.DELETING:
+                reservations = QUOTAS.reserve(context,
+                                              instances=-1,
+                                              cores=-instance['vcpus'],
+                                              ram=-instance['memory_mb'])
+
+            if not instance['host']:
                 # Just update database, nothing else we can do
-                return self.db.instance_destroy(context, instance['id'])
+                constraint = self.db.constraint(host=self.db.equal_any(host))
+                try:
+                    result = self.db.instance_destroy(context,
+                                                      instance['uuid'],
+                                                      constraint)
+                    if reservations:
+                        QUOTAS.commit(context, reservations)
+                    return result
+                except exception.ConstraintNotMet:
+                    # Refresh to get new host information
+                    instance = self.get(context, instance['uuid'])
 
-            self.update(context,
-                        instance,
-                        task_state=task_states.DELETING,
-                        progress=0)
-
-            if instance['task_state'] == task_states.RESIZE_VERIFY:
+            if instance['vm_state'] == vm_states.RESIZED:
                 # If in the middle of a resize, use confirm_resize to
                 # ensure the original instance is cleaned up too
                 migration_ref = self.db.migration_get_by_instance_and_status(
                         context, instance['uuid'], 'finished')
                 if migration_ref:
                     src_host = migration_ref['source_compute']
-                    params = {'migration_id': migration_ref['id']}
-                    # Call since this can race with the terminate_instance
-                    self._call_compute_message('confirm_resize', context,
-                                               instance, host=src_host,
-                                               params=params)
+                    # Call since this can race with the terminate_instance.
+                    # The resize is done but awaiting confirmation/reversion,
+                    # so there are two cases:
+                    # 1. up-resize: here -instance['vcpus'/'memory_mb'] match
+                    #    the quota usages accounted for this instance,
+                    #    so no further quota adjustment is needed
+                    # 2. down-resize: here -instance['vcpus'/'memory_mb'] are
+                    #    shy by delta(old, new) from the quota usages accounted
+                    #    for this instance, so we must adjust
+                    deltas = self._downsize_quota_delta(context,
+                                                        migration_ref)
+                    downsize_reservations = self._reserve_quota_delta(context,
+                                                                      deltas)
+                    self.compute_rpcapi.confirm_resize(context,
+                            instance, migration_ref['id'],
+                            host=src_host, cast=False,
+                            reservations=downsize_reservations)
 
-            self._cast_compute_message('terminate_instance',
-                                       context, instance)
+            self.compute_rpcapi.terminate_instance(context, instance)
+
+            if reservations:
+                QUOTAS.commit(context, reservations)
         except exception.InstanceNotFound:
             # NOTE(comstud): Race condition. Instance already gone.
-            pass
+            if reservations:
+                QUOTAS.rollback(context, reservations)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                if reservations:
+                    QUOTAS.rollback(context, reservations)
 
-    # NOTE(jerdfelt): The API implies that only ACTIVE and ERROR are
-    # allowed but the EC2 API appears to allow from RESCUED and STOPPED
-    # too
+    # NOTE(maoy): we allow delete to be called no matter what vm_state says.
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.BUILDING,
-                                    vm_states.ERROR, vm_states.RESCUED,
-                                    vm_states.SHUTOFF, vm_states.STOPPED])
+    @check_instance_lock
+    @check_instance_state(vm_state=None, task_state=None)
     def delete(self, context, instance):
         """Terminate an instance."""
         LOG.debug(_("Going to try to terminate instance"), instance=instance)
@@ -951,76 +983,56 @@ class API(BaseAPI):
         self._delete(context, instance)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.SOFT_DELETE])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.SOFT_DELETED])
     def restore(self, context, instance):
         """Restore a previously deleted (but not reclaimed) instance."""
-        self.update(context,
-                    instance,
-                    vm_state=vm_states.ACTIVE,
-                    task_state=None,
-                    deleted_at=None)
-
-        host = instance['host']
-        if host:
+        if instance['host']:
+            instance = self.update(context, instance,
+                        task_state=task_states.POWERING_ON, deleted_at=None)
+            self.compute_rpcapi.power_on_instance(context, instance)
+        else:
             self.update(context,
                         instance,
-                        task_state=task_states.POWERING_ON)
-            self._cast_compute_message('power_on_instance',
-                    context, instance)
+                        vm_state=vm_states.ACTIVE,
+                        task_state=None,
+                        deleted_at=None)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.SOFT_DELETE])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.SOFT_DELETED])
     def force_delete(self, context, instance):
         """Force delete a previously deleted (but not reclaimed) instance."""
         self._delete(context, instance)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
-                                    vm_states.RESCUED],
-                          task_state=[None, task_states.RESIZE_VERIFY])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED,
+                                    vm_states.ERROR, vm_states.STOPPED],
+                          task_state=[None])
     def stop(self, context, instance, do_cast=True):
         """Stop an instance."""
-        instance_uuid = instance["uuid"]
         LOG.debug(_("Going to try to stop instance"), instance=instance)
 
-        self.update(context,
-                    instance,
-                    vm_state=vm_states.ACTIVE,
-                    task_state=task_states.STOPPING,
-                    terminated_at=utils.utcnow(),
-                    progress=0)
+        instance = self.update(context, instance,
+                    task_state=task_states.STOPPING, progress=0)
 
-        rpc_method = rpc.cast if do_cast else rpc.call
-        self._cast_or_call_compute_message(rpc_method, 'stop_instance',
-                context, instance)
+        self.compute_rpcapi.stop_instance(context, instance, cast=do_cast)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.STOPPED, vm_states.SHUTOFF])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.STOPPED])
     def start(self, context, instance):
         """Start an instance."""
-        vm_state = instance["vm_state"]
-        instance_uuid = instance["uuid"]
         LOG.debug(_("Going to try to start instance"), instance=instance)
 
-        if vm_state == vm_states.SHUTOFF:
-            if instance['shutdown_terminate']:
-                LOG.warning(_("Instance %(instance_uuid)s is not "
-                              "stopped. (%(vm_state)s") % locals())
-                return
-
-            # NOTE(yamahata): nova compute doesn't reap instances
-            # which initiated shutdown itself. So reap it here.
-            self.stop(context, instance, do_cast=False)
-
-        self.update(context,
-                    instance,
-                    vm_state=vm_states.STOPPED,
-                    task_state=task_states.STARTING)
+        instance = self.update(context, instance,
+                               task_state=task_states.STARTING)
 
         # TODO(yamahata): injected_files isn't supported right now.
         #                 It is used only for osapi. not for ec2 api.
         #                 availability_zone isn't used by run_instance.
-        self._cast_compute_message('start_instance', context, instance)
+        self.compute_rpcapi.start_instance(context, instance)
 
     #NOTE(bcwaldon): no policy check here since it should be rolled in to
     # search_opts in get_all
@@ -1098,7 +1110,6 @@ class API(BaseAPI):
         filter_mapping = {
                 'image': 'image_ref',
                 'name': 'display_name',
-                'instance_name': 'name',
                 'tenant_id': 'project_id',
                 'flavor': _remap_flavor_filter,
                 'fixed_ip': _remap_fixed_ip_filter}
@@ -1153,7 +1164,7 @@ class API(BaseAPI):
                                                    sort_dir)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF])
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED])
     def backup(self, context, instance, name, backup_type, rotation,
                extra_properties=None):
         """Backup the given instance
@@ -1171,7 +1182,7 @@ class API(BaseAPI):
         return recv_meta
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF])
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED])
     def snapshot(self, context, instance, name, extra_properties=None):
         """Snapshot the given instance.
 
@@ -1207,8 +1218,16 @@ class API(BaseAPI):
         else:
             raise Exception(_('Image type not recognized %s') % image_type)
 
+        # change instance state and notify
+        old_vm_state = instance["vm_state"]
+        old_task_state = instance["task_state"]
+
         self.db.instance_test_and_set(
                 context, instance_uuid, 'task_state', [None], task_state)
+
+        notifications.send_update_with_states(context, instance, old_vm_state,
+                instance["vm_state"], old_task_state, instance["task_state"],
+                service="api", verify_states=True)
 
         properties = {
             'instance_uuid': instance_uuid,
@@ -1233,10 +1252,9 @@ class API(BaseAPI):
         sent_meta['properties'] = properties
 
         recv_meta = self.image_service.create(context, sent_meta)
-        params = {'image_id': recv_meta['id'], 'image_type': image_type,
-                  'backup_type': backup_type, 'rotation': rotation}
-        self._cast_compute_message('snapshot_instance', context, instance,
-                params=params)
+        self.compute_rpcapi.snapshot_instance(context, instance=instance,
+                image_id=recv_meta['id'], image_type=image_type,
+                backup_type=backup_type, rotation=rotation)
         return recv_meta
 
     def _get_minram_mindisk_params(self, context, instance):
@@ -1259,33 +1277,34 @@ class API(BaseAPI):
         return min_ram, min_disk
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
                                     vm_states.RESCUED],
-                          task_state=[None, task_states.RESIZE_VERIFY])
+                          task_state=[None])
     def reboot(self, context, instance, reboot_type):
         """Reboot the given instance."""
         state = {'SOFT': task_states.REBOOTING,
                  'HARD': task_states.REBOOTING_HARD}[reboot_type]
-        self.update(context,
-                    instance,
-                    vm_state=vm_states.ACTIVE,
-                    task_state=state)
-        self._cast_compute_message('reboot_instance', context, instance,
-                params={'reboot_type': reboot_type})
+        instance = self.update(context, instance, vm_state=vm_states.ACTIVE,
+                               task_state=state)
+        self.compute_rpcapi.reboot_instance(context, instance=instance,
+                reboot_type=reboot_type)
 
-    def _validate_image_href(self, context, image_href):
+    def _get_image(self, context, image_href):
         """Throws an ImageNotFound exception if image_href does not exist."""
-        (image_service, image_id) = nova.image.get_image_service(context,
+        (image_service, image_id) = glance.get_remote_image_service(context,
                                                                  image_href)
-        image_service.show(context, image_id)
+        return image_service.show(context, image_id)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
-                          task_state=[None, task_states.RESIZE_VERIFY])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED],
+                          task_state=[None])
     def rebuild(self, context, instance, image_href, admin_password, **kwargs):
         """Rebuild the given instance with the provided attributes."""
 
-        self._validate_image_href(context, image_href)
+        orig_image_ref = instance['image_ref']
+        image = self._get_image(context, image_href)
 
         files_to_inject = kwargs.pop('files_to_inject', [])
         self._check_injected_file_quota(context, files_to_inject)
@@ -1293,25 +1312,56 @@ class API(BaseAPI):
         metadata = kwargs.get('metadata', {})
         self._check_metadata_properties_quota(context, metadata)
 
-        self.update(context,
-                    instance,
-                    image_ref=image_href,
-                    vm_state=vm_states.REBUILDING,
-                    task_state=None,
-                    progress=0,
-                    **kwargs)
+        instance_type = instance['instance_type']
+        if instance_type['memory_mb'] < int(image.get('min_ram') or 0):
+            raise exception.InstanceTypeMemoryTooSmall()
+        if instance_type['root_gb'] < int(image.get('min_disk') or 0):
+            raise exception.InstanceTypeDiskTooSmall()
 
-        rebuild_params = {
-            "new_pass": admin_password,
-            "injected_files": files_to_inject,
-        }
+        def _reset_image_metadata():
+            """
+            Remove old image properties that we're storing as instance
+            system metadata.  These properties start with 'image_'.
+            Then add the properites for the new image.
+            """
 
-        self._cast_compute_message('rebuild_instance', context, instance,
-                params=rebuild_params)
+            # FIXME(comstud): There's a race condition here in that
+            # if the system_metadata for this instance is updated
+            # after we do the get and before we update.. those other
+            # updates will be lost. Since this problem exists in a lot
+            # of other places, I think it should be addressed in a DB
+            # layer overhaul.
+            sys_metadata = self.db.instance_system_metadata_get(context,
+                    instance['uuid'])
+            # Remove the old keys
+            for key in sys_metadata.keys():
+                if key.startswith('image_'):
+                    del sys_metadata[key]
+            # Add the new ones
+            for key, value in image['properties'].iteritems():
+                new_value = str(value)[:255]
+                sys_metadata['image_%s' % key] = new_value
+            self.db.instance_system_metadata_update(context,
+                    instance['uuid'], sys_metadata, True)
+
+        instance = self.update(context, instance,
+                               task_state=task_states.REBUILDING,
+                               # Unfortunately we need to set image_ref early,
+                               # so API users can see it.
+                               image_ref=image_href, progress=0, **kwargs)
+
+        # On a rebuild, since we're potentially changing images, we need to
+        # wipe out the old image properties that we're storing as instance
+        # system metadata... and copy in the properties for the new image.
+        _reset_image_metadata()
+
+        self.compute_rpcapi.rebuild_instance(context, instance=instance,
+                new_pass=admin_password, injected_files=files_to_inject,
+                image_ref=image_href, orig_image_ref=orig_image_ref)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
-                          task_state=[task_states.RESIZE_VERIFY])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.RESIZED])
     def revert_resize(self, context, instance):
         """Reverts a resize, deleting the 'new' instance in the process."""
         context = context.elevated()
@@ -1321,21 +1371,23 @@ class API(BaseAPI):
             raise exception.MigrationNotFoundByStatus(
                     instance_id=instance['uuid'], status='finished')
 
-        self.update(context,
-                    instance,
-                    vm_state=vm_states.RESIZING,
-                    task_state=task_states.RESIZE_REVERTING)
+        # reverse quota reservation for increased resource usage
+        deltas = self._reverse_upsize_quota_delta(context, migration_ref)
+        reservations = self._reserve_quota_delta(context, deltas)
 
-        params = {'migration_id': migration_ref['id']}
-        self._cast_compute_message('revert_resize', context, instance,
-                host=migration_ref['dest_compute'], params=params)
+        instance = self.update(context, instance,
+                               task_state=task_states.RESIZE_REVERTING)
+
+        self.compute_rpcapi.revert_resize(context,
+                instance=instance, migration_id=migration_ref['id'],
+                host=migration_ref['dest_compute'], reservations=reservations)
 
         self.db.migration_update(context, migration_ref['id'],
                                  {'status': 'reverted'})
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
-                          task_state=[task_states.RESIZE_VERIFY])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.RESIZED])
     def confirm_resize(self, context, instance):
         """Confirms a migration/resize and deletes the 'old' instance."""
         context = context.elevated()
@@ -1345,22 +1397,92 @@ class API(BaseAPI):
             raise exception.MigrationNotFoundByStatus(
                     instance_id=instance['uuid'], status='finished')
 
-        self.update(context,
-                    instance,
-                    vm_state=vm_states.ACTIVE,
-                    task_state=None)
+        # reserve quota only for any decrease in resource usage
+        deltas = self._downsize_quota_delta(context, migration_ref)
+        reservations = self._reserve_quota_delta(context, deltas)
 
-        params = {'migration_id': migration_ref['id']}
-        self._cast_compute_message('confirm_resize', context, instance,
-                host=migration_ref['source_compute'], params=params)
+        instance = self.update(context, instance, vm_state=vm_states.ACTIVE,
+                               task_state=None)
+
+        self.compute_rpcapi.confirm_resize(context,
+                instance=instance, migration_id=migration_ref['id'],
+                host=migration_ref['source_compute'],
+                reservations=reservations)
 
         self.db.migration_update(context, migration_ref['id'],
                 {'status': 'confirmed'})
-        self.db.instance_update(context, instance['uuid'],
-                {'host': migration_ref['dest_compute'], })
+
+    @staticmethod
+    def _resize_quota_delta(context, new_instance_type,
+                            old_instance_type, sense, compare):
+        """
+        Calculate any quota adjustment required at a particular point
+        in the resize cycle.
+
+        :param context: the request context
+        :param new_instance_type: the target instance type
+        :param old_instance_type: the original instance type
+        :param sense: the sense of the adjustment, 1 indicates a
+                      forward adjustment, whereas -1 indicates a
+                      reversal of a prior adjustment
+        :param compare: the direction of the comparison, 1 indicates
+                        we're checking for positive deltas, whereas
+                        -1 indicates negative deltas
+        """
+        def _quota_delta(resource):
+            return sense * (new_instance_type[resource] -
+                            old_instance_type[resource])
+
+        deltas = {}
+        if compare * _quota_delta('vcpus') > 0:
+            deltas['cores'] = _quota_delta('vcpus')
+        if compare * _quota_delta('memory_mb') > 0:
+            deltas['ram'] = _quota_delta('memory_mb')
+
+        return deltas
+
+    @staticmethod
+    def _upsize_quota_delta(context, new_instance_type, old_instance_type):
+        """
+        Calculate deltas required to adjust quota for an instance upsize.
+        """
+        return API._resize_quota_delta(context, new_instance_type,
+                                       old_instance_type, 1, 1)
+
+    @staticmethod
+    def _reverse_upsize_quota_delta(context, migration_ref):
+        """
+        Calculate deltas required to reverse a prior upsizing
+        quota adjustment.
+        """
+        old_instance_type = instance_types.get_instance_type(
+            migration_ref['old_instance_type_id'])
+        new_instance_type = instance_types.get_instance_type(
+            migration_ref['new_instance_type_id'])
+
+        return API._resize_quota_delta(context, new_instance_type,
+                                       old_instance_type, -1, -1)
+
+    @staticmethod
+    def _downsize_quota_delta(context, migration_ref):
+        """
+        Calculate deltas required to adjust quota for an instance downsize.
+        """
+        old_instance_type = instance_types.get_instance_type(
+            migration_ref['old_instance_type_id'])
+        new_instance_type = instance_types.get_instance_type(
+            migration_ref['new_instance_type_id'])
+
+        return API._resize_quota_delta(context, new_instance_type,
+                                       old_instance_type, 1, -1)
+
+    @staticmethod
+    def _reserve_quota_delta(context, deltas):
+        return QUOTAS.reserve(context, **deltas) if deltas else None
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF],
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED],
                           task_state=[None])
     def resize(self, context, instance, flavor_id=None, **kwargs):
         """Resize (ie, migrate) a running instance.
@@ -1373,7 +1495,8 @@ class API(BaseAPI):
 
         # If flavor_id is not provided, only migrate the instance.
         if not flavor_id:
-            LOG.debug(_("flavor_id is None. Assuming migration."))
+            LOG.debug(_("flavor_id is None. Assuming migration."),
+                      instance=instance)
             new_instance_type = current_instance_type
         else:
             new_instance_type = instance_types.get_instance_type_by_flavor_id(
@@ -1382,8 +1505,19 @@ class API(BaseAPI):
         current_instance_type_name = current_instance_type['name']
         new_instance_type_name = new_instance_type['name']
         LOG.debug(_("Old instance type %(current_instance_type_name)s, "
-                " new instance type %(new_instance_type_name)s") % locals())
+                    " new instance type %(new_instance_type_name)s"),
+                  locals(), instance=instance)
+
+        # FIXME(sirp): both of these should raise InstanceTypeNotFound instead
         if not new_instance_type:
+            raise exception.FlavorNotFound(flavor_id=flavor_id)
+
+        same_instance_type = (current_instance_type['id'] ==
+                              new_instance_type['id'])
+
+        # NOTE(sirp): We don't want to force a customer to change their flavor
+        # when Ops is migrating off of a failed host.
+        if new_instance_type['disabled'] and not same_instance_type:
             raise exception.FlavorNotFound(flavor_id=flavor_id)
 
         # NOTE(markwash): look up the image early to avoid auth problems later
@@ -1395,12 +1529,35 @@ class API(BaseAPI):
         if (current_memory_mb == new_memory_mb) and flavor_id:
             raise exception.CannotResizeToSameSize()
 
-        self.update(context,
-                    instance,
-                    vm_state=vm_states.RESIZING,
-                    task_state=task_states.RESIZE_PREP,
-                    progress=0,
-                    **kwargs)
+        # ensure there is sufficient headroom for upsizes
+        deltas = self._upsize_quota_delta(context, new_instance_type,
+                                          current_instance_type)
+        try:
+            reservations = self._reserve_quota_delta(context, deltas)
+        except exception.OverQuota as exc:
+            quotas = exc.kwargs['quotas']
+            usages = exc.kwargs['usages']
+            overs = exc.kwargs['overs']
+
+            headroom = dict((res, quotas[res] -
+                             (usages[res]['in_use'] + usages[res]['reserved']))
+                            for res in quotas.keys())
+
+            resource = overs[0]
+            used = quotas[resource] - headroom[resource]
+            total_allowed = used + headroom[resource]
+            overs = ','.join(overs)
+
+            pid = context.project_id
+            LOG.warn(_("%(overs)s quota exceeded for %(pid)s,"
+                       " tried to resize instance. %(msg)s"), locals())
+            raise exception.TooManyInstances(overs=overs,
+                                             req=deltas[resource],
+                                             used=used, allowed=total_allowed,
+                                             resource=resource)
+
+        instance = self.update(context, instance,
+                task_state=task_states.RESIZE_PREP, progress=0, **kwargs)
 
         request_spec = {
                 'instance_type': new_instance_type,
@@ -1413,43 +1570,42 @@ class API(BaseAPI):
             filter_properties['ignore_hosts'].append(instance['host'])
 
         args = {
-            "topic": FLAGS.compute_topic,
-            "instance_uuid": instance['uuid'],
-            "instance_type_id": new_instance_type['id'],
+            "instance": instance,
+            "instance_type": new_instance_type,
             "image": image,
-            "update_db": False,
-            "request_spec": utils.to_primitive(request_spec),
+            "request_spec": jsonutils.to_primitive(request_spec),
             "filter_properties": filter_properties,
+            "reservations": reservations,
         }
-        self._cast_scheduler_message(context,
-                    {"method": "prep_resize",
-                     "args": args})
+        self.scheduler_rpcapi.prep_resize(context, **args)
 
     @wrap_check_policy
+    @check_instance_lock
     def add_fixed_ip(self, context, instance, network_id):
         """Add fixed_ip from specified network to given instance."""
-        self._cast_compute_message('add_fixed_ip_to_instance', context,
-                instance, params=dict(network_id=network_id))
+        self.compute_rpcapi.add_fixed_ip_to_instance(context,
+                instance=instance, network_id=network_id)
 
     @wrap_check_policy
+    @check_instance_lock
     def remove_fixed_ip(self, context, instance, address):
         """Remove fixed_ip from specified network to given instance."""
-        self._cast_compute_message('remove_fixed_ip_from_instance',
-                context, instance, params=dict(address=address))
+        self.compute_rpcapi.remove_fixed_ip_from_instance(context,
+                instance=instance, address=address)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
-                                    vm_states.RESCUED],
-                          task_state=[None, task_states.RESIZE_VERIFY])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED])
     def pause(self, context, instance):
         """Pause the given instance."""
         self.update(context,
                     instance,
                     vm_state=vm_states.ACTIVE,
                     task_state=task_states.PAUSING)
-        self._cast_compute_message('pause_instance', context, instance)
+        self.compute_rpcapi.pause_instance(context, instance=instance)
 
     @wrap_check_policy
+    @check_instance_lock
     @check_instance_state(vm_state=[vm_states.PAUSED])
     def unpause(self, context, instance):
         """Unpause the given instance."""
@@ -1457,32 +1613,26 @@ class API(BaseAPI):
                     instance,
                     vm_state=vm_states.PAUSED,
                     task_state=task_states.UNPAUSING)
-        self._cast_compute_message('unpause_instance', context, instance)
+        self.compute_rpcapi.unpause_instance(context, instance=instance)
 
     @wrap_check_policy
     def get_diagnostics(self, context, instance):
         """Retrieve diagnostics for the given instance."""
-        return self._call_compute_message("get_diagnostics", context,
-                instance)
+        return self.compute_rpcapi.get_diagnostics(context, instance=instance)
 
     @wrap_check_policy
-    def get_actions(self, context, instance):
-        """Retrieve actions for the given instance."""
-        return self.db.instance_get_actions(context, instance['uuid'])
-
-    @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
-                                    vm_states.RESCUED],
-                          task_state=[None, task_states.RESIZE_VERIFY])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED])
     def suspend(self, context, instance):
         """Suspend the given instance."""
         self.update(context,
                     instance,
                     vm_state=vm_states.ACTIVE,
                     task_state=task_states.SUSPENDING)
-        self._cast_compute_message('suspend_instance', context, instance)
+        self.compute_rpcapi.suspend_instance(context, instance=instance)
 
     @wrap_check_policy
+    @check_instance_lock
     @check_instance_state(vm_state=[vm_states.SUSPENDED])
     def resume(self, context, instance):
         """Resume the given instance."""
@@ -1490,12 +1640,11 @@ class API(BaseAPI):
                     instance,
                     vm_state=vm_states.SUSPENDED,
                     task_state=task_states.RESUMING)
-        self._cast_compute_message('resume_instance', context, instance)
+        self.compute_rpcapi.resume_instance(context, instance=instance)
 
     @wrap_check_policy
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.SHUTOFF,
-                                    vm_states.STOPPED],
-                          task_state=[None, task_states.RESIZE_VERIFY])
+    @check_instance_lock
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED])
     def rescue(self, context, instance, rescue_password=None):
         """Rescue the given instance."""
         self.update(context,
@@ -1503,13 +1652,11 @@ class API(BaseAPI):
                     vm_state=vm_states.ACTIVE,
                     task_state=task_states.RESCUING)
 
-        rescue_params = {
-            "rescue_password": rescue_password
-        }
-        self._cast_compute_message('rescue_instance', context, instance,
-                params=rescue_params)
+        self.compute_rpcapi.rescue_instance(context, instance=instance,
+                rescue_password=rescue_password)
 
     @wrap_check_policy
+    @check_instance_lock
     @check_instance_state(vm_state=[vm_states.RESCUED])
     def unrescue(self, context, instance):
         """Unrescue the given instance."""
@@ -1517,9 +1664,10 @@ class API(BaseAPI):
                     instance,
                     vm_state=vm_states.RESCUED,
                     task_state=task_states.UNRESCUING)
-        self._cast_compute_message('unrescue_instance', context, instance)
+        self.compute_rpcapi.unrescue_instance(context, instance=instance)
 
     @wrap_check_policy
+    @check_instance_lock
     @check_instance_state(vm_state=[vm_states.ACTIVE])
     def set_admin_password(self, context, instance, password=None):
         """Set the root/admin password for the given instance."""
@@ -1527,50 +1675,50 @@ class API(BaseAPI):
                     instance,
                     task_state=task_states.UPDATING_PASSWORD)
 
-        params = {"new_pass": password}
-        self._cast_compute_message('set_admin_password', context, instance,
-                params=params)
+        self.compute_rpcapi.set_admin_password(context,
+                                               instance=instance,
+                                               new_pass=password)
 
     @wrap_check_policy
+    @check_instance_lock
     def inject_file(self, context, instance, path, file_contents):
         """Write a file to the given instance."""
-        params = {'path': path, 'file_contents': file_contents}
-        self._cast_compute_message('inject_file', context, instance,
-                params=params)
+        self.compute_rpcapi.inject_file(context, instance=instance, path=path,
+                file_contents=file_contents)
 
     @wrap_check_policy
     def get_vnc_console(self, context, instance, console_type):
         """Get a url to an instance Console."""
-        connect_info = self._call_compute_message('get_vnc_console',
-                context, instance, params={"console_type": console_type})
+        connect_info = self.compute_rpcapi.get_vnc_console(context,
+                instance=instance, console_type=console_type)
 
-        rpc.call(context, '%s' % FLAGS.consoleauth_topic,
-                 {'method': 'authorize_console',
-                  'args': {'token': connect_info['token'],
-                           'console_type': console_type,
-                           'host': connect_info['host'],
-                           'port': connect_info['port'],
-                           'internal_access_path':
-                                   connect_info['internal_access_path']}})
+        self.consoleauth_rpcapi.authorize_console(context,
+                connect_info['token'], console_type, connect_info['host'],
+                connect_info['port'], connect_info['internal_access_path'])
 
         return {'url': connect_info['access_url']}
 
     @wrap_check_policy
     def get_console_output(self, context, instance, tail_length=None):
-        """Get console output for an an instance."""
-        params = {'tail_length': tail_length}
-        return self._call_compute_message('get_console_output', context,
-                instance, params=params)
+        """Get console output for an instance."""
+        return self.compute_rpcapi.get_console_output(context,
+                instance=instance, tail_length=tail_length)
 
     @wrap_check_policy
     def lock(self, context, instance):
         """Lock the given instance."""
-        self._cast_compute_message('lock_instance', context, instance)
+        context = context.elevated()
+        instance_uuid = instance['uuid']
+        LOG.debug(_('Locking'), context=context, instance_uuid=instance_uuid)
+        self._instance_update(context, instance_uuid, locked=True)
 
     @wrap_check_policy
     def unlock(self, context, instance):
         """Unlock the given instance."""
-        self._cast_compute_message('unlock_instance', context, instance)
+        context = context.elevated()
+        instance_uuid = instance['uuid']
+        LOG.debug(_('Unlocking'), context=context, instance_uuid=instance_uuid)
+        self._instance_update(context, instance_uuid, locked=False)
 
     @wrap_check_policy
     def get_lock(self, context, instance):
@@ -1578,96 +1726,87 @@ class API(BaseAPI):
         return self.get(context, instance['uuid'])['locked']
 
     @wrap_check_policy
+    @check_instance_lock
     def reset_network(self, context, instance):
         """Reset networking on the instance."""
-        self._cast_compute_message('reset_network', context, instance)
+        self.compute_rpcapi.reset_network(context, instance=instance)
 
     @wrap_check_policy
+    @check_instance_lock
     def inject_network_info(self, context, instance):
         """Inject network info for the instance."""
-        self._cast_compute_message('inject_network_info', context, instance)
+        self.compute_rpcapi.inject_network_info(context, instance=instance)
 
     @wrap_check_policy
-    def attach_volume(self, context, instance, volume_id, device):
+    @check_instance_lock
+    def attach_volume(self, context, instance, volume_id, device=None):
         """Attach an existing volume to an existing instance."""
-        if not re.match("^/dev/x{0,1}[a-z]d[a-z]+$", device):
+        # NOTE(vish): Fail fast if the device is not going to pass. This
+        #             will need to be removed along with the test if we
+        #             change the logic in the manager for what constitutes
+        #             a valid device.
+        if device and not re.match("^/dev/x{0,1}[a-z]d[a-z]+$", device):
             raise exception.InvalidDevicePath(path=device)
-        volume = self.volume_api.get(context, volume_id)
-        self.volume_api.check_attach(context, volume)
-        self.volume_api.reserve_volume(context, volume)
-        params = {"volume_id": volume_id,
-                  "mountpoint": device}
-        self._cast_compute_message('attach_volume', context, instance,
-                params=params)
+        # NOTE(vish): This is done on the compute host because we want
+        #             to avoid a race where two devices are requested at
+        #             the same time. When db access is removed from
+        #             compute, the bdm will be created here and we will
+        #             have to make sure that they are assigned atomically.
+        device = self.compute_rpcapi.reserve_block_device_name(
+            context, device=device, instance=instance)
+        try:
+            volume = self.volume_api.get(context, volume_id)
+            self.volume_api.check_attach(context, volume)
+            self.volume_api.reserve_volume(context, volume)
+            self.compute_rpcapi.attach_volume(context, instance=instance,
+                    volume_id=volume_id, mountpoint=device)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.db.block_device_mapping_destroy_by_instance_and_device(
+                        context, instance['uuid'], device)
 
-    # FIXME(comstud): I wonder if API should pull in the instance from
-    # the volume ID via volume API and pass it and the volume object here
-    def detach_volume(self, context, volume_id):
-        """Detach a volume from an instance."""
-        instance = self.db.volume_get_instance(context.elevated(), volume_id)
-        if not instance:
-            raise exception.VolumeUnattached(volume_id=volume_id)
+        return device
 
+    @check_instance_lock
+    def _detach_volume(self, context, instance, volume_id):
         check_policy(context, 'detach_volume', instance)
 
         volume = self.volume_api.get(context, volume_id)
         self.volume_api.check_detach(context, volume)
 
-        params = {'volume_id': volume_id}
-        self._cast_compute_message('detach_volume', context, instance,
-                params=params)
+        self.compute_rpcapi.detach_volume(context, instance=instance,
+                volume_id=volume_id)
         return instance
 
-    @wrap_check_policy
-    def associate_floating_ip(self, context, instance, address):
-        """Makes calls to network_api to associate_floating_ip.
-
-        :param address: is a string floating ip address
-        """
-        instance_uuid = instance['uuid']
-
-        # TODO(tr3buchet): currently network_info doesn't contain floating IPs
-        # in its info, if this changes, the next few lines will need to
-        # accommodate the info containing floating as well as fixed ip
-        # addresses
-        nw_info = self.network_api.get_instance_nw_info(context.elevated(),
-                                                        instance)
-
-        if not nw_info:
-            raise exception.FixedIpNotFoundForInstance(
-                    instance_id=instance_uuid)
-
-        ips = [ip for ip in nw_info[0].fixed_ips()]
-
-        if not ips:
-            raise exception.FixedIpNotFoundForInstance(
-                    instance_id=instance_uuid)
-
-        # TODO(tr3buchet): this will associate the floating IP with the
-        # first fixed_ip (lowest id) an instance has. This should be
-        # changed to support specifying a particular fixed_ip if
-        # multiple exist.
-        if len(ips) > 1:
-            msg = _('multiple fixedips exist, using the first: %s')
-            LOG.warning(msg, ips[0]['address'])
-
-        self.network_api.associate_floating_ip(context,
-                floating_address=address, fixed_address=ips[0]['address'])
-        self.network_api.invalidate_instance_cache(context.elevated(),
-                                                   instance)
+    # FIXME(comstud): I wonder if API should pull in the instance from
+    # the volume ID via volume API and pass it and the volume object here
+    def detach_volume(self, context, volume_id):
+        """Detach a volume from an instance."""
+        volume = self.volume_api.get(context, volume_id)
+        instance_uuid = volume['instance_uuid']
+        instance = self.db.instance_get_by_uuid(context.elevated(),
+                                                instance_uuid)
+        if not instance:
+            raise exception.VolumeUnattached(volume_id=volume_id)
+        self._detach_volume(context, instance, volume_id)
 
     @wrap_check_policy
     def get_instance_metadata(self, context, instance):
         """Get all metadata associated with an instance."""
-        rv = self.db.instance_metadata_get(context, instance['id'])
+        rv = self.db.instance_metadata_get(context, instance['uuid'])
         return dict(rv.iteritems())
 
     @wrap_check_policy
+    @check_instance_lock
     def delete_instance_metadata(self, context, instance, key):
         """Delete the given metadata item from an instance."""
-        self.db.instance_metadata_delete(context, instance['id'], key)
+        self.db.instance_metadata_delete(context, instance['uuid'], key)
+        self.compute_rpcapi.change_instance_metadata(context,
+                                                     instance=instance,
+                                                     diff={key: ['-']})
 
     @wrap_check_policy
+    @check_instance_lock
     def update_instance_metadata(self, context, instance,
                                  metadata, delete=False):
         """Updates or creates instance metadata.
@@ -1676,15 +1815,20 @@ class API(BaseAPI):
         `metadata` argument will be deleted.
 
         """
+        orig = self.get_instance_metadata(context, instance)
         if delete:
             _metadata = metadata
         else:
-            _metadata = self.get_instance_metadata(context, instance)
+            _metadata = orig.copy()
             _metadata.update(metadata)
 
         self._check_metadata_properties_quota(context, _metadata)
-        self.db.instance_metadata_update(context, instance['id'],
+        self.db.instance_metadata_update(context, instance['uuid'],
                                          _metadata, True)
+        diff = utils.diff_dict(orig, _metadata)
+        self.compute_rpcapi.change_instance_metadata(context,
+                                                     instance=instance,
+                                                     diff=diff)
         return _metadata
 
     def get_instance_faults(self, context, instances):
@@ -1699,33 +1843,67 @@ class API(BaseAPI):
         uuids = [instance['uuid'] for instance in instances]
         return self.db.instance_fault_get_by_instance_uuids(context, uuids)
 
+    def get_instance_bdms(self, context, instance):
+        """Get all bdm tables for specified instance."""
+        return self.db.block_device_mapping_get_all_by_instance(context,
+                instance['uuid'])
 
-class HostAPI(BaseAPI):
+    def is_volume_backed_instance(self, context, instance, bdms):
+        bdms = bdms or self.get_instance_bdms(context, instance)
+        for bdm in bdms:
+            if (block_device.strip_dev(bdm.device_name) ==
+                block_device.strip_dev(instance['root_device_name'])):
+                return True
+        else:
+            return False
+
+    @check_instance_state(vm_state=[vm_states.ACTIVE])
+    def live_migrate(self, context, instance, block_migration,
+                     disk_over_commit, host):
+        """Migrate a server lively to a new host."""
+        LOG.debug(_("Going to try to live migrate instance"),
+                  instance=instance)
+        self.scheduler_rpcapi.live_migration(context, block_migration,
+                disk_over_commit, instance, host, topic=FLAGS.compute_topic)
+
+
+class HostAPI(base.Base):
+    def __init__(self):
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
+        super(HostAPI, self).__init__()
+
     """Sub-set of the Compute Manager API for managing host operations."""
     def set_host_enabled(self, context, host, enabled):
         """Sets the specified host's ability to accept new instances."""
         # NOTE(comstud): No instance_uuid argument to this compute manager
         # call
-        return self._call_compute_message("set_host_enabled", context,
-                host=host, params={"enabled": enabled})
+        return self.compute_rpcapi.set_host_enabled(context, enabled=enabled,
+                host=host)
+
+    def get_host_uptime(self, context, host):
+        """Returns the result of calling "uptime" on the target host."""
+        # NOTE(comstud): No instance_uuid argument to this compute manager
+        # call
+        return self.compute_rpcapi.get_host_uptime(context, host=host)
 
     def host_power_action(self, context, host, action):
         """Reboots, shuts down or powers up the host."""
         # NOTE(comstud): No instance_uuid argument to this compute manager
         # call
-        return self._call_compute_message("host_power_action", context,
-                host=host, params={"action": action})
+        return self.compute_rpcapi.host_power_action(context, action=action,
+                host=host)
 
     def set_host_maintenance(self, context, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
         guest VMs evacuation."""
-        return self._call_compute_message("host_maintenance_mode", context,
-                host=host, params={"host": host, "mode": mode})
+        return self.compute_rpcapi.host_maintenance_mode(context,
+                host_param=host, mode=mode, host=host)
 
 
 class AggregateAPI(base.Base):
     """Sub-set of the Compute Manager API for managing host aggregates."""
     def __init__(self, **kwargs):
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         super(AggregateAPI, self).__init__(**kwargs)
 
     def create_aggregate(self, context, aggregate_name, availability_zone):
@@ -1749,7 +1927,7 @@ class AggregateAPI(base.Base):
         return self._get_aggregate_info(context, aggregate)
 
     def get_aggregate_list(self, context):
-        """Get all the aggregates for this zone."""
+        """Get all the aggregates."""
         aggregates = self.db.aggregate_get_all(context)
         return [self._get_aggregate_info(context, a) for a in aggregates]
 
@@ -1763,11 +1941,6 @@ class AggregateAPI(base.Base):
 
         If a key is set to None, it gets removed from the aggregate metadata.
         """
-        # As a first release of the host aggregates blueprint, this call is
-        # pretty dumb, in the sense that interacts only with the model.
-        # In later releasses, updating metadata may trigger virt actions like
-        # the setup of shared storage, or more generally changes to the
-        # underlying hypervisor pools.
         for key in metadata.keys():
             if not metadata[key]:
                 try:
@@ -1792,56 +1965,26 @@ class AggregateAPI(base.Base):
         """Adds the host to an aggregate."""
         # validates the host; ComputeHostNotFound is raised if invalid
         service = self.db.service_get_all_compute_by_host(context, host)[0]
-        # add host, and reflects action in the aggregate operational state
         aggregate = self.db.aggregate_get(context, aggregate_id)
-        if aggregate.operational_state in [aggregate_states.CREATED,
-                                           aggregate_states.ACTIVE]:
-            if service.availability_zone != aggregate.availability_zone:
-                raise exception.InvalidAggregateAction(
-                        action='add host',
-                        aggregate_id=aggregate_id,
-                        reason='availibility zone mismatch')
-            self.db.aggregate_host_add(context, aggregate_id, host)
-            if aggregate.operational_state == aggregate_states.CREATED:
-                values = {'operational_state': aggregate_states.CHANGING}
-                self.db.aggregate_update(context, aggregate_id, values)
-            queue = self.db.queue_get_for(context, service.topic, host)
-            rpc.cast(context, queue, {"method": "add_aggregate_host",
-                                      "args": {"aggregate_id": aggregate_id,
-                                               "host": host}, })
-            return self.get_aggregate(context, aggregate_id)
-        else:
-            invalid = {aggregate_states.CHANGING: 'setup in progress',
-                       aggregate_states.DISMISSED: 'aggregate deleted',
-                       aggregate_states.ERROR: 'aggregate in error', }
-            if aggregate.operational_state in invalid.keys():
-                raise exception.InvalidAggregateAction(
-                        action='add host',
-                        aggregate_id=aggregate_id,
-                        reason=invalid[aggregate.operational_state])
+        if service.availability_zone != aggregate.availability_zone:
+            raise exception.InvalidAggregateAction(
+                    action='add host',
+                    aggregate_id=aggregate_id,
+                    reason='availability zone mismatch')
+        self.db.aggregate_host_add(context, aggregate_id, host)
+        #NOTE(jogo): Send message to host to support resource pools
+        self.compute_rpcapi.add_aggregate_host(context,
+                aggregate_id=aggregate_id, host_param=host, host=host)
+        return self.get_aggregate(context, aggregate_id)
 
     def remove_host_from_aggregate(self, context, aggregate_id, host):
         """Removes host from the aggregate."""
         # validates the host; ComputeHostNotFound is raised if invalid
         service = self.db.service_get_all_compute_by_host(context, host)[0]
-        aggregate = self.db.aggregate_get(context, aggregate_id)
-        if aggregate.operational_state in [aggregate_states.ACTIVE,
-                                           aggregate_states.ERROR]:
-            self.db.aggregate_host_delete(context, aggregate_id, host)
-            queue = self.db.queue_get_for(context, service.topic, host)
-            rpc.cast(context, queue, {"method": "remove_aggregate_host",
-                                      "args": {"aggregate_id": aggregate_id,
-                                               "host": host}, })
-            return self.get_aggregate(context, aggregate_id)
-        else:
-            invalid = {aggregate_states.CREATED: 'no hosts to remove',
-                       aggregate_states.CHANGING: 'setup in progress',
-                       aggregate_states.DISMISSED: 'aggregate deleted', }
-            if aggregate.operational_state in invalid.keys():
-                raise exception.InvalidAggregateAction(
-                        action='remove host',
-                        aggregate_id=aggregate_id,
-                        reason=invalid[aggregate.operational_state])
+        self.db.aggregate_host_delete(context, aggregate_id, host)
+        self.compute_rpcapi.remove_aggregate_host(context,
+                aggregate_id=aggregate_id, host_param=host, host=host)
+        return self.get_aggregate(context, aggregate_id)
 
     def _get_aggregate_info(self, context, aggregate):
         """Builds a dictionary with aggregate props, metadata and hosts."""
@@ -1851,3 +1994,544 @@ class AggregateAPI(base.Base):
         result["metadata"] = metadata
         result["hosts"] = hosts
         return result
+
+
+class KeypairAPI(base.Base):
+    """Sub-set of the Compute Manager API for managing key pairs."""
+    def __init__(self, **kwargs):
+        super(KeypairAPI, self).__init__(**kwargs)
+
+    def _validate_keypair_name(self, context, user_id, key_name):
+        safechars = "_- " + string.digits + string.ascii_letters
+        clean_value = "".join(x for x in key_name if x in safechars)
+        if clean_value != key_name:
+            msg = _("Keypair name contains unsafe characters")
+            raise exception.InvalidKeypair(explanation=msg)
+
+        if not 0 < len(key_name) < 256:
+            msg = _('Keypair name must be between 1 and 255 characters long')
+            raise exception.InvalidKeypair(explanation=msg)
+
+        # NOTE: check for existing keypairs of same name
+        try:
+            self.db.key_pair_get(context, user_id, key_name)
+            raise exception.KeyPairExists(key_name=key_name)
+        except exception.NotFound:
+            pass
+
+    def import_key_pair(self, context, user_id, key_name, public_key):
+        """Import a key pair using an existing public key."""
+        self._validate_keypair_name(context, user_id, key_name)
+
+        count = QUOTAS.count(context, 'key_pairs', user_id)
+        try:
+            QUOTAS.limit_check(context, key_pairs=count + 1)
+        except exception.OverQuota:
+            raise exception.KeypairLimitExceeded()
+
+        try:
+            fingerprint = crypto.generate_fingerprint(public_key)
+        except exception.InvalidKeypair:
+            msg = _("Keypair data is invalid")
+            raise exception.InvalidKeypair(explanation=msg)
+
+        keypair = {'user_id': user_id,
+                   'name': key_name,
+                   'fingerprint': fingerprint,
+                   'public_key': public_key}
+
+        self.db.key_pair_create(context, keypair)
+        return keypair
+
+    def create_key_pair(self, context, user_id, key_name):
+        """Create a new key pair."""
+        self._validate_keypair_name(context, user_id, key_name)
+
+        count = QUOTAS.count(context, 'key_pairs', user_id)
+        try:
+            QUOTAS.limit_check(context, key_pairs=count + 1)
+        except exception.OverQuota:
+            raise exception.KeypairLimitExceeded()
+
+        private_key, public_key, fingerprint = crypto.generate_key_pair()
+
+        keypair = {'user_id': user_id,
+                   'name': key_name,
+                   'fingerprint': fingerprint,
+                   'public_key': public_key,
+                   'private_key': private_key}
+        self.db.key_pair_create(context, keypair)
+
+        return keypair
+
+    def delete_key_pair(self, context, user_id, key_name):
+        """Delete a keypair by name."""
+        self.db.key_pair_destroy(context, user_id, key_name)
+
+    def get_key_pairs(self, context, user_id):
+        """List key pairs."""
+        key_pairs = self.db.key_pair_get_all_by_user(context, user_id)
+        rval = []
+        for key_pair in key_pairs:
+            rval.append({
+                'name': key_pair['name'],
+                'public_key': key_pair['public_key'],
+                'fingerprint': key_pair['fingerprint'],
+            })
+        return rval
+
+    def get_key_pair(self, context, user_id, key_name):
+        """Get a keypair by name."""
+        key_pair = self.db.key_pair_get(context, user_id, key_name)
+        return {'name': key_pair['name'],
+                'public_key': key_pair['public_key'],
+                'fingerprint': key_pair['fingerprint']}
+
+
+class SecurityGroupAPI(base.Base):
+    """
+    Sub-set of the Compute API related to managing security groups
+    and security group rules
+    """
+    def __init__(self, **kwargs):
+        super(SecurityGroupAPI, self).__init__(**kwargs)
+        self.security_group_rpcapi = compute_rpcapi.SecurityGroupAPI()
+        self.sgh = importutils.import_object(FLAGS.security_group_handler)
+
+    def validate_property(self, value, property, allowed):
+        """
+        Validate given security group property.
+
+        :param value:          the value to validate, as a string or unicode
+        :param property:       the property, either 'name' or 'description'
+        :param allowed:        the range of characters allowed
+        """
+
+        try:
+            val = value.strip()
+        except AttributeError:
+            msg = _("Security group %s is not a string or unicode") % property
+            self.raise_invalid_property(msg)
+        if not val:
+            msg = _("Security group %s cannot be empty.") % property
+            self.raise_invalid_property(msg)
+
+        if allowed and not re.match(allowed, val):
+            # Some validation to ensure that values match API spec.
+            # - Alphanumeric characters, spaces, dashes, and underscores.
+            # TODO(Daviey): LP: #813685 extend beyond group_name checking, and
+            #  probably create a param validator that can be used elsewhere.
+            msg = (_("Value (%(value)s) for parameter Group%(property)s is "
+                     "invalid. Content limited to '%(allowed)'.") %
+                   dict(value=value, allowed=allowed,
+                        property=property.capitalize()))
+            self.raise_invalid_property(msg)
+        if len(val) > 255:
+            msg = _("Security group %s should not be greater "
+                            "than 255 characters.") % property
+            self.raise_invalid_property(msg)
+
+    def ensure_default(self, context):
+        """Ensure that a context has a security group.
+
+        Creates a security group for the security context if it does not
+        already exist.
+
+        :param context: the security context
+        """
+        self.db.security_group_ensure_default(context)
+
+    def create(self, context, name, description):
+        try:
+            reservations = QUOTAS.reserve(context, security_groups=1)
+        except exception.OverQuota:
+            msg = _("Quota exceeded, too many security groups.")
+            self.raise_over_quota(msg)
+
+        LOG.audit(_("Create Security Group %s"), name, context=context)
+
+        self.ensure_default(context)
+
+        if self.db.security_group_exists(context, context.project_id, name):
+            msg = _('Security group %s already exists') % name
+            self.raise_group_already_exists(msg)
+
+        try:
+            group = {'user_id': context.user_id,
+                     'project_id': context.project_id,
+                     'name': name,
+                     'description': description}
+            group_ref = self.db.security_group_create(context, group)
+            self.sgh.trigger_security_group_create_refresh(context, group)
+            # Commit the reservation
+            QUOTAS.commit(context, reservations)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                QUOTAS.rollback(context, reservations)
+
+        return group_ref
+
+    def get(self, context, name=None, id=None, map_exception=False):
+        self.ensure_default(context)
+        try:
+            if name:
+                return self.db.security_group_get_by_name(context,
+                                                          context.project_id,
+                                                          name)
+            elif id:
+                return self.db.security_group_get(context, id)
+        except exception.NotFound as exp:
+            if map_exception:
+                msg = unicode(exp)
+                self.raise_not_found(msg)
+            else:
+                raise
+
+    def list(self, context, names=None, ids=None, project=None):
+        self.ensure_default(context)
+
+        groups = []
+        if names or ids:
+            if names:
+                for name in names:
+                    groups.append(self.db.security_group_get_by_name(context,
+                                                                     project,
+                                                                     name))
+            if ids:
+                for id in ids:
+                    groups.append(self.db.security_group_get(context, id))
+
+        elif context.is_admin:
+            groups = self.db.security_group_get_all(context)
+
+        elif project:
+            groups = self.db.security_group_get_by_project(context, project)
+
+        return groups
+
+    def destroy(self, context, security_group):
+        if self.db.security_group_in_use(context, security_group.id):
+            msg = _("Security group is still in use")
+            self.raise_invalid_group(msg)
+
+        # Get reservations
+        try:
+            reservations = QUOTAS.reserve(context, security_groups=-1)
+        except Exception:
+            reservations = None
+            LOG.exception(_("Failed to update usages deallocating "
+                            "security group"))
+
+        LOG.audit(_("Delete security group %s"), security_group.name,
+                  context=context)
+        self.db.security_group_destroy(context, security_group.id)
+
+        self.sgh.trigger_security_group_destroy_refresh(context,
+                                                        security_group.id)
+
+        # Commit the reservations
+        if reservations:
+            QUOTAS.commit(context, reservations)
+
+    def is_associated_with_server(self, security_group, instance_uuid):
+        """Check if the security group is already associated
+           with the instance. If Yes, return True.
+        """
+
+        if not security_group:
+            return False
+
+        instances = security_group.get('instances')
+        if not instances:
+            return False
+
+        for inst in instances:
+            if (instance_uuid == inst['uuid']):
+                return True
+
+        return False
+
+    @wrap_check_security_groups_policy
+    def add_to_instance(self, context, instance, security_group_name):
+        """Add security group to the instance"""
+        security_group = self.db.security_group_get_by_name(context,
+                context.project_id,
+                security_group_name)
+
+        instance_uuid = instance['uuid']
+
+        #check if the security group is associated with the server
+        if self.is_associated_with_server(security_group, instance_uuid):
+            raise exception.SecurityGroupExistsForInstance(
+                                        security_group_id=security_group['id'],
+                                        instance_id=instance_uuid)
+
+        #check if the instance is in running state
+        if instance['power_state'] != power_state.RUNNING:
+            raise exception.InstanceNotRunning(instance_id=instance_uuid)
+
+        self.db.instance_add_security_group(context.elevated(),
+                                            instance_uuid,
+                                            security_group['id'])
+        # NOTE(comstud): No instance_uuid argument to this compute manager
+        # call
+        self.security_group_rpcapi.refresh_security_group_rules(context,
+                security_group['id'], host=instance['host'])
+
+        self.trigger_handler('instance_add_security_group',
+                context, instance, security_group_name)
+
+    @wrap_check_security_groups_policy
+    def remove_from_instance(self, context, instance, security_group_name):
+        """Remove the security group associated with the instance"""
+        security_group = self.db.security_group_get_by_name(context,
+                context.project_id,
+                security_group_name)
+
+        instance_uuid = instance['uuid']
+
+        #check if the security group is associated with the server
+        if not self.is_associated_with_server(security_group, instance_uuid):
+            raise exception.SecurityGroupNotExistsForInstance(
+                                    security_group_id=security_group['id'],
+                                    instance_id=instance_uuid)
+
+        #check if the instance is in running state
+        if instance['power_state'] != power_state.RUNNING:
+            raise exception.InstanceNotRunning(instance_id=instance_uuid)
+
+        self.db.instance_remove_security_group(context.elevated(),
+                                               instance_uuid,
+                                               security_group['id'])
+        # NOTE(comstud): No instance_uuid argument to this compute manager
+        # call
+        self.security_group_rpcapi.refresh_security_group_rules(context,
+                security_group['id'], host=instance['host'])
+
+        self.trigger_handler('instance_remove_security_group',
+                context, instance, security_group_name)
+
+    def trigger_handler(self, event, *args):
+        handle = getattr(self.sgh, 'trigger_%s_refresh' % event)
+        handle(*args)
+
+    def trigger_rules_refresh(self, context, id):
+        """Called when a rule is added to or removed from a security_group."""
+
+        security_group = self.db.security_group_get(context, id)
+
+        for instance in security_group['instances']:
+            if instance['host'] is not None:
+                self.security_group_rpcapi.refresh_instance_security_rules(
+                        context, instance['host'], instance)
+
+    def trigger_members_refresh(self, context, group_ids):
+        """Called when a security group gains a new or loses a member.
+
+        Sends an update request to each compute node for each instance for
+        which this is relevant.
+        """
+        # First, we get the security group rules that reference these groups as
+        # the grantee..
+        security_group_rules = set()
+        for group_id in group_ids:
+            security_group_rules.update(
+                self.db.security_group_rule_get_by_security_group_grantee(
+                                                                     context,
+                                                                     group_id))
+
+        # ..then we distill the rules into the groups to which they belong..
+        security_groups = set()
+        for rule in security_group_rules:
+            security_group = self.db.security_group_get(
+                                                    context,
+                                                    rule['parent_group_id'])
+            security_groups.add(security_group)
+
+        # ..then we find the instances that are members of these groups..
+        instances = set()
+        for security_group in security_groups:
+            for instance in security_group['instances']:
+                instances.add(instance)
+
+        # ..then we send a request to refresh the rules for each instance.
+        for instance in instances:
+            if instance['host']:
+                self.security_group_rpcapi.refresh_instance_security_rules(
+                        context, instance['host'], instance)
+
+    def parse_cidr(self, cidr):
+        if cidr:
+            try:
+                cidr = urllib.unquote(cidr).decode()
+            except Exception as e:
+                self.raise_invalid_cidr(cidr, e)
+
+            if not utils.is_valid_cidr(cidr):
+                self.raise_invalid_cidr(cidr)
+
+            return cidr
+        else:
+            return '0.0.0.0/0'
+
+    @staticmethod
+    def new_group_ingress_rule(grantee_group_id, protocol, from_port,
+                               to_port):
+        return SecurityGroupAPI._new_ingress_rule(protocol, from_port,
+                                to_port, group_id=grantee_group_id)
+
+    @staticmethod
+    def new_cidr_ingress_rule(grantee_cidr, protocol, from_port, to_port):
+        return SecurityGroupAPI._new_ingress_rule(protocol, from_port,
+                                to_port, cidr=grantee_cidr)
+
+    @staticmethod
+    def _new_ingress_rule(ip_protocol, from_port, to_port,
+                          group_id=None, cidr=None):
+        values = {}
+
+        if group_id:
+            values['group_id'] = group_id
+            # Open everything if an explicit port range or type/code are not
+            # specified, but only if a source group was specified.
+            ip_proto_upper = ip_protocol.upper() if ip_protocol else ''
+            if (ip_proto_upper == 'ICMP' and
+                from_port is None and to_port is None):
+                from_port = -1
+                to_port = -1
+            elif (ip_proto_upper in ['TCP', 'UDP'] and from_port is None
+                  and to_port is None):
+                from_port = 1
+                to_port = 65535
+
+        elif cidr:
+            values['cidr'] = cidr
+
+        if ip_protocol and from_port is not None and to_port is not None:
+
+            ip_protocol = str(ip_protocol)
+            try:
+                # Verify integer conversions
+                from_port = int(from_port)
+                to_port = int(to_port)
+            except ValueError:
+                if ip_protocol.upper() == 'ICMP':
+                    raise exception.InvalidInput(reason="Type and"
+                         " Code must be integers for ICMP protocol type")
+                else:
+                    raise exception.InvalidInput(reason="To and From ports "
+                          "must be integers")
+
+            if ip_protocol.upper() not in ['TCP', 'UDP', 'ICMP']:
+                raise exception.InvalidIpProtocol(protocol=ip_protocol)
+
+            # Verify that from_port must always be less than
+            # or equal to to_port
+            if (ip_protocol.upper() in ['TCP', 'UDP'] and
+                (from_port > to_port)):
+                raise exception.InvalidPortRange(from_port=from_port,
+                      to_port=to_port, msg="Former value cannot"
+                                            " be greater than the later")
+
+            # Verify valid TCP, UDP port ranges
+            if (ip_protocol.upper() in ['TCP', 'UDP'] and
+                (from_port < 1 or to_port > 65535)):
+                raise exception.InvalidPortRange(from_port=from_port,
+                      to_port=to_port, msg="Valid TCP ports should"
+                                           " be between 1-65535")
+
+            # Verify ICMP type and code
+            if (ip_protocol.upper() == "ICMP" and
+                (from_port < -1 or from_port > 255 or
+                to_port < -1 or to_port > 255)):
+                raise exception.InvalidPortRange(from_port=from_port,
+                      to_port=to_port, msg="For ICMP, the"
+                                           " type:code must be valid")
+
+            values['protocol'] = ip_protocol
+            values['from_port'] = from_port
+            values['to_port'] = to_port
+
+        else:
+            # If cidr based filtering, protocol and ports are mandatory
+            if cidr:
+                return None
+
+        return values
+
+    def rule_exists(self, security_group, values):
+        """Indicates whether the specified rule values are already
+           defined in the given security group.
+        """
+        for rule in security_group.rules:
+            is_duplicate = True
+            keys = ('group_id', 'cidr', 'from_port', 'to_port', 'protocol')
+            for key in keys:
+                if rule.get(key) != values.get(key):
+                    is_duplicate = False
+                    break
+            if is_duplicate:
+                return rule.get('id') or True
+        return False
+
+    def get_rule(self, context, id):
+        self.ensure_default(context)
+        try:
+            return self.db.security_group_rule_get(context, id)
+        except exception.NotFound:
+            msg = _("Rule (%s) not found") % id
+            self.raise_not_found(msg)
+
+    def add_rules(self, context, id, name, vals):
+        count = QUOTAS.count(context, 'security_group_rules', id)
+        try:
+            projected = count + len(vals)
+            QUOTAS.limit_check(context, security_group_rules=projected)
+        except exception.OverQuota:
+            msg = _("Quota exceeded, too many security group rules.")
+            self.raise_over_quota(msg)
+
+        msg = _("Authorize security group ingress %s")
+        LOG.audit(msg, name, context=context)
+
+        rules = [self.db.security_group_rule_create(context, v) for v in vals]
+
+        self.trigger_rules_refresh(context, id=id)
+        self.trigger_handler('security_group_rule_create', context,
+                             [r['id'] for r in rules])
+        return rules
+
+    def remove_rules(self, context, security_group, rule_ids):
+        msg = _("Revoke security group ingress %s")
+        LOG.audit(msg, security_group['name'], context=context)
+
+        for rule_id in rule_ids:
+            self.db.security_group_rule_destroy(context, rule_id)
+
+        # NOTE(vish): we removed some rules, so refresh
+        self.trigger_rules_refresh(context, id=security_group['id'])
+        self.trigger_handler('security_group_rule_destroy', context, rule_ids)
+
+    @staticmethod
+    def raise_invalid_property(msg):
+        raise NotImplementedError()
+
+    @staticmethod
+    def raise_group_already_exists(msg):
+        raise NotImplementedError()
+
+    @staticmethod
+    def raise_invalid_group(msg):
+        raise NotImplementedError()
+
+    @staticmethod
+    def raise_invalid_cidr(cidr, decoding_exception=None):
+        raise NotImplementedError()
+
+    @staticmethod
+    def raise_over_quota(msg):
+        raise NotImplementedError()
+
+    @staticmethod
+    def raise_not_found(msg):
+        raise NotImplementedError()

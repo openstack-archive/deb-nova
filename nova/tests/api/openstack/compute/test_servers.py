@@ -17,7 +17,6 @@
 #    under the License.
 
 import datetime
-import json
 import urlparse
 
 import iso8601
@@ -28,6 +27,7 @@ import nova.api.openstack.compute
 from nova.api.openstack.compute import ips
 from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import views
+from nova.api.openstack import extensions
 from nova.api.openstack import xmlutil
 import nova.compute.api
 from nova.compute import instance_types
@@ -36,11 +36,12 @@ from nova.compute import vm_states
 import nova.db
 from nova.db.sqlalchemy import models
 from nova import flags
-import nova.image.fake
-import nova.rpc
+from nova.openstack.common import jsonutils
+import nova.openstack.common.rpc
 from nova import test
-from nova.tests import fake_network
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_network
+import nova.tests.image.fake
 from nova import utils
 
 
@@ -52,6 +53,8 @@ XPATH_NS = {
     'atom': 'http://www.w3.org/2005/Atom',
     'ns': 'http://docs.openstack.org/compute/api/v1.1'
 }
+
+INSTANCE_IDS = {FAKE_UUID: 1}
 
 
 def fake_gen_uuid():
@@ -71,8 +74,10 @@ def return_security_group(context, instance_id, security_group_id):
     pass
 
 
-def instance_update(context, instance_id, values):
-    return fakes.stub_instance(instance_id, name=values.get('display_name'))
+def instance_update(context, instance_uuid, values):
+    inst = fakes.stub_instance(INSTANCE_IDS.get(instance_uuid),
+                               name=values.get('display_name'))
+    return (inst, inst)
 
 
 def fake_compute_api(cls, req, id):
@@ -90,12 +95,13 @@ class MockSetAdminPassword(object):
 
 
 class ServersControllerTest(test.TestCase):
+
     def setUp(self):
         super(ServersControllerTest, self).setUp()
         self.flags(verbose=True, use_ipv6=False)
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
-        fakes.stub_out_image_service(self.stubs)
+        nova.tests.image.fake.stub_out_image_service(self.stubs)
         return_server = fakes.fake_instance_get()
         return_servers = fakes.fake_instance_get_all_by_filters()
         self.stubs.Set(nova.db, 'instance_get_all_by_filters',
@@ -106,13 +112,27 @@ class ServersControllerTest(test.TestCase):
                        return_servers)
         self.stubs.Set(nova.db, 'instance_add_security_group',
                        return_security_group)
-        self.stubs.Set(nova.db, 'instance_update', instance_update)
+        self.stubs.Set(nova.db, 'instance_update_and_get_original',
+                instance_update)
 
-        self.controller = servers.Controller()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
         self.ips_controller = ips.Controller()
 
         fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
                                                           spectacular=True)
+
+    def test_can_check_loaded_extensions(self):
+        self.ext_mgr.extensions = {'os-fake': None}
+        self.assertTrue(self.controller.ext_mgr.is_loaded('os-fake'))
+        self.assertFalse(self.controller.ext_mgr.is_loaded('os-not-loaded'))
+
+    def test_requested_networks_prefix(self):
+        uuid = 'br-00000000-0000-0000-0000-000000000000'
+        requested_networks = [{'uuid': uuid}]
+        res = self.controller._get_requested_networks(requested_networks)
+        self.assertTrue((uuid, None) in res)
 
     def test_get_server_by_uuid(self):
         req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
@@ -162,7 +182,6 @@ class ServersControllerTest(test.TestCase):
                 "accessIPv4": "",
                 "accessIPv6": "",
                 "hostId": '',
-                "key_name": '',
                 "image": {
                     "id": "10",
                     "links": [
@@ -190,7 +209,6 @@ class ServersControllerTest(test.TestCase):
                 "metadata": {
                     "seq": "1",
                 },
-                "config_drive": None,
                 "links": [
                     {
                         "rel": "self",
@@ -230,7 +248,6 @@ class ServersControllerTest(test.TestCase):
                 "accessIPv4": "",
                 "accessIPv6": "",
                 "hostId": '',
-                "key_name": '',
                 "image": {
                     "id": "10",
                     "links": [
@@ -258,7 +275,6 @@ class ServersControllerTest(test.TestCase):
                 "metadata": {
                     "seq": "1",
                 },
-                "config_drive": None,
                 "links": [
                     {
                         "rel": "self",
@@ -301,7 +317,6 @@ class ServersControllerTest(test.TestCase):
                 "accessIPv4": "",
                 "accessIPv6": "",
                 "hostId": '',
-                "key_name": '',
                 "image": {
                     "id": "10",
                     "links": [
@@ -329,7 +344,6 @@ class ServersControllerTest(test.TestCase):
                 "metadata": {
                     "seq": "1",
                 },
-                "config_drive": None,
                 "links": [
                     {
                         "rel": "self",
@@ -870,7 +884,7 @@ class ServersControllerTest(test.TestCase):
                   'accessIPv4': '0.0.0.0',
                   'accessIPv6': 'beef::0123',
                }}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         res_dict = self.controller.update(req, FAKE_UUID, body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -885,7 +899,7 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'name': 'server_test'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         res_dict = self.controller.update(req, FAKE_UUID, body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -898,7 +912,7 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'name': 'x' * 256}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                             req, FAKE_UUID, body)
 
@@ -909,7 +923,7 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'accessIPv4': '0.0.0.0'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         res_dict = self.controller.update(req, FAKE_UUID, body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -922,9 +936,35 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'accessIPv4': 'bad_format'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                             req, FAKE_UUID, body)
+
+    def test_update_server_access_ipv4_none(self):
+        self.stubs.Set(nova.db, 'instance_get',
+                fakes.fake_instance_get(access_ipv4='0.0.0.0'))
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'accessIPv4': None}}
+        req.body = jsonutils.dumps(body)
+        res_dict = self.controller.update(req, FAKE_UUID, body)
+
+        self.assertEqual(res_dict['server']['id'], FAKE_UUID)
+        self.assertEqual(res_dict['server']['accessIPv4'], '')
+
+    def test_update_server_access_ipv4_blank(self):
+        self.stubs.Set(nova.db, 'instance_get',
+                fakes.fake_instance_get(access_ipv4='0.0.0.0'))
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'accessIPv4': ''}}
+        req.body = jsonutils.dumps(body)
+        res_dict = self.controller.update(req, FAKE_UUID, body)
+
+        self.assertEqual(res_dict['server']['id'], FAKE_UUID)
+        self.assertEqual(res_dict['server']['accessIPv4'], '')
 
     def test_update_server_access_ipv6(self):
         self.stubs.Set(nova.db, 'instance_get',
@@ -933,7 +973,7 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'accessIPv6': 'beef::0123'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         res_dict = self.controller.update(req, FAKE_UUID, body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -946,9 +986,35 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'accessIPv6': 'bad_format'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                             req, FAKE_UUID, body)
+
+    def test_update_server_access_ipv6_none(self):
+        self.stubs.Set(nova.db, 'instance_get',
+                fakes.fake_instance_get(access_ipv6='beef::0123'))
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'accessIPv6': None}}
+        req.body = jsonutils.dumps(body)
+        res_dict = self.controller.update(req, FAKE_UUID, body)
+
+        self.assertEqual(res_dict['server']['id'], FAKE_UUID)
+        self.assertEqual(res_dict['server']['accessIPv6'], '')
+
+    def test_update_server_access_ipv6_blank(self):
+        self.stubs.Set(nova.db, 'instance_get',
+                fakes.fake_instance_get(access_ipv6='beef::0123'))
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'accessIPv6': ''}}
+        req.body = jsonutils.dumps(body)
+        res_dict = self.controller.update(req, FAKE_UUID, body)
+
+        self.assertEqual(res_dict['server']['id'], FAKE_UUID)
+        self.assertEqual(res_dict['server']['accessIPv6'], '')
 
     def test_update_server_adminPass_ignored(self):
         inst_dict = dict(name='server_test', adminPass='bacon')
@@ -970,7 +1036,7 @@ class ServersControllerTest(test.TestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
         req.method = 'PUT'
         req.content_type = "application/json"
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         res_dict = self.controller.update(req, FAKE_UUID, body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -985,7 +1051,7 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'name': 'server_test'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
                           req, FAKE_UUID, body)
 
@@ -998,12 +1064,12 @@ class ServersControllerTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {'name': 'server_test'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
                           req, FAKE_UUID, body)
 
     def test_rebuild_instance_with_access_ipv4_bad_format(self):
-        self.stubs.Set(nova.db, 'instance_get',
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
                 fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
         # proper local hrefs must start with 'http://localhost/v2/'
         image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
@@ -1031,7 +1097,163 @@ class ServersControllerTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+            self.controller._action_rebuild, req, FAKE_UUID, body)
+
+    def test_rebuild_instance_with_blank_metadata_key(self):
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
+        access_ipv4 = '0.0.0.0'
+        access_ipv6 = 'fead::1234'
+        body = {
+            'rebuild': {
+                'name': 'new_name',
+                'imageRef': image_href,
+                'accessIPv4': access_ipv4,
+                'accessIPv6': access_ipv6,
+                'metadata': {
+                    '': 'world',
+                    'open': 'stack',
+                },
+                'personality': [
+                    {
+                        "path": "/etc/banner.txt",
+                        "contents": "MQ==",
+                    },
+                ],
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+            self.controller._action_rebuild, req, FAKE_UUID, body)
+
+    def test_rebuild_instance_with_metadata_key_too_long(self):
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
+        access_ipv4 = '0.0.0.0'
+        access_ipv6 = 'fead::1234'
+        body = {
+            'rebuild': {
+                'name': 'new_name',
+                'imageRef': image_href,
+                'accessIPv4': access_ipv4,
+                'accessIPv6': access_ipv6,
+                'metadata': {
+                    ('a' * 260): 'world',
+                    'open': 'stack',
+                },
+                'personality': [
+                    {
+                        "path": "/etc/banner.txt",
+                        "contents": "MQ==",
+                    },
+                ],
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+            self.controller._action_rebuild, req, FAKE_UUID, body)
+
+    def test_rebuild_instance_with_metadata_value_too_long(self):
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
+        access_ipv4 = '0.0.0.0'
+        access_ipv6 = 'fead::1234'
+        body = {
+            'rebuild': {
+                'name': 'new_name',
+                'imageRef': image_href,
+                'accessIPv4': access_ipv4,
+                'accessIPv6': access_ipv6,
+                'metadata': {
+                    'key1': ('a' * 260),
+                    'open': 'stack',
+                },
+                'personality': [
+                    {
+                        "path": "/etc/banner.txt",
+                        "contents": "MQ==",
+                    },
+                ],
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+            self.controller._action_rebuild, req, FAKE_UUID, body)
+
+    def test_rebuild_instance_fails_when_min_ram_too_small(self):
+        # make min_ram larger than our instance ram size
+        def fake_get_image(self, context, image_href):
+            return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
+                name='public image', is_public=True,
+                status='active', properties={'key1': 'value1'},
+                min_ram="4096", min_disk="10")
+        self.stubs.Set(nova.compute.api.API, '_get_image',
+                fake_get_image)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
+        body = {
+            'rebuild': {
+                'name': 'new_name',
+                'imageRef': image_href,
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+            self.controller._action_rebuild, req, FAKE_UUID, body)
+
+    def test_rebuild_instance_fails_when_min_disk_too_small(self):
+        # make min_disk larger than our instance disk size
+        def fake_get_image(self, context, image_href):
+            return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
+                name='public image', is_public=True,
+                status='active', properties={'key1': 'value1'},
+                min_ram="128", min_disk="100000")
+        self.stubs.Set(nova.compute.api.API, '_get_image',
+                fake_get_image)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
+        body = {
+            'rebuild': {
+                'name': 'new_name',
+                'imageRef': image_href,
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest,
             self.controller._action_rebuild, req, FAKE_UUID, body)
@@ -1065,7 +1287,7 @@ class ServersControllerTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers/a/action')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest,
             self.controller._action_rebuild, req, FAKE_UUID, body)
@@ -1131,6 +1353,7 @@ class ServersControllerTest(test.TestCase):
             self.assertEqual(s['name'], 'server%d' % (i + 1))
 
     def test_delete_server_instance(self):
+        fakes.stub_out_instance_quota(self.stubs, 0, 10)
         req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
         req.method = 'DELETE'
 
@@ -1139,7 +1362,7 @@ class ServersControllerTest(test.TestCase):
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
                 fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
 
-        def instance_destroy_mock(context, id):
+        def instance_destroy_mock(*args, **kwargs):
             self.server_delete_called = True
         self.stubs.Set(nova.db, 'instance_destroy', instance_destroy_mock)
 
@@ -1148,12 +1371,13 @@ class ServersControllerTest(test.TestCase):
         self.assertEqual(self.server_delete_called, True)
 
     def test_delete_server_instance_while_building(self):
+        fakes.stub_out_instance_quota(self.stubs, 0, 10)
         req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
         req.method = 'DELETE'
 
         self.server_delete_called = False
 
-        def instance_destroy_mock(context, id):
+        def instance_destroy_mock(*args, **kwargs):
             self.server_delete_called = True
         self.stubs.Set(nova.db, 'instance_destroy', instance_destroy_mock)
 
@@ -1168,16 +1392,17 @@ class ServersControllerTest(test.TestCase):
         self.server_delete_called = False
 
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
-                fakes.fake_instance_get(vm_state=vm_states.RESIZING))
+                fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                        task_state=task_states.RESIZE_PREP))
 
-        def instance_destroy_mock(context, id):
+        def instance_destroy_mock(*args, **kwargs):
             self.server_delete_called = True
         self.stubs.Set(nova.db, 'instance_destroy', instance_destroy_mock)
 
-        self.assertRaises(webob.exc.HTTPConflict,
-                          self.controller.delete,
-                          req,
-                          FAKE_UUID)
+        self.controller.delete(req, FAKE_UUID)
+        # Delete shoud be allowed in any case, even during resizing,
+        # because it may get stuck.
+        self.assertEqual(self.server_delete_called, True)
 
 
 class ServerStatusTest(test.TestCase):
@@ -1186,7 +1411,9 @@ class ServerStatusTest(test.TestCase):
         super(ServerStatusTest, self).setUp()
         fakes.stub_out_nw_api(self.stubs)
 
-        self.controller = servers.Controller()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
 
     def _get_with_state(self, vm_state, task_state=None):
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
@@ -1211,7 +1438,8 @@ class ServerStatusTest(test.TestCase):
         self.assertEqual(response['server']['status'], 'HARD_REBOOT')
 
     def test_rebuild(self):
-        response = self._get_with_state(vm_states.REBUILDING)
+        response = self._get_with_state(vm_states.ACTIVE,
+                                        task_states.REBUILDING)
         self.assertEqual(response['server']['status'], 'REBUILD')
 
     def test_rebuild_error(self):
@@ -1219,16 +1447,16 @@ class ServerStatusTest(test.TestCase):
         self.assertEqual(response['server']['status'], 'ERROR')
 
     def test_resize(self):
-        response = self._get_with_state(vm_states.RESIZING)
+        response = self._get_with_state(vm_states.ACTIVE,
+                                        task_states.RESIZE_PREP)
         self.assertEqual(response['server']['status'], 'RESIZE')
 
     def test_verify_resize(self):
-        response = self._get_with_state(vm_states.ACTIVE,
-                                        task_states.RESIZE_VERIFY)
+        response = self._get_with_state(vm_states.RESIZED, None)
         self.assertEqual(response['server']['status'], 'VERIFY_RESIZE')
 
     def test_revert_resize(self):
-        response = self._get_with_state(vm_states.RESIZING,
+        response = self._get_with_state(vm_states.RESIZED,
                                         task_states.RESIZE_REVERTING)
         self.assertEqual(response['server']['status'], 'REVERT_RESIZE')
 
@@ -1239,7 +1467,7 @@ class ServerStatusTest(test.TestCase):
 
     def test_stopped(self):
         response = self._get_with_state(vm_states.STOPPED)
-        self.assertEqual(response['server']['status'], 'STOPPED')
+        self.assertEqual(response['server']['status'], 'SHUTOFF')
 
 
 class ServersControllerCreateTest(test.TestCase):
@@ -1251,9 +1479,12 @@ class ServersControllerCreateTest(test.TestCase):
         self.flags(verbose=True,
                    enable_instance_password=True)
         self.instance_cache_num = 0
-        self.instance_cache = {}
+        self.instance_cache_by_id = {}
+        self.instance_cache_by_uuid = {}
 
-        self.controller = servers.Controller()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
 
         def instance_create(context, inst):
             inst_type = instance_types.get_instance_type_by_flavor_id(3)
@@ -1275,18 +1506,22 @@ class ServersControllerCreateTest(test.TestCase):
                 "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
                 "config_drive": None,
                 "progress": 0,
-                "fixed_ips": []
+                "fixed_ips": [],
+                "task_state": "",
+                "vm_state": "",
             }
-            self.instance_cache[instance['id']] = instance
+
+            self.instance_cache_by_id[instance['id']] = instance
+            self.instance_cache_by_uuid[instance['uuid']] = instance
             return instance
 
         def instance_get(context, instance_id):
             """Stub for compute/api create() pulling in instance after
             scheduling
             """
-            return self.instance_cache[instance_id]
+            return self.instance_cache_by_id[instance_id]
 
-        def rpc_call_wrapper(context, topic, msg):
+        def rpc_call_wrapper(context, topic, msg, timeout=None):
             """Stub out the scheduler creating the instance entry"""
             if (topic == FLAGS.scheduler_topic and
                 msg['method'] == 'run_instance'):
@@ -1298,10 +1533,10 @@ class ServersControllerCreateTest(test.TestCase):
                         request_spec['instance_properties']))
                 return instances
 
-        def server_update(context, instance_id, params):
-            inst = self.instance_cache[instance_id]
+        def server_update(context, instance_uuid, params):
+            inst = self.instance_cache_by_uuid[instance_uuid]
             inst.update(params)
-            return inst
+            return (inst, inst)
 
         def fake_method(*args, **kwargs):
             pass
@@ -1314,7 +1549,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
-        fakes.stub_out_image_service(self.stubs)
+        nova.tests.image.fake.stub_out_image_service(self.stubs)
         fakes.stub_out_nw_api(self.stubs)
         self.stubs.Set(utils, 'gen_uuid', fake_gen_uuid)
         self.stubs.Set(nova.db, 'instance_add_security_group',
@@ -1322,11 +1557,15 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(nova.db, 'project_get_networks',
                        project_get_networks)
         self.stubs.Set(nova.db, 'instance_create', instance_create)
+        self.stubs.Set(nova.db, 'instance_system_metadata_update',
+                fake_method)
         self.stubs.Set(nova.db, 'instance_get', instance_get)
-        self.stubs.Set(nova.rpc, 'cast', fake_method)
-        self.stubs.Set(nova.rpc, 'call', rpc_call_wrapper)
-        self.stubs.Set(nova.db, 'instance_update', server_update)
-        self.stubs.Set(nova.db, 'queue_get_for', queue_get_for)
+        self.stubs.Set(nova.openstack.common.rpc, 'cast', fake_method)
+        self.stubs.Set(nova.openstack.common.rpc, 'call', rpc_call_wrapper)
+        self.stubs.Set(nova.db, 'instance_update_and_get_original',
+                server_update)
+        self.stubs.Set(nova.openstack.common.rpc, 'queue_get_for',
+                queue_get_for)
         self.stubs.Set(nova.network.manager.VlanManager, 'allocate_fixed_ip',
                        fake_method)
 
@@ -1352,7 +1591,7 @@ class ServersControllerCreateTest(test.TestCase):
             personality={}))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         server = self.controller.create(req, body).obj['server']
 
@@ -1373,7 +1612,95 @@ class ServersControllerCreateTest(test.TestCase):
         }
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req,
+                          body)
+
+    def test_create_instance_invalid_negative_min(self):
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = 'http://localhost/123/flavors/3'
+
+        body = {
+            'server': {
+                'min_count': -1,
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+            }
+        }
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req,
+                          body)
+
+    def test_create_instance_invalid_negative_max(self):
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = 'http://localhost/123/flavors/3'
+
+        body = {
+            'server': {
+                'max_count': -1,
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+            }
+        }
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req,
+                          body)
+
+    def test_create_instance_invalid_alpha_min(self):
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = 'http://localhost/123/flavors/3'
+
+        body = {
+            'server': {
+                'min_count': 'abcd',
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+            }
+        }
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req,
+                          body)
+
+    def test_create_instance_invalid_alpha_max(self):
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = 'http://localhost/123/flavors/3'
+
+        body = {
+            'server': {
+                'max_count': 'abcd',
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+            }
+        }
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create,
@@ -1384,6 +1711,7 @@ class ServersControllerCreateTest(test.TestCase):
         """Test creating multiple instances but not asking for
         reservation_id
         """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/123/flavors/3'
         body = {
@@ -1400,7 +1728,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1411,6 +1739,7 @@ class ServersControllerCreateTest(test.TestCase):
         """Test creating multiple instances but not asking for
         reservation_id
         """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
         self.flags(enable_instance_password=False)
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/123/flavors/3'
@@ -1428,7 +1757,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1439,6 +1768,7 @@ class ServersControllerCreateTest(test.TestCase):
         """Test creating multiple instances with asking for
         reservation_id
         """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/123/flavors/3'
         body = {
@@ -1456,7 +1786,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body)
 
@@ -1479,7 +1809,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1500,7 +1830,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                           req, body)
@@ -1508,6 +1838,271 @@ class ServersControllerCreateTest(test.TestCase):
     def test_create_instance_no_key_pair(self):
         fakes.stub_out_key_pair_funcs(self.stubs, have_key_pair=False)
         self._test_create_instance()
+
+    def _test_create_extra(self, params):
+        image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
+        server = dict(name='server_test', imageRef=image_uuid, flavorRef=2)
+        server.update(params)
+        body = dict(server=server)
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        server = self.controller.create(req, body).obj['server']
+
+    def test_create_instance_with_security_group_enabled(self):
+        self.ext_mgr.extensions = {'os-security-groups': 'fake'}
+        group = 'foo'
+        params = {'security_groups': [{'name': group}]}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['security_group'], [group])
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_security_group_disabled(self):
+        group = 'foo'
+        params = {'security_groups': [{'name': group}]}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            # NOTE(vish): if the security groups extension is not
+            #             enabled, then security groups passed in
+            #             are ignored.
+            self.assertEqual(kwargs['security_group'], ['default'])
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_disk_config_enabled(self):
+        self.ext_mgr.extensions = {'OS-DCF': 'fake'}
+        # NOTE(vish): the extension converts OS-DCF:disk_config into
+        #             auto_disk_config, so we are testing with
+        #             the_internal_value
+        params = {'auto_disk_config': True}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['auto_disk_config'], True)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_disk_config_disabled(self):
+        params = {'auto_disk_config': True}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['auto_disk_config'], False)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_scheduler_hints_enabled(self):
+        self.ext_mgr.extensions = {'os-scheduler-hints': 'fake'}
+        hints = {'a': 'b'}
+        params = {'scheduler_hints': hints}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['scheduler_hints'], hints)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_scheduler_hints_disabled(self):
+        hints = {'a': 'b'}
+        params = {'scheduler_hints': hints}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['scheduler_hints'], {})
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_volumes_enabled(self):
+        self.ext_mgr.extensions = {'os-volumes': 'fake'}
+        bdm = [{'device_name': 'foo'}]
+        params = {'block_device_mapping': bdm}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], bdm)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_volumes_disabled(self):
+        bdm = [{'device_name': 'foo'}]
+        params = {'block_device_mapping': bdm}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_user_data_enabled(self):
+        self.ext_mgr.extensions = {'os-user-data': 'fake'}
+        user_data = 'fake'
+        params = {'user_data': user_data}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['user_data'], user_data)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_user_data_disabled(self):
+        user_data = 'fake'
+        params = {'user_data': user_data}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['user_data'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_keypairs_enabled(self):
+        self.ext_mgr.extensions = {'os-keypairs': 'fake'}
+        key_name = 'green'
+
+        params = {'key_name': key_name}
+        old_create = nova.compute.api.API.create
+
+        # NOTE(sdague): key pair goes back to the database,
+        # so we need to stub it out for tests
+        def key_pair_get(context, user_id, name):
+            return {'public_key': 'FAKE_KEY',
+                    'fingerprint': 'FAKE_FINGERPRINT',
+                    'name': name}
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['key_name'], key_name)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.db, 'key_pair_get', key_pair_get)
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_keypairs_disabled(self):
+        key_name = 'green'
+
+        params = {'key_name': key_name}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['key_name'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_availability_zone_enabled(self):
+        self.ext_mgr.extensions = {'os-availability-zone': 'fake'}
+        availability_zone = 'fake'
+        params = {'availability_zone': availability_zone}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['availability_zone'], availability_zone)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_availability_zone_disabled(self):
+        availability_zone = 'fake'
+        params = {'availability_zone': availability_zone}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['availability_zone'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_multiple_create_enabled(self):
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        min_count = 2
+        max_count = 3
+        params = {
+            'min_count': min_count,
+            'max_count': max_count,
+        }
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['min_count'], 2)
+            self.assertEqual(kwargs['max_count'], 3)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_multiple_create_disabled(self):
+        ret_res_id = True
+        min_count = 2
+        max_count = 3
+        params = {
+            'min_count': min_count,
+            'max_count': max_count,
+        }
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['min_count'], 1)
+            self.assertEqual(kwargs['max_count'], 1)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_networks_enabled(self):
+        self.ext_mgr.extensions = {'os-networks': 'fake'}
+        net_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        requested_networks = [{'uuid': net_uuid}]
+        params = {'networks': requested_networks}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            result = [('76fa36fc-c930-4bf3-8c8a-ea2a2420deb6', None)]
+            self.assertEqual(kwargs['requested_networks'], result)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
+    def test_create_instance_with_networks_disabled(self):
+        self.ext_mgr.extensions = {}
+        net_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        requested_networks = [{'uuid': net_uuid}]
+        params = {'networks': requested_networks}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['requested_networks'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
 
     def test_create_instance_with_access_ip(self):
         # proper local hrefs must start with 'http://localhost/v2/'
@@ -1538,7 +2133,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1578,7 +2173,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1615,7 +2210,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                             req, body)
@@ -1649,7 +2244,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                             req, body)
@@ -1680,7 +2275,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                             req, body)
@@ -1711,7 +2306,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1746,7 +2341,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1774,7 +2369,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
@@ -1791,23 +2386,65 @@ class ServersControllerCreateTest(test.TestCase):
                 'imageRef': image_href,
                 'flavorRef': flavor_ref,
                 'metadata': {
-                    ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'): '12345',
+                    ('a' * 260): '12345',
                 },
             },
         }
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
-        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, req, body)
+
+    def test_create_instance_metadata_value_too_long(self):
+        self.flags(quota_metadata_items=1)
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/images/%s' % image_uuid
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {
+                    'key1': ('a' * 260),
+                },
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, req, body)
+
+    def test_create_instance_metadata_key_blank(self):
+        self.flags(quota_metadata_items=1)
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        image_href = 'http://localhost/v2/images/%s' % image_uuid
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {
+                    '': '12345',
+                },
+            },
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, req, body)
 
     def test_create_instance_invalid_key_name(self):
@@ -1818,7 +2455,7 @@ class ServersControllerCreateTest(test.TestCase):
             key_name='nonexistentkey'))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -1832,7 +2469,7 @@ class ServersControllerCreateTest(test.TestCase):
             key_name='key'))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1848,7 +2485,7 @@ class ServersControllerCreateTest(test.TestCase):
             personality={}))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -1863,7 +2500,7 @@ class ServersControllerCreateTest(test.TestCase):
             personality={}))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -1878,13 +2515,14 @@ class ServersControllerCreateTest(test.TestCase):
             personality={}))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, req, body)
 
     def test_create_instance_with_config_drive(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -1903,7 +2541,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1911,6 +2549,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_config_drive_as_id(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -1929,7 +2568,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -1937,6 +2576,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_bad_config_drive(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -1955,13 +2595,14 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, req, body)
 
     def test_create_instance_without_config_drive(self):
+        self.ext_mgr.extensions = {'os-config-drive': 'fake'}
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = 'http://localhost/v2/fake/flavors/3'
         body = {
@@ -1980,12 +2621,24 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
         server = res['server']
         self.assertEqual(FAKE_UUID, server['id'])
+
+    def test_create_instance_with_config_drive_disabled(self):
+        config_drive = [{'config_drive': 'foo'}]
+        params = {'config_drive': config_drive}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['config_drive'], None)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
 
     def test_create_instance_bad_href(self):
         image_href = 'asdf'
@@ -1996,7 +2649,7 @@ class ServersControllerCreateTest(test.TestCase):
             personality={}))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -2015,7 +2668,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -2035,7 +2688,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -2056,7 +2709,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = "application/json"
         res = self.controller.create(req, body).obj
 
@@ -2065,10 +2718,11 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertTrue('adminPass' not in server)
 
     def test_create_instance_admin_pass_empty(self):
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         body = {
             'server': {
                 'name': 'server_test',
-                'imageRef': 3,
+                'imageRef': image_uuid,
                 'flavorRef': 3,
                 'adminPass': '',
             },
@@ -2076,17 +2730,17 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = "application/json"
 
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller.create, req, body)
+        # The fact that the action doesn't raise is enough validation
+        self.controller.create(req, body)
 
     def test_create_instance_malformed_entity(self):
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
         body = {'server': 'string'}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -2118,30 +2772,44 @@ class ServersControllerCreateTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
         robj = self.controller.create(req, body)
 
         self.assertEqual(robj['Location'], selfhref)
 
-    def test_create_instance_above_quota(self):
-        fakes.stub_out_instance_quota(self.stubs, 0)
+    def _do_test_create_instance_above_quota(self, resource, allowed, quota,
+                                             expected_msg):
+        fakes.stub_out_instance_quota(self.stubs, allowed, quota, resource)
         image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
         body = dict(server=dict(
-            name='server_test', imageRef=image_uuid, flavorRef=2,
+            name='server_test', imageRef=image_uuid, flavorRef=3,
             metadata={'hello': 'world', 'open': 'stack'},
             personality={}))
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         try:
             server = self.controller.create(req, body).obj['server']
-            fail('excepted quota to be exceeded')
+            self.fail('expected quota to be exceeded')
         except webob.exc.HTTPRequestEntityTooLarge as e:
-            code = {'code': 'InstanceLimitExceeded'}
-            self.assertEquals(e.explanation,
-                              _('Quota exceeded: code=%(code)s') % code)
+            self.assertEquals(e.explanation, expected_msg)
+
+    def test_create_instance_above_quota_instances(self):
+        msg = _('Quota exceeded for instances: Requested 1, but'
+                ' already used 10 of 10 instances')
+        self._do_test_create_instance_above_quota('instances', 0, 10, msg)
+
+    def test_create_instance_above_quota_ram(self):
+        msg = _('Quota exceeded for ram: Requested 4096, but'
+                ' already used 8192 of 10240 ram')
+        self._do_test_create_instance_above_quota('ram', 2048, 10 * 1024, msg)
+
+    def test_create_instance_above_quota_cores(self):
+        msg = _('Quota exceeded for cores: Requested 2, but'
+                ' already used 9 of 10 cores')
+        self._do_test_create_instance_above_quota('cores', 1, 10, msg)
 
 
 class TestServerCreateRequestXMLDeserializer(test.TestCase):
@@ -2632,6 +3300,19 @@ class ServersViewBuilderTest(test.TestCase):
         self.view_builder = views.servers.ViewBuilder()
         self.request = fakes.HTTPRequest.blank("/v2")
 
+    def test_get_flavor_valid_instance_type(self):
+        flavor_bookmark = "http://localhost/fake/flavors/1"
+        expected = {"id": "1",
+                    "links": [{"rel": "bookmark",
+                               "href": flavor_bookmark}]}
+        result = self.view_builder._get_flavor(self.request, self.instance)
+        self.assertEqual(result, expected)
+
+    def test_get_flavor_deleted_instance_type(self):
+        self.instance['instance_type'] = {}
+        result = self.view_builder._get_flavor(self.request, self.instance)
+        self.assertEqual(result, {})
+
     def test_build_server(self):
         self_link = "http://localhost/v2/fake/servers/%s" % self.uuid
         bookmark_link = "http://localhost/fake/servers/%s" % self.uuid
@@ -2695,7 +3376,6 @@ class ServersViewBuilderTest(test.TestCase):
                 "accessIPv4": "",
                 "accessIPv6": "",
                 "hostId": '',
-                "key_name": '',
                 "image": {
                     "id": "5",
                     "links": [
@@ -2721,7 +3401,6 @@ class ServersViewBuilderTest(test.TestCase):
                     ]
                 },
                 "metadata": {},
-                "config_drive": None,
                 "links": [
                     {
                         "rel": "self",
@@ -2764,7 +3443,6 @@ class ServersViewBuilderTest(test.TestCase):
                 "accessIPv4": "",
                 "accessIPv6": "",
                 "hostId": '',
-                "key_name": '',
                 "image": {
                     "id": "5",
                     "links": [
@@ -2790,7 +3468,6 @@ class ServersViewBuilderTest(test.TestCase):
                     ]
                 },
                 "metadata": {},
-                "config_drive": None,
                 "links": [
                     {
                         "rel": "self",
@@ -2909,7 +3586,6 @@ class ServersViewBuilderTest(test.TestCase):
                 "accessIPv4": "",
                 "accessIPv6": "",
                 "hostId": '',
-                "key_name": '',
                 "image": {
                     "id": "5",
                     "links": [
@@ -2935,7 +3611,6 @@ class ServersViewBuilderTest(test.TestCase):
                     ]
                 },
                 "metadata": {},
-                "config_drive": None,
                 "links": [
                     {
                         "rel": "self",
@@ -2969,7 +3644,6 @@ class ServersViewBuilderTest(test.TestCase):
                 "created": "2010-10-10T12:00:00Z",
                 "progress": 0,
                 "name": "test_server",
-                "key_name": "",
                 "status": "BUILD",
                 "hostId": '',
                 "image": {
@@ -2997,7 +3671,6 @@ class ServersViewBuilderTest(test.TestCase):
                     ]
                 },
                 "metadata": {},
-                "config_drive": None,
                 "accessIPv4": "1.2.3.4",
                 "accessIPv6": "",
                 "links": [
@@ -3033,7 +3706,6 @@ class ServersViewBuilderTest(test.TestCase):
                 "created": "2010-10-10T12:00:00Z",
                 "progress": 0,
                 "name": "test_server",
-                "key_name": "",
                 "status": "BUILD",
                 "hostId": '',
                 "image": {
@@ -3061,7 +3733,6 @@ class ServersViewBuilderTest(test.TestCase):
                     ]
                 },
                 "metadata": {},
-                "config_drive": None,
                 "accessIPv4": "",
                 "accessIPv6": "fead::1234",
                 "links": [
@@ -3103,7 +3774,6 @@ class ServersViewBuilderTest(test.TestCase):
                 "accessIPv4": "",
                 "accessIPv6": "",
                 "hostId": '',
-                "key_name": '',
                 "image": {
                     "id": "5",
                     "links": [
@@ -3129,7 +3799,6 @@ class ServersViewBuilderTest(test.TestCase):
                     ]
                 },
                 "metadata": {"Open": "Stack"},
-                "config_drive": None,
                 "links": [
                     {
                         "rel": "self",
@@ -3248,7 +3917,6 @@ class ServerXMLSerializationTest(test.TestCase):
                 "name": "test_server",
                 "status": "BUILD",
                 "hostId": 'e4d909c290d0fb1ca068ffaddf22cbd0',
-                "key_name": '',
                 "accessIPv4": "1.2.3.4",
                 "accessIPv6": "fead::1234",
                 "image": {
@@ -4082,3 +4750,30 @@ class ServerXMLSerializationTest(test.TestCase):
                                  str(ip['version']))
                 self.assertEqual(str(ip_elem.get('addr')),
                                  str(ip['addr']))
+
+
+class ServersAllExtensionsTestCase(test.TestCase):
+    """
+    Servers tests using default API router with all extensions enabled.
+    """
+
+    def setUp(self):
+        super(ServersAllExtensionsTestCase, self).setUp()
+        self.app = nova.api.openstack.compute.APIRouter()
+
+    def test_create_missing_server(self):
+        """Test create with malformed body"""
+
+        def fake_create(*args, **kwargs):
+            raise Exception("Request should not reach the compute API.")
+
+        self.stubs.Set(nova.compute.api.API, 'create', fake_create)
+
+        req = fakes.HTTPRequest.blank('/fake/servers')
+        req.method = 'POST'
+        req.content_type = 'application/json'
+        body = {'foo': {'a': 'b'}}
+
+        req.body = jsonutils.dumps(body)
+        res = req.get_response(self.app)
+        self.assertEqual(422, res.status_int)

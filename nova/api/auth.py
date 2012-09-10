@@ -23,8 +23,9 @@ import webob.exc
 
 from nova import context
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import wsgi
 
 
@@ -84,6 +85,8 @@ class NovaKeystoneContext(wsgi.Middleware):
         else:
             # This is for legacy compatibility
             project_id = req.headers['X_TENANT']
+        project_name = req.headers.get('X_TENANT_NAME')
+        user_name = req.headers.get('X_USER_NAME')
 
         # Get the auth token
         auth_token = req.headers.get('X_AUTH_TOKEN',
@@ -93,11 +96,24 @@ class NovaKeystoneContext(wsgi.Middleware):
         remote_address = req.remote_addr
         if FLAGS.use_forwarded_for:
             remote_address = req.headers.get('X-Forwarded-For', remote_address)
+
+        service_catalog = None
+        if req.headers.get('X_SERVICE_CATALOG') is not None:
+            try:
+                catalog_header = req.headers.get('X_SERVICE_CATALOG')
+                service_catalog = jsonutils.loads(catalog_header)
+            except ValueError:
+                raise webob.exc.HTTPInternalServerError(
+                          _('Invalid service catalog json.'))
+
         ctx = context.RequestContext(user_id,
                                      project_id,
+                                     user_name=user_name,
+                                     project_name=project_name,
                                      roles=roles,
                                      auth_token=auth_token,
-                                     remote_address=remote_address)
+                                     remote_address=remote_address,
+                                     service_catalog=service_catalog)
 
         req.environ['nova.context'] = ctx
         return self.application

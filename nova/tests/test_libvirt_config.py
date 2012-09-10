@@ -53,6 +53,255 @@ class LibvirtConfigTest(LibvirtConfigBaseTest):
         xml = etree.tostring(root)
         self.assertXmlEqual(xml, "<demo><foo>bar</foo></demo>")
 
+    def test_config_parse(self):
+        inxml = "<demo><foo/></demo>"
+        obj = config.LibvirtConfigObject(root_name="demo")
+        obj.parse_str(inxml)
+
+
+class LibvirtConfigCapsTest(LibvirtConfigBaseTest):
+
+    def test_config_host(self):
+        xmlin = """
+        <capabilities>
+          <host>
+            <cpu>
+              <arch>x86_64</arch>
+              <model>Opteron_G3</model>
+              <vendor>AMD</vendor>
+              <topology sockets='1' cores='4' threads='1'/>
+              <feature name='ibs'/>
+              <feature name='osvw'/>
+            </cpu>
+          </host>
+          <guest>
+            <os_type>hvm</os_type>
+            <arch name='x86_64'/>
+          </guest>
+          <guest>
+            <os_type>hvm</os_type>
+            <arch name='i686'/>
+          </guest>
+        </capabilities>"""
+
+        obj = config.LibvirtConfigCaps()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(type(obj.host), config.LibvirtConfigCapsHost)
+
+        xmlout = obj.to_xml()
+
+        self.assertXmlEqual(xmlin, xmlout)
+
+
+class LibvirtConfigGuestTimerTest(LibvirtConfigBaseTest):
+    def test_config_platform(self):
+        obj = config.LibvirtConfigGuestTimer()
+        obj.track = "host"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <timer name="platform" track="host"/>
+        """)
+
+    def test_config_pit(self):
+        obj = config.LibvirtConfigGuestTimer()
+        obj.name = "pit"
+        obj.tickpolicy = "discard"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <timer name="pit" tickpolicy="discard"/>
+        """)
+
+    def test_config_hpet(self):
+        obj = config.LibvirtConfigGuestTimer()
+        obj.name = "hpet"
+        obj.present = False
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <timer name="hpet" present="no"/>
+        """)
+
+
+class LibvirtConfigGuestClockTest(LibvirtConfigBaseTest):
+    def test_config_utc(self):
+        obj = config.LibvirtConfigGuestClock()
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <clock offset="utc"/>
+        """)
+
+    def test_config_localtime(self):
+        obj = config.LibvirtConfigGuestClock()
+        obj.offset = "localtime"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <clock offset="localtime"/>
+        """)
+
+    def test_config_timezone(self):
+        obj = config.LibvirtConfigGuestClock()
+        obj.offset = "timezone"
+        obj.timezone = "EDT"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <clock offset="timezone" timezone="EDT"/>
+        """)
+
+    def test_config_variable(self):
+        obj = config.LibvirtConfigGuestClock()
+        obj.offset = "variable"
+        obj.adjustment = "123456"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <clock offset="variable" adjustment="123456"/>
+        """)
+
+    def test_config_timers(self):
+        obj = config.LibvirtConfigGuestClock()
+
+        tmpit = config.LibvirtConfigGuestTimer()
+        tmpit.name = "pit"
+        tmpit.tickpolicy = "discard"
+
+        tmrtc = config.LibvirtConfigGuestTimer()
+        tmrtc.name = "rtc"
+        tmrtc.tickpolicy = "merge"
+
+        obj.add_timer(tmpit)
+        obj.add_timer(tmrtc)
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <clock offset="utc">
+               <timer name="pit" tickpolicy="discard"/>
+               <timer name="rtc" tickpolicy="merge"/>
+            </clock>
+        """)
+
+
+class LibvirtConfigCPUFeatureTest(LibvirtConfigBaseTest):
+
+    def test_config_simple(self):
+        obj = config.LibvirtConfigCPUFeature("mtrr")
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <feature name="mtrr"/>
+        """)
+
+
+class LibvirtConfigGuestCPUFeatureTest(LibvirtConfigBaseTest):
+
+    def test_config_simple(self):
+        obj = config.LibvirtConfigGuestCPUFeature("mtrr")
+        obj.policy = "force"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <feature name="mtrr" policy="force"/>
+        """)
+
+
+class LibvirtConfigCPUTest(LibvirtConfigBaseTest):
+
+    def test_config_simple(self):
+        obj = config.LibvirtConfigCPU()
+        obj.model = "Penryn"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu>
+              <model>Penryn</model>
+            </cpu>
+        """)
+
+    def test_config_complex(self):
+        obj = config.LibvirtConfigCPU()
+        obj.model = "Penryn"
+        obj.vendor = "Intel"
+        obj.arch = "x86_64"
+
+        obj.add_feature(config.LibvirtConfigCPUFeature("mtrr"))
+        obj.add_feature(config.LibvirtConfigCPUFeature("apic"))
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu>
+              <arch>x86_64</arch>
+              <model>Penryn</model>
+              <vendor>Intel</vendor>
+              <feature name="mtrr"/>
+              <feature name="apic"/>
+            </cpu>
+        """)
+
+    def test_config_topology(self):
+        obj = config.LibvirtConfigCPU()
+        obj.model = "Penryn"
+        obj.sockets = 4
+        obj.cores = 4
+        obj.threads = 2
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu>
+              <model>Penryn</model>
+              <topology sockets="4" cores="4" threads="2"/>
+            </cpu>
+        """)
+
+
+class LibvirtConfigGuestCPUTest(LibvirtConfigBaseTest):
+
+    def test_config_simple(self):
+        obj = config.LibvirtConfigGuestCPU()
+        obj.model = "Penryn"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu match="exact">
+              <model>Penryn</model>
+            </cpu>
+        """)
+
+    def test_config_complex(self):
+        obj = config.LibvirtConfigGuestCPU()
+        obj.model = "Penryn"
+        obj.vendor = "Intel"
+        obj.arch = "x86_64"
+        obj.mode = "custom"
+
+        obj.add_feature(config.LibvirtConfigGuestCPUFeature("mtrr"))
+        obj.add_feature(config.LibvirtConfigGuestCPUFeature("apic"))
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu mode="custom" match="exact">
+              <arch>x86_64</arch>
+              <model>Penryn</model>
+              <vendor>Intel</vendor>
+              <feature name="mtrr" policy="require"/>
+              <feature name="apic" policy="require"/>
+            </cpu>
+        """)
+
+    def test_config_host(self):
+        obj = config.LibvirtConfigGuestCPU()
+        obj.mode = "host-model"
+        obj.match = "exact"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu mode="host-model" match="exact"/>
+        """)
+
 
 class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
 
@@ -182,11 +431,11 @@ class LibvirtConfigGuestSerialTest(LibvirtConfigBaseTest):
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
             <serial type="file">
-              <source file="/tmp/vm.log"/>
+              <source path="/tmp/vm.log"/>
             </serial>""")
 
 
-class LibvirtConfigGuestSerialTest(LibvirtConfigBaseTest):
+class LibvirtConfigGuestConsoleTest(LibvirtConfigBaseTest):
     def test_config_pty(self):
         obj = config.LibvirtConfigGuestConsole()
         obj.type = "pty"
@@ -307,7 +556,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               </devices>
             </domain>""")
 
-    def test_config_xen(self):
+    def test_config_xen_pv(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "xen"
         obj.memory = 1024 * 1024 * 100
@@ -339,6 +588,47 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
                 <type>linux</type>
                 <kernel>/tmp/vmlinuz</kernel>
                 <initrd>/tmp/ramdisk</initrd>
+                <cmdline>console=xvc0</cmdline>
+                <root>root=xvda</root>
+              </os>
+              <devices>
+                <disk type="file" device="disk">
+                  <source file="/tmp/img"/>
+                  <target bus="xen" dev="/dev/xvda"/>
+                </disk>
+              </devices>
+            </domain>""")
+
+    def test_config_xen_hvm(self):
+        obj = config.LibvirtConfigGuest()
+        obj.virt_type = "xen"
+        obj.memory = 1024 * 1024 * 100
+        obj.vcpus = 2
+        obj.name = "demo"
+        obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
+        obj.os_type = "hvm"
+        obj.os_loader = '/usr/lib/xen/boot/hvmloader'
+        obj.os_root = "root=xvda"
+        obj.os_cmdline = "console=xvc0"
+
+        disk = config.LibvirtConfigGuestDisk()
+        disk.source_type = "file"
+        disk.source_path = "/tmp/img"
+        disk.target_dev = "/dev/xvda"
+        disk.target_bus = "xen"
+
+        obj.add_device(disk)
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <domain type="xen">
+              <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
+              <name>demo</name>
+              <memory>104857600</memory>
+              <vcpu>2</vcpu>
+              <os>
+                <type>hvm</type>
+                <loader>/usr/lib/xen/boot/hvmloader</loader>
                 <cmdline>console=xvc0</cmdline>
                 <root>root=xvda</root>
               </os>
@@ -386,43 +676,6 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
                 </disk>
               </devices>
             </domain>""")
-
-
-class LibvirtConfigCPUTest(LibvirtConfigBaseTest):
-
-    def test_config_cpu(self):
-        obj = config.LibvirtConfigCPU()
-        obj.vendor = "AMD"
-        obj.model = "Quad-Core AMD Opteron(tm) Processor 2350"
-        obj.arch = "x86_64"
-        obj.add_feature("svm")
-        obj.add_feature("extapic")
-        obj.add_feature("constant_tsc")
-
-        xml = obj.to_xml()
-        self.assertXmlEqual(xml, """
-            <cpu>
-              <arch>x86_64</arch>
-              <model>Quad-Core AMD Opteron(tm) Processor 2350</model>
-              <vendor>AMD</vendor>
-              <feature name="svm"/>
-              <feature name="extapic"/>
-              <feature name="constant_tsc"/>
-            </cpu>""")
-
-    def test_config_topology(self):
-        obj = config.LibvirtConfigCPU()
-        obj.vendor = "AMD"
-        obj.sockets = 2
-        obj.cores = 4
-        obj.threads = 2
-
-        xml = obj.to_xml()
-        self.assertXmlEqual(xml, """
-            <cpu>
-              <vendor>AMD</vendor>
-              <topology cores="4" threads="2" sockets="2"/>
-            </cpu>""")
 
 
 class LibvirtConfigGuestSnapshotTest(LibvirtConfigBaseTest):

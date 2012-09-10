@@ -21,8 +21,8 @@ from nova import db
 from nova import exception
 from nova import flags
 from nova import ipv6
-from nova import log as logging
 from nova.network import manager
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -131,9 +131,11 @@ class QuantumNovaIPAMLib(object):
         network = db.network_get_by_uuid(admin_context, quantum_net_id)
         address = None
         if network['cidr']:
+            instance = db.instance_get_by_uuid(context,
+                                               vif_rec['instance_uuid'])
             address = db.fixed_ip_associate_pool(admin_context,
                                                  network['id'],
-                                                 vif_rec['instance_id'])
+                                                 instance['uuid'])
             values = {'allocated': True,
                       'virtual_interface_id': vif_rec['id']}
             db.fixed_ip_update(admin_context, address, values)
@@ -216,7 +218,7 @@ class QuantumNovaIPAMLib(object):
         """
         admin_context = context.elevated()
         fixed_ips = db.fixed_ips_by_virtual_interface(admin_context,
-                                                         vif_ref['id'])
+                                                      vif_ref['id'])
         # NOTE(s0mik): Sets fixed-ip to deallocated, but leaves the entry
         # associated with the instance-id.  This prevents us from handing it
         # out again immediately, as allocating it to a new instance before
@@ -224,16 +226,12 @@ class QuantumNovaIPAMLib(object):
         # be disassociated with the instance-id by a call to one of two
         # methods inherited from FlatManager:
         # - if DHCP is in use, a lease expiring in dnsmasq triggers
-        #   a call to release_fixed_ip in the network manager.
-        # - otherwise, _disassociate_stale_fixed_ips is called periodically
-        #   to disassociate all fixed ips that are unallocated
-        #   but still associated with an instance-id.
+        #   a call to release_fixed_ip in the network manager, or it will
+        #   be timed out periodically if the lease fails.
+        # - otherwise, we release the ip immediately
 
         read_deleted_context = admin_context.elevated(read_deleted='yes')
         for fixed_ip in fixed_ips:
-            db.fixed_ip_update(admin_context, fixed_ip['address'],
-                               {'allocated': False,
-                                'virtual_interface_id': None})
             fixed_id = fixed_ip['id']
             floating_ips = self.net_manager.db.floating_ip_get_by_fixed_ip_id(
                                 admin_context,
@@ -252,6 +250,11 @@ class QuantumNovaIPAMLib(object):
                         read_deleted_context,
                         address,
                         affect_auto_assigned=True)
+            db.fixed_ip_update(admin_context, fixed_ip['address'],
+                               {'allocated': False,
+                                'virtual_interface_id': None})
+            if not self.net_manager.DHCP:
+                db.fixed_ip_disassociate(admin_context, fixed_ip['address'])
 
         if len(fixed_ips) == 0:
             LOG.error(_('No fixed IPs to deallocate for vif %s'),

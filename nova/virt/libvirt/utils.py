@@ -19,16 +19,35 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import errno
+import hashlib
 import os
 import random
+import re
 
 from nova import exception
 from nova import flags
+from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import images
 
 
+LOG = logging.getLogger(__name__)
+
+
+util_opts = [
+    cfg.StrOpt('image_info_filename_pattern',
+               default='$instances_path/$base_dir_name/%(image)s.info',
+               help='Allows image information files to be stored in '
+                    'non-standard locations')
+    ]
+
+flags.DECLARE('instances_path', 'nova.compute.manager')
+flags.DECLARE('base_dir_name', 'nova.compute.manager')
 FLAGS = flags.FLAGS
+FLAGS.register_opts(util_opts)
 
 
 def execute(*args, **kwargs):
@@ -69,7 +88,87 @@ def create_cow_image(backing_file, path):
     :param path: Desired location of the COW image
     """
     execute('qemu-img', 'create', '-f', 'qcow2', '-o',
-             'cluster_size=2M,backing_file=%s' % backing_file, path)
+             'backing_file=%s' % backing_file, path)
+
+
+def create_lvm_image(vg, lv, size, sparse=False):
+    """Create LVM image.
+
+    Creates a LVM image with given size.
+
+    :param vg: existing volume group which should hold this image
+    :param lv: name for this image (logical volume)
+    :size: size of image in bytes
+    :sparse: create sparse logical volume
+    """
+    free_space = volume_group_free_space(vg)
+
+    def check_size(size):
+        if size > free_space:
+            raise RuntimeError(_('Insufficient Space on Volume Group %(vg)s.'
+                                 ' Only %(free_space)db available,'
+                                 ' but %(size)db required'
+                                 ' by volume %(lv)s.') % locals())
+
+    if sparse:
+        preallocated_space = 64 * 1024 * 1024
+        check_size(preallocated_space)
+        if free_space < size:
+            LOG.warning(_('Volume group %(vg)s will not be able'
+                          ' to hold sparse volume %(lv)s.'
+                          ' Virtual volume size is %(size)db,'
+                          ' but free space on volume group is'
+                          ' only %(free_space)db.') % locals())
+
+        cmd = ('lvcreate', '-L', '%db' % preallocated_space,
+                '--virtualsize', '%db' % size, '-n', lv, vg)
+    else:
+        check_size(size)
+        cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
+    execute(*cmd, run_as_root=True, attempts=3)
+
+
+def volume_group_free_space(vg):
+    """Return available space on volume group in bytes.
+
+    :param vg: volume group name
+    """
+    out, err = execute('vgs', '--noheadings', '--nosuffix',
+                       '--units', 'b', '-o', 'vg_free', vg,
+                       run_as_root=True)
+    return int(out.strip())
+
+
+def remove_logical_volumes(*paths):
+    """Remove one or more logical volume."""
+    if paths:
+        lvremove = ('lvremove', '-f') + paths
+        execute(*lvremove, attempts=3, run_as_root=True)
+
+
+def pick_disk_driver_name(is_block_dev=False):
+    """Pick the libvirt primary backend driver name
+
+    If the hypervisor supports multiple backend drivers, then the name
+    attribute selects the primary backend driver name, while the optional
+    type attribute provides the sub-type.  For example, xen supports a name
+    of "tap", "tap2", "phy", or "file", with a type of "aio" or "qcow2",
+    while qemu only supports a name of "qemu", but multiple types including
+    "raw", "bochs", "qcow2", and "qed".
+
+    :param is_block_dev:
+    :returns: driver_name or None
+    """
+    if FLAGS.libvirt_type == "xen":
+        if is_block_dev:
+            return "phy"
+        else:
+            return "tap"
+    elif FLAGS.libvirt_type in ('kvm', 'qemu'):
+        return "qemu"
+    else:
+        # UML doesn't want a driver_name set
+        return None
 
 
 def get_disk_size(path):
@@ -79,10 +178,9 @@ def get_disk_size(path):
     :returns: Size (in bytes) of the given disk image as it would be seen
               by a virtual machine.
     """
-    out, err = execute('qemu-img', 'info', path)
-    size = [i.split('(')[1].split()[0] for i in out.split('\n')
-        if i.strip().find('virtual size') >= 0]
-    return int(size[0])
+    size = images.qemu_img_info(path)['virtual size']
+    size = size.split('(')[1].split()[0]
+    return int(size)
 
 
 def get_disk_backing_file(path):
@@ -91,33 +189,45 @@ def get_disk_backing_file(path):
     :param path: Path to the disk image
     :returns: a path to the image's backing store
     """
-    out, err = execute('qemu-img', 'info', path)
-    backing_file = None
+    backing_file = images.qemu_img_info(path).get('backing file')
 
-    for line in out.split('\n'):
-        if line.startswith('backing file: '):
-            if 'actual path: ' in line:
-                backing_file = line.split('actual path: ')[1][:-1]
-            else:
-                backing_file = line.split('backing file: ')[1]
-            break
     if backing_file:
+        if 'actual path: ' in backing_file:
+            backing_file = backing_file.split('actual path: ')[1][:-1]
         backing_file = os.path.basename(backing_file)
 
     return backing_file
 
 
-def copy_image(src, dest):
-    """Copy a disk image
+def copy_image(src, dest, host=None):
+    """Copy a disk image to an existing directory
 
     :param src: Source image
     :param dest: Destination path
+    :param host: Remote host
     """
-    # We shell out to cp because that will intelligently copy
-    # sparse files.  I.E. holes will not be written to DEST,
-    # rather recreated efficiently.  In addition, since
-    # coreutils 8.11, holes can be read efficiently too.
-    execute('cp', src, dest)
+
+    if not host:
+        # We shell out to cp because that will intelligently copy
+        # sparse files.  I.E. holes will not be written to DEST,
+        # rather recreated efficiently.  In addition, since
+        # coreutils 8.11, holes can be read efficiently too.
+        execute('cp', src, dest)
+    else:
+        dest = "%s:%s" % (host, dest)
+        # Try rsync first as that can compress and create sparse dest files.
+        # Note however that rsync currently doesn't read sparse files
+        # efficiently: https://bugzilla.samba.org/show_bug.cgi?id=8918
+        # At least network traffic is mitigated with compression.
+        try:
+            # Do a relatively light weight test first, so that we
+            # can fall back to scp, without having run out of space
+            # on the destination for example.
+            execute('rsync', '--sparse', '--compress', '--dry-run', src, dest)
+        except exception.ProcessExecutionError:
+            execute('scp', src, dest)
+        else:
+            execute('rsync', '--sparse', '--compress', src, dest)
 
 
 def mkfs(fs, path, label=None):
@@ -132,6 +242,9 @@ def mkfs(fs, path, label=None):
         execute('mkswap', path)
     else:
         args = ['mkfs', '-t', fs]
+        #add -F to force no interactive excute on non-block device.
+        if fs in ['ext3', 'ext4']:
+            args.extend(['-F'])
         if label:
             args.extend(['-n', label])
         args.append(path)
@@ -143,7 +256,14 @@ def ensure_tree(path):
 
     :param path: Directory to create
     """
-    execute('mkdir', '-p', path)
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST:
+            if not os.path.isdir(path):
+                raise
+        else:
+            raise
 
 
 def write_to_file(path, contents, umask=None):
@@ -210,6 +330,9 @@ def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
     :param snapshot_name: Name of snapshot in disk image
     :param out_path: Desired path of extracted snapshot
     """
+    # NOTE(markmc): ISO is just raw to qemu-img
+    if dest_fmt == 'iso':
+        dest_fmt = 'raw'
     qemu_img_cmd = ('qemu-img',
                     'convert',
                     '-f',
@@ -228,7 +351,7 @@ def load_file(path):
 
     :param path: File to read
     """
-    with open(path, 'r+') as fp:
+    with open(path, 'r') as fp:
         return fp.read()
 
 
@@ -254,24 +377,6 @@ def file_delete(path):
     return os.unlink(path)
 
 
-def get_open_port(start_port, end_port):
-    """Find an available port
-
-    :param start_port: Start of acceptable port range
-    :param end_port: End of acceptable port range
-    """
-    for i in xrange(0, 100):  # don't loop forever
-        port = random.randint(start_port, end_port)
-        # netcat will exit with 0 only if the port is in use,
-        # so a nonzero return value implies it is unused
-        cmd = 'netcat', '0.0.0.0', port, '-w', '1'
-        try:
-            stdout, stderr = execute(*cmd, process_input='')
-        except exception.ProcessExecutionError:
-            return port
-    raise Exception(_('Unable to find an open port'))
-
-
 def get_fs_info(path):
     """Get free/used/total space info for a filesystem
 
@@ -294,3 +399,95 @@ def get_fs_info(path):
 def fetch_image(context, target, image_id, user_id, project_id):
     """Grab image"""
     images.fetch_to_raw(context, image_id, target, user_id, project_id)
+
+
+def get_info_filename(base_path):
+    """Construct a filename for storing addtional information about a base
+    image.
+
+    Returns a filename.
+    """
+
+    base_file = os.path.basename(base_path)
+    return (FLAGS.image_info_filename_pattern
+            % {'image': base_file})
+
+
+def is_valid_info_file(path):
+    """Test if a given path matches the pattern for info files."""
+
+    digest_size = hashlib.sha1().digestsize * 2
+    regexp = (FLAGS.image_info_filename_pattern
+              % {'image': ('([0-9a-f]{%(digest_size)d}|'
+                           '[0-9a-f]{%(digest_size)d}_sm|'
+                           '[0-9a-f]{%(digest_size)d}_[0-9]+)'
+                           % {'digest_size': digest_size})})
+    m = re.match(regexp, path)
+    if m:
+        return True
+    return False
+
+
+def read_stored_info(base_path, field=None):
+    """Read information about an image.
+
+    Returns an empty dictionary if there is no info, just the field value if
+    a field is requested, or the entire dictionary otherwise.
+    """
+
+    info_file = get_info_filename(base_path)
+    if not os.path.exists(info_file):
+        # Special case to handle essex checksums being converted
+        old_filename = base_path + '.sha1'
+        if field == 'sha1' and os.path.exists(old_filename):
+            hash_file = open(old_filename)
+            hash_value = hash_file.read()
+            hash_file.close()
+
+            write_stored_info(base_path, field=field, value=hash_value)
+            os.remove(old_filename)
+            d = {field: hash_value}
+
+        else:
+            d = {}
+
+    else:
+        LOG.info(_('Reading image info file: %s'), info_file)
+        f = open(info_file, 'r')
+        serialized = f.read().rstrip()
+        f.close()
+        LOG.info(_('Read: %s'), serialized)
+
+        try:
+            d = jsonutils.loads(serialized)
+
+        except ValueError, e:
+            LOG.error(_('Error reading image info file %(filename)s: '
+                        '%(error)s'),
+                      {'filename': info_file,
+                       'error': e})
+            d = {}
+
+    if field:
+        return d.get(field, None)
+    return d
+
+
+def write_stored_info(target, field=None, value=None):
+    """Write information about an image."""
+
+    if not field:
+        return
+
+    info_file = get_info_filename(target)
+    ensure_tree(os.path.dirname(info_file))
+
+    d = read_stored_info(info_file)
+    d[field] = value
+    serialized = jsonutils.dumps(d)
+
+    LOG.info(_('Writing image info file: %s'), info_file)
+    LOG.info(_('Wrote: %s'), serialized)
+    f = open(info_file, 'w')
+    f.write(serialized)
+    f.close()

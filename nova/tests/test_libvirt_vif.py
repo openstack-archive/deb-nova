@@ -14,15 +14,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from xml.etree import ElementTree
+from lxml import etree
 
 from nova import flags
 from nova import test
 from nova import utils
-from nova.virt import firewall
-from nova.virt.libvirt import vif
-from nova.virt.libvirt import connection
 from nova.virt.libvirt import config
+from nova.virt.libvirt import vif
 
 FLAGS = flags.FLAGS
 
@@ -75,7 +73,7 @@ class LibvirtVifTestCase(test.TestCase):
         conf.memory = 100 * 1024
         conf.vcpus = 4
 
-        nic = driver.plug(self.instance, self.net, self.mapping)
+        nic = driver.plug(self.instance, (self.net, self.mapping))
         conf.add_device(nic)
         return conf.to_xml()
 
@@ -83,7 +81,7 @@ class LibvirtVifTestCase(test.TestCase):
         d = vif.LibvirtBridgeDriver()
         xml = self._get_instance_xml(d)
 
-        doc = ElementTree.fromstring(xml)
+        doc = etree.fromstring(xml)
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
@@ -93,13 +91,13 @@ class LibvirtVifTestCase(test.TestCase):
         mac = node.find("mac").get("address")
         self.assertEqual(mac, self.mapping['mac'])
 
-        d.unplug(None, self.net, self.mapping)
+        d.unplug(None, (self.net, self.mapping))
 
     def test_ovs_ethernet_driver(self):
         d = vif.LibvirtOpenVswitchDriver()
         xml = self._get_instance_xml(d)
 
-        doc = ElementTree.fromstring(xml)
+        doc = etree.fromstring(xml)
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
@@ -111,13 +109,13 @@ class LibvirtVifTestCase(test.TestCase):
         script = node.find("script").get("path")
         self.assertEquals(script, "")
 
-        d.unplug(None, self.net, self.mapping)
+        d.unplug(None, (self.net, self.mapping))
 
     def test_ovs_virtualport_driver(self):
         d = vif.LibvirtOpenVswitchVirtualPortDriver()
         xml = self._get_instance_xml(d)
 
-        doc = ElementTree.fromstring(xml)
+        doc = etree.fromstring(xml)
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
@@ -137,13 +135,13 @@ class LibvirtVifTestCase(test.TestCase):
                 iface_id_found = True
 
         self.assertTrue(iface_id_found)
-        d.unplug(None, self.net, self.mapping)
+        d.unplug(None, (self.net, self.mapping))
 
     def test_quantum_bridge_ethernet_driver(self):
         d = vif.QuantumLinuxBridgeVIFDriver()
         xml = self._get_instance_xml(d)
 
-        doc = ElementTree.fromstring(xml)
+        doc = etree.fromstring(xml)
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
@@ -155,4 +153,4 @@ class LibvirtVifTestCase(test.TestCase):
         script = node.find("script").get("path")
         self.assertEquals(script, "")
 
-        d.unplug(None, self.net, self.mapping)
+        d.unplug(None, (self.net, self.mapping))

@@ -13,12 +13,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
 import webob
 
-from nova import log as logging
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import test
 from nova.tests.api.openstack import fakes
+import nova.tests.image.fake
 
 LOG = logging.getLogger(__name__)
 
@@ -27,6 +28,11 @@ class UrlmapTest(test.TestCase):
     def setUp(self):
         super(UrlmapTest, self).setUp()
         fakes.stub_out_rate_limiting(self.stubs)
+        nova.tests.image.fake.stub_out_image_service(self.stubs)
+
+    def tearDown(self):
+        super(UrlmapTest, self).tearDown()
+        nova.tests.image.fake.FakeImageService_reset()
 
     def test_path_version_v1_1(self):
         """Test URL path specifying v1.1 returns v2 content."""
@@ -35,7 +41,7 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['version']['id'], 'v2.0')
 
     def test_content_type_version_v1_1(self):
@@ -46,7 +52,7 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['version']['id'], 'v2.0')
 
     def test_accept_version_v1_1(self):
@@ -56,7 +62,7 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['version']['id'], 'v2.0')
 
     def test_path_version_v2(self):
@@ -66,7 +72,7 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['version']['id'], 'v2.0')
 
     def test_content_type_version_v2(self):
@@ -77,7 +83,7 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['version']['id'], 'v2.0')
 
     def test_accept_version_v2(self):
@@ -87,7 +93,7 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['version']['id'], 'v2.0')
 
     def test_path_content_type(self):
@@ -98,7 +104,7 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['image']['id'],
                          'cedef40a-ed67-4d10-800e-17455edce175')
 
@@ -110,6 +116,6 @@ class UrlmapTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         self.assertEqual(body['image']['id'],
                          'cedef40a-ed67-4d10-800e-17455edce175')

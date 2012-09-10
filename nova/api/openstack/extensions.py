@@ -26,9 +26,9 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
 import nova.policy
-from nova import utils
 
 
 LOG = logging.getLogger(__name__)
@@ -63,6 +63,7 @@ class ExtensionDescriptor(object):
         """Register extension with the extension manager."""
 
         ext_mgr.register(self)
+        self.ext_mgr = ext_mgr
 
     def get_resources(self):
         """List of extensions.ResourceExtension extension objects.
@@ -179,6 +180,9 @@ class ExtensionManager(object):
 
     """
 
+    def is_loaded(self, alias):
+        return alias in self.extensions
+
     def register(self, ext):
         # Do nothing if the extension doesn't check out
         if not self._check_extension(ext):
@@ -188,7 +192,8 @@ class ExtensionManager(object):
         LOG.audit(_('Loaded extension: %s'), alias)
 
         if alias in self.extensions:
-            raise exception.Error("Found duplicate extension: %s" % alias)
+            raise exception.NovaException("Found duplicate extension: %s"
+                                          % alias)
         self.extensions[alias] = ext
 
     def get_resources(self):
@@ -245,8 +250,11 @@ class ExtensionManager(object):
 
         LOG.debug(_("Loading extension %s"), ext_factory)
 
-        # Load the factory
-        factory = utils.import_class(ext_factory)
+        if isinstance(ext_factory, basestring):
+            # Load the factory
+            factory = importutils.import_class(ext_factory)
+        else:
+            factory = ext_factory
 
         # Call it
         LOG.debug(_("Calling extension factory %s"), ext_factory)
@@ -281,9 +289,9 @@ class ControllerExtension(object):
 class ResourceExtension(object):
     """Add top level resources to the OpenStack API in nova."""
 
-    def __init__(self, collection, controller, parent=None,
+    def __init__(self, collection, controller=None, parent=None,
                  collection_actions=None, member_actions=None,
-                 custom_routes_fn=None):
+                 custom_routes_fn=None, inherits=None):
         if not collection_actions:
             collection_actions = {}
         if not member_actions:
@@ -294,6 +302,7 @@ class ResourceExtension(object):
         self.collection_actions = collection_actions
         self.member_actions = member_actions
         self.custom_routes_fn = custom_routes_fn
+        self.inherits = inherits
 
 
 def wrap_errors(fn):
@@ -356,8 +365,8 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
             ext_name = ("%s%s.%s.extension" %
                         (package, relpkg, dname))
             try:
-                ext = utils.import_class(ext_name)
-            except exception.ClassNotFound:
+                ext = importutils.import_class(ext_name)
+            except ImportError:
                 # extension() doesn't exist on it, so we'll explore
                 # the directory for ourselves
                 subdirs.append(dname)

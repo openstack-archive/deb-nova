@@ -18,16 +18,16 @@ from lxml import etree
 import webob
 
 from nova.api.openstack.compute.contrib import floating_ips
+from nova import compute
+from nova.compute import utils as compute_utils
 from nova import context
 from nova import db
 from nova import exception
 from nova import network
-from nova import compute
-from nova import rpc
-from nova.rpc import common as rpc_common
+from nova.openstack.common import rpc
 from nova import test
-from nova.tests import fake_network
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_network
 from nova import utils
 
 FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
@@ -36,7 +36,7 @@ FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 def network_api_get_fixed_ip(self, context, id):
     if id is None:
         return None
-    return {'address': '10.0.0.1', 'id': id, 'instance_id': 1}
+    return {'address': '10.0.0.1', 'id': id, 'instance_uuid': 1}
 
 
 def network_api_get_floating_ip(self, context, id):
@@ -57,7 +57,7 @@ def network_api_get_floating_ips_by_project(self, context):
             {'id': 2,
              'pool': 'nova', 'interface': 'eth0',
              'address': '10.10.10.11',
-            'fixed_ip_id': None}]
+             'fixed_ip_id': None}]
 
 
 def compute_api_get(self, context, instance_id):
@@ -80,7 +80,7 @@ def network_api_associate(self, context, floating_address, fixed_address):
     pass
 
 
-def network_api_disassociate(self, context, floating_address):
+def network_api_disassociate(self, context, instance, floating_address):
     pass
 
 
@@ -93,16 +93,35 @@ def fake_instance_get(context, instance_id):
         "project_id": '123'}
 
 
+def stub_nw_info(stubs):
+    def get_nw_info_for_instance(instance):
+        return fake_network.fake_get_instance_nw_info(stubs, spectacular=True)
+    return get_nw_info_for_instance
+
+
+def get_instance_by_floating_ip_addr(self, context, address):
+    return None
+
+
 class FloatingIpTest(test.TestCase):
     floating_ip = "10.10.10.10"
+    floating_ip_2 = "10.10.10.11"
 
-    def _create_floating_ip(self):
+    def _create_floating_ips(self, floating_ips=None):
         """Create a floating ip object."""
-        host = "fake_host"
-        return db.floating_ip_create(self.context,
-                                     {'address': self.floating_ip,
-                                      'pool': 'nova',
-                                      'host': host})
+        if floating_ips is None:
+            floating_ips = [self.floating_ip]
+        elif not isinstance(floating_ips, (list, tuple)):
+            floating_ips = [floating_ips]
+
+        def make_ip_dict(ip):
+            """Shortcut for creating floating ip dict."""
+            return
+
+        dict_ = {'pool': 'nova', 'host': 'fake_host'}
+        return db.floating_ip_bulk_create(
+            self.context, [dict(address=ip, **dict_) for ip in floating_ips],
+        )
 
     def _delete_floating_ip(self):
         db.floating_ip_destroy(self.context, self.floating_ip)
@@ -123,9 +142,10 @@ class FloatingIpTest(test.TestCase):
                        network_api_release)
         self.stubs.Set(network.api.API, "disassociate_floating_ip",
                        network_api_disassociate)
-
-        fake_network.fake_get_instance_nw_info(self.stubs, 1, 1,
-                                               spectacular=True)
+        self.stubs.Set(network.api.API, "get_instance_id_by_floating_address",
+                       get_instance_by_floating_ip_addr)
+        self.stubs.Set(compute_utils, "get_nw_info_for_instance",
+                       stub_nw_info(self.stubs))
 
         fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
                                                           spectacular=True)
@@ -133,7 +153,7 @@ class FloatingIpTest(test.TestCase):
                        fake_instance_get)
 
         self.context = context.get_admin_context()
-        self._create_floating_ip()
+        self._create_floating_ips()
 
         self.controller = floating_ips.FloatingIPController()
         self.manager = floating_ips.FloatingIPActionController()
@@ -143,7 +163,7 @@ class FloatingIpTest(test.TestCase):
         super(FloatingIpTest, self).tearDown()
 
     def test_translate_floating_ip_view(self):
-        floating_ip_address = self._create_floating_ip()
+        floating_ip_address = self.floating_ip
         floating_ip = db.floating_ip_get_by_address(self.context,
                                                     floating_ip_address)
         floating_ip['fixed_ip'] = None
@@ -203,7 +223,7 @@ class FloatingIpTest(test.TestCase):
                     'fixed_ip_id': 11}
 
         def get_fixed_ip(self, context, id):
-            return {'address': '10.0.0.1', 'instance_id': 1}
+            return {'address': '10.0.0.1', 'instance_uuid': 1}
 
         self.stubs.Set(network.api.API, "get_floating_ip", get_floating_ip)
         self.stubs.Set(network.api.API, "get_fixed_ip", get_fixed_ip)
@@ -215,6 +235,28 @@ class FloatingIpTest(test.TestCase):
         self.assertEqual(res_dict['floating_ip']['ip'], '10.10.10.10')
         self.assertEqual(res_dict['floating_ip']['instance_id'], FAKE_UUID)
 
+    def test_recreation_of_floating_ip(self):
+        self._delete_floating_ip()
+        self._create_floating_ips()
+
+    def test_floating_ip_in_bulk_creation(self):
+        self._delete_floating_ip()
+
+        self._create_floating_ips([self.floating_ip, self.floating_ip_2])
+        all_ips = db.floating_ip_get_all(self.context)
+        ip_list = [ip['address'] for ip in all_ips]
+        self.assertIn(self.floating_ip, ip_list)
+        self.assertIn(self.floating_ip_2, ip_list)
+
+    def test_fail_floating_ip_in_bulk_creation(self):
+        self.assertRaises(exception.FloatingIpExists,
+                          self._create_floating_ips,
+                          [self.floating_ip, self.floating_ip_2])
+        all_ips = db.floating_ip_get_all(self.context)
+        ip_list = [ip['address'] for ip in all_ips]
+        self.assertIn(self.floating_ip, ip_list)
+        self.assertNotIn(self.floating_ip_2, ip_list)
+
 # test floating ip allocate/release(deallocate)
     def test_floating_ip_allocate_no_free_ips(self):
         def fake_call(*args, **kwargs):
@@ -223,7 +265,8 @@ class FloatingIpTest(test.TestCase):
         self.stubs.Set(rpc, "call", fake_call)
 
         req = fakes.HTTPRequest.blank('/v2/fake/os-floating-ips')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+        self.assertRaises(exception.NoMoreFloatingIps,
+                          self.controller.create,
                           req)
 
     def test_floating_ip_allocate(self):
@@ -268,6 +311,13 @@ class FloatingIpTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers/test_inst/action')
         self.manager._remove_floating_ip(req, 'test_inst', body)
+
+    def test_floating_ip_disassociate_missing(self):
+        body = dict(removeFloatingIp=dict(address='10.10.10.10'))
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/test_inst/action')
+        rsp = self.manager._remove_floating_ip(req, 'test_inst', body)
+        self.assertTrue(rsp.status_int == 404)
 
 # these are a few bad param tests
 

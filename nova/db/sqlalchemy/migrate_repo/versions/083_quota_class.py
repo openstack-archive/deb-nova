@@ -1,3 +1,5 @@
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
 # Copyright 2012 OpenStack LLC.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,7 +17,7 @@
 from sqlalchemy import Boolean, Column, DateTime
 from sqlalchemy import MetaData, Integer, String, Table
 
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 

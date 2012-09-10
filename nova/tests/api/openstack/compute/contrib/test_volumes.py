@@ -14,7 +14,6 @@
 #    under the License.
 
 import datetime
-import json
 
 from lxml import etree
 import webob
@@ -25,14 +24,22 @@ from nova.compute import instance_types
 from nova import context
 import nova.db
 from nova import flags
+from nova.openstack.common import jsonutils
+from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova import volume
+from webob import exc
 
 
 FLAGS = flags.FLAGS
 
 FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+FAKE_UUID_A = '00000000-aaaa-aaaa-aaaa-000000000000'
+FAKE_UUID_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+FAKE_UUID_C = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+FAKE_UUID_D = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+
 IMAGE_UUID = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
 
 
@@ -58,6 +65,37 @@ def fake_compute_api_create(cls, context, instance_type, image_href, **kwargs):
              }], resv_id)
 
 
+def fake_get_instance(self, context, instance_id):
+    return({'uuid': instance_id})
+
+
+def fake_attach_volume(self, context, instance, volume_id, device):
+    return()
+
+
+def fake_detach_volume(self, context, volume_id):
+    return()
+
+
+def fake_get_instance_bdms(self, context, instance):
+    return([{'id': 1,
+             'instance_uuid': instance['uuid'],
+             'device_name': '/dev/fake0',
+             'delete_on_termination': 'False',
+             'virtual_name': 'MyNamesVirtual',
+             'snapshot_id': None,
+             'volume_id': FAKE_UUID_A,
+             'volume_size': 1},
+            {'id': 2,
+             'instance_uuid':instance['uuid'],
+             'device_name': '/dev/fake1',
+             'delete_on_termination': 'False',
+             'virtual_name': 'MyNamesVirtual',
+             'snapshot_id': None,
+             'volume_id': FAKE_UUID_B,
+             'volume_size': 1}])
+
+
 class BootFromVolumeTest(test.TestCase):
 
     def setUp(self):
@@ -80,11 +118,11 @@ class BootFromVolumeTest(test.TestCase):
         _block_device_mapping_seen = None
         req = webob.Request.blank('/v2/fake/os-volumes_boot')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 202)
-        server = json.loads(res.body)['server']
+        server = jsonutils.loads(res.body)['server']
         self.assertEqual(FAKE_UUID, server['id'])
         self.assertEqual(FLAGS.password_length, len(server['adminPass']))
         self.assertEqual(len(_block_device_mapping_seen), 1)
@@ -100,11 +138,8 @@ def return_volume(context, volume_id):
 class VolumeApiTest(test.TestCase):
     def setUp(self):
         super(VolumeApiTest, self).setUp()
-        fakes.FakeAuthManager.reset_fake_data()
-        fakes.FakeAuthDatabase.data = {}
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
-        fakes.stub_out_auth(self.stubs)
         self.stubs.Set(nova.db, 'volume_get', return_volume)
 
         self.stubs.Set(volume.api.API, "delete", fakes.stub_volume_delete)
@@ -123,13 +158,13 @@ class VolumeApiTest(test.TestCase):
         body = {"volume": vol}
         req = webob.Request.blank('/v2/fake/os-volumes')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
         resp = req.get_response(fakes.wsgi_app())
 
         self.assertEqual(resp.status_int, 200)
 
-        resp_dict = json.loads(resp.body)
+        resp_dict = jsonutils.loads(resp.body)
         self.assertTrue('volume' in resp_dict)
         self.assertEqual(resp_dict['volume']['size'],
                          vol['size'])
@@ -143,7 +178,7 @@ class VolumeApiTest(test.TestCase):
     def test_volume_create_no_body(self):
         req = webob.Request.blank('/v2/fake/os-volumes')
         req.method = 'POST'
-        req.body = json.dumps({})
+        req.body = jsonutils.dumps({})
         req.headers['content-type'] = 'application/json'
 
         resp = req.get_response(fakes.wsgi_app())
@@ -184,6 +219,74 @@ class VolumeApiTest(test.TestCase):
         req.method = 'DELETE'
         resp = req.get_response(fakes.wsgi_app())
         self.assertEqual(resp.status_int, 404)
+
+
+class VolumeAttachTests(test.TestCase):
+    def setUp(self):
+        super(VolumeAttachTests, self).setUp()
+        self.stubs.Set(nova.compute.API,
+                       'get_instance_bdms',
+                       fake_get_instance_bdms)
+        self.stubs.Set(nova.compute.API, 'get', fake_get_instance)
+        self.context = context.get_admin_context()
+        self.expected_show = {'volumeAttachment':
+            {'device': '/dev/fake0',
+             'serverId': FAKE_UUID,
+             'id': FAKE_UUID_A,
+             'volumeId': FAKE_UUID_A
+            }}
+
+    def test_show(self):
+        attachments = volumes.VolumeAttachmentController()
+        req = webob.Request.blank('/v2/fake/os-volumes/show')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        result = attachments.show(req, FAKE_UUID, FAKE_UUID_A)
+        self.assertEqual(self.expected_show, result)
+
+    def test_delete(self):
+        self.stubs.Set(nova.compute.API, 'detach_volume', fake_detach_volume)
+        attachments = volumes.VolumeAttachmentController()
+        req = webob.Request.blank('/v2/fake/os-volumes/delete')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        result = attachments.delete(req, FAKE_UUID, FAKE_UUID_A)
+        self.assertEqual('202 Accepted', result.status)
+
+    def test_delete_vol_not_found(self):
+        self.stubs.Set(nova.compute.API, 'detach_volume', fake_detach_volume)
+        attachments = volumes.VolumeAttachmentController()
+        req = webob.Request.blank('/v2/fake/os-volumes/delete')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        self.assertRaises(exc.HTTPNotFound,
+                          attachments.delete,
+                          req,
+                          FAKE_UUID,
+                          FAKE_UUID_C)
+
+    def test_attach_volume(self):
+        self.stubs.Set(nova.compute.API, 'attach_volume', fake_attach_volume)
+        attachments = volumes.VolumeAttachmentController()
+        body = {'volumeAttachment': {'volumeId': FAKE_UUID_A,
+                                    'device': '/dev/fake'}}
+        req = webob.Request.blank('/v2/fake/os-volumes/attach')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+        result = attachments.create(req, FAKE_UUID, body)
+        self.assertEqual(result['volumeAttachment']['id'],
+            '00000000-aaaa-aaaa-aaaa-000000000000')
 
 
 class VolumeSerializerTest(test.TestCase):
@@ -259,7 +362,7 @@ class VolumeSerializerTest(test.TestCase):
             status='vol_status',
             size=1024,
             availabilityZone='vol_availability',
-            createdAt=datetime.datetime.now(),
+            createdAt=timeutils.utcnow(),
             attachments=[dict(
                     id='vol_id',
                     volumeId='vol_id',
@@ -288,7 +391,7 @@ class VolumeSerializerTest(test.TestCase):
                 status='vol1_status',
                 size=1024,
                 availabilityZone='vol1_availability',
-                createdAt=datetime.datetime.now(),
+                createdAt=timeutils.utcnow(),
                 attachments=[dict(
                         id='vol1_id',
                         volumeId='vol1_id',
@@ -308,7 +411,7 @@ class VolumeSerializerTest(test.TestCase):
                 status='vol2_status',
                 size=1024,
                 availabilityZone='vol2_availability',
-                createdAt=datetime.datetime.now(),
+                createdAt=timeutils.utcnow(),
                 attachments=[dict(
                         id='vol2_id',
                         volumeId='vol2_id',

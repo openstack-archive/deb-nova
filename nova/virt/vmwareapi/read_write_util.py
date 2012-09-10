@@ -27,10 +27,8 @@ import urllib
 import urllib2
 import urlparse
 
-from glance import client
-
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -38,10 +36,7 @@ FLAGS = flags.FLAGS
 
 USER_AGENT = "OpenStack-ESX-Adapter"
 
-try:
-    READ_CHUNKSIZE = client.BaseClient.CHUNKSIZE
-except AttributeError:
-    READ_CHUNKSIZE = 65536
+READ_CHUNKSIZE = 65536
 
 
 class GlanceFileRead(object):

@@ -19,11 +19,11 @@
 import re
 import webob
 
-from nova import compute
-from nova import exception
-from nova import log as logging
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova import compute
+from nova import exception
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -49,14 +49,22 @@ class ConsoleOutputController(wsgi.Controller):
         try:
             length = body['os-getConsoleOutput'].get('length')
         except (TypeError, KeyError):
-            raise webob.exc.HTTPBadRequest(_('Malformed request body'))
+            raise webob.exc.HTTPBadRequest(_('os-getConsoleOutput malformed '
+                                             'or missing from request body'))
+
+        if length is not None:
+            try:
+                int(length)
+            except ValueError:
+                raise webob.exc.HTTPBadRequest(_('Length in request body must '
+                                                 'be an integer value'))
 
         try:
             output = self.compute_api.get_console_output(context,
                                                          instance,
                                                          length)
         except exception.NotFound:
-            raise webob.exc.HTTPNotFound(_('Instance not found'))
+            raise webob.exc.HTTPNotFound(_('Unable to get console'))
 
         # XML output is not correctly escaped, so remove invalid characters
         remove_re = re.compile('[\x00-\x08\x0B-\x0C\x0E-\x1F]')

@@ -15,17 +15,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
 from lxml import etree
 import webob
-import webob.exc
 import webob.dec
+import webob.exc
 
-import nova.context
-from nova import test
 from nova.api import openstack as openstack_api
 from nova.api.openstack import wsgi
+import nova.context
+from nova import exception
+from nova.openstack.common import jsonutils
+from nova import test
 from nova.tests.api.openstack import fakes
 
 
@@ -63,7 +63,7 @@ class APITest(test.TestCase):
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, ctype)
 
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
 
     def test_vendor_content_type_xml(self):
         ctype = 'application/vnd.openstack.compute+xml'
@@ -120,6 +120,75 @@ class APITest(test.TestCase):
         resp = webob.Request.blank('/.xml').get_response(api)
         self.assertTrue('<computeFault' in resp.body, resp.body)
         self.assertEqual(resp.status_int, 500, resp.body)
+
+    def _do_test_exception_safety_reflected_in_faults(self, expose):
+        class ExceptionWithSafety(exception.NovaException):
+            safe = expose
+
+        @webob.dec.wsgify
+        def fail(req):
+            raise ExceptionWithSafety('some explanation')
+
+        api = self._wsgi_app(fail)
+        resp = webob.Request.blank('/').get_response(api)
+        self.assertTrue('{"computeFault' in resp.body, resp.body)
+        expected = ('ExceptionWithSafety: some explanation' if expose else
+                    'The server has either erred or is incapable '
+                    'of performing the requested operation.')
+        self.assertTrue(expected in resp.body, resp.body)
+        self.assertEqual(resp.status_int, 500, resp.body)
+
+    def test_safe_exceptions_are_described_in_faults(self):
+        self._do_test_exception_safety_reflected_in_faults(True)
+
+    def test_unsafe_exceptions_are_not_described_in_faults(self):
+        self._do_test_exception_safety_reflected_in_faults(False)
+
+    def _do_test_exception_mapping(self, exception_type, msg):
+        @webob.dec.wsgify
+        def fail(req):
+            raise exception_type(msg)
+
+        api = self._wsgi_app(fail)
+        resp = webob.Request.blank('/').get_response(api)
+        self.assertTrue(msg in resp.body, resp.body)
+        self.assertEqual(resp.status_int, exception_type.code, resp.body)
+
+        if hasattr(exception_type, 'headers'):
+            for (key, value) in exception_type.headers.iteritems():
+                self.assertTrue(key in resp.headers)
+                self.assertEquals(resp.headers[key], value)
+
+    def test_quota_error_mapping(self):
+        self._do_test_exception_mapping(exception.QuotaError, 'too many used')
+
+    def test_non_nova_notfound_exception_mapping(self):
+        class ExceptionWithCode(Exception):
+            code = 404
+
+        self._do_test_exception_mapping(ExceptionWithCode,
+                                        'NotFound')
+
+    def test_non_nova_exception_mapping(self):
+        class ExceptionWithCode(Exception):
+            code = 417
+
+        self._do_test_exception_mapping(ExceptionWithCode,
+                                        'Expectation failed')
+
+    def test_exception_with_none_code_throws_500(self):
+        class ExceptionWithNoneCode(Exception):
+            code = None
+
+        msg = 'Internal Server Error'
+
+        @webob.dec.wsgify
+        def fail(req):
+            raise ExceptionWithNoneCode()
+
+        api = self._wsgi_app(fail)
+        resp = webob.Request.blank('/').get_response(api)
+        self.assertEqual(500, resp.status_int)
 
     def test_request_id_in_response(self):
         req = webob.Request.blank('/')

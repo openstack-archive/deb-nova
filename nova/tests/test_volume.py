@@ -23,18 +23,24 @@ Tests for Volume Code.
 import cStringIO
 
 import mox
+import shutil
+import tempfile
 
 from nova import context
-from nova import exception
 from nova import db
+from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier_api
+from nova.openstack.common.notifier import test_notifier
+from nova.openstack.common import rpc
 import nova.policy
-from nova import rpc
+from nova import quota
 from nova import test
-from nova import utils
 import nova.volume.api
 
+QUOTAS = quota.QUOTAS
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
 
@@ -44,18 +50,30 @@ class VolumeTestCase(test.TestCase):
 
     def setUp(self):
         super(VolumeTestCase, self).setUp()
-        self.compute = utils.import_object(FLAGS.compute_manager)
-        self.flags(connection_type='fake')
-        self.volume = utils.import_object(FLAGS.volume_manager)
+        self.compute = importutils.import_object(FLAGS.compute_manager)
+        vol_tmpdir = tempfile.mkdtemp()
+        self.flags(compute_driver='nova.virt.fake.FakeDriver',
+                   volumes_dir=vol_tmpdir)
+        self.stubs.Set(nova.flags.FLAGS, 'notification_driver',
+                ['nova.openstack.common.notifier.test_notifier'])
+        self.volume = importutils.import_object(FLAGS.volume_manager)
         self.context = context.get_admin_context()
-        self.instance_id = db.instance_create(self.context, {})['id']
+        instance = db.instance_create(self.context, {})
+        self.instance_id = instance['id']
+        self.instance_uuid = instance['uuid']
+        test_notifier.NOTIFICATIONS = []
 
     def tearDown(self):
-        db.instance_destroy(self.context, self.instance_id)
+        try:
+            shutil.rmtree(FLAGS.volumes_dir)
+        except OSError, e:
+            pass
+        db.instance_destroy(self.context, self.instance_uuid)
+        notifier_api._reset_drivers()
         super(VolumeTestCase, self).tearDown()
 
     @staticmethod
-    def _create_volume(size='0', snapshot_id=None):
+    def _create_volume(size=0, snapshot_id=None):
         """Create a volume object."""
         vol = {}
         vol['size'] = size
@@ -67,19 +85,84 @@ class VolumeTestCase(test.TestCase):
         vol['attach_status'] = "detached"
         return db.volume_create(context.get_admin_context(), vol)
 
+    def test_ec2_uuid_mapping(self):
+        ec2_vol = db.ec2_volume_create(context.get_admin_context(),
+                'aaaaaaaa-bbbb-bbbb-bbbb-aaaaaaaaaaaa', 5)
+        self.assertEqual(5, ec2_vol['id'])
+        self.assertEqual('aaaaaaaa-bbbb-bbbb-bbbb-aaaaaaaaaaaa',
+                db.get_volume_uuid_by_ec2_id(context.get_admin_context(), 5))
+
+        ec2_vol = db.ec2_volume_create(context.get_admin_context(),
+                'aaaaaaaa-bbbb-bbbb-bbbb-aaaaaaaaaaaa', 1)
+        self.assertEqual(1, ec2_vol['id'])
+
+        ec2_vol = db.ec2_volume_create(context.get_admin_context(),
+                'aaaaaaaa-bbbb-bbbb-bbbb-aaaaaaaaazzz')
+        self.assertEqual(6, ec2_vol['id'])
+
     def test_create_delete_volume(self):
         """Test volume can be created and deleted."""
+        # Need to stub out reserve, commit, and rollback
+        def fake_reserve(context, expire=None, **deltas):
+            return ["RESERVATION"]
+
+        def fake_commit(context, reservations):
+            pass
+
+        def fake_rollback(context, reservations):
+            pass
+
+        self.stubs.Set(QUOTAS, "reserve", fake_reserve)
+        self.stubs.Set(QUOTAS, "commit", fake_commit)
+        self.stubs.Set(QUOTAS, "rollback", fake_rollback)
+
         volume = self._create_volume()
         volume_id = volume['id']
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 0)
         self.volume.create_volume(self.context, volume_id)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
         self.assertEqual(volume_id, db.volume_get(context.get_admin_context(),
                          volume_id).id)
 
         self.volume.delete_volume(self.context, volume_id)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 4)
         self.assertRaises(exception.NotFound,
                           db.volume_get,
                           self.context,
                           volume_id)
+
+    def _do_test_create_over_quota(self, resource, expected):
+        """Test volume creation over quota."""
+
+        def fake_reserve(context, **deltas):
+            kwargs = dict(overs=[resource],
+                          quotas=dict(gigabytes=1000, volumes=10),
+                          usages=dict(gigabytes=dict(reserved=1, in_use=999),
+                                      volumes=dict(reserved=1, in_use=9)))
+            raise exception.OverQuota(**kwargs)
+
+        def fake_commit(context, reservations):
+            self.fail('should not commit over quota')
+
+        self.stubs.Set(QUOTAS, 'reserve', fake_reserve)
+        self.stubs.Set(QUOTAS, 'commit', fake_commit)
+
+        volume_api = nova.volume.api.API()
+
+        self.assertRaises(expected,
+                          volume_api.create,
+                          self.context,
+                          2,
+                          'name',
+                          'description')
+
+    def test_create_volumes_over_quota(self):
+        self._do_test_create_over_quota('volumes',
+                                        exception.VolumeLimitExceeded)
+
+    def test_create_gigabytes_over_quota(self):
+        self._do_test_create_over_quota('gigabytes',
+                                        exception.VolumeSizeTooLarge)
 
     def test_delete_busy_volume(self):
         """Test volume survives deletion if driver reports it as busy."""
@@ -88,8 +171,8 @@ class VolumeTestCase(test.TestCase):
         self.volume.create_volume(self.context, volume_id)
 
         self.mox.StubOutWithMock(self.volume.driver, 'delete_volume')
-        self.volume.driver.delete_volume(mox.IgnoreArg()) \
-                                              .AndRaise(exception.VolumeIsBusy)
+        self.volume.driver.delete_volume(mox.IgnoreArg()).AndRaise(
+                exception.VolumeIsBusy)
         self.mox.ReplayAll()
         res = self.volume.delete_volume(self.context, volume_id)
         self.assertEqual(True, res)
@@ -160,27 +243,28 @@ class VolumeTestCase(test.TestCase):
         inst['project_id'] = 'fake'
         inst['instance_type_id'] = '2'  # m1.tiny
         inst['ami_launch_index'] = 0
-        instance_id = db.instance_create(self.context, inst)['id']
+        instance = db.instance_create(self.context, {})
+        instance_id = instance['id']
+        instance_uuid = instance['uuid']
         mountpoint = "/dev/sdf"
         volume = self._create_volume()
         volume_id = volume['id']
         self.volume.create_volume(self.context, volume_id)
         if FLAGS.fake_tests:
-            db.volume_attached(self.context, volume_id, instance_id,
+            db.volume_attached(self.context, volume_id, instance_uuid,
                                mountpoint)
         else:
             self.compute.attach_volume(self.context,
-                                       instance_id,
+                                       instance_uuid,
                                        volume_id,
                                        mountpoint)
         vol = db.volume_get(context.get_admin_context(), volume_id)
         self.assertEqual(vol['status'], "in-use")
         self.assertEqual(vol['attach_status'], "attached")
         self.assertEqual(vol['mountpoint'], mountpoint)
-        instance_ref = db.volume_get_instance(self.context, volume_id)
-        self.assertEqual(instance_ref['id'], instance_id)
+        self.assertEqual(vol['instance_uuid'], instance_uuid)
 
-        self.assertRaises(exception.Error,
+        self.assertRaises(exception.NovaException,
                           self.volume.delete_volume,
                           self.context,
                           volume_id)
@@ -188,7 +272,7 @@ class VolumeTestCase(test.TestCase):
             db.volume_detached(self.context, volume_id)
         else:
             self.compute.detach_volume(self.context,
-                                       instance_id,
+                                       instance_uuid,
                                        volume_id)
         vol = db.volume_get(self.context, volume_id)
         self.assertEqual(vol['status'], "available")
@@ -198,7 +282,7 @@ class VolumeTestCase(test.TestCase):
                           db.volume_get,
                           self.context,
                           volume_id)
-        db.instance_destroy(self.context, instance_id)
+        db.instance_destroy(self.context, instance_uuid)
 
     def test_concurrent_volumes_get_different_targets(self):
         """Ensure multiple concurrent volumes get different targets."""
@@ -308,7 +392,7 @@ class VolumeTestCase(test.TestCase):
 
         volume = self._create_volume()
         self.volume.create_volume(self.context, volume['id'])
-        db.volume_attached(self.context, volume['id'], self.instance_id,
+        db.volume_attached(self.context, volume['id'], self.instance_uuid,
                            '/dev/sda1')
 
         volume_api = nova.volume.api.API()
@@ -333,8 +417,8 @@ class VolumeTestCase(test.TestCase):
         self.volume.create_snapshot(self.context, volume_id, snapshot_id)
 
         self.mox.StubOutWithMock(self.volume.driver, 'delete_snapshot')
-        self.volume.driver.delete_snapshot(mox.IgnoreArg()) \
-                                            .AndRaise(exception.SnapshotIsBusy)
+        self.volume.driver.delete_snapshot(mox.IgnoreArg()).AndRaise(
+                exception.SnapshotIsBusy)
         self.mox.ReplayAll()
         self.volume.delete_snapshot(self.context, snapshot_id)
         snapshot_ref = db.snapshot_get(self.context, snapshot_id)
@@ -345,6 +429,32 @@ class VolumeTestCase(test.TestCase):
         self.volume.delete_snapshot(self.context, snapshot_id)
         self.volume.delete_volume(self.context, volume_id)
 
+    def test_create_volume_usage_notification(self):
+        """Ensure create volume generates appropriate usage notification"""
+        volume = self._create_volume()
+        volume_id = volume['id']
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 0)
+        self.volume.create_volume(self.context, volume_id)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['event_type'], 'volume.create.start')
+        payload = msg['payload']
+        self.assertEquals(payload['status'], 'creating')
+        msg = test_notifier.NOTIFICATIONS[1]
+        self.assertEquals(msg['priority'], 'INFO')
+        self.assertEquals(msg['event_type'], 'volume.create.end')
+        payload = msg['payload']
+        self.assertEquals(payload['tenant_id'], volume['project_id'])
+        self.assertEquals(payload['user_id'], volume['user_id'])
+        self.assertEquals(payload['volume_id'], volume['id'])
+        self.assertEquals(payload['status'], 'available')
+        self.assertEquals(payload['size'], volume['size'])
+        self.assertTrue('display_name' in payload)
+        self.assertTrue('snapshot_id' in payload)
+        self.assertTrue('launched_at' in payload)
+        self.assertTrue('created_at' in payload)
+        self.volume.delete_volume(self.context, volume_id)
+
 
 class DriverTestCase(test.TestCase):
     """Base Test class for Drivers."""
@@ -352,9 +462,11 @@ class DriverTestCase(test.TestCase):
 
     def setUp(self):
         super(DriverTestCase, self).setUp()
+        vol_tmpdir = tempfile.mkdtemp()
         self.flags(volume_driver=self.driver_name,
+                   volumes_dir=vol_tmpdir,
                    logging_default_format_string="%(message)s")
-        self.volume = utils.import_object(FLAGS.volume_manager)
+        self.volume = importutils.import_object(FLAGS.volume_manager)
         self.context = context.get_admin_context()
         self.output = ""
 
@@ -363,12 +475,21 @@ class DriverTestCase(test.TestCase):
             return self.output, None
         self.volume.driver.set_execute(_fake_execute)
 
-        log = logging.getLogger()
+        log = logging.getLogger('nova')
         self.stream = cStringIO.StringIO()
         log.logger.addHandler(logging.logging.StreamHandler(self.stream))
 
         inst = {}
-        self.instance_id = db.instance_create(self.context, inst)['id']
+        instance = db.instance_create(self.context, {})
+        self.instance_id = instance['id']
+        self.instance_uuid = instance['uuid']
+
+    def tearDown(self):
+        try:
+            shutil.rmtree(FLAGS.volumes_dir)
+        except OSError, e:
+            pass
+        super(DriverTestCase, self).tearDown()
 
     def _attach_volume(self):
         """Attach volumes to an instance. This function also sets
@@ -421,7 +542,7 @@ class ISCSITestCase(DriverTestCase):
 
             # each volume has a different mountpoint
             mountpoint = "/dev/sd" + chr((ord('b') + index))
-            db.volume_attached(self.context, vol_ref['id'], self.instance_id,
+            db.volume_attached(self.context, vol_ref['id'], self.instance_uuid,
                                mountpoint)
             volume_id_list.append(vol_ref['id'])
 

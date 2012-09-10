@@ -15,16 +15,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
 from xml.dom import minidom
 
 import webob
 import webob.dec
 import webob.exc
 
-from nova import test
 from nova.api.openstack import common
 from nova.api.openstack import wsgi
+from nova.openstack.common import jsonutils
+from nova import test
 
 
 class TestFaults(test.TestCase):
@@ -54,7 +54,7 @@ class TestFaults(test.TestCase):
                     "code": 400,
                 },
             }
-            actual = json.loads(response.body)
+            actual = jsonutils.loads(response.body)
 
             self.assertEqual(response.content_type, "application/json")
             self.assertEqual(expected, actual)
@@ -79,7 +79,7 @@ class TestFaults(test.TestCase):
                     "retryAfter": 4,
                 },
             }
-            actual = json.loads(response.body)
+            actual = jsonutils.loads(response.body)
 
             self.assertEqual(response.content_type, "application/json")
             self.assertEqual(expected, actual)

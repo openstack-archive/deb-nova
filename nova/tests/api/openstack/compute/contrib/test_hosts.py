@@ -16,30 +16,33 @@
 from lxml import etree
 import webob.exc
 
+from nova.api.openstack.compute.contrib import hosts as os_hosts
+from nova.compute import power_state
+from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import test
-from nova.api.openstack.compute.contrib import hosts as os_hosts
-from nova.compute import power_state
-from nova.compute import vm_states
-from nova.scheduler import api as scheduler_api
 
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
-# Simulate the hosts returned by the zone manager.
 HOST_LIST = [
         {"host_name": "host_c1", "service": "compute"},
         {"host_name": "host_c2", "service": "compute"},
         {"host_name": "host_v1", "service": "volume"},
         {"host_name": "host_v2", "service": "volume"}]
+SERVICES_LIST = [
+        {"host": "host_c1", "topic": "compute"},
+        {"host": "host_c2", "topic": "compute"},
+        {"host": "host_v1", "topic": "volume"},
+        {"host": "host_v2", "topic": "volume"}]
 
 
-def stub_get_host_list(req):
-    return HOST_LIST
+def stub_service_get_all(self, req):
+    return SERVICES_LIST
 
 
 def stub_set_host_enabled(context, host, enabled):
@@ -104,7 +107,8 @@ class HostTestCase(test.TestCase):
         super(HostTestCase, self).setUp()
         self.controller = os_hosts.HostController()
         self.req = FakeRequest()
-        self.stubs.Set(scheduler_api, 'get_host_list', stub_get_host_list)
+        self.stubs.Set(db, 'service_get_all',
+                       stub_service_get_all)
         self.stubs.Set(self.controller.api, 'set_host_enabled',
                        stub_set_host_enabled)
         self.stubs.Set(self.controller.api, 'set_host_maintenance',
@@ -181,7 +185,7 @@ class HostTestCase(test.TestCase):
         self.assertEqual(result["maintenance_mode"], "on_maintenance")
 
     def test_bad_host(self):
-        self.assertRaises(exception.HostNotFound, self.controller.update,
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
                 self.req, "bogus_host_name", body={"status": "disable"})
 
     def test_show_forbidden(self):
@@ -250,8 +254,8 @@ class HostTestCase(test.TestCase):
             self.assertEqual(len(resource['resource']), 5)
             self.assertTrue(set(resource['resource'].keys()) == set(column))
         db.service_destroy(ctxt, s_ref['id'])
-        db.instance_destroy(ctxt, i_ref1['id'])
-        db.instance_destroy(ctxt, i_ref2['id'])
+        db.instance_destroy(ctxt, i_ref1['uuid'])
+        db.instance_destroy(ctxt, i_ref2['uuid'])
 
 
 class HostSerializerTest(test.TestCase):

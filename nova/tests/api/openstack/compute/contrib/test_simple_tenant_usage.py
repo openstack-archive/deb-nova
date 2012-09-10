@@ -16,17 +16,18 @@
 #    under the License.
 
 import datetime
-import json
 
 from lxml import etree
 import webob
 
 from nova.api.openstack.compute.contrib import simple_tenant_usage
-from nova import policy
-from nova.common import policy as common_policy
 from nova.compute import api
 from nova import context
 from nova import flags
+from nova.openstack.common import jsonutils
+from nova.openstack.common import policy as common_policy
+from nova.openstack.common import timeutils
+from nova import policy
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -40,7 +41,7 @@ ROOT_GB = 10
 EPHEMERAL_GB = 20
 MEMORY_MB = 1024
 VCPUS = 2
-STOP = datetime.datetime.utcnow()
+STOP = timeutils.utcnow()
 START = STOP - datetime.timedelta(hours=HOURS)
 
 
@@ -55,15 +56,16 @@ def fake_instance_type_get(self, context, instance_type_id):
 
 
 def get_fake_db_instance(start, end, instance_id, tenant_id):
-    return  {'id': instance_id,
-             'image_ref': '1',
-             'project_id': tenant_id,
-             'user_id': 'fakeuser',
-             'display_name': 'name',
-             'state_description': 'state',
-             'instance_type_id': 1,
-             'launched_at': start,
-             'terminated_at': end}
+    return {'id': instance_id,
+            'uuid': '00000000-0000-0000-0000-00000000000000%02d' % instance_id,
+            'image_ref': '1',
+            'project_id': tenant_id,
+            'user_id': 'fakeuser',
+            'display_name': 'name',
+            'state_description': 'state',
+            'instance_type_id': 1,
+            'launched_at': start,
+            'terminated_at': end}
 
 
 def fake_instance_get_active_by_window(self, context, begin, end, project_id):
@@ -102,7 +104,7 @@ class SimpleTenantUsageTest(test.TestCase):
                                fake_auth_context=self.admin_context))
 
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         usages = res_dict['tenant_usages']
         for i in xrange(TENANTS):
             self.assertEqual(int(usages[i]['total_hours']),
@@ -115,45 +117,63 @@ class SimpleTenantUsageTest(test.TestCase):
                              SERVERS * VCPUS * HOURS)
             self.assertFalse(usages[i].get('server_usages'))
 
-    def test_verify_detailed_index(self):
+    def _get_tenant_usages(self, detailed=''):
         req = webob.Request.blank(
                     '/v2/faketenant_0/os-simple-tenant-usage?'
-                    'detailed=1&start=%s&end=%s' %
-                    (START.isoformat(), STOP.isoformat()))
+                    'detailed=%s&start=%s&end=%s' %
+                    (detailed, START.isoformat(), STOP.isoformat()))
         req.method = "GET"
         req.headers["content-type"] = "application/json"
 
         res = req.get_response(fakes.wsgi_app(
                                fake_auth_context=self.admin_context))
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
-        usages = res_dict['tenant_usages']
+        res_dict = jsonutils.loads(res.body)
+        return res_dict['tenant_usages']
+
+    def test_verify_detailed_index(self):
+        usages = self._get_tenant_usages('1')
         for i in xrange(TENANTS):
             servers = usages[i]['server_usages']
             for j in xrange(SERVERS):
                 self.assertEqual(int(servers[j]['hours']), HOURS)
 
+    def test_verify_simple_index(self):
+        usages = self._get_tenant_usages(detailed='0')
+        for i in xrange(TENANTS):
+            self.assertEqual(usages[i].get('server_usages'), None)
+
+    def test_verify_simple_index_empty_param(self):
+        # NOTE(lzyeval): 'detailed=&start=..&end=..'
+        usages = self._get_tenant_usages()
+        for i in xrange(TENANTS):
+            self.assertEqual(usages[i].get('server_usages'), None)
+
     def test_verify_show(self):
+        tenant_id = 0
         req = webob.Request.blank(
                   '/v2/faketenant_0/os-simple-tenant-usage/'
-                  'faketenant_0?start=%s&end=%s' %
-                  (START.isoformat(), STOP.isoformat()))
+                  'faketenant_%s?start=%s&end=%s' %
+                  (tenant_id, START.isoformat(), STOP.isoformat()))
         req.method = "GET"
         req.headers["content-type"] = "application/json"
 
         res = req.get_response(fakes.wsgi_app(
                                fake_auth_context=self.user_context))
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
 
         usage = res_dict['tenant_usage']
         servers = usage['server_usages']
         self.assertEqual(len(usage['server_usages']), SERVERS)
+        uuids = ['00000000-0000-0000-0000-00000000000000%02d' %
+                    (x + (tenant_id * SERVERS)) for x in xrange(SERVERS)]
         for j in xrange(SERVERS):
             delta = STOP - START
             uptime = delta.days * 24 * 3600 + delta.seconds
             self.assertEqual(int(servers[j]['uptime']), uptime)
             self.assertEqual(int(servers[j]['hours']), HOURS)
+            self.assertTrue(servers[j]['instance_id'] in uuids)
 
     def test_verify_show_cant_view_other_tenant(self):
         req = webob.Request.blank(
@@ -211,7 +231,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
 
     def test_serializer_show(self):
         serializer = simple_tenant_usage.SimpleTenantUsageTemplate()
-        today = datetime.datetime.now()
+        today = timeutils.utcnow()
         yesterday = today - datetime.timedelta(days=1)
         raw_usage = dict(
             tenant_id='tenant',
@@ -222,6 +242,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
             start=yesterday,
             stop=today,
             server_usages=[dict(
+                    instance_id='00000000-0000-0000-0000-0000000000000000',
                     name='test',
                     hours=24,
                     memory_mb=1024,
@@ -234,6 +255,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
                     state='terminated',
                     uptime=86400),
                            dict(
+                    instance_id='00000000-0000-0000-0000-0000000000000002',
                     name='test2',
                     hours=12,
                     memory_mb=512,
@@ -257,7 +279,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
 
     def test_serializer_index(self):
         serializer = simple_tenant_usage.SimpleTenantUsagesTemplate()
-        today = datetime.datetime.now()
+        today = timeutils.utcnow()
         yesterday = today - datetime.timedelta(days=1)
         raw_usages = [dict(
                 tenant_id='tenant1',
@@ -268,6 +290,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
                 start=yesterday,
                 stop=today,
                 server_usages=[dict(
+                        instance_id='00000000-0000-0000-0000-0000000000000001',
                         name='test1',
                         hours=24,
                         memory_mb=1024,
@@ -280,6 +303,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
                         state='terminated',
                         uptime=86400),
                                dict(
+                        instance_id='00000000-0000-0000-0000-0000000000000002',
                         name='test2',
                         hours=42,
                         memory_mb=4201,
@@ -302,6 +326,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
                 start=today,
                 stop=yesterday,
                 server_usages=[dict(
+                        instance_id='00000000-0000-0000-0000-0000000000000003',
                         name='test3',
                         hours=24,
                         memory_mb=1024,
@@ -314,6 +339,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
                         state='terminated',
                         uptime=86400),
                                dict(
+                        instance_id='00000000-0000-0000-0000-0000000000000002',
                         name='test2',
                         hours=42,
                         memory_mb=4201,

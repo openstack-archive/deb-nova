@@ -25,7 +25,7 @@ from eventlet import greenthread
 from eventlet import queue
 
 from nova import exception
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -66,12 +66,14 @@ class GlanceWriteThread(object):
     """Ensures that image data is written to in the glance client and that
     it is in correct ('active')state."""
 
-    def __init__(self, input, glance_client, image_id, image_meta=None):
+    def __init__(self, context, input, image_service, image_id,
+            image_meta=None):
         if not image_meta:
             image_meta = {}
 
+        self.context = context
         self.input = input
-        self.glance_client = glance_client
+        self.image_service = image_service
         self.image_id = image_id
         self.image_meta = image_meta
         self._running = False
@@ -82,35 +84,37 @@ class GlanceWriteThread(object):
         def _inner():
             """Function to do the image data transfer through an update
             and thereon checks if the state is 'active'."""
-            self.glance_client.update_image(self.image_id,
-                                            image_meta=self.image_meta,
-                                            image_data=self.input)
+            self.image_service.update(self.context,
+                                      self.image_id,
+                                      self.image_meta,
+                                      data=self.input)
             self._running = True
             while self._running:
                 try:
-                    _get_image_meta = self.glance_client.get_image_meta
-                    image_status = _get_image_meta(self.image_id).get("status")
+                    image_meta = self.image_service.show(self.context,
+                                                         self.image_id)
+                    image_status = image_meta.get("status")
                     if image_status == "active":
                         self.stop()
                         self.done.send(True)
                     # If the state is killed, then raise an exception.
                     elif image_status == "killed":
                         self.stop()
-                        exc_msg = (_("Glance image %s is in killed state") %
-                                   self.image_id)
-                        LOG.error(exc_msg)
-                        self.done.send_exception(exception.Error(exc_msg))
+                        msg = (_("Glance image %s is in killed state") %
+                                 self.image_id)
+                        LOG.error(msg)
+                        self.done.send_exception(exception.NovaException(msg))
                     elif image_status in ["saving", "queued"]:
                         greenthread.sleep(GLANCE_POLL_INTERVAL)
                     else:
                         self.stop()
-                        exc_msg = _("Glance image "
+                        msg = _("Glance image "
                                     "%(image_id)s is in unknown state "
                                     "- %(state)s") % {
                                             "image_id": self.image_id,
                                             "state": image_status}
-                        LOG.error(exc_msg)
-                        self.done.send_exception(exception.Error(exc_msg))
+                        LOG.error(msg)
+                        self.done.send_exception(exception.NovaException(msg))
                 except Exception, exc:
                     self.stop()
                     self.done.send_exception(exc)

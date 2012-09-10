@@ -26,11 +26,11 @@ import eventlet.green
 import eventlet.greenio
 import eventlet.wsgi
 
+from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
-from nova import rpc
+from nova.openstack.common import log as logging
 from nova import version
 from nova import wsgi
 
@@ -48,8 +48,6 @@ xvp_proxy_opts = [
 
 FLAGS = flags.FLAGS
 FLAGS.register_opts(xvp_proxy_opts)
-
-flags.DECLARE('consoleauth_topic', 'nova.consoleauth')
 
 
 class XCPVNCProxy(object):
@@ -145,9 +143,8 @@ class XCPVNCProxy(object):
                 return "Invalid Request"
 
             ctxt = context.get_admin_context()
-            connect_info = rpc.call(ctxt, FLAGS.consoleauth_topic,
-                                    {'method': 'check_token',
-                                     'args': {'token': token}})
+            api = consoleauth_rpcapi.ConsoleAuthAPI()
+            connect_info = api.check_token(ctxt, token)
 
             if not connect_info:
                 LOG.audit(_("Request made with invalid token: %s"), req)
@@ -180,8 +177,8 @@ def get_wsgi_server():
     LOG.audit(_("Starting nova-xvpvncproxy node (version %s)"),
               version.version_string_with_vcs())
 
-    return  wsgi.Server("XCP VNC Proxy",
-                         XCPVNCProxy(),
-                         protocol=SafeHttpProtocol,
-                         host=FLAGS.xvpvncproxy_host,
-                         port=FLAGS.xvpvncproxy_port)
+    return wsgi.Server("XCP VNC Proxy",
+                       XCPVNCProxy(),
+                       protocol=SafeHttpProtocol,
+                       host=FLAGS.xvpvncproxy_host,
+                       port=FLAGS.xvpvncproxy_port)

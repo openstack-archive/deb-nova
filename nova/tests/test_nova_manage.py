@@ -16,14 +16,13 @@
 #    under the License.
 
 import imp
-import json
 import os
 import StringIO
 import sys
 
-import nova.auth.manager
 from nova import context
 from nova import db
+from nova import exception
 from nova import test
 from nova.tests.db import fakes as db_fakes
 
@@ -35,7 +34,7 @@ TOPDIR = os.path.normpath(os.path.join(
 NOVA_MANAGE_PATH = os.path.join(TOPDIR, 'bin', 'nova-manage')
 
 sys.dont_write_bytecode = True
-nova_manage = imp.load_source('nova_manage.py', NOVA_MANAGE_PATH)
+nova_manage = imp.load_source('nova_manage', NOVA_MANAGE_PATH)
 sys.dont_write_bytecode = False
 
 
@@ -66,6 +65,40 @@ class FixedIpCommandsTestCase(test.TestCase):
         self.assertRaises(SystemExit,
                           self.commands.unreserve,
                           '55.55.55.55')
+
+
+class FloatingIpCommandsTestCase(test.TestCase):
+    def setUp(self):
+        super(FloatingIpCommandsTestCase, self).setUp()
+        db_fakes.stub_out_db_network_api(self.stubs)
+        self.commands = nova_manage.FloatingIpCommands()
+
+    def test_address_to_hosts(self):
+        def assert_loop(result, expected):
+            for ip in result:
+                self.assertTrue(str(ip) in expected)
+
+        address_to_hosts = self.commands.address_to_hosts
+        # /32 and /31
+        self.assertRaises(exception.InvalidInput, address_to_hosts,
+                          '192.168.100.1/32')
+        self.assertRaises(exception.InvalidInput, address_to_hosts,
+                          '192.168.100.1/31')
+        # /30
+        expected = ["192.168.100.%s" % i for i in range(1, 3)]
+        result = address_to_hosts('192.168.100.0/30')
+        self.assertTrue(len(list(result)) == 2)
+        assert_loop(result, expected)
+        # /29
+        expected = ["192.168.100.%s" % i for i in range(1, 7)]
+        result = address_to_hosts('192.168.100.0/29')
+        self.assertTrue(len(list(result)) == 6)
+        assert_loop(result, expected)
+        # /28
+        expected = ["192.168.100.%s" % i for i in range(1, 15)]
+        result = address_to_hosts('192.168.100.0/28')
+        self.assertTrue(len(list(result)) == 14)
+        assert_loop(result, expected)
 
 
 class NetworkCommandsTestCase(test.TestCase):
@@ -237,60 +270,82 @@ class NetworkCommandsTestCase(test.TestCase):
                                dis_host=True)
 
 
-class ExportAuthTestCase(test.TestCase):
+class InstanceTypeCommandsTestCase(test.TestCase):
+    def setUp(self):
+        super(InstanceTypeCommandsTestCase, self).setUp()
 
-    def test_export_with_noauth(self):
-        self._do_test_export()
+        values = dict(name="test.small",
+                      memory_mb=220,
+                      vcpus=1,
+                      root_gb=16,
+                      ephemeral_gb=32,
+                      flavorid=105)
+        ref = db.instance_type_create(context.get_admin_context(),
+                                      values)
+        self.instance_type_name = ref["name"]
+        self.instance_type_id = ref["id"]
+        self.instance_type_flavorid = ref["flavorid"]
+        self.set_key = nova_manage.InstanceTypeCommands().set_key
+        self.unset_key = nova_manage.InstanceTypeCommands().unset_key
 
-    def test_export_with_deprecated_auth(self):
-        self.flags(auth_strategy='deprecated')
-        self._do_test_export(noauth=False)
+    def tearDown(self):
+        db.instance_type_destroy(context.get_admin_context(),
+                                 "test.small")
+        super(InstanceTypeCommandsTestCase, self).tearDown()
 
-    def _do_test_export(self, noauth=True):
-        self.flags(allowed_roles=['role1', 'role2'])
-        am = nova.auth.manager.AuthManager(new=True)
-        user1 = am.create_user('user1', 'a1', 's1')
-        user2 = am.create_user('user2', 'a2', 's2')
-        user3 = am.create_user('user3', 'a3', 's3')
-        proj1 = am.create_project('proj1', user1, member_users=[user1, user2])
-        proj2 = am.create_project('proj2', user2, member_users=[user2, user3])
-        am.add_role(user1, 'role1', proj1)
-        am.add_role(user1, 'role1', proj2)
-        am.add_role(user3, 'role1', proj1)
-        am.add_role(user3, 'role2', proj2)
+    def _test_extra_specs_empty(self):
+        empty_specs = {}
+        actual_specs = db.instance_type_extra_specs_get(
+                              context.get_admin_context(),
+                              self.instance_type_id)
+        self.assertEquals(empty_specs, actual_specs)
 
-        commands = nova_manage.ExportCommands()
-        output = commands._get_auth_data()
+    def test_extra_specs_set_unset(self):
+        expected_specs = {'k1': 'v1'}
 
-        def pw(idx):
-            return ('user' if noauth else 'a') + str(idx)
+        self._test_extra_specs_empty()
 
-        expected = {
-            "users": [
-                {"id": "user1", "name": "user1", 'password': pw(1)},
-                {"id": "user2", "name": "user2", 'password': pw(2)},
-                {"id": "user3", "name": "user3", 'password': pw(3)},
-            ],
-            "roles": ["role1", "role2"],
-            "role_user_tenant_list": [
-                {"user_id": "user1", "role": "role1", "tenant_id": "proj1"},
-                {"user_id": "user3", "role": "role2", "tenant_id": "proj2"},
-            ],
-            "user_tenant_list": [
-                {"tenant_id": "proj1", "user_id": "user1"},
-                {"tenant_id": "proj1", "user_id": "user2"},
-                {"tenant_id": "proj2", "user_id": "user2"},
-                {"tenant_id": "proj2", "user_id": "user3"},
-            ],
-            "ec2_credentials": [
-                {"access_key": pw(1), "secret_key": "s1", "user_id": "user1"},
-                {"access_key": pw(2), "secret_key": "s2", "user_id": "user2"},
-                {"access_key": pw(3), "secret_key": "s3", "user_id": "user3"},
-            ],
-            "tenants": [
-                {"description": "proj1", "id": "proj1", "name": "proj1"},
-                {"description": "proj2", "id": "proj2", "name": "proj2"},
-            ],
-        }
+        self.set_key(self.instance_type_name, "k1", "v1")
+        actual_specs = db.instance_type_extra_specs_get(
+                              context.get_admin_context(),
+                              self.instance_type_flavorid)
+        self.assertEquals(expected_specs, actual_specs)
 
-        self.assertDictMatch(output, expected)
+        self.unset_key(self.instance_type_name, "k1")
+        self._test_extra_specs_empty()
+
+    def test_extra_specs_update(self):
+        expected_specs = {'k1': 'v1'}
+        updated_specs = {'k1': 'v2'}
+
+        self._test_extra_specs_empty()
+
+        self.set_key(self.instance_type_name, "k1", "v1")
+        actual_specs = db.instance_type_extra_specs_get(
+                              context.get_admin_context(),
+                              self.instance_type_flavorid)
+        self.assertEquals(expected_specs, actual_specs)
+
+        self.set_key(self.instance_type_name, "k1", "v2")
+        actual_specs = db.instance_type_extra_specs_get(
+                              context.get_admin_context(),
+                              self.instance_type_flavorid)
+        self.assertEquals(updated_specs, actual_specs)
+
+        self.unset_key(self.instance_type_name, "k1")
+
+    def test_extra_specs_multiple(self):
+        two_items_extra_specs = {'k1': 'v1',
+                                'k3': 'v3'}
+
+        self._test_extra_specs_empty()
+
+        self.set_key(self.instance_type_name, "k1", "v1")
+        self.set_key(self.instance_type_name, "k3", "v3")
+        actual_specs = db.instance_type_extra_specs_get(
+                              context.get_admin_context(),
+                              self.instance_type_flavorid)
+        self.assertEquals(two_items_extra_specs, actual_specs)
+
+        self.unset_key(self.instance_type_name, "k1")
+        self.unset_key(self.instance_type_name, "k3")

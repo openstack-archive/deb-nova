@@ -24,19 +24,19 @@ import os
 import shutil
 import tarfile
 import tempfile
-from xml.etree import ElementTree
 
 import boto.s3.connection
 import eventlet
+from lxml import etree
 
-from nova import rpc
+from nova.api.ec2 import ec2utils
+import nova.cert.rpcapi
 from nova import exception
 from nova import flags
-from nova import image
-from nova import log as logging
+from nova.image import glance
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 from nova import utils
-from nova.api.ec2 import ec2utils
 
 
 LOG = logging.getLogger(__name__)
@@ -68,7 +68,8 @@ class S3ImageService(object):
     """Wraps an existing image service to support s3 based register."""
 
     def __init__(self, service=None, *args, **kwargs):
-        self.service = service or image.get_default_image_service()
+        self.cert_rpcapi = nova.cert.rpcapi.CertAPI()
+        self.service = service or glance.get_default_image_service()
         self.service.__init__(*args, **kwargs)
 
     def _translate_uuids_to_ids(self, context, images):
@@ -135,25 +136,16 @@ class S3ImageService(object):
         image = self.service.update(context, image_uuid, metadata, data)
         return self._translate_uuid_to_id(context, image)
 
-    def index(self, context):
+    def detail(self, context, **kwargs):
         #NOTE(bcwaldon): sort asc to make sure we assign lower ids
         # to older images
-        images = self.service.index(context, sort_dir='asc')
-        return self._translate_uuids_to_ids(context, images)
-
-    def detail(self, context):
-        #NOTE(bcwaldon): sort asc to make sure we assign lower ids
-        # to older images
-        images = self.service.detail(context, sort_dir='asc')
+        kwargs.setdefault('sort_dir', 'asc')
+        images = self.service.detail(context, **kwargs)
         return self._translate_uuids_to_ids(context, images)
 
     def show(self, context, image_id):
         image_uuid = ec2utils.id_to_glance_id(context, image_id)
         image = self.service.show(context, image_uuid)
-        return self._translate_uuid_to_id(context, image)
-
-    def show_by_name(self, context, name):
-        image = self.service.show_by_name(context, name)
         return self._translate_uuid_to_id(context, image)
 
     @staticmethod
@@ -180,7 +172,7 @@ class S3ImageService(object):
         return local_filename
 
     def _s3_parse_manifest(self, context, metadata, manifest):
-        manifest = ElementTree.fromstring(manifest)
+        manifest = etree.fromstring(manifest)
         image_format = 'ami'
         image_type = 'machine'
 
@@ -289,8 +281,18 @@ class S3ImageService(object):
             context.update_store()
             log_vars = {'image_location': image_location,
                         'image_path': image_path}
-            metadata['properties']['image_state'] = 'downloading'
-            self.service.update(context, image_uuid, metadata)
+
+            def _update_image_state(context, image_uuid, image_state):
+                metadata = {'properties': {'image_state': image_state}}
+                self.service.update(context, image_uuid, metadata,
+                                    purge_props=False)
+
+            def _update_image_data(context, image_uuid, image_data):
+                metadata = {}
+                self.service.update(context, image_uuid, metadata, image_data,
+                                    purge_props=False)
+
+            _update_image_state(context, image_uuid, 'downloading')
 
             try:
                 parts = []
@@ -311,12 +313,10 @@ class S3ImageService(object):
             except Exception:
                 LOG.exception(_("Failed to download %(image_location)s "
                                 "to %(image_path)s"), log_vars)
-                metadata['properties']['image_state'] = 'failed_download'
-                self.service.update(context, image_uuid, metadata)
+                _update_image_state(context, image_uuid, 'failed_download')
                 return
 
-            metadata['properties']['image_state'] = 'decrypting'
-            self.service.update(context, image_uuid, metadata)
+            _update_image_state(context, image_uuid, 'decrypting')
 
             try:
                 hex_key = manifest.find('image/ec2_encrypted_key').text
@@ -330,38 +330,33 @@ class S3ImageService(object):
             except Exception:
                 LOG.exception(_("Failed to decrypt %(image_location)s "
                                 "to %(image_path)s"), log_vars)
-                metadata['properties']['image_state'] = 'failed_decrypt'
-                self.service.update(context, image_uuid, metadata)
+                _update_image_state(context, image_uuid, 'failed_decrypt')
                 return
 
-            metadata['properties']['image_state'] = 'untarring'
-            self.service.update(context, image_uuid, metadata)
+            _update_image_state(context, image_uuid, 'untarring')
 
             try:
                 unz_filename = self._untarzip_image(image_path, dec_filename)
             except Exception:
                 LOG.exception(_("Failed to untar %(image_location)s "
                                 "to %(image_path)s"), log_vars)
-                metadata['properties']['image_state'] = 'failed_untar'
-                self.service.update(context, image_uuid, metadata)
+                _update_image_state(context, image_uuid, 'failed_untar')
                 return
 
-            metadata['properties']['image_state'] = 'uploading'
-            self.service.update(context, image_uuid, metadata)
+            _update_image_state(context, image_uuid, 'uploading')
             try:
                 with open(unz_filename) as image_file:
-                    self.service.update(context, image_uuid,
-                                        metadata, image_file)
+                    _update_image_data(context, image_uuid, image_file)
             except Exception:
                 LOG.exception(_("Failed to upload %(image_location)s "
                                 "to %(image_path)s"), log_vars)
-                metadata['properties']['image_state'] = 'failed_upload'
-                self.service.update(context, image_uuid, metadata)
+                _update_image_state(context, image_uuid, 'failed_upload')
                 return
 
-            metadata['properties']['image_state'] = 'available'
-            metadata['status'] = 'active'
-            self.service.update(context, image_uuid, metadata)
+            metadata = {'status': 'active',
+                        'properties': {'image_state': 'available'}}
+            self.service.update(context, image_uuid, metadata,
+                    purge_props=False)
 
             shutil.rmtree(image_path)
 
@@ -369,25 +364,22 @@ class S3ImageService(object):
 
         return image
 
-    @staticmethod
-    def _decrypt_image(context, encrypted_filename, encrypted_key,
+    def _decrypt_image(self, context, encrypted_filename, encrypted_key,
                        encrypted_iv, decrypted_filename):
         elevated = context.elevated()
         try:
-            key = rpc.call(elevated, FLAGS.cert_topic,
-                           {"method": "decrypt_text",
-                            "args": {"project_id": context.project_id,
-                                     "text": base64.b64encode(encrypted_key)}})
+            key = self.cert_rpcapi.decrypt_text(elevated,
+                    project_id=context.project_id,
+                    text=base64.b64encode(encrypted_key))
         except Exception, exc:
-            raise exception.Error(_('Failed to decrypt private key: %s')
-                                  % exc)
+            msg = _('Failed to decrypt private key: %s') % exc
+            raise exception.NovaException(msg)
         try:
-            iv = rpc.call(elevated, FLAGS.cert_topic,
-                          {"method": "decrypt_text",
-                           "args": {"project_id": context.project_id,
-                                    "text": base64.b64encode(encrypted_iv)}})
+            iv = self.cert_rpcapi.decrypt_text(elevated,
+                    project_id=context.project_id,
+                    text=base64.b64encode(encrypted_iv))
         except Exception, exc:
-            raise exception.Error(_('Failed to decrypt initialization '
+            raise exception.NovaException(_('Failed to decrypt initialization '
                                     'vector: %s') % exc)
 
         try:
@@ -398,7 +390,7 @@ class S3ImageService(object):
                           '-iv', '%s' % (iv,),
                           '-out', '%s' % (decrypted_filename,))
         except exception.ProcessExecutionError, exc:
-            raise exception.Error(_('Failed to decrypt image file '
+            raise exception.NovaException(_('Failed to decrypt image file '
                                     '%(image_file)s: %(err)s') %
                                     {'image_file': encrypted_filename,
                                      'err': exc.stdout})
@@ -410,7 +402,7 @@ class S3ImageService(object):
         for n in tar_file.getnames():
             if not os.path.abspath(os.path.join(path, n)).startswith(path):
                 tar_file.close()
-                raise exception.Error(_('Unsafe filenames in image'))
+                raise exception.NovaException(_('Unsafe filenames in image'))
         tar_file.close()
 
     @staticmethod

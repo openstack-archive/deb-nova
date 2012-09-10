@@ -23,9 +23,12 @@ import webob
 
 from nova.api.openstack.compute.contrib import security_groups
 from nova.api.openstack import wsgi
+from nova.api.openstack import xmlutil
+from nova import compute
 import nova.db
 from nova import exception
 from nova import flags
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -224,14 +227,15 @@ class TestSecurityGroups(test.TestCase):
 
     def test_create_security_group_quota_limit(self):
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups')
-        for num in range(1, FLAGS.quota_security_groups):
+        for num in range(1, FLAGS.quota_security_groups + 1):
             name = 'test%s' % num
             sg = security_group_template(name=name)
             res_dict = self.controller.create(req, {'security_group': sg})
             self.assertEqual(res_dict['security_group']['name'], name)
 
         sg = security_group_template()
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+        self.assertRaises(exception.SecurityGroupLimitExceeded,
+                          self.controller.create,
                           req, {'security_group': sg})
 
     def test_get_security_group_list(self):
@@ -284,6 +288,20 @@ class TestSecurityGroups(test.TestCase):
         res_dict = self.server_controller.index(req, FAKE_UUID)
 
         self.assertEquals(res_dict, expected)
+
+    def test_get_security_group_by_instance_non_existing(self):
+        self.stubs.Set(nova.db, 'instance_get', return_server_nonexistent)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                       return_server_nonexistent)
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/1/os-security-groups')
+        self.assertRaises(webob.exc.HTTPNotFound,
+                          self.server_controller.index, req, '1')
+
+    def test_get_security_group_by_instance_invalid_id(self):
+        req = fakes.HTTPRequest.blank(
+            '/v2/fake/servers/invalid/os-security-groups')
+        self.assertRaises(webob.exc.HTTPNotFound,
+                          self.server_controller.index, req, 'invalid')
 
     def test_get_security_group_by_id(self):
         sg = security_group_template(id=2, rules=[])
@@ -815,7 +833,7 @@ class TestSecurityGroupRules(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                           req, {'security_group_rule': rule})
 
-    def  _test_create_with_no_ports(self, proto):
+    def _test_create_with_no_ports(self, proto):
         rule = {'ip_protocol': proto, 'parent_group_id': '2', 'group_id': '1'}
 
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
@@ -844,7 +862,7 @@ class TestSecurityGroupRules(test.TestCase):
         self._test_create_with_no_ports_and_no_group('udp')
         self._test_create_with_no_ports('udp')
 
-    def  _test_create_with_ports(self, id_val, proto, from_port, to_port):
+    def _test_create_with_ports(self, id_val, proto, from_port, to_port):
         rule = {
             'ip_protocol': proto, 'from_port': from_port, 'to_port': to_port,
             'parent_group_id': '2', 'group_id': '1'
@@ -922,7 +940,8 @@ class TestSecurityGroupRules(test.TestCase):
             'ip_protocol': 'tcp', 'from_port': '121', 'to_port': '121',
             'parent_group_id': '2', 'group_id': '1'
         }
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+        self.assertRaises(exception.SecurityGroupLimitExceeded,
+                          self.controller.create,
                           req, {'security_group_rule': rule})
 
 
@@ -1183,3 +1202,136 @@ class TestSecurityGroupXMLSerializer(unittest.TestCase):
         self.assertEqual(len(groups), len(tree))
         for idx, child in enumerate(tree):
             self._verify_security_group(groups[idx], child)
+
+
+UUID1 = '00000000-0000-0000-0000-000000000001'
+UUID2 = '00000000-0000-0000-0000-000000000002'
+UUID3 = '00000000-0000-0000-0000-000000000003'
+
+
+def fake_compute_get_all(*args, **kwargs):
+    return [
+        fakes.stub_instance(1, uuid=UUID1,
+                            security_groups=[{'name': 'fake-0-0'},
+                                             {'name': 'fake-0-1'}]),
+        fakes.stub_instance(2, uuid=UUID2,
+                            security_groups=[{'name': 'fake-1-0'},
+                                             {'name': 'fake-1-1'}])
+    ]
+
+
+def fake_compute_get(*args, **kwargs):
+    return fakes.stub_instance(1, uuid=UUID3,
+                               security_groups=[{'name': 'fake-2-0'},
+                                                {'name': 'fake-2-1'}])
+
+
+def fake_compute_create(*args, **kwargs):
+    return ([fake_compute_get()], '')
+
+
+class SecurityGroupsOutputTest(test.TestCase):
+    content_type = 'application/json'
+
+    def setUp(self):
+        super(SecurityGroupsOutputTest, self).setUp()
+        fakes.stub_out_nw_api(self.stubs)
+        self.stubs.Set(compute.api.API, 'get', fake_compute_get)
+        self.stubs.Set(compute.api.API, 'get_all', fake_compute_get_all)
+        self.stubs.Set(compute.api.API, 'create', fake_compute_create)
+
+    def _make_request(self, url, body=None):
+        req = webob.Request.blank(url)
+        if body:
+            req.method = 'POST'
+            req.body = self._encode_body(body)
+        req.content_type = self.content_type
+        req.headers['Accept'] = self.content_type
+        res = req.get_response(fakes.wsgi_app())
+        return res
+
+    def _encode_body(self, body):
+        return jsonutils.dumps(body)
+
+    def _get_server(self, body):
+        return jsonutils.loads(body).get('server')
+
+    def _get_servers(self, body):
+        return jsonutils.loads(body).get('servers')
+
+    def _get_groups(self, server):
+        return server.get('security_groups')
+
+    def test_create(self):
+        url = '/v2/fake/servers'
+        image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
+        server = dict(name='server_test', imageRef=image_uuid, flavorRef=2)
+        res = self._make_request(url, {'server': server})
+        self.assertEqual(res.status_int, 202)
+        server = self._get_server(res.body)
+        for i, group in enumerate(self._get_groups(server)):
+            name = 'fake-2-%s' % i
+            self.assertEqual(group.get('name'), name)
+
+    def test_show(self):
+        url = '/v2/fake/servers/%s' % UUID3
+        res = self._make_request(url)
+
+        self.assertEqual(res.status_int, 200)
+        server = self._get_server(res.body)
+        for i, group in enumerate(self._get_groups(server)):
+            name = 'fake-2-%s' % i
+            self.assertEqual(group.get('name'), name)
+
+    def test_detail(self):
+        url = '/v2/fake/servers/detail'
+        res = self._make_request(url)
+
+        self.assertEqual(res.status_int, 200)
+        for i, server in enumerate(self._get_servers(res.body)):
+            for j, group in enumerate(self._get_groups(server)):
+                name = 'fake-%s-%s' % (i, j)
+                self.assertEqual(group.get('name'), name)
+
+    def test_no_instance_passthrough_404(self):
+
+        def fake_compute_get(*args, **kwargs):
+            raise exception.InstanceNotFound()
+
+        self.stubs.Set(compute.api.API, 'get', fake_compute_get)
+        url = '/v2/fake/servers/70f6db34-de8d-4fbd-aafb-4065bdfa6115'
+        res = self._make_request(url)
+
+        self.assertEqual(res.status_int, 404)
+
+
+class SecurityGroupsOutputXmlTest(SecurityGroupsOutputTest):
+    content_type = 'application/xml'
+
+    class MinimalCreateServerTemplate(xmlutil.TemplateBuilder):
+        def construct(self):
+            root = xmlutil.TemplateElement('server', selector='server')
+            root.set('name')
+            root.set('id')
+            root.set('imageRef')
+            root.set('flavorRef')
+            return xmlutil.MasterTemplate(root, 1,
+                                          nsmap={None: xmlutil.XMLNS_V11})
+
+    def _encode_body(self, body):
+        serializer = self.MinimalCreateServerTemplate()
+        return serializer.serialize(body)
+
+    def _get_server(self, body):
+        return etree.XML(body)
+
+    def _get_servers(self, body):
+        return etree.XML(body).getchildren()
+
+    def _get_groups(self, server):
+        # NOTE(vish): we are adding security groups without an extension
+        #             namespace so we don't break people using the existing
+        #             functionality, but that means we need to use find with
+        #             the existing server namespace.
+        namespace = server.nsmap[None]
+        return server.find('{%s}security_groups' % namespace).getchildren()

@@ -17,8 +17,8 @@
 from nova.compute import power_state
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova import utils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova.virt.baremetal import nodes
 
 FLAGS = flags.FLAGS
@@ -31,14 +31,14 @@ def read_domains(fname):
         f = open(fname, 'r')
         json = f.read()
         f.close()
-        domains = utils.loads(json)
+        domains = jsonutils.loads(json)
         return domains
     except IOError:
         raise exception.NotFound()
 
 
 def write_domains(fname, domains):
-    json = utils.dumps(domains)
+    json = jsonutils.dumps(domains)
     f = open(fname, 'w')
     f.write(json)
     f.close()
@@ -160,8 +160,6 @@ class BareMetalDom(object):
             self.domains.remove(fd)
             msg = _("Domains: %s")
             LOG.debug(msg % (self.domains))
-            msg = _("Nodes: %s")
-            LOG.debug(msg % (self.baremetal_nodes.nodes))
             self.store_domain()
             msg = _("After storing domains: %s")
             LOG.debug(msg % (self.domains))

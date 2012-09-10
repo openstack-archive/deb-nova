@@ -18,10 +18,10 @@ import webob
 
 from nova.api.openstack.compute.contrib import volumetypes
 from nova import exception
+from nova.openstack.common import log as logging
 from nova import test
-from nova import log as logging
-from nova.volume import volume_types
 from nova.tests.api.openstack import fakes
+from nova.volume import volume_types
 
 
 LOG = logging.getLogger(__name__)

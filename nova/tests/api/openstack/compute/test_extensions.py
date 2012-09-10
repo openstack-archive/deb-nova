@@ -16,21 +16,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
-import webob
-from lxml import etree
 import iso8601
+from lxml import etree
+import webob
 
 from nova.api.openstack import compute
-from nova.api.openstack import extensions as base_extensions
 from nova.api.openstack.compute import extensions as compute_extensions
+from nova.api.openstack import extensions as base_extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import flags
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
-from nova import utils
+
 
 FLAGS = flags.FLAGS
 
@@ -110,11 +109,14 @@ class StubExtensionManager(object):
         self.action_ext = action_ext
         self.request_ext = request_ext
         self.controller_ext = controller_ext
+        self.extra_resource_ext = None
 
     def get_resources(self):
         resource_exts = []
         if self.resource_ext:
             resource_exts.append(self.resource_ext)
+        if self.extra_resource_ext:
+            resource_exts.append(self.extra_resource_ext)
         return resource_exts
 
     def get_actions(self):
@@ -152,9 +154,9 @@ class ExtensionControllerTest(ExtensionTestCase):
     def setUp(self):
         super(ExtensionControllerTest, self).setUp()
         self.ext_list = [
-            "Accounts",
             "AdminActions",
             "Aggregates",
+            "AvailabilityZone",
             "Certificates",
             "Cloudpipe",
             "Console_output",
@@ -174,17 +176,17 @@ class ExtensionControllerTest(ExtensionTestCase):
             "Hosts",
             "Keypairs",
             "Multinic",
+            "MultipleCreate",
             "Networks",
             "QuotaClasses",
             "Quotas",
             "Rescue",
             "SchedulerHints",
             "SecurityGroups",
-            "ServerActionList",
             "ServerDiagnostics",
             "ServerStartStop",
             "SimpleTenantUsage",
-            "Users",
+            "UserData",
             "VirtualInterfaces",
             "Volumes",
             "VolumeTypes",
@@ -198,7 +200,7 @@ class ExtensionControllerTest(ExtensionTestCase):
         self.assertEqual(200, response.status_int)
 
         # Make sure we have all the extensions, extra extensions being OK.
-        data = json.loads(response.body)
+        data = jsonutils.loads(response.body)
         names = [str(x['name']) for x in data['extensions']
                  if str(x['name']) in self.ext_list]
         names.sort()
@@ -225,7 +227,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             url = '/fake/extensions/%s' % ext['alias']
             request = webob.Request.blank(url)
             response = request.get_response(app)
-            output = json.loads(response.body)
+            output = jsonutils.loads(response.body)
             self.assertEqual(output['extension']['alias'], ext['alias'])
 
     def test_get_extension_json(self):
@@ -234,7 +236,7 @@ class ExtensionControllerTest(ExtensionTestCase):
         response = request.get_response(app)
         self.assertEqual(200, response.status_int)
 
-        data = json.loads(response.body)
+        data = jsonutils.loads(response.body)
         self.assertEqual(data['extension'], {
                 "namespace": "http://www.fox.in.socks/api/ext/pie/v1.0",
                 "name": "Fox In Socks",
@@ -334,7 +336,7 @@ class ResourceExtensionTest(ExtensionTestCase):
         response = request.get_response(app)
         self.assertEqual(400, response.status_int)
         self.assertEqual('application/json', response.content_type)
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         expected = {
             "badRequest": {
                 "message": "All aboard the fail train!",
@@ -352,7 +354,7 @@ class ResourceExtensionTest(ExtensionTestCase):
         response = request.get_response(app)
         self.assertEqual(404, response.status_int)
         self.assertEqual('application/json', response.content_type)
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         expected = {
             "itemNotFound": {
                 "message": "The resource could not be found.",
@@ -384,8 +386,8 @@ class ExtensionManagerTest(ExtensionTestCase):
         app = compute.APIRouter()
         ext_mgr = compute_extensions.ExtensionManager()
         ext_mgr.register(InvalidExtension())
-        self.assertTrue('FOXNSOX' in ext_mgr.extensions)
-        self.assertTrue('THIRD' not in ext_mgr.extensions)
+        self.assertTrue(ext_mgr.is_loaded('FOXNSOX'))
+        self.assertFalse(ext_mgr.is_loaded('THIRD'))
 
 
 class ActionExtensionTest(ExtensionTestCase):
@@ -395,7 +397,7 @@ class ActionExtensionTest(ExtensionTestCase):
         request = webob.Request.blank(url)
         request.method = 'POST'
         request.content_type = 'application/json'
-        request.body = json.dumps(body)
+        request.body = jsonutils.dumps(body)
         response = request.get_response(app)
         return response
 
@@ -417,7 +419,7 @@ class ActionExtensionTest(ExtensionTestCase):
         response = self._send_server_action_request(url, body)
         self.assertEqual(400, response.status_int)
         self.assertEqual('application/json', response.content_type)
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         expected = {
             "badRequest": {
                 "message": "There is no such action: blah",
@@ -438,7 +440,7 @@ class ActionExtensionTest(ExtensionTestCase):
         response = self._send_server_action_request(url, body)
         self.assertEqual(400, response.status_int)
         self.assertEqual('application/json', response.content_type)
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         expected = {
             "badRequest": {
                 "message": "Tweedle fail",
@@ -466,7 +468,7 @@ class RequestExtensionTest(ExtensionTestCase):
         request.environ['api.version'] = '2'
         response = request.get_response(app)
         self.assertEqual(200, response.status_int)
-        response_data = json.loads(response.body)
+        response_data = jsonutils.loads(response.body)
         self.assertEqual('bluegoo', response_data['flavor']['googoose'])
 
     def test_get_resources_with_mgr(self):
@@ -476,7 +478,7 @@ class RequestExtensionTest(ExtensionTestCase):
         request.environ['api.version'] = '2'
         response = request.get_response(app)
         self.assertEqual(200, response.status_int)
-        response_data = json.loads(response.body)
+        response_data = jsonutils.loads(response.body)
         self.assertEqual('newblue', response_data['flavor']['googoose'])
         self.assertEqual("Pig Bands!", response_data['big_bands'])
 
@@ -515,6 +517,27 @@ class ControllerExtensionTest(ExtensionTestCase):
         self.assertEqual(200, response.status_int)
         self.assertEqual(extension_body, response.body)
 
+    def test_controller_extension_late_inherited_resource(self):
+        # Need a dict for the body to convert to a ResponseObject
+        controller = StubController(dict(foo=response_body))
+        parent_ext = base_extensions.ResourceExtension('tweedles', controller)
+
+        ext_controller = StubLateExtensionController(extension_body)
+        extension = StubControllerExtension()
+        cont_ext = base_extensions.ControllerExtension(extension, 'tweedles',
+                                                       ext_controller)
+
+        manager = StubExtensionManager(resource_ext=parent_ext,
+                                       controller_ext=cont_ext)
+        child_ext = base_extensions.ResourceExtension('beetles', controller,
+                                                      inherits='tweedles')
+        manager.extra_resource_ext = child_ext
+        app = compute.APIRouter(manager)
+        request = webob.Request.blank("/fake/beetles")
+        response = request.get_response(app)
+        self.assertEqual(200, response.status_int)
+        self.assertEqual(extension_body, response.body)
+
     def test_controller_action_extension_early(self):
         controller = StubActionController(response_body)
         actions = dict(action='POST')
@@ -530,7 +553,7 @@ class ControllerExtensionTest(ExtensionTestCase):
         request = webob.Request.blank("/fake/tweedles/foo/action")
         request.method = 'POST'
         request.headers['Content-Type'] = 'application/json'
-        request.body = json.dumps(dict(fooAction=True))
+        request.body = jsonutils.dumps(dict(fooAction=True))
         response = request.get_response(app)
         self.assertEqual(200, response.status_int)
         self.assertEqual(extension_body, response.body)
@@ -553,7 +576,7 @@ class ControllerExtensionTest(ExtensionTestCase):
         request = webob.Request.blank("/fake/tweedles/foo/action")
         request.method = 'POST'
         request.headers['Content-Type'] = 'application/json'
-        request.body = json.dumps(dict(fooAction=True))
+        request.body = jsonutils.dumps(dict(fooAction=True))
         response = request.get_response(app)
         self.assertEqual(200, response.status_int)
         self.assertEqual(extension_body, response.body)

@@ -16,37 +16,32 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import webob.exc
-
 from nova.api.ec2 import cloud
-from nova.api.ec2 import ec2utils
-from nova.api.ec2 import inst_state
-from nova.compute import power_state
-from nova.compute import vm_states
+from nova.compute import utils as compute_utils
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova.image import fake
-from nova import log as logging
-from nova import rpc
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import rpc
 from nova import test
-from nova import utils
+from nova.tests.image import fake
 
-LOG = logging.getLogger('nova.tests.ec2_validate')
+LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
 
 class EC2ValidateTestCase(test.TestCase):
     def setUp(self):
         super(EC2ValidateTestCase, self).setUp()
-        self.flags(connection_type='fake',
+        self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    stub_network=True)
 
         def dumb(*args, **kwargs):
             pass
 
-        self.stubs.Set(utils, 'usage_from_instance', dumb)
+        self.stubs.Set(compute_utils, 'notify_about_instance_usage', dumb)
         # set up our cloud
         self.cloud = cloud.CloudController()
 
@@ -55,7 +50,7 @@ class EC2ValidateTestCase(test.TestCase):
         self.scheduter = self.start_service('scheduler')
         self.network = self.start_service('network')
         self.volume = self.start_service('volume')
-        self.image_service = utils.import_object(FLAGS.image_service)
+        self.image_service = fake.FakeImageService()
 
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -85,8 +80,14 @@ class EC2ValidateTestCase(test.TestCase):
                         'type': 'machine',
                         'image_state': 'available'}}
 
+        def fake_detail(self, context, **kwargs):
+            image = fake_show(self, context, None)
+            image['name'] = kwargs.get('name')
+            return [image]
+
+        fake.stub_out_image_service(self.stubs)
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
-        self.stubs.Set(fake._FakeImageService, 'show_by_name', fake_show)
+        self.stubs.Set(fake._FakeImageService, 'detail', fake_detail)
 
         # NOTE(comstud): Make 'cast' behave like a 'call' which will
         # ensure that operations complete
@@ -98,6 +99,10 @@ class EC2ValidateTestCase(test.TestCase):
         db.api.s3_image_create(self.context,
                                '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6')
 
+    def tearDown(self):
+        super(EC2ValidateTestCase, self).tearDown()
+        fake.FakeImageService_reset()
+
     #EC2_API tests (InvalidInstanceID.Malformed)
     def test_console_output(self):
         for ec2_id, e in self.ec2_id_exception_map:
@@ -106,24 +111,7 @@ class EC2ValidateTestCase(test.TestCase):
                               context=self.context,
                               instance_id=[ec2_id])
 
-    def test_attach_volume(self):
-        for ec2_id, e in self.ec2_id_exception_map:
-            self.assertRaises(e,
-                              self.cloud.attach_volume,
-                              context=self.context,
-                              volume_id='i-1234',
-                              instance_id=ec2_id,
-                              device='/dev/vdc')
-        #missing instance error gets priority
-        for ec2_id, e in self.ec2_id_exception_map:
-            self.assertRaises(e,
-                              self.cloud.attach_volume,
-                              context=self.context,
-                              volume_id=ec2_id,
-                              instance_id='i-1234',
-                              device='/dev/vdc')
-
-    def test_describe_instance_ttribute(self):
+    def test_describe_instance_attribute(self):
         for ec2_id, e in self.ec2_id_exception_map:
             self.assertRaises(e,
                               self.cloud.describe_instance_attribute,

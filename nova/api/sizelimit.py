@@ -21,17 +21,17 @@ Request Body limiting middleware.
 import webob.dec
 import webob.exc
 
-from nova import context
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 from nova import wsgi
 
 
 #default request size is 112k
-max_request_body_size_opt = cfg.BoolOpt('osapi_max_request_body_size',
-        default=114688,
-        help='')
+max_request_body_size_opt = cfg.IntOpt('osapi_max_request_body_size',
+                                       default=114688,
+                                       help='the maximum body size '
+                                            'per each osapi request(bytes)')
 
 FLAGS = flags.FLAGS
 FLAGS.register_opt(max_request_body_size_opt)

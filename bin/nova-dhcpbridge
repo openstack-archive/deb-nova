@@ -38,10 +38,11 @@ gettext.install('nova', unicode=1)
 from nova import context
 from nova import db
 from nova import flags
-from nova import log as logging
-from nova import rpc
-from nova import utils
 from nova.network import linux_net
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import rpc
+from nova import utils
 
 FLAGS = flags.FLAGS
 
@@ -52,7 +53,7 @@ def add_lease(mac, ip_address):
     """Set the IP that was assigned by the DHCP server."""
     if FLAGS.fake_rabbit:
         LOG.debug(_("leasing ip"))
-        network_manager = utils.import_object(FLAGS.network_manager)
+        network_manager = importutils.import_object(FLAGS.network_manager)
         network_manager.lease_fixed_ip(context.get_admin_context(),
                                        ip_address)
     else:
@@ -74,7 +75,7 @@ def del_lease(mac, ip_address):
     """Called when a lease expires."""
     if FLAGS.fake_rabbit:
         LOG.debug(_("releasing ip"))
-        network_manager = utils.import_object(FLAGS.network_manager)
+        network_manager = importutils.import_object(FLAGS.network_manager)
         network_manager.release_fixed_ip(context.get_admin_context(),
                                          ip_address)
     else:
@@ -88,16 +89,15 @@ def init_leases(network_id):
     """Get the list of hosts for a network."""
     ctxt = context.get_admin_context()
     network_ref = db.network_get(ctxt, network_id)
-    network_manager = utils.import_object(FLAGS.network_manager)
+    network_manager = importutils.import_object(FLAGS.network_manager)
     return network_manager.get_dhcp_leases(ctxt, network_ref)
 
 
 def main():
     """Parse environment and arguments and call the approproate action."""
     flagfile = os.environ.get('FLAGFILE', FLAGS.dhcpbridge_flagfile)
-    utils.default_flagfile(flagfile)
-    argv = FLAGS(sys.argv)
-    logging.setup()
+    argv = flags.parse_args(sys.argv)
+    logging.setup("nova")
 
     if int(os.environ.get('TESTING', '0')):
         from nova.tests import fake_flags
@@ -106,10 +106,10 @@ def main():
     if action in ['add', 'del', 'old']:
         mac = argv[2]
         ip = argv[3]
-        msg = _("Called '%(action)s' for mac '%(mac)s' with ip '%(ip)s'") % \
-                    {"action": action,
-                     "mac": mac,
-                     "ip": ip}
+        msg = (_("Called '%(action)s' for mac '%(mac)s' with ip '%(ip)s'") %
+               {"action": action,
+                "mac": mac,
+                "ip": ip})
         LOG.debug(msg)
         globals()[action + '_lease'](mac, ip)
     else:

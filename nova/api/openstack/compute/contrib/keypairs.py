@@ -17,20 +17,19 @@
 
 """ Keypair management extension"""
 
-import string
-
 import webob
 import webob.exc
 
+from nova.api.openstack.compute import servers
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.api.openstack import extensions
-from nova import crypto
-from nova import db
+from nova.compute import api as compute_api
 from nova import exception
 
 
 authorize = extensions.extension_authorizer('compute', 'keypairs')
+soft_authorize = extensions.soft_extension_authorizer('compute', 'keypairs')
 
 
 class KeypairTemplate(xmlutil.TemplateBuilder):
@@ -49,26 +48,10 @@ class KeypairsTemplate(xmlutil.TemplateBuilder):
 
 
 class KeypairController(object):
+
     """ Keypair API controller for the OpenStack API """
-
-    # TODO(ja): both this file and nova.api.ec2.cloud.py have similar logic.
-    # move the common keypair logic to nova.compute.API?
-
-    def _gen_key(self):
-        """
-        Generate a key
-        """
-        private_key, public_key, fingerprint = crypto.generate_key_pair()
-        return {'private_key': private_key,
-                'public_key': public_key,
-                'fingerprint': fingerprint}
-
-    def _validate_keypair_name(self, value):
-        safechars = "_-" + string.digits + string.ascii_letters
-        clean_value = "".join(x for x in value if x in safechars)
-        if clean_value != value:
-            msg = _("Keypair name contains unsafe characters")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
+    def __init__(self):
+        self.api = compute_api.KeypairAPI()
 
     @wsgi.serializers(xml=KeypairTemplate)
     def create(self, req, body):
@@ -89,40 +72,29 @@ class KeypairController(object):
         authorize(context)
         params = body['keypair']
         name = params['name']
-        self._validate_keypair_name(name)
 
-        if not 0 < len(name) < 256:
-            msg = _('Keypair name must be between 1 and 255 characters long')
-            raise webob.exc.HTTPBadRequest(explanation=msg)
-        # NOTE(ja): generation is slow, so shortcut invalid name exception
         try:
-            db.key_pair_get(context, context.user_id, name)
+            if 'public_key' in params:
+                keypair = self.api.import_key_pair(context,
+                                              context.user_id, name,
+                                              params['public_key'])
+            else:
+                keypair = self.api.create_key_pair(context, context.user_id,
+                                                   name)
+
+            return {'keypair': keypair}
+
+        except exception.KeypairLimitExceeded:
+            msg = _("Quota exceeded, too many key pairs.")
+            raise webob.exc.HTTPRequestEntityTooLarge(
+                        explanation=msg,
+                        headers={'Retry-After': 0})
+        except exception.InvalidKeypair:
+            msg = _("Keypair data is invalid")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+        except exception.KeyPairExists:
             msg = _("Key pair '%s' already exists.") % name
             raise webob.exc.HTTPConflict(explanation=msg)
-        except exception.NotFound:
-            pass
-
-        keypair = {'user_id': context.user_id,
-                   'name': name}
-
-        # import if public_key is sent
-        if 'public_key' in params:
-            try:
-                fingerprint = crypto.generate_fingerprint(params['public_key'])
-            except exception.InvalidKeypair:
-                msg = _("Keypair data is invalid")
-                raise webob.exc.HTTPBadRequest(explanation=msg)
-
-            keypair['public_key'] = params['public_key']
-            keypair['fingerprint'] = fingerprint
-        else:
-            generated_key = self._gen_key()
-            keypair['private_key'] = generated_key['private_key']
-            keypair['public_key'] = generated_key['public_key']
-            keypair['fingerprint'] = generated_key['fingerprint']
-
-        db.key_pair_create(context, keypair)
-        return {'keypair': keypair}
 
     def delete(self, req, id):
         """
@@ -131,10 +103,19 @@ class KeypairController(object):
         context = req.environ['nova.context']
         authorize(context)
         try:
-            db.key_pair_destroy(context, context.user_id, id)
+            self.api.delete_key_pair(context, context.user_id, id)
         except exception.KeypairNotFound:
             raise webob.exc.HTTPNotFound()
         return webob.Response(status_int=202)
+
+    @wsgi.serializers(xml=KeypairTemplate)
+    def show(self, req, id):
+        """Return data for the given key name."""
+        context = req.environ['nova.context']
+        authorize(context)
+
+        keypair = self.api.get_key_pair(context, context.user_id, id)
+        return {'keypair': keypair}
 
     @wsgi.serializers(xml=KeypairsTemplate)
     def index(self, req):
@@ -143,7 +124,7 @@ class KeypairController(object):
         """
         context = req.environ['nova.context']
         authorize(context)
-        key_pairs = db.key_pair_get_all_by_user(context, context.user_id)
+        key_pairs = self.api.get_key_pairs(context, context.user_id)
         rval = []
         for key_pair in key_pairs:
             rval.append({'keypair': {
@@ -153,6 +134,51 @@ class KeypairController(object):
             }})
 
         return {'keypairs': rval}
+
+
+class ServerKeyNameTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = xmlutil.TemplateElement('server')
+        root.set('key_name', 'key_name')
+        return xmlutil.SlaveTemplate(root, 1)
+
+
+class ServersKeyNameTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = xmlutil.TemplateElement('servers')
+        elem = xmlutil.SubTemplateElement(root, 'server', selector='servers')
+        elem.set('key_name', 'key_name')
+        return xmlutil.SlaveTemplate(root, 1)
+
+
+class Controller(servers.Controller):
+
+    def _add_key_name(self, req, servers):
+        for server in servers:
+            db_server = req.get_db_instance(server['id'])
+            # server['id'] is guaranteed to be in the cache due to
+            # the core API adding it in its 'show'/'detail' methods.
+            server['key_name'] = db_server['key_name']
+
+    def _show(self, req, resp_obj):
+        if 'server' in resp_obj.obj:
+            resp_obj.attach(xml=ServerKeyNameTemplate())
+            server = resp_obj.obj['server']
+            self._add_key_name(req, [server])
+
+    @wsgi.extends
+    def show(self, req, resp_obj, id):
+        context = req.environ['nova.context']
+        if soft_authorize(context):
+            self._show(req, resp_obj)
+
+    @wsgi.extends
+    def detail(self, req, resp_obj):
+        context = req.environ['nova.context']
+        if 'servers' in resp_obj.obj and authorize(context):
+            resp_obj.attach(xml=ServersKeyNameTemplate())
+            servers = resp_obj.obj['servers']
+            self._add_key_name(req, servers)
 
 
 class Keypairs(extensions.ExtensionDescriptor):
@@ -169,6 +195,10 @@ class Keypairs(extensions.ExtensionDescriptor):
         res = extensions.ResourceExtension(
                 'os-keypairs',
                 KeypairController())
-
         resources.append(res)
         return resources
+
+    def get_controller_extensions(self):
+        controller = Controller(self.ext_mgr)
+        extension = extensions.ControllerExtension(self, 'servers', controller)
+        return [extension]

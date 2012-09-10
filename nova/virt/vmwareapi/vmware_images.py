@@ -17,10 +17,11 @@
 """
 Utility functions for Image transfer.
 """
+import StringIO
 
 from nova import exception
 from nova.image import glance
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import io_util
 from nova.virt.vmwareapi import read_write_util
 
@@ -29,8 +30,9 @@ LOG = logging.getLogger(__name__)
 QUEUE_BUFFER_SIZE = 10
 
 
-def start_transfer(read_file_handle, data_size, write_file_handle=None,
-                   glance_client=None, image_id=None, image_meta=None):
+def start_transfer(context, read_file_handle, data_size,
+        write_file_handle=None, image_service=None, image_id=None,
+        image_meta=None):
     """Start the data transfer from the reader to the writer.
     Reader writes to the pipe and the writer reads from the pipe. This means
     that the total transfer time boils down to the slower of the read/write
@@ -56,9 +58,9 @@ def start_transfer(read_file_handle, data_size, write_file_handle=None,
     # handle to Glance Client instance, but to be sure of the transfer we need
     # to be sure of the status of the image on glnace changing to active.
     # The GlanceWriteThread handles the same for us.
-    elif glance_client and image_id:
-        write_thread = io_util.GlanceWriteThread(thread_safe_pipe,
-                                         glance_client, image_id, image_meta)
+    elif image_service and image_id:
+        write_thread = io_util.GlanceWriteThread(context, thread_safe_pipe,
+                image_service, image_id, image_meta)
     # Start the read and write threads.
     read_event = read_thread.start()
     write_event = write_thread.start()
@@ -75,7 +77,7 @@ def start_transfer(read_file_handle, data_size, write_file_handle=None,
 
         # Log and raise the exception.
         LOG.exception(exc)
-        raise exception.Error(exc)
+        raise exception.NovaException(exc)
     finally:
         # No matter what, try closing the read and write handles, if it so
         # applies.
@@ -86,11 +88,14 @@ def start_transfer(read_file_handle, data_size, write_file_handle=None,
 
 def fetch_image(context, image, instance, **kwargs):
     """Download image from the glance image server."""
-    LOG.debug(_("Downloading image %s from glance image server") % image)
-    (glance_client, image_id) = glance.get_glance_client(context, image)
-    metadata, read_iter = glance_client.get_image(image_id)
-    read_file_handle = read_write_util.GlanceFileRead(read_iter)
+    LOG.debug(_("Downloading image %s from glance image server") % image,
+              instance=instance)
+    (image_service, image_id) = glance.get_remote_image_service(context, image)
+    metadata = image_service.show(context, image_id)
     file_size = int(metadata['size'])
+    f = StringIO.StringIO()
+    image_service.download(context, image_id, f)
+    read_file_handle = read_write_util.GlanceFileRead(f)
     write_file_handle = read_write_util.VMWareHTTPWriteFile(
                                 kwargs.get("host"),
                                 kwargs.get("data_center_name"),
@@ -100,12 +105,14 @@ def fetch_image(context, image, instance, **kwargs):
                                 file_size)
     start_transfer(read_file_handle, file_size,
                    write_file_handle=write_file_handle)
-    LOG.debug(_("Downloaded image %s from glance image server") % image)
+    LOG.debug(_("Downloaded image %s from glance image server") % image,
+              instance=instance)
 
 
 def upload_image(context, image, instance, **kwargs):
     """Upload the snapshotted vm disk file to Glance image server."""
-    LOG.debug(_("Uploading image %s to the Glance image server") % image)
+    LOG.debug(_("Uploading image %s to the Glance image server") % image,
+              instance=instance)
     read_file_handle = read_write_util.VmWareHTTPReadFile(
                                 kwargs.get("host"),
                                 kwargs.get("data_center_name"),
@@ -113,7 +120,7 @@ def upload_image(context, image, instance, **kwargs):
                                 kwargs.get("cookies"),
                                 kwargs.get("file_path"))
     file_size = read_file_handle.get_size()
-    (glance_client, image_id) = glance.get_glance_client(context, image)
+    (image_service, image_id) = glance.get_remote_image_service(context, image)
     # The properties and other fields that we need to set for the image.
     image_metadata = {"is_public": True,
                       "disk_format": "vmdk",
@@ -124,9 +131,10 @@ def upload_image(context, image, instance, **kwargs):
                                      "vmware_ostype": kwargs.get("os_type"),
                                      "vmware_image_version":
                                             kwargs.get("image_version")}}
-    start_transfer(read_file_handle, file_size, glance_client=glance_client,
+    start_transfer(read_file_handle, file_size, image_service=image_service,
                         image_id=image_id, image_meta=image_metadata)
-    LOG.debug(_("Uploaded image %s to the Glance image server") % image)
+    LOG.debug(_("Uploaded image %s to the Glance image server") % image,
+              instance=instance)
 
 
 def get_vmdk_size_and_properties(context, image, instance):
@@ -136,10 +144,11 @@ def get_vmdk_size_and_properties(context, image, instance):
     geometry of the disk created depends on the size.
     """
 
-    LOG.debug(_("Getting image size for the image %s") % image)
-    (glance_client, image_id) = glance.get_glance_client(context, image)
-    meta_data = glance_client.get_image_meta(image_id)
+    LOG.debug(_("Getting image size for the image %s") % image,
+              instance=instance)
+    (image_service, image_id) = glance.get_remote_image_service(context, image)
+    meta_data = image_service.show(context, image_id)
     size, properties = meta_data["size"], meta_data["properties"]
     LOG.debug(_("Got image size of %(size)s for the image %(image)s") %
-              locals())
+              locals(), instance=instance)
     return size, properties

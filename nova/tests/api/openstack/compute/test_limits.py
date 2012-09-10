@@ -18,20 +18,17 @@ Tests dealing with HTTP rate-limiting.
 """
 
 import httplib
-import json
 import StringIO
-import unittest
 from xml.dom import minidom
 
 from lxml import etree
-import stubout
 import webob
 
 from nova.api.openstack.compute import limits
 from nova.api.openstack.compute import views
-from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 import nova.context
+from nova.openstack.common import jsonutils
 from nova import test
 
 
@@ -57,10 +54,11 @@ class BaseLimitTestSuite(test.TestCase):
         self.stubs.Set(limits.Limit, "_get_time", self._get_time)
         self.absolute_limits = {}
 
-        def stub_get_project_quotas(context, project_id):
-            return self.absolute_limits
+        def stub_get_project_quotas(context, project_id, usages=True):
+            return dict((k, dict(limit=v))
+                        for k, v in self.absolute_limits.items())
 
-        self.stubs.Set(nova.quota, "get_project_quotas",
+        self.stubs.Set(nova.quota.QUOTAS, "get_project_quotas",
                        stub_get_project_quotas)
 
     def _get_time(self):
@@ -111,7 +109,7 @@ class LimitsControllerTest(BaseLimitTestSuite):
                 "absolute": {},
             },
         }
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body)
 
     def test_index_json(self):
@@ -122,6 +120,10 @@ class LimitsControllerTest(BaseLimitTestSuite):
             'ram': 512,
             'instances': 5,
             'cores': 21,
+            'gigabytes': 512,
+            'volumes': 5,
+            'key_pairs': 10,
+            'floating_ips': 10,
         }
         response = request.get_response(self.controller)
         expected = {
@@ -166,10 +168,14 @@ class LimitsControllerTest(BaseLimitTestSuite):
                     "maxTotalRAMSize": 512,
                     "maxTotalInstances": 5,
                     "maxTotalCores": 21,
+                    "maxTotalVolumeGigabytes": 512,
+                    "maxTotalVolumes": 5,
+                    "maxTotalKeypairs": 10,
+                    "maxTotalFloatingIps": 10,
                     },
             },
         }
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body)
 
     def _populate_limits_diff_regex(self, request):
@@ -220,13 +226,13 @@ class LimitsControllerTest(BaseLimitTestSuite):
                 "absolute": {},
             },
         }
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body)
 
     def _test_index_absolute_limits_json(self, expected):
         request = self._get_index_request()
         response = request.get_response(self.controller)
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body['limits']['absolute'])
 
     def test_index_ignores_extra_absolute_limits_json(self):
@@ -313,7 +319,7 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
         retry_after = int(response.headers['Retry-After'])
         self.assertAlmostEqual(retry_after, 60, 1)
 
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         expected = "Only 1 GET request(s) can be made to * every minute."
         value = body["overLimitFault"]["details"].strip()
         self.assertEqual(value, expected)
@@ -603,7 +609,7 @@ class WsgiLimiterTest(BaseLimitTestSuite):
 
     def _request_data(self, verb, path):
         """Get data decribing a limit request verb/path."""
-        return json.dumps({"verb": verb, "path": path})
+        return jsonutils.dumps({"verb": verb, "path": path})
 
     def _request(self, verb, url, username=None):
         """Make sure that POSTing to the given url causes the given username
@@ -729,6 +735,9 @@ def wire_HTTPConnection_to_WSGI(host, app):
 
     This method may be called multiple times to map different hosts to
     different apps.
+
+    This method returns the original HTTPConnection object, so that the caller
+    can restore the default HTTPConnection interface (for all hosts).
     """
     class HTTPConnectionDecorator(object):
         """Wraps the real HTTPConnection class so that when you instantiate
@@ -743,7 +752,9 @@ def wire_HTTPConnection_to_WSGI(host, app):
             else:
                 return self.wrapped(connection_host, *args, **kwargs)
 
+    oldHTTPConnection = httplib.HTTPConnection
     httplib.HTTPConnection = HTTPConnectionDecorator(httplib.HTTPConnection)
+    return oldHTTPConnection
 
 
 class WsgiLimiterProxyTest(BaseLimitTestSuite):
@@ -758,7 +769,8 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
         """
         super(WsgiLimiterProxyTest, self).setUp()
         self.app = limits.WsgiLimiter(TEST_LIMITS)
-        wire_HTTPConnection_to_WSGI("169.254.0.1:80", self.app)
+        self.oldHTTPConnection = (
+            wire_HTTPConnection_to_WSGI("169.254.0.1:80", self.app))
         self.proxy = limits.WsgiLimiterProxy("169.254.0.1:80")
 
     def test_200(self):
@@ -778,6 +790,10 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
                     "made to /delayed every minute.")
 
         self.assertEqual((delay, error), expected)
+
+    def tearDown(self):
+        # restore original HTTPConnection object
+        httplib.HTTPConnection = self.oldHTTPConnection
 
 
 class LimitsViewBuilderTest(test.TestCase):

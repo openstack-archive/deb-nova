@@ -15,13 +15,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
 import webob
 
 from nova.api.openstack.compute import server_metadata
+from nova.compute import rpcapi as compute_rpcapi
 import nova.db
 from nova import exception
 from nova import flags
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova import utils
@@ -39,8 +40,8 @@ def return_create_instance_metadata(context, server_id, metadata, delete):
 
 
 def return_server_metadata(context, server_id):
-    if not isinstance(server_id, int):
-        msg = 'id %s must be int in return server metadata' % server_id
+    if not isinstance(server_id, str) or not len(server_id) == 36:
+        msg = 'id %s must be a uuid in return server metadata' % server_id
         raise Exception(msg)
     return stub_server_metadata()
 
@@ -70,15 +71,25 @@ def stub_max_server_metadata():
 
 
 def return_server(context, server_id):
-    return {'id': server_id, 'name': 'fake'}
+    return {'id': server_id,
+            'uuid': '0cc3346e-9fef-4445-abe6-5d2b2690ec64',
+            'name': 'fake',
+            'locked': False}
 
 
 def return_server_by_uuid(context, server_uuid):
-    return {'id': 1, 'name': 'fake'}
+    return {'id': 1,
+            'uuid': '0cc3346e-9fef-4445-abe6-5d2b2690ec64',
+            'name': 'fake',
+            'locked': False}
 
 
 def return_server_nonexistant(context, server_id):
     raise exception.InstanceNotFound()
+
+
+def fake_change_instance_metadata(self, context, instance, diff):
+    pass
 
 
 class ServerMetaDataTest(test.TestCase):
@@ -92,6 +103,9 @@ class ServerMetaDataTest(test.TestCase):
 
         self.stubs.Set(nova.db, 'instance_metadata_get',
                        return_server_metadata)
+
+        self.stubs.Set(compute_rpcapi.ComputeAPI, 'change_instance_metadata',
+                       fake_change_instance_metadata)
 
         self.controller = server_metadata.Controller()
         self.uuid = str(utils.gen_uuid())
@@ -157,7 +171,8 @@ class ServerMetaDataTest(test.TestCase):
         self.assertEqual(None, res)
 
     def test_delete_nonexistant_server(self):
-        self.stubs.Set(nova.db, 'instance_get', return_server_nonexistant)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                       return_server_nonexistant)
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'DELETE'
         self.assertRaises(webob.exc.HTTPNotFound,
@@ -180,7 +195,7 @@ class ServerMetaDataTest(test.TestCase):
         req.method = 'POST'
         req.content_type = "application/json"
         body = {"metadata": {"key9": "value9"}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         res_dict = self.controller.create(req, self.uuid, body)
 
         body['metadata'].update({
@@ -200,12 +215,38 @@ class ServerMetaDataTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, req, self.uuid, None)
 
+    def test_create_item_empty_key(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url + '/key1')
+        req.method = 'PUT'
+        body = {"meta": {"": "value1"}}
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, req, self.uuid, body)
+
+    def test_create_item_key_too_long(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url + '/key1')
+        req.method = 'PUT'
+        body = {"meta": {("a" * 260): "value1"}}
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req, self.uuid, body)
+
     def test_create_nonexistant_server(self):
-        self.stubs.Set(nova.db, 'instance_get', return_server_nonexistant)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                       return_server_nonexistant)
         req = fakes.HTTPRequest.blank(self.url)
         req.method = 'POST'
         body = {"metadata": {"key1": "value1"}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPNotFound,
@@ -223,7 +264,7 @@ class ServerMetaDataTest(test.TestCase):
                 'key99': 'value99',
             },
         }
-        req.body = json.dumps(expected)
+        req.body = jsonutils.dumps(expected)
         res_dict = self.controller.update_all(req, self.uuid, expected)
 
         self.assertEqual(expected, res_dict)
@@ -235,7 +276,7 @@ class ServerMetaDataTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = "application/json"
         expected = {'metadata': {}}
-        req.body = json.dumps(expected)
+        req.body = jsonutils.dumps(expected)
         res_dict = self.controller.update_all(req, self.uuid, expected)
 
         self.assertEqual(expected, res_dict)
@@ -247,7 +288,7 @@ class ServerMetaDataTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = "application/json"
         expected = {'meta': {}}
-        req.body = json.dumps(expected)
+        req.body = jsonutils.dumps(expected)
 
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.update_all, req, self.uuid, expected)
@@ -259,7 +300,7 @@ class ServerMetaDataTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = "application/json"
         expected = {'metadata': ['asdf']}
-        req.body = json.dumps(expected)
+        req.body = jsonutils.dumps(expected)
 
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.update_all, req, self.uuid, expected)
@@ -270,7 +311,7 @@ class ServerMetaDataTest(test.TestCase):
         req.method = 'PUT'
         req.content_type = "application/json"
         body = {'metadata': {'key10': 'value10'}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
 
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.controller.update_all, req, '100', body)
@@ -281,18 +322,19 @@ class ServerMetaDataTest(test.TestCase):
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
         body = {"meta": {"key1": "value1"}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res_dict = self.controller.update(req, self.uuid, 'key1', body)
         expected = {'meta': {'key1': 'value1'}}
         self.assertEqual(expected, res_dict)
 
     def test_update_item_nonexistant_server(self):
-        self.stubs.Set(nova.db, 'instance_get', return_server_nonexistant)
+        self.stubs.Set(nova.db, 'instance_get_by_uuid',
+                       return_server_nonexistant)
         req = fakes.HTTPRequest.blank('/v1.1/fake/servers/asdf/metadata/key1')
         req.method = 'PUT'
         body = {"meta": {"key1": "value1"}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPNotFound,
@@ -308,13 +350,51 @@ class ServerMetaDataTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.update, req, self.uuid, 'key1', None)
 
+    def test_update_item_empty_key(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url + '/key1')
+        req.method = 'PUT'
+        body = {"meta": {"": "value1"}}
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.update, req, self.uuid, '', body)
+
+    def test_update_item_key_too_long(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url + '/key1')
+        req.method = 'PUT'
+        body = {"meta": {("a" * 260): "value1"}}
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.update,
+                          req, self.uuid, ("a" * 260), body)
+
+    def test_update_item_value_too_long(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url + '/key1')
+        req.method = 'PUT'
+        body = {"meta": {"key1": ("a" * 260)}}
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.update,
+                          req, self.uuid, "key1", body)
+
     def test_update_item_too_many_keys(self):
         self.stubs.Set(nova.db, 'instance_metadata_update',
                        return_create_instance_metadata)
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
         body = {"meta": {"key1": "value1", "key2": "value2"}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -326,7 +406,7 @@ class ServerMetaDataTest(test.TestCase):
         req = fakes.HTTPRequest.blank(self.url + '/bad')
         req.method = 'PUT'
         body = {"meta": {"key1": "value1"}}
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -340,10 +420,35 @@ class ServerMetaDataTest(test.TestCase):
             data['metadata']['key%i' % num] = "blah"
         req = fakes.HTTPRequest.blank(self.url)
         req.method = 'POST'
-        req.body = json.dumps(data)
+        req.body = jsonutils.dumps(data)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
+                          self.controller.create, req, self.uuid, data)
+
+    def test_invalid_metadata_items_on_create(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url)
+        req.method = 'POST'
+        req.headers["content-type"] = "application/json"
+
+        #test for long key
+        data = {"metadata": {"a" * 260: "value1"}}
+        req.body = jsonutils.dumps(data)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, req, self.uuid, data)
+
+        #test for long value
+        data = {"metadata": {"key": "v" * 260}}
+        req.body = jsonutils.dumps(data)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, req, self.uuid, data)
+
+        #test for empty key.
+        data = {"metadata": {"": "value1"}}
+        req.body = jsonutils.dumps(data)
+        self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, req, self.uuid, data)
 
     def test_too_many_metadata_items_on_update_item(self):
@@ -354,8 +459,37 @@ class ServerMetaDataTest(test.TestCase):
             data['metadata']['key%i' % num] = "blah"
         req = fakes.HTTPRequest.blank(self.url)
         req.method = 'PUT'
-        req.body = json.dumps(data)
+        req.body = jsonutils.dumps(data)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
+                          self.controller.update_all, req, self.uuid, data)
+
+    def test_invalid_metadata_items_on_update_item(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        data = {"metadata": {}}
+        for num in range(FLAGS.quota_metadata_items + 1):
+            data['metadata']['key%i' % num] = "blah"
+        req = fakes.HTTPRequest.blank(self.url)
+        req.method = 'PUT'
+        req.body = jsonutils.dumps(data)
+        req.headers["content-type"] = "application/json"
+
+        #test for long key
+        data = {"metadata": {"a" * 260: "value1"}}
+        req.body = jsonutils.dumps(data)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.update_all, req, self.uuid, data)
+
+        #test for long value
+        data = {"metadata": {"key": "v" * 260}}
+        req.body = jsonutils.dumps(data)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.update_all, req, self.uuid, data)
+
+        #test for empty key.
+        data = {"metadata": {"": "value1"}}
+        req.body = jsonutils.dumps(data)
+        self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.update_all, req, self.uuid, data)

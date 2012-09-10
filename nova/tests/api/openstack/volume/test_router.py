@@ -16,11 +16,11 @@
 
 from nova.api.openstack import volume
 from nova.api.openstack.volume import snapshots
-from nova.api.openstack.volume import volumes
 from nova.api.openstack.volume import versions
+from nova.api.openstack.volume import volumes
 from nova.api.openstack import wsgi
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import test
 from nova.tests.api.openstack import fakes
 

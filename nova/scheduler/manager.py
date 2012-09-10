@@ -27,11 +27,15 @@ from nova.compute import vm_states
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova import manager
-from nova.notifier import api as notifier
+from nova import notifications
 from nova.openstack.common import cfg
-from nova import utils
+from nova.openstack.common import excutils
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier
+from nova.openstack.common.rpc import common as rpc_common
+from nova import quota
 
 
 LOG = logging.getLogger(__name__)
@@ -43,27 +47,41 @@ scheduler_driver_opt = cfg.StrOpt('scheduler_driver',
 FLAGS = flags.FLAGS
 FLAGS.register_opt(scheduler_driver_opt)
 
+QUOTAS = quota.QUOTAS
+
 
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
 
+    RPC_API_VERSION = '1.5'
+
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         if not scheduler_driver:
             scheduler_driver = FLAGS.scheduler_driver
-        self.driver = utils.import_object(scheduler_driver)
+        self.driver = importutils.import_object(scheduler_driver)
         super(SchedulerManager, self).__init__(*args, **kwargs)
 
     def __getattr__(self, key):
         """Converts all method calls to use the schedule method"""
+        # NOTE(russellb) Because of what this is doing, we must be careful
+        # when changing the API of the scheduler drivers, as that changes
+        # the rpc API as well, and the version should be updated accordingly.
         return functools.partial(self._schedule, key)
 
     def get_host_list(self, context):
-        """Get a list of hosts from the HostManager."""
-        return self.driver.get_host_list()
+        """Get a list of hosts from the HostManager.
+
+        Currently unused, but left for backwards compatibility.
+        """
+        raise rpc_common.RPCException(message=_('Deprecated in version 1.0'))
 
     def get_service_capabilities(self, context):
-        """Get the normalized set of capabilities for this zone."""
-        return self.driver.get_service_capabilities()
+        """Get the normalized set of capabilities for this zone.
+
+        Has been unused since pre-essex, but remains for rpc API 1.X
+        completeness.
+        """
+        raise rpc_common.RPCException(message=_('Deprecated in version 1.0'))
 
     def update_service_capabilities(self, context, service_name=None,
             host=None, capabilities=None, **kwargs):
@@ -91,50 +109,83 @@ class SchedulerManager(manager.Manager):
         try:
             return driver_method(*args, **kwargs)
         except Exception as ex:
-            with utils.save_and_reraise_exception():
+            with excutils.save_and_reraise_exception():
+                request_spec = kwargs.get('request_spec', {})
                 self._set_vm_state_and_notify(method,
                                              {'vm_state': vm_states.ERROR},
-                                             context, ex, *args, **kwargs)
+                                             context, ex, request_spec)
 
-    def run_instance(self, context, topic, *args, **kwargs):
+    def run_instance(self, context, request_spec, admin_password,
+            injected_files, requested_networks, is_first_time,
+            filter_properties, reservations, topic=None):
         """Tries to call schedule_run_instance on the driver.
         Sets instance vm_state to ERROR on exceptions
         """
-        args = (context,) + args
         try:
-            return self.driver.schedule_run_instance(*args, **kwargs)
+            result = self.driver.schedule_run_instance(context,
+                    request_spec, admin_password, injected_files,
+                    requested_networks, is_first_time, filter_properties,
+                    reservations)
+            return result
         except exception.NoValidHost as ex:
             # don't reraise
             self._set_vm_state_and_notify('run_instance',
                                          {'vm_state': vm_states.ERROR},
-                                          context, ex, *args, **kwargs)
+                                          context, ex, request_spec)
+            if reservations:
+                QUOTAS.rollback(context, reservations)
         except Exception as ex:
-            with utils.save_and_reraise_exception():
+            with excutils.save_and_reraise_exception():
                 self._set_vm_state_and_notify('run_instance',
                                              {'vm_state': vm_states.ERROR},
-                                             context, ex, *args, **kwargs)
+                                             context, ex, request_spec)
+                if reservations:
+                    QUOTAS.rollback(context, reservations)
 
-    def prep_resize(self, context, topic, *args, **kwargs):
+    # FIXME(comstud): Remove 'update_db' in a future version.  It's only
+    # here for rpcapi backwards compatibility.
+    def prep_resize(self, context, image, request_spec, filter_properties,
+                    update_db=None, instance=None, instance_uuid=None,
+                    instance_type=None, instance_type_id=None,
+                    reservations=None, topic=None):
         """Tries to call schedule_prep_resize on the driver.
         Sets instance vm_state to ACTIVE on NoHostFound
         Sets vm_state to ERROR on other exceptions
         """
-        args = (context,) + args
+        if not instance:
+            instance = db.instance_get_by_uuid(context, instance_uuid)
+
+        if not instance_type:
+            instance_type = db.instance_type_get(context, instance_type_id)
+
         try:
-            return self.driver.schedule_prep_resize(*args, **kwargs)
+            kwargs = {
+                'context': context,
+                'image': image,
+                'request_spec': request_spec,
+                'filter_properties': filter_properties,
+                'instance': instance,
+                'instance_type': instance_type,
+                'reservations': reservations,
+            }
+            return self.driver.schedule_prep_resize(**kwargs)
         except exception.NoValidHost as ex:
             self._set_vm_state_and_notify('prep_resize',
                                          {'vm_state': vm_states.ACTIVE,
                                           'task_state': None},
-                                         context, ex, *args, **kwargs)
+                                         context, ex, request_spec)
+            if reservations:
+                QUOTAS.rollback(context, reservations)
         except Exception as ex:
-            with utils.save_and_reraise_exception():
+            with excutils.save_and_reraise_exception():
                 self._set_vm_state_and_notify('prep_resize',
                                              {'vm_state': vm_states.ERROR},
-                                             context, ex, *args, **kwargs)
+                                             context, ex, request_spec)
+                if reservations:
+                    QUOTAS.rollback(context, reservations)
 
     def _set_vm_state_and_notify(self, method, updates, context, ex,
-                                *args, **kwargs):
+                                 request_spec):
         """changes VM state and notifies"""
         # FIXME(comstud): Re-factor this somehow. Not sure this belongs in the
         # scheduler manager like this. We should make this easier.
@@ -150,15 +201,19 @@ class SchedulerManager(manager.Manager):
         LOG.warning(_("Failed to schedule_%(method)s: %(ex)s") % locals())
 
         vm_state = updates['vm_state']
-        request_spec = kwargs.get('request_spec', {})
         properties = request_spec.get('instance_properties', {})
         instance_uuid = properties.get('uuid', {})
 
         if instance_uuid:
             state = vm_state.upper()
-            msg = _("Setting instance %(instance_uuid)s to %(state)s state.")
-            LOG.warning(msg % locals())
-            db.instance_update(context, instance_uuid, updates)
+            LOG.warning(_('Setting instance to %(state)s state.'), locals(),
+                        instance_uuid=instance_uuid)
+
+            # update instance state and notify on the transition
+            (old_ref, new_ref) = db.instance_update_and_get_original(context,
+                    instance_uuid, updates)
+            notifications.send_update(context, old_ref, new_ref,
+                    service="scheduler")
 
         payload = dict(request_spec=request_spec,
                        instance_properties=properties,
@@ -167,7 +222,7 @@ class SchedulerManager(manager.Manager):
                        method=method,
                        reason=ex)
 
-        notifier.notify(notifier.publisher_id("scheduler"),
+        notifier.notify(context, notifier.publisher_id("scheduler"),
                         'scheduler.' + method, notifier.ERROR, payload)
 
     # NOTE (masumotok) : This method should be moved to nova.api.ec2.admin.
@@ -227,3 +282,7 @@ class SchedulerManager(manager.Manager):
                                  'ephemeral_gb': sum(ephemeral)}
 
         return {'resource': resource, 'usage': usage}
+
+    @manager.periodic_task
+    def _expire_reservations(self, context):
+        QUOTAS.expire(context)

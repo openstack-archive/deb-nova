@@ -19,15 +19,16 @@ import functools
 import mox
 import StringIO
 
-from nova import flags
-from nova import utils
-from nova import test
 from nova.compute import power_state
-from nova.tests import fake_utils
 from nova import exception
+from nova import flags
+from nova.openstack.common import jsonutils
+from nova import test
+from nova.tests import fake_utils
 
-from nova.virt.baremetal import proxy
 from nova.virt.baremetal import dom
+from nova.virt.baremetal import driver
+
 
 FLAGS = flags.FLAGS
 
@@ -95,8 +96,8 @@ class DomainReadWriteTestCase(test.TestCase):
 
     def assertJSONEquals(self, x, y):
         """Check if two json strings represent the equivalent Python object"""
-        self.assertEquals(utils.loads(x), utils.loads(y))
-        return utils.loads(x) == utils.loads(y)
+        self.assertEquals(jsonutils.loads(x), jsonutils.loads(y))
+        return jsonutils.loads(x) == jsonutils.loads(y)
 
     def test_write_domain(self):
         """Write the domain to file"""
@@ -174,18 +175,14 @@ class BareMetalDomTestCase(test.TestCase):
         """Check to see that all entries in the domain list are removed
         except for the one that is in the running state"""
 
-        fake_file = StringIO.StringIO()
-
         domains = [dict(node_id=1, name='i-00000001',
                         status=power_state.NOSTATE),
               dict(node_id=2, name='i-00000002', status=power_state.RUNNING),
-              dict(node_id=3, name='i-00000003', status=power_state.BLOCKED),
-              dict(node_id=4, name='i-00000004', status=power_state.PAUSED),
-              dict(node_id=5, name='i-00000005', status=power_state.SHUTDOWN),
-              dict(node_id=6, name='i-00000006', status=power_state.SHUTOFF),
-              dict(node_id=7, name='i-00000007', status=power_state.CRASHED),
-              dict(node_id=8, name='i-00000008', status=power_state.SUSPENDED),
-              dict(node_id=9, name='i-00000009', status=power_state.FAILED)]
+              dict(node_id=3, name='i-00000003', status=power_state.PAUSED),
+              dict(node_id=5, name='i-00000004', status=power_state.SHUTDOWN),
+              dict(node_id=7, name='i-00000005', status=power_state.CRASHED),
+              dict(node_id=8, name='i-00000006', status=power_state.SUSPENDED),
+              dict(node_id=9, name='i-00000007', status=power_state.NOSTATE)]
 
         # Create the mock objects
         self.mox.StubOutWithMock(dom, 'read_domains')
@@ -229,7 +226,7 @@ class BareMetalDomTestCase(test.TestCase):
         self.assertEquals(bmdom.find_domain('instance-00000001'), domain)
 
 
-class ProxyBareMetalTestCase(test.TestCase):
+class BareMetalTestCase(test.TestCase):
 
     test_ip = '10.11.12.13'
     test_instance = {'memory_kb': '1024000',
@@ -243,7 +240,7 @@ class ProxyBareMetalTestCase(test.TestCase):
                      'instance_type_id': '5'}  # m1.small
 
     def setUp(self):
-        super(ProxyBareMetalTestCase, self).setUp()
+        super(BareMetalTestCase, self).setUp()
         self.flags(baremetal_driver='fake')
         fake_utils.stub_out_utils_execute(self.stubs)
 
@@ -260,7 +257,7 @@ class ProxyBareMetalTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         # Code under test
-        conn = proxy.get_connection(True)
+        conn = driver.BareMetalDriver(True)
         # TODO(mikalstill): this is not a very good fake instance
         info = conn.get_info({'name': 'instance-00000001'})
 

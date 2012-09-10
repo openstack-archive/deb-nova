@@ -1,3 +1,5 @@
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
 # Copyright (c) 2011 OpenStack, LLC.
 # All Rights Reserved.
 #
@@ -25,8 +27,9 @@ import json
 import os
 
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 
 
 scheduler_json_config_location_opt = cfg.StrOpt(
@@ -78,7 +81,7 @@ class SchedulerOptions(object):
 
     def _get_time_now(self):
         """Get current UTC. Broken out for testing."""
-        return datetime.datetime.utcnow()
+        return timeutils.utcnow()
 
     def get_configuration(self, filename=None):
         """Check the json file for changes and load it if needed."""

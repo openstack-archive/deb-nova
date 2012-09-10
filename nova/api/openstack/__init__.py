@@ -25,7 +25,8 @@ import webob.dec
 import webob.exc
 
 from nova.api.openstack import wsgi
-from nova import log as logging
+from nova.openstack.common import log as logging
+from nova import utils
 from nova import wsgi as base_wsgi
 
 
@@ -35,25 +36,53 @@ LOG = logging.getLogger(__name__)
 class FaultWrapper(base_wsgi.Middleware):
     """Calls down the middleware stack, making exceptions into faults."""
 
+    _status_to_type = {}
+
+    @staticmethod
+    def status_to_type(status):
+        if not FaultWrapper._status_to_type:
+            for clazz in utils.walk_class_hierarchy(webob.exc.HTTPError):
+                FaultWrapper._status_to_type[clazz.code] = clazz
+        return FaultWrapper._status_to_type.get(
+                                  status, webob.exc.HTTPInternalServerError)()
+
+    def _error(self, inner, req):
+        LOG.exception(_("Caught error: %s"), unicode(inner))
+
+        safe = getattr(inner, 'safe', False)
+        headers = getattr(inner, 'headers', None)
+        status = getattr(inner, 'code', 500)
+        if status is None:
+            status = 500
+
+        msg_dict = dict(url=req.url, status=status)
+        LOG.info(_("%(url)s returned with HTTP %(status)d") % msg_dict)
+        outer = self.status_to_type(status)
+        if headers:
+            outer.headers = headers
+        # NOTE(johannes): We leave the explanation empty here on
+        # purpose. It could possibly have sensitive information
+        # that should not be returned back to the user. See
+        # bugs 868360 and 874472
+        # NOTE(eglynn): However, it would be over-conservative and
+        # inconsistent with the EC2 API to hide every exception,
+        # including those that are safe to expose, see bug 1021373
+        if safe:
+            outer.explanation = '%s: %s' % (inner.__class__.__name__,
+                                            unicode(inner))
+        return wsgi.Fault(outer)
+
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
         try:
             return req.get_response(self.application)
         except Exception as ex:
-            LOG.exception(_("Caught error: %s"), unicode(ex))
-            msg_dict = dict(url=req.url, status=500)
-            LOG.info(_("%(url)s returned with HTTP %(status)d") % msg_dict)
-            exc = webob.exc.HTTPInternalServerError()
-            # NOTE(johannes): We leave the explanation empty here on
-            # purpose. It could possibly have sensitive information
-            # that should not be returned back to the user. See
-            # bugs 868360 and 874472
-            return wsgi.Fault(exc)
+            return self._error(ex, req)
 
 
 class APIMapper(routes.Mapper):
     def routematch(self, url=None, environ=None):
-        if url is "":
+        if url == "":
             result = self._match("", environ)
             return result[0], result[1]
         return routes.Mapper.routematch(self, url, environ)
@@ -95,7 +124,7 @@ class APIRouter(base_wsgi.Router):
 
         mapper = ProjectMapper()
         self.resources = {}
-        self._setup_routes(mapper)
+        self._setup_routes(mapper, ext_mgr)
         self._setup_ext_routes(mapper, ext_mgr)
         self._setup_extensions(ext_mgr)
         super(APIRouter, self).__init__(mapper)
@@ -105,7 +134,13 @@ class APIRouter(base_wsgi.Router):
             LOG.debug(_('Extended resource: %s'),
                       resource.collection)
 
-            wsgi_resource = wsgi.Resource(resource.controller)
+            inherits = None
+            if resource.inherits:
+                inherits = self.resources.get(resource.inherits)
+                if not resource.controller:
+                    resource.controller = inherits.controller
+            wsgi_resource = wsgi.Resource(resource.controller,
+                                          inherits=inherits)
             self.resources[resource.collection] = wsgi_resource
             kargs = dict(
                 controller=wsgi_resource,
@@ -139,5 +174,5 @@ class APIRouter(base_wsgi.Router):
             resource.register_actions(controller)
             resource.register_extensions(controller)
 
-    def _setup_routes(self, mapper):
+    def _setup_routes(self, mapper, ext_mgr):
         raise NotImplementedError

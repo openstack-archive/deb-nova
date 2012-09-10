@@ -15,18 +15,17 @@
 
 """The volumes extension."""
 
-from webob import exc
 import webob
+from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack import extensions
-from nova.api.openstack.compute import servers
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import volume
 from nova.volume import volume_types
 
@@ -57,7 +56,9 @@ def _translate_volume_summary_view(context, vol):
     d['createdAt'] = vol['created_at']
 
     if vol['attach_status'] == 'attached':
-        d['attachments'] = [_translate_attachment_detail_view(context, vol)]
+        d['attachments'] = [_translate_attachment_detail_view(vol['id'],
+            vol['instance_uuid'],
+            vol['mountpoint'])]
     else:
         d['attachments'] = [{}]
 
@@ -218,34 +219,36 @@ class VolumeController(object):
         #             trying to lazy load, but for now we turn it into
         #             a dict to avoid an error.
         retval = _translate_volume_detail_view(context, dict(new_volume))
+        result = {'volume': retval}
 
-        return {'volume': retval}
+        location = '%s/%s' % (req.url, new_volume['id'])
+
+        return wsgi.ResponseObject(result, headers=dict(location=location))
 
 
-def _translate_attachment_detail_view(_context, vol):
+def _translate_attachment_detail_view(volume_id, instance_uuid, mountpoint):
     """Maps keys for attachment details view."""
 
-    d = _translate_attachment_summary_view(_context, vol)
+    d = _translate_attachment_summary_view(volume_id,
+            instance_uuid,
+            mountpoint)
 
     # No additional data / lookups at the moment
-
     return d
 
 
-def _translate_attachment_summary_view(_context, vol):
+def _translate_attachment_summary_view(volume_id, instance_uuid, mountpoint):
     """Maps keys for attachment summary view."""
     d = {}
-
-    volume_id = vol['id']
 
     # NOTE(justinsb): We use the volume id as the id of the attachment object
     d['id'] = volume_id
 
     d['volumeId'] = volume_id
-    if vol.get('instance'):
-        d['serverId'] = vol['instance']['uuid']
-    if vol.get('mountpoint'):
-        d['device'] = vol['mountpoint']
+
+    d['serverId'] = instance_uuid
+    if mountpoint:
+        d['device'] = mountpoint
 
     return d
 
@@ -284,7 +287,6 @@ class VolumeAttachmentController(object):
 
     def __init__(self):
         self.compute_api = compute.API()
-        self.volume_api = volume.API()
         super(VolumeAttachmentController, self).__init__()
 
     @wsgi.serializers(xml=VolumeAttachmentsTemplate)
@@ -301,18 +303,31 @@ class VolumeAttachmentController(object):
 
         volume_id = id
         try:
-            vol = self.volume_api.get(context, volume_id)
+            instance = self.compute_api.get(context, server_id)
         except exception.NotFound:
+            raise exc.HTTPNotFound()
+
+        bdms = self.compute_api.get_instance_bdms(context, instance)
+
+        if not bdms:
+            LOG.debug(_("Instance %s is not attached."), server_id)
+            raise exc.HTTPNotFound()
+
+        assigned_mountpoint = None
+
+        for bdm in bdms:
+            if bdm['volume_id'] == volume_id:
+                assigned_mountpoint = bdm['device_name']
+                break
+
+        if assigned_mountpoint is None:
             LOG.debug("volume_id not found")
             raise exc.HTTPNotFound()
 
-        instance = vol['instance']
-        if instance is None or str(instance['uuid']) != server_id:
-            LOG.debug("instance_id != server_id")
-            raise exc.HTTPNotFound()
-
-        return {'volumeAttachment': _translate_attachment_detail_view(context,
-                                                                      vol)}
+        return {'volumeAttachment': _translate_attachment_detail_view(
+            volume_id,
+            instance['uuid'],
+            assigned_mountpoint)}
 
     @wsgi.serializers(xml=VolumeAttachmentTemplate)
     def create(self, req, server_id, body):
@@ -324,7 +339,7 @@ class VolumeAttachmentController(object):
             raise exc.HTTPUnprocessableEntity()
 
         volume_id = body['volumeAttachment']['volumeId']
-        device = body['volumeAttachment']['device']
+        device = body['volumeAttachment'].get('device')
 
         msg = _("Attach volume %(volume_id)s to instance %(server_id)s"
                 " at %(device)s") % locals()
@@ -332,15 +347,17 @@ class VolumeAttachmentController(object):
 
         try:
             instance = self.compute_api.get(context, server_id)
-            self.compute_api.attach_volume(context, instance,
-                                           volume_id, device)
+            device = self.compute_api.attach_volume(context, instance,
+                                                    volume_id, device)
         except exception.NotFound:
             raise exc.HTTPNotFound()
 
         # The attach is async
         attachment = {}
         attachment['id'] = volume_id
+        attachment['serverId'] = server_id
         attachment['volumeId'] = volume_id
+        attachment['device'] = device
 
         # NOTE(justinsb): And now, we have a problem...
         # The attach is async, so there's a window in which we don't see
@@ -366,19 +383,28 @@ class VolumeAttachmentController(object):
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
 
         try:
-            vol = self.volume_api.get(context, volume_id)
+            instance = self.compute_api.get(context, server_id)
         except exception.NotFound:
             raise exc.HTTPNotFound()
 
-        instance = vol['instance']
-        if instance is None or str(instance['uuid']) != server_id:
-            LOG.debug("instance_id != server_id")
+        bdms = self.compute_api.get_instance_bdms(context, instance)
+
+        if not bdms:
+            LOG.debug(_("Instance %s is not attached."), server_id)
             raise exc.HTTPNotFound()
 
-        self.compute_api.detach_volume(context,
-                                       volume_id=volume_id)
+        found = False
+        for bdm in bdms:
+            if bdm['volume_id'] == volume_id:
+                self.compute_api.detach_volume(context,
+                    volume_id=volume_id)
+                found = True
+                break
 
-        return webob.Response(status_int=202)
+        if not found:
+            raise exc.HTTPNotFound()
+        else:
+            return webob.Response(status_int=202)
 
     def _items(self, req, server_id, entity_maker):
         """Returns a list of attachments, transformed through entity_maker."""
@@ -390,17 +416,17 @@ class VolumeAttachmentController(object):
         except exception.NotFound:
             raise exc.HTTPNotFound()
 
-        volumes = instance['volumes']
-        limited_list = common.limited(volumes, req)
-        res = [entity_maker(context, vol) for vol in limited_list]
-        return {'volumeAttachments': res}
+        bdms = self.compute_api.get_instance_bdms(context, instance)
+        limited_list = common.limited(bdms, req)
+        results = []
 
+        for bdm in limited_list:
+            if bdm['volume_id']:
+                results.append(entity_maker(bdm['volume_id'],
+                        bdm['instance_uuid'],
+                        bdm['device_name']))
 
-class BootFromVolumeController(servers.Controller):
-    """The boot from volume API controller for the OpenStack API."""
-
-    def _get_block_device_mapping(self, data):
-        return data.get('block_device_mapping')
+        return {'volumeAttachments': results}
 
 
 def _translate_snapshot_detail_view(context, vol):
@@ -566,7 +592,7 @@ class Volumes(extensions.ExtensionDescriptor):
         resources.append(res)
 
         res = extensions.ResourceExtension('os-volumes_boot',
-                                           BootFromVolumeController())
+                                           inherits='servers')
         resources.append(res)
 
         res = extensions.ResourceExtension('os-snapshots',

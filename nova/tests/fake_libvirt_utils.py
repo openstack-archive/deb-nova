@@ -14,7 +14,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import os
 import StringIO
+
 
 files = {}
 disk_sizes = {}
@@ -33,10 +35,6 @@ def create_cow_image(backing_file, path):
     pass
 
 
-def get_disk_size(path):
-    return disk_sizes.get(path, 1024 * 1024 * 20)
-
-
 def get_disk_backing_file(path):
     return disk_backing_files.get(path, None)
 
@@ -46,6 +44,22 @@ def copy_image(src, dest):
 
 
 def mkfs(fs, path):
+    pass
+
+
+def resize2fs(path):
+    pass
+
+
+def create_lvm_image(vg, lv, size, sparse=False):
+    pass
+
+
+def volume_group_free_space(vg):
+    pass
+
+
+def remove_logical_volumes(*paths):
     pass
 
 
@@ -89,16 +103,15 @@ def file_open(path, mode=None):
 
 
 def load_file(path):
-    return ''
+    if os.path.exists(path):
+        with open(path, 'r') as fp:
+            return fp.read()
+    else:
+        return ''
 
 
 def file_delete(path):
     return True
-
-
-def get_open_port(start_port, end_port):
-    # Return the port in the middle
-    return int((start_port + end_port) / 2)
 
 
 def get_fs_info(path):

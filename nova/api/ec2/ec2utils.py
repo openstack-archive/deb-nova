@@ -18,12 +18,13 @@
 
 import re
 
+from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova import network
 from nova.network import model as network_model
+from nova.openstack.common import log as logging
+from nova import utils
 
 
 FLAGS = flags.FLAGS
@@ -92,19 +93,13 @@ def image_ec2_id(image_id, image_type='ami'):
 
 
 def get_ip_info_for_instance_from_nw_info(nw_info):
-    ip_info = dict(fixed_ips=[], fixed_ip6s=[], floating_ips=[])
-    for vif in nw_info:
-        vif_fixed_ips = vif.fixed_ips()
-
-        fixed_ips = [ip['address']
-                     for ip in vif_fixed_ips if ip['version'] == 4]
-        fixed_ip6s = [ip['address']
-                      for ip in vif_fixed_ips if ip['version'] == 6]
-        floating_ips = [ip['address']
-                        for ip in vif.floating_ips()]
-        ip_info['fixed_ips'].extend(fixed_ips)
-        ip_info['fixed_ip6s'].extend(fixed_ip6s)
-        ip_info['floating_ips'].extend(floating_ips)
+    ip_info = {}
+    fixed_ips = nw_info.fixed_ips()
+    ip_info['fixed_ips'] = [ip['address'] for ip in fixed_ips
+                                          if ip['version'] == 4]
+    ip_info['fixed_ip6s'] = [ip['address'] for ip in fixed_ips
+                                           if ip['version'] == 6]
+    ip_info['floating_ips'] = [ip['address'] for ip in nw_info.floating_ips()]
 
     return ip_info
 
@@ -132,16 +127,102 @@ def id_to_ec2_id(instance_id, template='i-%08x'):
     return template % int(instance_id)
 
 
-def id_to_ec2_snap_id(instance_id):
-    """Convert an snapshot ID (int) to an ec2 snapshot ID
-    (snap-[base 16 number])"""
-    return id_to_ec2_id(instance_id, 'snap-%08x')
+def id_to_ec2_inst_id(instance_id):
+    """Get or create an ec2 instance ID (i-[base 16 number]) from uuid."""
+    if utils.is_uuid_like(instance_id):
+        ctxt = context.get_admin_context()
+        int_id = get_int_id_from_instance_uuid(ctxt, instance_id)
+        return id_to_ec2_id(int_id)
+    else:
+        return id_to_ec2_id(instance_id)
 
 
-def id_to_ec2_vol_id(instance_id):
-    """Convert an volume ID (int) to an ec2 volume ID (vol-[base 16 number])"""
-    return id_to_ec2_id(instance_id, 'vol-%08x')
+def ec2_inst_id_to_uuid(context, ec2_id):
+    """"Convert an instance id to  uuid."""
+    int_id = ec2_id_to_id(ec2_id)
+    return get_instance_uuid_from_int_id(context, int_id)
 
+
+def get_instance_uuid_from_int_id(context, int_id):
+    return db.get_instance_uuid_by_ec2_id(context, int_id)
+
+
+def id_to_ec2_snap_id(snapshot_id):
+    """Get or create an ec2 volume ID (vol-[base 16 number]) from uuid."""
+    if utils.is_uuid_like(snapshot_id):
+        ctxt = context.get_admin_context()
+        int_id = get_int_id_from_snapshot_uuid(ctxt, snapshot_id)
+        return id_to_ec2_id(int_id, 'snap-%08x')
+    else:
+        return id_to_ec2_id(snapshot_id, 'snap-%08x')
+
+
+def id_to_ec2_vol_id(volume_id):
+    """Get or create an ec2 volume ID (vol-[base 16 number]) from uuid."""
+    if utils.is_uuid_like(volume_id):
+        ctxt = context.get_admin_context()
+        int_id = get_int_id_from_volume_uuid(ctxt, volume_id)
+        return id_to_ec2_id(int_id, 'vol-%08x')
+    else:
+        return id_to_ec2_id(volume_id, 'vol-%08x')
+
+
+def ec2_vol_id_to_uuid(ec2_id):
+    """Get the cooresponding UUID for the given ec2-id."""
+    ctxt = context.get_admin_context()
+
+    # NOTE(jgriffith) first strip prefix to get just the numeric
+    int_id = ec2_id_to_id(ec2_id)
+    return get_volume_uuid_from_int_id(ctxt, int_id)
+
+
+def get_int_id_from_instance_uuid(context, instance_uuid):
+    if instance_uuid is None:
+        return
+    try:
+        return db.get_ec2_instance_id_by_uuid(context, instance_uuid)
+    except exception.NotFound:
+        return db.ec2_instance_create(context, instance_uuid)['id']
+
+
+def get_int_id_from_volume_uuid(context, volume_uuid):
+    if volume_uuid is None:
+        return
+    try:
+        return db.get_ec2_volume_id_by_uuid(context, volume_uuid)
+    except exception.NotFound:
+        return db.ec2_volume_create(context, volume_uuid)['id']
+
+
+def get_volume_uuid_from_int_id(context, int_id):
+    return db.get_volume_uuid_by_ec2_id(context, int_id)
+
+
+def ec2_snap_id_to_uuid(ec2_id):
+    """Get the cooresponding UUID for the given ec2-id."""
+    ctxt = context.get_admin_context()
+
+    # NOTE(jgriffith) first strip prefix to get just the numeric
+    int_id = ec2_id_to_id(ec2_id)
+    return get_snapshot_uuid_from_int_id(ctxt, int_id)
+
+
+def get_int_id_from_snapshot_uuid(context, snapshot_uuid):
+    if snapshot_uuid is None:
+        return
+    try:
+        return db.get_ec2_snapshot_id_by_uuid(context, snapshot_uuid)
+    except exception.NotFound:
+        return db.ec2_snapshot_create(context, snapshot_uuid)['id']
+
+
+def get_snapshot_uuid_from_int_id(context, int_id):
+    return db.get_snapshot_uuid_by_ec2_id(context, int_id)
+
+
+def ec2_instance_id_to_uuid(context, ec2_id):
+    int_id = ec2_id_to_id(ec2_id)
+    return db.instance_get(context, int_id)['uuid']
 
 _c2u = re.compile('(((?<=[a-z])[A-Z])|([A-Z](?![A-Z]|$)))')
 

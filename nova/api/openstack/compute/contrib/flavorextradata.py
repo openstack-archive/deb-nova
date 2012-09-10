@@ -24,11 +24,11 @@ attributes.  This extension adds to that list:
 - OS-FLV-EXT-DATA:ephemeral
 """
 
-from nova import exception
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import instance_types
+from nova import exception
 
 
 authorize = extensions.soft_extension_authorizer('compute', 'flavorextradata')
@@ -37,7 +37,8 @@ authorize = extensions.soft_extension_authorizer('compute', 'flavorextradata')
 class FlavorextradataController(wsgi.Controller):
     def _get_flavor_refs(self):
         """Return a dictionary mapping flavorid to flavor_ref."""
-        flavor_refs = instance_types.get_all_types(True)
+
+        flavor_refs = instance_types.get_all_types()
         rval = {}
         for name, obj in flavor_refs.iteritems():
             rval[obj['flavorid']] = obj
@@ -55,8 +56,7 @@ class FlavorextradataController(wsgi.Controller):
             resp_obj.attach(xml=FlavorextradatumTemplate())
 
             try:
-                flavor_ref = instance_types.\
-                                get_instance_type_by_flavor_id(id)
+                flavor_ref = instance_types.get_instance_type_by_flavor_id(id)
             except exception.FlavorNotFound:
                 explanation = _("Flavor not found.")
                 raise exception.HTTPNotFound(explanation=explanation)
@@ -118,8 +118,9 @@ class FlavorextradatumTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('flavor', selector='flavor')
         make_flavor(root)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={
-            Flavorextradata.alias: Flavorextradata.namespace})
+        alias = Flavorextradata.alias
+        namespace = Flavorextradata.namespace
+        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})
 
 
 class FlavorextradataTemplate(xmlutil.TemplateBuilder):
@@ -127,5 +128,6 @@ class FlavorextradataTemplate(xmlutil.TemplateBuilder):
         root = xmlutil.TemplateElement('flavors')
         elem = xmlutil.SubTemplateElement(root, 'flavor', selector='flavors')
         make_flavor(elem)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={
-            Flavorextradata.alias: Flavorextradata.namespace})
+        alias = Flavorextradata.alias
+        namespace = Flavorextradata.namespace
+        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})

@@ -1,4 +1,5 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
+# encoding=UTF8
 
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -20,35 +21,15 @@
 
 import datetime
 
-from nova import test
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
+from nova.openstack.common import timeutils
+from nova import test
 from nova import utils
 
 FLAGS = flags.FLAGS
-
-
-def _setup_networking(instance_id, ip='1.2.3.4', flo_addr='1.2.1.2'):
-    ctxt = context.get_admin_context()
-    network_ref = db.project_get_networks(ctxt,
-                                           'fake',
-                                           associate=True)[0]
-    vif = {'address': '56:12:12:12:12:12',
-           'network_id': network_ref['id'],
-           'instance_id': instance_id}
-    vif_ref = db.virtual_interface_create(ctxt, vif)
-
-    fixed_ip = {'address': ip,
-                'network_id': network_ref['id'],
-                'virtual_interface_id': vif_ref['id'],
-                'allocated': True,
-                'instance_id': instance_id}
-    db.fixed_ip_create(ctxt, fixed_ip)
-    fix_ref = db.fixed_ip_get_by_address(ctxt, ip)
-    db.floating_ip_create(ctxt, {'address': flo_addr,
-                                 'fixed_ip_id': fix_ref['id']})
 
 
 class DbApiTestCase(test.TestCase):
@@ -58,20 +39,72 @@ class DbApiTestCase(test.TestCase):
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
 
+    def create_instances_with_args(self, **kwargs):
+        args = {'reservation_id': 'a', 'image_ref': 1, 'host': 'host1',
+                'project_id': self.project_id}
+        args.update(kwargs)
+        return db.instance_create(self.context, args)
+
+    def test_ec2_ids_not_found_are_printable(self):
+
+        def check_exc_format(method):
+            try:
+                method(self.context, 'fake')
+            except Exception as exc:
+                self.assertTrue('fake' in unicode(exc))
+
+        check_exc_format(db.get_ec2_volume_id_by_uuid)
+        check_exc_format(db.get_volume_uuid_by_ec2_id)
+        check_exc_format(db.get_ec2_snapshot_id_by_uuid)
+        check_exc_format(db.get_snapshot_uuid_by_ec2_id)
+        check_exc_format(db.get_ec2_instance_id_by_uuid)
+        check_exc_format(db.get_instance_uuid_by_ec2_id)
+
     def test_instance_get_all_by_filters(self):
-        args = {'reservation_id': 'a', 'image_ref': 1, 'host': 'host1'}
-        db.instance_create(self.context, args)
-        db.instance_create(self.context, args)
+        self.create_instances_with_args()
+        self.create_instances_with_args()
         result = db.instance_get_all_by_filters(self.context, {})
-        self.assertTrue(2, len(result))
+        self.assertEqual(2, len(result))
+
+    def test_instance_get_all_by_filters_regex(self):
+        self.create_instances_with_args(display_name='test1')
+        self.create_instances_with_args(display_name='teeeest2')
+        self.create_instances_with_args(display_name='diff')
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': 't.*st.'})
+        self.assertEqual(2, len(result))
+
+    def test_instance_get_all_by_filters_regex_unsupported_db(self):
+        """Ensure that the 'LIKE' operator is used for unsupported dbs."""
+        self.flags(sql_connection="notdb://")
+        self.create_instances_with_args(display_name='test1')
+        self.create_instances_with_args(display_name='test.*')
+        self.create_instances_with_args(display_name='diff')
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': 'test.*'})
+        self.assertEqual(1, len(result))
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': '%test%'})
+        self.assertEqual(2, len(result))
+
+    def test_instance_get_all_by_filters_metadata(self):
+        self.create_instances_with_args(metadata={'foo': 'bar'})
+        self.create_instances_with_args()
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'metadata': {'foo': 'bar'}})
+        self.assertEqual(1, len(result))
+
+    def test_instance_get_all_by_filters_unicode_value(self):
+        self.create_instances_with_args(display_name=u'test♥')
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': u'test'})
+        self.assertEqual(1, len(result))
 
     def test_instance_get_all_by_filters_deleted(self):
-        args1 = {'reservation_id': 'a', 'image_ref': 1, 'host': 'host1'}
-        inst1 = db.instance_create(self.context, args1)
-        args2 = {'reservation_id': 'b', 'image_ref': 1, 'host': 'host1'}
-        inst2 = db.instance_create(self.context, args2)
-        db.instance_destroy(self.context.elevated(), inst1['id'])
-        result = db.instance_get_all_by_filters(self.context.elevated(), {})
+        inst1 = self.create_instances_with_args()
+        inst2 = self.create_instances_with_args(reservation_id='b')
+        db.instance_destroy(self.context, inst1['uuid'])
+        result = db.instance_get_all_by_filters(self.context, {})
         self.assertEqual(2, len(result))
         self.assertIn(inst1.id, [result[0].id, result[1].id])
         self.assertIn(inst2.id, [result[0].id, result[1].id])
@@ -80,26 +113,42 @@ class DbApiTestCase(test.TestCase):
         else:
             self.assertTrue(result[1].deleted)
 
-    def test_migration_get_all_unconfirmed(self):
+    def test_migration_get_unconfirmed_by_dest_compute(self):
         ctxt = context.get_admin_context()
 
         # Ensure no migrations are returned.
-        results = db.migration_get_all_unconfirmed(ctxt, 10)
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host')
+        self.assertEqual(0, len(results))
+
+        # Ensure no migrations are returned.
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host2')
+        self.assertEqual(0, len(results))
+
+        updated_at = datetime.datetime(2000, 01, 01, 12, 00, 00)
+        values = {"status": "finished", "updated_at": updated_at,
+                "dest_compute": "fake_host2"}
+        migration = db.migration_create(ctxt, values)
+
+        # Ensure different host is not returned
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host')
         self.assertEqual(0, len(results))
 
         # Ensure one migration older than 10 seconds is returned.
-        updated_at = datetime.datetime(2000, 01, 01, 12, 00, 00)
-        values = {"status": "finished", "updated_at": updated_at}
-        migration = db.migration_create(ctxt, values)
-        results = db.migration_get_all_unconfirmed(ctxt, 10)
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                'fake_host2')
         self.assertEqual(1, len(results))
         db.migration_update(ctxt, migration.id, {"status": "CONFIRMED"})
 
         # Ensure the new migration is not returned.
-        updated_at = datetime.datetime.utcnow()
-        values = {"status": "finished", "updated_at": updated_at}
+        updated_at = timeutils.utcnow()
+        values = {"status": "finished", "updated_at": updated_at,
+                "dest_compute": "fake_host2"}
         migration = db.migration_create(ctxt, values)
-        results = db.migration_get_all_unconfirmed(ctxt, 10)
+        results = db.migration_get_unconfirmed_by_dest_compute(ctxt, 10,
+                "fake_host2")
         self.assertEqual(0, len(results))
         db.migration_update(ctxt, migration.id, {"status": "CONFIRMED"})
 
@@ -117,15 +166,15 @@ class DbApiTestCase(test.TestCase):
         instance = db.instance_create(ctxt, values)
         results = db.instance_get_all_hung_in_rebooting(ctxt, 10)
         self.assertEqual(1, len(results))
-        db.instance_update(ctxt, instance.id, {"task_state": None})
+        db.instance_update(ctxt, instance['uuid'], {"task_state": None})
 
         # Ensure the newly rebooted instance is not returned.
-        updated_at = datetime.datetime.utcnow()
+        updated_at = timeutils.utcnow()
         values = {"task_state": "rebooting", "updated_at": updated_at}
         instance = db.instance_create(ctxt, values)
         results = db.instance_get_all_hung_in_rebooting(ctxt, 10)
         self.assertEqual(0, len(results))
-        db.instance_update(ctxt, instance.id, {"task_state": None})
+        db.instance_update(ctxt, instance['uuid'], {"task_state": None})
 
     def test_network_create_safe(self):
         ctxt = context.get_admin_context()
@@ -151,6 +200,8 @@ class DbApiTestCase(test.TestCase):
                           db.network_delete_safe, ctxt, network['id'])
         db.fixed_ip_update(ctxt, address2, {'allocated': False})
         network = db.network_delete_safe(ctxt, network['id'])
+        self.assertRaises(exception.FixedIpNotFoundForAddress,
+                          db.fixed_ip_get_by_address, ctxt, address1)
         ctxt = ctxt.elevated(read_deleted='yes')
         fixed_ip = db.fixed_ip_get_by_address(ctxt, address1)
         self.assertTrue(fixed_ip['deleted'])
@@ -168,36 +219,58 @@ class DbApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
 
         # Create an instance with some metadata
-        metadata = {'host': 'foo'}
-        values = {'metadata': metadata}
+        values = {'metadata': {'host': 'foo'},
+                  'system_metadata': {'original_image_ref': 'blah'}}
         instance = db.instance_create(ctxt, values)
 
         # Update the metadata
-        metadata = {'host': 'bar'}
-        values = {'metadata': metadata}
-        db.instance_update(ctxt, instance.id, values)
+        values = {'metadata': {'host': 'bar'},
+                  'system_metadata': {'original_image_ref': 'baz'}}
+        db.instance_update(ctxt, instance['uuid'], values)
 
-        # Retrieve the metadata to ensure it was successfully updated
-        instance_meta = db.instance_metadata_get(ctxt, instance.id)
+        # Retrieve the user-provided metadata to ensure it was successfully
+        # updated
+        instance_meta = db.instance_metadata_get(ctxt, instance.uuid)
         self.assertEqual('bar', instance_meta['host'])
+
+        # Retrieve the system metadata to ensure it was successfully updated
+        system_meta = db.instance_system_metadata_get(ctxt, instance.uuid)
+        self.assertEqual('baz', system_meta['original_image_ref'])
 
     def test_instance_update_with_instance_uuid(self):
         """ test instance_update() works when an instance UUID is passed """
         ctxt = context.get_admin_context()
 
         # Create an instance with some metadata
-        metadata = {'host': 'foo'}
-        values = {'metadata': metadata}
+        values = {'metadata': {'host': 'foo'},
+                  'system_metadata': {'original_image_ref': 'blah'}}
         instance = db.instance_create(ctxt, values)
 
         # Update the metadata
-        metadata = {'host': 'bar'}
-        values = {'metadata': metadata}
-        db.instance_update(ctxt, instance.uuid, values)
+        values = {'metadata': {'host': 'bar'},
+                  'system_metadata': {'original_image_ref': 'baz'}}
+        db.instance_update(ctxt, instance['uuid'], values)
 
-        # Retrieve the metadata to ensure it was successfully updated
-        instance_meta = db.instance_metadata_get(ctxt, instance.id)
+        # Retrieve the user-provided metadata to ensure it was successfully
+        # updated
+        instance_meta = db.instance_metadata_get(ctxt, instance.uuid)
         self.assertEqual('bar', instance_meta['host'])
+
+        # Retrieve the system metadata to ensure it was successfully updated
+        system_meta = db.instance_system_metadata_get(ctxt, instance.uuid)
+        self.assertEqual('baz', system_meta['original_image_ref'])
+
+    def test_instance_update_with_and_get_original(self):
+        ctxt = context.get_admin_context()
+
+        # Create an instance with some metadata
+        values = {'vm_state': 'building'}
+        instance = db.instance_create(ctxt, values)
+
+        (old_ref, new_ref) = db.instance_update_and_get_original(ctxt,
+                instance['uuid'], {'vm_state': 'needscoffee'})
+        self.assertEquals("building", old_ref["vm_state"])
+        self.assertEquals("needscoffee", new_ref["vm_state"])
 
     def test_instance_fault_create(self):
         """Ensure we can create an instance fault"""
@@ -304,19 +377,19 @@ class DbApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         values = {'host': 'foo', 'hostname': 'myname'}
         instance = db.instance_create(ctxt, values)
-        values = {'address': 'bar', 'instance_id': instance['id']}
+        values = {'address': 'bar', 'instance_uuid': instance['uuid']}
         vif = db.virtual_interface_create(ctxt, values)
         values = {'address': 'baz',
                   'network_id': 1,
                   'allocated': True,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'virtual_interface_id': vif['id']}
         fixed_address = db.fixed_ip_create(ctxt, values)
         data = db.network_get_associated_fixed_ips(ctxt, 1)
         self.assertEqual(len(data), 1)
         record = data[0]
         self.assertEqual(record['address'], fixed_address)
-        self.assertEqual(record['instance_id'], instance['id'])
+        self.assertEqual(record['instance_uuid'], instance['uuid'])
         self.assertEqual(record['network_id'], 1)
         self.assertEqual(record['instance_created'], instance['created_at'])
         self.assertEqual(record['instance_updated'], instance['updated_at'])
@@ -335,31 +408,31 @@ class DbApiTestCase(test.TestCase):
         new = time = timeout + datetime.timedelta(seconds=5)
         # should deallocate
         values = {'allocated': False,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': net['id'],
                   'updated_at': old}
         db.fixed_ip_create(ctxt, values)
         # still allocated
         values = {'allocated': True,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': net['id'],
                   'updated_at': old}
         db.fixed_ip_create(ctxt, values)
         # wrong network
         values = {'allocated': False,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': None,
                   'updated_at': old}
         db.fixed_ip_create(ctxt, values)
         # too new
         values = {'allocated': False,
-                  'instance_id': instance['id'],
+                  'instance_uuid': instance['uuid'],
                   'network_id': None,
                   'updated_at': new}
         db.fixed_ip_create(ctxt, values)
 
     def test_fixed_ip_disassociate_all_by_timeout_single_host(self):
-        now = utils.utcnow()
+        now = timeutils.utcnow()
         ctxt = context.get_admin_context()
         self._timeout_test(ctxt, now, False)
         result = db.fixed_ip_disassociate_all_by_timeout(ctxt, 'foo', now)
@@ -368,13 +441,82 @@ class DbApiTestCase(test.TestCase):
         self.assertEqual(result, 1)
 
     def test_fixed_ip_disassociate_all_by_timeout_multi_host(self):
-        now = utils.utcnow()
+        now = timeutils.utcnow()
         ctxt = context.get_admin_context()
         self._timeout_test(ctxt, now, True)
         result = db.fixed_ip_disassociate_all_by_timeout(ctxt, 'foo', now)
         self.assertEqual(result, 1)
         result = db.fixed_ip_disassociate_all_by_timeout(ctxt, 'bar', now)
         self.assertEqual(result, 0)
+
+    def test_get_vol_mapping_non_admin(self):
+        ref = db.ec2_volume_create(self.context, 'fake-uuid')
+        ec2_id = db.get_ec2_volume_id_by_uuid(self.context, 'fake-uuid')
+        self.assertEqual(ref['id'], ec2_id)
+
+    def test_get_snap_mapping_non_admin(self):
+        ref = db.ec2_snapshot_create(self.context, 'fake-uuid')
+        ec2_id = db.get_ec2_snapshot_id_by_uuid(self.context, 'fake-uuid')
+        self.assertEqual(ref['id'], ec2_id)
+
+    def test_bw_usage_calls(self):
+        ctxt = context.get_admin_context()
+        now = timeutils.utcnow()
+        timeutils.set_time_override(now)
+        start_period = now - datetime.timedelta(seconds=10)
+        uuid3_refreshed = now - datetime.timedelta(seconds=5)
+
+        expected_bw_usages = [{'uuid': 'fake_uuid1',
+                               'mac': 'fake_mac1',
+                               'start_period': start_period,
+                               'bw_in': 100,
+                               'bw_out': 200,
+                               'last_refreshed': now},
+                              {'uuid': 'fake_uuid2',
+                               'mac': 'fake_mac2',
+                               'start_period': start_period,
+                               'bw_in': 200,
+                               'bw_out': 300,
+                               'last_refreshed': now},
+                              {'uuid': 'fake_uuid3',
+                               'mac': 'fake_mac3',
+                               'start_period': start_period,
+                               'bw_in': 400,
+                               'bw_out': 500,
+                               'last_refreshed': uuid3_refreshed}]
+
+        def _compare(bw_usage, expected):
+            for key, value in expected.items():
+                self.assertEqual(bw_usage[key], value)
+
+        bw_usages = db.bw_usage_get_by_uuids(ctxt,
+                ['fake_uuid1', 'fake_uuid2'], start_period)
+        # No matches
+        self.assertEqual(len(bw_usages), 0)
+
+        # Add 3 entries
+        db.bw_usage_update(ctxt, 'fake_uuid1',
+                'fake_mac1', start_period,
+                100, 200)
+        db.bw_usage_update(ctxt, 'fake_uuid2',
+                'fake_mac2', start_period,
+                100, 200)
+        # Test explicit refreshed time
+        db.bw_usage_update(ctxt, 'fake_uuid3',
+                'fake_mac3', start_period,
+                400, 500, last_refreshed=uuid3_refreshed)
+        # Update 2nd entry
+        db.bw_usage_update(ctxt, 'fake_uuid2',
+                'fake_mac2', start_period,
+                200, 300)
+
+        bw_usages = db.bw_usage_get_by_uuids(ctxt,
+                ['fake_uuid1', 'fake_uuid2', 'fake_uuid3'], start_period)
+        self.assertEqual(len(bw_usages), 3)
+        _compare(bw_usages[0], expected_bw_usages[0])
+        _compare(bw_usages[1], expected_bw_usages[1])
+        _compare(bw_usages[2], expected_bw_usages[2])
+        timeutils.clear_time_override()
 
 
 def _get_fake_aggr_values():
@@ -418,7 +560,7 @@ class AggregateDBApiTestCase(test.TestCase):
     def test_aggregate_create(self):
         """Ensure aggregate can be created with no metadata."""
         result = _create_aggregate(metadata=None)
-        self.assertEqual(result['operational_state'], 'created')
+        self.assertEquals(result.name, 'fake_aggregate')
 
     def test_aggregate_create_avoid_name_conflict(self):
         """Test we can avoid conflict on deleted aggregates."""
@@ -428,7 +570,6 @@ class AggregateDBApiTestCase(test.TestCase):
         r2 = _create_aggregate(values=values)
         self.assertEqual(r2.name, values['name'])
         self.assertEqual(r2.availability_zone, values['availability_zone'])
-        self.assertEqual(r2.operational_state, "created")
 
     def test_aggregate_create_raise_exist_exc(self):
         """Ensure aggregate names are distinct."""
@@ -476,18 +617,68 @@ class AggregateDBApiTestCase(test.TestCase):
         self.assertEqual(_get_fake_aggr_metadata(), expected.metadetails)
 
     def test_aggregate_get_by_host(self):
-        """Ensure we can get an aggregate by host."""
+        """Ensure we can get aggregates by host."""
         ctxt = context.get_admin_context()
-        r1 = _create_aggregate_with_hosts(context=ctxt)
-        r2 = db.aggregate_get_by_host(ctxt, 'foo.openstack.org')
-        self.assertEqual(r1.id, r2.id)
+        values = {'name': 'fake_aggregate2',
+            'availability_zone': 'fake_avail_zone', }
+        a1 = _create_aggregate_with_hosts(context=ctxt)
+        a2 = _create_aggregate_with_hosts(context=ctxt, values=values)
+        r1 = db.aggregate_get_by_host(ctxt, 'foo.openstack.org')
+        self.assertEqual([a1.id, a2.id], [x.id for x in r1])
+
+    def test_aggregate_get_by_host_with_key(self):
+        """Ensure we can get aggregates by host."""
+        ctxt = context.get_admin_context()
+        values = {'name': 'fake_aggregate2',
+            'availability_zone': 'fake_avail_zone', }
+        a1 = _create_aggregate_with_hosts(context=ctxt,
+                                          metadata={'goodkey': 'good'})
+        a2 = _create_aggregate_with_hosts(context=ctxt, values=values)
+        # filter result by key
+        r1 = db.aggregate_get_by_host(ctxt, 'foo.openstack.org', key='goodkey')
+        self.assertEqual([a1.id], [x.id for x in r1])
+
+    def test_aggregate_metdata_get_by_host(self):
+        """Ensure we can get aggregates by host."""
+        ctxt = context.get_admin_context()
+        values = {'name': 'fake_aggregate2',
+            'availability_zone': 'fake_avail_zone', }
+        values2 = {'name': 'fake_aggregate3',
+            'availability_zone': 'fake_avail_zone', }
+        a1 = _create_aggregate_with_hosts(context=ctxt)
+        a2 = _create_aggregate_with_hosts(context=ctxt, values=values)
+        a3 = _create_aggregate_with_hosts(context=ctxt, values=values2,
+                hosts=['bar.openstack.org'], metadata={'badkey': 'bad'})
+        r1 = db.aggregate_metadata_get_by_host(ctxt, 'foo.openstack.org')
+        self.assertEqual(r1['fake_key1'], set(['fake_value1']))
+        self.assertFalse('badkey' in r1)
+
+    def test_aggregate_metdata_get_by_host_with_key(self):
+        """Ensure we can get aggregates by host."""
+        ctxt = context.get_admin_context()
+        values = {'name': 'fake_aggregate2',
+            'availability_zone': 'fake_avail_zone', }
+        values2 = {'name': 'fake_aggregate3',
+            'availability_zone': 'fake_avail_zone', }
+        a1 = _create_aggregate_with_hosts(context=ctxt)
+        a2 = _create_aggregate_with_hosts(context=ctxt, values=values)
+        a3 = _create_aggregate_with_hosts(context=ctxt, values=values2,
+                hosts=['foo.openstack.org'], metadata={'good': 'value'})
+        r1 = db.aggregate_metadata_get_by_host(ctxt, 'foo.openstack.org',
+                                               key='good')
+        self.assertEqual(r1['good'], set(['value']))
+        self.assertFalse('fake_key1' in r1)
+        # Delete metadata
+        db.aggregate_metadata_delete(ctxt, a3.id, 'good')
+        r2 = db.aggregate_metadata_get_by_host(ctxt, 'foo.openstack.org',
+                                               key='good')
+        self.assertFalse('good' in r2)
 
     def test_aggregate_get_by_host_not_found(self):
         """Ensure AggregateHostNotFound is raised with unknown host."""
         ctxt = context.get_admin_context()
         _create_aggregate_with_hosts(context=ctxt)
-        self.assertRaises(exception.AggregateHostNotFound,
-                          db.aggregate_get_by_host, ctxt, 'unknown_host')
+        self.assertEqual([], db.aggregate_get_by_host(ctxt, 'unknown_host'))
 
     def test_aggregate_delete_raise_not_found(self):
         """Ensure AggregateNotFound is raised when deleting an aggregate."""
@@ -507,7 +698,7 @@ class AggregateDBApiTestCase(test.TestCase):
         self.assertEqual(0, len(expected))
         aggregate = db.aggregate_get(ctxt.elevated(read_deleted='yes'),
                                      result['id'])
-        self.assertEqual(aggregate["operational_state"], "dismissed")
+        self.assertEqual(aggregate.deleted, True)
 
     def test_aggregate_update(self):
         """Ensure an aggregate can be updated."""
@@ -635,15 +826,17 @@ class AggregateDBApiTestCase(test.TestCase):
         expected = db.aggregate_host_get_all(ctxt, result.id)
         self.assertEqual(len(expected), 1)
 
-    def test_aggregate_host_add_duplicate_raise_conflict(self):
-        """Ensure we cannot add host to distinct aggregates."""
+    def test_aggregate_host_add_duplicate_works(self):
+        """Ensure we can add host to distinct aggregates."""
         ctxt = context.get_admin_context()
-        _create_aggregate_with_hosts(context=ctxt, metadata=None)
-        self.assertRaises(exception.AggregateHostConflict,
-                          _create_aggregate_with_hosts, ctxt,
+        r1 = _create_aggregate_with_hosts(context=ctxt, metadata=None)
+        r2 = _create_aggregate_with_hosts(ctxt,
                           values={'name': 'fake_aggregate2',
                                   'availability_zone': 'fake_avail_zone2', },
                           metadata=None)
+        h1 = db.aggregate_host_get_all(ctxt, r1.id)
+        h2 = db.aggregate_host_get_all(ctxt, r2.id)
+        self.assertEqual(h1, h2)
 
     def test_aggregate_host_add_duplicate_raise_exist_exc(self):
         """Ensure we cannot add host to the same aggregate."""
@@ -794,25 +987,248 @@ class TestIpAllocation(test.TestCase):
     def test_fixed_ip_associate_fails_if_ip_not_in_network(self):
         self.assertRaises(exception.FixedIpNotFoundForNetwork,
                           db.fixed_ip_associate,
-                          self.ctxt, None, None)
+                          self.ctxt, None, self.instance.uuid)
 
     def test_fixed_ip_associate_fails_if_ip_in_use(self):
-        address = self.create_fixed_ip(instance_id=self.instance.id)
+        address = self.create_fixed_ip(instance_uuid=self.instance.uuid)
         self.assertRaises(exception.FixedIpAlreadyInUse,
                           db.fixed_ip_associate,
-                          self.ctxt, address, self.instance.id)
+                          self.ctxt, address, self.instance.uuid)
 
     def test_fixed_ip_associate_succeeds(self):
         address = self.create_fixed_ip(network_id=self.network.id)
-        db.fixed_ip_associate(self.ctxt, address, self.instance.id,
+        db.fixed_ip_associate(self.ctxt, address, self.instance.uuid,
                               network_id=self.network.id)
         fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
-        self.assertEqual(fixed_ip.instance_id, self.instance.id)
+        self.assertEqual(fixed_ip.instance_uuid, self.instance.uuid)
 
     def test_fixed_ip_associate_succeeds_and_sets_network(self):
         address = self.create_fixed_ip()
-        db.fixed_ip_associate(self.ctxt, address, self.instance.id,
+        db.fixed_ip_associate(self.ctxt, address, self.instance.uuid,
                               network_id=self.network.id)
         fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
-        self.assertEqual(fixed_ip.instance_id, self.instance.id)
+        self.assertEqual(fixed_ip.instance_uuid, self.instance.uuid)
         self.assertEqual(fixed_ip.network_id, self.network.id)
+
+
+class InstanceDestroyConstraints(test.TestCase):
+
+    def test_destroy_with_equal_any_constraint_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'task_state': 'deleting'})
+        constraint = db.constraint(task_state=db.equal_any('deleting'))
+        db.instance_destroy(ctx, instance['uuid'], constraint)
+        self.assertRaises(exception.InstanceNotFound, db.instance_get_by_uuid,
+                          ctx, instance['uuid'])
+
+    def test_destroy_with_equal_any_constraint_not_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'vm_state': 'resize'})
+        constraint = db.constraint(vm_state=db.equal_any('active', 'error'))
+        self.assertRaises(exception.ConstraintNotMet, db.instance_destroy,
+                          ctx, instance['uuid'], constraint)
+        instance = db.instance_get_by_uuid(ctx, instance['uuid'])
+        self.assertFalse(instance['deleted'])
+
+    def test_destroy_with_not_equal_constraint_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'task_state': 'deleting'})
+        constraint = db.constraint(task_state=db.not_equal('error', 'resize'))
+        db.instance_destroy(ctx, instance['uuid'], constraint)
+        self.assertRaises(exception.InstanceNotFound, db.instance_get_by_uuid,
+                          ctx, instance['uuid'])
+
+    def test_destroy_with_not_equal_constraint_not_met(self):
+        ctx = context.get_admin_context()
+        instance = db.instance_create(ctx, {'vm_state': 'active'})
+        constraint = db.constraint(vm_state=db.not_equal('active', 'error'))
+        self.assertRaises(exception.ConstraintNotMet, db.instance_destroy,
+                          ctx, instance['uuid'], constraint)
+        instance = db.instance_get_by_uuid(ctx, instance['uuid'])
+        self.assertFalse(instance['deleted'])
+
+
+def _get_sm_backend_params():
+    config_params = ("name_label=testsmbackend "
+                     "server=localhost "
+                     "serverpath=/tmp/nfspath")
+    params = dict(flavor_id=1,
+                sr_uuid=None,
+                sr_type='nfs',
+                config_params=config_params)
+    return params
+
+
+def _get_sm_flavor_params():
+    params = dict(label="gold",
+                  description="automatic backups")
+    return params
+
+
+class SMVolumeDBApiTestCase(test.TestCase):
+    def setUp(self):
+        super(SMVolumeDBApiTestCase, self).setUp()
+        self.user_id = 'fake'
+        self.project_id = 'fake'
+        self.context = context.RequestContext(self.user_id, self.project_id)
+
+    def test_sm_backend_conf_create(self):
+        params = _get_sm_backend_params()
+        ctxt = context.get_admin_context()
+        beconf = db.sm_backend_conf_create(ctxt,
+                                           params)
+        self.assertIsInstance(beconf['id'], int)
+
+    def test_sm_backend_conf_create_raise_duplicate(self):
+        params = _get_sm_backend_params()
+        ctxt = context.get_admin_context()
+        beconf = db.sm_backend_conf_create(ctxt,
+                                           params)
+        self.assertIsInstance(beconf['id'], int)
+        self.assertRaises(exception.Duplicate,
+                          db.sm_backend_conf_create,
+                          ctxt,
+                          params)
+
+    def test_sm_backend_conf_update(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_backend_params()
+        beconf = db.sm_backend_conf_create(ctxt,
+                                           params)
+        beconf = db.sm_backend_conf_update(ctxt,
+                                           beconf['id'],
+                                           dict(sr_uuid="FA15E-1D"))
+        self.assertEqual(beconf['sr_uuid'], "FA15E-1D")
+
+    def test_sm_backend_conf_update_raise_notfound(self):
+        ctxt = context.get_admin_context()
+        self.assertRaises(exception.NotFound,
+                          db.sm_backend_conf_update,
+                          ctxt,
+                          7,
+                          dict(sr_uuid="FA15E-1D"))
+
+    def test_sm_backend_conf_get(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_backend_params()
+        beconf = db.sm_backend_conf_create(ctxt,
+                                           params)
+        val = db.sm_backend_conf_get(ctxt, beconf['id'])
+        self.assertDictMatch(dict(val), dict(beconf))
+
+    def test_sm_backend_conf_get_raise_notfound(self):
+        ctxt = context.get_admin_context()
+        self.assertRaises(exception.NotFound,
+                          db.sm_backend_conf_get,
+                          ctxt,
+                          7)
+
+    def test_sm_backend_conf_get_by_sr(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_backend_params()
+        beconf = db.sm_backend_conf_create(ctxt,
+                                           params)
+        val = db.sm_backend_conf_get_by_sr(ctxt, beconf['sr_uuid'])
+        self.assertDictMatch(dict(val), dict(beconf))
+
+    def test_sm_backend_conf_get_by_sr_raise_notfound(self):
+        ctxt = context.get_admin_context()
+        self.assertRaises(exception.NotFound,
+                          db.sm_backend_conf_get_by_sr,
+                          ctxt,
+                          "FA15E-1D")
+
+    def test_sm_backend_conf_delete(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_backend_params()
+        beconf = db.sm_backend_conf_create(ctxt,
+                                           params)
+        db.sm_backend_conf_delete(ctxt, beconf['id'])
+        self.assertRaises(exception.NotFound,
+                          db.sm_backend_conf_get,
+                          ctxt,
+                          beconf['id'])
+
+    def test_sm_backend_conf_delete_nonexisting(self):
+        ctxt = context.get_admin_context()
+        self.assertNotRaises(None, db.sm_backend_conf_delete,
+                              ctxt, "FA15E-1D")
+
+    def test_sm_flavor_create(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_flavor_params()
+        flav = db.sm_flavor_create(ctxt,
+                                   params)
+        self.assertIsInstance(flav['id'], int)
+
+    def sm_flavor_create_raise_duplicate(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_flavor_params()
+        flav = db.sm_flavor_create(ctxt,
+                                   params)
+        self.assertRaises(exception.Duplicate,
+                          db.sm_flavor_create,
+                          params)
+
+    def test_sm_flavor_update(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_flavor_params()
+        flav = db.sm_flavor_create(ctxt,
+                                   params)
+        newparms = dict(description="basic volumes")
+        flav = db.sm_flavor_update(ctxt, flav['id'], newparms)
+        self.assertEqual(flav['description'], "basic volumes")
+
+    def test_sm_flavor_update_raise_notfound(self):
+        ctxt = context.get_admin_context()
+        self.assertRaises(exception.NotFound,
+                          db.sm_flavor_update,
+                          ctxt,
+                          7,
+                          dict(description="fakedesc"))
+
+    def test_sm_flavor_delete(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_flavor_params()
+        flav = db.sm_flavor_create(ctxt,
+                                   params)
+        db.sm_flavor_delete(ctxt, flav['id'])
+        self.assertRaises(exception.NotFound,
+                          db.sm_flavor_get,
+                          ctxt,
+                          "gold")
+
+    def test_sm_flavor_delete_nonexisting(self):
+        ctxt = context.get_admin_context()
+        self.assertNotRaises(None, db.sm_flavor_delete,
+                             ctxt, 7)
+
+    def test_sm_flavor_get(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_flavor_params()
+        flav = db.sm_flavor_create(ctxt,
+                                   params)
+        val = db.sm_flavor_get(ctxt, flav['id'])
+        self.assertDictMatch(dict(val), dict(flav))
+
+    def test_sm_flavor_get_raise_notfound(self):
+        ctxt = context.get_admin_context()
+        self.assertRaises(exception.NotFound,
+                          db.sm_flavor_get,
+                          ctxt,
+                          7)
+
+    def test_sm_flavor_get_by_label(self):
+        ctxt = context.get_admin_context()
+        params = _get_sm_flavor_params()
+        flav = db.sm_flavor_create(ctxt,
+                                   params)
+        val = db.sm_flavor_get_by_label(ctxt, flav['label'])
+        self.assertDictMatch(dict(val), dict(flav))
+
+    def test_sm_flavor_get_by_label_raise_notfound(self):
+        ctxt = context.get_admin_context()
+        self.assertRaises(exception.NotFound,
+                          db.sm_flavor_get,
+                          ctxt,
+                          "fake")

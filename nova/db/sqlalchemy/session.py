@@ -18,16 +18,17 @@
 
 """Session Handling for SQLAlchemy backend."""
 
+import re
 import time
 
+from sqlalchemy.exc import DisconnectionError, OperationalError
 import sqlalchemy.interfaces
 import sqlalchemy.orm
-from sqlalchemy.exc import DisconnectionError, OperationalError
 from sqlalchemy.pool import NullPool, StaticPool
 
 import nova.exception
 import nova.flags as flags
-import nova.log as logging
+import nova.openstack.common.log as logging
 
 
 FLAGS = flags.FLAGS
@@ -51,16 +52,12 @@ def get_session(autocommit=True, expire_on_commit=False):
     return session
 
 
-class SynchronousSwitchListener(sqlalchemy.interfaces.PoolListener):
-
+def synchronous_switch_listener(dbapi_conn, connection_rec):
     """Switch sqlite connections to non-synchronous mode"""
-
-    def connect(self, dbapi_con, con_record):
-        dbapi_con.execute("PRAGMA synchronous = OFF")
+    dbapi_conn.execute("PRAGMA synchronous = OFF")
 
 
-class MySQLPingListener(object):
-
+def ping_listener(dbapi_conn, connection_rec, connection_proxy):
     """
     Ensures that MySQL connections checked out of the
     pool are alive.
@@ -68,16 +65,14 @@ class MySQLPingListener(object):
     Borrowed from:
     http://groups.google.com/group/sqlalchemy/msg/a4ce563d802c929f
     """
-
-    def checkout(self, dbapi_con, con_record, con_proxy):
-        try:
-            dbapi_con.cursor().execute('select 1')
-        except dbapi_con.OperationalError, ex:
-            if ex.args[0] in (2006, 2013, 2014, 2045, 2055):
-                LOG.warn('Got mysql server has gone away: %s', ex)
-                raise DisconnectionError("Database server went away")
-            else:
-                raise
+    try:
+        dbapi_conn.cursor().execute('select 1')
+    except dbapi_conn.OperationalError, ex:
+        if ex.args[0] in (2006, 2013, 2014, 2045, 2055):
+            LOG.warn('Got mysql server has gone away: %s', ex)
+            raise DisconnectionError("Database server went away")
+        else:
+            raise
 
 
 def is_db_connection_error(args):
@@ -89,6 +84,16 @@ def is_db_connection_error(args):
         if args.find(err_code) != -1:
             return True
     return False
+
+
+def regexp(expr, item):
+    reg = re.compile(expr)
+    return reg.search(unicode(item)) is not None
+
+
+class AddRegexFactory(sqlalchemy.interfaces.PoolListener):
+    def connect(delf, dbapi_con, con_record):
+        dbapi_con.create_function('REGEXP', 2, regexp)
 
 
 def get_engine():
@@ -115,14 +120,22 @@ def get_engine():
             if FLAGS.sql_connection == "sqlite://":
                 engine_args["poolclass"] = StaticPool
                 engine_args["connect_args"] = {'check_same_thread': False}
-
-            if not FLAGS.sqlite_synchronous:
-                engine_args["listeners"] = [SynchronousSwitchListener()]
-
-        if 'mysql' in connection_dict.drivername:
-            engine_args['listeners'] = [MySQLPingListener()]
+                engine_args['listeners'] = [AddRegexFactory()]
 
         _ENGINE = sqlalchemy.create_engine(FLAGS.sql_connection, **engine_args)
+
+        if 'mysql' in connection_dict.drivername:
+            sqlalchemy.event.listen(_ENGINE, 'checkout', ping_listener)
+        elif "sqlite" in connection_dict.drivername:
+            if not FLAGS.sqlite_synchronous:
+                sqlalchemy.event.listen(_ENGINE, 'connect',
+                                        synchronous_switch_listener)
+
+        if (FLAGS.sql_connection_trace and
+                _ENGINE.dialect.dbapi.__name__ == 'MySQLdb'):
+            import MySQLdb.cursors
+            _do_query = debug_mysql_do_query()
+            setattr(MySQLdb.cursors.BaseCursor, '_do_query', _do_query)
 
         try:
             _ENGINE.connect()
@@ -154,3 +167,44 @@ def get_maker(engine, autocommit=True, expire_on_commit=False):
     return sqlalchemy.orm.sessionmaker(bind=engine,
                                        autocommit=autocommit,
                                        expire_on_commit=expire_on_commit)
+
+
+def debug_mysql_do_query():
+    """Return a debug version of MySQLdb.cursors._do_query"""
+    import MySQLdb.cursors
+    import traceback
+
+    old_mysql_do_query = MySQLdb.cursors.BaseCursor._do_query
+
+    def _do_query(self, q):
+        stack = ''
+        for file, line, method, function in traceback.extract_stack():
+            # exclude various common things from trace
+            if file.endswith('session.py') and method == '_do_query':
+                continue
+            if file.endswith('api.py') and method == 'wrapper':
+                continue
+            if file.endswith('utils.py') and method == '_inner':
+                continue
+            if file.endswith('exception.py') and method == '_wrap':
+                continue
+            # nova/db/api is just a wrapper around nova/db/sqlalchemy/api
+            if file.endswith('nova/db/api.py'):
+                continue
+            # only trace inside nova
+            index = file.rfind('nova')
+            if index == -1:
+                continue
+            stack += "File:%s:%s Method:%s() Line:%s | " \
+                    % (file[index:], line, method, function)
+
+        # strip trailing " | " from stack
+        if stack:
+            stack = stack[:-3]
+            qq = "%s /* %s */" % (q, stack)
+        else:
+            qq = q
+        old_mysql_do_query(self, qq)
+
+    # return the new _do_query method
+    return _do_query

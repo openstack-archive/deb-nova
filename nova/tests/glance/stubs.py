@@ -14,78 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import copy
-import StringIO
-
-from glance.common import exception as glance_exception
-
-from nova import exception
-from nova.image import glance
-
-
-def stubout_glance_client(stubs):
-    def fake_get_glance_client(context, image_href):
-        image_id = int(str(image_href).split('/')[-1])
-        return (FakeGlance('foo'), image_id)
-    stubs.Set(glance, 'get_glance_client', fake_get_glance_client)
-
-
-class FakeGlance(object):
-    IMAGE_MACHINE = 1
-    IMAGE_KERNEL = 2
-    IMAGE_RAMDISK = 3
-    IMAGE_RAW = 4
-    IMAGE_VHD = 5
-    IMAGE_ISO = 6
-
-    IMAGE_FIXTURES = {
-        IMAGE_MACHINE: {
-            'image_meta': {'name': 'fakemachine', 'size': 0,
-                           'disk_format': 'ami',
-                           'container_format': 'ami'},
-            'image_data': StringIO.StringIO('')},
-        IMAGE_KERNEL: {
-            'image_meta': {'name': 'fakekernel', 'size': 0,
-                           'disk_format': 'aki',
-                           'container_format': 'aki'},
-            'image_data': StringIO.StringIO('')},
-        IMAGE_RAMDISK: {
-            'image_meta': {'name': 'fakeramdisk', 'size': 0,
-                           'disk_format': 'ari',
-                           'container_format': 'ari'},
-            'image_data': StringIO.StringIO('')},
-        IMAGE_RAW: {
-            'image_meta': {'name': 'fakeraw', 'size': 0,
-                           'disk_format': 'raw',
-                           'container_format': 'bare'},
-            'image_data': StringIO.StringIO('')},
-        IMAGE_VHD: {
-            'image_meta': {'name': 'fakevhd', 'size': 0,
-                           'disk_format': 'vhd',
-                           'container_format': 'ovf'},
-            'image_data': StringIO.StringIO('')},
-        IMAGE_ISO: {
-            'image_meta': {'name': 'fakeiso', 'size': 0,
-                           'disk_format': 'iso',
-                           'container_format': 'bare'},
-            'image_data': StringIO.StringIO('')}}
-
-    def __init__(self, host, port=None, use_ssl=False, auth_tok=None):
-        pass
-
-    def set_auth_token(self, auth_tok):
-        pass
-
-    def get_image_meta(self, image_id):
-        meta = copy.deepcopy(self.IMAGE_FIXTURES[int(image_id)]['image_meta'])
-        meta['id'] = image_id
-        return meta
-
-    def get_image(self, image_id):
-        image = self.IMAGE_FIXTURES[int(image_id)]
-        meta = copy.deepcopy(image['image_meta'])
-        meta['id'] = image_id
-        return meta, image['image_data']
+import glanceclient.exc
 
 
 NOW_GLANCE_FORMAT = "2010-10-11T10:30:22"
@@ -94,64 +23,90 @@ NOW_GLANCE_FORMAT = "2010-10-11T10:30:22"
 class StubGlanceClient(object):
 
     def __init__(self, images=None):
-        self.images = []
+        self._images = []
         _images = images or []
-        map(lambda image: self.add_image(image, None), _images)
+        map(lambda image: self.create(**image), _images)
 
-    def set_auth_token(self, auth_tok):
-        pass
-
-    def get_image_meta(self, image_id):
-        for image in self.images:
-            if image['id'] == str(image_id):
-                return image
-        raise glance_exception.NotFound()
+        #NOTE(bcwaldon): HACK to get client.images.* to work
+        self.images = lambda: None
+        for fn in ('list', 'get', 'data', 'create', 'update', 'delete'):
+            setattr(self.images, fn, getattr(self, fn))
 
     #TODO(bcwaldon): implement filters
-    def get_images_detailed(self, filters=None, marker=None, limit=3):
+    def list(self, filters=None, marker=None, limit=30):
         if marker is None:
             index = 0
         else:
-            for index, image in enumerate(self.images):
-                if image['id'] == str(marker):
+            for index, image in enumerate(self._images):
+                if image.id == str(marker):
                     index += 1
                     break
             else:
-                raise glance_exception.Invalid()
+                raise glanceclient.exc.BadRequest('Marker not found')
 
-        return self.images[index:index + limit]
+        return self._images[index:index + limit]
 
-    def get_image(self, image_id):
-        return self.get_image_meta(image_id), []
+    def get(self, image_id):
+        for image in self._images:
+            if image.id == str(image_id):
+                return image
+        raise glanceclient.exc.NotFound(image_id)
 
-    def add_image(self, metadata, data):
+    def data(self, image_id):
+        self.get(image_id)
+        return []
+
+    def create(self, **metadata):
         metadata['created_at'] = NOW_GLANCE_FORMAT
         metadata['updated_at'] = NOW_GLANCE_FORMAT
 
-        self.images.append(metadata)
+        self._images.append(FakeImage(metadata))
 
         try:
             image_id = str(metadata['id'])
         except KeyError:
             # auto-generate an id if one wasn't provided
-            image_id = str(len(self.images))
+            image_id = str(len(self._images))
 
-        self.images[-1]['id'] = image_id
+        self._images[-1].id = image_id
 
-        return self.images[-1]
+        return self._images[-1]
 
-    def update_image(self, image_id, metadata, data):
-        for i, image in enumerate(self.images):
-            if image['id'] == str(image_id):
-                if 'id' in metadata:
-                    metadata['id'] = str(metadata['id'])
-                self.images[i].update(metadata)
-                return self.images[i]
-        raise glance_exception.NotFound()
+    def update(self, image_id, **metadata):
+        for i, image in enumerate(self._images):
+            if image.id == str(image_id):
+                for k, v in metadata.items():
+                    setattr(self._images[i], k, v)
+                return self._images[i]
+        raise glanceclient.exc.NotFound(image_id)
 
-    def delete_image(self, image_id):
-        for i, image in enumerate(self.images):
-            if image['id'] == image_id:
-                del self.images[i]
+    def delete(self, image_id):
+        for i, image in enumerate(self._images):
+            if image.id == image_id:
+                del self._images[i]
                 return
-        raise glance_exception.NotFound()
+        raise glanceclient.exc.NotFound(image_id)
+
+
+class FakeImage(object):
+    def __init__(self, metadata):
+        IMAGE_ATTRIBUTES = ['size', 'disk_format', 'owner',
+                            'container_format', 'checksum', 'id',
+                            'name', 'created_at', 'updated_at',
+                            'deleted', 'status',
+                            'min_disk', 'min_ram', 'is_public']
+        raw = dict.fromkeys(IMAGE_ATTRIBUTES)
+        raw.update(metadata)
+        self.__dict__['raw'] = raw
+
+    def __getattr__(self, key):
+        try:
+            return self.__dict__['raw'][key]
+        except KeyError:
+            raise AttributeError(key)
+
+    def __setattr__(self, key, value):
+        try:
+            self.__dict__['raw'][key] = value
+        except KeyError:
+            raise AttributeError(key)

@@ -20,14 +20,18 @@
 
 """Built-in instance properties."""
 
+import re
+
 from nova import context
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
+
+INVALID_NAME_REGEX = re.compile("[^\w\.\- ]")
 
 
 def create(name, memory, vcpus, root_gb, ephemeral_gb, flavorid, swap=None,
@@ -47,6 +51,12 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb, flavorid, swap=None,
         'swap': swap,
         'rxtx_factor': rxtx_factor,
     }
+
+    # ensure name does not contain any special characters
+    invalid_name = INVALID_NAME_REGEX.search(name)
+    if invalid_name:
+        msg = _("names can only contain [a-zA-Z0-9_.- ]")
+        raise exception.InvalidInput(reason=msg)
 
     # ensure some attributes are integers and greater than or equal to 0
     for option in kwargs:
@@ -87,14 +97,15 @@ def destroy(name):
         raise exception.InstanceTypeNotFoundByName(instance_type_name=name)
 
 
-def get_all_types(inactive=0, filters=None):
+def get_all_types(inactive=False, filters=None):
     """Get all non-deleted instance_types.
 
     Pass true as argument if you want deleted instance types returned also.
-
     """
     ctxt = context.get_admin_context()
-    inst_types = db.instance_type_get_all(ctxt, inactive, filters)
+    inst_types = db.instance_type_get_all(
+            ctxt, inactive=inactive, filters=filters)
+
     inst_type_dict = {}
     for inst_type in inst_types:
         inst_type_dict[inst_type['name']] = inst_type
@@ -129,10 +140,10 @@ def get_instance_type_by_name(name):
 
 # TODO(termie): flavor-specific code should probably be in the API that uses
 #               flavors.
-def get_instance_type_by_flavor_id(flavorid):
+def get_instance_type_by_flavor_id(flavorid, read_deleted="yes"):
     """Retrieve instance type by flavorid.
 
     :raises: FlavorNotFound
     """
-    ctxt = context.get_admin_context()
+    ctxt = context.get_admin_context(read_deleted=read_deleted)
     return db.instance_type_get_by_flavor_id(ctxt, flavorid)

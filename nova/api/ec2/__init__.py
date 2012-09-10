@@ -31,12 +31,14 @@ from nova.api.ec2 import apirequest
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import faults
 from nova.api import validator
-from nova.auth import manager
 from nova import context
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova import utils
 from nova import wsgi
 
@@ -60,6 +62,10 @@ ec2_opts = [
                 default=False,
                 help='Return the IP address as private dns hostname in '
                      'describe instances'),
+    cfg.BoolOpt('ec2_strict_validation',
+                default=True,
+                help='Validate security group names'
+                     ' according to EC2 specification'),
     ]
 
 FLAGS = flags.FLAGS
@@ -101,7 +107,7 @@ class RequestLogging(wsgi.Middleware):
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
-        start = utils.utcnow()
+        start = timeutils.utcnow()
         rv = req.get_response(self.application)
         self.log_request_completion(rv, req, start)
         return rv
@@ -115,7 +121,7 @@ class RequestLogging(wsgi.Middleware):
             controller = None
             action = None
         ctxt = request.environ.get('nova.context', None)
-        delta = utils.utcnow() - start
+        delta = timeutils.utcnow() - start
         seconds = delta.seconds
         microseconds = delta.microseconds
         LOG.info(
@@ -186,76 +192,6 @@ class Lockout(wsgi.Middleware):
         return res
 
 
-class EC2Token(wsgi.Middleware):
-    """Deprecated, only here to make merging easier."""
-
-    @webob.dec.wsgify(RequestClass=wsgi.Request)
-    def __call__(self, req):
-        # Read request signature and access id.
-        try:
-            signature = req.params['Signature']
-            access = req.params['AWSAccessKeyId']
-        except KeyError, e:
-            LOG.exception(e)
-            raise webob.exc.HTTPBadRequest()
-
-        # Make a copy of args for authentication and signature verification.
-        auth_params = dict(req.params)
-        # Not part of authentication args
-        auth_params.pop('Signature')
-
-        if "ec2" in FLAGS.keystone_ec2_url:
-            LOG.warning("Configuration setting for keystone_ec2_url needs "
-                        "to be updated to /tokens only. The /ec2 prefix is "
-                        "being deprecated")
-            # Authenticate the request.
-            creds = {'ec2Credentials': {'access': access,
-                                        'signature': signature,
-                                        'host': req.host,
-                                        'verb': req.method,
-                                        'path': req.path,
-                                        'params': auth_params,
-                                       }}
-        else:
-            # Authenticate the request.
-            creds = {'auth': {'OS-KSEC2:ec2Credentials': {'access': access,
-                                        'signature': signature,
-                                        'host': req.host,
-                                        'verb': req.method,
-                                        'path': req.path,
-                                        'params': auth_params,
-                                       }}}
-        creds_json = utils.dumps(creds)
-        headers = {'Content-Type': 'application/json'}
-
-        # Disable "has no x member" pylint error
-        # for httplib and urlparse
-        # pylint: disable-msg=E1101
-        o = urlparse.urlparse(FLAGS.keystone_ec2_url)
-        if o.scheme == "http":
-            conn = httplib.HTTPConnection(o.netloc)
-        else:
-            conn = httplib.HTTPSConnection(o.netloc)
-        conn.request('POST', o.path, body=creds_json, headers=headers)
-        response = conn.getresponse().read()
-        conn.close()
-
-        # NOTE(vish): We could save a call to keystone by
-        #             having keystone return token, tenant,
-        #             user, and roles from this call.
-
-        result = utils.loads(response)
-        try:
-            token_id = result['access']['token']['id']
-        except (AttributeError, KeyError), e:
-            LOG.exception(e)
-            raise webob.exc.HTTPBadRequest()
-
-        # Authenticated!
-        req.headers['X-Auth-Token'] = token_id
-        return self.application
-
-
 class EC2KeystoneAuth(wsgi.Middleware):
     """Authenticate an EC2 request with keystone and convert to context."""
 
@@ -288,7 +224,7 @@ class EC2KeystoneAuth(wsgi.Middleware):
             creds = {'ec2Credentials': cred_dict}
         else:
             creds = {'auth': {'OS-KSEC2:ec2Credentials': cred_dict}}
-        creds_json = utils.dumps(creds)
+        creds_json = jsonutils.dumps(creds)
         headers = {'Content-Type': 'application/json'}
 
         o = urlparse.urlparse(FLAGS.keystone_ec2_url)
@@ -305,13 +241,15 @@ class EC2KeystoneAuth(wsgi.Middleware):
             else:
                 msg = _("Failure communicating with keystone")
             return ec2_error(req, request_id, "Unauthorized", msg)
-        result = utils.loads(data)
+        result = jsonutils.loads(data)
         conn.close()
 
         try:
             token_id = result['access']['token']['id']
             user_id = result['access']['user']['id']
             project_id = result['access']['token']['tenant']['id']
+            user_name = result['access']['user'].get('name')
+            project_name = result['access']['token']['tenant'].get('name')
             roles = [role['name'] for role
                      in result['access']['user']['roles']]
         except (AttributeError, KeyError), e:
@@ -323,11 +261,16 @@ class EC2KeystoneAuth(wsgi.Middleware):
         if FLAGS.use_forwarded_for:
             remote_address = req.headers.get('X-Forwarded-For',
                                              remote_address)
+
+        catalog = result['access']['serviceCatalog']
         ctxt = context.RequestContext(user_id,
                                       project_id,
+                                      user_name=user_name,
+                                      project_name=project_name,
                                       roles=roles,
                                       auth_token=token_id,
-                                      remote_address=remote_address)
+                                      remote_address=remote_address,
+                                      service_catalog=catalog)
 
         req.environ['nova.context'] = ctxt
 
@@ -355,62 +298,11 @@ class NoAuth(wsgi.Middleware):
         return self.application
 
 
-class Authenticate(wsgi.Middleware):
-    """Authenticate an EC2 request and add 'nova.context' to WSGI environ."""
-
-    @webob.dec.wsgify(RequestClass=wsgi.Request)
-    def __call__(self, req):
-        # Read request signature and access id.
-        try:
-            signature = req.params['Signature']
-            access = req.params['AWSAccessKeyId']
-        except KeyError:
-            raise webob.exc.HTTPBadRequest()
-
-        # Make a copy of args for authentication and signature verification.
-        auth_params = dict(req.params)
-        # Not part of authentication args
-        auth_params.pop('Signature')
-
-        # Authenticate the request.
-        authman = manager.AuthManager()
-        try:
-            (user, project) = authman.authenticate(
-                    access,
-                    signature,
-                    auth_params,
-                    req.method,
-                    req.host,
-                    req.path)
-        # Be explicit for what exceptions are 403, the rest bubble as 500
-        except (exception.NotFound, exception.NotAuthorized,
-                exception.InvalidSignature) as ex:
-            LOG.audit(_("Authentication Failure: %s"), unicode(ex))
-            raise webob.exc.HTTPForbidden()
-
-        # Authenticated!
-        remote_address = req.remote_addr
-        if FLAGS.use_forwarded_for:
-            remote_address = req.headers.get('X-Forwarded-For', remote_address)
-        roles = authman.get_active_roles(user, project)
-        ctxt = context.RequestContext(user_id=user.id,
-                                      project_id=project.id,
-                                      is_admin=user.is_admin(),
-                                      roles=roles,
-                                      remote_address=remote_address)
-        req.environ['nova.context'] = ctxt
-        uname = user.name
-        pname = project.name
-        msg = _('Authenticated Request For %(uname)s:%(pname)s)') % locals()
-        LOG.audit(msg, context=req.environ['nova.context'])
-        return self.application
-
-
 class Requestify(wsgi.Middleware):
 
     def __init__(self, app, controller):
         super(Requestify, self).__init__(app)
-        self.controller = utils.import_class(controller)()
+        self.controller = importutils.import_object(controller)
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
@@ -583,7 +475,7 @@ class Executor(wsgi.Application):
         except exception.InstanceNotFound as ex:
             LOG.info(_('InstanceNotFound raised: %s'), unicode(ex),
                      context=context)
-            ec2_id = ec2utils.id_to_ec2_id(ex.kwargs['instance_id'])
+            ec2_id = ec2utils.id_to_ec2_inst_id(ex.kwargs['instance_id'])
             message = ex.message % {'instance_id': ec2_id}
             return ec2_error(req, request_id, type(ex).__name__, message)
         except exception.VolumeNotFound as ex:
@@ -644,7 +536,7 @@ class Executor(wsgi.Application):
                     env.pop(k)
 
             LOG.exception(_('Unexpected error raised: %s'), unicode(ex))
-            LOG.error(_('Environment: %s') % utils.dumps(env))
+            LOG.error(_('Environment: %s') % jsonutils.dumps(env))
             return ec2_error(req, request_id, 'UnknownError',
                              _('An unknown error has occurred. '
                                'Please try your request again.'))

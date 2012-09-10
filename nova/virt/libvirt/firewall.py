@@ -20,14 +20,9 @@
 
 from eventlet import tpool
 
-from nova import context
-from nova import db
 from nova import flags
-from nova import log as logging
-from nova import utils
-
+from nova.openstack.common import log as logging
 import nova.virt.firewall as base_firewall
-from nova.virt import netutils
 
 
 LOG = logging.getLogger(__name__)
@@ -101,10 +96,17 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
         LOG.info(_('Ensuring static filters'), instance=instance)
         self._ensure_static_filters()
 
+        allow_dhcp = False
+        for (network, mapping) in network_info:
+            if mapping['dhcp_server']:
+                allow_dhcp = True
+                break
         if instance['image_ref'] == str(FLAGS.vpn_image_id):
             base_filter = 'nova-vpn'
-        else:
+        elif allow_dhcp:
             base_filter = 'nova-base'
+        else:
+            base_filter = 'nova-nodhcp'
 
         for (network, mapping) in network_info:
             nic_id = mapping['mac'].replace(':', '')
@@ -128,6 +130,10 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
                                                     'no-ip-spoofing',
                                                     'no-arp-spoofing',
                                                     'allow-dhcp-server']))
+        self._define_filter(self._filter_container('nova-nodhcp',
+                                                   ['no-mac-spoofing',
+                                                    'no-ip-spoofing',
+                                                    'no-arp-spoofing']))
         self._define_filter(self._filter_container('nova-vpn',
                                                    ['allow-dhcp-server']))
         self._define_filter(self.nova_dhcp_filter)
@@ -149,12 +155,12 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             # in the thread pool no matter what.
             tpool.execute(self._conn.nwfilterDefineXML, xml)
         else:
-            # NOTE(maoy): self._conn is a eventlet.tpool.Proxy object
+            # NOTE(maoy): self._conn is an eventlet.tpool.Proxy object
             self._conn.nwfilterDefineXML(xml)
 
     def unfilter_instance(self, instance, network_info):
         """Clear out the nwfilter rules."""
-        instance_name = instance.name
+        instance_name = instance['name']
         for (network, mapping) in network_info:
             nic_id = mapping['mac'].replace(':', '')
             instance_filter_name = self._instance_filter_name(instance, nic_id)
@@ -213,7 +219,7 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             try:
                 self._conn.nwfilterLookupByName(instance_filter_name)
             except libvirt.libvirtError:
-                name = instance.name
+                name = instance['name']
                 LOG.debug(_('The nwfilter(%(instance_filter_name)s) for'
                             '%(name)s is not found.') % locals(),
                           instance=instance)

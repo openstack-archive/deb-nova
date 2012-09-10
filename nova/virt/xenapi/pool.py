@@ -19,19 +19,19 @@
 Management class for Pool-related functions (join, eject, etc).
 """
 
-import json
 import urlparse
 
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova import rpc
-from nova.compute import aggregate_states
 from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import rpc
+from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 
-LOG = logging.getLogger("nova.virt.xenapi.pool")
+LOG = logging.getLogger(__name__)
 
 xenapi_pool_opts = [
     cfg.BoolOpt('use_join_force',
@@ -48,7 +48,6 @@ class ResourcePool(object):
     Implements resource pool operations.
     """
     def __init__(self, session):
-        self.XenAPI = session.get_imported_xenapi()
         host_ref = session.get_xenapi_host()
         host_rec = session.call_xenapi('host.get_record', host_ref)
         self._host_name = host_rec['hostname']
@@ -56,22 +55,53 @@ class ResourcePool(object):
         self._host_uuid = host_rec['uuid']
         self._session = session
 
+    def undo_aggregate_operation(self, context, op, aggregate_id,
+                                  host, set_error):
+        """Undo aggregate operation when pool error raised"""
+        try:
+            if set_error:
+                metadata = {pool_states.KEY: pool_states.ERROR}
+                db.aggregate_metadata_add(context, aggregate_id, metadata)
+            op(context, aggregate_id, host)
+        except Exception:
+            LOG.exception(_('Aggregate %(aggregate_id)s: unrecoverable state '
+                            'during operation on %(host)s') % locals())
+
     def add_to_aggregate(self, context, aggregate, host, **kwargs):
         """Add a compute host to an aggregate."""
+        if not pool_states.is_hv_pool(context, aggregate.id):
+            return
+
+        invalid = {pool_states.CHANGING: 'setup in progress',
+                   pool_states.DISMISSED: 'aggregate deleted',
+                   pool_states.ERROR: 'aggregate in error'}
+
+        if (db.aggregate_metadata_get(context, aggregate.id)[pool_states.KEY]
+                in invalid.keys()):
+            raise exception.InvalidAggregateAction(
+                    action='add host',
+                    aggregate_id=aggregate.id,
+                    reason=invalid[db.aggregate_metadata_get(context,
+                            aggregate.id)
+                    [pool_states.KEY]])
+
+        if (db.aggregate_metadata_get(context, aggregate.id)[pool_states.KEY]
+                == pool_states.CREATED):
+            db.aggregate_metadata_add(context, aggregate.id,
+                    {pool_states.KEY: pool_states.CHANGING})
         if len(aggregate.hosts) == 1:
             # this is the first host of the pool -> make it master
             self._init_pool(aggregate.id, aggregate.name)
             # save metadata so that we can find the master again
-            values = {
-                'operational_state': aggregate_states.ACTIVE,
-                'metadata': {'master_compute': host,
-                             host: self._host_uuid},
-                }
-            db.aggregate_update(context, aggregate.id, values)
+            metadata = {'master_compute': host,
+                        host: self._host_uuid,
+                        pool_states.KEY: pool_states.ACTIVE}
+            db.aggregate_metadata_add(context, aggregate.id, metadata)
         else:
             # the pool is already up and running, we need to figure out
             # whether we can serve the request from this host or not.
-            master_compute = aggregate.metadetails['master_compute']
+            master_compute = db.aggregate_metadata_get(context,
+                    aggregate.id)['master_compute']
             if master_compute == FLAGS.host and master_compute != host:
                 # this is the master ->  do a pool-join
                 # To this aim, nova compute on the slave has to go down.
@@ -91,7 +121,22 @@ class ResourcePool(object):
 
     def remove_from_aggregate(self, context, aggregate, host, **kwargs):
         """Remove a compute host from an aggregate."""
-        master_compute = aggregate.metadetails.get('master_compute')
+        if not pool_states.is_hv_pool(context, aggregate.id):
+            return
+
+        invalid = {pool_states.CREATED: 'no hosts to remove',
+                   pool_states.CHANGING: 'setup in progress',
+                   pool_states.DISMISSED: 'aggregate deleted', }
+        if (db.aggregate_metadata_get(context, aggregate.id)[pool_states.KEY]
+                in invalid.keys()):
+            raise exception.InvalidAggregateAction(
+                    action='remove host',
+                    aggregate_id=aggregate.id,
+                    reason=invalid[db.aggregate_metadata_get(context,
+                            aggregate.id)[pool_states.KEY]])
+
+        master_compute = db.aggregate_metadata_get(context,
+                aggregate.id)['master_compute']
         if master_compute == FLAGS.host and master_compute != host:
             # this is the master -> instruct it to eject a host from the pool
             host_uuid = db.aggregate_metadata_get(context, aggregate.id)[host]
@@ -134,12 +179,12 @@ class ResourcePool(object):
                     'url': url,
                     'user': user,
                     'password': passwd,
-                    'force': json.dumps(FLAGS.use_join_force),
+                    'force': jsonutils.dumps(FLAGS.use_join_force),
                     'master_addr': self._host_addr,
                     'master_user': FLAGS.xenapi_connection_username,
                     'master_pass': FLAGS.xenapi_connection_password, }
             self._session.call_plugin('xenhost', 'host_join', args)
-        except self.XenAPI.Failure as e:
+        except self._session.XenAPI.Failure as e:
             LOG.error(_("Pool-Join failed: %(e)s") % locals())
             raise exception.AggregateError(aggregate_id=aggregate_id,
                                            action='add_to_aggregate',
@@ -158,7 +203,7 @@ class ResourcePool(object):
 
             host_ref = self._session.call_xenapi('host.get_by_uuid', host_uuid)
             self._session.call_xenapi("pool.eject", host_ref)
-        except self.XenAPI.Failure as e:
+        except self._session.XenAPI.Failure as e:
             LOG.error(_("Pool-eject failed: %(e)s") % locals())
             raise exception.AggregateError(aggregate_id=aggregate_id,
                                            action='remove_from_aggregate',
@@ -170,7 +215,7 @@ class ResourcePool(object):
             pool_ref = self._session.call_xenapi("pool.get_all")[0]
             self._session.call_xenapi("pool.set_name_label",
                                       pool_ref, aggregate_name)
-        except self.XenAPI.Failure as e:
+        except self._session.XenAPI.Failure as e:
             LOG.error(_("Unable to set up pool: %(e)s.") % locals())
             raise exception.AggregateError(aggregate_id=aggregate_id,
                                            action='add_to_aggregate',
@@ -181,7 +226,7 @@ class ResourcePool(object):
         try:
             pool_ref = self._session.call_xenapi('pool.get_all')[0]
             self._session.call_xenapi('pool.set_name_label', pool_ref, '')
-        except self.XenAPI.Failure as e:
+        except self._session.XenAPI.Failure as e:
             LOG.error(_("Pool-set_name_label failed: %(e)s") % locals())
             raise exception.AggregateError(aggregate_id=aggregate_id,
                                            action='remove_from_aggregate',
@@ -195,7 +240,7 @@ def forward_request(context, request_type, master, aggregate_id,
     # because this might be 169.254.0.1, i.e. xenapi
     # NOTE: password in clear is not great, but it'll do for now
     sender_url = swap_xapi_host(FLAGS.xenapi_connection_url, slave_address)
-    rpc.cast(context, db.queue_get_for(context, FLAGS.compute_topic, master),
+    rpc.cast(context, rpc.queue_get_for(context, FLAGS.compute_topic, master),
              {"method": request_type,
               "args": {"aggregate_id": aggregate_id,
                        "host": slave_compute,

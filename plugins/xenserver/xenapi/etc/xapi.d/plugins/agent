@@ -43,19 +43,13 @@ import xenstore
 AGENT_TIMEOUT = 30
 
 
-def jsonify(fnc):
-    def wrapper(*args, **kwargs):
-        return json.dumps(fnc(*args, **kwargs))
-    return wrapper
-
-
 class TimeoutError(StandardError):
     pass
 
 
 def version(self, arg_dict):
     """Get version of agent."""
-    arg_dict["value"] = json.dumps({"name": "version", "value": ""})
+    arg_dict["value"] = json.dumps({"name": "version", "value": "agent"})
     request_id = arg_dict["id"]
     arg_dict["path"] = "data/host/%s" % request_id
     xenstore.write_record(self, arg_dict)
@@ -105,7 +99,6 @@ def password(self, arg_dict):
     return resp
 
 
-@jsonify
 def resetnetwork(self, arg_dict):
     """Writes a resquest to xenstore that tells the agent
     to reset networking.
@@ -114,6 +107,11 @@ def resetnetwork(self, arg_dict):
     request_id = arg_dict['id']
     arg_dict['path'] = "data/host/%s" % request_id
     xenstore.write_record(self, arg_dict)
+    try:
+        resp = _wait_for_agent(self, request_id, arg_dict)
+    except TimeoutError, e:
+        raise PluginError(e)
+    return resp
 
 
 def inject_file(self, arg_dict):
@@ -206,22 +204,22 @@ def _wait_for_agent(self, request_id, arg_dict):
     arg_dict["path"] = "data/guest/%s" % request_id
     arg_dict["ignore_missing_path"] = True
     start = time.time()
-    while True:
-        if time.time() - start > AGENT_TIMEOUT:
-            # No response within the timeout period; bail out
-            # First, delete the request record
-            arg_dict["path"] = "data/host/%s" % request_id
-            xenstore.delete_record(self, arg_dict)
-            raise TimeoutError(_("TIMEOUT: No response from agent within"
-                    " %s seconds.") % AGENT_TIMEOUT)
+    while time.time() - start < AGENT_TIMEOUT:
         ret = xenstore.read_record(self, arg_dict)
         # Note: the response for None with be a string that includes
         # double quotes.
         if ret != '"None"':
             # The agent responded
             return ret
-        else:
-            time.sleep(3)
+
+        time.sleep(.5)
+
+    # No response within the timeout period; bail out
+    # First, delete the request record
+    arg_dict["path"] = "data/host/%s" % request_id
+    xenstore.delete_record(self, arg_dict)
+    raise TimeoutError(_("TIMEOUT: No response from agent within"
+                         " %s seconds.") % AGENT_TIMEOUT)
 
 
 if __name__ == "__main__":

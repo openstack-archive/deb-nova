@@ -19,20 +19,20 @@ import datetime
 import hashlib
 import os
 import os.path
-import socket
 import shutil
+import socket
 import StringIO
 import tempfile
 
 import eventlet
 from eventlet import greenpool
 import iso8601
-import lockfile
 import mox
 
 import nova
 from nova import exception
 from nova import flags
+from nova.openstack.common import timeutils
 from nova import test
 from nova import utils
 
@@ -73,7 +73,7 @@ exit 1
                               tmpfilename, tmpfilename2, attempts=10,
                               process_input='foo',
                               delay_on_retry=False)
-            fp = open(tmpfilename2, 'r+')
+            fp = open(tmpfilename2, 'r')
             runs = fp.read()
             fp.close()
             self.assertNotEquals(runs.strip(), 'failure', 'stdin did not '
@@ -87,7 +87,7 @@ exit 1
             os.unlink(tmpfilename2)
 
     def test_unknown_kwargs_raises_error(self):
-        self.assertRaises(exception.Error,
+        self.assertRaises(exception.NovaException,
                           utils.execute,
                           '/usr/bin/env', 'true',
                           this_is_not_a_valid_kwarg=True)
@@ -229,16 +229,16 @@ class GetFromPathTestCase(test.TestCase):
     def test_bad_xpath(self):
         f = utils.get_from_path
 
-        self.assertRaises(exception.Error, f, [], None)
-        self.assertRaises(exception.Error, f, [], "")
-        self.assertRaises(exception.Error, f, [], "/")
-        self.assertRaises(exception.Error, f, [], "/a")
-        self.assertRaises(exception.Error, f, [], "/a/")
-        self.assertRaises(exception.Error, f, [], "//")
-        self.assertRaises(exception.Error, f, [], "//a")
-        self.assertRaises(exception.Error, f, [], "a//a")
-        self.assertRaises(exception.Error, f, [], "a//a/")
-        self.assertRaises(exception.Error, f, [], "a/a/")
+        self.assertRaises(exception.NovaException, f, [], None)
+        self.assertRaises(exception.NovaException, f, [], "")
+        self.assertRaises(exception.NovaException, f, [], "/")
+        self.assertRaises(exception.NovaException, f, [], "/a")
+        self.assertRaises(exception.NovaException, f, [], "/a/")
+        self.assertRaises(exception.NovaException, f, [], "//")
+        self.assertRaises(exception.NovaException, f, [], "//a")
+        self.assertRaises(exception.NovaException, f, [], "a//a")
+        self.assertRaises(exception.NovaException, f, [], "a//a/")
+        self.assertRaises(exception.NovaException, f, [], "a/a/")
 
     def test_real_failure1(self):
         # Real world failure case...
@@ -417,6 +417,51 @@ class GenericUtilsTestCase(test.TestCase):
                 self.assertEqual(fake_execute.uid, 2)
             self.assertEqual(fake_execute.uid, os.getuid())
 
+    def test_service_is_up(self):
+        fts_func = datetime.datetime.fromtimestamp
+        fake_now = 1000
+        down_time = 5
+
+        self.flags(service_down_time=down_time)
+        self.mox.StubOutWithMock(timeutils, 'utcnow')
+
+        # Up (equal)
+        timeutils.utcnow().AndReturn(fts_func(fake_now))
+        service = {'updated_at': fts_func(fake_now - down_time),
+                   'created_at': fts_func(fake_now - down_time)}
+        self.mox.ReplayAll()
+        result = utils.service_is_up(service)
+        self.assertTrue(result)
+
+        self.mox.ResetAll()
+        # Up
+        timeutils.utcnow().AndReturn(fts_func(fake_now))
+        service = {'updated_at': fts_func(fake_now - down_time + 1),
+                   'created_at': fts_func(fake_now - down_time + 1)}
+        self.mox.ReplayAll()
+        result = utils.service_is_up(service)
+        self.assertTrue(result)
+
+        self.mox.ResetAll()
+        # Down
+        timeutils.utcnow().AndReturn(fts_func(fake_now))
+        service = {'updated_at': fts_func(fake_now - down_time - 1),
+                   'created_at': fts_func(fake_now - down_time - 1)}
+        self.mox.ReplayAll()
+        result = utils.service_is_up(service)
+        self.assertFalse(result)
+
+    def test_xhtml_escape(self):
+        self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
+        self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
+
+    def test_hash_file(self):
+        data = 'Mary had a little lamb, its fleece as white as snow'
+        flo = StringIO.StringIO(data)
+        h1 = utils.hash_file(flo)
+        h2 = hashlib.sha1(data).hexdigest()
+        self.assertEquals(h1, h2)
+
 
 class IsUUIDLikeTestCase(test.TestCase):
     def assertUUIDLike(self, val, expected):
@@ -441,93 +486,6 @@ class IsUUIDLikeTestCase(test.TestCase):
 
     def test_gen_valid_uuid(self):
         self.assertUUIDLike(str(utils.gen_uuid()), True)
-
-
-class ToPrimitiveTestCase(test.TestCase):
-    def test_list(self):
-        self.assertEquals(utils.to_primitive([1, 2, 3]), [1, 2, 3])
-
-    def test_empty_list(self):
-        self.assertEquals(utils.to_primitive([]), [])
-
-    def test_tuple(self):
-        self.assertEquals(utils.to_primitive((1, 2, 3)), [1, 2, 3])
-
-    def test_dict(self):
-        self.assertEquals(utils.to_primitive(dict(a=1, b=2, c=3)),
-                          dict(a=1, b=2, c=3))
-
-    def test_empty_dict(self):
-        self.assertEquals(utils.to_primitive({}), {})
-
-    def test_datetime(self):
-        x = datetime.datetime(1, 2, 3, 4, 5, 6, 7)
-        self.assertEquals(utils.to_primitive(x), "0001-02-03 04:05:06.000007")
-
-    def test_iter(self):
-        class IterClass(object):
-            def __init__(self):
-                self.data = [1, 2, 3, 4, 5]
-                self.index = 0
-
-            def __iter__(self):
-                return self
-
-            def next(self):
-                if self.index == len(self.data):
-                    raise StopIteration
-                self.index = self.index + 1
-                return self.data[self.index - 1]
-
-        x = IterClass()
-        self.assertEquals(utils.to_primitive(x), [1, 2, 3, 4, 5])
-
-    def test_iteritems(self):
-        class IterItemsClass(object):
-            def __init__(self):
-                self.data = dict(a=1, b=2, c=3).items()
-                self.index = 0
-
-            def __iter__(self):
-                return self
-
-            def next(self):
-                if self.index == len(self.data):
-                    raise StopIteration
-                self.index = self.index + 1
-                return self.data[self.index - 1]
-
-        x = IterItemsClass()
-        ordered = utils.to_primitive(x)
-        ordered.sort()
-        self.assertEquals(ordered, [['a', 1], ['b', 2], ['c', 3]])
-
-    def test_instance(self):
-        class MysteryClass(object):
-            a = 10
-
-            def __init__(self):
-                self.b = 1
-
-        x = MysteryClass()
-        self.assertEquals(utils.to_primitive(x, convert_instances=True),
-                          dict(b=1))
-
-        self.assertEquals(utils.to_primitive(x), x)
-
-    def test_typeerror(self):
-        x = bytearray  # Class, not instance
-        self.assertEquals(utils.to_primitive(x), u"<type 'bytearray'>")
-
-    def test_nasties(self):
-        def foo():
-            pass
-        x = [datetime, foo, dir]
-        ret = utils.to_primitive(x)
-        self.assertEquals(len(ret), 3)
-        self.assertTrue(ret[0].startswith(u"<module 'datetime' from "))
-        self.assertTrue(ret[1].startswith('<function foo at 0x'))
-        self.assertEquals(ret[2], '<built-in function dir>')
 
 
 class MonkeyPatchTestCase(test.TestCase):
@@ -575,289 +533,22 @@ class MonkeyPatchTestCase(test.TestCase):
             in nova.tests.monkey_patch_example.CALLED_FUNCTION)
 
 
-class DeprecationTest(test.TestCase):
-    def setUp(self):
-        super(DeprecationTest, self).setUp()
-
-        def fake_warn_deprecated_class(cls, msg):
-            self.warn = ('class', cls, msg)
-
-        def fake_warn_deprecated_function(func, msg):
-            self.warn = ('function', func, msg)
-
-        self.stubs.Set(utils, 'warn_deprecated_class',
-                       fake_warn_deprecated_class)
-        self.stubs.Set(utils, 'warn_deprecated_function',
-                       fake_warn_deprecated_function)
-        self.warn = None
-
-    def test_deprecated_function_no_message(self):
-        def test_function():
-            pass
-
-        decorated = utils.deprecated()(test_function)
-
-        decorated()
-        self.assertEqual(self.warn, ('function', test_function, ''))
-
-    def test_deprecated_function_with_message(self):
-        def test_function():
-            pass
-
-        decorated = utils.deprecated('string')(test_function)
-
-        decorated()
-        self.assertEqual(self.warn, ('function', test_function, 'string'))
-
-    def test_deprecated_class_no_message(self):
-        @utils.deprecated()
-        class TestClass(object):
-            pass
-
-        TestClass()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-    def test_deprecated_class_with_message(self):
-        @utils.deprecated('string')
-        class TestClass(object):
-            pass
-
-        TestClass()
-        self.assertEqual(self.warn, ('class', TestClass, 'string'))
-
-    def test_deprecated_classmethod_no_message(self):
-        @utils.deprecated()
-        class TestClass(object):
-            @classmethod
-            def class_method(cls):
-                pass
-
-        TestClass.class_method()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-    def test_deprecated_classmethod_with_message(self):
-        @utils.deprecated('string')
-        class TestClass(object):
-            @classmethod
-            def class_method(cls):
-                pass
-
-        TestClass.class_method()
-        self.assertEqual(self.warn, ('class', TestClass, 'string'))
-
-    def test_deprecated_staticmethod_no_message(self):
-        @utils.deprecated()
-        class TestClass(object):
-            @staticmethod
-            def static_method():
-                pass
-
-        TestClass.static_method()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-    def test_deprecated_staticmethod_with_message(self):
-        @utils.deprecated('string')
-        class TestClass(object):
-            @staticmethod
-            def static_method():
-                pass
-
-        TestClass.static_method()
-        self.assertEqual(self.warn, ('class', TestClass, 'string'))
-
-    def test_deprecated_instancemethod(self):
-        @utils.deprecated()
-        class TestClass(object):
-            def instance_method(self):
-                pass
-
-        # Instantiate the class...
-        obj = TestClass()
-        self.assertEqual(self.warn, ('class', TestClass, ''))
-
-        # Reset warn...
-        self.warn = None
-
-        # Call the instance method...
-        obj.instance_method()
-
-        # Make sure that did *not* generate a warning
-        self.assertEqual(self.warn, None)
-
-    def test_service_is_up(self):
-        fts_func = datetime.datetime.fromtimestamp
-        fake_now = 1000
-        down_time = 5
-
-        self.flags(service_down_time=down_time)
-        self.mox.StubOutWithMock(utils, 'utcnow')
-
-        # Up (equal)
-        utils.utcnow().AndReturn(fts_func(fake_now))
-        service = {'updated_at': fts_func(fake_now - down_time),
-                   'created_at': fts_func(fake_now - down_time)}
-        self.mox.ReplayAll()
-        result = utils.service_is_up(service)
-        self.assertTrue(result)
-
-        self.mox.ResetAll()
-        # Up
-        utils.utcnow().AndReturn(fts_func(fake_now))
-        service = {'updated_at': fts_func(fake_now - down_time + 1),
-                   'created_at': fts_func(fake_now - down_time + 1)}
-        self.mox.ReplayAll()
-        result = utils.service_is_up(service)
-        self.assertTrue(result)
-
-        self.mox.ResetAll()
-        # Down
-        utils.utcnow().AndReturn(fts_func(fake_now))
-        service = {'updated_at': fts_func(fake_now - down_time - 1),
-                   'created_at': fts_func(fake_now - down_time - 1)}
-        self.mox.ReplayAll()
-        result = utils.service_is_up(service)
-        self.assertFalse(result)
-
-    def test_xhtml_escape(self):
-        self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
-        self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
-
-    def test_hash_file(self):
-        data = 'Mary had a little lamb, its fleece as white as snow'
-        flo = StringIO.StringIO(data)
-        h1 = utils.hash_file(flo)
-        h2 = hashlib.sha1(data).hexdigest()
-        self.assertEquals(h1, h2)
-
-
-class Iso8601TimeTest(test.TestCase):
-
-    def _instaneous(self, timestamp, yr, mon, day, hr, min, sec, micro):
-        self.assertEquals(timestamp.year, yr)
-        self.assertEquals(timestamp.month, mon)
-        self.assertEquals(timestamp.day, day)
-        self.assertEquals(timestamp.hour, hr)
-        self.assertEquals(timestamp.minute, min)
-        self.assertEquals(timestamp.second, sec)
-        self.assertEquals(timestamp.microsecond, micro)
-
-    def _do_test(self, str, yr, mon, day, hr, min, sec, micro, shift):
-        DAY_SECONDS = 24 * 60 * 60
-        timestamp = utils.parse_isotime(str)
-        self._instaneous(timestamp, yr, mon, day, hr, min, sec, micro)
-        offset = timestamp.tzinfo.utcoffset(None)
-        self.assertEqual(offset.seconds + offset.days * DAY_SECONDS, shift)
-
-    def test_zulu(self):
-        str = '2012-02-14T20:53:07Z'
-        self._do_test(str, 2012, 02, 14, 20, 53, 7, 0, 0)
-
-    def test_zulu_micros(self):
-        str = '2012-02-14T20:53:07.123Z'
-        self._do_test(str, 2012, 02, 14, 20, 53, 7, 123000, 0)
-
-    def test_offset_east(self):
-        str = '2012-02-14T20:53:07+04:30'
-        offset = 4.5 * 60 * 60
-        self._do_test(str, 2012, 02, 14, 20, 53, 7, 0, offset)
-
-    def test_offset_east_micros(self):
-        str = '2012-02-14T20:53:07.42+04:30'
-        offset = 4.5 * 60 * 60
-        self._do_test(str, 2012, 02, 14, 20, 53, 7, 420000, offset)
-
-    def test_offset_west(self):
-        str = '2012-02-14T20:53:07-05:30'
-        offset = -5.5 * 60 * 60
-        self._do_test(str, 2012, 02, 14, 20, 53, 7, 0, offset)
-
-    def test_offset_west_micros(self):
-        str = '2012-02-14T20:53:07.654321-05:30'
-        offset = -5.5 * 60 * 60
-        self._do_test(str, 2012, 02, 14, 20, 53, 7, 654321, offset)
-
-    def test_compare(self):
-        zulu = utils.parse_isotime('2012-02-14T20:53:07')
-        east = utils.parse_isotime('2012-02-14T20:53:07-01:00')
-        west = utils.parse_isotime('2012-02-14T20:53:07+01:00')
-        self.assertTrue(east > west)
-        self.assertTrue(east > zulu)
-        self.assertTrue(zulu > west)
-
-    def test_compare_micros(self):
-        zulu = utils.parse_isotime('2012-02-14T20:53:07.6544')
-        east = utils.parse_isotime('2012-02-14T19:53:07.654321-01:00')
-        west = utils.parse_isotime('2012-02-14T21:53:07.655+01:00')
-        self.assertTrue(east < west)
-        self.assertTrue(east < zulu)
-        self.assertTrue(zulu < west)
-
-    def test_zulu_roundtrip(self):
-        str = '2012-02-14T20:53:07Z'
-        zulu = utils.parse_isotime(str)
-        self.assertEquals(zulu.tzinfo, iso8601.iso8601.UTC)
-        self.assertEquals(utils.isotime(zulu), str)
-
-    def test_east_roundtrip(self):
-        str = '2012-02-14T20:53:07-07:00'
-        east = utils.parse_isotime(str)
-        self.assertEquals(east.tzinfo.tzname(None), '-07:00')
-        self.assertEquals(utils.isotime(east), str)
-
-    def test_west_roundtrip(self):
-        str = '2012-02-14T20:53:07+11:30'
-        west = utils.parse_isotime(str)
-        self.assertEquals(west.tzinfo.tzname(None), '+11:30')
-        self.assertEquals(utils.isotime(west), str)
-
-    def test_now_roundtrip(self):
-        str = utils.isotime()
-        now = utils.parse_isotime(str)
-        self.assertEquals(now.tzinfo, iso8601.iso8601.UTC)
-        self.assertEquals(utils.isotime(now), str)
-
-    def test_zulu_normalize(self):
-        str = '2012-02-14T20:53:07Z'
-        zulu = utils.parse_isotime(str)
-        normed = utils.normalize_time(zulu)
-        self._instaneous(normed, 2012, 2, 14, 20, 53, 07, 0)
-
-    def test_east_normalize(self):
-        str = '2012-02-14T20:53:07-07:00'
-        east = utils.parse_isotime(str)
-        normed = utils.normalize_time(east)
-        self._instaneous(normed, 2012, 2, 15, 03, 53, 07, 0)
-
-    def test_west_normalize(self):
-        str = '2012-02-14T20:53:07+21:00'
-        west = utils.parse_isotime(str)
-        normed = utils.normalize_time(west)
-        self._instaneous(normed, 2012, 2, 13, 23, 53, 07, 0)
-
-
-class TestGreenLocks(test.TestCase):
+class TestFileLocks(test.TestCase):
     def test_concurrent_green_lock_succeeds(self):
-        """Verify spawn_n greenthreads with two locks run concurrently.
-
-        This succeeds with spawn but fails with spawn_n because lockfile
-        gets the same thread id for both spawn_n threads. Our workaround
-        of using the GreenLockFile will work even if the issue is fixed.
-        """
+        """Verify spawn_n greenthreads with two locks run concurrently."""
         self.completed = False
         with utils.tempdir() as tmpdir:
 
             def locka(wait):
-                a = utils.GreenLockFile(os.path.join(tmpdir, 'a'))
-                a.acquire()
-                wait.wait()
-                a.release()
+                a = utils.InterProcessLock(os.path.join(tmpdir, 'a'))
+                with a:
+                    wait.wait()
                 self.completed = True
 
             def lockb(wait):
-                b = utils.GreenLockFile(os.path.join(tmpdir, 'b'))
-                b.acquire()
-                wait.wait()
-                b.release()
+                b = utils.InterProcessLock(os.path.join(tmpdir, 'b'))
+                with b:
+                    wait.wait()
 
             wait1 = eventlet.event.Event()
             wait2 = eventlet.event.Event()
@@ -871,159 +562,6 @@ class TestGreenLocks(test.TestCase):
         self.assertTrue(self.completed)
 
 
-class TestLockCleanup(test.TestCase):
-    """unit tests for utils.cleanup_file_locks()"""
-
-    def setUp(self):
-        super(TestLockCleanup, self).setUp()
-
-        self.pid = os.getpid()
-        self.dead_pid = self._get_dead_pid()
-        self.tempdir = tempfile.mkdtemp()
-        self.flags(lock_path=self.tempdir)
-        self.lock_name = 'nova-testlock'
-        self.lock_file = os.path.join(FLAGS.lock_path,
-                                      self.lock_name + '.lock')
-        self.hostname = socket.gethostname()
-        print self.pid, self.dead_pid
-        try:
-            os.unlink(self.lock_file)
-        except OSError as (errno, strerror):
-            if errno == 2:
-                pass
-
-    def tearDown(self):
-        shutil.rmtree(self.tempdir)
-        super(TestLockCleanup, self).tearDown()
-
-    def _get_dead_pid(self):
-        """get a pid for a process that does not exist"""
-
-        candidate_pid = self.pid - 1
-        while os.path.exists(os.path.join('/proc', str(candidate_pid))):
-            candidate_pid -= 1
-            if candidate_pid == 1:
-                return 0
-        return candidate_pid
-
-    def _get_sentinel_name(self, hostname, pid, thread='MainThread'):
-        return os.path.join(FLAGS.lock_path,
-                            '%s.%s-%d' % (hostname, thread, pid))
-
-    def _create_sentinel(self, hostname, pid, thread='MainThread'):
-        name = self._get_sentinel_name(hostname, pid, thread)
-        open(name, 'wb').close()
-        return name
-
-    def test_clean_stale_locks(self):
-        """verify locks for dead processes are cleaned up"""
-
-        # create sentinels for two processes, us and a 'dead' one
-        # no active lock
-        sentinel1 = self._create_sentinel(self.hostname, self.pid)
-        sentinel2 = self._create_sentinel(self.hostname, self.dead_pid)
-
-        utils.cleanup_file_locks()
-
-        self.assertTrue(os.path.exists(sentinel1))
-        self.assertFalse(os.path.exists(self.lock_file))
-        self.assertFalse(os.path.exists(sentinel2))
-
-        os.unlink(sentinel1)
-
-    def test_clean_stale_locks_active(self):
-        """verify locks for dead processes are cleaned with an active lock """
-
-        # create sentinels for two processes, us and a 'dead' one
-        # create an active lock for us
-        sentinel1 = self._create_sentinel(self.hostname, self.pid)
-        sentinel2 = self._create_sentinel(self.hostname, self.dead_pid)
-        os.link(sentinel1, self.lock_file)
-
-        utils.cleanup_file_locks()
-
-        self.assertTrue(os.path.exists(sentinel1))
-        self.assertTrue(os.path.exists(self.lock_file))
-        self.assertFalse(os.path.exists(sentinel2))
-
-        os.unlink(sentinel1)
-        os.unlink(self.lock_file)
-
-    def test_clean_stale_with_threads(self):
-        """verify locks for multiple threads are cleaned up """
-
-        # create sentinels for four threads in our process, and a 'dead'
-        # process.  no lock.
-        sentinel1 = self._create_sentinel(self.hostname, self.pid, 'Default-1')
-        sentinel2 = self._create_sentinel(self.hostname, self.pid, 'Default-2')
-        sentinel3 = self._create_sentinel(self.hostname, self.pid, 'Default-3')
-        sentinel4 = self._create_sentinel(self.hostname, self.pid, 'Default-4')
-        sentinel5 = self._create_sentinel(self.hostname, self.dead_pid,
-                                          'Default-1')
-
-        utils.cleanup_file_locks()
-
-        self.assertTrue(os.path.exists(sentinel1))
-        self.assertTrue(os.path.exists(sentinel2))
-        self.assertTrue(os.path.exists(sentinel3))
-        self.assertTrue(os.path.exists(sentinel4))
-        self.assertFalse(os.path.exists(self.lock_file))
-        self.assertFalse(os.path.exists(sentinel5))
-
-        os.unlink(sentinel1)
-        os.unlink(sentinel2)
-        os.unlink(sentinel3)
-        os.unlink(sentinel4)
-
-    def test_clean_stale_with_threads_active(self):
-        """verify locks for multiple threads are cleaned up """
-
-        # create sentinels for four threads in our process, and a 'dead'
-        # process
-        sentinel1 = self._create_sentinel(self.hostname, self.pid, 'Default-1')
-        sentinel2 = self._create_sentinel(self.hostname, self.pid, 'Default-2')
-        sentinel3 = self._create_sentinel(self.hostname, self.pid, 'Default-3')
-        sentinel4 = self._create_sentinel(self.hostname, self.pid, 'Default-4')
-        sentinel5 = self._create_sentinel(self.hostname, self.dead_pid,
-                                          'Default-1')
-
-        os.link(sentinel1, self.lock_file)
-
-        utils.cleanup_file_locks()
-
-        self.assertTrue(os.path.exists(sentinel1))
-        self.assertTrue(os.path.exists(sentinel2))
-        self.assertTrue(os.path.exists(sentinel3))
-        self.assertTrue(os.path.exists(sentinel4))
-        self.assertTrue(os.path.exists(self.lock_file))
-        self.assertFalse(os.path.exists(sentinel5))
-
-        os.unlink(sentinel1)
-        os.unlink(sentinel2)
-        os.unlink(sentinel3)
-        os.unlink(sentinel4)
-        os.unlink(self.lock_file)
-
-    def test_clean_bogus_lockfiles(self):
-        """verify lockfiles are cleaned """
-
-        lock1 = os.path.join(FLAGS.lock_path, 'nova-testlock1.lock')
-        lock2 = os.path.join(FLAGS.lock_path, 'nova-testlock2.lock')
-        lock3 = os.path.join(FLAGS.lock_path, 'testlock3.lock')
-
-        open(lock1, 'wb').close()
-        open(lock2, 'wb').close()
-        open(lock3, 'wb').close()
-
-        utils.cleanup_file_locks()
-
-        self.assertFalse(os.path.exists(lock1))
-        self.assertFalse(os.path.exists(lock2))
-        self.assertTrue(os.path.exists(lock3))
-
-        os.unlink(lock3)
-
-
 class AuditPeriodTest(test.TestCase):
 
     def setUp(self):
@@ -1035,14 +573,14 @@ class AuditPeriodTest(test.TestCase):
                                            day=5,
                                            month=3,
                                            year=2012)
-        utils.set_time_override(override_time=self.test_time)
+        timeutils.set_time_override(override_time=self.test_time)
 
     def tearDown(self):
-        utils.clear_time_override()
+        timeutils.clear_time_override()
         super(AuditPeriodTest, self).tearDown()
 
     def test_hour(self):
-        begin, end = utils.current_audit_period(unit='hour')
+        begin, end = utils.last_completed_audit_period(unit='hour')
         self.assertEquals(begin, datetime.datetime(
                                            hour=7,
                                            day=5,
@@ -1055,7 +593,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_hour_with_offset_before_current(self):
-        begin, end = utils.current_audit_period(unit='hour@10')
+        begin, end = utils.last_completed_audit_period(unit='hour@10')
         self.assertEquals(begin, datetime.datetime(
                                            minute=10,
                                            hour=7,
@@ -1070,7 +608,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_hour_with_offset_after_current(self):
-        begin, end = utils.current_audit_period(unit='hour@30')
+        begin, end = utils.last_completed_audit_period(unit='hour@30')
         self.assertEquals(begin, datetime.datetime(
                                            minute=30,
                                            hour=6,
@@ -1085,7 +623,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_day(self):
-        begin, end = utils.current_audit_period(unit='day')
+        begin, end = utils.last_completed_audit_period(unit='day')
         self.assertEquals(begin, datetime.datetime(
                                            day=4,
                                            month=3,
@@ -1096,7 +634,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_day_with_offset_before_current(self):
-        begin, end = utils.current_audit_period(unit='day@6')
+        begin, end = utils.last_completed_audit_period(unit='day@6')
         self.assertEquals(begin, datetime.datetime(
                                            hour=6,
                                            day=4,
@@ -1109,7 +647,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_day_with_offset_after_current(self):
-        begin, end = utils.current_audit_period(unit='day@10')
+        begin, end = utils.last_completed_audit_period(unit='day@10')
         self.assertEquals(begin, datetime.datetime(
                                            hour=10,
                                            day=3,
@@ -1122,7 +660,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_month(self):
-        begin, end = utils.current_audit_period(unit='month')
+        begin, end = utils.last_completed_audit_period(unit='month')
         self.assertEquals(begin, datetime.datetime(
                                            day=1,
                                            month=2,
@@ -1133,7 +671,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_month_with_offset_before_current(self):
-        begin, end = utils.current_audit_period(unit='month@2')
+        begin, end = utils.last_completed_audit_period(unit='month@2')
         self.assertEquals(begin, datetime.datetime(
                                            day=2,
                                            month=2,
@@ -1144,7 +682,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_month_with_offset_after_current(self):
-        begin, end = utils.current_audit_period(unit='month@15')
+        begin, end = utils.last_completed_audit_period(unit='month@15')
         self.assertEquals(begin, datetime.datetime(
                                            day=15,
                                            month=1,
@@ -1155,7 +693,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_year(self):
-        begin, end = utils.current_audit_period(unit='year')
+        begin, end = utils.last_completed_audit_period(unit='year')
         self.assertEquals(begin, datetime.datetime(
                                            day=1,
                                            month=1,
@@ -1166,7 +704,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_year_with_offset_before_current(self):
-        begin, end = utils.current_audit_period(unit='year@2')
+        begin, end = utils.last_completed_audit_period(unit='year@2')
         self.assertEquals(begin, datetime.datetime(
                                            day=1,
                                            month=2,
@@ -1177,7 +715,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2012))
 
     def test_year_with_offset_after_current(self):
-        begin, end = utils.current_audit_period(unit='year@6')
+        begin, end = utils.last_completed_audit_period(unit='year@6')
         self.assertEquals(begin, datetime.datetime(
                                            day=1,
                                            month=6,
@@ -1186,3 +724,35 @@ class AuditPeriodTest(test.TestCase):
                                            day=1,
                                            month=6,
                                            year=2011))
+
+
+class DiffDict(test.TestCase):
+    """Unit tests for diff_dict()"""
+
+    def test_no_change(self):
+        old = dict(a=1, b=2, c=3)
+        new = dict(a=1, b=2, c=3)
+        diff = utils.diff_dict(old, new)
+
+        self.assertEqual(diff, {})
+
+    def test_new_key(self):
+        old = dict(a=1, b=2, c=3)
+        new = dict(a=1, b=2, c=3, d=4)
+        diff = utils.diff_dict(old, new)
+
+        self.assertEqual(diff, dict(d=['+', 4]))
+
+    def test_changed_key(self):
+        old = dict(a=1, b=2, c=3)
+        new = dict(a=1, b=4, c=3)
+        diff = utils.diff_dict(old, new)
+
+        self.assertEqual(diff, dict(b=['+', 4]))
+
+    def test_removed_key(self):
+        old = dict(a=1, b=2, c=3)
+        new = dict(a=1, c=3)
+        diff = utils.diff_dict(old, new)
+
+        self.assertEqual(diff, dict(b=['-']))

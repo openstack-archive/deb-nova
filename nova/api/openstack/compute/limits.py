@@ -20,7 +20,6 @@ Module dedicated functions/classes dealing with rate limiting requests.
 import collections
 import copy
 import httplib
-import json
 import math
 import re
 import time
@@ -31,9 +30,13 @@ import webob.exc
 from nova.api.openstack.compute.views import limits as limits_views
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova import quota
-from nova import utils
 from nova import wsgi as base_wsgi
+
+
+QUOTAS = quota.QUOTAS
 
 
 # Convenience constants for the limits dictionary passed to Limiter().
@@ -82,7 +85,9 @@ class LimitsController(object):
         Return all global and rate limit information.
         """
         context = req.environ['nova.context']
-        abs_limits = quota.get_project_quotas(context, context.project_id)
+        quotas = QUOTAS.get_project_quotas(context, context.project_id,
+                                           usages=False)
+        abs_limits = dict((k, v['limit']) for k, v in quotas.items())
         rate_limits = req.environ.get("nova.limits", [])
 
         builder = self._get_view_builder(req)
@@ -233,7 +238,7 @@ class RateLimitingMiddleware(base_wsgi.Middleware):
         if limiter is None:
             limiter = Limiter
         else:
-            limiter = utils.import_class(limiter)
+            limiter = importutils.import_class(limiter)
 
         # Parse the limits, if any are provided
         if limits is not None:
@@ -413,7 +418,7 @@ class WsgiLimiter(object):
             raise webob.exc.HTTPMethodNotAllowed()
 
         try:
-            info = dict(json.loads(request.body))
+            info = dict(jsonutils.loads(request.body))
         except ValueError:
             raise webob.exc.HTTPBadRequest()
 
@@ -444,7 +449,7 @@ class WsgiLimiterProxy(object):
         self.limiter_address = limiter_address
 
     def check_for_delay(self, verb, path, username=None):
-        body = json.dumps({"verb": verb, "path": path})
+        body = jsonutils.dumps({"verb": verb, "path": path})
         headers = {"Content-Type": "application/json"}
 
         conn = httplib.HTTPConnection(self.limiter_address)

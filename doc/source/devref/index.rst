@@ -38,6 +38,7 @@ Background Concepts for Nova
 
    architecture
    threading
+   vmstates
    il8n
    filter_scheduler
    multinic
@@ -70,7 +71,6 @@ Module Reference
    xensmvolume
    compute
    network
-   auth
    api
    scheduler
    fakes

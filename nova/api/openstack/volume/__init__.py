@@ -24,9 +24,9 @@ import nova.api.openstack
 from nova.api.openstack.volume import extensions
 from nova.api.openstack.volume import snapshots
 from nova.api.openstack.volume import types
-from nova.api.openstack.volume import volumes
 from nova.api.openstack.volume import versions
-from nova import log as logging
+from nova.api.openstack.volume import volumes
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class APIRouter(nova.api.openstack.APIRouter):
     """
     ExtensionManager = extensions.ExtensionManager
 
-    def _setup_routes(self, mapper):
+    def _setup_routes(self, mapper, ext_mgr):
         self.resources['versions'] = versions.create_resource()
         mapper.connect("versions", "/",
                     controller=self.resources['versions'],

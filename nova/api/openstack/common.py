@@ -25,16 +25,18 @@ from xml.dom import minidom
 
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.compute import vm_states
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
+from nova.compute import vm_states
+from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import quota
 
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
+QUOTAS = quota.QUOTAS
 
 
 XML_NS_V11 = 'http://docs.openstack.org/compute/api/v1.1'
@@ -46,25 +48,26 @@ _STATE_MAP = {
         task_states.REBOOTING: 'REBOOT',
         task_states.REBOOTING_HARD: 'HARD_REBOOT',
         task_states.UPDATING_PASSWORD: 'PASSWORD',
-        task_states.RESIZE_VERIFY: 'VERIFY_RESIZE',
+        task_states.REBUILDING: 'REBUILD',
+        task_states.REBUILD_BLOCK_DEVICE_MAPPING: 'REBUILD',
+        task_states.REBUILD_SPAWNING: 'REBUILD',
+        task_states.MIGRATING: 'MIGRATING',
+        task_states.RESIZE_PREP: 'RESIZE',
+        task_states.RESIZE_MIGRATING: 'RESIZE',
+        task_states.RESIZE_MIGRATED: 'RESIZE',
+        task_states.RESIZE_FINISH: 'RESIZE',
     },
     vm_states.BUILDING: {
         'default': 'BUILD',
     },
-    vm_states.REBUILDING: {
-        'default': 'REBUILD',
-    },
     vm_states.STOPPED: {
-        'default': 'STOPPED',
-    },
-    vm_states.SHUTOFF: {
         'default': 'SHUTOFF',
     },
-    vm_states.MIGRATING: {
-        'default': 'MIGRATING',
-    },
-    vm_states.RESIZING: {
-        'default': 'RESIZE',
+    vm_states.RESIZED: {
+        'default': 'VERIFY_RESIZE',
+        # Note(maoy): the OS API spec 1.1 doesn't have CONFIRMING_RESIZE
+        # state so we comment that out for future reference only.
+        #task_states.RESIZE_CONFIRMING: 'CONFIRMING_RESIZE',
         task_states.RESIZE_REVERTING: 'REVERT_RESIZE',
     },
     vm_states.PAUSED: {
@@ -82,7 +85,7 @@ _STATE_MAP = {
     vm_states.DELETED: {
         'default': 'DELETED',
     },
-    vm_states.SOFT_DELETE: {
+    vm_states.SOFT_DELETED: {
         'default': 'DELETED',
     },
 }
@@ -90,10 +93,12 @@ _STATE_MAP = {
 
 def status_from_state(vm_state, task_state='default'):
     """Given vm_state and task_state, return a status string."""
-    task_map = _STATE_MAP.get(vm_state, dict(default='UNKNOWN_STATE'))
+    task_map = _STATE_MAP.get(vm_state, dict(default='UNKNOWN'))
     status = task_map.get(task_state, task_map['default'])
-    LOG.debug("Generated %(status)s from vm_state=%(vm_state)s "
-              "task_state=%(task_state)s." % locals())
+    if status == "UNKNOWN":
+        LOG.error(_("status is UNKNOWN from vm_state=%(vm_state)s "
+                    "task_state=%(task_state)s. Bad upgrade or db "
+                    "corrupted?") % locals())
     return status
 
 
@@ -249,35 +254,28 @@ def remove_version_from_href(href):
     return urlparse.urlunsplit(parsed_url)
 
 
-def get_version_from_href(href):
-    """Returns the api version in the href.
-
-    Returns the api version in the href.
-    If no version is found, '2' is returned
-
-    Given: 'http://www.nova.com/123'
-    Returns: '2'
-
-    Given: 'http://www.nova.com/v1.1'
-    Returns: '1.1'
-
-    """
-    try:
-        expression = r'/v([0-9]+|[0-9]+\.[0-9]+)(/|$)'
-        return re.findall(expression, href)[0][0]
-    except IndexError:
-        return '2'
-
-
-def check_img_metadata_quota_limit(context, metadata):
+def check_img_metadata_properties_quota(context, metadata):
     if metadata is None:
         return
-    num_metadata = len(metadata)
-    quota_metadata = quota.allowed_metadata_items(context, num_metadata)
-    if quota_metadata < num_metadata:
+    try:
+        QUOTAS.limit_check(context, metadata_items=len(metadata))
+    except exception.OverQuota:
         expl = _("Image metadata limit exceeded")
         raise webob.exc.HTTPRequestEntityTooLarge(explanation=expl,
                                                 headers={'Retry-After': 0})
+
+    #  check the key length.
+    if isinstance(metadata, dict):
+        for key, value in metadata.iteritems():
+            if len(key) == 0:
+                expl = _("Image metadata key cannot be blank")
+                raise webob.exc.HTTPBadRequest(explanation=expl)
+            if len(key) > 255:
+                expl = _("Image metadata key too long")
+                raise webob.exc.HTTPBadRequest(explanation=expl)
+    else:
+        expl = _("Invalid image metadata")
+        raise webob.exc.HTTPBadRequest(explanation=expl)
 
 
 def dict_to_query_str(params):
@@ -292,7 +290,6 @@ def dict_to_query_str(params):
 
 def get_networks_for_instance_from_nw_info(nw_info):
     networks = {}
-    LOG.debug(_('Converting nw_info: %s') % nw_info)
     for vif in nw_info:
         ips = vif.fixed_ips()
         floaters = vif.floating_ips()
@@ -302,7 +299,6 @@ def get_networks_for_instance_from_nw_info(nw_info):
 
         networks[label]['ips'].extend(ips)
         networks[label]['floating_ips'].extend(floaters)
-        LOG.debug(_('Converted networks: %s') % networks)
     return networks
 
 
@@ -423,19 +419,19 @@ def check_snapshots_enabled(f):
 class ViewBuilder(object):
     """Model API responses as dictionaries."""
 
-    _collection_name = None
-
-    def _get_links(self, request, identifier):
+    def _get_links(self, request, identifier, collection_name):
         return [{
             "rel": "self",
-            "href": self._get_href_link(request, identifier),
+            "href": self._get_href_link(request, identifier, collection_name),
         },
         {
             "rel": "bookmark",
-            "href": self._get_bookmark_link(request, identifier),
+            "href": self._get_bookmark_link(request,
+                                            identifier,
+                                            collection_name),
         }]
 
-    def _get_next_link(self, request, identifier):
+    def _get_next_link(self, request, identifier, collection_name):
         """Return href string with proper limit and marker params."""
         params = request.params.copy()
         params["marker"] = identifier
@@ -443,29 +439,33 @@ class ViewBuilder(object):
                                           FLAGS.osapi_compute_link_prefix)
         url = os.path.join(prefix,
                            request.environ["nova.context"].project_id,
-                           self._collection_name)
+                           collection_name)
         return "%s?%s" % (url, dict_to_query_str(params))
 
-    def _get_href_link(self, request, identifier):
+    def _get_href_link(self, request, identifier, collection_name):
         """Return an href string pointing to this object."""
         prefix = self._update_link_prefix(request.application_url,
                                           FLAGS.osapi_compute_link_prefix)
         return os.path.join(prefix,
                             request.environ["nova.context"].project_id,
-                            self._collection_name,
+                            collection_name,
                             str(identifier))
 
-    def _get_bookmark_link(self, request, identifier):
+    def _get_bookmark_link(self, request, identifier, collection_name):
         """Create a URL that refers to a specific resource."""
         base_url = remove_version_from_href(request.application_url)
         base_url = self._update_link_prefix(base_url,
                                             FLAGS.osapi_compute_link_prefix)
         return os.path.join(base_url,
                             request.environ["nova.context"].project_id,
-                            self._collection_name,
+                            collection_name,
                             str(identifier))
 
-    def _get_collection_links(self, request, items, id_key="uuid"):
+    def _get_collection_links(self,
+                              request,
+                              items,
+                              collection_name,
+                              id_key="uuid"):
         """Retrieve 'next' link, if applicable."""
         links = []
         limit = int(request.params.get("limit", 0))
@@ -473,11 +473,15 @@ class ViewBuilder(object):
             last_item = items[-1]
             if id_key in last_item:
                 last_item_id = last_item[id_key]
-            else:
+            elif 'id' in last_item:
                 last_item_id = last_item["id"]
+            else:
+                last_item_id = last_item["flavorid"]
             links.append({
                 "rel": "next",
-                "href": self._get_next_link(request, last_item_id),
+                "href": self._get_next_link(request,
+                                            last_item_id,
+                                            collection_name),
             })
         return links
 

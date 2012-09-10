@@ -25,71 +25,38 @@ from nova.openstack.common import setup as common_setup
 from nova import version
 
 
-class local_sdist(sdist.sdist):
-    """Customized sdist hook - builds the ChangeLog file from VC first."""
-    def run(self):
-        common_setup.write_git_changelog()
-        # sdist.sdist is an old style class, can't user super()
-        sdist.sdist.run(self)
-
-nova_cmdclass = {'sdist': local_sdist}
-
-try:
-    from sphinx import setup_command
-
-    class local_BuildDoc(setup_command.BuildDoc):
-        def run(self):
-            for builder in ['html', 'man']:
-                self.builder = builder
-                self.finalize_options()
-                setup_command.BuildDoc.run(self)
-    nova_cmdclass['build_sphinx'] = local_BuildDoc
-
-except Exception:
-    pass
-
-
-def find_data_files(destdir, srcdir):
-    package_data = []
-    files = []
-    for d in glob.glob('%s/*' % (srcdir, )):
-        if os.path.isdir(d):
-            package_data += find_data_files(
-                                 os.path.join(destdir, os.path.basename(d)), d)
-        else:
-            files += [d]
-    package_data += [(destdir, files)]
-    return package_data
-
-
 setuptools.setup(name='nova',
       version=version.canonical_version_string(),
       description='cloud computing fabric controller',
       author='OpenStack',
       author_email='nova@lists.launchpad.net',
       url='http://www.openstack.org/',
-      cmdclass=nova_cmdclass,
+      cmdclass=common_setup.get_cmdclass(),
       packages=setuptools.find_packages(exclude=['bin', 'smoketests']),
       include_package_data=True,
       test_suite='nose.collector',
-      scripts=['bin/clear_rabbit_queues',
-               'bin/instance-usage-audit',
-               'bin/nova-all',
+      setup_requires=['setuptools_git>=0.4'],
+      scripts=['bin/nova-all',
                'bin/nova-api',
                'bin/nova-api-ec2',
                'bin/nova-api-metadata',
                'bin/nova-api-os-compute',
                'bin/nova-api-os-volume',
+               'bin/nova-rpc-zmq-receiver',
                'bin/nova-cert',
+               'bin/nova-clear-rabbit-queues',
                'bin/nova-compute',
                'bin/nova-console',
                'bin/nova-consoleauth',
                'bin/nova-dhcpbridge',
                'bin/nova-manage',
                'bin/nova-network',
+               'bin/nova-novncproxy',
                'bin/nova-objectstore',
                'bin/nova-rootwrap',
                'bin/nova-scheduler',
                'bin/nova-volume',
-               'bin/nova-xvpvncproxy'],
+               'bin/nova-volume-usage-audit',
+               'bin/nova-xvpvncproxy',
+              ],
         py_modules=[])

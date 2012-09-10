@@ -60,10 +60,10 @@ db_opts = [
                default='instance-%08x',
                help='Template string to be used to generate instance names'),
     cfg.StrOpt('volume_name_template',
-               default='volume-%08x',
+               default='volume-%s',
                help='Template string to be used to generate instance names'),
     cfg.StrOpt('snapshot_name_template',
-               default='snapshot-%08x',
+               default='snapshot-%s',
                help='Template string to be used to generate snapshot names'),
     ]
 
@@ -74,14 +74,40 @@ IMPL = utils.LazyPluggable('db_backend',
                            sqlalchemy='nova.db.sqlalchemy.api')
 
 
-class NoMoreNetworks(exception.Error):
+class NoMoreNetworks(exception.NovaException):
     """No more available networks."""
     pass
 
 
-class NoMoreTargets(exception.Error):
+class NoMoreTargets(exception.NovaException):
     """No more available targets"""
     pass
+
+
+###################
+
+
+def constraint(**conditions):
+    """Return a constraint object suitable for use with some updates."""
+    return IMPL.constraint(**conditions)
+
+
+def equal_any(*values):
+    """Return an equality condition object suitable for use in a constraint.
+
+    Equal_any conditions require that a model object's attribute equal any
+    one of the given values.
+    """
+    return IMPL.equal_any(*values)
+
+
+def not_equal(*values):
+    """Return an inequality condition object suitable for use in a constraint.
+
+    Not_equal conditions require that a model object's attribute differs from
+    all of the given values.
+    """
+    return IMPL.not_equal(*values)
 
 
 ###################
@@ -141,7 +167,7 @@ def service_get_all_volume_sorted(context):
 
 
 def service_get_by_args(context, host, binary):
-    """Get the state of an service by node name and binary."""
+    """Get the state of a service by node name and binary."""
     return IMPL.service_get_by_args(context, host, binary)
 
 
@@ -151,7 +177,7 @@ def service_create(context, values):
 
 
 def service_update(context, service_id, values):
-    """Set the given properties on an service and update it.
+    """Set the given properties on a service and update it.
 
     Raises NotFound if service does not exist.
 
@@ -163,7 +189,7 @@ def service_update(context, service_id, values):
 
 
 def compute_node_get(context, compute_id):
-    """Get an computeNode or raise if it does not exist."""
+    """Get a computeNode."""
     return IMPL.compute_node_get(context, compute_id)
 
 
@@ -172,13 +198,18 @@ def compute_node_get_all(context):
     return IMPL.compute_node_get_all(context)
 
 
+def compute_node_search_by_hypervisor(context, hypervisor_match):
+    """Get computeNodes given a hypervisor hostname match string."""
+    return IMPL.compute_node_search_by_hypervisor(context, hypervisor_match)
+
+
 def compute_node_create(context, values):
     """Create a computeNode from the values dictionary."""
     return IMPL.compute_node_create(context, values)
 
 
 def compute_node_update(context, compute_id, values, auto_adjust=True):
-    """Set the given properties on an computeNode and update it.
+    """Set the given properties on a computeNode and update it.
 
     Raises NotFound if computeNode does not exist.
     """
@@ -200,6 +231,11 @@ def compute_node_utilization_set(context, host, free_ram_mb=None,
                                  free_disk_gb=None, work=None, vms=None):
     return IMPL.compute_node_utilization_set(context, host, free_ram_mb,
                                              free_disk_gb, work, vms)
+
+
+def compute_node_statistics(context):
+    return IMPL.compute_node_statistics(context)
+
 
 ###################
 
@@ -246,18 +282,24 @@ def floating_ip_allocate_address(context, project_id, pool):
     return IMPL.floating_ip_allocate_address(context, project_id, pool)
 
 
+def floating_ip_bulk_create(context, ips):
+    """Create a lot of floating ips from the values dictionary."""
+    return IMPL.floating_ip_bulk_create(context, ips)
+
+
 def floating_ip_create(context, values):
     """Create a floating ip from the values dictionary."""
     return IMPL.floating_ip_create(context, values)
 
 
-def floating_ip_count_by_project(context, project_id):
+def floating_ip_count_by_project(context, project_id, session=None):
     """Count floating ips used by project."""
-    return IMPL.floating_ip_count_by_project(context, project_id)
+    return IMPL.floating_ip_count_by_project(context, project_id,
+                                             session=session)
 
 
 def floating_ip_deallocate(context, address):
-    """Deallocate an floating ip by address."""
+    """Deallocate a floating ip by address."""
     return IMPL.floating_ip_deallocate(context, address)
 
 
@@ -267,7 +309,7 @@ def floating_ip_destroy(context, address):
 
 
 def floating_ip_disassociate(context, address):
-    """Disassociate an floating ip from a fixed ip by address.
+    """Disassociate a floating ip from a fixed ip by address.
 
     :returns: the address of the existing fixed ip.
 
@@ -277,7 +319,7 @@ def floating_ip_disassociate(context, address):
 
 def floating_ip_fixed_ip_associate(context, floating_address,
                                    fixed_address, host):
-    """Associate an floating ip to a fixed_ip by address."""
+    """Associate a floating ip to a fixed_ip by address."""
     return IMPL.floating_ip_fixed_ip_associate(context,
                                                floating_address,
                                                fixed_address,
@@ -373,33 +415,39 @@ def migration_get_by_instance_and_status(context, instance_uuid, status):
             status)
 
 
-def migration_get_all_unconfirmed(context, confirm_window):
-    """Finds all unconfirmed migrations within the confirmation window."""
-    return IMPL.migration_get_all_unconfirmed(context, confirm_window)
+def migration_get_unconfirmed_by_dest_compute(context, confirm_window,
+        dest_compute):
+    """
+    Finds all unconfirmed migrations within the confirmation window for
+    a specific destination compute host.
+    """
+    return IMPL.migration_get_unconfirmed_by_dest_compute(context,
+            confirm_window, dest_compute)
 
 
 ####################
 
 
-def fixed_ip_associate(context, address, instance_id, network_id=None,
+def fixed_ip_associate(context, address, instance_uuid, network_id=None,
                        reserved=False):
     """Associate fixed ip to instance.
 
     Raises if fixed ip is not available.
 
     """
-    return IMPL.fixed_ip_associate(context, address, instance_id, network_id,
+    return IMPL.fixed_ip_associate(context, address, instance_uuid, network_id,
                                    reserved)
 
 
-def fixed_ip_associate_pool(context, network_id, instance_id=None, host=None):
+def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
+                            host=None):
     """Find free ip in network and associate it to instance or host.
 
     Raises if one is not available.
 
     """
     return IMPL.fixed_ip_associate_pool(context, network_id,
-                                        instance_id, host)
+                                        instance_uuid, host)
 
 
 def fixed_ip_create(context, values):
@@ -437,14 +485,14 @@ def fixed_ip_get_by_address(context, address):
     return IMPL.fixed_ip_get_by_address(context, address)
 
 
-def fixed_ip_get_by_instance(context, instance_id):
+def fixed_ip_get_by_instance(context, instance_uuid):
     """Get fixed ips by instance or raise if none exist."""
-    return IMPL.fixed_ip_get_by_instance(context, instance_id)
+    return IMPL.fixed_ip_get_by_instance(context, instance_uuid)
 
 
-def fixed_ip_get_by_network_host(context, network_id, host):
+def fixed_ip_get_by_network_host(context, network_uuid, host):
     """Get fixed ip for a host in a network."""
-    return IMPL.fixed_ip_get_by_network_host(context, network_id, host)
+    return IMPL.fixed_ip_get_by_network_host(context, network_uuid, host)
 
 
 def fixed_ips_by_virtual_interface(context, vif_id):
@@ -520,14 +568,15 @@ def instance_create(context, values):
     return IMPL.instance_create(context, values)
 
 
-def instance_data_get_for_project(context, project_id):
+def instance_data_get_for_project(context, project_id, session=None):
     """Get (instance_count, total_cores, total_ram) for project."""
-    return IMPL.instance_data_get_for_project(context, project_id)
+    return IMPL.instance_data_get_for_project(context, project_id,
+                                              session=session)
 
 
-def instance_destroy(context, instance_id):
+def instance_destroy(context, instance_uuid, constraint=None):
     """Destroy the instance or raise if it does not exist."""
-    return IMPL.instance_destroy(context, instance_id)
+    return IMPL.instance_destroy(context, instance_uuid, constraint)
 
 
 def instance_get_by_uuid(context, uuid):
@@ -540,9 +589,9 @@ def instance_get(context, instance_id):
     return IMPL.instance_get(context, instance_id)
 
 
-def instance_get_all(context):
+def instance_get_all(context, columns_to_join=None):
     """Get all instances."""
-    return IMPL.instance_get_all(context)
+    return IMPL.instance_get_all(context, columns_to_join=columns_to_join)
 
 
 def instance_get_all_by_filters(context, filters, sort_key='created_at',
@@ -552,30 +601,41 @@ def instance_get_all_by_filters(context, filters, sort_key='created_at',
                                             sort_dir)
 
 
-def instance_get_active_by_window(context, begin, end=None, project_id=None):
+def instance_get_active_by_window(context, begin, end=None, project_id=None,
+                                  host=None):
     """Get instances active during a certain time window.
 
-    Specifying a project_id will filter for a certain project."""
-    return IMPL.instance_get_active_by_window(context, begin, end, project_id)
+    Specifying a project_id will filter for a certain project.
+    Specifying a host will filter for instances on a given compute host.
+    """
+    return IMPL.instance_get_active_by_window(context, begin, end,
+                                              project_id, host)
 
 
 def instance_get_active_by_window_joined(context, begin, end=None,
-                                         project_id=None):
+                                         project_id=None, host=None):
     """Get instances and joins active during a certain time window.
 
-    Specifying a project_id will filter for a certain project."""
+    Specifying a project_id will filter for a certain project.
+    Specifying a host will filter for instances on a given compute host.
+    """
     return IMPL.instance_get_active_by_window_joined(context, begin, end,
-                                              project_id)
+                                              project_id, host)
 
 
 def instance_get_all_by_project(context, project_id):
-    """Get all instance belonging to a project."""
+    """Get all instances belonging to a project."""
     return IMPL.instance_get_all_by_project(context, project_id)
 
 
 def instance_get_all_by_host(context, host):
-    """Get all instance belonging to a host."""
+    """Get all instances belonging to a host."""
     return IMPL.instance_get_all_by_host(context, host)
+
+
+def instance_get_all_by_host_and_not_type(context, host, type_id=None):
+    """Get all instances belonging to a host with a different type_id."""
+    return IMPL.instance_get_all_by_host_and_not_type(context, host, type_id)
 
 
 def instance_get_all_by_reservation(context, reservation_id):
@@ -593,22 +653,39 @@ def instance_get_all_hung_in_rebooting(context, reboot_window):
     return IMPL.instance_get_all_hung_in_rebooting(context, reboot_window)
 
 
-def instance_test_and_set(context, instance_id, attr, ok_states,
+def instance_test_and_set(context, instance_uuid, attr, ok_states,
                           new_state):
     """Atomically check if an instance is in a valid state, and if it is, set
     the instance into a new state.
     """
-    return IMPL.instance_test_and_set(
-            context, instance_id, attr, ok_states, new_state)
+    return IMPL.instance_test_and_set(context, instance_uuid, attr,
+                                      ok_states, new_state)
 
 
-def instance_update(context, instance_id, values):
+def instance_update(context, instance_uuid, values):
     """Set the given properties on an instance and update it.
 
     Raises NotFound if instance does not exist.
 
     """
-    return IMPL.instance_update(context, instance_id, values)
+    return IMPL.instance_update(context, instance_uuid, values)
+
+
+def instance_update_and_get_original(context, instance_uuid, values):
+    """Set the given properties on an instance and update it. Return
+    a shallow copy of the original instance reference, as well as the
+    updated one.
+
+    :param context: = request context object
+    :param instance_id: = instance id or uuid
+    :param values: = dict containing column values
+
+    :returns: a tuple of the form (old_instance_ref, new_instance_ref)
+
+    Raises NotFound if instance does not exist.
+    """
+    return IMPL.instance_update_and_get_original(context, instance_uuid,
+                                                 values)
 
 
 def instance_add_security_group(context, instance_id, security_group_id):
@@ -621,16 +698,6 @@ def instance_remove_security_group(context, instance_id, security_group_id):
     """Disassociate the given security group from the given instance."""
     return IMPL.instance_remove_security_group(context, instance_id,
                                             security_group_id)
-
-
-def instance_action_create(context, values):
-    """Create an instance action from the values dictionary."""
-    return IMPL.instance_action_create(context, values)
-
-
-def instance_get_actions(context, instance_uuid):
-    """Get instance actions by instance uuid."""
-    return IMPL.instance_get_actions(context, instance_uuid)
 
 
 def instance_get_id_to_uuid_mapping(context, ids):
@@ -703,12 +770,17 @@ def key_pair_get_all_by_user(context, user_id):
     return IMPL.key_pair_get_all_by_user(context, user_id)
 
 
+def key_pair_count_by_user(context, user_id):
+    """Count number of key pairs for the given user ID."""
+    return IMPL.key_pair_count_by_user(context, user_id)
+
+
 ####################
 
 
-def network_associate(context, project_id, force=False):
+def network_associate(context, project_id, network_id=None, force=False):
     """Associate a free network to a project."""
-    return IMPL.network_associate(context, project_id, force)
+    return IMPL.network_associate(context, project_id, network_id, force)
 
 
 def network_count(context):
@@ -751,7 +823,7 @@ def network_disassociate(context, network_id):
 
 
 def network_get(context, network_id):
-    """Get an network or raise if it does not exist."""
+    """Get a network or raise if it does not exist."""
     return IMPL.network_get(context, network_id)
 
 
@@ -819,20 +891,12 @@ def network_set_host(context, network_id, host_id):
 
 
 def network_update(context, network_id, values):
-    """Set the given properties on an network and update it.
+    """Set the given properties on a network and update it.
 
     Raises NotFound if network does not exist.
 
     """
     return IMPL.network_update(context, network_id, values)
-
-
-###################
-
-
-def queue_get_for(context, topic, physical_node_id):
-    """Return a channel to send a message to a node with a topic."""
-    return IMPL.queue_get_for(context, topic, physical_node_id)
 
 
 ###################
@@ -855,29 +919,6 @@ def iscsi_target_create_safe(context, values):
 
 
 ###############
-
-
-def auth_token_destroy(context, token_id):
-    """Destroy an auth token."""
-    return IMPL.auth_token_destroy(context, token_id)
-
-
-def auth_token_get(context, token_hash):
-    """Retrieves a token given the hash representing it."""
-    return IMPL.auth_token_get(context, token_hash)
-
-
-def auth_token_update(context, token_hash, values):
-    """Updates a token given the hash representing it."""
-    return IMPL.auth_token_update(context, token_hash, values)
-
-
-def auth_token_create(context, token):
-    """Creates a new token."""
-    return IMPL.auth_token_create(context, token)
-
-
-###################
 
 
 def quota_create(context, project_id, resource, limit):
@@ -903,11 +944,6 @@ def quota_update(context, project_id, resource, limit):
 def quota_destroy(context, project_id, resource):
     """Destroy the quota or raise if it does not exist."""
     return IMPL.quota_destroy(context, project_id, resource)
-
-
-def quota_destroy_all_by_project(context, project_id):
-    """Destroy all quotas associated with a given project."""
-    return IMPL.quota_get_all_by_project(context, project_id)
 
 
 ###################
@@ -946,6 +982,93 @@ def quota_class_destroy_all_by_name(context, class_name):
 ###################
 
 
+def quota_usage_create(context, project_id, resource, in_use, reserved,
+                       until_refresh):
+    """Create a quota usage for the given project and resource."""
+    return IMPL.quota_usage_create(context, project_id, resource,
+                                   in_use, reserved, until_refresh)
+
+
+def quota_usage_get(context, project_id, resource):
+    """Retrieve a quota usage or raise if it does not exist."""
+    return IMPL.quota_usage_get(context, project_id, resource)
+
+
+def quota_usage_get_all_by_project(context, project_id):
+    """Retrieve all usage associated with a given resource."""
+    return IMPL.quota_usage_get_all_by_project(context, project_id)
+
+
+def quota_usage_update(context, class_name, resource, in_use, reserved,
+                       until_refresh):
+    """Update a quota usage or raise if it does not exist."""
+    return IMPL.quota_usage_update(context, project_id, resource,
+                                   in_use, reserved, until_refresh)
+
+
+def quota_usage_destroy(context, project_id, resource):
+    """Destroy the quota usage or raise if it does not exist."""
+    return IMPL.quota_usage_destroy(context, project_id, resource)
+
+
+###################
+
+
+def reservation_create(context, uuid, usage, project_id, resource, delta,
+                       expire):
+    """Create a reservation for the given project and resource."""
+    return IMPL.reservation_create(context, uuid, usage, project_id,
+                                   resource, delta, expire)
+
+
+def reservation_get(context, uuid):
+    """Retrieve a reservation or raise if it does not exist."""
+    return IMPL.reservation_get(context, uuid)
+
+
+def reservation_get_all_by_project(context, project_id):
+    """Retrieve all reservations associated with a given project."""
+    return IMPL.reservation_get_all_by_project(context, project_id)
+
+
+def reservation_destroy(context, uuid):
+    """Destroy the reservation or raise if it does not exist."""
+    return IMPL.reservation_destroy(context, uuid)
+
+
+###################
+
+
+def quota_reserve(context, resources, quotas, deltas, expire,
+                  until_refresh, max_age):
+    """Check quotas and create appropriate reservations."""
+    return IMPL.quota_reserve(context, resources, quotas, deltas, expire,
+                              until_refresh, max_age)
+
+
+def reservation_commit(context, reservations):
+    """Commit quota reservations."""
+    return IMPL.reservation_commit(context, reservations)
+
+
+def reservation_rollback(context, reservations):
+    """Roll back quota reservations."""
+    return IMPL.reservation_rollback(context, reservations)
+
+
+def quota_destroy_all_by_project(context, project_id):
+    """Destroy all quotas associated with a given project."""
+    return IMPL.quota_destroy_all_by_project(context, project_id)
+
+
+def reservation_expire(context):
+    """Roll back any expired reservations."""
+    return IMPL.reservation_expire(context)
+
+
+###################
+
+
 def volume_allocate_iscsi_target(context, volume_id, host):
     """Atomically allocate a free iscsi_target from the pool."""
     return IMPL.volume_allocate_iscsi_target(context, volume_id, host)
@@ -961,9 +1084,10 @@ def volume_create(context, values):
     return IMPL.volume_create(context, values)
 
 
-def volume_data_get_for_project(context, project_id):
+def volume_data_get_for_project(context, project_id, session=None):
     """Get (volume_count, gigabytes) for project."""
-    return IMPL.volume_data_get_for_project(context, project_id)
+    return IMPL.volume_data_get_for_project(context, project_id,
+                                            session=session)
 
 
 def volume_destroy(context, volume_id):
@@ -991,9 +1115,9 @@ def volume_get_all_by_host(context, host):
     return IMPL.volume_get_all_by_host(context, host)
 
 
-def volume_get_all_by_instance(context, instance_id):
-    """Get all volumes belonging to a instance."""
-    return IMPL.volume_get_all_by_instance(context, instance_id)
+def volume_get_all_by_instance_uuid(context, instance_uuid):
+    """Get all volumes belonging to an instance."""
+    return IMPL.volume_get_all_by_instance_uuid(context, instance_uuid)
 
 
 def volume_get_all_by_project(context, project_id):
@@ -1006,23 +1130,42 @@ def volume_get_by_ec2_id(context, ec2_id):
     return IMPL.volume_get_by_ec2_id(context, ec2_id)
 
 
-def volume_get_instance(context, volume_id):
-    """Get the instance that a volume is attached to."""
-    return IMPL.volume_get_instance(context, volume_id)
-
-
 def volume_get_iscsi_target_num(context, volume_id):
     """Get the target num (tid) allocated to the volume."""
     return IMPL.volume_get_iscsi_target_num(context, volume_id)
 
 
 def volume_update(context, volume_id, values):
-    """Set the given properties on an volume and update it.
+    """Set the given properties on a volume and update it.
 
     Raises NotFound if volume does not exist.
 
     """
     return IMPL.volume_update(context, volume_id, values)
+
+
+def get_ec2_volume_id_by_uuid(context, volume_id):
+    return IMPL.get_ec2_volume_id_by_uuid(context, volume_id)
+
+
+def get_volume_uuid_by_ec2_id(context, ec2_id):
+    return IMPL.get_volume_uuid_by_ec2_id(context, ec2_id)
+
+
+def ec2_volume_create(context, volume_id, forced_id=None):
+    return IMPL.ec2_volume_create(context, volume_id, forced_id)
+
+
+def get_snapshot_uuid_by_ec2_id(context, ec2_id):
+    return IMPL.get_snapshot_uuid_by_ec2_id(context, ec2_id)
+
+
+def get_ec2_snapshot_id_by_uuid(context, snapshot_id):
+    return IMPL.get_ec2_snapshot_id_by_uuid(context, snapshot_id)
+
+
+def ec2_snapshot_create(context, snapshot_id, forced_id=None):
+    return IMPL.ec2_snapshot_create(context, snapshot_id, forced_id)
 
 
 ####################
@@ -1059,7 +1202,7 @@ def snapshot_get_all_for_volume(context, volume_id):
 
 
 def snapshot_update(context, snapshot_id, values):
-    """Set the given properties on an snapshot and update it.
+    """Set the given properties on a snapshot and update it.
 
     Raises NotFound if snapshot does not exist.
 
@@ -1086,9 +1229,10 @@ def block_device_mapping_update_or_create(context, values):
     return IMPL.block_device_mapping_update_or_create(context, values)
 
 
-def block_device_mapping_get_all_by_instance(context, instance_id):
-    """Get all block device mapping belonging to a instance"""
-    return IMPL.block_device_mapping_get_all_by_instance(context, instance_id)
+def block_device_mapping_get_all_by_instance(context, instance_uuid):
+    """Get all block device mapping belonging to an instance"""
+    return IMPL.block_device_mapping_get_all_by_instance(context,
+                                                         instance_uuid)
 
 
 def block_device_mapping_destroy(context, bdm_id):
@@ -1096,11 +1240,18 @@ def block_device_mapping_destroy(context, bdm_id):
     return IMPL.block_device_mapping_destroy(context, bdm_id)
 
 
-def block_device_mapping_destroy_by_instance_and_volume(context, instance_id,
+def block_device_mapping_destroy_by_instance_and_device(context, instance_uuid,
+                                                        device_name):
+    """Destroy the block device mapping."""
+    return IMPL.block_device_mapping_destroy_by_instance_and_device(
+        context, instance_uuid, device_name)
+
+
+def block_device_mapping_destroy_by_instance_and_volume(context, instance_uuid,
                                                         volume_id):
-    """Destroy the block device mapping or raise if it does not exist."""
+    """Destroy the block device mapping."""
     return IMPL.block_device_mapping_destroy_by_instance_and_volume(
-        context, instance_id, volume_id)
+        context, instance_uuid, volume_id)
 
 
 ####################
@@ -1146,14 +1297,20 @@ def security_group_create(context, values):
     return IMPL.security_group_create(context, values)
 
 
+def security_group_ensure_default(context):
+    """Ensure default security group exists for a project_id."""
+    return IMPL.security_group_ensure_default(context)
+
+
 def security_group_destroy(context, security_group_id):
     """Deletes a security group."""
     return IMPL.security_group_destroy(context, security_group_id)
 
 
-def security_group_count_by_project(context, project_id):
+def security_group_count_by_project(context, project_id, session=None):
     """Count number of security groups in a project."""
-    return IMPL.security_group_count_by_project(context, project_id)
+    return IMPL.security_group_count_by_project(context, project_id,
+                                                session=session)
 
 
 ####################
@@ -1165,7 +1322,7 @@ def security_group_rule_create(context, values):
 
 
 def security_group_rule_get_by_security_group(context, security_group_id):
-    """Get all rules for a a given security group."""
+    """Get all rules for a given security group."""
     return IMPL.security_group_rule_get_by_security_group(context,
                                                           security_group_id)
 
@@ -1213,114 +1370,6 @@ def provider_fw_rule_destroy(context, rule_id):
 ###################
 
 
-def user_get(context, id):
-    """Get user by id."""
-    return IMPL.user_get(context, id)
-
-
-def user_get_by_uid(context, uid):
-    """Get user by uid."""
-    return IMPL.user_get_by_uid(context, uid)
-
-
-def user_get_by_access_key(context, access_key):
-    """Get user by access key."""
-    return IMPL.user_get_by_access_key(context, access_key)
-
-
-def user_create(context, values):
-    """Create a new user."""
-    return IMPL.user_create(context, values)
-
-
-def user_delete(context, id):
-    """Delete a user."""
-    return IMPL.user_delete(context, id)
-
-
-def user_get_all(context):
-    """Create a new user."""
-    return IMPL.user_get_all(context)
-
-
-def user_add_role(context, user_id, role):
-    """Add another global role for user."""
-    return IMPL.user_add_role(context, user_id, role)
-
-
-def user_remove_role(context, user_id, role):
-    """Remove global role from user."""
-    return IMPL.user_remove_role(context, user_id, role)
-
-
-def user_get_roles(context, user_id):
-    """Get global roles for user."""
-    return IMPL.user_get_roles(context, user_id)
-
-
-def user_add_project_role(context, user_id, project_id, role):
-    """Add project role for user."""
-    return IMPL.user_add_project_role(context, user_id, project_id, role)
-
-
-def user_remove_project_role(context, user_id, project_id, role):
-    """Remove project role from user."""
-    return IMPL.user_remove_project_role(context, user_id, project_id, role)
-
-
-def user_get_roles_for_project(context, user_id, project_id):
-    """Return list of roles a user holds on project."""
-    return IMPL.user_get_roles_for_project(context, user_id, project_id)
-
-
-def user_update(context, user_id, values):
-    """Update user."""
-    return IMPL.user_update(context, user_id, values)
-
-
-###################
-
-
-def project_get(context, id):
-    """Get project by id."""
-    return IMPL.project_get(context, id)
-
-
-def project_create(context, values):
-    """Create a new project."""
-    return IMPL.project_create(context, values)
-
-
-def project_add_member(context, project_id, user_id):
-    """Add user to project."""
-    return IMPL.project_add_member(context, project_id, user_id)
-
-
-def project_get_all(context):
-    """Get all projects."""
-    return IMPL.project_get_all(context)
-
-
-def project_get_by_user(context, user_id):
-    """Get all projects of which the given user is a member."""
-    return IMPL.project_get_by_user(context, user_id)
-
-
-def project_remove_member(context, project_id, user_id):
-    """Remove the given user from the given project."""
-    return IMPL.project_remove_member(context, project_id, user_id)
-
-
-def project_update(context, project_id, values):
-    """Update Remove the given user from the given project."""
-    return IMPL.project_update(context, project_id, values)
-
-
-def project_delete(context, project_id):
-    """Delete project."""
-    return IMPL.project_delete(context, project_id)
-
-
 def project_get_networks(context, project_id, associate=True):
     """Return the network associated with the project.
 
@@ -1337,11 +1386,6 @@ def project_get_networks(context, project_id, associate=True):
 def console_pool_create(context, values):
     """Create console pool."""
     return IMPL.console_pool_create(context, values)
-
-
-def console_pool_get(context, pool_id):
-    """Get a console pool."""
-    return IMPL.console_pool_get(context, pool_id)
 
 
 def console_pool_get_by_host_type(context, compute_host, proxy_host,
@@ -1370,19 +1414,19 @@ def console_delete(context, console_id):
     return IMPL.console_delete(context, console_id)
 
 
-def console_get_by_pool_instance(context, pool_id, instance_id):
+def console_get_by_pool_instance(context, pool_id, instance_uuid):
     """Get console entry for a given instance and pool."""
-    return IMPL.console_get_by_pool_instance(context, pool_id, instance_id)
+    return IMPL.console_get_by_pool_instance(context, pool_id, instance_uuid)
 
 
-def console_get_all_by_instance(context, instance_id):
+def console_get_all_by_instance(context, instance_uuid):
     """Get consoles for a given instance."""
-    return IMPL.console_get_all_by_instance(context, instance_id)
+    return IMPL.console_get_all_by_instance(context, instance_uuid)
 
 
-def console_get(context, console_id, instance_id=None):
+def console_get(context, console_id, instance_uuid=None):
     """Get a specific console (possibly on a given instance)."""
-    return IMPL.console_get(context, console_id, instance_id)
+    return IMPL.console_get(context, console_id, instance_uuid)
 
 
     ##################
@@ -1410,59 +1454,50 @@ def instance_type_get_by_name(context, name):
 
 
 def instance_type_get_by_flavor_id(context, id):
-    """Get instance type by name."""
+    """Get instance type by flavor id."""
     return IMPL.instance_type_get_by_flavor_id(context, id)
 
 
 def instance_type_destroy(context, name):
-    """Delete a instance type."""
+    """Delete an instance type."""
     return IMPL.instance_type_destroy(context, name)
 
 
 ####################
 
 
-def cell_create(context, values):
-    """Create a new child Cell entry."""
-    return IMPL.cell_create(context, values)
+def instance_metadata_get(context, instance_uuid):
+    """Get all metadata for an instance."""
+    return IMPL.instance_metadata_get(context, instance_uuid)
 
 
-def cell_update(context, cell_id, values):
-    """Update a child Cell entry."""
-    return IMPL.cell_update(context, cell_id, values)
+def instance_metadata_delete(context, instance_uuid, key):
+    """Delete the given metadata item."""
+    IMPL.instance_metadata_delete(context, instance_uuid, key)
 
 
-def cell_delete(context, cell_id):
-    """Delete a child Cell."""
-    return IMPL.cell_delete(context, cell_id)
-
-
-def cell_get(context, cell_id):
-    """Get a specific child Cell."""
-    return IMPL.cell_get(context, cell_id)
-
-
-def cell_get_all(context):
-    """Get all child Cells."""
-    return IMPL.cell_get_all(context)
+def instance_metadata_update(context, instance_uuid, metadata, delete):
+    """Update metadata if it exists, otherwise create it."""
+    IMPL.instance_metadata_update(context, instance_uuid, metadata, delete)
 
 
 ####################
 
 
-def instance_metadata_get(context, instance_id):
-    """Get all metadata for an instance."""
-    return IMPL.instance_metadata_get(context, instance_id)
+def instance_system_metadata_get(context, instance_uuid):
+    """Get all system metadata for an instance."""
+    return IMPL.instance_system_metadata_get(context, instance_uuid)
 
 
-def instance_metadata_delete(context, instance_id, key):
-    """Delete the given metadata item."""
-    IMPL.instance_metadata_delete(context, instance_id, key)
+def instance_system_metadata_delete(context, instance_uuid, key):
+    """Delete the given system metadata item."""
+    IMPL.instance_system_metadata_delete(context, instance_uuid, key)
 
 
-def instance_metadata_update(context, instance_id, metadata, delete):
+def instance_system_metadata_update(context, instance_uuid, metadata, delete):
     """Update metadata if it exists, otherwise create it."""
-    IMPL.instance_metadata_update(context, instance_id, metadata, delete)
+    IMPL.instance_system_metadata_update(
+            context, instance_uuid, metadata, delete)
 
 
 ####################
@@ -1497,41 +1532,38 @@ def agent_build_update(context, agent_build_id, values):
 ####################
 
 
-def bw_usage_get_by_macs(context, macs, start_period):
-    """Return bw usages for an instance in a given audit period."""
-    return IMPL.bw_usage_get_by_macs(context, macs, start_period)
+def bw_usage_get_by_uuids(context, uuids, start_period):
+    """Return bw usages for instance(s) in a given audit period."""
+    return IMPL.bw_usage_get_by_uuids(context, uuids, start_period)
 
 
-def bw_usage_update(context,
-                    mac,
-                    start_period,
-                    bw_in, bw_out):
-    """Update cached bw usage for an instance and network
-       Creates new record if needed."""
-    return IMPL.bw_usage_update(context,
-                                mac,
-                                start_period,
-                                bw_in, bw_out)
+def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
+                    last_refreshed=None):
+    """Update cached bandwidth usage for an instance's network based on mac
+    address.  Creates new record if needed.
+    """
+    return IMPL.bw_usage_update(context, uuid, mac, start_period, bw_in,
+            bw_out, last_refreshed=last_refreshed)
 
 
 ####################
 
 
-def instance_type_extra_specs_get(context, instance_type_id):
+def instance_type_extra_specs_get(context, flavor_id):
     """Get all extra specs for an instance type."""
-    return IMPL.instance_type_extra_specs_get(context, instance_type_id)
+    return IMPL.instance_type_extra_specs_get(context, flavor_id)
 
 
-def instance_type_extra_specs_delete(context, instance_type_id, key):
+def instance_type_extra_specs_delete(context, flavor_id, key):
     """Delete the given extra specs item."""
-    IMPL.instance_type_extra_specs_delete(context, instance_type_id, key)
+    IMPL.instance_type_extra_specs_delete(context, flavor_id, key)
 
 
-def instance_type_extra_specs_update_or_create(context, instance_type_id,
+def instance_type_extra_specs_update_or_create(context, flavor_id,
                                                extra_specs):
     """Create or update instance type extra specs. This adds or modifies the
     key/value pairs specified in the extra specs dict argument"""
-    IMPL.instance_type_extra_specs_update_or_create(context, instance_type_id,
+    IMPL.instance_type_extra_specs_update_or_create(context, flavor_id,
                                                     extra_specs)
 
 
@@ -1579,6 +1611,13 @@ def volume_type_get_by_name(context, name):
 def volume_type_destroy(context, name):
     """Delete a volume type."""
     return IMPL.volume_type_destroy(context, name)
+
+
+def volume_get_active_by_window(context, begin, end=None, project_id=None):
+    """Get all the volumes inside the window.
+
+    Specifying a project_id will filter for a certain project."""
+    return IMPL.volume_get_active_by_window(context, begin, end, project_id)
 
 
 ####################
@@ -1663,7 +1702,7 @@ def sm_flavor_create(context, values):
 
 def sm_flavor_update(context, sm_flavor_id, values):
     """Update a SM Flavor entry."""
-    return IMPL.sm_flavor_update(context, values)
+    return IMPL.sm_flavor_update(context, sm_flavor_id, values)
 
 
 def sm_flavor_delete(context, sm_flavor_id):
@@ -1671,14 +1710,19 @@ def sm_flavor_delete(context, sm_flavor_id):
     return IMPL.sm_flavor_delete(context, sm_flavor_id)
 
 
-def sm_flavor_get(context, sm_flavor):
+def sm_flavor_get(context, sm_flavor_id):
     """Get a specific SM Flavor."""
-    return IMPL.sm_flavor_get(context, sm_flavor)
+    return IMPL.sm_flavor_get(context, sm_flavor_id)
 
 
 def sm_flavor_get_all(context):
     """Get all SM Flavors."""
     return IMPL.sm_flavor_get_all(context)
+
+
+def sm_flavor_get_by_label(context, sm_flavor_label):
+    """Get a specific SM Flavor given label."""
+    return IMPL.sm_flavor_get_by_label(context, sm_flavor_label)
 
 
 ####################
@@ -1722,9 +1766,18 @@ def aggregate_get(context, aggregate_id):
     return IMPL.aggregate_get(context, aggregate_id)
 
 
-def aggregate_get_by_host(context, host):
-    """Get a specific aggregate by host"""
-    return IMPL.aggregate_get_by_host(context, host)
+def aggregate_get_by_host(context, host, key=None):
+    """Get a list of aggregates that host belongs to"""
+    return IMPL.aggregate_get_by_host(context, host, key)
+
+
+def aggregate_metadata_get_by_host(context, host, key=None):
+    """Get metadata for all aggregates that host belongs to.
+
+    Returns a dictionary where each value is a set, this is to cover the case
+    where there two aggregates have different values for the same key.
+    Optional key filter"""
+    return IMPL.aggregate_metadata_get_by_host(context, host, key)
 
 
 def aggregate_update(context, aggregate_id, values):
@@ -1784,3 +1837,70 @@ def instance_fault_create(context, values):
 def instance_fault_get_by_instance_uuids(context, instance_uuids):
     """Get all instance faults for the provided instance_uuids."""
     return IMPL.instance_fault_get_by_instance_uuids(context, instance_uuids)
+
+
+####################
+
+
+def get_ec2_instance_id_by_uuid(context, instance_id):
+    """Get ec2 id through uuid from instance_id_mappings table"""
+    return IMPL.get_ec2_instance_id_by_uuid(context, instance_id)
+
+
+def get_instance_uuid_by_ec2_id(context, ec2_id):
+    """Get uuid through ec2 id from instance_id_mappings table"""
+    return IMPL.get_instance_uuid_by_ec2_id(context, ec2_id)
+
+
+def ec2_instance_create(context, instance_ec2_id):
+    """Create the ec2 id to instance uuid mapping on demand"""
+    return IMPL.ec2_instance_create(context, instance_ec2_id)
+
+
+####################
+
+
+def task_log_end_task(context, task_name,
+                        period_beginning,
+                        period_ending,
+                        host,
+                        errors,
+                        message=None,
+                        session=None):
+    """Mark a task as complete for a given host/time period"""
+    return IMPL.task_log_end_task(context, task_name,
+                                  period_beginning,
+                                  period_ending,
+                                  host,
+                                  errors,
+                                  message,
+                                  session)
+
+
+def task_log_begin_task(context, task_name,
+                        period_beginning,
+                        period_ending,
+                        host,
+                        task_items=None,
+                        message=None,
+                        session=None):
+    """Mark a task as started for a given host/time period"""
+    return IMPL.task_log_begin_task(context, task_name,
+                                    period_beginning,
+                                    period_ending,
+                                    host,
+                                    task_items,
+                                    message,
+                                    session)
+
+
+def task_log_get_all(context, task_name, period_beginning,
+                 period_ending, host=None, state=None, session=None):
+    return IMPL.task_log_get_all(context, task_name, period_beginning,
+                 period_ending, host, state, session)
+
+
+def task_log_get(context, task_name, period_beginning,
+                 period_ending, host, state=None, session=None):
+    return IMPL.task_log_get(context, task_name, period_beginning,
+                 period_ending, host, state, session)

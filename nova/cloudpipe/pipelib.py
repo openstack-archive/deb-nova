@@ -24,19 +24,16 @@ an instance with it.
 
 import os
 import string
-import tempfile
 import zipfile
 
-# NOTE(vish): cloud is only for the _gen_key functionality
-from nova.api.ec2 import cloud
 from nova import compute
 from nova.compute import instance_types
 from nova import crypto
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 from nova import utils
 
 
@@ -147,7 +144,10 @@ class CloudPipe(object):
     def setup_key_pair(self, context):
         key_name = '%s%s' % (context.project_id, FLAGS.vpn_key_suffix)
         try:
-            result = cloud._gen_key(context, context.user_id, key_name)
+            keypair_api = compute.api.KeypairAPI()
+            result = keypair_api.create_key_pair(context,
+                                                 context.user_id,
+                                                 key_name)
             private_key = result['private_key']
             key_dir = os.path.join(FLAGS.keys_path, context.user_id)
             if not os.path.exists(key_dir):

@@ -20,7 +20,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -42,8 +42,8 @@ class ServerStartStopActionController(wsgi.Controller):
     def _start_server(self, req, id, body):
         """Start an instance. """
         context = req.environ['nova.context']
-        LOG.debug(_("start instance %r"), id)
         instance = self._get_instance(context, id)
+        LOG.debug(_('start instance'), instance=instance)
         self.compute_api.start(context, instance)
         return webob.Response(status_int=202)
 
@@ -51,8 +51,8 @@ class ServerStartStopActionController(wsgi.Controller):
     def _stop_server(self, req, id, body):
         """Stop an instance."""
         context = req.environ['nova.context']
-        LOG.debug(_("stop instance %r"), id)
         instance = self._get_instance(context, id)
+        LOG.debug(_('stop instance'), instance=instance)
         self.compute_api.stop(context, instance)
         return webob.Response(status_int=202)
 

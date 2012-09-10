@@ -17,7 +17,7 @@
 
 from nova.api.openstack import extensions as base_extensions
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -30,4 +30,5 @@ class ExtensionManager(base_extensions.ExtensionManager):
 
         self.cls_list = FLAGS.osapi_volume_extension
         self.extensions = {}
+        self.plugins = []
         self._load_extensions()

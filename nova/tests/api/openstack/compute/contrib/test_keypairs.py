@@ -13,17 +13,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
-import webob
 from lxml import etree
+import webob
 
-from nova.api.openstack import wsgi
 from nova.api.openstack.compute.contrib import keypairs
+from nova.api.openstack import wsgi
 from nova import db
 from nova import exception
+from nova.openstack.common import jsonutils
+from nova import quota
 from nova import test
 from nova.tests.api.openstack import fakes
+
+
+QUOTAS = quota.QUOTAS
 
 
 def fake_keypair(name):
@@ -53,8 +56,10 @@ class KeypairsTest(test.TestCase):
 
     def setUp(self):
         super(KeypairsTest, self).setUp()
+        self.Controller = keypairs.Controller()
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
+
         self.stubs.Set(db, "key_pair_get_all_by_user",
                        db_key_pair_get_all_by_user)
         self.stubs.Set(db, "key_pair_create",
@@ -66,7 +71,7 @@ class KeypairsTest(test.TestCase):
         req = webob.Request.blank('/v2/fake/os-keypairs')
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         response = {'keypairs': [{'keypair': fake_keypair('FAKE')}]}
         self.assertEqual(res_dict, response)
 
@@ -74,11 +79,11 @@ class KeypairsTest(test.TestCase):
         body = {'keypair': {'name': 'create_test'}}
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
         self.assertTrue(len(res_dict['keypair']['private_key']) > 0)
 
@@ -86,7 +91,7 @@ class KeypairsTest(test.TestCase):
         body = {'keypair': {'name': ''}}
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)
@@ -99,7 +104,7 @@ class KeypairsTest(test.TestCase):
         }
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)
@@ -112,11 +117,26 @@ class KeypairsTest(test.TestCase):
         }
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         self.assertEqual(res.status_int, 400)
+
+    def test_keypair_create_quota_limit(self):
+
+        def fake_quotas_count(self, context, resource, *args, **kwargs):
+            return 100
+
+        self.stubs.Set(QUOTAS, "count", fake_quotas_count)
+
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.headers['Content-Type'] = 'application/json'
+        body = {'keypair': {'name': 'foo'}}
+        req.body = jsonutils.dumps(body)
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 413)
 
     def test_keypair_import(self):
         body = {
@@ -136,21 +156,70 @@ class KeypairsTest(test.TestCase):
 
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         # FIXME(ja): sholud we check that public_key was sent to create?
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
         self.assertFalse('private_key' in res_dict['keypair'])
+
+    def test_keypair_import_quota_limit(self):
+
+        def fake_quotas_count(self, context, resource, *args, **kwargs):
+            return 100
+
+        self.stubs.Set(QUOTAS, "count", fake_quotas_count)
+
+        body = {
+            'keypair': {
+                'name': 'create_test',
+                'public_key': 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDBYIznA'
+                              'x9D7118Q1VKGpXy2HDiKyUTM8XcUuhQpo0srqb9rboUp4'
+                              'a9NmCwpWpeElDLuva707GOUnfaBAvHBwsRXyxHJjRaI6Y'
+                              'Qj2oLJwqvaSaWUbyT1vtryRqy6J3TecN0WINY71f4uymi'
+                              'MZP0wby4bKBcYnac8KiCIlvkEl0ETjkOGUq8OyWRmn7lj'
+                              'j5SESEUdBP0JnuTFKddWTU/wD6wydeJaUhBTqOlHn0kX1'
+                              'GyqoNTE1UEhcM5ZRWgfUZfTjVyDF2kGj3vJLCJtJ8LoGc'
+                              'j7YaN4uPg1rBle+izwE/tLonRrds+cev8p6krSSrxWOwB'
+                              'bHkXa6OciiJDvkRzJXzf',
+            },
+        }
+
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 413)
+
+    def test_keypair_create_quota_limit(self):
+
+        def fake_quotas_count(self, context, resource, *args, **kwargs):
+            return 100
+
+        self.stubs.Set(QUOTAS, "count", fake_quotas_count)
+
+        body = {
+            'keypair': {
+                'name': 'create_test',
+            },
+        }
+
+        req = webob.Request.blank('/v2/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 413)
 
     def test_keypair_create_duplicate(self):
         self.stubs.Set(db, "key_pair_get", db_key_pair_get)
         body = {'keypair': {'name': 'create_duplicate'}}
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 409)
@@ -165,7 +234,7 @@ class KeypairsTest(test.TestCase):
 
         req = webob.Request.blank('/v2/fake/os-keypairs')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 400)
@@ -180,14 +249,65 @@ class KeypairsTest(test.TestCase):
     def test_keypair_delete_not_found(self):
 
         def db_key_pair_get_not_found(context, user_id, name):
-            raise exception.KeyPairNotFound()
+            raise exception.KeypairNotFound(user_id=user_id, name=name)
 
         self.stubs.Set(db, "key_pair_get",
                        db_key_pair_get_not_found)
         req = webob.Request.blank('/v2/fake/os-keypairs/WHAT')
         res = req.get_response(fakes.wsgi_app())
-        print res
         self.assertEqual(res.status_int, 404)
+
+    def test_keypair_show(self):
+
+        def _db_key_pair_get(context, user_id, name):
+            return {'name': 'foo', 'public_key': 'XXX', 'fingerprint': 'YYY'}
+
+        self.stubs.Set(db, "key_pair_get", _db_key_pair_get)
+
+        req = webob.Request.blank('/v2/fake/os-keypairs/FAKE')
+        req.method = 'GET'
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        res_dict = jsonutils.loads(res.body)
+        self.assertEqual(res.status_int, 200)
+        self.assertEqual('foo', res_dict['keypair']['name'])
+        self.assertEqual('XXX', res_dict['keypair']['public_key'])
+        self.assertEqual('YYY', res_dict['keypair']['fingerprint'])
+
+    def test_keypair_show_not_found(self):
+
+        def _db_key_pair_get(context, user_id, name):
+            raise exception.KeypairNotFound(user_id=user_id, name=name)
+
+        self.stubs.Set(db, "key_pair_get", _db_key_pair_get)
+
+        req = webob.Request.blank('/v2/fake/os-keypairs/FAKE')
+        req.method = 'GET'
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        self.assertEqual(res.status_int, 404)
+
+    def test_show_server(self):
+        self.stubs.Set(db, 'instance_get',
+                        fakes.fake_instance_get())
+        req = webob.Request.blank('/v2/fake/servers/1')
+        req.headers['Content-Type'] = 'application/json'
+        response = req.get_response(fakes.wsgi_app())
+        self.assertEquals(response.status_int, 200)
+        res_dict = jsonutils.loads(response.body)
+        self.assertTrue('key_name' in res_dict['server'])
+        self.assertEquals(res_dict['server']['key_name'], '')
+
+    def test_detail_servers(self):
+        self.stubs.Set(db, 'instance_get',
+                        fakes.fake_instance_get())
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/detail')
+        res = req.get_response(fakes.wsgi_app())
+        server_dicts = jsonutils.loads(res.body)['servers']
+
+        for server_dict in server_dicts:
+            self.asserTrue('key_name' in server_dict)
+            self.assertEquals(server_dict['key_name'], '')
 
 
 class KeypairsXMLSerializerTest(test.TestCase):
@@ -205,7 +325,6 @@ class KeypairsXMLSerializerTest(test.TestCase):
         serializer = keypairs.KeypairTemplate()
         text = serializer.serialize(exemplar)
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('keypair', tree.tag)
@@ -226,7 +345,6 @@ class KeypairsXMLSerializerTest(test.TestCase):
         serializer = keypairs.KeypairsTemplate()
         text = serializer.serialize(exemplar)
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('keypairs', tree.tag)

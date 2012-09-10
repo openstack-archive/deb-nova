@@ -23,12 +23,12 @@ import operator
 
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova.notifier import api as notifier
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier
 from nova.scheduler import driver
 from nova.scheduler import least_cost
 from nova.scheduler import scheduler_options
-from nova import utils
 
 
 FLAGS = flags.FLAGS
@@ -51,32 +51,34 @@ class FilterScheduler(driver.Scheduler):
         msg = _("No host selection for %s defined.") % topic
         raise exception.NoValidHost(reason=msg)
 
-    def schedule_run_instance(self, context, request_spec, *args, **kwargs):
+    def schedule_run_instance(self, context, request_spec,
+                              admin_password, injected_files,
+                              requested_networks, is_first_time,
+                              filter_properties, reservations):
         """This method is called from nova.compute.api to provision
         an instance.  We first create a build plan (a list of WeightedHosts)
         and then provision.
 
         Returns a list of the instances created.
         """
-
         elevated = context.elevated()
         num_instances = request_spec.get('num_instances', 1)
         LOG.debug(_("Attempting to build %(num_instances)d instance(s)") %
                 locals())
 
         payload = dict(request_spec=request_spec)
-        notifier.notify(notifier.publisher_id("scheduler"),
+        notifier.notify(context, notifier.publisher_id("scheduler"),
                         'scheduler.run_instance.start', notifier.INFO, payload)
 
         weighted_hosts = self._schedule(context, "compute", request_spec,
-                                        *args, **kwargs)
+                                        filter_properties)
 
         if not weighted_hosts:
             raise exception.NoValidHost(reason="")
 
         # NOTE(comstud): Make sure we do not pass this through.  It
         # contains an instance of RpcContext that cannot be serialized.
-        kwargs.pop('filter_properties', None)
+        filter_properties.pop('context', None)
 
         instances = []
         for num in xrange(num_instances):
@@ -85,18 +87,29 @@ class FilterScheduler(driver.Scheduler):
             weighted_host = weighted_hosts.pop(0)
 
             request_spec['instance_properties']['launch_index'] = num
+
             instance = self._provision_resource(elevated, weighted_host,
-                                                request_spec, kwargs)
+                                                request_spec, reservations,
+                                                filter_properties,
+                                                requested_networks,
+                                                injected_files, admin_password,
+                                                is_first_time)
+            # scrub retry host list in case we're scheduling multiple
+            # instances:
+            retry = filter_properties.get('retry', {})
+            retry['hosts'] = []
 
             if instance:
                 instances.append(instance)
 
-        notifier.notify(notifier.publisher_id("scheduler"),
+        notifier.notify(context, notifier.publisher_id("scheduler"),
                         'scheduler.run_instance.end', notifier.INFO, payload)
 
         return instances
 
-    def schedule_prep_resize(self, context, request_spec, *args, **kwargs):
+    def schedule_prep_resize(self, context, image, request_spec,
+                             filter_properties, instance, instance_type,
+                             reservations=None):
         """Select a target for resize.
 
         Selects a target host for the instance, post-resize, and casts
@@ -104,51 +117,106 @@ class FilterScheduler(driver.Scheduler):
         """
 
         hosts = self._schedule(context, 'compute', request_spec,
-                               *args, **kwargs)
+                               filter_properties)
         if not hosts:
             raise exception.NoValidHost(reason="")
         host = hosts.pop(0)
 
-        # NOTE(comstud): Make sure we do not pass this through.  It
-        # contains an instance of RpcContext that cannot be serialized.
-        kwargs.pop('filter_properties', None)
-
         # Forward off to the host
-        driver.cast_to_compute_host(context, host.host_state.host,
-                'prep_resize', **kwargs)
+        self.compute_rpcapi.prep_resize(context, image, instance,
+                instance_type, host.host_state.host, reservations)
 
     def _provision_resource(self, context, weighted_host, request_spec,
-            kwargs):
+            reservations, filter_properties, requested_networks,
+            injected_files, admin_password, is_first_time):
         """Create the requested resource in this Zone."""
-        instance = self.create_instance_db_entry(context, request_spec)
+        instance = self.create_instance_db_entry(context, request_spec,
+                                                 reservations)
+
+        # Add a retry entry for the selected compute host:
+        self._add_retry_host(filter_properties, weighted_host.host_state.host)
 
         payload = dict(request_spec=request_spec,
                        weighted_host=weighted_host.to_dict(),
                        instance_id=instance['uuid'])
-        notifier.notify(notifier.publisher_id("scheduler"),
+        notifier.notify(context, notifier.publisher_id("scheduler"),
                         'scheduler.run_instance.scheduled', notifier.INFO,
                         payload)
 
-        driver.cast_to_compute_host(context, weighted_host.host_state.host,
-                'run_instance', instance_uuid=instance['uuid'], **kwargs)
-        inst = driver.encode_instance(instance, local=True)
+        updated_instance = driver.instance_update_db(context, instance['uuid'],
+                weighted_host.host_state.host)
+
+        self.compute_rpcapi.run_instance(context, instance=updated_instance,
+                host=weighted_host.host_state.host,
+                request_spec=request_spec, filter_properties=filter_properties,
+                requested_networks=requested_networks,
+                injected_files=injected_files,
+                admin_password=admin_password, is_first_time=is_first_time)
+
+        inst = driver.encode_instance(updated_instance, local=True)
+
         # So if another instance is created, create_instance_db_entry will
         # actually create a new entry, instead of assume it's been created
         # already
         del request_spec['instance_properties']['uuid']
+
         return inst
+
+    def _add_retry_host(self, filter_properties, host):
+        """Add a retry entry for the selected computep host.  In the event that
+        the request gets re-scheduled, this entry will signal that the given
+        host has already been tried.
+        """
+        retry = filter_properties.get('retry', None)
+        if not retry:
+            return
+        hosts = retry['hosts']
+        hosts.append(host)
 
     def _get_configuration_options(self):
         """Fetch options dictionary. Broken out for testing."""
         return self.options.get_configuration()
 
     def populate_filter_properties(self, request_spec, filter_properties):
-        """Stuff things into filter_properties.  Can be overriden in a
+        """Stuff things into filter_properties.  Can be overridden in a
         subclass to add more data.
         """
         pass
 
-    def _schedule(self, context, topic, request_spec, *args, **kwargs):
+    def _max_attempts(self):
+        max_attempts = FLAGS.scheduler_max_attempts
+        if max_attempts < 1:
+            raise exception.NovaException(_("Invalid value for "
+                "'scheduler_max_attempts', must be >= 1"))
+        return max_attempts
+
+    def _populate_retry(self, filter_properties, instance_properties):
+        """Populate filter properties with history of retries for this
+        request. If maximum retries is exceeded, raise NoValidHost.
+        """
+        max_attempts = self._max_attempts()
+        retry = filter_properties.pop('retry', {})
+
+        if max_attempts == 1:
+            # re-scheduling is disabled.
+            return
+
+        # retry is enabled, update attempt count:
+        if retry:
+            retry['num_attempts'] += 1
+        else:
+            retry = {
+                'num_attempts': 1,
+                'hosts': []  # list of compute hosts tried
+            }
+        filter_properties['retry'] = retry
+
+        if retry['num_attempts'] > max_attempts:
+            uuid = instance_properties.get('uuid', None)
+            msg = _("Exceeded max scheduling attempts %d ") % max_attempts
+            raise exception.NoValidHost(msg, instance_uuid=uuid)
+
+    def _schedule(self, context, topic, request_spec, filter_properties):
         """Returns a list of hosts that meet the required specs,
         ordered by their fitness.
         """
@@ -163,7 +231,9 @@ class FilterScheduler(driver.Scheduler):
         cost_functions = self.get_cost_functions()
         config_options = self._get_configuration_options()
 
-        filter_properties = kwargs.get('filter_properties', {})
+        # check retry policy:
+        self._populate_retry(filter_properties, instance_properties)
+
         filter_properties.update({'context': context,
                                   'request_spec': request_spec,
                                   'config_options': config_options,
@@ -243,8 +313,8 @@ class FilterScheduler(driver.Scheduler):
                 # NOTE: import_class is somewhat misnamed since
                 # the weighing function can be any non-class callable
                 # (i.e., no 'self')
-                cost_fn = utils.import_class(cost_fn_str)
-            except exception.ClassNotFound:
+                cost_fn = importutils.import_class(cost_fn_str)
+            except ImportError:
                 raise exception.SchedulerCostFunctionNotFound(
                         cost_fn_str=cost_fn_str)
 

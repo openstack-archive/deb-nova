@@ -16,17 +16,17 @@
 #    under the License.
 
 import inspect
-from xml.dom import minidom
-from xml.parsers import expat
 import math
 import time
+from xml.dom import minidom
+from xml.parsers import expat
 
 from lxml import etree
 import webob
 
 from nova import exception
-from nova import log as logging
-from nova import utils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import wsgi
 
 
@@ -64,6 +64,52 @@ _MEDIA_TYPE_MAP = {
 class Request(webob.Request):
     """Add some OpenStack API-specific logic to the base webob.Request."""
 
+    def __init__(self, *args, **kwargs):
+        super(Request, self).__init__(*args, **kwargs)
+        self._extension_data = {'db_instances': {}}
+
+    def cache_db_instances(self, instances):
+        """
+        Allow API methods to store instances from a DB query to be
+        used by API extensions within the same API request.
+
+        An instance of this class only lives for the lifetime of a
+        single API request, so there's no need to implement full
+        cache management.
+        """
+        db_instances = self._extension_data['db_instances']
+        for instance in instances:
+            db_instances[instance['uuid']] = instance
+
+    def cache_db_instance(self, instance):
+        """
+        Allow API methods to store an instance from a DB query to be
+        used by API extensions within the same API request.
+
+        An instance of this class only lives for the lifetime of a
+        single API request, so there's no need to implement full
+        cache management.
+        """
+        self.cache_db_instances([instance])
+
+    def get_db_instances(self):
+        """
+        Allow an API extension to get previously stored instances within
+        the same API request.
+
+        Note that the instance data will be slightly stale.
+        """
+        return self._extension_data['db_instances']
+
+    def get_db_instance(self, instance_uuid):
+        """
+        Allow an API extension to get a previously stored instance
+        within the same API request.
+
+        Note that the instance data will be slightly stale.
+        """
+        return self._extension_data['db_instances'].get(instance_uuid)
+
     def best_match_content_type(self):
         """Determine the requested response content-type."""
         if 'nova.best_content_type' not in self.environ:
@@ -94,10 +140,15 @@ class Request(webob.Request):
         if not "Content-Type" in self.headers:
             return None
 
-        allowed_types = SUPPORTED_CONTENT_TYPES
         content_type = self.content_type
 
-        if content_type not in allowed_types:
+        # NOTE(markmc): text/plain is the default for eventlet and
+        # other webservers which use mimetools.Message.gettype()
+        # whereas twisted defaults to ''.
+        if not content_type or content_type == 'text/plain':
+            return None
+
+        if content_type not in SUPPORTED_CONTENT_TYPES:
             raise exception.InvalidContentType(content_type=content_type)
 
         return content_type
@@ -130,7 +181,7 @@ class JSONDeserializer(TextDeserializer):
 
     def _from_json(self, datastring):
         try:
-            return utils.loads(datastring)
+            return jsonutils.loads(datastring)
         except ValueError:
             msg = _("cannot understand JSON")
             raise exception.MalformedRequestBody(reason=msg)
@@ -242,7 +293,7 @@ class JSONDictSerializer(DictSerializer):
     """Default JSON request body serialization"""
 
     def default(self, data):
-        return utils.dumps(data)
+        return jsonutils.dumps(data)
 
 
 class XMLDictSerializer(DictSerializer):
@@ -403,7 +454,7 @@ class ResponseObject(object):
     optional.
     """
 
-    def __init__(self, obj, code=None, **serializers):
+    def __init__(self, obj, code=None, headers=None, **serializers):
         """Binds serializers with an object.
 
         Takes keyword arguments akin to the @serializer() decorator
@@ -416,7 +467,7 @@ class ResponseObject(object):
         self.serializers = serializers
         self._default_code = 200
         self._code = code
-        self._headers = {}
+        self._headers = headers or {}
         self.serializer = None
         self.media_type = None
 
@@ -533,7 +584,7 @@ def action_peek_json(body):
     """Determine action to invoke."""
 
     try:
-        decoded = utils.loads(body)
+        decoded = jsonutils.loads(body)
     except ValueError:
         msg = _("cannot understand JSON")
         raise exception.MalformedRequestBody(reason=msg)
@@ -577,7 +628,11 @@ class ResourceExceptionHandler(object):
         elif isinstance(ex_value, exception.Invalid):
             raise Fault(exception.ConvertedException(
                 code=ex_value.code, explanation=unicode(ex_value)))
-        elif isinstance(ex_value, TypeError):
+
+        # Under python 2.6, TypeError's exception value is actually a string,
+        # so test # here via ex_type instead:
+        # http://bugs.python.org/issue7853
+        elif issubclass(ex_type, TypeError):
             exc_info = (ex_type, ex_value, ex_traceback)
             LOG.error(_('Exception handling resource: %s') % ex_value,
                     exc_info=exc_info)
@@ -609,11 +664,16 @@ class Resource(wsgi.Application):
 
     """
 
-    def __init__(self, controller, action_peek=None, **deserializers):
+    def __init__(self, controller, action_peek=None, inherits=None,
+                 **deserializers):
         """
         :param controller: object that implement methods created by routes lib
         :param action_peek: dictionary of routines for peeking into an action
                             request body to determine the desired action
+        :param inherits: another resource object that this resource should
+                         inherit extensions from. Any action extensions that
+                         are applied to the parent resource will also apply
+                         to this resource.
         """
 
         self.controller = controller
@@ -638,6 +698,7 @@ class Resource(wsgi.Application):
         # Save a mapping of extensions
         self.wsgi_extensions = {}
         self.wsgi_action_extensions = {}
+        self.inherits = inherits
 
     def register_actions(self, controller):
         """Registers controller actions with this resource."""
@@ -893,6 +954,19 @@ class Resource(wsgi.Application):
         return response
 
     def get_method(self, request, action, content_type, body):
+        meth, extensions = self._get_method(request,
+                                            action,
+                                            content_type,
+                                            body)
+        if self.inherits:
+            _meth, parent_ext = self.inherits.get_method(request,
+                                                         action,
+                                                         content_type,
+                                                         body)
+            extensions.extend(parent_ext)
+        return meth, extensions
+
+    def _get_method(self, request, action, content_type, body):
         """Look up the action-specific method and its extensions."""
 
         # Look up the method

@@ -18,25 +18,32 @@
 
 """Unit tests for the API endpoint"""
 
-import datetime
-import httplib
 import random
 import StringIO
 
 import boto
 from boto.ec2 import regioninfo
 from boto import exception as boto_exc
+# newer versions of boto use their own wrapper on top of httplib.HTTPResponse
+try:
+    from boto.connection import HTTPResponse
+except ImportError:
+    from httplib import HTTPResponse
 import webob
 
-from nova import block_device
-from nova import context
-from nova import exception
-from nova import test
 from nova.api import auth
 from nova.api import ec2
 from nova.api.ec2 import apirequest
-from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
+from nova import block_device
+from nova import context
+from nova import exception
+from nova import flags
+from nova.openstack.common import timeutils
+from nova import test
+
+
+FLAGS = flags.FLAGS
 
 
 class FakeHttplibSocket(object):
@@ -55,7 +62,7 @@ class FakeHttplibConnection(object):
 
     requests made via this connection actually get translated and routed into
     our WSGI app, we then wait for the response and turn it back into
-    the httplib.HTTPResponse that boto expects.
+    the HTTPResponse that boto expects.
     """
     def __init__(self, app, host, is_secure=False):
         self.app = app
@@ -74,7 +81,7 @@ class FakeHttplibConnection(object):
         # guess that's a function the web server usually provides.
         resp = "HTTP/1.0 %s" % resp
         self.sock = FakeHttplibSocket(resp)
-        self.http_response = httplib.HTTPResponse(self.sock)
+        self.http_response = HTTPResponse(self.sock)
         # NOTE(vish): boto is accessing private variables for some reason
         self._HTTPConnection__response = self.http_response
         self.http_response.begin()
@@ -214,9 +221,9 @@ class ApiEc2TestCase(test.TestCase):
         # NOTE(vish): skipping the Authorizer
         roles = ['sysadmin', 'netadmin']
         ctxt = context.RequestContext('fake', 'fake', roles=roles)
-        self.app = auth.InjectContext(ctxt,
-                ec2.Requestify(ec2.Authorizer(ec2.Executor()),
-                               'nova.api.ec2.cloud.CloudController'))
+        self.app = auth.InjectContext(ctxt, ec2.FaultWrapper(
+                ec2.RequestLogging(ec2.Requestify(ec2.Authorizer(ec2.Executor()
+                               ), 'nova.api.ec2.cloud.CloudController'))))
 
     def expect_http(self, host=None, is_secure=False, api_version=None):
         """Returns a new EC2 connection"""
@@ -249,19 +256,13 @@ class ApiEc2TestCase(test.TestCase):
         """
         conv = apirequest._database_to_isoformat
         # sqlite database representation with microseconds
-        time_to_convert = datetime.datetime.strptime(
-                            "2011-02-21 20:14:10.634276",
-                            "%Y-%m-%d %H:%M:%S.%f")
-        self.assertEqual(
-                        conv(time_to_convert),
-                        '2011-02-21T20:14:10.634Z')
+        time_to_convert = timeutils.parse_strtime("2011-02-21 20:14:10.634276",
+                                                  "%Y-%m-%d %H:%M:%S.%f")
+        self.assertEqual(conv(time_to_convert), '2011-02-21T20:14:10.634Z')
         # mysqlite database representation
-        time_to_convert = datetime.datetime.strptime(
-                            "2011-02-21 19:56:18",
-                            "%Y-%m-%d %H:%M:%S")
-        self.assertEqual(
-                        conv(time_to_convert),
-                        '2011-02-21T19:56:18.000Z')
+        time_to_convert = timeutils.parse_strtime("2011-02-21 19:56:18",
+                                                  "%Y-%m-%d %H:%M:%S")
+        self.assertEqual(conv(time_to_convert), '2011-02-21T19:56:18.000Z')
 
     def test_xmlns_version_matches_request_version(self):
         self.expect_http(api_version='2010-10-30')
@@ -290,13 +291,11 @@ class ApiEc2TestCase(test.TestCase):
     def test_get_all_key_pairs(self):
         """Test that, after creating a user and project and generating
          a key pair, that the API call to list key pairs works properly"""
-        self.expect_http()
-        self.mox.ReplayAll()
         keyname = "".join(random.choice("sdiuisudfsdcnpaqwertasd")
                           for x in range(random.randint(4, 8)))
-        # NOTE(vish): create depends on pool, so call helper directly
-        cloud._gen_key(context.get_admin_context(), 'fake', keyname)
-
+        self.expect_http()
+        self.mox.ReplayAll()
+        self.ec2.create_key_pair(keyname)
         rv = self.ec2.get_all_key_pairs()
         results = [k for k in rv if k.name == keyname]
         self.assertEquals(len(results), 1)
@@ -306,9 +305,6 @@ class ApiEc2TestCase(test.TestCase):
         requesting a second keypair with the same name fails sanely"""
         self.expect_http()
         self.mox.ReplayAll()
-        keyname = "".join(random.choice("sdiuisudfsdcnpaqwertasd")
-                          for x in range(random.randint(4, 8)))
-        # NOTE(vish): create depends on pool, so call helper directly
         self.ec2.create_key_pair('test')
 
         try:
@@ -356,19 +352,37 @@ class ApiEc2TestCase(test.TestCase):
 
     def test_group_name_valid_chars_security_group(self):
         """ Test that we sanely handle invalid security group names.
-         API Spec states we should only accept alphanumeric characters,
-         spaces, dashes, and underscores. """
-        self.expect_http()
-        self.mox.ReplayAll()
+         EC2 API Spec states we should only accept alphanumeric characters,
+         spaces, dashes, and underscores. Amazon implementation
+         accepts more characters - so, [:print:] is ok. """
 
-        # Test block group_name of non alphanumeric characters, spaces,
-        # dashes, and underscores.
-        security_group_name = "aa #^% -=99"
-
-        self.assertRaises(boto_exc.EC2ResponseError,
-                self.ec2.create_security_group,
-                security_group_name,
-                'test group')
+        bad_strict_ec2 = "aa \t\x01\x02\x7f"
+        bad_amazon_ec2 = "aa #^% -=99"
+        test_raise = [
+            (True, bad_amazon_ec2, "test desc"),
+            (True, "test name", bad_amazon_ec2),
+            (False, bad_strict_ec2, "test desc"),
+        ]
+        for test in test_raise:
+            self.expect_http()
+            self.mox.ReplayAll()
+            FLAGS.ec2_strict_validation = test[0]
+            self.assertRaises(boto_exc.EC2ResponseError,
+                              self.ec2.create_security_group,
+                              test[1],
+                              test[2])
+        test_accept = [
+            (False, bad_amazon_ec2, "test desc"),
+            (False, "test name", bad_amazon_ec2),
+        ]
+        for test in test_accept:
+            self.expect_http()
+            self.mox.ReplayAll()
+            FLAGS.ec2_strict_validation = test[0]
+            self.ec2.create_security_group(test[1], test[2])
+            self.expect_http()
+            self.mox.ReplayAll()
+            self.ec2.delete_security_group(test[1])
 
     def test_group_name_valid_length_security_group(self):
         """Test that we sanely handle invalid security group names.
@@ -487,8 +501,6 @@ class ApiEc2TestCase(test.TestCase):
         self.assertEqual(len(rv), 1)
         self.assertEqual(rv[0].name, 'default')
 
-        return
-
     def test_authorize_revoke_security_group_cidr_v6(self):
         """
         Test that we can add and remove CIDR based rules
@@ -540,8 +552,6 @@ class ApiEc2TestCase(test.TestCase):
 
         self.assertEqual(len(rv), 1)
         self.assertEqual(rv[0].name, 'default')
-
-        return
 
     def test_authorize_revoke_security_group_foreign_group(self):
         """

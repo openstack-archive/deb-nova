@@ -22,9 +22,10 @@ import time
 
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.libvirt import config
+from nova.virt.libvirt import utils as virtutils
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
@@ -36,15 +37,11 @@ class LibvirtVolumeDriver(object):
     def __init__(self, connection):
         self.connection = connection
 
-    def _pick_volume_driver(self):
-        hypervisor_type = self.connection.get_hypervisor_type().lower()
-        return "phy" if hypervisor_type == "xen" else "qemu"
-
     def connect_volume(self, connection_info, mount_device):
         """Connect the volume. Returns xml for libvirt."""
         conf = config.LibvirtConfigGuestDisk()
         conf.source_type = "block"
-        conf.driver_name = self._pick_volume_driver()
+        conf.driver_name = virtutils.pick_disk_driver_name(is_block_dev=True)
         conf.driver_format = "raw"
         conf.driver_cache = "none"
         conf.source_path = connection_info['data']['device_path']
@@ -77,29 +74,21 @@ class LibvirtNetVolumeDriver(LibvirtVolumeDriver):
     """Driver to attach Network volumes to libvirt."""
 
     def connect_volume(self, connection_info, mount_device):
-        driver = self._pick_volume_driver()
-        protocol = connection_info['driver_volume_type']
-        name = connection_info['data']['name']
-        if connection_info['data'].get('auth_enabled'):
-            username = connection_info['data']['auth_username']
-            secret_type = connection_info['data']['secret_type']
-            secret_uuid = connection_info['data']['secret_uuid']
-            xml = """<disk type='network'>
-                         <driver name='%s' type='raw' cache='none'/>
-                         <source protocol='%s' name='%s'/>
-                         <auth username='%s'>
-                             <secret type='%s' uuid='%s'/>
-                         </auth>
-                         <target dev='%s' bus='virtio'/>
-                     </disk>""" % (driver, protocol, name, username,
-                                   secret_type, secret_uuid, mount_device)
-        else:
-            xml = """<disk type='network'>
-                         <driver name='%s' type='raw' cache='none'/>
-                         <source protocol='%s' name='%s'/>
-                         <target dev='%s' bus='virtio'/>
-                     </disk>""" % (driver, protocol, name, mount_device)
-        return xml
+        conf = config.LibvirtConfigGuestDisk()
+        conf.source_type = "network"
+        conf.driver_name = virtutils.pick_disk_driver_name(is_block_dev=False)
+        conf.driver_format = "raw"
+        conf.driver_cache = "none"
+        conf.source_protocol = connection_info['driver_volume_type']
+        conf.source_host = connection_info['data']['name']
+        conf.target_dev = mount_device
+        conf.target_bus = "virtio"
+        netdisk_properties = connection_info['data']
+        if netdisk_properties.get('auth_enabled'):
+            conf.auth_username = netdisk_properties['auth_username']
+            conf.auth_secret_type = netdisk_properties['secret_type']
+            conf.auth_secret_uuid = netdisk_properties['secret_uuid']
+        return conf
 
 
 class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
@@ -116,10 +105,11 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
                   (iscsi_command, out, err))
         return (out, err)
 
-    def _iscsiadm_update(self, iscsi_properties, property_key, property_value):
+    def _iscsiadm_update(self, iscsi_properties, property_key, property_value,
+                         **kwargs):
         iscsi_command = ('--op', 'update', '-n', property_key,
                          '-v', property_value)
-        return self._run_iscsiadm(iscsi_properties, iscsi_command)
+        return self._run_iscsiadm(iscsi_properties, iscsi_command, **kwargs)
 
     @utils.synchronized('connect_volume')
     def connect_volume(self, connection_info, mount_device):
@@ -168,8 +158,8 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
         tries = 0
         while not os.path.exists(host_device):
             if tries >= FLAGS.num_iscsi_scan_tries:
-                raise exception.Error(_("iSCSI device not found at %s") %
-                                      (host_device))
+                raise exception.NovaException(_("iSCSI device not found at %s")
+                                              % (host_device))
 
             LOG.warn(_("ISCSI volume not yet found at: %(mount_device)s. "
                        "Will rescan & retry.  Try number: %(tries)s") %
@@ -205,7 +195,8 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
         devices = self.connection.get_all_block_devices()
         devices = [dev for dev in devices if dev.startswith(device_prefix)]
         if not devices:
-            self._iscsiadm_update(iscsi_properties, "node.startup", "manual")
+            self._iscsiadm_update(iscsi_properties, "node.startup", "manual",
+                                  check_exit_code=[0, 255])
             self._run_iscsiadm(iscsi_properties, ("--logout",),
                                check_exit_code=[0, 255])
             self._run_iscsiadm(iscsi_properties, ('--op', 'delete'),

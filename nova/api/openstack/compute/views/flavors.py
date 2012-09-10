@@ -27,12 +27,14 @@ class ViewBuilder(common.ViewBuilder):
             "flavor": {
                 "id": flavor["flavorid"],
                 "name": flavor["name"],
-                "links": self._get_links(request, flavor["flavorid"]),
+                "links": self._get_links(request,
+                                         flavor["flavorid"],
+                                         self._collection_name),
             },
         }
 
     def show(self, request, flavor):
-        return {
+        flavor_dict = {
             "flavor": {
                 "id": flavor["flavorid"],
                 "name": flavor["name"],
@@ -41,9 +43,19 @@ class ViewBuilder(common.ViewBuilder):
                 "vcpus": flavor.get("vcpus") or "",
                 "swap": flavor.get("swap") or "",
                 "rxtx_factor": flavor.get("rxtx_factor") or "",
-                "links": self._get_links(request, flavor["flavorid"]),
+                "links": self._get_links(request,
+                                         flavor["flavorid"],
+                                         self._collection_name),
             },
         }
+
+        # NOTE(sirp): disabled attribute is namespaced for now for
+        # compatability with the OpenStack API. This should ultimately be made
+        # a first class attribute.
+        flavor_dict["flavor"]["OS-FLV-DISABLED:disabled"] =\
+                flavor.get("disabled", "")
+
+        return flavor_dict
 
     def index(self, request, flavors):
         """Return the 'index' view of flavors."""
@@ -58,6 +70,7 @@ class ViewBuilder(common.ViewBuilder):
         flavor_list = [func(request, flavor)["flavor"] for flavor in flavors]
         flavors_links = self._get_collection_links(request,
                                                    flavors,
+                                                   self._collection_name,
                                                    "flavorid")
         flavors_dict = dict(flavors=flavor_list)
 

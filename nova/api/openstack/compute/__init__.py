@@ -24,16 +24,16 @@ import nova.api.openstack
 from nova.api.openstack.compute import consoles
 from nova.api.openstack.compute import extensions
 from nova.api.openstack.compute import flavors
-from nova.api.openstack.compute import images
 from nova.api.openstack.compute import image_metadata
+from nova.api.openstack.compute import images
 from nova.api.openstack.compute import ips
 from nova.api.openstack.compute import limits
-from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import server_metadata
+from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import versions
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class APIRouter(nova.api.openstack.APIRouter):
     """
     ExtensionManager = extensions.ExtensionManager
 
-    def _setup_routes(self, mapper):
+    def _setup_routes(self, mapper, ext_mgr):
         self.resources['versions'] = versions.create_resource()
         mapper.connect("versions", "/",
                     controller=self.resources['versions'],
@@ -67,7 +67,7 @@ class APIRouter(nova.api.openstack.APIRouter):
                     parent_resource=dict(member_name='server',
                     collection_name='servers'))
 
-        self.resources['servers'] = servers.create_resource()
+        self.resources['servers'] = servers.create_resource(ext_mgr)
         mapper.resource("server", "servers",
                         controller=self.resources['servers'],
                         collection={'detail': 'GET'},

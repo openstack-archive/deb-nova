@@ -13,17 +13,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 """
-Tests For Distributed Scheduler.
+Tests For Filter Scheduler.
 """
 
 import mox
 
 from nova import context
 from nova import exception
-from nova.scheduler import least_cost
-from nova.scheduler import host_manager
+from nova.scheduler import driver
 from nova.scheduler import filter_scheduler
-from nova import test
+from nova.scheduler import host_manager
+from nova.scheduler import least_cost
 from nova.tests.scheduler import fakes
 from nova.tests.scheduler import test_scheduler
 
@@ -33,7 +33,7 @@ def fake_filter_hosts(hosts, filter_properties):
 
 
 class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
-    """Test case for Distributed Scheduler."""
+    """Test case for Filter Scheduler."""
 
     driver_cls = filter_scheduler.FilterScheduler
 
@@ -51,7 +51,8 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
                                           'ephemeral_gb': 0},
                         'instance_properties': {'project_id': 1}}
         self.assertRaises(exception.NoValidHost, sched.schedule_run_instance,
-                          fake_context, request_spec)
+                          fake_context, request_spec, None, None, None,
+                          None, {}, None)
 
     def test_run_instance_non_admin(self):
         """Test creating an instance locally using run_instance, passing
@@ -72,7 +73,8 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         request_spec = {'instance_type': {'memory_mb': 1, 'local_gb': 1},
                         'instance_properties': {'project_id': 1}}
         self.assertRaises(exception.NoValidHost, sched.schedule_run_instance,
-                          fake_context, request_spec)
+                          fake_context, request_spec, None, None, None,
+                          None, {}, None)
         self.assertTrue(self.was_admin)
 
     def test_schedule_bad_topic(self):
@@ -80,7 +82,7 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         sched = fakes.FakeFilterScheduler()
         fake_context = context.RequestContext('user', 'project')
         self.assertRaises(NotImplementedError, sched._schedule, fake_context,
-                          "foo", {})
+                          "foo", {}, {})
 
     def test_scheduler_includes_launch_index(self):
         ctxt = "fake-context"
@@ -112,20 +114,22 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         self.mox.StubOutWithMock(self.driver, '_provision_resource')
 
         self.driver._schedule(context_fake, 'compute',
-                              request_spec, **fake_kwargs
+                              request_spec, {}
                               ).AndReturn(['host1', 'host2'])
         # instance 1
         self.driver._provision_resource(
             ctxt, 'host1',
-            mox.Func(_has_launch_index(0)), fake_kwargs).AndReturn(instance1)
+            mox.Func(_has_launch_index(0)), None,
+            {}, None, None, None, None).AndReturn(instance1)
         # instance 2
         self.driver._provision_resource(
             ctxt, 'host2',
-            mox.Func(_has_launch_index(1)), fake_kwargs).AndReturn(instance2)
+            mox.Func(_has_launch_index(1)), None,
+            {}, None, None, None, None).AndReturn(instance2)
         self.mox.ReplayAll()
 
         self.driver.schedule_run_instance(context_fake, request_spec,
-                                          **fake_kwargs)
+                None, None, None, None, {}, None)
 
     def test_schedule_happy_day(self):
         """Make sure there's nothing glaringly wrong with _schedule()
@@ -159,10 +163,36 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
                                                 'vcpus': 1}}
         self.mox.ReplayAll()
         weighted_hosts = sched._schedule(fake_context, 'compute',
-                request_spec)
+                request_spec, {})
         self.assertEquals(len(weighted_hosts), 10)
         for weighted_host in weighted_hosts:
             self.assertTrue(weighted_host.host_state is not None)
+
+    def test_schedule_prep_resize_doesnt_update_host(self):
+        fake_context = context.RequestContext('user', 'project',
+                is_admin=True)
+
+        sched = fakes.FakeFilterScheduler()
+
+        def _return_hosts(*args, **kwargs):
+            host_state = host_manager.HostState('host2', 'compute')
+            return [least_cost.WeightedHost(1.0, host_state=host_state)]
+
+        self.stubs.Set(sched, '_schedule', _return_hosts)
+
+        info = {'called': 0}
+
+        def _fake_instance_update_db(*args, **kwargs):
+            # This should not be called
+            info['called'] = 1
+
+        self.stubs.Set(driver, 'instance_update_db',
+                _fake_instance_update_db)
+
+        instance = {'uuid': 'fake-uuid', 'host': 'host1'}
+
+        sched.schedule_prep_resize(fake_context, {}, {}, {}, instance, {})
+        self.assertEqual(info['called'], 0)
 
     def test_get_cost_functions(self):
         self.flags(reserved_host_memory_mb=128)
@@ -175,3 +205,88 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         hostinfo.update_from_compute_node(dict(memory_mb=1000,
                 local_gb=0, vcpus=1))
         self.assertEquals(1000 - 128, fn(hostinfo, {}))
+
+    def test_max_attempts(self):
+        self.flags(scheduler_max_attempts=4)
+
+        sched = fakes.FakeFilterScheduler()
+        self.assertEqual(4, sched._max_attempts())
+
+    def test_invalid_max_attempts(self):
+        self.flags(scheduler_max_attempts=0)
+
+        sched = fakes.FakeFilterScheduler()
+        self.assertRaises(exception.NovaException, sched._max_attempts)
+
+    def test_retry_disabled(self):
+        """Retry info should not get populated when re-scheduling is off"""
+        self.flags(scheduler_max_attempts=1)
+        sched = fakes.FakeFilterScheduler()
+
+        instance_properties = {}
+        request_spec = dict(instance_properties=instance_properties)
+        filter_properties = {}
+
+        sched._schedule(self.context, 'compute', request_spec,
+                filter_properties=filter_properties)
+
+        # should not have retry info in the populated filter properties:
+        self.assertFalse("retry" in filter_properties)
+
+    def test_retry_attempt_one(self):
+        """Test retry logic on initial scheduling attempt"""
+        self.flags(scheduler_max_attempts=2)
+        sched = fakes.FakeFilterScheduler()
+
+        instance_properties = {}
+        request_spec = dict(instance_properties=instance_properties)
+        filter_properties = {}
+
+        sched._schedule(self.context, 'compute', request_spec,
+                filter_properties=filter_properties)
+
+        num_attempts = filter_properties['retry']['num_attempts']
+        self.assertEqual(1, num_attempts)
+
+    def test_retry_attempt_two(self):
+        """Test retry logic when re-scheduling"""
+        self.flags(scheduler_max_attempts=2)
+        sched = fakes.FakeFilterScheduler()
+
+        instance_properties = {}
+        request_spec = dict(instance_properties=instance_properties)
+
+        retry = dict(num_attempts=1)
+        filter_properties = dict(retry=retry)
+
+        sched._schedule(self.context, 'compute', request_spec,
+                filter_properties=filter_properties)
+
+        num_attempts = filter_properties['retry']['num_attempts']
+        self.assertEqual(2, num_attempts)
+
+    def test_retry_exceeded_max_attempts(self):
+        """Test for necessary explosion when max retries is exceeded"""
+        self.flags(scheduler_max_attempts=2)
+        sched = fakes.FakeFilterScheduler()
+
+        instance_properties = {}
+        request_spec = dict(instance_properties=instance_properties)
+
+        retry = dict(num_attempts=2)
+        filter_properties = dict(retry=retry)
+
+        self.assertRaises(exception.NoValidHost, sched._schedule, self.context,
+                'compute', request_spec, filter_properties=filter_properties)
+
+    def test_add_retry_host(self):
+        retry = dict(num_attempts=1, hosts=[])
+        filter_properties = dict(retry=retry)
+        host = "fakehost"
+
+        sched = fakes.FakeFilterScheduler()
+        sched._add_retry_host(filter_properties, host)
+
+        hosts = filter_properties['retry']['hosts']
+        self.assertEqual(1, len(hosts))
+        self.assertEqual(host, hosts[0])

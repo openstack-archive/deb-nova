@@ -14,15 +14,15 @@
 #    under the License.
 
 import datetime
-import json
 
 import webob
 
+from nova.api.openstack.compute.contrib import flavormanage
+from nova.compute import instance_types
 from nova import exception
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
-from nova.compute import instance_types
-from nova.api.openstack.compute.contrib import flavormanage
 
 
 def fake_get_instance_type_by_flavor_id(flavorid):
@@ -107,9 +107,9 @@ class FlavorManageTest(test.TestCase):
         req = webob.Request.blank(url)
         req.headers['Content-Type'] = 'application/json'
         req.method = 'POST'
-        req.body = json.dumps(expected)
+        req.body = jsonutils.dumps(expected)
         res = req.get_response(fakes.wsgi_app())
-        body = json.loads(res.body)
+        body = jsonutils.loads(res.body)
         for key in expected["flavor"]:
             self.assertEquals(body["flavor"][key], expected["flavor"][key])
 
@@ -136,6 +136,6 @@ class FlavorManageTest(test.TestCase):
         req = webob.Request.blank(url)
         req.headers['Content-Type'] = 'application/json'
         req.method = 'POST'
-        req.body = json.dumps(expected)
+        req.body = jsonutils.dumps(expected)
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 409)

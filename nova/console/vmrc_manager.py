@@ -17,14 +17,14 @@
 
 """VMRC Console Manager."""
 
+from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova import manager
 from nova.openstack.common import cfg
-from nova import rpc
-from nova import utils
-from nova.virt import vmwareapi_conn
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.virt.vmwareapi import driver as vmwareapi_conn
 
 
 LOG = logging.getLogger(__name__)
@@ -46,7 +46,8 @@ class ConsoleVMRCManager(manager.Manager):
     """Manager to handle VMRC connections for accessing instance consoles."""
 
     def __init__(self, console_driver=None, *args, **kwargs):
-        self.driver = utils.import_object(FLAGS.console_driver)
+        self.driver = importutils.import_object(FLAGS.console_driver)
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         super(ConsoleVMRCManager, self).__init__(*args, **kwargs)
 
     def init_host(self):
@@ -98,7 +99,7 @@ class ConsoleVMRCManager(manager.Manager):
         try:
             console = self.db.console_get_by_pool_instance(context,
                                                       pool['id'],
-                                                      instance_id)
+                                                      instance['uuid'])
             if self.driver.is_otp():
                 console = self._generate_console(context,
                                                  pool,
@@ -137,12 +138,8 @@ class ConsoleVMRCManager(manager.Manager):
                                                          self.host,
                                                          console_type)
         except exception.NotFound:
-            pool_info = rpc.call(context,
-                                 self.db.queue_get_for(context,
-                                                       FLAGS.compute_topic,
-                                                       instance_host),
-                                 {'method': 'get_console_pool_info',
-                                  'args': {'console_type': console_type}})
+            pool_info = self.compute_rpcapi.get_console_pool_info(context,
+                    console_type, instance_host)
             pool_info['password'] = self.driver.fix_pool_password(
                                                     pool_info['password'])
             pool_info['host'] = self.host

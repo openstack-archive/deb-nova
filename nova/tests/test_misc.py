@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import commands
 import errno
 import glob
 import os
@@ -22,7 +21,6 @@ import select
 
 from eventlet import greenpool
 from eventlet import greenthread
-import lockfile
 
 from nova import exception
 from nova import test
@@ -42,33 +40,6 @@ class ExceptionTestCase(test.TestCase):
 
 
 class ProjectTestCase(test.TestCase):
-    def test_authors_up_to_date(self):
-        topdir = os.path.normpath(os.path.dirname(__file__) + '/../../')
-        missing = set()
-        contributors = set()
-        mailmap = utils.parse_mailmap(os.path.join(topdir, '.mailmap'))
-        authors_file = open(os.path.join(topdir,
-                                         'Authors'), 'r').read().lower()
-
-        if os.path.exists(os.path.join(topdir, '.git')):
-            for email in commands.getoutput('git log --format=%ae').split():
-                if not email:
-                    continue
-                if "jenkins" in email and "openstack.org" in email:
-                    continue
-                email = '<' + email.lower() + '>'
-                contributors.add(utils.str_dict_replace(email, mailmap))
-        else:
-            return
-
-        for contributor in contributors:
-            if contributor == 'nova-core':
-                continue
-            if not contributor in authors_file:
-                missing.add(contributor)
-
-        self.assertTrue(len(missing) == 0,
-                        '%r not listed in Authors' % missing)
 
     def test_all_migrations_have_downgrade(self):
         topdir = os.path.normpath(os.path.dirname(__file__) + '/../../')
@@ -135,20 +106,19 @@ class LockTestCase(test.TestCase):
         self.assertEqual(saved_sem_num, len(utils._semaphores),
                          "Semaphore leak detected")
 
-    def test_nested_external_fails(self):
-        """We can not nest external syncs"""
+    def test_nested_external_works(self):
+        """We can nest external syncs"""
+        sentinel = object()
 
         @utils.synchronized('testlock1', external=True)
         def outer_lock():
 
             @utils.synchronized('testlock2', external=True)
             def inner_lock():
-                pass
-            inner_lock()
-        try:
-            self.assertRaises(lockfile.NotMyLock, outer_lock)
-        finally:
-            utils.cleanup_file_locks()
+                return sentinel
+            return inner_lock()
+
+        self.assertEqual(sentinel, outer_lock())
 
     def test_synchronized_externally(self):
         """We can lock across multiple processes"""

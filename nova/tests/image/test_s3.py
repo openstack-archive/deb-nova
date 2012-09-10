@@ -15,13 +15,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import binascii
+import eventlet
+import mox
 import os
+import tempfile
 
 from nova import context
 import nova.db.api
 from nova import exception
-from nova import test
 from nova.image import s3
+from nova import test
+from nova.tests.image import fake
 
 
 ami_manifest_xml = """<?xml version="1.0" ?>
@@ -58,17 +63,37 @@ ami_manifest_xml = """<?xml version="1.0" ?>
 </manifest>
 """
 
+file_manifest_xml = """<?xml version="1.0" ?>
+<manifest>
+        <image>
+                <ec2_encrypted_key>foo</ec2_encrypted_key>
+                <user_encrypted_key>foo</user_encrypted_key>
+                <ec2_encrypted_iv>foo</ec2_encrypted_iv>
+                <parts count="1">
+                        <part index="0">
+                               <filename>foo</filename>
+                        </part>
+                </parts>
+        </image>
+</manifest>
+"""
+
 
 class TestS3ImageService(test.TestCase):
     def setUp(self):
         super(TestS3ImageService, self).setUp()
-        self.flags(image_service='nova.image.fake.FakeImageService')
-        self.image_service = s3.S3ImageService()
         self.context = context.RequestContext(None, None)
 
         # set up one fixture to test shows, should have id '1'
         nova.db.api.s3_image_create(self.context,
                                     '155d900f-4e14-4e4c-a73d-069cbf4541e6')
+
+        fake.stub_out_image_service(self.stubs)
+        self.image_service = s3.S3ImageService()
+
+    def tearDown(self):
+        super(TestS3ImageService, self).tearDown()
+        fake.FakeImageService_reset()
 
     def _assertEqualList(self, list0, list1, keys):
         self.assertEqual(len(list0), len(list1))
@@ -133,10 +158,49 @@ class TestS3ImageService(test.TestCase):
              'no_device': True}]
         self.assertEqual(block_device_mapping, expected_bdm)
 
+    def test_s3_create_is_public(self):
+        metadata = {'properties': {
+                    'image_location': 'mybucket/my.img.manifest.xml'},
+                    'name': 'mybucket/my.img'}
+        handle, tempf = tempfile.mkstemp(dir='/tmp')
+
+        ignore = mox.IgnoreArg()
+        mockobj = self.mox.CreateMockAnything()
+        self.stubs.Set(self.image_service, '_conn', mockobj)
+        mockobj(ignore).AndReturn(mockobj)
+        self.stubs.Set(mockobj, 'get_bucket', mockobj)
+        mockobj(ignore).AndReturn(mockobj)
+        self.stubs.Set(mockobj, 'get_key', mockobj)
+        mockobj(ignore).AndReturn(mockobj)
+        self.stubs.Set(mockobj, 'get_contents_as_string', mockobj)
+        mockobj().AndReturn(file_manifest_xml)
+        self.stubs.Set(self.image_service, '_download_file', mockobj)
+        mockobj(ignore, ignore, ignore).AndReturn(tempf)
+        self.stubs.Set(binascii, 'a2b_hex', mockobj)
+        mockobj(ignore).AndReturn('foo')
+        mockobj(ignore).AndReturn('foo')
+        self.stubs.Set(self.image_service, '_decrypt_image', mockobj)
+        mockobj(ignore, ignore, ignore, ignore, ignore).AndReturn(mockobj)
+        self.stubs.Set(self.image_service, '_untarzip_image', mockobj)
+        mockobj(ignore, ignore).AndReturn(tempf)
+        self.mox.ReplayAll()
+
+        img = self.image_service._s3_create(self.context, metadata)
+        eventlet.sleep()
+        translated = self.image_service._translate_id_to_uuid(context, img)
+        uuid = translated['id']
+        image_service = fake.FakeImageService()
+        updated_image = image_service.update(self.context, uuid,
+                        {'is_public': True}, purge_props=False)
+        self.assertTrue(updated_image['is_public'])
+        self.assertEqual(updated_image['status'], 'active')
+        self.assertEqual(updated_image['properties']['image_state'],
+                          'available')
+
     def test_s3_malicious_tarballs(self):
-        self.assertRaises(exception.Error,
+        self.assertRaises(exception.NovaException,
             self.image_service._test_for_malicious_tarball,
             "/unused", os.path.join(os.path.dirname(__file__), 'abs.tar.gz'))
-        self.assertRaises(exception.Error,
+        self.assertRaises(exception.NovaException,
             self.image_service._test_for_malicious_tarball,
             "/unused", os.path.join(os.path.dirname(__file__), 'rel.tar.gz'))

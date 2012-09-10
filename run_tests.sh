@@ -60,6 +60,13 @@ coverage=0
 recreate_db=1
 patch_migrate=1
 
+export NOSE_WITH_OPENSTACK=1
+export NOSE_OPENSTACK_COLOR=1
+export NOSE_OPENSTACK_RED=0.05
+export NOSE_OPENSTACK_YELLOW=0.025
+export NOSE_OPENSTACK_SHOW_ELAPSED=1
+export NOSE_OPENSTACK_STDOUT=1
+
 for arg in "$@"; do
   process_option $arg
 done
@@ -75,10 +82,9 @@ fi
 
 function run_tests {
   # Cleanup *pyc
-  echo "cleaning *.pyc files"
   ${wrapper} find . -type f -name "*.pyc" -delete
   # Just run the test suites in current environment
-  ${wrapper} $NOSETESTS 2> run_tests.log
+  ${wrapper} $NOSETESTS
   # If we get some short import error right away, print the error log directly
   RESULT=$?
   if [ "$RESULT" -ne "0" ];
@@ -89,31 +95,39 @@ function run_tests {
         cat run_tests.log
     fi
   fi
+  # cleanup locks - not really needed, but stops pollution of the source tree
+  rm -f nova-ensure_bridge nova-ensure_vlan nova-iptables nova-testlock1 nova-testlock2
   return $RESULT
 }
 
-# Files of interest
-# NOTE(lzyeval): Avoid selecting nova-api-paste.ini and nova.conf in nova/bin
-#                when running on devstack.
-# NOTE(lzyeval): Avoid selecting *.pyc files to reduce pep8 check-up time
-#                when running on devstack.
-xen_api_path="plugins/xenserver/xenapi/etc/xapi.d/plugins"
-xen_net_path="plugins/xenserver/networking/etc/xensource/scripts"
-srcfiles=`find nova -type f -name "*.py"`
-srcfiles+=" `find bin -type f ! -name "nova.conf*" ! -name "*api-paste.ini*"`"
-srcfiles+=" `find tools -type f -name "*.py"`"
-srcfiles+=" `find ${xen_api_path} ${xen_net_path} -type f ! -name "*.patch" ! -name "*.pyc"`"
-srcfiles+=" setup.py"
 
 function run_pep8 {
   echo "Running PEP8 and HACKING compliance check..."
-  # Just run PEP8 in current environment
-  #
-  ${wrapper} python tools/hacking.py ${srcfiles}
+
+  # Files of interest
+  # NOTE(lzyeval): Avoid selecting nova-api-paste.ini and nova.conf in nova/bin
+  #                when running on devstack.
+  # NOTE(lzyeval): Avoid selecting *.pyc files to reduce pep8 check-up time
+  #                when running on devstack.
+  srcfiles=`find nova -type f -name "*.py" ! -wholename "nova\/openstack*"`
+  srcfiles+=" `find bin -type f ! -name "nova.conf*" ! -name "*api-paste.ini*"`"
+  srcfiles+=" `find tools -type f -name "*.py"`"
+  srcfiles+=" setup.py"
+
+  # Until all these issues get fixed, ignore.
+  ignore='--ignore=N4'
+
+  ${wrapper} python tools/hacking.py ${ignore} ${srcfiles}
+
+  # NOTE(sirp): Dom0 plugins are written for Python 2.4, meaning some HACKING
+  #             checks are too strict.
+  pep8onlyfiles=`find plugins -type f -name "*.py"`
+  pep8onlyfiles+=" `find plugins/xenserver/xenapi/etc/xapi.d/plugins/ -type f -perm +111`"
+  ${wrapper} pep8 ${pep8onlyfiles}
 }
 
 
-NOSETESTS="python nova/testing/runner.py $noseopts $noseargs"
+NOSETESTS="nosetests $noseopts $noseargs"
 
 if [ $never_venv -eq 0 ]
 then
@@ -169,5 +183,6 @@ fi
 
 if [ $coverage -eq 1 ]; then
     echo "Generating coverage report in covhtml/"
-    ${wrapper} coverage html -d covhtml -i
+    # Don't compute coverage for common code, which is tested elsewhere
+    ${wrapper} coverage html --include='nova/*' --omit='nova/openstack/common/*' -d covhtml -i
 fi

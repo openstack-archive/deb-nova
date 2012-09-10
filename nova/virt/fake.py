@@ -28,17 +28,12 @@ semantics of real hypervisor connections.
 from nova.compute import power_state
 from nova import db
 from nova import exception
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import driver
 
 
 LOG = logging.getLogger(__name__)
-
-
-def get_connection(_read_only):
-    # The read_only parameter is ignored.
-    return FakeConnection.instance()
 
 
 class FakeInstance(object):
@@ -47,11 +42,14 @@ class FakeInstance(object):
         self.name = name
         self.state = state
 
+    def __getitem__(self, key):
+        return getattr(self, key)
 
-class FakeConnection(driver.ComputeDriver):
+
+class FakeDriver(driver.ComputeDriver):
     """Fake hypervisor driver"""
 
-    def __init__(self):
+    def __init__(self, read_only=False):
         self.instances = {}
         self.host_status = {
           'host_name-description': 'Fake Host',
@@ -70,28 +68,11 @@ class FakeConnection(driver.ComputeDriver):
           'host_name_label': 'fake-mini'}
         self._mounts = {}
 
-    @classmethod
-    def instance(cls):
-        if not hasattr(cls, '_instance'):
-            cls._instance = cls()
-        return cls._instance
-
     def init_host(self, host):
         return
 
     def list_instances(self):
         return self.instances.keys()
-
-    def _map_to_instance_info(self, instance):
-        instance = utils.check_isinstance(instance, FakeInstance)
-        info = driver.InstanceInfo(instance.name, instance.state)
-        return info
-
-    def list_instances_detail(self):
-        info_list = []
-        for instance in self.instances.values():
-            info_list.append(self._map_to_instance_info(instance))
-        return info_list
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
@@ -101,9 +82,9 @@ class FakeConnection(driver.ComputeDriver):
         """Unplug VIFs from networks."""
         pass
 
-    def spawn(self, context, instance, image_meta,
-              network_info=None, block_device_info=None):
-        name = instance.name
+    def spawn(self, context, instance, image_meta, injected_files,
+              admin_password, network_info=None, block_device_info=None):
+        name = instance['name']
         state = power_state.RUNNING
         fake_instance = FakeInstance(name, state)
         self.instances[name] = fake_instance
@@ -119,22 +100,17 @@ class FakeConnection(driver.ComputeDriver):
     def get_host_ip_addr():
         return '192.168.0.1'
 
-    def resize(self, instance, flavor):
-        pass
-
     def set_admin_password(self, instance, new_pass):
         pass
 
     def inject_file(self, instance, b64_path, b64_contents):
         pass
 
-    def agent_update(self, instance, url, md5hash):
-        pass
-
     def resume_state_on_host_boot(self, context, instance, network_info):
         pass
 
-    def rescue(self, context, instance, network_info, image_meta):
+    def rescue(self, context, instance, network_info, image_meta,
+               rescue_password):
         pass
 
     def unrescue(self, instance, network_info):
@@ -153,7 +129,10 @@ class FakeConnection(driver.ComputeDriver):
     def finish_revert_migration(self, instance, network_info):
         pass
 
-    def poll_unconfirmed_resizes(self, resize_confirm_window):
+    def power_off(self, instance):
+        pass
+
+    def power_on(self, instance):
         pass
 
     def pause(self, instance):
@@ -174,7 +153,7 @@ class FakeConnection(driver.ComputeDriver):
             del self.instances[key]
         else:
             LOG.warning("Key '%s' not in instances '%s'" %
-                        (key, self.instances))
+                        (key, self.instances), instance=instance)
 
     def attach_volume(self, connection_info, instance_name, mountpoint):
         """Attach the disk to the instance at mountpoint using info"""
@@ -204,17 +183,11 @@ class FakeConnection(driver.ComputeDriver):
     def get_diagnostics(self, instance_name):
         return 'FAKE_DIAGNOSTICS'
 
-    def get_all_bw_usage(self, start_time, stop_time=None):
+    def get_all_bw_usage(self, instances, start_time, stop_time=None):
         """Return bandwidth usage info for each interface on each
            running VM"""
         bwusage = []
         return bwusage
-
-    def list_disks(self, instance_name):
-        return ['A_DISK']
-
-    def list_interfaces(self, instance_name):
-        return ['A_VIF']
 
     def block_stats(self, instance_name, disk_id):
         return [0L, 0L, 0L, 0L, None]
@@ -231,14 +204,17 @@ class FakeConnection(driver.ComputeDriver):
                 'port': 6969}
 
     def get_console_pool_info(self, console_type):
-        return  {'address': '127.0.0.1',
-                 'username': 'fakeuser',
-                 'password': 'fakepassword'}
+        return {'address': '127.0.0.1',
+                'username': 'fakeuser',
+                'password': 'fakepassword'}
 
     def refresh_security_group_rules(self, security_group_id):
         return True
 
     def refresh_security_group_members(self, security_group_id):
+        return True
+
+    def refresh_instance_security_rules(self, instance):
         return True
 
     def refresh_provider_fw_rules(self):
@@ -276,21 +252,16 @@ class FakeConnection(driver.ComputeDriver):
             LOG.info(_('Compute_service record updated for %s ') % host)
             db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
 
-    def compare_cpu(self, xml):
-        """This method is supported only by libvirt."""
-        raise NotImplementedError('This method is supported only by libvirt.')
-
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         """This method is supported only by libvirt."""
         raise NotImplementedError('This method is supported only by libvirt.')
 
     def get_instance_disk_info(self, instance_name):
-        """This method is supported only by libvirt."""
         return
 
     def live_migration(self, context, instance_ref, dest,
-                       post_method, recover_method, block_migration=False):
-        """This method is supported only by libvirt."""
+                       post_method, recover_method, block_migration=False,
+                       migrate_data=None):
         return
 
     def finish_migration(self, context, migration, instance, disk_info,
@@ -300,8 +271,8 @@ class FakeConnection(driver.ComputeDriver):
     def confirm_migration(self, migration, instance, network_info):
         return
 
-    def pre_live_migration(self, block_device_info):
-        """This method is supported only by libvirt."""
+    def pre_live_migration(self, context, instance_ref, block_device_info,
+                           network_info):
         return
 
     def unfilter_instance(self, instance_ref, network_info):
@@ -338,4 +309,4 @@ class FakeConnection(driver.ComputeDriver):
         pass
 
     def get_volume_connector(self, instance):
-        return {'ip': '127.0.0.1', 'initiator': 'fake'}
+        return {'ip': '127.0.0.1', 'initiator': 'fake', 'host': 'fakehost'}

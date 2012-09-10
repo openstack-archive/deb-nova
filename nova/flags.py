@@ -30,22 +30,17 @@ import os
 import socket
 import sys
 
-from nova.compat import flagfile
 from nova.openstack.common import cfg
 
 
-class NovaConfigOpts(cfg.CommonConfigOpts):
-
-    def __init__(self, *args, **kwargs):
-        super(NovaConfigOpts, self).__init__(*args, **kwargs)
-        self.disable_interspersed_args()
-
-    def __call__(self, argv):
-        with flagfile.handle_flagfiles_managed(argv[1:]) as args:
-            return argv[:1] + super(NovaConfigOpts, self).__call__(args)
+FLAGS = cfg.CONF
 
 
-FLAGS = NovaConfigOpts()
+def parse_args(argv, default_config_files=None):
+    FLAGS.disable_interspersed_args()
+    return argv[:1] + FLAGS(argv[1:],
+                            project='nova',
+                            default_config_files=default_config_files)
 
 
 class UnrecognizedFlag(Exception):
@@ -78,31 +73,15 @@ def _get_my_ip():
         return "127.0.0.1"
 
 
-log_opts = [
-    cfg.StrOpt('logdir',
-               default=None,
-               help='Log output to a per-service log file in named directory'),
-    cfg.StrOpt('logfile',
-               default=None,
-               help='Log output to a named file'),
-    cfg.BoolOpt('use_stderr',
-                default=True,
-                help='Log output to standard error'),
-    ]
-
 core_opts = [
     cfg.StrOpt('connection_type',
                default=None,
-               help='Virtualization api connection type : libvirt, xenapi, '
-                    'or fake'),
+               help='Deprecated (use compute_driver instead): Virtualization '
+                    'api connection type : libvirt, xenapi, or fake'),
     cfg.StrOpt('sql_connection',
                default='sqlite:///$state_path/$sqlite_db',
                help='The SQLAlchemy connection string used to connect to the '
                     'database'),
-    cfg.IntOpt('sql_connection_debug',
-               default=0,
-               help='Verbosity of SQL debugging information. 0=None, '
-                    '100=Everything'),
     cfg.StrOpt('api_paste_config',
                default="api-paste.ini",
                help='File name for the paste.deploy config for nova-api'),
@@ -125,12 +104,15 @@ debug_opts = [
     cfg.BoolOpt('fake_network',
                 default=False,
                 help='If passed, use fake network devices and addresses'),
-    cfg.BoolOpt('fake_rabbit',
-                default=False,
-                help='If passed, use a fake RabbitMQ provider'),
+    cfg.IntOpt('sql_connection_debug',
+               default=0,
+               help='Verbosity of SQL debugging information. 0=None, '
+                    '100=Everything'),
+    cfg.BoolOpt('sql_connection_trace',
+               default=False,
+               help='Add python stack traces to SQL as comment strings'),
 ]
 
-FLAGS.register_cli_opts(log_opts)
 FLAGS.register_cli_opts(core_opts)
 FLAGS.register_cli_opts(debug_opts)
 
@@ -189,41 +171,6 @@ global_opts = [
     cfg.StrOpt('network_topic',
                default='network',
                help='the topic network nodes listen on'),
-    cfg.StrOpt('rabbit_host',
-               default='localhost',
-               help='the RabbitMQ host'),
-    cfg.IntOpt('rabbit_port',
-               default=5672,
-               help='the RabbitMQ port'),
-    cfg.BoolOpt('rabbit_use_ssl',
-                default=False,
-                help='connect over SSL for RabbitMQ'),
-    cfg.StrOpt('rabbit_userid',
-               default='guest',
-               help='the RabbitMQ userid'),
-    cfg.StrOpt('rabbit_password',
-               default='guest',
-               help='the RabbitMQ password'),
-    cfg.StrOpt('rabbit_virtual_host',
-               default='/',
-               help='the RabbitMQ virtual host'),
-    cfg.IntOpt('rabbit_retry_interval',
-               default=1,
-               help='how frequently to retry connecting with RabbitMQ'),
-    cfg.IntOpt('rabbit_retry_backoff',
-               default=2,
-               help='how long to backoff for between retries when connecting '
-                    'to RabbitMQ'),
-    cfg.IntOpt('rabbit_max_retries',
-               default=0,
-               help='maximum retries with trying to connect to RabbitMQ '
-                    '(the default of 0 implies an infinite retry count)'),
-    cfg.StrOpt('control_exchange',
-               default='nova',
-               help='the main RabbitMQ exchange to connect to'),
-    cfg.BoolOpt('rabbit_durable_queues',
-                default=False,
-                help='use durable queues in RabbitMQ'),
     cfg.BoolOpt('api_rate_limit',
                 default=True,
                 help='whether to rate limit the api'),
@@ -313,9 +260,6 @@ global_opts = [
     cfg.IntOpt('auth_token_ttl',
                default=3600,
                help='Seconds for auth tokens to linger'),
-    cfg.StrOpt('logfile_mode',
-               default='0644',
-               help='Default file mode used when creating log files'),
     cfg.StrOpt('sqlite_db',
                default='nova.sqlite',
                help='the filename to use with sqlite'),
@@ -362,19 +306,16 @@ global_opts = [
     cfg.StrOpt('firewall_driver',
                default='nova.virt.firewall.IptablesFirewallDriver',
                help='Firewall driver (defaults to iptables)'),
-    cfg.StrOpt('image_service',
-               default='nova.image.glance.GlanceImageService',
-               help='The service to use for retrieving and searching images.'),
     cfg.StrOpt('host',
                default=socket.gethostname(),
                help='Name of this node.  This can be an opaque identifier.  '
-                    'It is not necessarily a hostname, FQDN, or IP address.'),
+                    'It is not necessarily a hostname, FQDN, or IP address. '
+                    'However, the node name must be valid within '
+                    'an AMQP key, and if using ZeroMQ, a valid '
+                    'hostname, FQDN, or IP address'),
     cfg.StrOpt('node_availability_zone',
                default='nova',
                help='availability zone of this node'),
-    cfg.StrOpt('notification_driver',
-               default='nova.notifier.no_op_notifier',
-               help='Default driver for sending notifications'),
     cfg.ListOpt('memcached_servers',
                 default=None,
                 help='Memcached servers or None for in process cache.'),
@@ -394,11 +335,15 @@ global_opts = [
                      'host rebooted'),
     cfg.StrOpt('default_ephemeral_format',
                default=None,
-               help='The default format a ephemeral_volume will be '
+               help='The default format an ephemeral_volume will be '
                     'formatted with on creation.'),
     cfg.StrOpt('root_helper',
                default='sudo',
-               help='Command prefix to use for running commands as root'),
+               help='Deprecated: command to use for running commands as root'),
+    cfg.StrOpt('rootwrap_config',
+               default=None,
+               help='Path to the rootwrap configuration file to use for '
+                    'running commands as root'),
     cfg.StrOpt('network_driver',
                default='nova.network.linux_net',
                help='Driver to use for network creation'),
@@ -408,7 +353,7 @@ global_opts = [
     cfg.BoolOpt('enable_instance_password',
                 default=True,
                 help='Allows use of instance password during '
-                       'server creation'),
+                     'server creation'),
     cfg.IntOpt('password_length',
                default=12,
                help='Length of generated instance admin passwords'),
@@ -425,9 +370,9 @@ global_opts = [
                 default=False,
                 help='Allow destination machine to match source for resize. '
                      'Useful when testing in single-host environments.'),
-    cfg.StrOpt('stub_network',
-               default=False,
-               help='Stub network related code'),
+    cfg.BoolOpt('stub_network',
+                default=False,
+                help='Stub network related code'),
     cfg.IntOpt('reclaim_instance_interval',
                default=0,
                help='Interval in seconds for reclaiming deleted instances'),
@@ -446,9 +391,12 @@ global_opts = [
     cfg.ListOpt('isolated_hosts',
                 default=[],
                 help='Host reserved for specific images'),
-    cfg.BoolOpt('cache_images',
-                default=True,
-                help='Cache glance images locally'),
+    cfg.StrOpt('cache_images',
+                default='all',
+                help='Cache glance images locally. `all` will cache all'
+                     ' images, `some` will only cache images that have the'
+                     ' image_property `cache_in_nova=True`, and `none` turns'
+                     ' off caching entirely'),
     cfg.BoolOpt('use_cow_images',
                 default=True,
                 help='Whether to use cow images'),
@@ -462,15 +410,29 @@ global_opts = [
                 default='nova.volume.api.API',
                 help='The full class name of the volume API class to use'),
     cfg.StrOpt('security_group_handler',
-               default='nova.network.quantum.sg.NullSecurityGroupHandler',
+               default='nova.network.sg.NullSecurityGroupHandler',
                help='The full class name of the security group handler class'),
     cfg.StrOpt('default_access_ip_network_name',
                default=None,
                help='Name of network to use to set access ips for instances'),
     cfg.StrOpt('auth_strategy',
                default='noauth',
-               help='The strategy to use for auth. Supports noauth, keystone, '
-                    'and deprecated.'),
+               help='The strategy to use for auth: noauth or keystone.'),
+    cfg.ListOpt('non_inheritable_image_properties',
+                default=['cache_in_nova',
+                         'instance_uuid',
+                         'user_id',
+                         'image_type',
+                         'backup_type',
+                         'min_ram',
+                         'min_disk'],
+                help='These are image properties which a snapshot should not'
+                     ' inherit from an instance'),
+    cfg.BoolOpt('defer_iptables_apply',
+                default=False,
+                help='Whether to batch up the application of IPTables rules'
+                     ' during a host restart and apply all at the end of the'
+                     ' init phase'),
 ]
 
 FLAGS.register_opts(global_opts)

@@ -39,8 +39,17 @@ import shutil
 
 from nova.db.sqlalchemy.session import get_engine
 from nova import flags
+from nova.openstack.common import log as logging
+
+import eventlet
+
+
+eventlet.monkey_patch(os=False)
 
 FLAGS = flags.FLAGS
+FLAGS.use_stderr = False
+
+logging.setup('nova')
 
 _DB = None
 
@@ -50,7 +59,10 @@ def reset_db():
         engine = get_engine()
         engine.dispose()
         conn = engine.connect()
-        conn.connection.executescript(_DB)
+        if _DB:
+            conn.connection.executescript(_DB)
+        else:
+            setup()
     else:
         shutil.copyfile(os.path.join(FLAGS.state_path, FLAGS.sqlite_clean_db),
                         os.path.join(FLAGS.state_path, FLAGS.sqlite_db))
@@ -64,9 +76,10 @@ def setup():
     from nova.db import migration
     from nova.network import manager as network_manager
     from nova.tests import fake_flags
+    fake_flags.set_defaults(FLAGS)
 
     if FLAGS.sql_connection == "sqlite://":
-        if migration.db_version() > 1:
+        if migration.db_version() > migration.INIT_VERSION:
             return
     else:
         testdb = os.path.join(FLAGS.state_path, FLAGS.sqlite_db)

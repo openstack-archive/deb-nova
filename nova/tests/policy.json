@@ -13,7 +13,6 @@
     "compute:delete_instance_metadata": [],
 
     "compute:get_instance_faults": [],
-    "compute:get_actions": [],
     "compute:get_diagnostics": [],
 
     "compute:get_lock": [],
@@ -59,8 +58,8 @@
     "compute:snapshot": [],
     "compute:backup": [],
 
-    "compute:add_security_group": [],
-    "compute:remove_security_group": [],
+    "compute:security_groups:add_to_instance": [],
+    "compute:security_groups:remove_from_instance": [],
 
     "compute:delete": [],
     "compute:soft_delete": [],
@@ -79,10 +78,12 @@
     "compute_extension:admin_actions:injectNetworkInfo": [],
     "compute_extension:admin_actions:createBackup": [],
     "compute_extension:admin_actions:migrateLive": [],
+    "compute_extension:admin_actions:resetState": [],
     "compute_extension:admin_actions:migrate": [],
     "compute_extension:aggregates": [],
     "compute_extension:certificates": [],
     "compute_extension:cloudpipe": [],
+    "compute_extension:config_drive": [],
     "compute_extension:console_output": [],
     "compute_extension:consoles": [],
     "compute_extension:createserverext": [],
@@ -97,14 +98,17 @@
     "compute_extension:floating_ip_pools": [],
     "compute_extension:floating_ips": [],
     "compute_extension:hosts": [],
+    "compute_extension:hypervisors": [],
+    "compute_extension:instance_usage_audit_log": [],
     "compute_extension:keypairs": [],
     "compute_extension:multinic": [],
     "compute_extension:networks": [],
-    "compute_extension:quotas": [],
+    "compute_extension:networks:view": [],
+    "compute_extension:quotas:show": [],
+    "compute_extension:quotas:update": [],
     "compute_extension:quota_classes": [],
     "compute_extension:rescue": [],
     "compute_extension:security_groups": [],
-    "compute_extension:server_action_list": [],
     "compute_extension:server_diagnostics": [],
     "compute_extension:simple_tenant_usage:show": [],
     "compute_extension:simple_tenant_usage:list": [],
@@ -116,7 +120,6 @@
     "compute_extension:zones": [],
 
 
-
     "volume:create": [],
     "volume:get": [],
     "volume:get_all": [],
@@ -125,7 +128,6 @@
     "volume:update": [],
     "volume:delete_volume_metadata": [],
     "volume:update_volume_metadata": [],
-
     "volume:attach": [],
     "volume:detach": [],
     "volume:reserve_volume": [],
@@ -134,11 +136,14 @@
     "volume:check_detach": [],
     "volume:initialize_connection": [],
     "volume:terminate_connection": [],
-
     "volume:create_snapshot": [],
     "volume:delete_snapshot": [],
     "volume:get_snapshot": [],
     "volume:get_all_snapshots": [],
+
+
+    "volume_extension:types_manage": [],
+    "volume_extension:types_extra_specs": [],
 
 
     "network:get_all_networks": [],

@@ -17,15 +17,14 @@
 
 import datetime
 
-from nova.api.openstack  import compute
-from nova.api.openstack.compute import extensions
-from nova.api.openstack import wsgi
+from nova.api.openstack import compute
 import nova.db.api
 from nova import flags
-import nova.rpc
+from nova.openstack.common import jsonutils
+import nova.openstack.common.rpc
 from nova import test
 from nova.tests.api.openstack import fakes
-from nova import utils
+import nova.tests.image.fake
 
 
 MANUAL_INSTANCE_UUID = fakes.FAKE_UUID
@@ -47,6 +46,8 @@ class DiskConfigTestCase(test.TestCase):
     def setUp(self):
         super(DiskConfigTestCase, self).setUp()
         self.flags(verbose=True)
+        nova.tests.image.fake.stub_out_image_service(self.stubs)
+
         fakes.stub_out_nw_api(self.stubs)
 
         FAKE_INSTANCES = [
@@ -92,13 +93,17 @@ class DiskConfigTestCase(test.TestCase):
             inst['updated_at'] = datetime.datetime(2010, 10, 10, 12, 0, 0)
             inst['progress'] = 0
             inst['name'] = 'instance-1'  # this is a property
+            inst['task_state'] = ''
+            inst['vm_state'] = ''
+            # NOTE(vish): db create translates security groups into model
+            #             objects. Translate here so tests pass
+            inst['security_groups'] = [{'name': group}
+                                       for group in inst['security_groups']]
 
             def fake_instance_get_for_create(context, id_, *args, **kwargs):
-                return inst
+                return (inst, inst)
 
-            self.stubs.Set(nova.db, 'instance_get',
-                          fake_instance_get_for_create)
-            self.stubs.Set(nova.db, 'instance_update',
+            self.stubs.Set(nova.db, 'instance_update_and_get_original',
                           fake_instance_get_for_create)
 
             def fake_instance_get_all_for_create(context, *args, **kwargs):
@@ -122,6 +127,10 @@ class DiskConfigTestCase(test.TestCase):
 
         self.app = compute.APIRouter()
 
+    def tearDown(self):
+        super(DiskConfigTestCase, self).tearDown()
+        nova.tests.image.fake.FakeImageService_reset()
+
     def assertDiskConfig(self, dict_, value):
         self.assert_(API_DISK_CONFIG in dict_)
         self.assertEqual(dict_[API_DISK_CONFIG], value)
@@ -130,19 +139,19 @@ class DiskConfigTestCase(test.TestCase):
         req = fakes.HTTPRequest.blank(
             '/fake/servers/%s' % MANUAL_INSTANCE_UUID)
         res = req.get_response(self.app)
-        server_dict = utils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'MANUAL')
 
         req = fakes.HTTPRequest.blank(
             '/fake/servers/%s' % AUTO_INSTANCE_UUID)
         res = req.get_response(self.app)
-        server_dict = utils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'AUTO')
 
     def test_detail_servers(self):
         req = fakes.HTTPRequest.blank('/fake/servers/detail')
         res = req.get_response(self.app)
-        server_dicts = utils.loads(res.body)['servers']
+        server_dicts = jsonutils.loads(res.body)['servers']
 
         expectations = ['MANUAL', 'AUTO']
         for server_dict, expected in zip(server_dicts, expectations):
@@ -152,19 +161,19 @@ class DiskConfigTestCase(test.TestCase):
         req = fakes.HTTPRequest.blank(
             '/fake/images/a440c04b-79fa-479c-bed1-0b816eaec379')
         res = req.get_response(self.app)
-        image_dict = utils.loads(res.body)['image']
+        image_dict = jsonutils.loads(res.body)['image']
         self.assertDiskConfig(image_dict, 'MANUAL')
 
         req = fakes.HTTPRequest.blank(
             '/fake/images/70a599e0-31e7-49b7-b260-868f441e862b')
         res = req.get_response(self.app)
-        image_dict = utils.loads(res.body)['image']
+        image_dict = jsonutils.loads(res.body)['image']
         self.assertDiskConfig(image_dict, 'AUTO')
 
     def test_detail_image(self):
         req = fakes.HTTPRequest.blank('/fake/images/detail')
         res = req.get_response(self.app)
-        image_dicts = utils.loads(res.body)['images']
+        image_dicts = jsonutils.loads(res.body)['images']
 
         expectations = ['MANUAL', 'AUTO']
         for image_dict, expected in zip(image_dicts, expectations):
@@ -184,9 +193,9 @@ class DiskConfigTestCase(test.TestCase):
                   API_DISK_CONFIG: 'AUTO'
                }}
 
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = utils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'AUTO')
 
     def test_create_server_override_manual(self):
@@ -200,9 +209,9 @@ class DiskConfigTestCase(test.TestCase):
                   API_DISK_CONFIG: 'MANUAL'
                }}
 
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = utils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'MANUAL')
 
     def test_create_server_detect_from_image(self):
@@ -218,9 +227,9 @@ class DiskConfigTestCase(test.TestCase):
                   'flavorRef': '1',
                }}
 
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = utils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'MANUAL')
 
         req = fakes.HTTPRequest.blank('/fake/servers')
@@ -232,9 +241,9 @@ class DiskConfigTestCase(test.TestCase):
                   'flavorRef': '1',
                }}
 
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = utils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'AUTO')
 
     def test_update_server_invalid_disk_config(self):
@@ -244,7 +253,7 @@ class DiskConfigTestCase(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {API_DISK_CONFIG: 'server_test'}}
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 400)
         expected_msg = ('{"badRequest": {"message": "%s must be either'

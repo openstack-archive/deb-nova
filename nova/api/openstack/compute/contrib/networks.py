@@ -17,30 +17,36 @@
 #    under the License.
 
 
+import webob
 from webob import exc
 
 from nova.api.openstack import extensions
 from nova import exception
 from nova import flags
-from nova import log as logging
 import nova.network.api
-from nova.rpc import common
+from nova.openstack.common import log as logging
 
 
 FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'networks')
+authorize_view = extensions.extension_authorizer('compute', 'networks:view')
 
 
-def network_dict(network):
+def network_dict(context, network):
+    fields = ('id', 'cidr', 'netmask', 'gateway', 'broadcast', 'dns1', 'dns2',
+              'cidr_v6', 'gateway_v6', 'label', 'netmask_v6')
+    admin_fields = ('created_at', 'updated_at', 'deleted_at', 'deleted',
+                    'injected', 'bridge', 'vlan', 'vpn_public_address',
+                    'vpn_public_port', 'vpn_private_address', 'dhcp_start',
+                    'project_id', 'host', 'bridge_interface', 'multi_host',
+                    'priority', 'rxtx_base')
     if network:
-        fields = ('bridge', 'vpn_public_port', 'dhcp_start',
-                  'bridge_interface', 'updated_at', 'id', 'cidr_v6',
-                  'deleted_at', 'gateway', 'label', 'project_id',
-                  'vpn_private_address', 'deleted', 'vlan', 'broadcast',
-                  'netmask', 'injected', 'cidr', 'vpn_public_address',
-                  'multi_host', 'dns1', 'host', 'gateway_v6', 'netmask_v6',
-                  'created_at')
+        # NOTE(mnaser): We display a limited set of fields so users can know
+        #               what networks are available, extra system-only fields
+        #               are only visible if they are an admin.
+        if context.is_admin:
+            fields += admin_fields
         result = dict((field, network[field]) for field in fields)
         if 'uuid' in network:
             result['id'] = network['uuid']
@@ -85,25 +91,20 @@ class NetworkController(object):
 
     def index(self, req):
         context = req.environ['nova.context']
-        authorize(context)
+        authorize_view(context)
         networks = self.network_api.get_all(context)
-        result = [network_dict(net_ref) for net_ref in networks]
-        return  {'networks': result}
+        result = [network_dict(context, net_ref) for net_ref in networks]
+        return {'networks': result}
 
     def show(self, req, id):
         context = req.environ['nova.context']
-        authorize(context)
+        authorize_view(context)
         LOG.debug(_("Showing network with id %s") % id)
         try:
             network = self.network_api.get(context, id)
         except exception.NetworkNotFound:
             raise exc.HTTPNotFound(_("Network not found"))
-        except common.RemoteError as ex:
-            if ex.exc_type in ["NetworkNotFound", "NetworkNotFoundForUUID"]:
-                raise exc.HTTPNotFound(_("Network not found"))
-            else:
-                raise
-        return {'network': network_dict(network)}
+        return {'network': network_dict(context, network)}
 
     def delete(self, req, id):
         context = req.environ['nova.context']
@@ -123,6 +124,31 @@ class NetworkController(object):
     def create(self, req, id, body=None):
         raise exc.HTTPNotImplemented()
 
+    def add(self, req, body):
+        context = req.environ['nova.context']
+        authorize(context)
+        if not body:
+            raise exc.HTTPUnprocessableEntity()
+
+        network_id = body.get('id', None)
+        project_id = context.project_id
+        LOG.debug(_("Associating network %(network)s"
+                    " with project %(project)s") %
+                  {"network": network_id or "",
+                   "project": project_id})
+        try:
+            self.network_api.add_network_to_project(
+                context, project_id, network_id)
+        except Exception as ex:
+            msg = (_("Cannot associate network %(network)s"
+                     " with project %(project)s: %(message)s") %
+                   {"network": network_id or "",
+                    "project": project_id,
+                    "message": getattr(ex, "value", str(ex))})
+            raise exc.HTTPBadRequest(explanation=msg)
+
+        return webob.Response(status_int=202)
+
 
 class Networks(extensions.ExtensionDescriptor):
     """Admin-only Network Management Extension"""
@@ -134,7 +160,10 @@ class Networks(extensions.ExtensionDescriptor):
 
     def get_resources(self):
         member_actions = {'action': 'POST'}
-        res = extensions.ResourceExtension('os-networks',
-                                           NetworkController(),
-                                           member_actions=member_actions)
+        collection_actions = {'add': 'POST'}
+        res = extensions.ResourceExtension(
+            'os-networks',
+            NetworkController(),
+            member_actions=member_actions,
+            collection_actions=collection_actions)
         return [res]

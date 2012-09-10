@@ -1,15 +1,12 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 import inspect
-import json
 import webob
 
+from nova.api.openstack import wsgi
 from nova import exception
 from nova import test
-from nova import utils
-from nova.api.openstack import wsgi
 from nova.tests.api.openstack import fakes
-import nova.context
 
 
 class RequestTest(test.TestCase):
@@ -77,6 +74,27 @@ class RequestTest(test.TestCase):
         request.headers["Accept"] = "application/unsupported1"
         result = request.best_match_content_type()
         self.assertEqual(result, "application/json")
+
+    def test_cache_and_retrieve_instances(self):
+        request = wsgi.Request.blank('/foo')
+        instances = []
+        for x in xrange(3):
+            instances.append({'uuid': 'uuid%s' % x})
+        # Store 2
+        request.cache_db_instances(instances[:2])
+        # Store 1
+        request.cache_db_instance(instances[2])
+        self.assertEqual(request.get_db_instance('uuid0'),
+                instances[0])
+        self.assertEqual(request.get_db_instance('uuid1'),
+                instances[1])
+        self.assertEqual(request.get_db_instance('uuid2'),
+                instances[2])
+        self.assertEqual(request.get_db_instance('uuid3'), None)
+        self.assertEqual(request.get_db_instances(),
+                {'uuid0': instances[0],
+                 'uuid1': instances[1],
+                 'uuid2': instances[2]})
 
 
 class ActionDispatcherTest(test.TestCase):
@@ -218,7 +236,7 @@ class ResourceTest(test.TestCase):
         expected = 'off'
         self.assertEqual(actual, expected)
 
-    def test_get_method_unknown_controller_action(self):
+    def test_get_method_unknown_controller_method(self):
         class Controller(object):
             def index(self, req, pants=None):
                 return pants
@@ -733,6 +751,18 @@ class ResourceTest(test.TestCase):
 
         self.assertEqual(called, [2])
         self.assertEqual(response, 'foo')
+
+    def test_resource_exception_handler_type_error(self):
+        """A TypeError should be translated to a Fault/HTTP 400"""
+        def foo(a,):
+            return a
+
+        try:
+            with wsgi.ResourceExceptionHandler():
+                foo()  # generate a TypeError
+            self.fail("Should have raised a Fault (HTTP 400)")
+        except wsgi.Fault as fault:
+            self.assertEqual(400, fault.status_int)
 
 
 class ResponseObjectTest(test.TestCase):

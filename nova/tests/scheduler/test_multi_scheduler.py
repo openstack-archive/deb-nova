@@ -56,6 +56,17 @@ class FakeVolumeScheduler(driver.Scheduler):
         pass
 
 
+class FakeDefaultScheduler(driver.Scheduler):
+    is_fake_default = True
+
+    def __init__(self):
+        super(FakeDefaultScheduler, self).__init__()
+        self.is_update_caps_called = False
+
+    def schedule(self, *args, **kwargs):
+        pass
+
+
 class MultiDriverTestCase(test_scheduler.SchedulerTestCase):
     """Test case for multi driver"""
 
@@ -66,15 +77,18 @@ class MultiDriverTestCase(test_scheduler.SchedulerTestCase):
         base_name = 'nova.tests.scheduler.test_multi_scheduler.%s'
         compute_cls_name = base_name % 'FakeComputeScheduler'
         volume_cls_name = base_name % 'FakeVolumeScheduler'
+        default_cls_name = base_name % 'FakeDefaultScheduler'
         self.flags(compute_scheduler_driver=compute_cls_name,
-                volume_scheduler_driver=volume_cls_name)
+                volume_scheduler_driver=volume_cls_name,
+                default_scheduler_driver=default_cls_name)
         self._manager = multi.MultiScheduler()
 
     def test_drivers_inited(self):
         mgr = self._manager
-        self.assertEqual(len(mgr.drivers), 2)
+        self.assertEqual(len(mgr.drivers), 3)
         self.assertTrue(mgr.drivers['compute'].is_fake_compute)
         self.assertTrue(mgr.drivers['volume'].is_fake_volume)
+        self.assertTrue(mgr.drivers['default'].is_fake_default)
 
     def test_proxy_calls(self):
         mgr = self._manager
@@ -96,6 +110,7 @@ class MultiDriverTestCase(test_scheduler.SchedulerTestCase):
 
         self.mox.StubOutWithMock(mgr.drivers['compute'], 'schedule')
         self.mox.StubOutWithMock(mgr.drivers['volume'], 'schedule')
+        self.mox.StubOutWithMock(mgr.drivers['default'], 'schedule')
 
         ctxt = 'fake_context'
         method = 'fake_method'
@@ -107,10 +122,13 @@ class MultiDriverTestCase(test_scheduler.SchedulerTestCase):
                 *fake_args, **fake_kwargs)
         mgr.drivers['volume'].schedule(ctxt, 'volume', method,
                 *fake_args, **fake_kwargs)
+        mgr.drivers['default'].schedule(ctxt, 'random_topic', method,
+                *fake_args, **fake_kwargs)
 
         self.mox.ReplayAll()
         mgr.schedule(ctxt, 'compute', method, *fake_args, **fake_kwargs)
         mgr.schedule(ctxt, 'volume', method, *fake_args, **fake_kwargs)
+        mgr.schedule(ctxt, 'random_topic', method, *fake_args, **fake_kwargs)
 
     def test_update_service_capabilities(self):
         def fake_update_service_capabilities(self, service, host, caps):
@@ -125,3 +143,43 @@ class MultiDriverTestCase(test_scheduler.SchedulerTestCase):
         mgr.update_service_capabilities('foo_svc', 'foo_host', 'foo_caps')
         self.assertTrue(mgr.drivers['compute'].is_update_caps_called)
         self.assertTrue(mgr.drivers['volume'].is_update_caps_called)
+
+
+class SimpleSchedulerTestCase(MultiDriverTestCase):
+    """Test case for simple driver."""
+
+    driver_cls = multi.MultiScheduler
+
+    def setUp(self):
+        super(SimpleSchedulerTestCase, self).setUp()
+        base_name = 'nova.tests.scheduler.test_multi_scheduler.%s'
+        compute_cls_name = base_name % 'FakeComputeScheduler'
+        volume_cls_name = 'nova.scheduler.simple.SimpleScheduler'
+        default_cls_name = base_name % 'FakeDefaultScheduler'
+        self.flags(compute_scheduler_driver=compute_cls_name,
+                volume_scheduler_driver=volume_cls_name,
+                default_scheduler_driver=default_cls_name)
+        self._manager = multi.MultiScheduler()
+
+    def test_update_service_capabilities(self):
+        def fake_update_service_capabilities(self, service, host, caps):
+            self.is_update_caps_called = True
+
+        mgr = self._manager
+        self.stubs.Set(driver.Scheduler,
+                       'update_service_capabilities',
+                       fake_update_service_capabilities)
+        self.assertFalse(mgr.drivers['compute'].is_update_caps_called)
+        mgr.update_service_capabilities('foo_svc', 'foo_host', 'foo_caps')
+        self.assertTrue(mgr.drivers['compute'].is_update_caps_called)
+        self.assertTrue(mgr.drivers['volume'].is_update_caps_called)
+
+    def test_drivers_inited(self):
+        mgr = self._manager
+        self.assertEqual(len(mgr.drivers), 3)
+        self.assertTrue(mgr.drivers['compute'].is_fake_compute)
+        self.assertTrue(mgr.drivers['volume'] is not None)
+        self.assertTrue(mgr.drivers['default'].is_fake_default)
+
+    def test_proxy_calls(self):
+        pass

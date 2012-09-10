@@ -19,15 +19,14 @@ import webob.exc
 from xml.dom import minidom
 from xml.parsers import expat
 
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.api.openstack import extensions
 from nova.compute import api as compute_api
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova.scheduler import api as scheduler_api
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -98,7 +97,11 @@ def _list_hosts(req, service=None):
     by service type.
     """
     context = req.environ['nova.context']
-    hosts = scheduler_api.get_host_list(context)
+    services = db.service_get_all(context, False)
+
+    hosts = []
+    for host in services:
+        hosts.append({"host_name": host['host'], 'service': host['topic']})
     if service:
         hosts = [host for host in hosts
                 if host["service"] == service]
@@ -113,7 +116,8 @@ def check_host(fn):
         if id in hosts:
             return fn(self, req, id, *args, **kwargs)
         else:
-            raise exception.HostNotFound(host=id)
+            message = _("Host '%s' could not be found.") % id
+            raise webob.exc.HTTPNotFound(explanation=message)
     return wrapped
 
 
@@ -224,8 +228,6 @@ class HostController(object):
         """
         host = id
         context = req.environ['nova.context']
-        # Expected to use AuthMiddleware.
-        # Otherwise, non-admin user can use describe-resource
         if not context.is_admin:
             msg = _("Describe-resource is admin only functionality")
             raise webob.exc.HTTPForbidden(explanation=msg)
@@ -271,7 +273,7 @@ class HostController(object):
             vcpus = [i['vcpus'] for i in instance_refs
                      if i['project_id'] == project_id]
 
-            mem = [i['memory_mb']  for i in instance_refs
+            mem = [i['memory_mb'] for i in instance_refs
                    if i['project_id'] == project_id]
 
             disk = [i['root_gb'] + i['ephemeral_gb'] for i in instance_refs

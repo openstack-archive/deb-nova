@@ -22,22 +22,13 @@ Driver base-classes:
     types that support that contract
 """
 
-from nova import context as nova_context
-from nova import db
-from nova import flags
-from nova import log as logging
 from nova.compute import power_state
+from nova import flags
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
-
-
-class InstanceInfo(object):
-    def __init__(self, name, state):
-        self.name = name
-        assert state in power_state.valid_states(), "Bad state: %s" % state
-        self.state = state
 
 
 def block_device_info_get_root(block_device_info):
@@ -89,10 +80,6 @@ class ComputeDriver(object):
     platform-specific layer, and never escape the connection interface.  The
     platform-specific layer is responsible for keeping track of which instance
     ID maps to which platform-specific ID, and vice versa.
-
-    In contrast, the list_disks and list_interfaces calls may return
-    platform-specific IDs.  These identify a specific virtual disk or specific
-    virtual network interface, and these IDs are opaque to the rest of Nova.
 
     Some methods here take an instance of nova.compute.service.Instance.  This
     is the data structure used by nova.compute to store details regarding an
@@ -162,13 +149,8 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def list_instances_detail(self):
-        """Return a list of InstanceInfo for all registered VMs"""
-        # TODO(Vek): Need to pass context in for access to auth_token
-        raise NotImplementedError()
-
-    def spawn(self, context, instance, image_meta,
-              network_info=None, block_device_info=None):
+    def spawn(self, context, instance, image_meta, injected_files,
+              admin_password, network_info=None, block_device_info=None):
         """
         Create a new instance/VM/domain on the virtualization platform.
 
@@ -185,6 +167,8 @@ class ComputeDriver(object):
                          the creation of the new instance.
         :param image_meta: image object returned by nova.image.glance that
                            defines the image from which to boot this instance
+        :param injected_files: User files to inject into instance.
+        :param admin_password: Administrator password to set in instance.
         :param network_info:
            :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
         :param block_device_info: Information about block devices to be
@@ -220,9 +204,6 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def snapshot_instance(self, context, instance_id, image_id):
-        raise NotImplementedError()
-
     def get_console_pool_info(self, console_type):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
@@ -240,7 +221,7 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def get_all_bw_usage(self, start_time, stop_time=None):
+    def get_all_bw_usage(self, instances, start_time, stop_time=None):
         """Return bandwidth usage info for each interface on each
            running VM"""
         raise NotImplementedError()
@@ -258,20 +239,6 @@ class ComputeDriver(object):
 
     def detach_volume(self, connection_info, instance_name, mountpoint):
         """Detach the disk attached to the instance"""
-        raise NotImplementedError()
-
-    def compare_cpu(self, cpu_info):
-        """Compares given cpu info against host
-
-        Before attempting to migrate a VM to this host,
-        compare_cpu is called to ensure that the VM will
-        actually run here.
-
-        :param cpu_info: (str) JSON structure describing the source CPU.
-        :returns: None if migration is acceptable
-        :raises: :py:class:`~nova.exception.InvalidCPUInfo` if migration
-                 is not acceptable.
-        """
         raise NotImplementedError()
 
     def migrate_disk_and_power_off(self, context, instance, dest,
@@ -339,7 +306,8 @@ class ComputeDriver(object):
         """resume guest state when a host is booted"""
         raise NotImplementedError()
 
-    def rescue(self, context, instance, network_info, image_meta):
+    def rescue(self, context, instance, network_info, image_meta,
+               rescue_password):
         """Rescue the specified instance"""
         raise NotImplementedError()
 
@@ -366,27 +334,66 @@ class ComputeDriver(object):
         :param host: hostname that compute manager is currently running
 
         """
-        # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
     def live_migration(self, ctxt, instance_ref, dest,
-                       post_method, recover_method):
-        """Spawning live_migration operation for distributing high-load.
+                       post_method, recover_method, block_migration=False,
+                       migrate_data=None):
+        """Live migration of an instance to another host.
 
-        :param ctxt: security context
-        :param instance_ref:
+        :params ctxt: security context
+        :params instance_ref:
             nova.db.sqlalchemy.models.Instance object
             instance object that is migrated.
-        :param dest: destination host
-        :param post_method:
+        :params dest: destination host
+        :params post_method:
             post operation method.
             expected nova.compute.manager.post_live_migration.
-        :param recover_method:
+        :params recover_method:
             recovery method when any exception occurs.
             expected nova.compute.manager.recover_live_migration.
+        :params block_migration: if true, migrate VM disk.
+        :params migrate_data: implementation specific params.
 
         """
-        # TODO(Vek): Need to pass context in for access to auth_token
+        raise NotImplementedError()
+
+    def check_can_live_migrate_destination(self, ctxt, instance_ref,
+                                           block_migration=False,
+                                           disk_over_commit=False):
+        """Check if it is possible to execute live migration.
+
+        This runs checks on the destination host, and then calls
+        back to the source host to check the results.
+
+        :param ctxt: security context
+        :param instance_ref: nova.db.sqlalchemy.models.Instance
+        :param dest: destination host
+        :param block_migration: if true, prepare for block migration
+        :param disk_over_commit: if true, allow disk over commit
+        """
+        raise NotImplementedError()
+
+    def check_can_live_migrate_destination_cleanup(self, ctxt,
+                                                   dest_check_data):
+        """Do required cleanup on dest host after check_can_live_migrate calls
+
+        :param ctxt: security context
+        :param dest_check_data: result of check_can_live_migrate_destination
+        """
+        raise NotImplementedError()
+
+    def check_can_live_migrate_source(self, ctxt, instance_ref,
+                                      dest_check_data):
+        """Check if it is possible to execute live migration.
+
+        This checks if the live migration can succeed, based on the
+        results from check_can_live_migrate_destination.
+
+        :param context: security context
+        :param instance_ref: nova.db.sqlalchemy.models.Instance
+        :param dest_check_data: result of check_can_live_migrate_destination
+        """
         raise NotImplementedError()
 
     def refresh_security_group_rules(self, security_group_id):
@@ -487,6 +494,14 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
+    def filter_defer_apply_on(self):
+        """Defer application of IPTables rules"""
+        pass
+
+    def filter_defer_apply_off(self):
+        """Turn off deferral of IPTables rules and apply the rules now"""
+        pass
+
     def unfilter_instance(self, instance, network_info):
         """Stop filtering instance"""
         # TODO(Vek): Need to pass context in for access to auth_token
@@ -515,18 +530,16 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def agent_update(self, instance, url, md5hash):
+    def change_instance_metadata(self, context, instance, diff):
         """
-        Update agent on the specified instance.
+        Applies a diff to the instance metadata.
 
-        The first parameter is an instance of nova.compute.service.Instance,
-        and so the instance is being specified as instance.name. The second
-        parameter is the URL of the agent to be fetched and updated on the
-        instance; the third is the md5 hash of the file for verification
-        purposes.
+        This is an optional driver method which is used to publish
+        changes to the instance's metadata to the hypervisor.  If the
+        hypervisor has no means of publishing the instance metadata to
+        the instance, then this method should not be implemented.
         """
-        # TODO(Vek): Need to pass context in for access to auth_token
-        raise NotImplementedError()
+        pass
 
     def inject_network_info(self, instance, nw_info):
         """inject network info for specified instance"""
@@ -543,11 +556,6 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def poll_unconfirmed_resizes(self, resize_confirm_window):
-        """Poll for unconfirmed resizes."""
-        # TODO(Vek): Need to pass context in for access to auth_token
-        raise NotImplementedError()
-
     def host_power_action(self, host, action):
         """Reboots, shuts down or powers up the host."""
         raise NotImplementedError()
@@ -559,6 +567,11 @@ class ComputeDriver(object):
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
+        # TODO(Vek): Need to pass context in for access to auth_token
+        raise NotImplementedError()
+
+    def get_host_uptime(self, host):
+        """Returns the result of calling "uptime" on the target host."""
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
@@ -577,38 +590,6 @@ class ComputeDriver(object):
 
     def get_host_stats(self, refresh=False):
         """Return currently known host stats"""
-        raise NotImplementedError()
-
-    def list_disks(self, instance_name):
-        """
-        Return the IDs of all the virtual disks attached to the specified
-        instance, as a list.  These IDs are opaque to the caller (they are
-        only useful for giving back to this layer as a parameter to
-        disk_stats).  These IDs only need to be unique for a given instance.
-
-        Note that this function takes an instance ID.
-        """
-        raise NotImplementedError()
-
-    def list_interfaces(self, instance_name):
-        """
-        Return the IDs of all the virtual network interfaces attached to the
-        specified instance, as a list.  These IDs are opaque to the caller
-        (they are only useful for giving back to this layer as a parameter to
-        interface_stats).  These IDs only need to be unique for a given
-        instance.
-
-        Note that this function takes an instance ID.
-        """
-        raise NotImplementedError()
-
-    def resize(self, instance, flavor):
-        """
-        Resizes/Migrates the specified instance.
-
-        The flavor parameter determines whether or not the instance RAM and
-        disk space are modified, and if so, to what size.
-        """
         raise NotImplementedError()
 
     def block_stats(self, instance_name, disk_id):
@@ -670,22 +651,29 @@ class ComputeDriver(object):
 
     def add_to_aggregate(self, context, aggregate, host, **kwargs):
         """Add a compute host to an aggregate."""
+        #NOTE(jogo) Currently only used for XenAPI-Pool
         raise NotImplementedError()
 
     def remove_from_aggregate(self, context, aggregate, host, **kwargs):
         """Remove a compute host from an aggregate."""
         raise NotImplementedError()
 
+    def undo_aggregate_operation(self, context, op, aggregate_id,
+                                  host, set_error=True):
+        """Undo for  Resource Pools"""
+        raise NotImplementedError()
+
     def get_volume_connector(self, instance):
         """Get connector information for the instance for attaching to volumes.
 
         Connector information is a dictionary representing the ip of the
-        machine that will be making the connection and and the name of the
-        iscsi initiator as follows::
+        machine that will be making the connection, the name of the iscsi
+        initiator and the hostname of the machine as follows::
 
             {
                 'ip': ip,
                 'initiator': initiator,
+                'host': hostname
             }
         """
         raise NotImplementedError()

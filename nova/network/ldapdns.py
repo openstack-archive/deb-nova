@@ -13,17 +13,14 @@
 #    under the License.
 
 import ldap
-import os
-import shutil
-import tempfile
 import time
 
 from nova.auth import fakeldap
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova import utils
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
+from nova import utils
 
 
 LOG = logging.getLogger(__name__)
@@ -95,7 +92,7 @@ class DNSEntry(object):
     @classmethod
     def _get_tuple_for_domain(cls, lobj, domain):
         entry = lobj.search_s(flags.FLAGS.ldap_dns_base_dn, ldap.SCOPE_SUBTREE,
-                              "(associatedDomain=%s)" % utils.utf8(domain))
+                              '(associatedDomain=%s)' % utils.utf8(domain))
         if not entry:
             return None
         if len(entry) > 1:
@@ -106,7 +103,7 @@ class DNSEntry(object):
     @classmethod
     def _get_all_domains(cls, lobj):
         entries = lobj.search_s(flags.FLAGS.ldap_dns_base_dn,
-                                ldap.SCOPE_SUBTREE, "(sOARecord=*)")
+                                ldap.SCOPE_SUBTREE, '(sOARecord=*)')
         domains = []
         for entry in entries:
             domain = entry[1].get('associatedDomain')
@@ -118,15 +115,15 @@ class DNSEntry(object):
         self.ldap_tuple = tuple
 
     def _qualify(self, name):
-        return "%s.%s" % (name, self.qualified_domain)
+        return '%s.%s' % (name, self.qualified_domain)
 
     def _dequalify(self, name):
         z = ".%s" % self.qualified_domain
         if name.endswith(z):
             dequalified = name[0:name.rfind(z)]
         else:
-            LOG.warn("Unable to dequalify.  %s is not in %s.\n" % (name,
-                                                        self.qualified_domain))
+            LOG.warn("Unable to dequalify.  %s is not in %s.\n" %
+                     (name, self.qualified_domain))
             dequalified = None
 
         return dequalified
@@ -144,8 +141,8 @@ class DomainEntry(DNSEntry):
 
     @classmethod
     def _soa(cls):
-        date = time.strftime("%Y%m%d%H%M%S")
-        soa = "%s %s %s %s %s %s %s" % (
+        date = time.strftime('%Y%m%d%H%M%S')
+        soa = '%s %s %s %s %s %s %s' % (
                  flags.FLAGS.ldap_dns_servers[0],
                  flags.FLAGS.ldap_dns_soa_hostmaster,
                  date,
@@ -160,9 +157,9 @@ class DomainEntry(DNSEntry):
         """Create a new domain entry, and return an object that wraps it."""
         entry = cls._get_tuple_for_domain(lobj, domain)
         if entry:
-            raise exception.FloatingIpDNSExists(name=domain, domain="")
+            raise exception.FloatingIpDNSExists(name=domain, domain='')
 
-        newdn = "dc=%s,%s" % (domain, flags.FLAGS.ldap_dns_base_dn)
+        newdn = 'dc=%s,%s' % (domain, flags.FLAGS.ldap_dns_base_dn)
         attrs = {'objectClass': ['domainrelatedobject', 'dnsdomain',
                                  'domain', 'dcobject', 'top'],
                  'sOARecord': [cls._soa()],
@@ -196,9 +193,9 @@ class DomainEntry(DNSEntry):
 
     def subentry_with_name(self, name):
         entry = self.lobj.search_s(self.dn, ldap.SCOPE_SUBTREE,
-                                   "(associatedDomain=%s.%s)" %
-                                     (utils.utf8(name),
-                                      utils.utf8(self.qualified_domain)))
+                                   '(associatedDomain=%s.%s)' %
+                                   (utils.utf8(name),
+                                    utils.utf8(self.qualified_domain)))
         if entry:
             return HostEntry(self, entry[0])
         else:
@@ -206,7 +203,7 @@ class DomainEntry(DNSEntry):
 
     def subentries_with_ip(self, ip):
         entries = self.lobj.search_s(self.dn, ldap.SCOPE_SUBTREE,
-                                   "(aRecord=%s)" % utils.utf8(ip))
+                                     '(aRecord=%s)' % utils.utf8(ip))
         objs = []
         for entry in entries:
             if 'associatedDomain' in entry[1]:
@@ -231,7 +228,7 @@ class DomainEntry(DNSEntry):
             return self.subentry_with_name(name)
         else:
             # We need to create an entirely new entry.
-            newdn = "dc=%s,%s" % (name, self.dn)
+            newdn = 'dc=%s,%s' % (name, self.dn)
             attrs = {'objectClass': ['domainrelatedobject', 'dnsdomain',
                                      'domain', 'dcobject', 'top'],
                      'aRecord': [address],
@@ -268,7 +265,7 @@ class HostEntry(DNSEntry):
             if (self.rdn[1] == name):
                 # We just removed the rdn, so we need to move this entry.
                 names.remove(self._qualify(name))
-                newrdn = "dc=%s" % self._dequalify(names[0])
+                newrdn = 'dc=%s' % self._dequalify(names[0])
                 self.lobj.modrdn_s(self.dn, [newrdn])
         else:
             # We should delete the entire record.
@@ -283,7 +280,7 @@ class HostEntry(DNSEntry):
                                          [utils.utf8(address)])])
         else:
             self.remove_name(name)
-            parent.add_entry(name, address)
+            self.parent.add_entry(name, address)
 
     def _names(self):
         names = []

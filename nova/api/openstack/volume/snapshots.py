@@ -15,15 +15,15 @@
 
 """The volumes snapshots api."""
 
-from webob import exc
 import webob
+from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import volume
 
 
@@ -130,7 +130,11 @@ class SnapshotsController(object):
         """Returns a list of snapshots, transformed through entity_maker."""
         context = req.environ['nova.context']
 
-        snapshots = self.volume_api.get_all_snapshots(context)
+        search_opts = {}
+        search_opts.update(req.GET)
+
+        snapshots = self.volume_api.get_all_snapshots(context,
+                                                      search_opts=search_opts)
         limited_list = common.limited(snapshots, req)
         res = [entity_maker(context, snapshot) for snapshot in limited_list]
         return {'snapshots': res}

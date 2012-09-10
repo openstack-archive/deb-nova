@@ -12,6 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import json
 import webob
 
 import nova.api.auth
@@ -33,6 +34,7 @@ class TestNovaKeystoneContextMiddleware(test.TestCase):
         self.request = webob.Request.blank('/')
         self.request.headers['X_TENANT_ID'] = 'testtenantid'
         self.request.headers['X_AUTH_TOKEN'] = 'testauthtoken'
+        self.request.headers['X_SERVICE_CATALOG'] = json.dumps({})
 
     def test_no_user_or_user_id(self):
         response = self.request.get_response(self.middleware)
@@ -56,3 +58,9 @@ class TestNovaKeystoneContextMiddleware(test.TestCase):
         response = self.request.get_response(self.middleware)
         self.assertEqual(response.status, '200 OK')
         self.assertEqual(self.context.user_id, 'testuserid')
+
+    def test_invalid_service_catalog(self):
+        self.request.headers['X_USER'] = 'testuser'
+        self.request.headers['X_SERVICE_CATALOG'] = "bad json"
+        response = self.request.get_response(self.middleware)
+        self.assertEqual(response.status, '500 Internal Server Error')

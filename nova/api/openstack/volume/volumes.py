@@ -15,15 +15,15 @@
 
 """The volumes api."""
 
-from webob import exc
 import webob
+from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import volume
 from nova.volume import volume_types
 
@@ -48,15 +48,13 @@ def _translate_attachment_summary_view(_context, vol):
     """Maps keys for attachment summary view."""
     d = {}
 
-    # TODO(bcwaldon): remove str cast once we use uuids
-    volume_id = str(vol['id'])
+    volume_id = vol['id']
 
     # NOTE(justinsb): We use the volume id as the id of the attachment object
     d['id'] = volume_id
 
     d['volume_id'] = volume_id
-    if vol.get('instance'):
-        d['server_id'] = vol['instance']['uuid']
+    d['server_id'] = vol['instance_uuid']
     if vol.get('mountpoint'):
         d['device'] = vol['mountpoint']
 
@@ -77,8 +75,7 @@ def _translate_volume_summary_view(context, vol):
     """Maps keys for volumes summary view."""
     d = {}
 
-    # TODO(bcwaldon): remove str cast once we use uuids
-    d['id'] = str(vol['id'])
+    d['id'] = vol['id']
     d['status'] = vol['status']
     d['size'] = vol['size']
     d['availability_zone'] = vol['availability_zone']
@@ -99,9 +96,6 @@ def _translate_volume_summary_view(context, vol):
         d['volume_type'] = str(vol['volume_type_id'])
 
     d['snapshot_id'] = vol['snapshot_id']
-    # TODO(bcwaldon): remove str cast once we use uuids
-    if d['snapshot_id'] is not None:
-        d['snapshot_id'] = str(d['snapshot_id'])
 
     LOG.audit(_("vol=%s"), vol, context=context)
 
@@ -202,9 +196,15 @@ class VolumeController(object):
 
     def _items(self, req, entity_maker):
         """Returns a list of volumes, transformed through entity_maker."""
-        context = req.environ['nova.context']
 
-        volumes = self.volume_api.get_all(context)
+        search_opts = {}
+        search_opts.update(req.GET)
+
+        context = req.environ['nova.context']
+        remove_invalid_options(context,
+                               search_opts, self._get_volume_search_options())
+
+        volumes = self.volume_api.get_all(context, search_opts=search_opts)
         limited_list = common.limited(volumes, req)
         res = [entity_maker(context, vol) for vol in limited_list]
         return {'volumes': res}
@@ -218,7 +218,17 @@ class VolumeController(object):
             raise exc.HTTPUnprocessableEntity()
 
         volume = body['volume']
-        size = volume['size']
+
+        def as_int(s):
+            try:
+                return int(s)
+            except ValueError:
+                return s
+
+        # NOTE(eglynn): we're tolerant of non-int sizes here, as type
+        # integrity is enforced later in the creation codepath
+        size = as_int(volume['size'])
+
         LOG.audit(_("Create volume of %s GB"), size, context=context)
 
         kwargs = {}
@@ -253,8 +263,31 @@ class VolumeController(object):
         #             a dict to avoid an error.
         retval = _translate_volume_detail_view(context, dict(new_volume))
 
-        return {'volume': retval}
+        result = {'volume': retval}
+
+        location = '%s/%s' % (req.url, new_volume['id'])
+
+        return wsgi.ResponseObject(result, headers=dict(location=location))
+
+    def _get_volume_search_options(self):
+        """Return volume search options allowed by non-admin."""
+        return ('name', 'status')
 
 
 def create_resource():
     return wsgi.Resource(VolumeController())
+
+
+def remove_invalid_options(context, search_options, allowed_search_options):
+    """Remove search options that are not valid for non-admin API/context."""
+    if context.is_admin:
+        # Allow all options
+        return
+    # Otherwise, strip out all unknown options
+    unknown_options = [opt for opt in search_options
+            if opt not in allowed_search_options]
+    bad_options = ", ".join(unknown_options)
+    log_msg = _("Removing options '%(bad_options)s' from query") % locals()
+    LOG.debug(log_msg)
+    for opt in unknown_options:
+        search_options.pop(opt, None)

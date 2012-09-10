@@ -21,7 +21,8 @@ Classes to represent the configuration of various libvirt objects
 and support conversion to/from XML
 """
 
-from nova import log as logging
+from nova import exception
+from nova.openstack.common import log as logging
 
 from lxml import etree
 
@@ -38,9 +39,6 @@ class LibvirtConfigObject(object):
         self.ns_prefix = kwargs.get('ns_prefix')
         self.ns_uri = kwargs.get('ns_uri')
 
-        if "xml_str" in kwargs:
-            self.parse_dom(kwargs.get("xml_str"))
-
     def _text_node(self, name, value):
         child = etree.Element(name)
         child.text = str(value)
@@ -53,14 +51,290 @@ class LibvirtConfigObject(object):
             return etree.Element("{" + self.ns_uri + "}" + self.root_name,
                                  nsmap={self.ns_prefix: self.ns_uri})
 
-    def parse_dom(xmldoc):
-        raise NotImplementedError()
+    def parse_str(self, xmlstr):
+        self.parse_dom(etree.fromstring(xmlstr))
+
+    def parse_dom(self, xmldoc):
+        if self.root_name != xmldoc.tag:
+            raise exception.InvalidInput(
+                "Root element name should be '%s' not '%s'"
+                % (self.root_name, xmldoc.tag))
 
     def to_xml(self, pretty_print=True):
         root = self.format_dom()
         xml_str = etree.tostring(root, pretty_print=pretty_print)
         LOG.debug("Generated XML %s " % (xml_str,))
         return xml_str
+
+
+class LibvirtConfigCaps(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigCaps, self).__init__(root_name="capabilities",
+                                                **kwargs)
+        self.host = None
+        self.guests = []
+
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigCaps, self).parse_dom(xmldoc)
+
+        for c in xmldoc.getchildren():
+            if c.tag == "host":
+                host = LibvirtConfigCapsHost()
+                host.parse_dom(c)
+                self.host = host
+            elif c.tag == "guest":
+                guest = LibvirtConfigCapsGuest()
+                guest.parse_dom(c)
+                self.guests.append(guest)
+
+    def format_dom(self):
+        caps = super(LibvirtConfigCaps, self).format_dom()
+
+        if self.host:
+            caps.append(self.host.format_dom())
+        for g in self.guests:
+            caps.append(g.format_dom())
+
+        return caps
+
+
+class LibvirtConfigCapsHost(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigCapsHost, self).__init__(root_name="host",
+                                                    **kwargs)
+
+        self.cpu = None
+
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigCapsHost, self).parse_dom(xmldoc)
+
+        for c in xmldoc.getchildren():
+            if c.tag == "cpu":
+                cpu = LibvirtConfigCPU()
+                cpu.parse_dom(c)
+                self.cpu = cpu
+
+    def format_dom(self):
+        caps = super(LibvirtConfigCapsHost, self).format_dom()
+
+        if self.cpu:
+            caps.append(self.cpu.format_dom())
+
+        return caps
+
+
+class LibvirtConfigCapsGuest(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigCapsGuest, self).__init__(root_name="guest",
+                                                     **kwargs)
+
+        self.arch = None
+        self.ostype = None
+        self.domtype = list()
+
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigCapsGuest, self).parse_dom(xmldoc)
+
+        for c in xmldoc.getchildren():
+            if c.tag == "os_type":
+                self.ostype = c.text
+            elif c.tag == "arch":
+                self.arch = c.get("name")
+                for sc in c.getchildren():
+                    if sc.tag == "domain":
+                        self.domtype.append(sc.get("type"))
+
+    def format_dom(self):
+        caps = super(LibvirtConfigCapsGuest, self).format_dom()
+
+        if self.ostype is not None:
+            caps.append(self._text_node("os_type", self.ostype))
+        if self.arch:
+            arch = etree.Element("arch", name=self.arch)
+            for dt in self.domtype:
+                dte = etree.Element("domain")
+                dte.set("type", dt)
+                arch.append(dte)
+            caps.append(arch)
+
+        return caps
+
+
+class LibvirtConfigGuestTimer(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestTimer, self).__init__(root_name="timer",
+                                                      **kwargs)
+
+        self.name = "platform"
+        self.track = None
+        self.tickpolicy = None
+        self.present = None
+
+    def format_dom(self):
+        tm = super(LibvirtConfigGuestTimer, self).format_dom()
+
+        tm.set("name", self.name)
+        if self.track is not None:
+            tm.set("track", self.track)
+        if self.tickpolicy is not None:
+            tm.set("tickpolicy", self.tickpolicy)
+        if self.present is not None:
+            if self.present:
+                tm.set("present", "yes")
+            else:
+                tm.set("present", "no")
+
+        return tm
+
+
+class LibvirtConfigGuestClock(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestClock, self).__init__(root_name="clock",
+                                                      **kwargs)
+
+        self.offset = "utc"
+        self.adjustment = None
+        self.timezone = None
+        self.timers = []
+
+    def format_dom(self):
+        clk = super(LibvirtConfigGuestClock, self).format_dom()
+
+        clk.set("offset", self.offset)
+        if self.adjustment:
+            clk.set("adjustment", self.adjustment)
+        elif self.timezone:
+            clk.set("timezone", self.timezone)
+
+        for tm in self.timers:
+            clk.append(tm.format_dom())
+
+        return clk
+
+    def add_timer(self, tm):
+        self.timers.append(tm)
+
+
+class LibvirtConfigCPUFeature(LibvirtConfigObject):
+
+    def __init__(self, name=None, **kwargs):
+        super(LibvirtConfigCPUFeature, self).__init__(root_name='feature',
+                                                      **kwargs)
+
+        self.name = name
+
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigCPUFeature, self).parse_dom(xmldoc)
+
+        self.name = xmldoc.get("name")
+
+    def format_dom(self):
+        ft = super(LibvirtConfigCPUFeature, self).format_dom()
+
+        ft.set("name", self.name)
+
+        return ft
+
+
+class LibvirtConfigCPU(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigCPU, self).__init__(root_name='cpu',
+                                               **kwargs)
+
+        self.arch = None
+        self.vendor = None
+        self.model = None
+
+        self.sockets = None
+        self.cores = None
+        self.threads = None
+
+        self.features = []
+
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigCPU, self).parse_dom(xmldoc)
+
+        for c in xmldoc.getchildren():
+            if c.tag == "arch":
+                self.arch = c.text
+            elif c.tag == "model":
+                self.model = c.text
+            elif c.tag == "vendor":
+                self.vendor = c.text
+            elif c.tag == "topology":
+                self.sockets = int(c.get("sockets"))
+                self.cores = int(c.get("cores"))
+                self.threads = int(c.get("threads"))
+            elif c.tag == "feature":
+                f = LibvirtConfigCPUFeature()
+                f.parse_dom(c)
+                self.add_feature(f)
+
+    def format_dom(self):
+        cpu = super(LibvirtConfigCPU, self).format_dom()
+
+        if self.arch is not None:
+            cpu.append(self._text_node("arch", self.arch))
+        if self.model is not None:
+            cpu.append(self._text_node("model", self.model))
+        if self.vendor is not None:
+            cpu.append(self._text_node("vendor", self.vendor))
+
+        if (self.sockets is not None and
+            self.cores is not None and
+            self.threads is not None):
+            top = etree.Element("topology")
+            top.set("sockets", str(self.sockets))
+            top.set("cores", str(self.cores))
+            top.set("threads", str(self.threads))
+            cpu.append(top)
+
+        for f in self.features:
+            cpu.append(f.format_dom())
+
+        return cpu
+
+    def add_feature(self, feat):
+        self.features.append(feat)
+
+
+class LibvirtConfigGuestCPUFeature(LibvirtConfigCPUFeature):
+
+    def __init__(self, name=None, **kwargs):
+        super(LibvirtConfigGuestCPUFeature, self).__init__(name, **kwargs)
+
+        self.policy = "require"
+
+    def format_dom(self):
+        ft = super(LibvirtConfigGuestCPUFeature, self).format_dom()
+
+        ft.set("policy", self.policy)
+
+        return ft
+
+
+class LibvirtConfigGuestCPU(LibvirtConfigCPU):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestCPU, self).__init__(**kwargs)
+
+        self.mode = None
+        self.match = "exact"
+
+    def format_dom(self):
+        cpu = super(LibvirtConfigGuestCPU, self).format_dom()
+
+        if self.mode:
+            cpu.set("mode", self.mode)
+        cpu.set("match", self.match)
+
+        return cpu
 
 
 class LibvirtConfigGuestDevice(LibvirtConfigObject):
@@ -95,9 +369,9 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
 
         dev.set("type", self.source_type)
         dev.set("device", self.source_device)
-        if self.driver_name is not None or \
-                self.driver_format is not None or \
-                self.driver_cache is not None:
+        if (self.driver_name is not None or
+            self.driver_format is not None or
+            self.driver_cache is not None):
             drv = etree.Element("driver")
             if self.driver_name is not None:
                 drv.set("name", self.driver_name)
@@ -305,8 +579,11 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self.name = None
         self.memory = 1024 * 1024 * 500
         self.vcpus = 1
+        self.cpu = None
         self.acpi = False
+        self.clock = None
         self.os_type = None
+        self.os_loader = None
         self.os_kernel = None
         self.os_initrd = None
         self.os_cmdline = None
@@ -326,6 +603,8 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         os.append(self._text_node("type", self.os_type))
         if self.os_kernel is not None:
             os.append(self._text_node("kernel", self.os_kernel))
+        if self.os_loader is not None:
+            os.append(self._text_node("loader", self.os_loader))
         if self.os_initrd is not None:
             os.append(self._text_node("initrd", self.os_initrd))
         if self.os_cmdline is not None:
@@ -360,6 +639,13 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self._format_basic_props(root)
         self._format_os(root)
         self._format_features(root)
+
+        if self.clock is not None:
+            root.append(self.clock.format_dom())
+
+        if self.cpu is not None:
+            root.append(self.cpu.format_dom())
+
         self._format_devices(root)
 
         return root
@@ -367,45 +653,8 @@ class LibvirtConfigGuest(LibvirtConfigObject):
     def add_device(self, dev):
         self.devices.append(dev)
 
-
-class LibvirtConfigCPU(LibvirtConfigObject):
-
-    def __init__(self, **kwargs):
-        super(LibvirtConfigCPU, self).__init__(root_name="cpu",
-                                               **kwargs)
-
-        self.arch = None
-        self.model = None
-        self.vendor = None
-        self.sockets = None
-        self.cores = None
-        self.threads = None
-        self.features = []
-
-    def add_feature(self, name):
-        self.features.append(name)
-
-    def format_dom(self):
-        cpu = super(LibvirtConfigCPU, self).format_dom()
-        if self.arch:
-            cpu.append(self._text_node("arch", self.arch))
-        if self.model:
-            cpu.append(self._text_node("model", self.model))
-        if self.vendor:
-            cpu.append(self._text_node("vendor", self.vendor))
-        if (self.sockets is not None and
-            self.cores is not None and
-            self.threads is not None):
-            cpu.append(etree.Element("topology",
-                                     sockets=str(self.sockets),
-                                     cores=str(self.cores),
-                                     threads=str(self.threads)))
-
-        for f in self.features:
-            cpu.append(etree.Element("feature",
-                                     name=f))
-
-        return cpu
+    def set_clock(self, clk):
+        self.clock = clk
 
 
 class LibvirtConfigGuestSnapshot(LibvirtConfigObject):

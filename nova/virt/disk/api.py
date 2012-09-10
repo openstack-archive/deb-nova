@@ -26,20 +26,20 @@ Includes injection of SSH PGP keys into authorized_keys file.
 """
 
 import crypt
-import json
 import os
 import random
-import re
 import tempfile
 
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk import guestfs
 from nova.virt.disk import loop
 from nova.virt.disk import nbd
+from nova.virt import images
 
 
 LOG = logging.getLogger(__name__)
@@ -91,10 +91,6 @@ for s in FLAGS.virt_mkfs:
         _DEFAULT_MKFS_COMMAND = mkfs_command
 
 
-_QEMU_VIRT_SIZE_REGEX = re.compile('^virtual size: (.*) \(([0-9]+) bytes\)',
-                                   re.MULTILINE)
-
-
 def mkfs(os_type, fs_label, target):
     mkfs_command = (_MKFS_COMMAND.get(os_type, _DEFAULT_MKFS_COMMAND) or
                     '') % locals()
@@ -102,22 +98,56 @@ def mkfs(os_type, fs_label, target):
         utils.execute(*mkfs_command.split())
 
 
-def get_image_virtual_size(image):
-    out, _err = utils.execute('qemu-img', 'info', image)
-    m = _QEMU_VIRT_SIZE_REGEX.search(out)
-    return int(m.group(2))
+def resize2fs(image, check_exit_code=False):
+    utils.execute('e2fsck', '-fp', image, check_exit_code=check_exit_code)
+    utils.execute('resize2fs', image, check_exit_code=check_exit_code)
+
+
+def get_disk_size(path):
+    """Get the (virtual) size of a disk image
+
+    :param path: Path to the disk image
+    :returns: Size (in bytes) of the given disk image as it would be seen
+              by a virtual machine.
+    """
+    size = images.qemu_img_info(path)['virtual size']
+    size = size.split('(')[1].split()[0]
+    return int(size)
 
 
 def extend(image, size):
     """Increase image to size"""
-    # NOTE(MotoKen): check image virtual size before resize
-    virt_size = get_image_virtual_size(image)
+    virt_size = get_disk_size(image)
     if virt_size >= size:
         return
     utils.execute('qemu-img', 'resize', image, size)
     # NOTE(vish): attempts to resize filesystem
-    utils.execute('e2fsck', '-fp', image, check_exit_code=False)
-    utils.execute('resize2fs', image, check_exit_code=False)
+    resize2fs(image)
+
+
+def can_resize_fs(image, size, use_cow=False):
+    """Check whether we can resize contained file system."""
+
+    # Check that we're increasing the size
+    virt_size = get_disk_size(image)
+    if virt_size >= size:
+        return False
+
+    # Check the image is unpartitioned
+    if use_cow:
+        # Try to mount an unpartitioned qcow2 image
+        try:
+            inject_data(image, use_cow=True)
+        except exception.NovaException:
+            return False
+    else:
+        # For raw, we can directly inspect the file system
+        try:
+            utils.execute('e2label', image)
+        except exception.ProcessExecutionError:
+            return False
+
+    return True
 
 
 def bind(src, target, instance_name):
@@ -129,9 +159,8 @@ def bind(src, target, instance_name):
         s = os.stat(src)
         cgroup_info = "b %s:%s rwm\n" % (os.major(s.st_rdev),
                                          os.minor(s.st_rdev))
-        cgroups_path = \
-            "/sys/fs/cgroup/devices/libvirt/lxc/%s/devices.allow" \
-            % instance_name
+        cgroups_path = ("/sys/fs/cgroup/devices/libvirt/lxc/"
+                        "%s/devices.allow" % instance_name)
         utils.execute('tee', cgroups_path,
                       process_input=cgroup_info, run_as_root=True)
 
@@ -143,6 +172,8 @@ def unbind(target):
 
 class _DiskImage(object):
     """Provide operations on a disk image file."""
+
+    tmp_prefix = 'openstack-disk-mount-tmp'
 
     def __init__(self, image, partition=None, use_cow=False, mount_dir=None):
         # These passed to each mounter
@@ -162,7 +193,38 @@ class _DiskImage(object):
             self.handlers.remove('loop')
 
         if not self.handlers:
-            raise exception.Error(_('no capable image handler configured'))
+            msg = _('no capable image handler configured')
+            raise exception.NovaException(msg)
+
+        if mount_dir:
+            # Note the os.path.ismount() shortcut doesn't
+            # work with libguestfs due to permissions issues.
+            device = self._device_for_path(mount_dir)
+            if device:
+                self._reset(device)
+
+    @staticmethod
+    def _device_for_path(path):
+        device = None
+        with open("/proc/mounts", 'r') as ifp:
+            for line in ifp:
+                fields = line.split()
+                if fields[1] == path:
+                    device = fields[0]
+                    break
+        return device
+
+    def _reset(self, device):
+        """Reset internal state for a previously mounted directory."""
+        mounter_cls = self._handler_class(device=device)
+        mounter = mounter_cls(image=self.image,
+                              partition=self.partition,
+                              mount_dir=self.mount_dir,
+                              device=device)
+        self._mounter = mounter
+
+        mount_name = os.path.basename(self.mount_dir or '')
+        self._mkdir = mount_name.startswith(self.tmp_prefix)
 
     @property
     def errors(self):
@@ -170,12 +232,15 @@ class _DiskImage(object):
         return '\n--\n'.join([''] + self._errors)
 
     @staticmethod
-    def _handler_class(mode):
-        """Look up the appropriate class to use based on MODE."""
+    def _handler_class(mode=None, device=None):
+        """Look up the appropriate class to use based on MODE or DEVICE."""
         for cls in (loop.Mount, nbd.Mount, guestfs.Mount):
-            if cls.mode == mode:
+            if mode and cls.mode == mode:
                 return cls
-        raise exception.Error(_("unknown disk image handler: %s") % mode)
+            elif device and cls.device_id_string in device:
+                return cls
+        msg = _("no disk image handler for: %s") % mode or device
+        raise exception.NovaException(msg)
 
     def mount(self):
         """Mount a disk image, using the object attributes.
@@ -186,10 +251,10 @@ class _DiskImage(object):
         contains any diagnostics.
         """
         if self._mounter:
-            raise exception.Error(_('image already mounted'))
+            raise exception.NovaException(_('image already mounted'))
 
         if not self.mount_dir:
-            self.mount_dir = tempfile.mkdtemp()
+            self.mount_dir = tempfile.mkdtemp(prefix=self.tmp_prefix)
             self._mkdir = True
 
         try:
@@ -224,7 +289,7 @@ class _DiskImage(object):
 
 def inject_data(image,
                 key=None, net=None, metadata=None, admin_password=None,
-                partition=None, use_cow=False):
+                files=None, partition=None, use_cow=False):
     """Injects a ssh key and optionally net data into a disk image.
 
     it will mount the image as a fully partitioned disk and attempt to inject
@@ -237,127 +302,168 @@ def inject_data(image,
     if img.mount():
         try:
             inject_data_into_fs(img.mount_dir,
-                                key, net, metadata, admin_password,
-                                utils.execute)
+                                key, net, metadata, admin_password, files)
         finally:
             img.umount()
     else:
-        raise exception.Error(img.errors)
+        raise exception.NovaException(img.errors)
 
 
-def inject_files(image, files, partition=None, use_cow=False):
-    """Injects arbitrary files into a disk image"""
-    img = _DiskImage(image=image, partition=partition, use_cow=use_cow)
-    if img.mount():
-        try:
-            for (path, contents) in files:
-                _inject_file_into_fs(img.mount_dir, path, contents)
-        finally:
-            img.umount()
-    else:
-        raise exception.Error(img.errors)
-
-
-def setup_container(image, container_dir=None, use_cow=False):
+def setup_container(image, container_dir, use_cow=False):
     """Setup the LXC container.
 
     It will mount the loopback image to the container directory in order
     to create the root filesystem for the container.
-
-    LXC does not support qcow2 images yet.
     """
-    try:
-        img = _DiskImage(image=image, use_cow=use_cow, mount_dir=container_dir)
-        if img.mount():
-            return img
-        else:
-            raise exception.Error(img.errors)
-    except Exception, exn:
-        LOG.exception(_('Failed to mount filesystem: %s'), exn)
+    img = _DiskImage(image=image, use_cow=use_cow, mount_dir=container_dir)
+    if not img.mount():
+        LOG.error(_("Failed to mount container filesystem '%(image)s' "
+                    "on '%(target)s': %(errors)s") %
+                  {"image": img, "target": container_dir,
+                   "errors": img.errors})
+        raise exception.NovaException(img.errors)
 
 
-def destroy_container(img):
+def destroy_container(container_dir):
     """Destroy the container once it terminates.
 
     It will umount the container that is mounted,
     and delete any  linked devices.
-
-    LXC does not support qcow2 images yet.
     """
     try:
-        if img:
-            img.umount()
+        img = _DiskImage(image=None, mount_dir=container_dir)
+        img.umount()
     except Exception, exn:
-        LOG.exception(_('Failed to remove container: %s'), exn)
+        LOG.exception(_('Failed to unmount container filesystem: %s'), exn)
 
 
-def inject_data_into_fs(fs, key, net, metadata, admin_password, execute):
+def inject_data_into_fs(fs, key, net, metadata, admin_password, files):
     """Injects data into a filesystem already mounted by the caller.
     Virt connections can call this directly if they mount their fs
     in a different way to inject_data
     """
     if key:
-        _inject_key_into_fs(key, fs, execute=execute)
+        _inject_key_into_fs(key, fs)
     if net:
-        _inject_net_into_fs(net, fs, execute=execute)
+        _inject_net_into_fs(net, fs)
     if metadata:
-        _inject_metadata_into_fs(metadata, fs, execute=execute)
+        _inject_metadata_into_fs(metadata, fs)
     if admin_password:
-        _inject_admin_password_into_fs(admin_password, fs, execute=execute)
+        _inject_admin_password_into_fs(admin_password, fs)
+    if files:
+        for (path, contents) in files:
+            _inject_file_into_fs(fs, path, contents)
 
 
-def _inject_file_into_fs(fs, path, contents):
-    absolute_path = os.path.join(fs, path.lstrip('/'))
+def _join_and_check_path_within_fs(fs, *args):
+    '''os.path.join() with safety check for injected file paths.
+
+    Join the supplied path components and make sure that the
+    resulting path we are injecting into is within the
+    mounted guest fs.  Trying to be clever and specifying a
+    path with '..' in it will hit this safeguard.
+    '''
+    absolute_path, _err = utils.execute('readlink', '-nm',
+                                        os.path.join(fs, *args),
+                                        run_as_root=True)
+    if not absolute_path.startswith(os.path.realpath(fs) + '/'):
+        raise exception.Invalid(_('injected file path not valid'))
+    return absolute_path
+
+
+def _inject_file_into_fs(fs, path, contents, append=False):
+    absolute_path = _join_and_check_path_within_fs(fs, path.lstrip('/'))
+
     parent_dir = os.path.dirname(absolute_path)
     utils.execute('mkdir', '-p', parent_dir, run_as_root=True)
-    utils.execute('tee', absolute_path, process_input=contents,
-          run_as_root=True)
+
+    args = []
+    if append:
+        args.append('-a')
+    args.append(absolute_path)
+
+    kwargs = dict(process_input=contents, run_as_root=True)
+
+    utils.execute('tee', *args, **kwargs)
 
 
-def _inject_metadata_into_fs(metadata, fs, execute=None):
-    metadata_path = os.path.join(fs, "meta.js")
-    metadata = dict([(m.key, m.value) for m in metadata])
-
-    utils.execute('tee', metadata_path,
-                  process_input=json.dumps(metadata), run_as_root=True)
+def _inject_metadata_into_fs(metadata, fs):
+    metadata = dict([(m['key'], m['value']) for m in metadata])
+    _inject_file_into_fs(fs, 'meta.js', jsonutils.dumps(metadata))
 
 
-def _inject_key_into_fs(key, fs, execute=None):
+def _setup_selinux_for_keys(fs):
+    """Get selinux guests to ensure correct context on injected keys."""
+
+    se_cfg = _join_and_check_path_within_fs(fs, 'etc', 'selinux')
+    se_cfg, _err = utils.trycmd('readlink', '-e', se_cfg, run_as_root=True)
+    if not se_cfg:
+        return
+
+    rclocal = _join_and_check_path_within_fs(fs, 'etc', 'rc.local')
+
+    # Support systemd based systems
+    rc_d = _join_and_check_path_within_fs(fs, 'etc', 'rc.d')
+    rclocal_e, _err = utils.trycmd('readlink', '-e', rclocal, run_as_root=True)
+    rc_d_e, _err = utils.trycmd('readlink', '-e', rc_d, run_as_root=True)
+    if not rclocal_e and rc_d_e:
+        rclocal = os.path.join(rc_d, 'rc.local')
+
+    # Note some systems end rc.local with "exit 0"
+    # and so to append there you'd need something like:
+    #  utils.execute('sed', '-i', '${/^exit 0$/d}' rclocal, run_as_root=True)
+    restorecon = [
+        '#!/bin/sh\n',
+        '# Added by Nova to ensure injected ssh keys have the right context\n',
+        'restorecon -RF /root/.ssh/ 2>/dev/null || :\n',
+    ]
+
+    rclocal_rel = os.path.relpath(rclocal, fs)
+    _inject_file_into_fs(fs, rclocal_rel, ''.join(restorecon), append=True)
+    utils.execute('chmod', 'a+x', rclocal, run_as_root=True)
+
+
+def _inject_key_into_fs(key, fs):
     """Add the given public ssh key to root's authorized_keys.
 
     key is an ssh key string.
     fs is the path to the base of the filesystem into which to inject the key.
     """
-    sshdir = os.path.join(fs, 'root', '.ssh')
+    sshdir = _join_and_check_path_within_fs(fs, 'root', '.ssh')
     utils.execute('mkdir', '-p', sshdir, run_as_root=True)
     utils.execute('chown', 'root', sshdir, run_as_root=True)
     utils.execute('chmod', '700', sshdir, run_as_root=True)
-    keyfile = os.path.join(sshdir, 'authorized_keys')
-    key_data = [
+
+    keyfile = os.path.join('root', '.ssh', 'authorized_keys')
+
+    key_data = ''.join([
         '\n',
         '# The following ssh key was injected by Nova',
         '\n',
         key.strip(),
         '\n',
-    ]
-    utils.execute('tee', '-a', keyfile,
-                  process_input=''.join(key_data), run_as_root=True)
+    ])
+
+    _inject_file_into_fs(fs, keyfile, key_data, append=True)
+
+    _setup_selinux_for_keys(fs)
 
 
-def _inject_net_into_fs(net, fs, execute=None):
+def _inject_net_into_fs(net, fs):
     """Inject /etc/network/interfaces into the filesystem rooted at fs.
 
     net is the contents of /etc/network/interfaces.
     """
-    netdir = os.path.join(os.path.join(fs, 'etc'), 'network')
+    netdir = _join_and_check_path_within_fs(fs, 'etc', 'network')
     utils.execute('mkdir', '-p', netdir, run_as_root=True)
     utils.execute('chown', 'root:root', netdir, run_as_root=True)
     utils.execute('chmod', 755, netdir, run_as_root=True)
-    netfile = os.path.join(netdir, 'interfaces')
-    utils.execute('tee', netfile, process_input=net, run_as_root=True)
+
+    netfile = os.path.join('etc', 'network', 'interfaces')
+    _inject_file_into_fs(fs, netfile, net)
 
 
-def _inject_admin_password_into_fs(admin_passwd, fs, execute=None):
+def _inject_admin_password_into_fs(admin_passwd, fs):
     """Set the root password to admin_passwd
 
     admin_password is a root password
@@ -379,16 +485,15 @@ def _inject_admin_password_into_fs(admin_passwd, fs, execute=None):
     fd, tmp_shadow = tempfile.mkstemp()
     os.close(fd)
 
-    utils.execute('cp', os.path.join(fs, 'etc', 'passwd'), tmp_passwd,
-                  run_as_root=True)
-    utils.execute('cp', os.path.join(fs, 'etc', 'shadow'), tmp_shadow,
-                  run_as_root=True)
+    passwd_path = _join_and_check_path_within_fs(fs, 'etc', 'passwd')
+    shadow_path = _join_and_check_path_within_fs(fs, 'etc', 'shadow')
+
+    utils.execute('cp', passwd_path, tmp_passwd, run_as_root=True)
+    utils.execute('cp', shadow_path, tmp_shadow, run_as_root=True)
     _set_passwd(admin_user, admin_passwd, tmp_passwd, tmp_shadow)
-    utils.execute('cp', tmp_passwd, os.path.join(fs, 'etc', 'passwd'),
-                  run_as_root=True)
+    utils.execute('cp', tmp_passwd, passwd_path, run_as_root=True)
     os.unlink(tmp_passwd)
-    utils.execute('cp', tmp_shadow, os.path.join(fs, 'etc', 'shadow'),
-                  run_as_root=True)
+    utils.execute('cp', tmp_shadow, shadow_path, run_as_root=True)
     os.unlink(tmp_shadow)
 
 
@@ -403,7 +508,7 @@ def _set_passwd(username, admin_passwd, passwd_file, shadow_file):
     :param passwd_file: path to the passwd file
     :param shadow_file: path to the shadow password file
     :returns: nothing
-    :raises: exception.Error(), IOError()
+    :raises: exception.NovaException(), IOError()
 
     """
     salt_set = ('abcdefghijklmnopqrstuvwxyz'
@@ -439,7 +544,7 @@ def _set_passwd(username, admin_passwd, passwd_file, shadow_file):
                 break
         if not found:
             msg = _('User %(username)s not found in password file.')
-            raise exception.Error(msg % username)
+            raise exception.NovaException(msg % username)
 
         # update password in the shadow file.It's an error if the
         # the user doesn't exist.
@@ -455,7 +560,7 @@ def _set_passwd(username, admin_passwd, passwd_file, shadow_file):
         s_file.close()
         if not found:
             msg = _('User %(username)s not found in shadow file.')
-            raise exception.Error(msg % username)
+            raise exception.NovaException(msg % username)
         s_file = open(shadow_file, 'wb')
         for entry in new_shadow:
             s_file.write(entry)

@@ -16,11 +16,10 @@
 
 """The security groups extension."""
 
-import urllib
 from xml.dom import minidom
 
-from webob import exc
 import webob
+from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack import extensions
@@ -30,14 +29,13 @@ from nova import compute
 from nova import db
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova import quota
-from nova import utils
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 authorize = extensions.extension_authorizer('compute', 'security_groups')
+softauth = extensions.soft_extension_authorizer('compute', 'security_groups')
 
 
 def make_rule(elem):
@@ -179,8 +177,9 @@ class SecurityGroupControllerBase(object):
     """Base class for Security Group controllers."""
 
     def __init__(self):
-        self.compute_api = compute.API()
-        self.sgh = utils.import_object(FLAGS.security_group_handler)
+        self.security_group_api = NativeSecurityGroupAPI()
+        self.compute_api = compute.API(
+                                   security_group_api=self.security_group_api)
 
     def _format_security_group_rule(self, context, rule):
         sg_rule = {}
@@ -192,7 +191,8 @@ class SecurityGroupControllerBase(object):
         sg_rule['group'] = {}
         sg_rule['ip_range'] = {}
         if rule.group_id:
-            source_group = db.security_group_get(context, rule.group_id)
+            source_group = self.security_group_api.get(context,
+                                                       id=rule.group_id)
             sg_rule['group'] = {'name': source_group.name,
                              'tenant_id': source_group.project_id}
         else:
@@ -211,55 +211,65 @@ class SecurityGroupControllerBase(object):
                     context, rule)]
         return security_group
 
+    def _authorize_context(self, req):
+        context = req.environ['nova.context']
+        authorize(context)
+        return context
+
+    def _validate_id(self, id):
+        try:
+            return int(id)
+        except ValueError:
+            msg = _("Security group id should be integer")
+            raise exc.HTTPBadRequest(explanation=msg)
+
+    def _from_body(self, body, key):
+        if not body:
+            raise exc.HTTPUnprocessableEntity()
+        value = body.get(key, None)
+        if value is None:
+            raise exc.HTTPUnprocessableEntity()
+        return value
+
 
 class SecurityGroupController(SecurityGroupControllerBase):
     """The Security group API controller for the OpenStack API."""
 
-    def _get_security_group(self, context, id):
-        try:
-            id = int(id)
-            security_group = db.security_group_get(context, id)
-        except ValueError:
-            msg = _("Security group id should be integer")
-            raise exc.HTTPBadRequest(explanation=msg)
-        except exception.NotFound as exp:
-            raise exc.HTTPNotFound(explanation=unicode(exp))
-        return security_group
-
     @wsgi.serializers(xml=SecurityGroupTemplate)
     def show(self, req, id):
         """Return data about the given security group."""
-        context = req.environ['nova.context']
-        authorize(context)
-        security_group = self._get_security_group(context, id)
+        context = self._authorize_context(req)
+
+        id = self._validate_id(id)
+
+        security_group = self.security_group_api.get(context, None, id,
+                                                     map_exception=True)
+
         return {'security_group': self._format_security_group(context,
                                                               security_group)}
 
     def delete(self, req, id):
         """Delete a security group."""
-        context = req.environ['nova.context']
-        authorize(context)
-        security_group = self._get_security_group(context, id)
-        if db.security_group_in_use(context, security_group.id):
-            msg = _("Security group is still in use")
-            raise exc.HTTPBadRequest(explanation=msg)
-        LOG.audit(_("Delete security group %s"), id, context=context)
-        db.security_group_destroy(context, security_group.id)
-        self.sgh.trigger_security_group_destroy_refresh(
-            context, security_group.id)
+        context = self._authorize_context(req)
+
+        id = self._validate_id(id)
+
+        security_group = self.security_group_api.get(context, None, id,
+                                                     map_exception=True)
+
+        self.security_group_api.destroy(context, security_group)
 
         return webob.Response(status_int=202)
 
     @wsgi.serializers(xml=SecurityGroupsTemplate)
     def index(self, req):
         """Returns a list of security groups"""
-        context = req.environ['nova.context']
-        authorize(context)
+        context = self._authorize_context(req)
 
-        self.compute_api.ensure_default_security_group(context)
-        groups = db.security_group_get_by_project(context,
-                                                  context.project_id)
-        limited_list = common.limited(groups, req)
+        raw_groups = self.security_group_api.list(context,
+                                                  project=context.project_id)
+
+        limited_list = common.limited(raw_groups, req)
         result = [self._format_security_group(context, group)
                      for group in limited_list]
 
@@ -271,61 +281,22 @@ class SecurityGroupController(SecurityGroupControllerBase):
     @wsgi.deserializers(xml=SecurityGroupXMLDeserializer)
     def create(self, req, body):
         """Creates a new security group."""
-        context = req.environ['nova.context']
-        authorize(context)
-        if not body:
-            raise exc.HTTPUnprocessableEntity()
+        context = self._authorize_context(req)
 
-        security_group = body.get('security_group', None)
-
-        if security_group is None:
-            raise exc.HTTPUnprocessableEntity()
+        security_group = self._from_body(body, 'security_group')
 
         group_name = security_group.get('name', None)
         group_description = security_group.get('description', None)
 
-        self._validate_security_group_property(group_name, "name")
-        self._validate_security_group_property(group_description,
-                                               "description")
-        group_name = group_name.strip()
-        group_description = group_description.strip()
+        self.security_group_api.validate_property(group_name, 'name', None)
+        self.security_group_api.validate_property(group_description,
+                                                  'description', None)
 
-        if quota.allowed_security_groups(context, 1) < 1:
-            msg = _("Quota exceeded, too many security groups.")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        LOG.audit(_("Create Security Group %s"), group_name, context=context)
-        self.compute_api.ensure_default_security_group(context)
-        if db.security_group_exists(context, context.project_id, group_name):
-            msg = _('Security group %s already exists') % group_name
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        group = {'user_id': context.user_id,
-                 'project_id': context.project_id,
-                 'name': group_name,
-                 'description': group_description}
-        group_ref = db.security_group_create(context, group)
-        self.sgh.trigger_security_group_create_refresh(context, group)
+        group_ref = self.security_group_api.create(context, group_name,
+                                                   group_description)
 
         return {'security_group': self._format_security_group(context,
                                                                  group_ref)}
-
-    def _validate_security_group_property(self, value, typ):
-        """ typ will be either 'name' or 'description',
-            depending on the caller
-        """
-        try:
-            val = value.strip()
-        except AttributeError:
-            msg = _("Security group %s is not a string or unicode") % typ
-            raise exc.HTTPBadRequest(explanation=msg)
-        if not val:
-            msg = _("Security group %s cannot be empty.") % typ
-            raise exc.HTTPBadRequest(explanation=msg)
-        if len(val) > 255:
-            msg = _("Security group %s should not be greater "
-                            "than 255 characters.") % typ
-            raise exc.HTTPBadRequest(explanation=msg)
 
 
 class SecurityGroupRulesController(SecurityGroupControllerBase):
@@ -333,37 +304,20 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
     @wsgi.serializers(xml=SecurityGroupRuleTemplate)
     @wsgi.deserializers(xml=SecurityGroupRulesXMLDeserializer)
     def create(self, req, body):
-        context = req.environ['nova.context']
-        authorize(context)
+        context = self._authorize_context(req)
 
-        if not body:
-            raise exc.HTTPUnprocessableEntity()
+        sg_rule = self._from_body(body, 'security_group_rule')
 
-        if not 'security_group_rule' in body:
-            raise exc.HTTPUnprocessableEntity()
+        parent_group_id = self._validate_id(sg_rule.get('parent_group_id',
+                                                        None))
 
-        self.compute_api.ensure_default_security_group(context)
-
-        sg_rule = body['security_group_rule']
-        parent_group_id = sg_rule.get('parent_group_id', None)
-        try:
-            parent_group_id = int(parent_group_id)
-            security_group = db.security_group_get(context, parent_group_id)
-        except ValueError:
-            msg = _("Parent group id is not integer")
-            raise exc.HTTPBadRequest(explanation=msg)
-        except exception.NotFound as exp:
-            msg = _("Security group (%s) not found") % parent_group_id
-            raise exc.HTTPNotFound(explanation=msg)
-
-        msg = _("Authorize security group ingress %s")
-        LOG.audit(msg, security_group['name'], context=context)
+        security_group = self.security_group_api.get(context, None,
+                                          parent_group_id, map_exception=True)
 
         try:
             values = self._rule_args_to_dict(context,
                               to_port=sg_rule.get('to_port'),
                               from_port=sg_rule.get('from_port'),
-                              parent_group_id=sg_rule.get('parent_group_id'),
                               ip_protocol=sg_rule.get('ip_protocol'),
                               cidr=sg_rule.get('cidr'),
                               group_id=sg_rule.get('group_id'))
@@ -371,169 +325,50 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
             raise exc.HTTPBadRequest(explanation=unicode(exp))
 
         if values is None:
-            msg = _("Not enough parameters to build a "
-                                       "valid rule.")
+            msg = _("Not enough parameters to build a valid rule.")
             raise exc.HTTPBadRequest(explanation=msg)
 
         values['parent_group_id'] = security_group.id
 
-        if self._security_group_rule_exists(security_group, values):
+        if self.security_group_api.rule_exists(security_group, values):
             msg = _('This rule already exists in group %s') % parent_group_id
             raise exc.HTTPBadRequest(explanation=msg)
 
-        allowed = quota.allowed_security_group_rules(context,
-                                                   parent_group_id,
-                                                   1)
-        if allowed < 1:
-            msg = _("Quota exceeded, too many security group rules.")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        security_group_rule = db.security_group_rule_create(context, values)
-        self.sgh.trigger_security_group_rule_create_refresh(
-            context, [security_group_rule['id']])
-        self.compute_api.trigger_security_group_rules_refresh(context,
-                                    security_group_id=security_group['id'])
+        security_group_rule = self.security_group_api.add_rules(
+                context, parent_group_id, security_group['name'], [values])[0]
 
         return {"security_group_rule": self._format_security_group_rule(
                                                         context,
                                                         security_group_rule)}
 
-    def _security_group_rule_exists(self, security_group, values):
-        """Indicates whether the specified rule values are already
-           defined in the given security group.
-        """
-        for rule in security_group.rules:
-            is_duplicate = True
-            keys = ('group_id', 'cidr', 'from_port', 'to_port', 'protocol')
-            for key in keys:
-                if rule.get(key) != values.get(key):
-                    is_duplicate = False
-                    break
-            if is_duplicate:
-                return True
-        return False
-
     def _rule_args_to_dict(self, context, to_port=None, from_port=None,
-                                  parent_group_id=None, ip_protocol=None,
-                                  cidr=None, group_id=None):
-        values = {}
+                           ip_protocol=None, cidr=None, group_id=None):
 
         if group_id is not None:
-            try:
-                parent_group_id = int(parent_group_id)
-                group_id = int(group_id)
-            except ValueError:
-                msg = _("Parent or group id is not integer")
-                raise exception.InvalidInput(reason=msg)
-
-            values['group_id'] = group_id
+            group_id = self._validate_id(group_id)
             #check if groupId exists
-            db.security_group_get(context, group_id)
-        elif cidr:
-            # If this fails, it throws an exception. This is what we want.
-            try:
-                cidr = urllib.unquote(cidr).decode()
-            except Exception:
-                raise exception.InvalidCidr(cidr=cidr)
-
-            if not utils.is_valid_cidr(cidr):
-                # Raise exception for non-valid address
-                raise exception.InvalidCidr(cidr=cidr)
-
-            values['cidr'] = cidr
+            self.security_group_api.get(context, id=group_id)
+            return self.security_group_api.new_group_ingress_rule(
+                                    group_id, ip_protocol, from_port, to_port)
         else:
-            values['cidr'] = '0.0.0.0/0'
-
-        if group_id:
-            # Open everything if an explicit port range or type/code are not
-            # specified, but only if a source group was specified.
-            ip_proto_upper = ip_protocol.upper() if ip_protocol else ''
-            if (ip_proto_upper == 'ICMP' and
-                from_port is None and to_port is None):
-                from_port = -1
-                to_port = -1
-            elif (ip_proto_upper in ['TCP', 'UDP'] and from_port is None
-                  and to_port is None):
-                from_port = 1
-                to_port = 65535
-
-        if ip_protocol and from_port is not None and to_port is not None:
-
-            ip_protocol = str(ip_protocol)
-            try:
-                from_port = int(from_port)
-                to_port = int(to_port)
-            except ValueError:
-                if ip_protocol.upper() == 'ICMP':
-                    raise exception.InvalidInput(reason="Type and"
-                         " Code must be integers for ICMP protocol type")
-                else:
-                    raise exception.InvalidInput(reason="To and From ports "
-                          "must be integers")
-
-            if ip_protocol.upper() not in ['TCP', 'UDP', 'ICMP']:
-                raise exception.InvalidIpProtocol(protocol=ip_protocol)
-
-            # Verify that from_port must always be less than
-            # or equal to to_port
-            if (ip_protocol.upper() in ['TCP', 'UDP'] and
-                from_port > to_port):
-                raise exception.InvalidPortRange(from_port=from_port,
-                      to_port=to_port, msg="Former value cannot"
-                                            " be greater than the later")
-
-            # Verify valid TCP, UDP port ranges
-            if (ip_protocol.upper() in ['TCP', 'UDP'] and
-                (from_port < 1 or to_port > 65535)):
-                raise exception.InvalidPortRange(from_port=from_port,
-                      to_port=to_port, msg="Valid TCP ports should"
-                                           " be between 1-65535")
-
-            # Verify ICMP type and code
-            if (ip_protocol.upper() == "ICMP" and
-                (from_port < -1 or from_port > 255 or
-                to_port < -1 or to_port > 255)):
-                raise exception.InvalidPortRange(from_port=from_port,
-                      to_port=to_port, msg="For ICMP, the"
-                                           " type:code must be valid")
-
-            values['protocol'] = ip_protocol.lower()
-            values['from_port'] = from_port
-            values['to_port'] = to_port
-        else:
-            # If cidr based filtering, protocol and ports are mandatory
-            if 'cidr' in values:
-                return None
-
-        return values
+            cidr = self.security_group_api.parse_cidr(cidr)
+            return self.security_group_api.new_cidr_ingress_rule(
+                                        cidr, ip_protocol, from_port, to_port)
 
     def delete(self, req, id):
-        context = req.environ['nova.context']
-        authorize(context)
+        context = self._authorize_context(req)
 
-        self.compute_api.ensure_default_security_group(context)
-        try:
-            id = int(id)
-            rule = db.security_group_rule_get(context, id)
-        except ValueError:
-            msg = _("Rule id is not integer")
-            raise exc.HTTPBadRequest(explanation=msg)
-        except exception.NotFound:
-            msg = _("Rule (%s) not found") % id
-            raise exc.HTTPNotFound(explanation=msg)
+        id = self._validate_id(id)
+
+        rule = self.security_group_api.get_rule(context, id)
 
         group_id = rule.parent_group_id
-        self.compute_api.ensure_default_security_group(context)
-        security_group = db.security_group_get(context, group_id)
 
-        msg = _("Revoke security group ingress %s")
-        LOG.audit(msg, security_group['name'], context=context)
+        security_group = self.security_group_api.get(context, None, group_id,
+                                                     map_exception=True)
 
-        db.security_group_rule_destroy(context, rule['id'])
-        self.sgh.trigger_security_group_rule_destroy_refresh(
-            context, [rule['id']])
-        self.compute_api.trigger_security_group_rules_refresh(context,
-                                    security_group_id=security_group['id'])
+        self.security_group_api.remove_rules(context, security_group,
+                                             [rule['id']])
 
         return webob.Response(status_int=202)
 
@@ -543,19 +378,16 @@ class ServerSecurityGroupController(SecurityGroupControllerBase):
     @wsgi.serializers(xml=SecurityGroupsTemplate)
     def index(self, req, server_id):
         """Returns a list of security groups for the given instance."""
-        context = req.environ['nova.context']
-        authorize(context)
+        context = self._authorize_context(req)
 
-        self.compute_api.ensure_default_security_group(context)
+        self.security_group_api.ensure_default(context)
 
         try:
             instance = self.compute_api.get(context, server_id)
-            groups = db.security_group_get_by_instance(context,
-                                                       instance['id'])
-        except exception.ApiError, e:
-            raise webob.exc.HTTPBadRequest(explanation=e.message)
-        except exception.NotAuthorized, e:
-            raise webob.exc.HTTPUnauthorized()
+        except exception.InstanceNotFound as exp:
+            raise exc.HTTPNotFound(explanation=unicode(exp))
+
+        groups = db.security_group_get_by_instance(context, instance['id'])
 
         result = [self._format_security_group(context, group)
                     for group in groups]
@@ -568,89 +400,138 @@ class ServerSecurityGroupController(SecurityGroupControllerBase):
 class SecurityGroupActionController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SecurityGroupActionController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
-        self.sgh = utils.import_object(FLAGS.security_group_handler)
+        self.security_group_api = NativeSecurityGroupAPI()
+        self.compute_api = compute.API(
+                                   security_group_api=self.security_group_api)
+
+    def _parse(self, body, action):
+        try:
+            body = body[action]
+            group_name = body['name']
+        except TypeError:
+            msg = _("Missing parameter dict")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+        except KeyError:
+            msg = _("Security group not specified")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+
+        if not group_name or group_name.strip() == '':
+            msg = _("Security group name cannot be empty")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+
+        return group_name
+
+    def _invoke(self, method, context, id, group_name):
+        try:
+            instance = self.compute_api.get(context, id)
+            method(context, instance, group_name)
+        except exception.SecurityGroupNotFound as exp:
+            raise exc.HTTPNotFound(explanation=unicode(exp))
+        except exception.InstanceNotFound as exp:
+            raise exc.HTTPNotFound(explanation=unicode(exp))
+        except exception.Invalid as exp:
+            raise exc.HTTPBadRequest(explanation=unicode(exp))
+
+        return webob.Response(status_int=202)
 
     @wsgi.action('addSecurityGroup')
     def _addSecurityGroup(self, req, id, body):
         context = req.environ['nova.context']
         authorize(context)
 
-        try:
-            body = body['addSecurityGroup']
-            group_name = body['name']
-        except TypeError:
-            msg = _("Missing parameter dict")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
-        except KeyError:
-            msg = _("Security group not specified")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
+        group_name = self._parse(body, 'addSecurityGroup')
 
-        if not group_name or group_name.strip() == '':
-            msg = _("Security group name cannot be empty")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
-
-        try:
-            instance = self.compute_api.get(context, id)
-            self.compute_api.add_security_group(context, instance, group_name)
-            self.sgh.trigger_instance_add_security_group_refresh(
-                context, instance, group_name)
-        except exception.SecurityGroupNotFound as exp:
-            raise exc.HTTPNotFound(explanation=unicode(exp))
-        except exception.InstanceNotFound as exp:
-            raise exc.HTTPNotFound(explanation=unicode(exp))
-        except exception.Invalid as exp:
-            raise exc.HTTPBadRequest(explanation=unicode(exp))
-
-        return webob.Response(status_int=202)
+        return self._invoke(self.security_group_api.add_to_instance,
+                            context, id, group_name)
 
     @wsgi.action('removeSecurityGroup')
     def _removeSecurityGroup(self, req, id, body):
         context = req.environ['nova.context']
         authorize(context)
 
-        try:
-            body = body['removeSecurityGroup']
-            group_name = body['name']
-        except TypeError:
-            msg = _("Missing parameter dict")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
-        except KeyError:
-            msg = _("Security group not specified")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
+        group_name = self._parse(body, 'removeSecurityGroup')
 
-        if not group_name or group_name.strip() == '':
-            msg = _("Security group name cannot be empty")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
+        return self._invoke(self.security_group_api.remove_from_instance,
+                            context, id, group_name)
 
-        try:
-            instance = self.compute_api.get(context, id)
-            self.compute_api.remove_security_group(context, instance,
-                                                   group_name)
-            self.sgh.trigger_instance_remove_security_group_refresh(
-                context, instance, group_name)
-        except exception.SecurityGroupNotFound as exp:
-            raise exc.HTTPNotFound(explanation=unicode(exp))
-        except exception.InstanceNotFound as exp:
-            raise exc.HTTPNotFound(explanation=unicode(exp))
-        except exception.Invalid as exp:
-            raise exc.HTTPBadRequest(explanation=unicode(exp))
 
-        return webob.Response(status_int=202)
+class SecurityGroupsOutputController(wsgi.Controller):
+    def __init__(self, *args, **kwargs):
+        super(SecurityGroupsOutputController, self).__init__(*args, **kwargs)
+        self.compute_api = compute.API()
+
+    def _extend_servers(self, req, servers):
+        key = "security_groups"
+        for server in servers:
+            instance = req.get_db_instance(server['id'])
+            groups = instance.get(key)
+            if groups:
+                server[key] = [{"name": group["name"]} for group in groups]
+
+    def _show(self, req, resp_obj):
+        if not softauth(req.environ['nova.context']):
+            return
+        if 'server' in resp_obj.obj:
+            resp_obj.attach(xml=SecurityGroupServerTemplate())
+            self._extend_servers(req, [resp_obj.obj['server']])
+
+    @wsgi.extends
+    def show(self, req, resp_obj, id):
+        return self._show(req, resp_obj)
+
+    @wsgi.extends
+    def create(self, req, resp_obj, body):
+        return self._show(req, resp_obj)
+
+    @wsgi.extends
+    def detail(self, req, resp_obj):
+        if not softauth(req.environ['nova.context']):
+            return
+        resp_obj.attach(xml=SecurityGroupServersTemplate())
+        self._extend_servers(req, list(resp_obj.obj['servers']))
+
+
+class SecurityGroupsTemplateElement(xmlutil.TemplateElement):
+    def will_render(self, datum):
+        return "security_groups" in datum
+
+
+def make_server(elem):
+    secgrps = SecurityGroupsTemplateElement('security_groups')
+    elem.append(secgrps)
+    secgrp = xmlutil.SubTemplateElement(secgrps, 'security_group',
+                                        selector="security_groups")
+    secgrp.set('name')
+
+
+class SecurityGroupServerTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = xmlutil.TemplateElement('server')
+        make_server(root)
+        return xmlutil.SlaveTemplate(root, 1)
+
+
+class SecurityGroupServersTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = xmlutil.TemplateElement('servers')
+        elem = xmlutil.SubTemplateElement(root, 'server', selector='servers')
+        make_server(elem)
+        return xmlutil.SlaveTemplate(root, 1)
 
 
 class Security_groups(extensions.ExtensionDescriptor):
     """Security group support"""
-
     name = "SecurityGroups"
-    alias = "security_groups"
+    alias = "os-security-groups"
     namespace = "http://docs.openstack.org/compute/ext/securitygroups/api/v1.1"
     updated = "2011-07-21T00:00:00+00:00"
 
     def get_controller_extensions(self):
         controller = SecurityGroupActionController()
-        extension = extensions.ControllerExtension(self, 'servers', controller)
-        return [extension]
+        actions = extensions.ControllerExtension(self, 'servers', controller)
+        controller = SecurityGroupsOutputController()
+        output = extensions.ControllerExtension(self, 'servers', controller)
+        return [actions, output]
 
     def get_resources(self):
         resources = []
@@ -671,3 +552,29 @@ class Security_groups(extensions.ExtensionDescriptor):
         resources.append(res)
 
         return resources
+
+
+class NativeSecurityGroupAPI(compute.api.SecurityGroupAPI):
+    @staticmethod
+    def raise_invalid_property(msg):
+        raise exc.HTTPBadRequest(explanation=msg)
+
+    @staticmethod
+    def raise_group_already_exists(msg):
+        raise exc.HTTPBadRequest(explanation=msg)
+
+    @staticmethod
+    def raise_invalid_group(msg):
+        raise exc.HTTPBadRequest(explanation=msg)
+
+    @staticmethod
+    def raise_invalid_cidr(cidr, decoding_exception=None):
+        raise exception.InvalidCidr(cidr=cidr)
+
+    @staticmethod
+    def raise_over_quota(msg):
+        raise exception.SecurityGroupLimitExceeded(msg)
+
+    @staticmethod
+    def raise_not_found(msg):
+        raise exc.HTTPNotFound(explanation=msg)

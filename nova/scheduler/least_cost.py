@@ -23,8 +23,8 @@ is then selected for provisioning.
 """
 
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -67,6 +67,11 @@ class WeightedHost(object):
             x['host'] = self.host_state.host
         return x
 
+    def __repr__(self):
+        if self.host_state:
+            return "WeightedHost host: %s" % self.host_state.host
+        return "WeightedHost with no host_state"
+
 
 def noop_cost_fn(host_state, weighing_properties):
     """Return a pre-weight cost of 1 for each host"""
@@ -74,8 +79,13 @@ def noop_cost_fn(host_state, weighing_properties):
 
 
 def compute_fill_first_cost_fn(host_state, weighing_properties):
-    """More free ram = higher weight. So servers will less free
-    ram will be preferred."""
+    """More free ram = higher weight. So servers with less free
+    ram will be preferred.
+
+    Note: the weight for this function in default configuration
+    is -1.0. With a -1.0 this function runs in reverse, so systems
+    with the most free memory will be preferred.
+    """
     return host_state.free_ram_mb
 
 
@@ -97,30 +107,11 @@ def weighted_sum(weighted_fns, host_states, weighing_properties):
               candidate.
     """
 
-    # Make a grid of functions results.
-    # One row per host. One column per function.
-    scores = []
-    for weight, fn in weighted_fns:
-        scores.append([fn(host_state, weighing_properties)
-                for host_state in host_states])
+    min_score, best_host = None, None
+    for host_state in host_states:
+        score = sum(weight * fn(host_state, weighing_properties)
+                    for weight, fn in weighted_fns)
+        if min_score is None or score < min_score:
+            min_score, best_host = score, host_state
 
-    # Adjust the weights in the grid by the functions weight adjustment
-    # and sum them up to get a final list of weights.
-    adjusted_scores = []
-    for (weight, fn), row in zip(weighted_fns, scores):
-        adjusted_scores.append([weight * score for score in row])
-
-    # Now, sum down the columns to get the final score. Column per host.
-    final_scores = [0.0] * len(host_states)
-    for row in adjusted_scores:
-        for idx, col in enumerate(row):
-            final_scores[idx] += col
-
-    # Super-impose the host_state into the scores so
-    # we don't lose it when we sort.
-    final_scores = [(final_scores[idx], host_state)
-            for idx, host_state in enumerate(host_states)]
-
-    final_scores = sorted(final_scores)
-    weight, host_state = final_scores[0]  # Lowest score is the winner!
-    return WeightedHost(weight, host_state=host_state)
+    return WeightedHost(min_score, host_state=best_host)

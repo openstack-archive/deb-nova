@@ -19,6 +19,10 @@
 # Importing full names to not pollute the namespace and cause possible
 # collisions with use of 'from nova.volume import <foo>' elsewhere.
 import nova.flags
-import nova.utils
+import nova.openstack.common.importutils
 
-API = nova.utils.import_class(nova.flags.FLAGS.volume_api_class)
+
+def API():
+    importutils = nova.openstack.common.importutils
+    cls = importutils.import_class(nova.flags.FLAGS.volume_api_class)
+    return cls()

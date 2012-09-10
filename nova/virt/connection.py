@@ -21,42 +21,42 @@
 
 import sys
 
+from nova.common import deprecated
+from nova import exception
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import driver
-from nova.virt import fake
-from nova.virt.libvirt import connection as libvirt_conn
-from nova.virt import vmwareapi_conn
-from nova.virt import xenapi_conn
-
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
-"""
-In case of baremetal (FLAGS.connection_type),
-specific driver is set by FLAGS.baremetal_driver
-"""
-if FLAGS.connection_type == 'baremetal':
-    from nova.virt.baremetal import proxy
+known_drivers = {
+    'baremetal': 'baremetal.BareMetalDriver',
+    'fake': 'fake.FakeDriver',
+    'libvirt': 'libvirt.LibvirtDriver',
+    'vmwareapi': 'vmwareapi.VMWareESXDriver',
+    'xenapi': 'xenapi.XenAPIDriver'
+    }
 
 
 def get_connection(read_only=False):
     """
     Returns an object representing the connection to a virtualization
-    platform.
+    platform, or to an on-demand bare-metal provisioning platform.
 
     This could be :mod:`nova.virt.fake.FakeConnection` in test mode,
     a connection to KVM, QEMU, or UML via :mod:`libvirt_conn`, or a connection
-    to XenServer or Xen Cloud Platform via :mod:`xenapi`.
+    to XenServer or Xen Cloud Platform via :mod:`xenapi`. Other platforms are
+    also supported.
 
     Any object returned here must conform to the interface documented by
     :mod:`FakeConnection`.
 
     **Related flags**
 
-    :connection_type:  A string literal that falls through a if/elif structure
+    :connection_type:  A string literal that falls through an if/elif structure
                        to determine what virtualization mechanism to use.
                        Values may be
 
@@ -64,24 +64,21 @@ def get_connection(read_only=False):
                             * libvirt
                             * xenapi
                             * vmwareapi
+                            * baremetal
+
     """
-    # TODO(termie): maybe lazy load after initial check for permissions
-    # TODO(termie): check whether we can be disconnected
-    t = FLAGS.connection_type
-    if t == 'fake':
-        conn = fake.get_connection(read_only)
-    elif t == 'libvirt':
-        conn = libvirt_conn.get_connection(read_only)
-    elif t == 'xenapi':
-        conn = xenapi_conn.get_connection(read_only)
-    elif t == 'vmwareapi':
-        conn = vmwareapi_conn.get_connection(read_only)
-    elif t == 'baremetal':
-        conn = proxy.get_connection(read_only)
-    else:
-        raise Exception('Unknown connection type "%s"' % t)
+    deprecated.warn(_('Specifying virt driver via connection_type is '
+                      'deprecated. Use compute_driver=classname instead.'))
+
+    driver_name = known_drivers.get(FLAGS.connection_type)
+
+    if driver_name is None:
+        raise exception.VirtDriverNotFound(name=FLAGS.connection_type)
+
+    conn = importutils.import_object_ns('nova.virt', driver_name,
+                                        read_only=read_only)
 
     if conn is None:
-        LOG.error(_('Failed to open connection to the hypervisor'))
+        LOG.error(_('Failed to open connection to underlying virt platform'))
         sys.exit(1)
     return utils.check_isinstance(conn, driver.ComputeDriver)

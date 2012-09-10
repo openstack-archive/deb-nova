@@ -304,9 +304,6 @@ def stub_out_db_network_api(stubs):
         return [FakeModel(n) for n in networks
                 if n['project_id'] == project_id]
 
-    def fake_queue_get_for(context, topic, node):
-        return "%s.%s" % (topic, node)
-
     funcs = [fake_floating_ip_allocate_address,
              fake_floating_ip_deallocate,
              fake_floating_ip_disassociate,
@@ -335,8 +332,7 @@ def stub_out_db_network_api(stubs):
              fake_network_get_all_by_instance,
              fake_network_set_host,
              fake_network_update,
-             fake_project_get_networks,
-             fake_queue_get_for]
+             fake_project_get_networks]
 
     stub_out(stubs, funcs)
 
@@ -348,6 +344,7 @@ def stub_out_db_instance_api(stubs, injected=True):
         'm1.tiny': dict(id=2,
                         memory_mb=512,
                         vcpus=1,
+                        vcpu_weight=None,
                         root_gb=0,
                         ephemeral_gb=10,
                         flavorid=1,
@@ -356,6 +353,7 @@ def stub_out_db_instance_api(stubs, injected=True):
         'm1.small': dict(id=5,
                          memory_mb=2048,
                          vcpus=1,
+                         vcpu_weight=None,
                          root_gb=20,
                          ephemeral_gb=0,
                          flavorid=2,
@@ -365,6 +363,7 @@ def stub_out_db_instance_api(stubs, injected=True):
             dict(id=1,
                  memory_mb=4096,
                  vcpus=2,
+                 vcpu_weight=None,
                  root_gb=40,
                  ephemeral_gb=40,
                  flavorid=3,
@@ -373,6 +372,7 @@ def stub_out_db_instance_api(stubs, injected=True):
         'm1.large': dict(id=3,
                          memory_mb=8192,
                          vcpus=4,
+                         vcpu_weight=None,
                          root_gb=80,
                          ephemeral_gb=80,
                          flavorid=4,
@@ -382,6 +382,7 @@ def stub_out_db_instance_api(stubs, injected=True):
             dict(id=4,
                  memory_mb=16384,
                  vcpus=8,
+                 vcpu_weight=None,
                  root_gb=160,
                  ephemeral_gb=160,
                  flavorid=5,

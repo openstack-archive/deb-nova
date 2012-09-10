@@ -19,8 +19,8 @@ import os
 import socket
 from xml.dom import minidom
 
-from webob import exc
 import webob
+from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack.compute import ips
@@ -31,18 +31,14 @@ from nova import compute
 from nova.compute import instance_types
 from nova import exception
 from nova import flags
-from nova import log as logging
-from nova.rpc import common as rpc_common
+from nova.openstack.common import log as logging
+from nova.openstack.common.rpc import common as rpc_common
+from nova.openstack.common import timeutils
 from nova import utils
 
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
-
-
-class SecurityGroupsTemplateElement(xmlutil.TemplateElement):
-    def will_render(self, datum):
-        return 'security_groups' in datum
 
 
 def make_fault(elem):
@@ -89,13 +85,6 @@ def make_server(elem, detailed=False):
         # Attach addresses node
         elem.append(ips.AddressesTemplate())
 
-        # Attach security groups node
-        secgrps = SecurityGroupsTemplateElement('security_groups')
-        elem.append(secgrps)
-        secgrp = xmlutil.SubTemplateElement(secgrps, 'security_group',
-                                            selector='security_groups')
-        secgrp.set('name')
-
     xmlutil.make_links(elem, 'links')
 
 
@@ -140,9 +129,7 @@ def FullServerTemplate():
 
 
 class CommonDeserializer(wsgi.MetadataXMLDeserializer):
-    """
-    Common deserializer to handle xml-formatted server create
-    requests.
+    """Common deserializer to handle xml-formatted server create requests.
 
     Handles standard server attributes as well as optional metadata
     and personality attributes
@@ -151,7 +138,7 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
     metadata_deserializer = common.MetadataXMLDeserializer()
 
     def _extract_personality(self, server_node):
-        """Marshal the personality attribute of a parsed request"""
+        """Marshal the personality attribute of a parsed request."""
         node = self.find_first_child_named(server_node, "personality")
         if node is not None:
             personality = []
@@ -166,7 +153,7 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
             return None
 
     def _extract_server(self, node):
-        """Marshal the server attribute of a parsed request"""
+        """Marshal the server attribute of a parsed request."""
         server = {}
         server_node = self.find_first_child_named(node, 'server')
 
@@ -199,7 +186,7 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         return server
 
     def _extract_networks(self, server_node):
-        """Marshal the networks attribute of a parsed request"""
+        """Marshal the networks attribute of a parsed request."""
         node = self.find_first_child_named(server_node, "networks")
         if node is not None:
             networks = []
@@ -210,13 +197,15 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
                     item["uuid"] = network_node.getAttribute("uuid")
                 if network_node.hasAttribute("fixed_ip"):
                     item["fixed_ip"] = network_node.getAttribute("fixed_ip")
+                if network_node.hasAttribute("port"):
+                    item["port"] = network_node.getAttribute("port")
                 networks.append(item)
             return networks
         else:
             return None
 
     def _extract_security_groups(self, server_node):
-        """Marshal the security_groups attribute of a parsed request"""
+        """Marshal the security_groups attribute of a parsed request."""
         node = self.find_first_child_named(server_node, "security_groups")
         if node is not None:
             security_groups = []
@@ -232,8 +221,7 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
 
 
 class ActionDeserializer(CommonDeserializer):
-    """
-    Deserializer to handle xml-formatted server action requests.
+    """Deserializer to handle xml-formatted server action requests.
 
     Handles standard server attributes as well as optional metadata
     and personality attributes
@@ -274,7 +262,10 @@ class ActionDeserializer(CommonDeserializer):
     def _action_rebuild(self, node):
         rebuild = {}
         if node.hasAttribute("name"):
-            rebuild['name'] = node.getAttribute("name")
+            name = node.getAttribute("name")
+            if not name:
+                raise AttributeError("Name cannot be blank")
+            rebuild['name'] = name
 
         if node.hasAttribute("auto_disk_config"):
             rebuild['auto_disk_config'] = node.getAttribute("auto_disk_config")
@@ -327,22 +318,21 @@ class ActionDeserializer(CommonDeserializer):
 
 
 class CreateDeserializer(CommonDeserializer):
-    """
-    Deserializer to handle xml-formatted server create requests.
+    """Deserializer to handle xml-formatted server create requests.
 
     Handles standard server attributes as well as optional metadata
     and personality attributes
     """
 
     def default(self, string):
-        """Deserialize an xml-formatted server create request"""
+        """Deserialize an xml-formatted server create request."""
         dom = minidom.parseString(string)
         server = self._extract_server(dom)
         return {'body': {'server': server}}
 
 
 class Controller(wsgi.Controller):
-    """ The Server API base controller class for the OpenStack API """
+    """The Server API base controller class for the OpenStack API."""
 
     _view_builder_class = views_servers.ViewBuilder
 
@@ -360,13 +350,14 @@ class Controller(wsgi.Controller):
         # Convenience return
         return robj
 
-    def __init__(self, **kwargs):
+    def __init__(self, ext_mgr=None, **kwargs):
         super(Controller, self).__init__(**kwargs)
         self.compute_api = compute.API()
+        self.ext_mgr = ext_mgr
 
     @wsgi.serializers(xml=MinimalServersTemplate)
     def index(self, req):
-        """ Returns a list of server names and ids for a given user """
+        """Returns a list of server names and ids for a given user."""
         try:
             servers = self._get_servers(req, is_detail=False)
         except exception.Invalid as err:
@@ -377,7 +368,7 @@ class Controller(wsgi.Controller):
 
     @wsgi.serializers(xml=ServersTemplate)
     def detail(self, req):
-        """ Returns a list of server details for a given user """
+        """Returns a list of server details for a given user."""
         try:
             servers = self._get_servers(req, is_detail=True)
         except exception.Invalid as err:
@@ -385,12 +376,6 @@ class Controller(wsgi.Controller):
         except exception.NotFound as err:
             raise exc.HTTPNotFound()
         return servers
-
-    def _get_block_device_mapping(self, data):
-        """Get block_device_mapping from 'server' dictionary.
-        Overridden by volumes controller.
-        """
-        return None
 
     def _add_instance_faults(self, ctxt, instances):
         faults = self.compute_api.get_instance_faults(ctxt, instances)
@@ -405,9 +390,7 @@ class Controller(wsgi.Controller):
         return instances
 
     def _get_servers(self, req, is_detail):
-        """Returns a list of servers, taking into account any search
-        options specified.
-        """
+        """Returns a list of servers, based on any search options specified."""
 
         search_opts = {}
         search_opts.update(req.GET)
@@ -428,7 +411,7 @@ class Controller(wsgi.Controller):
 
         if 'changes-since' in search_opts:
             try:
-                parsed = utils.parse_isotime(search_opts['changes-since'])
+                parsed = timeutils.parse_isotime(search_opts['changes-since'])
             except ValueError:
                 msg = _('Invalid changes-since value')
                 raise exc.HTTPBadRequest(explanation=msg)
@@ -462,46 +445,27 @@ class Controller(wsgi.Controller):
         limited_list = self._limit_items(instance_list, req)
         if is_detail:
             self._add_instance_faults(context, limited_list)
-            return self._view_builder.detail(req, limited_list)
+            response = self._view_builder.detail(req, limited_list)
         else:
-            return self._view_builder.index(req, limited_list)
+            response = self._view_builder.index(req, limited_list)
+        req.cache_db_instances(limited_list)
+        return response
 
-    def _get_server(self, context, instance_uuid):
-        """Utility function for looking up an instance by uuid"""
+    def _get_server(self, context, req, instance_uuid):
+        """Utility function for looking up an instance by uuid."""
         try:
-            return self.compute_api.get(context, instance_uuid)
+            instance = self.compute_api.get(context, instance_uuid)
         except exception.NotFound:
             raise exc.HTTPNotFound()
-
-    def _handle_quota_error(self, error):
-        """
-        Reraise quota errors as api-specific http exceptions
-        """
-
-        code_mappings = {
-            "OnsetFileLimitExceeded":
-                    _("Personality file limit exceeded"),
-            "OnsetFilePathLimitExceeded":
-                    _("Personality file path too long"),
-            "OnsetFileContentLimitExceeded":
-                    _("Personality file content too long"),
-
-            # NOTE(bcwaldon): expose the message generated below in order
-            # to better explain how the quota was exceeded
-            "InstanceLimitExceeded": error.message,
-        }
-
-        code = error.kwargs['code']
-        expl = code_mappings.get(code, error.message) % error.kwargs
-        raise exc.HTTPRequestEntityTooLarge(explanation=expl,
-                                            headers={'Retry-After': 0})
+        req.cache_db_instance(instance)
+        return instance
 
     def _validate_server_name(self, value):
         if not isinstance(value, basestring):
             msg = _("Server name is not a string or unicode")
             raise exc.HTTPBadRequest(explanation=msg)
 
-        if value.strip() == '':
+        if not value.strip():
             msg = _("Server name is an empty string")
             raise exc.HTTPBadRequest(explanation=msg)
 
@@ -510,8 +474,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
 
     def _get_injected_files(self, personality):
-        """
-        Create a list of injected files from the personality attribute
+        """Create a list of injected files from the personality attribute.
 
         At this time, injected_files must be formatted as a list of
         (file_path, file_content) pairs for compatibility with the
@@ -537,19 +500,37 @@ class Controller(wsgi.Controller):
             injected_files.append((path, contents))
         return injected_files
 
+    def _is_quantum_v2(self):
+        return FLAGS.network_api_class ==\
+            "nova.network.quantumv2.api.API"
+
     def _get_requested_networks(self, requested_networks):
-        """
-        Create a list of requested networks from the networks attribute
-        """
+        """Create a list of requested networks from the networks attribute."""
         networks = []
         for network in requested_networks:
             try:
-                network_uuid = network['uuid']
+                port_id = network.get('port', None)
+                if port_id:
+                    network_uuid = None
+                    if not self._is_quantum_v2():
+                        # port parameter is only for qunatum v2.0
+                        msg = _("Unknown argment : port")
+                        raise exc.HTTPBadRequest(explanation=msg)
+                    if not utils.is_uuid_like(port_id):
+                        msg = _("Bad port format: port uuid is "
+                                "not in proper format "
+                                "(%s)") % port_id
+                        raise exc.HTTPBadRequest(explanation=msg)
+                else:
+                    network_uuid = network['uuid']
 
-                if not utils.is_uuid_like(network_uuid):
-                    msg = _("Bad networks format: network uuid is not in"
-                         " proper format (%s)") % network_uuid
-                    raise exc.HTTPBadRequest(explanation=msg)
+                if not port_id and not utils.is_uuid_like(network_uuid):
+                    br_uuid = network_uuid.split('-', 1)[-1]
+                    if not utils.is_uuid_like(br_uuid):
+                        msg = _("Bad networks format: network uuid is "
+                                "not in proper format "
+                                "(%s)") % network_uuid
+                        raise exc.HTTPBadRequest(explanation=msg)
 
                 #fixed IP address is optional
                 #if the fixed IP address is not provided then
@@ -558,16 +539,22 @@ class Controller(wsgi.Controller):
                 if address is not None and not utils.is_valid_ipv4(address):
                     msg = _("Invalid fixed IP address (%s)") % address
                     raise exc.HTTPBadRequest(explanation=msg)
-                # check if the network id is already present in the list,
-                # we don't want duplicate networks to be passed
-                # at the boot time
-                for id, ip in networks:
-                    if id == network_uuid:
-                        expl = (_("Duplicate networks (%s) are not allowed") %
-                                network_uuid)
-                        raise exc.HTTPBadRequest(explanation=expl)
 
-                networks.append((network_uuid, address))
+                # For quantumv2, requestd_networks
+                # should be tuple of (network_uuid, fixed_ip, port_id)
+                if self._is_quantum_v2():
+                    networks.append((network_uuid, address, port_id))
+                else:
+                    # check if the network id is already present in the list,
+                    # we don't want duplicate networks to be passed
+                    # at the boot time
+                    for id, ip in networks:
+                        if id == network_uuid:
+                            expl = (_("Duplicate networks"
+                                      " (%s) are not allowed") %
+                                    network_uuid)
+                            raise exc.HTTPBadRequest(explanation=expl)
+                    networks.append((network_uuid, address))
             except KeyError as key:
                 expl = _('Bad network format: missing %s') % key
                 raise exc.HTTPBadRequest(explanation=expl)
@@ -578,7 +565,7 @@ class Controller(wsgi.Controller):
         return networks
 
     def _validate_user_data(self, user_data):
-        """Check if the user_data is encoded properly"""
+        """Check if the user_data is encoded properly."""
         if not user_data:
             return
         try:
@@ -603,10 +590,11 @@ class Controller(wsgi.Controller):
 
     @wsgi.serializers(xml=ServerTemplate)
     def show(self, req, id):
-        """ Returns server details by server id """
+        """Returns server details by server id."""
         try:
             context = req.environ['nova.context']
             instance = self.compute_api.get(context, id)
+            req.cache_db_instance(instance)
             self._add_instance_faults(context, [instance])
             return self._view_builder.show(req, instance)
         except exception.NotFound:
@@ -616,7 +604,7 @@ class Controller(wsgi.Controller):
     @wsgi.serializers(xml=FullServerTemplate)
     @wsgi.deserializers(xml=CreateDeserializer)
     def create(self, req, body):
-        """ Creates a new server for a given user """
+        """Creates a new server for a given user."""
         if not body:
             raise exc.HTTPUnprocessableEntity()
 
@@ -641,25 +629,32 @@ class Controller(wsgi.Controller):
         image_href = self._image_uuid_from_href(image_href)
 
         personality = server_dict.get('personality')
-        config_drive = server_dict.get('config_drive')
+        config_drive = None
+        if self.ext_mgr.is_loaded('os-config-drive'):
+            config_drive = server_dict.get('config_drive')
 
         injected_files = []
         if personality:
             injected_files = self._get_injected_files(personality)
 
         sg_names = []
-        security_groups = server_dict.get('security_groups')
-        if security_groups is not None:
-            sg_names = [sg['name'] for sg in security_groups if sg.get('name')]
+        if self.ext_mgr.is_loaded('os-security-groups'):
+            security_groups = server_dict.get('security_groups')
+            if security_groups is not None:
+                sg_names = [sg['name'] for sg in security_groups
+                            if sg.get('name')]
         if not sg_names:
             sg_names.append('default')
 
         sg_names = list(set(sg_names))
 
-        requested_networks = server_dict.get('networks')
+        requested_networks = None
+        if self.ext_mgr.is_loaded('os-networks'):
+            requested_networks = server_dict.get('networks')
+
         if requested_networks is not None:
             requested_networks = self._get_requested_networks(
-                                                    requested_networks)
+                requested_networks)
 
         (access_ip_v4, ) = server_dict.get('accessIPv4'),
         if access_ip_v4 is not None:
@@ -676,35 +671,65 @@ class Controller(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
 
         # optional openstack extensions:
-        key_name = server_dict.get('key_name')
-        user_data = server_dict.get('user_data')
+        key_name = None
+        if self.ext_mgr.is_loaded('os-keypairs'):
+            key_name = server_dict.get('key_name')
+
+        user_data = None
+        if self.ext_mgr.is_loaded('os-user-data'):
+            user_data = server_dict.get('user_data')
         self._validate_user_data(user_data)
 
-        availability_zone = server_dict.get('availability_zone')
-        name = server_dict['name']
-        self._validate_server_name(name)
-        name = name.strip()
+        availability_zone = None
+        if self.ext_mgr.is_loaded('os-availability-zone'):
+            availability_zone = server_dict.get('availability_zone')
 
-        block_device_mapping = self._get_block_device_mapping(server_dict)
+        block_device_mapping = None
+        if self.ext_mgr.is_loaded('os-volumes'):
+            block_device_mapping = server_dict.get('block_device_mapping')
 
-        ret_resv_id = server_dict.get('return_reservation_id', False)
-
-        min_count = server_dict.get('min_count')
-        max_count = server_dict.get('max_count')
-        # min_count and max_count are optional.  If they exist, they come
-        # in as strings.  We want to default 'min_count' to 1, and default
+        ret_resv_id = False
+        # min_count and max_count are optional.  If they exist, they may come
+        # in as strings.  Verify that they are valid integers and > 0.
+        # Also, we want to default 'min_count' to 1, and default
         # 'max_count' to be 'min_count'.
-        min_count = int(min_count) if min_count else 1
-        max_count = int(max_count) if max_count else min_count
-        if min_count > max_count:
-            min_count = max_count
+        min_count = 1
+        max_count = 1
+        if self.ext_mgr.is_loaded('os-multiple-create'):
+            ret_resv_id = server_dict.get('return_reservation_id', False)
+            min_count = server_dict.get('min_count', 1)
+            max_count = server_dict.get('max_count', min_count)
 
-        auto_disk_config = server_dict.get('auto_disk_config')
-        scheduler_hints = server_dict.get('scheduler_hints', {})
+        try:
+            min_count = int(min_count)
+        except ValueError:
+            raise webob.exc.HTTPBadRequest(_('min_count must be an '
+                                             'integer value'))
+        if min_count < 1:
+            raise webob.exc.HTTPBadRequest(_('min_count must be > 0'))
+
+        try:
+            max_count = int(max_count)
+        except ValueError:
+            raise webob.exc.HTTPBadRequest(_('max_count must be an '
+                                             'integer value'))
+        if max_count < 1:
+            raise webob.exc.HTTPBadRequest(_('max_count must be > 0'))
+
+        if min_count > max_count:
+            raise webob.exc.HTTPBadRequest(_('min_count must be <= max_count'))
+
+        auto_disk_config = False
+        if self.ext_mgr.is_loaded('OS-DCF'):
+            auto_disk_config = server_dict.get('auto_disk_config')
+
+        scheduler_hints = {}
+        if self.ext_mgr.is_loaded('os-scheduler-hints'):
+            scheduler_hints = server_dict.get('scheduler_hints', {})
 
         try:
             _get_inst_type = instance_types.get_instance_type_by_flavor_id
-            inst_type = _get_inst_type(flavor_id)
+            inst_type = _get_inst_type(flavor_id, read_deleted="no")
 
             (instances, resv_id) = self.compute_api.create(context,
                             inst_type,
@@ -728,10 +753,15 @@ class Controller(wsgi.Controller):
                             auto_disk_config=auto_disk_config,
                             scheduler_hints=scheduler_hints)
         except exception.QuotaError as error:
-            self._handle_quota_error(error)
+            raise exc.HTTPRequestEntityTooLarge(explanation=unicode(error),
+                                                headers={'Retry-After': 0})
         except exception.InstanceTypeMemoryTooSmall as error:
             raise exc.HTTPBadRequest(explanation=unicode(error))
+        except exception.InstanceTypeNotFound as error:
+            raise exc.HTTPBadRequest(explanation=unicode(error))
         except exception.InstanceTypeDiskTooSmall as error:
+            raise exc.HTTPBadRequest(explanation=unicode(error))
+        except exception.InvalidMetadata as error:
             raise exc.HTTPBadRequest(explanation=unicode(error))
         except exception.ImageNotFound as error:
             msg = _("Can not find requested image")
@@ -754,6 +784,7 @@ class Controller(wsgi.Controller):
         if ret_resv_id:
             return {'reservation_id': resv_id}
 
+        req.cache_db_instances(instances)
         server = self._view_builder.create(req, instances[0])
 
         if '_is_precooked' in server['server'].keys():
@@ -766,8 +797,8 @@ class Controller(wsgi.Controller):
 
         return self._add_location(robj)
 
-    def _delete(self, context, id):
-        instance = self._get_server(context, id)
+    def _delete(self, context, req, instance_uuid):
+        instance = self._get_server(context, req, instance_uuid)
         if FLAGS.reclaim_instance_interval:
             self.compute_api.soft_delete(context, instance)
         else:
@@ -775,7 +806,7 @@ class Controller(wsgi.Controller):
 
     @wsgi.serializers(xml=ServerTemplate)
     def update(self, req, id, body):
-        """Update server then pass on to version-specific controller"""
+        """Update server then pass on to version-specific controller."""
         if len(req.body) == 0:
             raise exc.HTTPUnprocessableEntity()
 
@@ -792,12 +823,18 @@ class Controller(wsgi.Controller):
 
         if 'accessIPv4' in body['server']:
             access_ipv4 = body['server']['accessIPv4']
-            self._validate_access_ipv4(access_ipv4)
+            if access_ipv4 is None:
+                access_ipv4 = ''
+            if access_ipv4:
+                self._validate_access_ipv4(access_ipv4)
             update_dict['access_ip_v4'] = access_ipv4.strip()
 
         if 'accessIPv6' in body['server']:
             access_ipv6 = body['server']['accessIPv6']
-            self._validate_access_ipv6(access_ipv6)
+            if access_ipv6 is None:
+                access_ipv6 = ''
+            if access_ipv6:
+                self._validate_access_ipv6(access_ipv6)
             update_dict['access_ip_v6'] = access_ipv6.strip()
 
         if 'auto_disk_config' in body['server']:
@@ -805,8 +842,13 @@ class Controller(wsgi.Controller):
                     body['server']['auto_disk_config'])
             update_dict['auto_disk_config'] = auto_disk_config
 
+        if 'hostId' in body['server']:
+            msg = _("HostId cannot be updated.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
         try:
             instance = self.compute_api.get(ctxt, id)
+            req.cache_db_instance(instance)
             self.compute_api.update(ctxt, instance, **update_dict)
         except exception.NotFound:
             raise exc.HTTPNotFound()
@@ -822,7 +864,7 @@ class Controller(wsgi.Controller):
     @wsgi.action('confirmResize')
     def _action_confirm_resize(self, req, id, body):
         context = req.environ['nova.context']
-        instance = self._get_server(context, id)
+        instance = self._get_server(context, req, id)
         try:
             self.compute_api.confirm_resize(context, instance)
         except exception.MigrationNotFound:
@@ -842,7 +884,7 @@ class Controller(wsgi.Controller):
     @wsgi.action('revertResize')
     def _action_revert_resize(self, req, id, body):
         context = req.environ['nova.context']
-        instance = self._get_server(context, id)
+        instance = self._get_server(context, req, id)
         try:
             self.compute_api.revert_resize(context, instance)
         except exception.MigrationNotFound:
@@ -874,7 +916,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
 
         context = req.environ['nova.context']
-        instance = self._get_server(context, id)
+        instance = self._get_server(context, req, id)
 
         try:
             self.compute_api.reboot(context, instance, reboot_type)
@@ -882,14 +924,14 @@ class Controller(wsgi.Controller):
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'reboot')
         except Exception, e:
-            LOG.exception(_("Error in reboot %s"), e)
+            LOG.exception(_("Error in reboot %s"), e, instance=instance)
             raise exc.HTTPUnprocessableEntity()
         return webob.Response(status_int=202)
 
     def _resize(self, req, instance_id, flavor_id, **kwargs):
         """Begin the resize process with given instance/flavor."""
         context = req.environ["nova.context"]
-        instance = self._get_server(context, instance_id)
+        instance = self._get_server(context, req, instance_id)
 
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
@@ -907,9 +949,9 @@ class Controller(wsgi.Controller):
 
     @wsgi.response(204)
     def delete(self, req, id):
-        """ Destroys a server """
+        """Destroys a server."""
         try:
-            self._delete(req.environ['nova.context'], id)
+            self._delete(req.environ['nova.context'], req, id)
         except exception.NotFound:
             raise exc.HTTPNotFound()
         except exception.InstanceInvalidState as state_error:
@@ -962,10 +1004,10 @@ class Controller(wsgi.Controller):
             msg = _("No adminPass was specified")
             raise exc.HTTPBadRequest(explanation=msg)
         password = body['changePassword']['adminPass']
-        if not isinstance(password, basestring) or password == '':
+        if not isinstance(password, basestring):
             msg = _("Invalid adminPass")
             raise exc.HTTPBadRequest(explanation=msg)
-        server = self._get_server(context, id)
+        server = self._get_server(context, req, id)
         self.compute_api.set_admin_password(context, server, password)
         return webob.Response(status_int=202)
 
@@ -986,7 +1028,7 @@ class Controller(wsgi.Controller):
     @wsgi.deserializers(xml=ActionDeserializer)
     @wsgi.action('resize')
     def _action_resize(self, req, id, body):
-        """ Resizes a given instance to the flavor size requested """
+        """Resizes a given instance to the flavor size requested."""
         try:
             flavor_ref = body["resize"]["flavorRef"]
             if not flavor_ref:
@@ -1007,7 +1049,7 @@ class Controller(wsgi.Controller):
     @wsgi.deserializers(xml=ActionDeserializer)
     @wsgi.action('rebuild')
     def _action_rebuild(self, req, id, body):
-        """Rebuild an instance with the given attributes"""
+        """Rebuild an instance with the given attributes."""
         try:
             body = body['rebuild']
         except (KeyError, TypeError):
@@ -1027,7 +1069,7 @@ class Controller(wsgi.Controller):
             password = utils.generate_password(FLAGS.password_length)
 
         context = req.environ['nova.context']
-        instance = self._get_server(context, id)
+        instance = self._get_server(context, req, id)
 
         attr_map = {
             'personality': 'files_to_inject',
@@ -1043,6 +1085,9 @@ class Controller(wsgi.Controller):
 
         if 'accessIPv6' in body:
             self._validate_access_ipv6(body['accessIPv6'])
+
+        if 'name' in body:
+            self._validate_server_name(body['name'])
 
         kwargs = {}
 
@@ -1070,11 +1115,17 @@ class Controller(wsgi.Controller):
         except exception.InstanceNotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
+        except exception.InvalidMetadata as error:
+            raise exc.HTTPBadRequest(explanation=unicode(error))
         except exception.ImageNotFound:
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceTypeMemoryTooSmall as error:
+            raise exc.HTTPBadRequest(explanation=unicode(error))
+        except exception.InstanceTypeDiskTooSmall as error:
+            raise exc.HTTPBadRequest(explanation=unicode(error))
 
-        instance = self._get_server(context, id)
+        instance = self._get_server(context, req, id)
 
         self._add_instance_faults(context, [instance])
         view = self._view_builder.show(req, instance)
@@ -1105,14 +1156,14 @@ class Controller(wsgi.Controller):
 
         props = {}
         metadata = entity.get('metadata', {})
-        common.check_img_metadata_quota_limit(context, metadata)
+        common.check_img_metadata_properties_quota(context, metadata)
         try:
             props.update(metadata)
         except ValueError:
             msg = _("Invalid metadata")
             raise exc.HTTPBadRequest(explanation=msg)
 
-        instance = self._get_server(context, id)
+        instance = self._get_server(context, req, id)
 
         try:
             image = self.compute_api.snapshot(context,
@@ -1135,28 +1186,33 @@ class Controller(wsgi.Controller):
         return resp
 
     def _get_server_admin_password(self, server):
-        """ Determine the admin password for a server on creation """
-        password = server.get('adminPass')
+        """Determine the admin password for a server on creation."""
+        try:
+            password = server['adminPass']
+            self._validate_admin_password(password)
+        except KeyError:
+            password = utils.generate_password(FLAGS.password_length)
+        except ValueError:
+            raise exc.HTTPBadRequest(explanation=_("Invalid adminPass"))
 
-        if password is None:
-            return utils.generate_password(FLAGS.password_length)
-        if not isinstance(password, basestring) or password == '':
-            msg = _("Invalid adminPass")
-            raise exc.HTTPBadRequest(explanation=msg)
         return password
 
+    def _validate_admin_password(self, password):
+        if not isinstance(password, basestring):
+            raise ValueError()
+
     def _get_server_search_options(self):
-        """Return server search options allowed by non-admin"""
+        """Return server search options allowed by non-admin."""
         return ('reservation_id', 'name', 'status', 'image', 'flavor',
                 'changes-since')
 
 
-def create_resource():
-    return wsgi.Resource(Controller())
+def create_resource(ext_mgr):
+    return wsgi.Resource(Controller(ext_mgr))
 
 
 def remove_invalid_options(context, search_options, allowed_search_options):
-    """Remove search options that are not valid for non-admin API/context"""
+    """Remove search options that are not valid for non-admin API/context."""
     if context.is_admin:
         # Allow all options
         return

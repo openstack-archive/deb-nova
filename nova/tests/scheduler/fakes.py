@@ -18,9 +18,9 @@ Fakes For Scheduler tests.
 
 import mox
 
-from nova import db
 from nova.compute import instance_types
 from nova.compute import vm_states
+from nova import db
 from nova.scheduler import filter_scheduler
 from nova.scheduler import host_manager
 
@@ -86,14 +86,6 @@ class FakeHostManager(host_manager.HostManager):
             },
         }
 
-    def get_host_list_from_db(self, context):
-        return [
-            ('host1', dict(free_disk_gb=1024, free_ram_mb=1024)),
-            ('host2', dict(free_disk_gb=2048, free_ram_mb=2048)),
-            ('host3', dict(free_disk_gb=4096, free_ram_mb=4096)),
-            ('host4', dict(free_disk_gb=8192, free_ram_mb=8192)),
-        ]
-
 
 class FakeHostState(host_manager.HostState):
     def __init__(self, host, topic, attribute_dict):
@@ -139,4 +131,5 @@ def mox_host_manager_db_calls(mock, context):
     mock.StubOutWithMock(db, 'instance_get_all')
 
     db.compute_node_get_all(mox.IgnoreArg()).AndReturn(COMPUTE_NODES)
-    db.instance_get_all(mox.IgnoreArg()).AndReturn(INSTANCES)
+    db.instance_get_all(mox.IgnoreArg(),
+            columns_to_join=['instance_type']).AndReturn(INSTANCES)

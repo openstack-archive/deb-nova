@@ -15,13 +15,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import unittest
 import time
+import unittest
 
+from nova.openstack.common.log import logging
 from nova import service
-from nova.log import logging
-from nova.tests.integrated import integrated_helpers
 from nova.tests.integrated.api import client
+from nova.tests.integrated import integrated_helpers
 from nova.volume import driver
 
 
@@ -118,29 +118,29 @@ class VolumesTest(integrated_helpers._IntegratedTestBase):
 
         create_actions = driver.LoggingVolumeDriver.logs_like(
                             'create_volume',
-                            id=int(created_volume_id))
+                            id=created_volume_id)
         LOG.debug("Create_Actions: %s" % create_actions)
 
         self.assertEquals(1, len(create_actions))
         create_action = create_actions[0]
-        self.assertEquals(create_action['id'], int(created_volume_id))
+        self.assertEquals(create_action['id'], created_volume_id)
         self.assertEquals(create_action['availability_zone'], 'nova')
         self.assertEquals(create_action['size'], 1)
 
         export_actions = driver.LoggingVolumeDriver.logs_like(
                             'create_export',
-                            id=int(created_volume_id))
+                            id=created_volume_id)
         self.assertEquals(1, len(export_actions))
         export_action = export_actions[0]
-        self.assertEquals(export_action['id'], int(created_volume_id))
+        self.assertEquals(export_action['id'], created_volume_id)
         self.assertEquals(export_action['availability_zone'], 'nova')
 
         delete_actions = driver.LoggingVolumeDriver.logs_like(
                             'delete_volume',
-                            id=int(created_volume_id))
+                            id=created_volume_id)
         self.assertEquals(1, len(delete_actions))
         delete_action = export_actions[0]
-        self.assertEquals(delete_action['id'], int(created_volume_id))
+        self.assertEquals(delete_action['id'], created_volume_id)
 
     def test_create_volume_with_metadata(self):
         """Creates a volume with metadata."""

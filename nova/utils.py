@@ -25,8 +25,6 @@ import errno
 import functools
 import hashlib
 import inspect
-import itertools
-import json
 import os
 import pyclbr
 import random
@@ -39,78 +37,33 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import uuid
-import warnings
+import weakref
 from xml.sax import saxutils
 
 from eventlet import corolocal
 from eventlet import event
+from eventlet.green import subprocess
 from eventlet import greenthread
 from eventlet import semaphore
-from eventlet.green import subprocess
-import iso8601
-import lockfile
 import netaddr
 
+from nova.common import deprecated
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import excutils
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 
 
 LOG = logging.getLogger(__name__)
-ISO_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
-PERFECT_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f"
 FLAGS = flags.FLAGS
 
 FLAGS.register_opt(
     cfg.BoolOpt('disable_process_locking', default=False,
                 help='Whether to disable inter-process locks'))
-
-
-def import_class(import_str):
-    """Returns a class from a string including module and class."""
-    mod_str, _sep, class_str = import_str.rpartition('.')
-    try:
-        __import__(mod_str)
-        return getattr(sys.modules[mod_str], class_str)
-    except (ImportError, ValueError, AttributeError), exc:
-        LOG.debug(_('Inner Exception: %s'), exc)
-        raise exception.ClassNotFound(class_name=class_str, exception=exc)
-
-
-def import_object(import_str):
-    """Returns an object including a module or module and class."""
-    try:
-        __import__(import_str)
-        return sys.modules[import_str]
-    except ImportError:
-        cls = import_class(import_str)
-        return cls()
-
-
-def find_config(config_path):
-    """Find a configuration file using the given hint.
-
-    :param config_path: Full or relative path to the config.
-    :returns: Full path of the config, if it exists.
-    :raises: `nova.exception.ConfigNotFound`
-
-    """
-    possible_locations = [
-        config_path,
-        os.path.join(FLAGS.state_path, "etc", "nova", config_path),
-        os.path.join(FLAGS.state_path, "etc", config_path),
-        os.path.join(FLAGS.state_path, config_path),
-        "/etc/nova/%s" % config_path,
-    ]
-
-    for path in possible_locations:
-        if os.path.exists(path):
-            return os.path.abspath(path)
-
-    raise exception.ConfigNotFound(path=os.path.abspath(config_path))
 
 
 def vpn_ping(address, port, timeout=0.05, session_id=None):
@@ -161,16 +114,11 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
         return server_sess
 
 
-def fetchfile(url, target):
-    LOG.debug(_('Fetching %s') % url)
-    execute('curl', '--fail', url, '-o', target)
-
-
 def execute(*cmd, **kwargs):
     """Helper method to execute command with optional retry.
 
     If you add a run_as_root=True command, don't forget to add the
-    corresponding filter to nova.rootwrap !
+    corresponding filter to etc/nova/rootwrap.d !
 
     :param cmd:                Passed to subprocess.Popen.
     :param process_input:      Send to opened process.
@@ -186,13 +134,12 @@ def execute(*cmd, **kwargs):
                                the command is prefixed by the command specified
                                in the root_helper FLAG.
 
-    :raises exception.Error: on receiving unknown arguments
+    :raises exception.NovaException: on receiving unknown arguments
     :raises exception.ProcessExecutionError:
 
     :returns: a tuple, (stdout, stderr) from the spawned process, or None if
              the command fails.
     """
-
     process_input = kwargs.pop('process_input', None)
     check_exit_code = kwargs.pop('check_exit_code', [0])
     ignore_exit_code = False
@@ -207,11 +154,22 @@ def execute(*cmd, **kwargs):
     shell = kwargs.pop('shell', False)
 
     if len(kwargs):
-        raise exception.Error(_('Got unknown keyword args '
-                                'to utils.execute: %r') % kwargs)
+        raise exception.NovaException(_('Got unknown keyword args '
+                                        'to utils.execute: %r') % kwargs)
 
     if run_as_root:
-        cmd = shlex.split(FLAGS.root_helper) + list(cmd)
+
+        if FLAGS.rootwrap_config is None or FLAGS.root_helper != 'sudo':
+            deprecated.warn(_('The root_helper option (which lets you specify '
+                              'a root wrapper different from nova-rootwrap, '
+                              'and defaults to using sudo) is now deprecated. '
+                              'You should use the rootwrap_config option '
+                              'instead.'))
+
+        if (FLAGS.rootwrap_config is not None):
+            cmd = ['sudo', 'nova-rootwrap', FLAGS.rootwrap_config] + list(cmd)
+        else:
+            cmd = shlex.split(FLAGS.root_helper) + list(cmd)
     cmd = map(str, cmd)
 
     while attempts > 0:
@@ -275,12 +233,10 @@ def trycmd(*args, **kwargs):
         failed = False
     except exception.ProcessExecutionError, exn:
         out, err = '', str(exn)
-        LOG.debug(err)
         failed = True
 
     if not failed and discard_warnings and err:
         # Handle commands that output to stderr but otherwise succeed
-        LOG.debug(err)
         err = ''
 
     return out, err
@@ -290,11 +246,12 @@ def ssh_execute(ssh, cmd, process_input=None,
                 addl_env=None, check_exit_code=True):
     LOG.debug(_('Running cmd (SSH): %s'), ' '.join(cmd))
     if addl_env:
-        raise exception.Error(_('Environment not supported over SSH'))
+        raise exception.NovaException(_('Environment not supported over SSH'))
 
     if process_input:
         # This is (probably) fixable if we need it...
-        raise exception.Error(_('process_input not supported over SSH'))
+        msg = _('process_input not supported over SSH')
+        raise exception.NovaException(msg)
 
     stdin_stream, stdout_stream, stderr_stream = ssh.exec_command(cmd)
     channel = stdout_stream.channel
@@ -327,27 +284,6 @@ def novadir():
     return os.path.abspath(nova.__file__).split('nova/__init__.py')[0]
 
 
-def default_flagfile(filename='nova.conf', args=None):
-    if args is None:
-        args = sys.argv
-    for arg in args:
-        if arg.find('flagfile') != -1:
-            return arg[arg.index('flagfile') + len('flagfile') + 1:]
-    else:
-        if not os.path.isabs(filename):
-            # turn relative filename into an absolute path
-            script_dir = os.path.dirname(inspect.stack()[-1][1])
-            filename = os.path.abspath(os.path.join(script_dir, filename))
-        if not os.path.exists(filename):
-            filename = "./nova.conf"
-            if not os.path.exists(filename):
-                filename = '/etc/nova/nova.conf'
-        if os.path.exists(filename):
-            flagfile = '--flagfile=%s' % filename
-            args.insert(1, flagfile)
-            return filename
-
-
 def debug(arg):
     LOG.debug(_('debug in callback: %s'), arg)
     return arg
@@ -355,7 +291,7 @@ def debug(arg):
 
 def generate_uid(topic, size=8):
     characters = '01234567890abcdefghijklmnopqrstuvwxyz'
-    choices = [random.choice(characters) for x in xrange(size)]
+    choices = [random.choice(characters) for _x in xrange(size)]
     return '%s-%s' % (topic, ''.join(choices))
 
 
@@ -371,7 +307,7 @@ EASIER_PASSWORD_SYMBOLS = ('23456789',  # Removed: 0, 1
                            'ABCDEFGHJKLMNPQRSTUVWXYZ')  # Removed: I, O
 
 
-def current_audit_period(unit=None):
+def last_completed_audit_period(unit=None, before=None):
     """This method gives you the most recently *completed* audit period.
 
     arguments:
@@ -383,6 +319,8 @@ def current_audit_period(unit=None):
                     like so:  'day@18'  This will begin the period at 18:00
                     UTC.  'month@15' starts a monthly period on the 15th,
                     and year@3 begins a yearly one on March 1st.
+            before: Give the audit period most recently completed before
+                    <timestamp>. Defaults to now.
 
 
     returns:  2 tuple of datetimes (begin, end)
@@ -396,7 +334,10 @@ def current_audit_period(unit=None):
         unit, offset = unit.split("@", 1)
         offset = int(offset)
 
-    rightnow = utcnow()
+    if before is not None:
+        rightnow = before
+    else:
+        rightnow = timeutils.utcnow()
     if unit not in ('month', 'day', 'year', 'hour'):
         raise ValueError('Time period must be hour, day, month or year')
     if unit == 'month':
@@ -457,34 +398,6 @@ def current_audit_period(unit=None):
     return (begin, end)
 
 
-def usage_from_instance(instance_ref, network_info=None, **kw):
-    image_ref_url = "%s/images/%s" % (generate_glance_url(),
-            instance_ref['image_ref'])
-
-    usage_info = dict(
-          tenant_id=instance_ref['project_id'],
-          user_id=instance_ref['user_id'],
-          instance_id=instance_ref['uuid'],
-          instance_type=instance_ref['instance_type']['name'],
-          instance_type_id=instance_ref['instance_type_id'],
-          memory_mb=instance_ref['memory_mb'],
-          disk_gb=instance_ref['root_gb'] + instance_ref['ephemeral_gb'],
-          display_name=instance_ref['display_name'],
-          created_at=str(instance_ref['created_at']),
-          launched_at=str(instance_ref['launched_at'])
-                      if instance_ref['launched_at'] else '',
-          image_ref_url=image_ref_url,
-          state=instance_ref['vm_state'],
-          state_description=instance_ref['task_state']
-                            if instance_ref['task_state'] else '')
-
-    if network_info is not None:
-        usage_info['fixed_ips'] = network_info.fixed_ips()
-
-    usage_info.update(kw)
-    return usage_info
-
-
 def generate_password(length=20, symbolgroups=DEFAULT_PASSWORD_SYMBOLS):
     """Generate a random password from the supplied symbol groups.
 
@@ -531,88 +444,12 @@ def get_my_linklocal(interface):
         if address[0] is not None:
             return address[0]
         else:
-            raise exception.Error(_('Link Local address is not found.:%s')
-                                  % if_str)
+            msg = _('Link Local address is not found.:%s') % if_str
+            raise exception.NovaException(msg)
     except Exception as ex:
-        raise exception.Error(_("Couldn't get Link Local IP of %(interface)s"
-                                " :%(ex)s") % locals())
-
-
-def utcnow():
-    """Overridable version of utils.utcnow."""
-    if utcnow.override_time:
-        return utcnow.override_time
-    return datetime.datetime.utcnow()
-
-
-utcnow.override_time = None
-
-
-def is_older_than(before, seconds):
-    """Return True if before is older than seconds."""
-    return utcnow() - before > datetime.timedelta(seconds=seconds)
-
-
-def utcnow_ts():
-    """Timestamp version of our utcnow function."""
-    return time.mktime(utcnow().timetuple())
-
-
-def set_time_override(override_time=datetime.datetime.utcnow()):
-    """Override utils.utcnow to return a constant time."""
-    utcnow.override_time = override_time
-
-
-def advance_time_delta(timedelta):
-    """Advance overriden time using a datetime.timedelta."""
-    assert(not utcnow.override_time is None)
-    utcnow.override_time += timedelta
-
-
-def advance_time_seconds(seconds):
-    """Advance overriden time by seconds."""
-    advance_time_delta(datetime.timedelta(0, seconds))
-
-
-def clear_time_override():
-    """Remove the overridden time."""
-    utcnow.override_time = None
-
-
-def strtime(at=None, fmt=PERFECT_TIME_FORMAT):
-    """Returns formatted utcnow."""
-    if not at:
-        at = utcnow()
-    return at.strftime(fmt)
-
-
-def parse_strtime(timestr, fmt=PERFECT_TIME_FORMAT):
-    """Turn a formatted time back into a datetime."""
-    return datetime.datetime.strptime(timestr, fmt)
-
-
-def isotime(at=None):
-    """Stringify time in ISO 8601 format"""
-    if not at:
-        at = datetime.datetime.utcnow()
-    str = at.strftime(ISO_TIME_FORMAT)
-    tz = at.tzinfo.tzname(None) if at.tzinfo else 'UTC'
-    str += ('Z' if tz == 'UTC' else tz)
-    return str
-
-
-def parse_isotime(timestr):
-    """Turn an iso formatted time back into a datetime."""
-    try:
-        return iso8601.parse_date(timestr)
-    except (iso8601.ParseError, TypeError) as e:
-        raise ValueError(e.message)
-
-
-def normalize_time(timestamp):
-    """Normalize time in arbitrary timezone to UTC"""
-    offset = timestamp.utcoffset()
-    return timestamp.replace(tzinfo=None) - offset if offset else timestamp
+        msg = _("Couldn't get Link Local IP of %(interface)s"
+                " :%(ex)s") % locals()
+        raise exception.NovaException(msg)
 
 
 def parse_mailmap(mailmap='.mailmap'):
@@ -645,7 +482,8 @@ class LazyPluggable(object):
         if not self.__backend:
             backend_name = FLAGS[self.__pivot]
             if backend_name not in self.__backends:
-                raise exception.Error(_('Invalid backend: %s') % backend_name)
+                msg = _('Invalid backend: %s') % backend_name
+                raise exception.NovaException(msg)
 
             backend = self.__backends[backend_name]
             if isinstance(backend, tuple):
@@ -744,132 +582,86 @@ def utf8(value):
     return value
 
 
-def to_primitive(value, convert_instances=False, level=0):
-    """Convert a complex object into primitives.
+class _InterProcessLock(object):
+    """Lock implementation which allows multiple locks, working around
+    issues like bugs.debian.org/cgi-bin/bugreport.cgi?bug=632857 and does
+    not require any cleanup. Since the lock is always held on a file
+    descriptor rather than outside of the process, the lock gets dropped
+    automatically if the process crashes, even if __exit__ is not executed.
 
-    Handy for JSON serialization. We can optionally handle instances,
-    but since this is a recursive function, we could have cyclical
-    data structures.
+    There are no guarantees regarding usage by multiple green threads in a
+    single process here. This lock works only between processes. Exclusive
+    access between local threads should be achieved using the semaphores
+    in the @synchronized decorator.
 
-    To handle cyclical data structures we could track the actual objects
-    visited in a set, but not all objects are hashable. Instead we just
-    track the depth of the object inspections and don't go too deep.
-
-    Therefore, convert_instances=True is lossy ... be aware.
-
+    Note these locks are released when the descriptor is closed, so it's not
+    safe to close the file descriptor while another green thread holds the
+    lock. Just opening and closing the lock file can break synchronisation,
+    so lock files must be accessed only using this abstraction.
     """
-    nasty = [inspect.ismodule, inspect.isclass, inspect.ismethod,
-             inspect.isfunction, inspect.isgeneratorfunction,
-             inspect.isgenerator, inspect.istraceback, inspect.isframe,
-             inspect.iscode, inspect.isbuiltin, inspect.isroutine,
-             inspect.isabstract]
-    for test in nasty:
-        if test(value):
-            return unicode(value)
 
-    # value of itertools.count doesn't get caught by inspects
-    # above and results in infinite loop when list(value) is called.
-    if type(value) == itertools.count:
-        return unicode(value)
+    def __init__(self, name):
+        self.lockfile = None
+        self.fname = name
 
-    # FIXME(vish): Workaround for LP bug 852095. Without this workaround,
-    #              tests that raise an exception in a mocked method that
-    #              has a @wrap_exception with a notifier will fail. If
-    #              we up the dependency to 0.5.4 (when it is released) we
-    #              can remove this workaround.
-    if getattr(value, '__module__', None) == 'mox':
-        return 'mock'
+    def __enter__(self):
+        self.lockfile = open(self.fname, 'w')
 
-    if level > 3:
-        return '?'
+        while True:
+            try:
+                # Using non-blocking locks since green threads are not
+                # patched to deal with blocking locking calls.
+                # Also upon reading the MSDN docs for locking(), it seems
+                # to have a laughable 10 attempts "blocking" mechanism.
+                self.trylock()
+                return self
+            except IOError, e:
+                if e.errno in (errno.EACCES, errno.EAGAIN):
+                    # external locks synchronise things like iptables
+                    # updates - give it some time to prevent busy spinning
+                    time.sleep(0.01)
+                else:
+                    raise
 
-    # The try block may not be necessary after the class check above,
-    # but just in case ...
-    try:
-        if isinstance(value, (list, tuple)):
-            o = []
-            for v in value:
-                o.append(to_primitive(v, convert_instances=convert_instances,
-                                      level=level))
-            return o
-        elif isinstance(value, dict):
-            o = {}
-            for k, v in value.iteritems():
-                o[k] = to_primitive(v, convert_instances=convert_instances,
-                                    level=level)
-            return o
-        elif isinstance(value, datetime.datetime):
-            return str(value)
-        elif hasattr(value, 'iteritems'):
-            return to_primitive(dict(value.iteritems()),
-                                convert_instances=convert_instances,
-                                level=level)
-        elif hasattr(value, '__iter__'):
-            return to_primitive(list(value), level)
-        elif convert_instances and hasattr(value, '__dict__'):
-            # Likely an instance of something. Watch for cycles.
-            # Ignore class member vars.
-            return to_primitive(value.__dict__,
-                                convert_instances=convert_instances,
-                                level=level + 1)
-        else:
-            return value
-    except TypeError, e:
-        # Class objects are tricky since they may define something like
-        # __iter__ defined but it isn't callable as list().
-        return unicode(value)
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            self.unlock()
+            self.lockfile.close()
+        except IOError:
+            LOG.exception(_("Could not release the aquired lock `%s`")
+                             % self.fname)
+
+    def trylock(self):
+        raise NotImplementedError()
+
+    def unlock(self):
+        raise NotImplementedError()
 
 
-def dumps(value):
-    try:
-        return json.dumps(value)
-    except TypeError:
-        pass
-    return json.dumps(to_primitive(value))
+class _WindowsLock(_InterProcessLock):
+    def trylock(self):
+        msvcrt.locking(self.lockfile, msvcrt.LK_NBLCK, 1)
+
+    def unlock(self):
+        msvcrt.locking(self.lockfile, msvcrt.LK_UNLCK, 1)
 
 
-def loads(s):
-    return json.loads(s)
+class _PosixLock(_InterProcessLock):
+    def trylock(self):
+        fcntl.lockf(self.lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def unlock(self):
+        fcntl.lockf(self.lockfile, fcntl.LOCK_UN)
 
 
-try:
-    import anyjson
-except ImportError:
-    pass
+if os.name == 'nt':
+    import msvcrt
+    InterProcessLock = _WindowsLock
 else:
-    anyjson._modules.append(("nova.utils", "dumps", TypeError,
-                                           "loads", ValueError))
-    anyjson.force_implementation("nova.utils")
+    import fcntl
+    InterProcessLock = _PosixLock
 
-
-class GreenLockFile(lockfile.FileLock):
-    """Implementation of lockfile that allows for a lock per greenthread.
-
-    Simply implements lockfile:LockBase init with an addiontall suffix
-    on the unique name of the greenthread identifier
-    """
-    def __init__(self, path, threaded=True):
-        self.path = path
-        self.lock_file = os.path.abspath(path) + ".lock"
-        self.hostname = socket.gethostname()
-        self.pid = os.getpid()
-        if threaded:
-            t = threading.current_thread()
-            # Thread objects in Python 2.4 and earlier do not have ident
-            # attrs.  Worm around that.
-            ident = getattr(t, "ident", hash(t)) or hash(t)
-            gident = corolocal.get_ident()
-            self.tname = "-%x-%x" % (ident & 0xffffffff, gident & 0xffffffff)
-        else:
-            self.tname = ""
-        dirname = os.path.dirname(self.lock_file)
-        self.unique_name = os.path.join(dirname,
-                                        "%s%s.%s" % (self.hostname,
-                                                     self.tname,
-                                                     self.pid))
-
-
-_semaphores = {}
+_semaphores = weakref.WeakValueDictionary()
 
 
 def synchronized(name, external=False):
@@ -899,20 +691,6 @@ def synchronized(name, external=False):
     multiple processes. This means that if two different workers both run a
     a method decorated with @synchronized('mylock', external=True), only one
     of them will execute at a time.
-
-    Important limitation: you can only have one external lock running per
-    thread at a time. For example the following will fail:
-
-        @utils.synchronized('testlock1', external=True)
-        def outer_lock():
-
-            @utils.synchronized('testlock2', external=True)
-            def inner_lock():
-                pass
-            inner_lock()
-
-        outer_lock()
-
     """
 
     def wrap(f):
@@ -921,9 +699,13 @@ def synchronized(name, external=False):
             # NOTE(soren): If we ever go natively threaded, this will be racy.
             #              See http://stackoverflow.com/questions/5390569/dyn
             #              amically-allocating-and-destroying-mutexes
+            sem = _semaphores.get(name, semaphore.Semaphore())
             if name not in _semaphores:
-                _semaphores[name] = semaphore.Semaphore()
-            sem = _semaphores[name]
+                # this check is not racy - we're already holding ref locally
+                # so GC won't remove the item and there was no IO switch
+                # (only valid in greenthreads)
+                _semaphores[name] = sem
+
             LOG.debug(_('Attempting to grab semaphore "%(lock)s" for method '
                         '"%(method)s"...'), {'lock': name,
                                              'method': f.__name__})
@@ -937,7 +719,7 @@ def synchronized(name, external=False):
                               {'lock': name, 'method': f.__name__})
                     lock_file_path = os.path.join(FLAGS.lock_path,
                                                   'nova-%s' % name)
-                    lock = GreenLockFile(lock_file_path)
+                    lock = InterProcessLock(lock_file_path)
                     with lock:
                         LOG.debug(_('Got file lock "%(lock)s" for '
                                     'method "%(method)s"...'),
@@ -946,86 +728,9 @@ def synchronized(name, external=False):
                 else:
                     retval = f(*args, **kwargs)
 
-            # If no-one else is waiting for it, delete it.
-            # See note about possible raciness above.
-            if not sem.balance < 1:
-                del _semaphores[name]
-
             return retval
         return inner
     return wrap
-
-
-def cleanup_file_locks():
-    """clean up stale locks left behind by process failures
-
-    The lockfile module, used by @synchronized, can leave stale lockfiles
-    behind after process failure. These locks can cause process hangs
-    at startup, when a process deadlocks on a lock which will never
-    be unlocked.
-
-    Intended to be called at service startup.
-
-    """
-
-    # NOTE(mikeyp) this routine incorporates some internal knowledge
-    #              from the lockfile module, and this logic really
-    #              should be part of that module.
-    #
-    # cleanup logic:
-    # 1) look for the lockfile modules's 'sentinel' files, of the form
-    #    hostname.[thread-.*]-pid, extract the pid.
-    #    if pid doesn't match a running process, delete the file since
-    #    it's from a dead process.
-    # 2) check for the actual lockfiles. if lockfile exists with linkcount
-    #    of 1, it's bogus, so delete it. A link count >= 2 indicates that
-    #    there are probably sentinels still linked to it from active
-    #    processes.  This check isn't perfect, but there is no way to
-    #    reliably tell which sentinels refer to which lock in the
-    #    lockfile implementation.
-
-    if FLAGS.disable_process_locking:
-        return
-
-    hostname = socket.gethostname()
-    sentinel_re = hostname + r'\..*-(\d+$)'
-    lockfile_re = r'nova-.*\.lock'
-    files = os.listdir(FLAGS.lock_path)
-
-    # cleanup sentinels
-    for filename in files:
-        match = re.match(sentinel_re, filename)
-        if match is None:
-            continue
-        pid = match.group(1)
-        LOG.debug(_('Found sentinel %(filename)s for pid %(pid)s'),
-                  {'filename': filename, 'pid': pid})
-        try:
-            os.kill(int(pid), 0)
-        except OSError, e:
-            # PID wasn't found
-            delete_if_exists(os.path.join(FLAGS.lock_path, filename))
-            LOG.debug(_('Cleaned sentinel %(filename)s for pid %(pid)s'),
-                      {'filename': filename, 'pid': pid})
-
-    # cleanup lock files
-    for filename in files:
-        match = re.match(lockfile_re, filename)
-        if match is None:
-            continue
-        try:
-            stat_info = os.stat(os.path.join(FLAGS.lock_path, filename))
-        except OSError as e:
-            if e.errno == errno.ENOENT:
-                continue
-            else:
-                raise
-        LOG.debug(_('Found lockfile %(file)s with link count %(count)d'),
-                  {'file': filename, 'count': stat_info.st_nlink})
-        if stat_info.st_nlink == 1:
-            delete_if_exists(os.path.join(FLAGS.lock_path, filename))
-            LOG.debug(_('Cleaned lockfile %(file)s with link count %(count)d'),
-                      {'file': filename, 'count': stat_info.st_nlink})
 
 
 def delete_if_exists(pathname):
@@ -1052,12 +757,12 @@ def get_from_path(items, path):
 
     """
     if path is None:
-        raise exception.Error('Invalid mini_xpath')
+        raise exception.NovaException('Invalid mini_xpath')
 
     (first_token, sep, remainder) = path.partition('/')
 
     if first_token == '':
-        raise exception.Error('Invalid mini_xpath')
+        raise exception.NovaException('Invalid mini_xpath')
 
     results = []
 
@@ -1129,13 +834,29 @@ def subset_dict(dict_, keys):
     return subset
 
 
+def diff_dict(orig, new):
+    """
+    Return a dict describing how to change orig to new.  The keys
+    correspond to values that have changed; the value will be a list
+    of one or two elements.  The first element of the list will be
+    either '+' or '-', indicating whether the key was updated or
+    deleted; if the key was updated, the list will contain a second
+    element, giving the updated value.
+    """
+    # Figure out what keys went away
+    result = dict((k, ['-']) for k in set(orig.keys()) - set(new.keys()))
+    # Compute the updates
+    for key, value in new.items():
+        if key not in orig or value != orig[key]:
+            result[key] = ['+', value]
+    return result
+
+
 def check_isinstance(obj, cls):
     """Checks that obj is of type cls, and lets PyLint infer types."""
     if isinstance(obj, cls):
         return obj
     raise Exception(_('Expected object of type: %s') % (str(cls)))
-    # TODO(justinsb): Can we make this better??
-    return cls()  # Ugly PyLint hack
 
 
 def parse_server_string(server_str):
@@ -1164,7 +885,7 @@ def parse_server_string(server_str):
         return (address, port)
 
     except Exception:
-        LOG.debug(_('Invalid server_string: %s'), server_str)
+        LOG.error(_('Invalid server_string: %s'), server_str)
         return ('', '')
 
 
@@ -1257,20 +978,20 @@ def monkey_patch():
     for module_and_decorator in FLAGS.monkey_patch_modules:
         module, decorator_name = module_and_decorator.split(':')
         # import decorator function
-        decorator = import_class(decorator_name)
+        decorator = importutils.import_class(decorator_name)
         __import__(module)
         # Retrieve module information using pyclbr
         module_data = pyclbr.readmodule_ex(module)
         for key in module_data.keys():
             # set the decorator for the class methods
             if isinstance(module_data[key], pyclbr.Class):
-                clz = import_class("%s.%s" % (module, key))
+                clz = importutils.import_class("%s.%s" % (module, key))
                 for method, func in inspect.getmembers(clz, inspect.ismethod):
                     setattr(clz, method,
                         decorator("%s.%s.%s" % (module, key, method), func))
             # set the decorator for the function
             if isinstance(module_data[key], pyclbr.Function):
-                func = import_class("%s.%s" % (module, key))
+                func = importutils.import_class("%s.%s" % (module, key))
                 setattr(sys.modules[module], key,
                     decorator("%s.%s" % (module, key), func))
 
@@ -1305,43 +1026,9 @@ def generate_glance_url():
     return "http://%s:%d" % (FLAGS.glance_host, FLAGS.glance_port)
 
 
-@contextlib.contextmanager
-def save_and_reraise_exception():
-    """Save current exception, run some code and then re-raise.
-
-    In some cases the exception context can be cleared, resulting in None
-    being attempted to be reraised after an exception handler is run. This
-    can happen when eventlet switches greenthreads or when running an
-    exception handler, code raises and catches an exception. In both
-    cases the exception context will be cleared.
-
-    To work around this, we save the exception state, run handler code, and
-    then re-raise the original exception. If another exception occurs, the
-    saved exception is logged and the new exception is reraised.
-    """
-    type_, value, traceback = sys.exc_info()
-    try:
-        yield
-    except Exception:
-        # NOTE(jkoelker): Using LOG.error here since it accepts exc_info
-        #                 as a kwargs.
-        LOG.error(_('Original exception being dropped'),
-                  exc_info=(type_, value, traceback))
-        raise
-    raise type_, value, traceback
-
-
-@contextlib.contextmanager
-def logging_error(message):
-    """Catches exception, write message to the log, re-raise.
-    This is a common refinement of save_and_reraise that writes a specific
-    message to the log.
-    """
-    try:
-        yield
-    except Exception as error:
-        with save_and_reraise_exception():
-            LOG.exception(message)
+def generate_image_url(image_ref):
+    """Generate an image URL from an image_ref."""
+    return "%s/images/%s" % (generate_glance_url(), image_ref)
 
 
 @contextlib.contextmanager
@@ -1352,7 +1039,7 @@ def remove_path_on_error(path):
     try:
         yield
     except Exception:
-        with save_and_reraise_exception():
+        with excutils.save_and_reraise_exception():
             delete_if_exists(path)
 
 
@@ -1405,6 +1092,7 @@ def read_cached_file(filename, cache_info, reload_func=None):
     """
     mtime = os.path.getmtime(filename)
     if not cache_info or mtime != cache_info.get('mtime'):
+        LOG.debug(_("Reloading cached file %s") % filename)
         with open(filename) as fap:
             cache_info['data'] = fap.read()
         cache_info['mtime'] = mtime
@@ -1416,7 +1104,8 @@ def read_cached_file(filename, cache_info, reload_func=None):
 def hash_file(file_like_object):
     """Generate a hash for the contents of a file."""
     checksum = hashlib.sha1()
-    any(map(checksum.update, iter(lambda: file_like_object.read(32768), '')))
+    for chunk in iter(lambda: file_like_object.read(32768), b''):
+        checksum.update(chunk)
     return checksum.hexdigest()
 
 
@@ -1448,178 +1137,11 @@ def temporary_mutation(obj, **kwargs):
                 setattr(obj, attr, old_value)
 
 
-def warn_deprecated_class(cls, msg):
-    """
-    Issues a warning to indicate that the given class is deprecated.
-    If a message is given, it is appended to the deprecation warning.
-    """
-
-    fullname = '%s.%s' % (cls.__module__, cls.__name__)
-    if msg:
-        fullmsg = _("Class %(fullname)s is deprecated: %(msg)s")
-    else:
-        fullmsg = _("Class %(fullname)s is deprecated")
-
-    # Issue the warning
-    warnings.warn(fullmsg % locals(), DeprecationWarning, stacklevel=3)
-
-
-def warn_deprecated_function(func, msg):
-    """
-    Issues a warning to indicate that the given function is
-    deprecated.  If a message is given, it is appended to the
-    deprecation warning.
-    """
-
-    name = func.__name__
-
-    # Find the function's definition
-    sourcefile = inspect.getsourcefile(func)
-
-    # Find the line number, if possible
-    if inspect.ismethod(func):
-        code = func.im_func.func_code
-    else:
-        code = func.func_code
-    lineno = getattr(code, 'co_firstlineno', None)
-
-    if lineno is None:
-        location = sourcefile
-    else:
-        location = "%s:%d" % (sourcefile, lineno)
-
-    # Build up the message
-    if msg:
-        fullmsg = _("Function %(name)s in %(location)s is deprecated: %(msg)s")
-    else:
-        fullmsg = _("Function %(name)s in %(location)s is deprecated")
-
-    # Issue the warning
-    warnings.warn(fullmsg % locals(), DeprecationWarning, stacklevel=3)
-
-
-def _stubout(klass, message):
-    """
-    Scans a class and generates wrapping stubs for __new__() and every
-    class and static method.  Returns a dictionary which can be passed
-    to type() to generate a wrapping class.
-    """
-
-    overrides = {}
-
-    def makestub_class(name, func):
-        """
-        Create a stub for wrapping class methods.
-        """
-
-        def stub(cls, *args, **kwargs):
-            warn_deprecated_class(klass, message)
-            return func(*args, **kwargs)
-
-        # Overwrite the stub's name
-        stub.__name__ = name
-        stub.func_name = name
-
-        return classmethod(stub)
-
-    def makestub_static(name, func):
-        """
-        Create a stub for wrapping static methods.
-        """
-
-        def stub(*args, **kwargs):
-            warn_deprecated_class(klass, message)
-            return func(*args, **kwargs)
-
-        # Overwrite the stub's name
-        stub.__name__ = name
-        stub.func_name = name
-
-        return staticmethod(stub)
-
-    for name, kind, _klass, _obj in inspect.classify_class_attrs(klass):
-        # We're only interested in __new__(), class methods, and
-        # static methods...
-        if (name != '__new__' and
-            kind not in ('class method', 'static method')):
-            continue
-
-        # Get the function...
-        func = getattr(klass, name)
-
-        # Override it in the class
-        if kind == 'class method':
-            stub = makestub_class(name, func)
-        elif kind == 'static method' or name == '__new__':
-            stub = makestub_static(name, func)
-
-        # Save it in the overrides dictionary...
-        overrides[name] = stub
-
-    # Apply the overrides
-    for name, stub in overrides.items():
-        setattr(klass, name, stub)
-
-
-def deprecated(message=''):
-    """
-    Marks a function, class, or method as being deprecated.  For
-    functions and methods, emits a warning each time the function or
-    method is called.  For classes, generates a new subclass which
-    will emit a warning each time the class is instantiated, or each
-    time any class or static method is called.
-
-    If a message is passed to the decorator, that message will be
-    appended to the emitted warning.  This may be used to suggest an
-    alternate way of achieving the desired effect, or to explain why
-    the function, class, or method is deprecated.
-    """
-
-    def decorator(f_or_c):
-        # Make sure we can deprecate it...
-        if not callable(f_or_c) or isinstance(f_or_c, types.ClassType):
-            warnings.warn("Cannot mark object %r as deprecated" % f_or_c,
-                          DeprecationWarning, stacklevel=2)
-            return f_or_c
-
-        # If we're deprecating a class, create a subclass of it and
-        # stub out all the class and static methods
-        if inspect.isclass(f_or_c):
-            klass = f_or_c
-            _stubout(klass, message)
-            return klass
-
-        # OK, it's a function; use a traditional wrapper...
-        func = f_or_c
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            warn_deprecated_function(func, message)
-
-            return func(*args, **kwargs)
-
-        return wrapper
-    return decorator
-
-
-def _showwarning(message, category, filename, lineno, file=None, line=None):
-    """
-    Redirect warnings into logging.
-    """
-
-    fmtmsg = warnings.formatwarning(message, category, filename, lineno, line)
-    LOG.warning(fmtmsg)
-
-
-# Install our warnings handler
-warnings.showwarning = _showwarning
-
-
 def service_is_up(service):
     """Check whether a service is up based on last heartbeat."""
     last_heartbeat = service['updated_at'] or service['created_at']
     # Timestamps in DB are UTC.
-    elapsed = total_seconds(utcnow() - last_heartbeat)
+    elapsed = total_seconds(timeutils.utcnow() - last_heartbeat)
     return abs(elapsed) <= FLAGS.service_down_time
 
 
@@ -1676,7 +1198,7 @@ def tempdir(**kwargs):
         try:
             shutil.rmtree(tmpdir)
         except OSError, e:
-            LOG.debug(_('Could not remove tmpdir: %s'), str(e))
+            LOG.error(_('Could not remove tmpdir: %s'), str(e))
 
 
 def strcmp_const_time(s1, s2):
@@ -1699,6 +1221,28 @@ def strcmp_const_time(s1, s2):
     return result == 0
 
 
+def sys_platform_translate(arch):
+    """Translate cpu architecture into supported platforms."""
+    if (arch[0] == 'i' and arch[1].isdigit() and arch[2:4] == '86'):
+        arch = 'i686'
+    elif arch.startswith('arm'):
+        arch = 'arm'
+    return arch
+
+
+def walk_class_hierarchy(clazz, encountered=None):
+    """Walk class hierarchy, yielding most derived classes first"""
+    if not encountered:
+        encountered = []
+    for subclass in clazz.__subclasses__():
+        if subclass not in encountered:
+            encountered.append(subclass)
+            # drill down to leaves first
+            for subsubclass in walk_class_hierarchy(subclass, encountered):
+                yield subsubclass
+            yield subclass
+
+
 class UndoManager(object):
     """Provides a mechanism to facilitate rolling back a series of actions
     when an exception is raised.
@@ -1719,7 +1263,7 @@ class UndoManager(object):
         .. note:: (sirp) This should only be called within an
                   exception handler.
         """
-        with save_and_reraise_exception():
+        with excutils.save_and_reraise_exception():
             if msg:
                 LOG.exception(msg, **kwargs)
 

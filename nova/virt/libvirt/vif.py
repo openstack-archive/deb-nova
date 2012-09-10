@@ -21,9 +21,9 @@
 
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.network import linux_net
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import netutils
 from nova.virt import vif
@@ -43,6 +43,7 @@ libvirt_vif_opts = [
 
 FLAGS = flags.FLAGS
 FLAGS.register_opts(libvirt_vif_opts)
+flags.DECLARE('libvirt_type', 'nova.virt.libvirt.driver')
 
 
 class LibvirtBridgeDriver(vif.VIFDriver):
@@ -63,7 +64,8 @@ class LibvirtBridgeDriver(vif.VIFDriver):
 
         conf.filtername = "nova-instance-" + instance['name'] + "-" + mac_id
         conf.add_filter_param("IP", mapping['ips'][0]['ip'])
-        conf.add_filter_param("DHCPSERVER", mapping['dhcp_server'])
+        if mapping['dhcp_server']:
+            conf.add_filter_param("DHCPSERVER", mapping['dhcp_server'])
 
         if FLAGS.use_ipv6:
             conf.add_filter_param("RASERVER",
@@ -81,29 +83,32 @@ class LibvirtBridgeDriver(vif.VIFDriver):
 
         return conf
 
-    def plug(self, instance, network, mapping):
+    def plug(self, instance, vif):
         """Ensure that the bridge exists, and add VIF to it."""
+        network, mapping = vif
         if (not network.get('multi_host') and
             mapping.get('should_create_bridge')):
             if mapping.get('should_create_vlan'):
                 iface = FLAGS.vlan_interface or network['bridge_interface']
                 LOG.debug(_('Ensuring vlan %(vlan)s and bridge %(bridge)s'),
                           {'vlan': network['vlan'],
-                           'bridge': network['bridge']})
+                           'bridge': network['bridge']},
+                          instance=instance)
                 linux_net.LinuxBridgeInterfaceDriver.ensure_vlan_bridge(
                                              network['vlan'],
                                              network['bridge'],
                                              iface)
             else:
                 iface = FLAGS.flat_interface or network['bridge_interface']
-                LOG.debug(_("Ensuring bridge %s"), network['bridge'])
+                LOG.debug(_("Ensuring bridge %s"), network['bridge'],
+                          instance=instance)
                 linux_net.LinuxBridgeInterfaceDriver.ensure_bridge(
                                         network['bridge'],
                                         iface)
 
         return self._get_configurations(instance, network, mapping)
 
-    def unplug(self, instance, network, mapping):
+    def unplug(self, instance, vif):
         """No manual unplugging required."""
         pass
 
@@ -113,10 +118,11 @@ class LibvirtOpenVswitchDriver(vif.VIFDriver):
        libvirt XML.  Used for libvirt versions that do not support
        OVS virtual port XML (0.9.10 or earlier)."""
 
-    def get_dev_name(_self, iface_id):
+    def get_dev_name(self, iface_id):
         return "tap" + iface_id[0:11]
 
-    def plug(self, instance, network, mapping):
+    def plug(self, instance, vif):
+        network, mapping = vif
         iface_id = mapping['vif_uuid']
         dev = self.get_dev_name(iface_id)
         if not linux_net._device_exists(dev):
@@ -146,6 +152,8 @@ class LibvirtOpenVswitchDriver(vif.VIFDriver):
 
         conf = config.LibvirtConfigGuestInterface()
 
+        if FLAGS.libvirt_use_virtio_for_bridges:
+            conf.model = "virtio"
         conf.net_type = "ethernet"
         conf.target_dev = dev
         conf.script = ""
@@ -153,25 +161,26 @@ class LibvirtOpenVswitchDriver(vif.VIFDriver):
 
         return conf
 
-    def unplug(self, instance, network, mapping):
+    def unplug(self, instance, vif):
         """Unplug the VIF from the network by deleting the port from
         the bridge."""
+        network, mapping = vif
         dev = self.get_dev_name(mapping['vif_uuid'])
         try:
             utils.execute('ovs-vsctl', 'del-port',
                           FLAGS.libvirt_ovs_bridge, dev, run_as_root=True)
             utils.execute('ip', 'link', 'delete', dev, run_as_root=True)
         except exception.ProcessExecutionError:
-            LOG.exception(_("Failed while unplugging vif of instance '%s'"),
-                        instance['name'])
+            LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
 
 class LibvirtOpenVswitchVirtualPortDriver(vif.VIFDriver):
     """VIF driver for Open vSwitch that uses integrated libvirt
        OVS virtual port XML (introduced in libvirt 0.9.11)."""
 
-    def plug(self, instance, network, mapping):
+    def plug(self, instance, vif):
         """ Pass data required to create OVS virtual port element"""
+        network, mapping = vif
 
         conf = config.LibvirtConfigGuestInterface()
 
@@ -185,7 +194,7 @@ class LibvirtOpenVswitchVirtualPortDriver(vif.VIFDriver):
 
         return conf
 
-    def unplug(self, instance, network, mapping):
+    def unplug(self, instance, vif):
         """No action needed.  Libvirt takes care of cleanup"""
         pass
 
@@ -196,13 +205,18 @@ class QuantumLinuxBridgeVIFDriver(vif.VIFDriver):
     def get_dev_name(self, iface_id):
         return "tap" + iface_id[0:11]
 
-    def plug(self, instance, network, mapping):
+    def plug(self, instance, vif):
+        network, mapping = vif
         iface_id = mapping['vif_uuid']
         dev = self.get_dev_name(iface_id)
-        linux_net.QuantumLinuxBridgeInterfaceDriver.create_tap_dev(dev)
+
+        if FLAGS.libvirt_type != 'xen':
+            linux_net.QuantumLinuxBridgeInterfaceDriver.create_tap_dev(dev)
 
         conf = config.LibvirtConfigGuestInterface()
 
+        if FLAGS.libvirt_use_virtio_for_bridges:
+            conf.model = 'virtio'
         conf.net_type = "ethernet"
         conf.target_dev = dev
         conf.script = ""
@@ -210,13 +224,13 @@ class QuantumLinuxBridgeVIFDriver(vif.VIFDriver):
 
         return conf
 
-    def unplug(self, instance, network, mapping):
+    def unplug(self, instance, vif):
         """Unplug the VIF from the network by deleting the port from
         the bridge."""
+        network, mapping = vif
         dev = self.get_dev_name(mapping['vif_uuid'])
         try:
             utils.execute('ip', 'link', 'delete', dev, run_as_root=True)
         except exception.ProcessExecutionError:
-            LOG.warning(_("Failed while unplugging vif of instance '%s'"),
-                        instance['name'])
+            LOG.warning(_("Failed while unplugging vif"), instance=instance)
             raise

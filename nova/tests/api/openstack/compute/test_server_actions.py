@@ -19,25 +19,30 @@ import mox
 import webob
 
 from nova.api.openstack.compute import servers
+from nova.compute import task_states
 from nova.compute import vm_states
 import nova.db
 from nova import exception
 from nova import flags
+from nova.openstack.common import importutils
 from nova import test
 from nova.tests.api.openstack import fakes
+import nova.tests.image.fake
 from nova import utils
 
 
 FLAGS = flags.FLAGS
 FAKE_UUID = fakes.FAKE_UUID
+INSTANCE_IDS = {FAKE_UUID: 1}
 
 
 def return_server_not_found(context, uuid):
     raise exception.NotFound()
 
 
-def instance_update(context, instance_id, kwargs):
-    return fakes.stub_instance(instance_id)
+def instance_update(context, instance_uuid, kwargs):
+    inst = fakes.stub_instance(INSTANCE_IDS[instance_uuid], host='fake_host')
+    return (inst, inst)
 
 
 class MockSetAdminPassword(object):
@@ -55,22 +60,21 @@ class ServerActionsControllerTest(test.TestCase):
     def setUp(self):
         super(ServerActionsControllerTest, self).setUp()
 
-        fakes.stub_out_auth(self.stubs)
         self.stubs.Set(nova.db, 'instance_get_by_uuid',
-                fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
-                        host='fake_host'))
-        self.stubs.Set(nova.db, 'instance_update', instance_update)
+                       fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                               host='fake_host'))
+        self.stubs.Set(nova.db, 'instance_update_and_get_original',
+                       instance_update)
 
         fakes.stub_out_glance(self.stubs)
         fakes.stub_out_nw_api(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_compute_api_snapshot(self.stubs)
-        fakes.stub_out_image_service(self.stubs)
+        nova.tests.image.fake.stub_out_image_service(self.stubs)
         service_class = 'nova.image.glance.GlanceImageService'
-        self.service = utils.import_object(service_class)
-        self.service.delete_all()
+        self.service = importutils.import_object(service_class)
         self.sent_to_glance = {}
-        fakes.stub_out_glance_add_image(self.stubs, self.sent_to_glance)
+        fakes.stub_out_glanceclient_create(self.stubs, self.sent_to_glance)
         self.flags(allow_instance_snapshots=True,
                    enable_instance_password=True)
         self.uuid = FAKE_UUID
@@ -121,11 +125,15 @@ class ServerActionsControllerTest(test.TestCase):
                           req, FAKE_UUID, body)
 
     def test_server_change_password_empty_string(self):
+        mock_method = MockSetAdminPassword()
+        self.stubs.Set(nova.compute.api.API, 'set_admin_password', mock_method)
         body = {'changePassword': {'adminPass': ''}}
+
         req = fakes.HTTPRequest.blank(self.url)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller._action_change_password,
-                          req, FAKE_UUID, body)
+        self.controller._action_change_password(req, FAKE_UUID, body)
+
+        self.assertEqual(mock_method.instance_id, self.uuid)
+        self.assertEqual(mock_method.password, '')
 
     def test_server_change_password_none(self):
         body = {'changePassword': {'adminPass': None}}
@@ -454,8 +462,9 @@ class ServerActionsControllerTest(test.TestCase):
         context = req.environ['nova.context']
         update(context, mox.IgnoreArg(),
                 image_ref=self._image_href,
-                vm_state=vm_states.REBUILDING,
-                task_state=None, progress=0, **attributes).AndReturn(None)
+                task_state=task_states.REBUILDING,
+                progress=0, **attributes).AndReturn(
+                        fakes.stub_instance(1, host='fake_host'))
         self.mox.ReplayAll()
 
         self.controller._action_rebuild(req, FAKE_UUID, body)
@@ -700,6 +709,18 @@ class ServerActionsControllerTest(test.TestCase):
                           self.controller._action_create_image,
                           req, FAKE_UUID, body)
 
+    def test_locked(self):
+        def fake_locked(context, instance_uuid):
+            return {"name": "foo",
+                    "uuid": FAKE_UUID,
+                    "locked": True}
+        self.stubs.Set(nova.db, 'instance_get_by_uuid', fake_locked)
+        body = dict(reboot=dict(type="HARD"))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.assertRaises(webob.exc.HTTPConflict,
+                          self.controller._action_reboot,
+                          req, FAKE_UUID, body)
+
 
 class TestServerActionXMLDeserializer(test.TestCase):
 
@@ -757,6 +778,19 @@ class TestServerActionXMLDeserializer(test.TestCase):
                           self.deserializer.deserialize,
                           serial_request,
                           'action')
+
+    def test_change_pass_empty_pass(self):
+        serial_request = """<?xml version="1.0" encoding="UTF-8"?>
+                <changePassword
+                    xmlns="http://docs.openstack.org/compute/api/v1.1"
+                    adminPass=""/> """
+        request = self.deserializer.deserialize(serial_request, 'action')
+        expected = {
+            "changePassword": {
+                "adminPass": "",
+            },
+        }
+        self.assertEquals(request['body'], expected)
 
     def test_reboot(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
@@ -873,6 +907,17 @@ class TestServerActionXMLDeserializer(test.TestCase):
                         <file path="/etc/banner.txt">Mg==</file>
                     </personality>
                 </rebuild>"""
+        self.assertRaises(AttributeError,
+                          self.deserializer.deserialize,
+                          serial_request,
+                          'action')
+
+    def test_rebuild_blank_name(self):
+        serial_request = """<?xml version="1.0" encoding="UTF-8"?>
+                <rebuild
+                    xmlns="http://docs.openstack.org/compute/api/v1.1"
+                    imageRef="http://localhost/images/1"
+                    name=""/>"""
         self.assertRaises(AttributeError,
                           self.deserializer.deserialize,
                           serial_request,

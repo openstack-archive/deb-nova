@@ -33,29 +33,46 @@ FAKE_NETWORKS = [
         'id': 1, 'uuid': '20c8acc0-f747-4d71-a389-46d078ebf047',
         'cidr_v6': None, 'deleted_at': None,
         'gateway': '10.0.0.1', 'label': 'mynet_0',
-        'project_id': '1234',
+        'project_id': '1234', 'rxtx_base': None,
         'vpn_private_address': '10.0.0.2', 'deleted': False,
         'vlan': 100, 'broadcast': '10.0.0.7',
         'netmask': '255.255.255.248', 'injected': False,
         'cidr': '10.0.0.0/29',
         'vpn_public_address': '127.0.0.1', 'multi_host': False,
-        'dns1': None, 'host': 'nsokolov-desktop',
-        'gateway_v6': None, 'netmask_v6': None,
+        'dns1': None, 'dns2': None, 'host': 'nsokolov-desktop',
+        'gateway_v6': None, 'netmask_v6': None, 'priority': None,
         'created_at': '2011-08-15 06:19:19.387525',
     },
     {
         'bridge': 'br101', 'vpn_public_port': 1001,
         'dhcp_start': '10.0.0.11', 'bridge_interface': 'eth0',
         'updated_at': None, 'id': 2, 'cidr_v6': None,
+        'uuid': '20c8acc0-f747-4d71-a389-46d078ebf000',
         'deleted_at': None, 'gateway': '10.0.0.9',
         'label': 'mynet_1', 'project_id': None,
         'vpn_private_address': '10.0.0.10', 'deleted': False,
-        'vlan': 101, 'broadcast': '10.0.0.15',
+        'vlan': 101, 'broadcast': '10.0.0.15', 'rxtx_base': None,
         'netmask': '255.255.255.248', 'injected': False,
         'cidr': '10.0.0.10/29', 'vpn_public_address': None,
-        'multi_host': False, 'dns1': None, 'host': None,
-        'gateway_v6': None, 'netmask_v6': None,
+        'multi_host': False, 'dns1': None, 'dns2': None, 'host': None,
+        'gateway_v6': None, 'netmask_v6': None, 'priority': None,
         'created_at': '2011-08-15 06:19:19.885495',
+    },
+]
+
+
+FAKE_USER_NETWORKS = [
+    {
+        'id': 1, 'cidr': '10.0.0.0/29', 'netmask': '255.255.255.248',
+        'gateway': '10.0.0.1', 'broadcast': '10.0.0.7', 'dns1': None,
+        'dns2': None, 'cidr_v6': None, 'gateway_v6': None, 'label': 'mynet_0',
+        'netmask_v6': None, 'uuid': '20c8acc0-f747-4d71-a389-46d078ebf047',
+    },
+    {
+        'id': 2, 'cidr': '10.0.0.10/29', 'netmask': '255.255.255.248',
+        'gateway': '10.0.0.9', 'broadcast': '10.0.0.15', 'dns1': None,
+        'dns2': None, 'cidr_v6': None, 'gateway_v6': None, 'label': 'mynet_1',
+        'netmask_v6': None, 'uuid': '20c8acc0-f747-4d71-a389-46d078ebf000',
     },
 ]
 
@@ -72,12 +89,25 @@ class FakeNetworkAPI(object):
                 return True
         raise exception.NetworkNotFoundForUUID()
 
-    #NOTE(bcwaldon): this does nothing other than check for existance
-    def disassociate(self, context, network_id):
-        for i, network in enumerate(self.networks):
-            if network.get('uuid') == network_id:
+    def disassociate(self, context, network_uuid):
+        for network in self.networks:
+            if network.get('uuid') == network_uuid:
+                network['project_id'] = None
                 return True
         raise common.RemoteError(type(exception.NetworkNotFound()).__name__)
+
+    def add_network_to_project(self, context,
+                               project_id, network_uuid=None):
+        if network_uuid:
+            for network in self.networks:
+                if network.get('project_id', None) is None:
+                    network['project_id'] = project_id
+                    return
+            return
+        for network in self.networks:
+            if network.get('uuid') == network_uuid:
+                network['project_id'] = project_id
+                return
 
     def get_all(self, context):
         return self.networks
@@ -98,12 +128,27 @@ class NetworksTest(test.TestCase):
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
 
-    def test_network_list_all(self):
+    @staticmethod
+    def network_uuid_to_id(network):
+        network['id'] = network['uuid']
+        del network['uuid']
+
+    def test_network_list_all_as_user(self):
+        self.maxDiff = None
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks')
         res_dict = self.controller.index(req)
+        expected = copy.deepcopy(FAKE_USER_NETWORKS)
+        for network in expected:
+            self.network_uuid_to_id(network)
+        self.assertEquals(res_dict, {'networks': expected})
+
+    def test_network_list_all_as_admin(self):
+        req = fakes.HTTPRequest.blank('/v2/1234/os-networks')
+        req.environ["nova.context"].is_admin = True
+        res_dict = self.controller.index(req)
         expected = copy.deepcopy(FAKE_NETWORKS)
-        expected[0]['id'] = expected[0]['uuid']
-        del expected[0]['uuid']
+        for network in expected:
+            self.network_uuid_to_id(network)
         self.assertEquals(res_dict, {'networks': expected})
 
     def test_network_disassociate(self):
@@ -118,13 +163,21 @@ class NetworksTest(test.TestCase):
                           self.controller.action,
                           req, 100, {'disassociate': None})
 
-    def test_network_get(self):
-        uuid = FAKE_NETWORKS[0]['uuid']
+    def test_network_get_as_user(self):
+        uuid = FAKE_USER_NETWORKS[0]['uuid']
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks/%s' % uuid)
         res_dict = self.controller.show(req, uuid)
+        expected = {'network': copy.deepcopy(FAKE_USER_NETWORKS[0])}
+        self.network_uuid_to_id(expected['network'])
+        self.assertEqual(res_dict, expected)
+
+    def test_network_get_as_admin(self):
+        uuid = FAKE_NETWORKS[0]['uuid']
+        req = fakes.HTTPRequest.blank('/v2/1234/os-networks/%s' % uuid)
+        req.environ["nova.context"].is_admin = True
+        res_dict = self.controller.show(req, uuid)
         expected = {'network': copy.deepcopy(FAKE_NETWORKS[0])}
-        expected['network']['id'] = expected['network']['uuid']
-        del expected['network']['uuid']
+        self.network_uuid_to_id(expected['network'])
         self.assertEqual(res_dict, expected)
 
     def test_network_get_not_found(self):
@@ -142,3 +195,13 @@ class NetworksTest(test.TestCase):
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks/100')
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.controller.delete, req, 100)
+
+    def test_network_add(self):
+        uuid = FAKE_NETWORKS[1]['uuid']
+        req = fakes.HTTPRequest.blank('/v2/1234/os-networks/add')
+        res = self.controller.add(req, {'id': uuid})
+        self.assertEqual(res.status_int, 202)
+        req = fakes.HTTPRequest.blank('/v2/1234/os-networks/%s' % uuid)
+        req.environ["nova.context"].is_admin = True
+        res_dict = self.controller.show(req, uuid)
+        self.assertEqual(res_dict['network']['project_id'], 'fake')

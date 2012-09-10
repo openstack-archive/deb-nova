@@ -24,8 +24,8 @@ import time
 
 from nova import exception
 from nova import flags
-from nova import log as logging
 from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.volume import iscsi
 
@@ -36,10 +36,10 @@ volume_opts = [
     cfg.StrOpt('volume_group',
                default='nova-volumes',
                help='Name for the VG that will contain exported volumes'),
-    cfg.StrOpt('num_shell_tries',
+    cfg.IntOpt('num_shell_tries',
                default=3,
                help='number of times to attempt to run flakey shell commands'),
-    cfg.StrOpt('num_iscsi_scan_tries',
+    cfg.IntOpt('num_iscsi_scan_tries',
                default=3,
                help='number of times to rescan iSCSI target to find volume'),
     cfg.IntOpt('iscsi_num_targets',
@@ -103,7 +103,7 @@ class VolumeDriver(object):
                                 run_as_root=True)
         volume_groups = out.split()
         if not FLAGS.volume_group in volume_groups:
-            raise exception.Error(_("volume group %s doesn't exist")
+            raise exception.NovaException(_("volume group %s doesn't exist")
                                   % FLAGS.volume_group)
 
     def _create_volume(self, volume_name, sizestr):
@@ -268,15 +268,14 @@ class ISCSIDriver(VolumeDriver):
                                                            volume['id'])
         except exception.NotFound:
             LOG.info(_("Skipping ensure_export. No iscsi_target "
-                       "provisioned for volume: %d"), volume['id'])
+                       "provisioned for volume: %s"), volume['id'])
             return
 
         iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, volume['name'])
         volume_path = "/dev/%s/%s" % (FLAGS.volume_group, volume['name'])
 
-        self.tgtadm.new_target(iscsi_name, iscsi_target, check_exit_code=False)
-        self.tgtadm.new_logicalunit(iscsi_target, 0, volume_path,
-                                    check_exit_code=False)
+        self.tgtadm.create_iscsi_target(iscsi_name, iscsi_target,
+                0, volume_path, check_exit_code=False)
 
     def _ensure_iscsi_targets(self, context, host):
         """Ensure that target ids have been created in datastore."""
@@ -297,8 +296,8 @@ class ISCSIDriver(VolumeDriver):
         iscsi_name = "%s%s" % (FLAGS.iscsi_target_prefix, volume['name'])
         volume_path = "/dev/%s/%s" % (FLAGS.volume_group, volume['name'])
 
-        self.tgtadm.new_target(iscsi_name, iscsi_target)
-        self.tgtadm.new_logicalunit(iscsi_target, 0, volume_path)
+        self.tgtadm.create_iscsi_target(iscsi_name, iscsi_target,
+                0, volume_path)
 
         model_update = {}
         if FLAGS.iscsi_helper == 'tgtadm':
@@ -316,7 +315,7 @@ class ISCSIDriver(VolumeDriver):
                                                            volume['id'])
         except exception.NotFound:
             LOG.info(_("Skipping remove_export. No iscsi_target "
-                       "provisioned for volume: %d"), volume['id'])
+                       "provisioned for volume: %s"), volume['id'])
             return
 
         try:
@@ -325,11 +324,10 @@ class ISCSIDriver(VolumeDriver):
             self.tgtadm.show_target(iscsi_target)
         except Exception as e:
             LOG.info(_("Skipping remove_export. No iscsi_target "
-                       "is presently exported for volume: %d"), volume['id'])
+                       "is presently exported for volume: %s"), volume['id'])
             return
 
-        self.tgtadm.delete_logicalunit(iscsi_target, 0)
-        self.tgtadm.delete_target(iscsi_target)
+        self.tgtadm.remove_iscsi_target(iscsi_target, 0, volume['id'])
 
     def _do_iscsi_discovery(self, volume):
         #TODO(justinsb): Deprecate discovery and use stored info
@@ -381,7 +379,7 @@ class ISCSIDriver(VolumeDriver):
             location = self._do_iscsi_discovery(volume)
 
             if not location:
-                raise exception.Error(_("Could not find iSCSI export "
+                raise exception.NovaException(_("Could not find iSCSI export "
                                         " for volume %s") %
                                       (volume['name']))
 
@@ -502,7 +500,7 @@ class RBDDriver(VolumeDriver):
         (stdout, stderr) = self._execute('rados', 'lspools')
         pools = stdout.split("\n")
         if not FLAGS.rbd_pool in pools:
-            raise exception.Error(_("rbd has no pool %s") %
+            raise exception.NovaException(_("rbd has no pool %s") %
                                   FLAGS.rbd_pool)
 
     def create_volume(self, volume):
@@ -549,6 +547,10 @@ class RBDDriver(VolumeDriver):
         """Removes an export for a logical volume"""
         pass
 
+    def check_for_export(self, context, volume_id):
+        """Make sure volume is exported."""
+        pass
+
     def initialize_connection(self, volume, connector):
         return {
             'driver_volume_type': 'rbd',
@@ -576,9 +578,10 @@ class SheepdogDriver(VolumeDriver):
             #  use it and just check if 'running' is in the output.
             (out, err) = self._execute('collie', 'cluster', 'info')
             if not 'running' in out.split():
-                raise exception.Error(_("Sheepdog is not working: %s") % out)
+                msg = _("Sheepdog is not working: %s") % out
+                raise exception.NovaException(msg)
         except exception.ProcessExecutionError:
-            raise exception.Error(_("Sheepdog is not working"))
+            raise exception.NovaException(_("Sheepdog is not working"))
 
     def create_volume(self, volume):
         """Creates a sheepdog volume"""
@@ -620,6 +623,10 @@ class SheepdogDriver(VolumeDriver):
 
     def remove_export(self, context, volume):
         """Removes an export for a logical volume"""
+        pass
+
+    def check_for_export(self, context, volume_id):
+        """Make sure volume is exported."""
         pass
 
     def initialize_connection(self, volume, connector):

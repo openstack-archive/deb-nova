@@ -18,7 +18,7 @@ import webob.exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-import nova.log as logging
+import nova.openstack.common.log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -46,7 +46,9 @@ class SchedulerHintsController(wsgi.Controller):
     @wsgi.extends
     def create(self, req, body):
         hints = self._extract_scheduler_hints(body)
-        body['server']['scheduler_hints'] = hints
+
+        if 'server' in body:
+            body['server']['scheduler_hints'] = hints
         yield
 
 

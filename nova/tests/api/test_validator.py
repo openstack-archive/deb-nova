@@ -18,15 +18,15 @@
 
 import base64
 
-from nova import test
 from nova.api import validator
+from nova import test
 
 
 class ValidatorTestCase(test.TestCase):
 
     def test_validate(self):
         fixture = {
-            'foo': lambda val: val == True
+            'foo': lambda val: val is True
         }
 
         self.assertTrue(
