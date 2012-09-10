@@ -1,3 +1,186 @@
+nova (2012.1.1-9) unstable; urgency=low
+
+  [ Thomas Goirand ]
+  * Added Debconf Chinese translation thanks to ben <duyujie.dyj@gmail.com>.
+
+  [ Loic Dachary (OuoU) ]
+  * revert to using --flagfile instead of --config-file in
+    nova-compute.init because --flagfile supports both configuration file
+    formats. Using --config-file forces to use the newest configuration
+    file format and is not backward compatible. If upgrading from
+    nova-compute-2012.1.1-4 to all versions until nova-compute-2012.1.1-8
+    when using the old format in nova.conf, nova-compute will no longer
+    run. It will silently fail to parse the older format and abort.
+  
+ -- Loic Dachary (OuoU) <loic@debian.org>  Mon, 03 Sep 2012 13:24:09 +0200
+
+nova (2012.1.1-8) unstable; urgency=low
+
+  * Corrected wrong encoding in the it.po (Closes: #685576).
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 24 Aug 2012 05:30:21 +0000
+
+nova (2012.1.1-7) unstable; urgency=low
+
+  * Updated Spanish debconf translation thanks to Jathan
+  <jathanblackred@gmail.com> (Closes: #678479).
+  * Added Italian debconf translation thanks to Beatrice Torracca
+  <beatricet@libero.it> (Closes: #681250).
+  * Added missing [DEFAULT] in nova-compute.conf for xen.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 10 Aug 2012 06:17:03 +0000
+
+nova (2012.1.1-6) unstable; urgency=high
+
+  [ Thomas Goirand ]
+  * CVE-2012-3447: file injection writing to host filesystem (Closes: #684256).
+  [ Ghe Rivero ]
+  * Fixed the init script of nova-compute to use /etc/nova/nova-compute.conf.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 07 Aug 2012 05:12:35 +0000
+
+nova (2012.1.1-5) unstable; urgency=high
+
+  * Fix CVE-2012-3371. Closes: #681301
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Thu, 12 Jul 2012 10:14:32 +0200
+
+nova (2012.1.1-4) unstable; urgency=low
+
+  * fix the iscsiadm path (Closes: #681175).
+
+ -- Loic Dachary (OuoU) <loic@debian.org>  Wed, 11 Jul 2012 09:14:08 +0200
+
+nova (2012.1.1-3) unstable; urgency=low
+
+  * Added a display-po-stats target in debian/rules
+  * Added a call-for-po-trans target in debian/rules
+  * Updated debconf translations thanks to:
+    - de.po: Pfannenstein Erik <epfannenstein@gmx.de> (Closes: #680558).
+    - pl.po: "Michał Kułach" <michalkulach@gmail.com> (Closes: #680524).
+    - da.po: Joe Dalton <joedalton2@yahoo.dk> (Closes: #680354).
+    - ru.po: Yuri Kozlov <yuray@komyakino.ru> (Closes: #680267).
+  * Do not rm -r /var/lib/nova/instances in the nova-compute postrm, because
+  it has files from nova-common. Same with nova-network (Closes: #680642).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 04 Jul 2012 17:15:47 +0000
+
+nova (2012.1.1-2) unstable; urgency=high
+
+  * Fixes CVE-2012-3360, CVE-2012-3361 (Closes: #680110).
+  * Debconf translation updates with thanks to:
+    - cs.po Michal Simunek <michal.simunek@gmail.com> (Closes: #679670).
+    - pt.po Miguel Figueiredo <elmig@debianpt.org> (Closes: #679497).
+    - sk.po helix84 <helix84@centrum.sk> (Closes: #679445).
+    - fr.po Julien Patriarca <patriarcaj@gmail.com> (Closes: #679422).
+    - sv.po Martin Bagge <brother@bsnet.se> (Closes: #679009).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 03 Jul 2012 18:18:38 +0000
+
+nova (2012.1.1-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Thu, 28 Jun 2012 17:46:09 +0200
+
+nova (2012.1-8) unstable; urgency=low
+
+  [ Thomas Goirand ]
+  * Fixes "Cannot disassociate network from project" critical error 'bool'
+  object has no attribute decode (Closes: #672350).
+  * Added new debconf translations (with thanks to):
+    - es: jathan <jathanblackred@gmail.com> (Closes: #678479).
+    - de: Pfannenstein Erik <epfannenstein@gmx.de> (Closes: #678034).
+    - gl: Jorge Barreiro <yortx.barry@gmail.com> (Closes: #678908).
+    - pt: Traduz <traduz@debianpt.org> (Closes: #678735).
+    - cs: Michal Simunek <michal.simunek@gmail.com> (Closes: #678667).
+    - ru: Yuri Kozlov <yuray@komyakino.ru> (Closes: #678429).
+    - fr: Julien Patriarca <patriarcaj@gmail.com> (Closes: #678234).
+    - pl: "Michał Kułach" <michalkulach@gmail.com> (Closes: #678154).
+    - sk: helix84 <helix84@centrum.sk> (Closes: #677284).
+
+  [ Ghe Rivero ]
+  * remove extra slash on sql_connection nova.conf
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 25 Jun 2012 09:13:57 +0000
+
+nova (2012.1-7) unstable; urgency=low
+
+  * Fixes "prompting due to modified conffiles" (Closes: #677400).
+  * File /etc/default/nova-common isn't a conffile anymore as well.
+  * Removed libvirt-type flag in nova-compute-xen nova-compute.conf, since we
+  are using XenAPI and not libvirt.
+  * Now configuring XenAPI URL, user and password through Debconf.
+  * Makes replacements in nova.conf accept spaces, dashes and tabs.
+  * Added initial Swedish debconf translation thanks to Martin Bagge
+  <brother@bsnet.se> (Closes: #677031).
+  * Added initial Dutch debconf translation thanks to Jeroen Schot
+  <schot@A-Eskwadraat.nl> (Closes: #677364).
+  * Added initial Danish debconf translation thanks to Joe Dalton
+  <joedalton2@yahoo.dk> (Closes: #677798).
+  * Applied debian/control and debian/*.templates from debian-l10n-english
+  (Closes: #675136).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 18 Jun 2012 12:34:40 +0000
+
+nova (2012.1-6) unstable; urgency=low
+
+  [ Thomas Goirand ]
+  * Now depends on sqlite3 (Closes: #674510).
+  * nova-compute-{hypervisor} are now conflicting each others.
+  * Fixed URL to the format 1.0 for the debian/copyright file.
+  * nova-api is now split into multiple nova-api-* packages.
+
+  [ Mehdi Abaakouk ]
+  * Add nodocs support in DEB_BUILD_OPTIONS.
+  * Do not use dbconfig if configure_db is false. Closes: #675271
+  * Fixed CVE-2012-2654. (Closes: #676465)
+
+  [ Loic Dachary (OuoU) ]
+  * Fix broken init file for nova-bojectstore (Closes: #676638)
+  * Add Loic Dachary in uploaders
+  
+ -- Loic Dachary (OuoU) <loic@debian.org>  Tue, 12 Jun 2012 17:51:01 +0200
+
+nova (2012.1-5) unstable; urgency=low
+
+  [ Ghe Rivero ]
+  * Not start daemons from init by default. Added /etc/default/nova file
+  * Added some new packages: api-os-compute, api-os-volume, api-ec2,
+  compute-qemu, api-metadata
+  * Instal api-paste.ini from nova-common
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Mon, 28 May 2012 15:27:57 +0200
+
+nova (2012.1-4) unstable; urgency=low
+
+  [ Ghe Rivero ]
+  * Properly use dbconfig postrm at nova-common. Closes: #673986
+  * Added python db modules to suggests. Closes: #672888
+
+  [ Mehdi Abaakou ]
+  * Remove obsolete volume_group option in nova-volume init script. Closes:
+    #674030
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Thu, 24 May 2012 08:50:35 +0200
+
+nova (2012.1-3) unstable; urgency=low
+
+  * 3 files are moved from python-nova to nova-compute, nova-network and 
+  nova-volumes, add Replaces and Breaks statements to enable smooth upgrade of
+  version in testing. Closes: #665375 
+  * Call dbconfig postrm script and remove nova-manage log. Closes: #670435
+  * Remove doc/sourc/api on dh_autoclean 
+  * Purge nova-* log files
+
+ -- Mehdi Abaakouk <sileht@sileht.net>  Wed, 09 May 2012 11:55:04 +0200
+
+nova (2012.1-2) unstable; urgency=low
+
+  * Fixed CVE-2012-2101. Closes: #670637
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Wed, 02 May 2012 11:29:53 +0200
+
 nova (2012.1-1) unstable; urgency=low
 
   * New upstream release

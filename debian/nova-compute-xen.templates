@@ -1,0 +1,37 @@
+# These templates have been reviewed by the debian-l10n-english
+# team
+#
+# If modifications/additions/rewording are needed, please ask
+# debian-l10n-english@lists.debian.org for advice.
+#
+# Even minor modifications require translation updates and such
+# changes should be coordinated with translators and reviewers.
+
+Template: nova-compute-xen/xenapi_url
+Type: string
+Default: https://my-dom0.example.com
+_Description: Address of the XenAPI dom0:
+ Nova Compute Xen needs to know the address of the server running XenAPI. You
+ can enter an IP address, or a fully qualified domain name if it resolves
+ correctly.
+ .
+ This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform
+ (XCP) appliance installed from an ISO image, or even the Kronos Project's XCP
+ (available in Debian and Ubuntu as the package xcp-xapi).
+ .
+ This can later be edited in /etc/nova/nova-compute.conf.
+
+Template: nova-compute-xen/xenapi_username
+Type: string
+Default: root
+_Description: Username to connect to XenAPI:
+ Please enter the username used to connect to your XenAPI (XCP server).
+ .
+ This can later be edited in /etc/nova/nova-compute.conf.
+
+Template: nova-compute-xen/xenapi_password
+Type: password
+_Description: Password to connect to XenAPI:
+ Please enter the password used to connect to your XenAPI (XCP server).
+ .
+ This can later be edited in /etc/nova/nova-compute.conf.

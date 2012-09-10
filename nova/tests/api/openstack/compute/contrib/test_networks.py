@@ -20,6 +20,7 @@ import webob
 
 from nova.api.openstack.compute.contrib import networks
 from nova import exception
+from nova.rpc import common
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -76,7 +77,7 @@ class FakeNetworkAPI(object):
         for i, network in enumerate(self.networks):
             if network.get('uuid') == network_id:
                 return True
-        raise exception.NetworkNotFound()
+        raise common.RemoteError(type(exception.NetworkNotFound()).__name__)
 
     def get_all(self, context):
         return self.networks

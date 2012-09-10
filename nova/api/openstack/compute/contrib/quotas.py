@@ -29,6 +29,11 @@ from nova import quota
 authorize = extensions.extension_authorizer('compute', 'quotas')
 
 
+quota_resources = ['metadata_items', 'injected_file_content_bytes',
+        'volumes', 'gigabytes', 'ram', 'floating_ips', 'instances',
+        'injected_files', 'cores', 'security_groups', 'security_group_rules']
+
+
 class QuotaTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('quota_set', selector='quota_set')

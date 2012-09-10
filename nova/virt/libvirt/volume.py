@@ -77,21 +77,29 @@ class LibvirtNetVolumeDriver(LibvirtVolumeDriver):
     """Driver to attach Network volumes to libvirt."""
 
     def connect_volume(self, connection_info, mount_device):
-        conf = config.LibvirtConfigGuestDisk()
-        conf.source_type = "network"
-        conf.driver_name = self._pick_volume_driver()
-        conf.driver_format = "raw"
-        conf.driver_cache = "none"
-        conf.source_protocol = connection_info['driver_volume_type']
-        conf.source_host = connection_info['data']['name']
-        conf.target_dev = mount_device
-        conf.target_bus = "virtio"
-        netdisk_properties = connection_info['data']
-        if netdisk_properties.get('auth_enabled'):
-            conf.auth_username = netdisk_properties['auth_username']
-            conf.auth_secret_type = netdisk_properties['secret_type']
-            conf.auth_secret_uuid = netdisk_properties['secret_uuid']
-        return conf
+        driver = self._pick_volume_driver()
+        protocol = connection_info['driver_volume_type']
+        name = connection_info['data']['name']
+        if connection_info['data'].get('auth_enabled'):
+            username = connection_info['data']['auth_username']
+            secret_type = connection_info['data']['secret_type']
+            secret_uuid = connection_info['data']['secret_uuid']
+            xml = """<disk type='network'>
+                         <driver name='%s' type='raw' cache='none'/>
+                         <source protocol='%s' name='%s'/>
+                         <auth username='%s'>
+                             <secret type='%s' uuid='%s'/>
+                         </auth>
+                         <target dev='%s' bus='virtio'/>
+                     </disk>""" % (driver, protocol, name, username,
+                                   secret_type, secret_uuid, mount_device)
+        else:
+            xml = """<disk type='network'>
+                         <driver name='%s' type='raw' cache='none'/>
+                         <source protocol='%s' name='%s'/>
+                         <target dev='%s' bus='virtio'/>
+                     </disk>""" % (driver, protocol, name, mount_device)
+        return xml
 
 
 class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):

@@ -1,0 +1,153 @@
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the nova package.
+#
+# Yuri Kozlov <yuray@komyakino.ru>, 2012.
+msgid ""
+msgstr ""
+"Project-Id-Version: nova 2012.1.1-1\n"
+"Report-Msgid-Bugs-To: nova@packages.debian.org\n"
+"POT-Creation-Date: 2012-06-25 10:00+0000\n"
+"PO-Revision-Date: 2012-07-04 21:24+0400\n"
+"Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
+"Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Lokalize 1.2\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n"
+"%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+#| msgid "Start Nova services at boot?"
+msgid "Start nova services at boot?"
+msgstr "Запускать службы nova при включении машины?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+"Please choose whether you want to start Nova services when the machine is "
+"booted up."
+msgstr "Укажите, нужно ли запускать службы Nova при включении машины."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid "Set up a database for Nova?"
+msgstr "Настроить базу данных для Nova?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"No database has been set up for Nova to use. If you want to set one up now, "
+"please make sure you have all needed information:"
+msgstr ""
+"Для использования Nova требуется настроить базу данных. Если вы хотите "
+"сделать это сейчас, то проверьте, что у вас есть вся необходимая информация:"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+" * the host name of the database server (which must allow TCP\n"
+"   connections from this machine);\n"
+" * a username and password to access the database;\n"
+" * the type of database management software you want to use."
+msgstr ""
+" * имя узла сервера базы данных (этот сервер должен принимать\n"
+"   TCP-соединения с этой машины);\n"
+" * имя пользователя и пароль для доступа к базе данных;\n"
+" * тип базы данных, которую вы хотите использовать."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"If you don't choose this option, no database will be set up and Nova will "
+"use regular SQLite support."
+msgstr ""
+"Если вы ответите отрицательно, то база данных настроена не будет, и Nova "
+"будет использоваться SQLite."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-common\"."
+msgstr ""
+"Позднее, вы можете изменить эту настройку, запустив «dpkg-reconfigure -plow "
+"nova-common»."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Address of the XenAPI dom0:"
+msgstr "Адрес XenAPI dom0:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"Nova Compute Xen needs to know the address of the server running XenAPI. You "
+"can enter an IP address, or a fully qualified domain name if it resolves "
+"correctly."
+msgstr ""
+"Для Nova Compute Xen требуется указать адрес сервера с запущенным XenAPI. "
+"Вы можете ввести IP-адрес или полностью определённое доменное имя, если "
+"настроен определитель имён."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform "
+"(XCP) appliance installed from an ISO image, or even the Kronos Project's "
+"XCP (available in Debian and Ubuntu as the package xcp-xapi)."
+msgstr ""
+"Это может быть сервер с запущенным Citrix XenServer, "
+"ПАК CentOS Xen Cloud Platform, установленный из образа ISO, "
+"или даже Kronos Project XCP (доступен в Debian и "
+"Ubuntu из пакета xcp-xapi)."
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
+#: ../nova-compute-xen.templates:4001
+msgid "This can later be edited in /etc/nova/nova-compute.conf."
+msgstr ""
+"Позже можно изменить настройку, отредактировав файл "
+"/etc/nova/nova-compute.conf."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Username to connect to XenAPI:"
+msgstr "Имя пользователя для подключения к XenAPI:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Please enter the username used to connect to your XenAPI (XCP server)."
+msgstr "Введите имя пользователя для подключения к XenAPI (серверу XCP)."
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Password to connect to XenAPI:"
+msgstr "Пароль для подключения к XenAPI:"
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Please enter the password used to connect to your XenAPI (XCP server)."
+msgstr "Введите пароль для подключения к XenAPI (серверу XCP)."
+

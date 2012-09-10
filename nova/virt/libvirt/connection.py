@@ -102,6 +102,9 @@ libvirt_opts = [
                 default=False,
                 help='Inject the admin password at boot time, '
                      'without an agent.'),
+    cfg.BoolOpt('libvirt_inject_key',
+                default=True,
+                help='Inject the ssh public key at boot time'),
     cfg.BoolOpt('use_usb_tablet',
                 default=True,
                 help='Sync virtual and real mouse cursors in Windows VMs'),
@@ -795,6 +798,13 @@ class LibvirtConnection(driver.ComputeDriver):
         dom.create()
 
     @exception.wrap_exception()
+    def resume_state_on_host_boot(self, context, instance, network_info):
+        """resume guest state when a host is booted"""
+        # NOTE(dprince): use hard reboot to ensure network and firewall
+        # rules are configured
+        self._hard_reboot(instance, network_info)
+
+    @exception.wrap_exception()
     def rescue(self, context, instance, network_info, image_meta):
         """Loads a VM using rescue images.
 
@@ -979,6 +989,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         self._chown_console_log_for_instance(instance['name'])
         data = self._flush_libvirt_console(pty)
+        console_log = self._get_console_log_path(instance['name'])
         fpath = self._append_to_file(data, console_log)
 
         return libvirt_utils.load_file(fpath)
@@ -1065,7 +1076,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         generating = 'image_id' not in kwargs
         if not os.path.exists(target):
-            base_dir = os.path.join(FLAGS.instances_path, '_base')
+            base_dir = os.path.join(FLAGS.instances_path, FLAGS.base_dir_name)
+
             if not os.path.exists(base_dir):
                 libvirt_utils.ensure_tree(base_dir)
             base = os.path.join(base_dir, fname)
@@ -1129,9 +1141,12 @@ class LibvirtConnection(driver.ComputeDriver):
         libvirt_utils.mkfs('swap', target)
 
     @staticmethod
-    def _chown_console_log_for_instance(instance_name):
-        console_log = os.path.join(FLAGS.instances_path, instance_name,
-                                   'console.log')
+    def _get_console_log_path(instance_name):
+        return os.path.join(FLAGS.instances_path, instance_name,
+                'console.log')
+
+    def _chown_console_log_for_instance(self, instance_name):
+        console_log = self._get_console_log_path(instance_name)
         if os.path.exists(console_log):
             libvirt_utils.chown(console_log, os.getuid())
 
@@ -1277,7 +1292,7 @@ class LibvirtConnection(driver.ComputeDriver):
                 self._create_local(basepath('disk.config'), 64, unit='M',
                                    fs_format='msdos', label=label)  # 64MB
 
-        if instance['key_data']:
+        if FLAGS.libvirt_inject_key and instance['key_data']:
             key = str(instance['key_data'])
         else:
             key = None
@@ -1828,10 +1843,15 @@ class LibvirtConnection(driver.ComputeDriver):
         if sys.platform.upper() not in ['LINUX2', 'LINUX3']:
             return 0
 
-        meminfo = open('/proc/meminfo').read().split()
-        idx = meminfo.index('MemTotal:')
-        # transforming kb to mb.
-        return int(meminfo[idx + 1]) / 1024
+        if FLAGS.libvirt_type == 'xen':
+            meminfo = self._conn.getInfo()[1]
+            # this is in MB
+            return meminfo
+        else:
+            meminfo = open('/proc/meminfo').read().split()
+            idx = meminfo.index('MemTotal:')
+            # transforming KB to MB
+            return int(meminfo[idx + 1]) / 1024
 
     @staticmethod
     def get_local_gb_total():
@@ -1880,8 +1900,26 @@ class LibvirtConnection(driver.ComputeDriver):
         idx1 = m.index('MemFree:')
         idx2 = m.index('Buffers:')
         idx3 = m.index('Cached:')
-        avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1])) / 1024
-        return  self.get_memory_mb_total() - avail
+        if FLAGS.libvirt_type == 'xen':
+            used = 0
+            for domain_id in self._conn.listDomainsID():
+                # skip dom0
+                dom_mem = int(self._conn.lookupByID(domain_id).info()[2])
+                if domain_id != 0:
+                    used += dom_mem
+                else:
+                    # the mem reported by dom0 is be greater of what
+                    # it is being used
+                    used += (dom_mem -
+                             (int(m[idx1 + 1]) +
+                              int(m[idx2 + 1]) +
+                              int(m[idx3 + 1])))
+            # Convert it to MB
+            return used / 1024
+        else:
+            avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))
+            # Convert it to MB
+            return  self.get_memory_mb_total() - avail / 1024
 
     def get_local_gb_used(self):
         """Get the free hdd size(GB) of physical computer.

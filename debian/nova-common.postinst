@@ -1,8 +1,20 @@
-#!/bin/sh -e
+#!/bin/sh
 
-if [ "$1" = "configure" ]; then
+set -e
+
+if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
+
     addgroup --quiet --system nova
     adduser --quiet --system --home /var/lib/nova --ingroup nova --no-create-home --shell /bin/bash nova
+
+    # Create config files if they don't exist
+    if ! [ -d /etc/nova ] ; then
+        mkdir /etc/nova
+    fi
+    if ! [ -e /etc/nova/nova.conf ] ; then
+        cp /usr/share/doc/nova-common/nova.conf.dist /etc/nova/nova.conf
+    fi
+
     chown nova:nova /var/log/nova /etc/nova/nova.conf
     if [ -z "$2" ]; then
         # New install - blanket permissions
@@ -17,40 +29,50 @@ if [ "$1" = "configure" ]; then
     fi
 
     . /usr/share/debconf/confmodule
-    . /usr/share/dbconfig-common/dpkg/postinst
 
-    db_get nova-common/database-type
-    if [ $RET = "sqlite3" ]
-    then
-        dbc_name="nova.sqlite"
-        db_set nova-common/db/dbname $dbc_name
-    fi
+    db_get nova-common/configure_db
 
-    dbc_dbfile_owner="nova:nova"
-    dbc_go nova-common $@
+    if [ "$RET" = "true" ]; then
+        . /usr/share/dbconfig-common/dpkg/postinst
 
-    if [ "$dbc_install" = "true" ]
-    then
-        case "$dbc_dbtype" in
-            mysql)
-                [ -n "$dbc_dbport" ] && dbport=:$dbc_dbport
-                SQL_CONNECTION="mysql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
-                ;;
-            pgsql)
-                [ -n "$dbc_dbport" ] && dbport=:$dbc_dbport
-                SQL_CONNECTION="pgsql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
-                ;;
-            *)
-                SQL_CONNECTION="sqlite:////$dbc_basepath/$dbc_dbname"
-                ;;
-        esac
-
-        sed -e "s,^sql_connection=.\+,sql_connection=$SQL_CONNECTION," -i /etc/nova/nova.conf
-
-        if [ "$dbc_upgrade" = "true" ]
+        db_get nova-common/database-type
+        if [ "$RET" = "sqlite3" ]
         then
-            nova-manage db sync || true
+            dbc_name="nova.sqlite"
+            db_set nova-common/db/dbname $dbc_name
         fi
+
+        dbc_dbfile_owner="nova:nova"
+        dbc_go nova-common $@
+
+        if [ "$dbc_install" = "true" ]
+        then
+
+            case "$dbc_dbtype" in
+                mysql)
+                    [ -n "$dbc_dbport" ] && dbport=:$dbc_dbport
+                    SQL_CONNECTION="mysql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
+                    ;;
+                pgsql)
+                    [ -n "$dbc_dbport" ] && dbport=:$dbc_dbport
+                    SQL_CONNECTION="pgsql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
+                    ;;
+                *)
+                    SQL_CONNECTION="sqlite:///$dbc_basepath/$dbc_dbname"
+                    ;;
+            esac
+
+            sed -e "s,^[- \t]*sql_connection=.\+,sql_connection=$SQL_CONNECTION," -i /etc/nova/nova.conf
+
+            if [ "$dbc_upgrade" = "true" ]
+            then
+                nova-manage db sync || true
+            fi
+        fi
+    fi
+    db_get nova-common/start_services
+    if [ " $RET" = "false" ]; then
+        sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova
     fi
 fi
 

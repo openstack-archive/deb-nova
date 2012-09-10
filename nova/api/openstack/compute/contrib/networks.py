@@ -24,6 +24,7 @@ from nova import exception
 from nova import flags
 from nova import log as logging
 import nova.network.api
+from nova.rpc import common
 
 
 FLAGS = flags.FLAGS
@@ -75,6 +76,11 @@ class NetworkController(object):
             self.network_api.disassociate(context, network_id)
         except exception.NetworkNotFound:
             raise exc.HTTPNotFound(_("Network not found"))
+        except common.RemoteError as ex:
+            if ex.exc_type in ["NetworkNotFound", "NetworkNotFoundForUUID"]:
+                raise exc.HTTPNotFound(_("Network not found"))
+            else:
+                raise
         return exc.HTTPAccepted()
 
     def index(self, req):
@@ -92,6 +98,11 @@ class NetworkController(object):
             network = self.network_api.get(context, id)
         except exception.NetworkNotFound:
             raise exc.HTTPNotFound(_("Network not found"))
+        except common.RemoteError as ex:
+            if ex.exc_type in ["NetworkNotFound", "NetworkNotFoundForUUID"]:
+                raise exc.HTTPNotFound(_("Network not found"))
+            else:
+                raise
         return {'network': network_dict(network)}
 
     def delete(self, req, id):
@@ -102,6 +113,11 @@ class NetworkController(object):
             self.network_api.delete(context, id)
         except exception.NetworkNotFound:
             raise exc.HTTPNotFound(_("Network not found"))
+        except common.RemoteError as ex:
+            if ex.exc_type in ["NetworkNotFound", "NetworkNotFoundForUUID"]:
+                raise exc.HTTPNotFound(_("Network not found"))
+            else:
+                raise
         return exc.HTTPAccepted()
 
     def create(self, req, id, body=None):

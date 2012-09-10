@@ -1,0 +1,2 @@
+[type: gettext/rfc822deb] nova-common.templates
+[type: gettext/rfc822deb] nova-compute-xen.templates

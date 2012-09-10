@@ -1,0 +1,121 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: nova\n"
+"Report-Msgid-Bugs-To: nova@packages.debian.org\n"
+"POT-Creation-Date: 2012-06-25 10:00+0000\n"
+"PO-Revision-Date: 2012-08-27 16:48+0800\n"
+"Last-Translator: ben <duyujie.dyj@gmail.com>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid "Start nova services at boot?"
+msgstr "系统启动时启动nova服务？"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid "Please choose whether you want to start Nova services when the machine is booted up."
+msgstr "请选择是否需要在机器启动时启动Nova服务。"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid "Set up a database for Nova?"
+msgstr "为Nova设置数据库？"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid "No database has been set up for Nova to use. If you want to set one up now, please make sure you have all needed information:"
+msgstr "未曾为Nova设置数据库。如果你希望现在设置，请确定您有以下信息："
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+" * the host name of the database server (which must allow TCP\n"
+"   connections from this machine);\n"
+" * a username and password to access the database;\n"
+" * the type of database management software you want to use."
+msgstr ""
+" * 数据库服务器的主机名（需要这台主机的TCP链接）；\n"
+" * 访问这个数据库的用户名及密码；\n"
+" * 你希望使用的数据库管理软件的类型。"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid "If you don't choose this option, no database will be set up and Nova will use regular SQLite support."
+msgstr "如果你没有选择该项，不会设置数据库并且Nova将会使用SQLite。"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid "You can change this setting later on by running \"dpkg-reconfigure -plow nova-common\"."
+msgstr "您可以通过运行\"dpkg-reconfigure -plow nova-common\" 命令来修改配置。"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Address of the XenAPI dom0:"
+msgstr "XenAPI dom0 地址："
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Nova Compute Xen needs to know the address of the server running XenAPI. You can enter an IP address, or a fully qualified domain name if it resolves correctly."
+msgstr "Nova Compute Xen 需要知道运行XenAPI的服务器地址。你可以输入一个IP地址，或者一个正确解析的域名。"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform (XCP) appliance installed from an ISO image, or even the Kronos Project's XCP (available in Debian and Ubuntu as the package xcp-xapi)."
+msgstr "这可能是一个运行Citrix XenServer的服务器，或者从一个ISO镜像安装的CentOS XCP(Xen Cloud Platform)应用程序，或者Kronos 项目的XCP（可以从Debian和Ubuntu的xcp-xapi包获得）。"
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:2001
+#: ../nova-compute-xen.templates:3001
+#: ../nova-compute-xen.templates:4001
+msgid "This can later be edited in /etc/nova/nova-compute.conf."
+msgstr "稍后可以修改配置文件 /etc/nova/nova-compute.conf。"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Username to connect to XenAPI:"
+msgstr "链接到XenAPI的用户名："
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Please enter the username used to connect to your XenAPI (XCP server)."
+msgstr "请输入链接到您的XenAPI（XCP服务器）的用户名。"
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Password to connect to XenAPI:"
+msgstr "链接到XenAPI的密码："
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Please enter the password used to connect to your XenAPI (XCP server)."
+msgstr "请输入链接到您的XenAPI（XCP服务器）的密码。"
+

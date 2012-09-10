@@ -1,0 +1,153 @@
+# Danish translation nova.
+# Copyright (C) 2012 nova & nedenstående oversættere.
+# This file is distributed under the same license as the nova package.
+# Joe Hansen <joedalton2@yahoo.dk>, 2012.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: nova\n"
+"Report-Msgid-Bugs-To: nova@packages.debian.org\n"
+"POT-Creation-Date: 2012-06-25 10:00+0000\n"
+"PO-Revision-Date: 2012-07-05 23:51+0200\n"
+"Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
+"Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid "Start nova services at boot?"
+msgstr "Start Novatjenester ved opstart?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+"Please choose whether you want to start Nova services when the machine is "
+"booted up."
+msgstr ""
+"Vælg venligst hvorvidt du ønsker at starte Novatjenester når maskinen "
+"startes op."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid "Set up a database for Nova?"
+msgstr "Opsæt en database for Nova?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"No database has been set up for Nova to use. If you want to set one up now, "
+"please make sure you have all needed information:"
+msgstr ""
+"Ingen database er blevet opsat, som Nova kan bruge. Hvis du ønsker at opsætte "
+"en nu så sikr dig, at du har den krævede information:"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+" * the host name of the database server (which must allow TCP\n"
+"   connections from this machine);\n"
+" * a username and password to access the database;\n"
+" * the type of database management software you want to use."
+msgstr ""
+" * værtsnavnet for databaseserveren (som skal tillade TCP-\n"
+"   forbindelser fra denne maskine)\n"
+" * et brugernavn og adgangskode for at tilgå databasen\n"
+" * Databasehåndteringstypen du ønsker at bruge."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"If you don't choose this option, no database will be set up and Nova will "
+"use regular SQLite support."
+msgstr ""
+"Hvis du ikke vælger denne indstilling, så vil der ikke blive sat en database "
+"op og Nova vil bruge normal SQLite-understøttelse."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-common\"."
+msgstr ""
+"Du kan ændre denne indstilling senere ved at køre »dpkg-reconfigure -plow "
+"nova-common«."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Address of the XenAPI dom0:"
+msgstr "Adresse for XenAPI dom0:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"Nova Compute Xen needs to know the address of the server running XenAPI. You "
+"can enter an IP address, or a fully qualified domain name if it resolves "
+"correctly."
+msgstr ""
+"Nova Compute Xen skal kende adressen for serveren, der kører XenAPI. Du kan "
+"indtaste en IP-adresse eller et fuldt kvalificeret domænenavn, hvis det "
+"bliver slået korrekt op."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform "
+"(XCP) appliance installed from an ISO image, or even the Kronos Project's "
+"XCP (available in Debian and Ubuntu as the package xcp-xapi)."
+msgstr ""
+"Dette kan være en server der kører Citrix XenServer, CentOS Xen Cloud Platform- "
+"apparatet (XCP) installeret fra et ISO-aftryk, eller endda Kronosprojektets "
+"XCP (tilgængelig i Debian og Ubuntu som pakken xcp-xapi)."
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
+#: ../nova-compute-xen.templates:4001
+msgid "This can later be edited in /etc/nova/nova-compute.conf."
+msgstr "Dette kan senere redigeres i /etc/nova/nova-compute.conf."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Username to connect to XenAPI:"
+msgstr "Brugernavn til at forbinde til XenAPI:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Please enter the username used to connect to your XenAPI (XCP server)."
+msgstr ""
+"Indtast venligst brugernavnet brugt til at forbinde til din XenAPI "
+"XCP-server)."
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Password to connect to XenAPI:"
+msgstr "Adgangskode til at forbinde til XenAPI:"
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Please enter the password used to connect to your XenAPI (XCP server)."
+msgstr ""
+"Indtast venligst adgangskoden brugt til at forbinde til din XenAPI "
+"(XCP-server)."
+

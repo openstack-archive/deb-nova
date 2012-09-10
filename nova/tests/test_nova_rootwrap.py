@@ -69,7 +69,7 @@ class RootwrapTestCase(test.TestCase):
         p = subprocess.Popen(["/bin/sleep", "5"])
         f = filters.KillFilter("/bin/kill", "root",
                                ["-ALRM"],
-                               ["/bin/sleep"])
+                               ["/bin/sleep", "/usr/bin/sleep"])
         usercmd = ['kill', '-9', p.pid]
         # Incorrect signal should fail
         self.assertFalse(f.match(usercmd))
@@ -79,7 +79,7 @@ class RootwrapTestCase(test.TestCase):
 
         f = filters.KillFilter("/bin/kill", "root",
                                ["-9", ""],
-                               ["/bin/sleep"])
+                               ["/bin/sleep", "/usr/bin/sleep"])
         usercmd = ['kill', '-9', os.getpid()]
         # Our own PID does not match /bin/sleep, so it should fail
         self.assertFalse(f.match(usercmd))
@@ -102,6 +102,20 @@ class RootwrapTestCase(test.TestCase):
         # Providing something that is not a pid should be False
         usercmd = ['kill', 'notapid']
         self.assertFalse(f.match(usercmd))
+
+    def test_KillFilter_deleted_exe(self):
+        """Makes sure deleted exe's are killed correctly"""
+        # See bug #967931.
+        def fake_readlink(blah):
+            return '/bin/commandddddd (deleted)'
+
+        f = filters.KillFilter("/bin/kill", "root",
+                               [""],
+                               ["/bin/commandddddd"])
+        usercmd = ['kill', 1234]
+        # Providing no signal should work
+        self.stubs.Set(os, 'readlink', fake_readlink)
+        self.assertTrue(f.match(usercmd))
 
     def test_ReadFileFilter(self):
         goodfn = '/good/file.name'

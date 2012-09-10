@@ -8,7 +8,10 @@
 
 override_dh_auto_clean:
 	dh_auto_clean
-	rm -fr doc/build/{doctress,html,man}
+	rm -fr doc/source/api
+	rm -fr doc/build/man
+	rm -fr doc/build/html
+	rm -fr doc/build/doctress
 	rm -rf tests.sqlite clean.sqlite run_tests.log
 	rm -rf CA
 	rm -rf nova.egg-info
@@ -16,15 +19,18 @@ override_dh_auto_clean:
 
 override_dh_auto_build:
 	dh_auto_build
+ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	python setup.py build_sphinx
+endif
 
 override_dh_install:
 	dh_install
-	rm $(CURDIR)/debian/python-nova/usr/lib/python*/dist-packages/nova/rootwrap/compute.py
-	rm $(CURDIR)/debian/python-nova/usr/lib/python*/dist-packages/nova/rootwrap/network.py
-	rm $(CURDIR)/debian/python-nova/usr/lib/python*/dist-packages/nova/rootwrap/volume.py
 	chmod 440 $(CURDIR)/debian/nova-common/etc/sudoers.d/nova_sudoers
-
+	#install -D -m 0664 $(CURDIR)/debian/nova-volume.default $(CURDIR)/debian/nova-volume/etc/default/nova-volume
+	for hypervisor in qemu kvm uml lxc; do \
+		install -D -m 0600 $(CURDIR)/debian/nova-compute-$${hypervisor}.conf $(CURDIR)/debian/nova-compute-$${hypervisor}/etc/nova/nova-compute.conf; \
+	done
+	install -D -m 0600 $(CURDIR)/debian/nova-compute-xen.conf.dist $(CURDIR)/debian/nova-compute-xen/usr/share/doc/nova-compute-xen/nova-compute.conf.dist
 
 override_dh_fixperms:
 	dh_fixperms -Xnova_sudoers
@@ -32,19 +38,49 @@ override_dh_fixperms:
 	rm -f $(CURDIR)/debian/python-nova/usr/share/pyshared/nova/CA/projects/.gitignore
 	rm -f $(CURDIR)/debian/python-nova/usr/share/pyshared/nova/CA/reqs/.gitignore
 
-# ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
-# override_dh_auto_test:
-# 	./run_tests.sh -N
-# endif
+ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
+override_dh_auto_test:
+	./run_tests.sh -N -P
+endif
 
 override_dh_installinit:
 	dh_installinit
 	dh_installinit -pnova-console --name=nova-consoleauth
+
 override_dh_installdocs:
+ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	dh_installdocs
 	ln -sf /usr/share/javascript/jquery/jquery.js $(CURDIR)/debian/nova-doc/usr/share/doc/nova-doc/html/_static/jquery.js
 	ln -sf /usr/share/javascript/underscore/underscore.min.js $(CURDIR)/debian/nova-doc/usr/share/doc/nova-doc/html/_static/underscore.js
+else
+override_dh_installman:
+endif
 
 override_dh_python2:
 	dh_python2
 	dh_python2  /usr/lib/xcp
+	rm debian/python-nova/usr/lib/python2.6/dist-packages/nova/CA/.gitignore
+	rm debian/python-nova/usr/lib/python2.6/dist-packages/nova/CA/projects/.gitignore
+	rm debian/python-nova/usr/lib/python2.6/dist-packages/nova/CA/reqs/.gitignore
+	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/.gitignore
+	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/projects/.gitignore
+	rm debian/python-nova/usr/lib/python2.7/dist-packages/nova/CA/reqs/.gitignore
+
+get-vcs-source:
+	git remote add upstream git://github.com/openstack/nova.git || true
+	git fetch upstream
+	git archive --prefix=nova-2012.1/ 2012.1 | xz >../nova_2012.1.orig.tar.xz
+	if ! git checkout master ; then \
+		echo "No upstream branch: checking out" ; \
+		git checkout -b master upstream/master ; \
+	fi
+	git checkout debian/unstable
+
+display-po-stats:
+	cd $(CURDIR)/debian/po ; for i in *.po ; do \
+		echo -n $$i": " ; \
+		msgfmt -o /dev/null --statistic $$i ; \
+	done
+
+call-for-po-trans:
+	podebconf-report-po --call --withtranslators --languageteam

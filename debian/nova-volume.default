@@ -1,4 +1,0 @@
-# nova-volume default vg to use.
-# If nothing is set here, then nova-volume will pickup the
-# first volume group it sees.
-#nova_volume_group=

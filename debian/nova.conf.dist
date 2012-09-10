@@ -2,7 +2,6 @@
 logdir=/var/log/nova
 state_path=/var/lib/nova
 lock_path=/var/lock/nova
-connection_type=libvirt
 root_helper=sudo nova-rootwrap
 auth_strategy=keystone
 dhcpbridge_flagfile=/etc/nova/nova.conf

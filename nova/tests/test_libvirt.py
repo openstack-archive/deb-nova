@@ -258,10 +258,9 @@ class LibvirtVolumeTestCase(test.TestCase):
         connection_info['data']['auth_username'] = user
         connection_info['data']['secret_type'] = secret_type
         connection_info['data']['secret_uuid'] = uuid
-
         mount_device = "vde"
-        conf = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = conf.format_dom()
+        xml = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = ElementTree.fromstring(xml)
         self.assertEqual(tree.get('type'), 'network')
         self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
         rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
@@ -285,10 +284,9 @@ class LibvirtVolumeTestCase(test.TestCase):
         connection_info['data']['auth_username'] = user
         connection_info['data']['secret_type'] = secret_type
         connection_info['data']['secret_uuid'] = uuid
-
         mount_device = "vde"
-        conf = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = conf.format_dom()
+        xml = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = ElementTree.fromstring(xml)
         self.assertEqual(tree.get('type'), 'network')
         self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
         rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
@@ -325,7 +323,7 @@ class CacheConcurrencyTestCase(test.TestCase):
         self.flags(instances_path='nova.compute.manager')
 
         def fake_exists(fname):
-            basedir = os.path.join(FLAGS.instances_path, '_base')
+            basedir = os.path.join(FLAGS.instances_path, FLAGS.base_dir_name)
             if fname == basedir:
                 return True
             return False
@@ -973,7 +971,8 @@ class LibvirtConnTestCase(test.TestCase):
             return directio_supported
 
         self.stubs.Set(connection.LibvirtConnection,
-            '_supports_direct_io', connection_supports_direct_io_stub)
+                       '_supports_direct_io',
+                       connection_supports_direct_io_stub)
 
         user_context = context.RequestContext(self.user_id, self.project_id)
         instance_ref = db.instance_create(user_context, self.test_instance)
@@ -1393,9 +1392,92 @@ class LibvirtConnTestCase(test.TestCase):
         if os.path.isdir(path):
             shutil.rmtree(path)
 
-        path = os.path.join(FLAGS.instances_path, '_base')
+        path = os.path.join(FLAGS.instances_path, FLAGS.base_dir_name)
         if os.path.isdir(path):
-            shutil.rmtree(os.path.join(FLAGS.instances_path, '_base'))
+            shutil.rmtree(os.path.join(FLAGS.instances_path,
+                                       FLAGS.base_dir_name))
+
+    @test.skip_if(missing_libvirt(), "Test requires libvirt")
+    def test_get_console_output_file(self):
+
+        with utils.tempdir() as tmpdir:
+            self.flags(instances_path=tmpdir)
+
+            instance_ref = self.test_instance
+            instance_ref['image_ref'] = 123456
+            instance = db.instance_create(self.context, instance_ref)
+
+            console_dir = (os.path.join(tmpdir, instance['name']))
+            os.mkdir(console_dir)
+            console_log = '%s/console.log' % (console_dir)
+            f = open(console_log, "w")
+            f.write("foo")
+            f.close()
+            fake_dom_xml = """
+                <domain type='kvm'>
+                    <devices>
+                        <disk type='file'>
+                            <source file='filename'/>
+                        </disk>
+                        <console type='file'>
+                            <source path='%s'/>
+                            <target port='0'/>
+                        </console>
+                    </devices>
+                </domain>
+            """ % console_log
+
+            def fake_lookup(id):
+                return FakeVirtDomain(fake_dom_xml)
+
+            self.create_fake_libvirt_mock()
+            connection.LibvirtConnection._conn.lookupByName = fake_lookup
+            connection.libvirt_utils = libvirt_utils
+
+            conn = connection.LibvirtConnection(False)
+            output = conn.get_console_output(instance)
+            self.assertEquals("foo", output)
+
+    @test.skip_if(missing_libvirt(), "Test requires libvirt")
+    def test_get_console_output_pty(self):
+
+        with utils.tempdir() as tmpdir:
+            self.flags(instances_path=tmpdir)
+
+            instance_ref = self.test_instance
+            instance_ref['image_ref'] = 123456
+            instance = db.instance_create(self.context, instance_ref)
+
+            console_dir = (os.path.join(tmpdir, instance['name']))
+            os.mkdir(console_dir)
+            pty_file = '%s/fake_pty' % (console_dir)
+            f = open(pty_file, "w")
+            f.write("foo")
+            f.close()
+            fake_dom_xml = """
+                <domain type='kvm'>
+                    <devices>
+                        <disk type='file'>
+                            <source file='filename'/>
+                        </disk>
+                        <console type='pty'>
+                            <source path='%s'/>
+                            <target port='0'/>
+                        </console>
+                    </devices>
+                </domain>
+            """ % pty_file
+
+            def fake_lookup(id):
+                return FakeVirtDomain(fake_dom_xml)
+
+            self.create_fake_libvirt_mock()
+            connection.LibvirtConnection._conn.lookupByName = fake_lookup
+            connection.libvirt_utils = libvirt_utils
+
+            conn = connection.LibvirtConnection(False)
+            output = conn.get_console_output(instance)
+            self.assertEquals("foo", output)
 
     def test_get_host_ip_addr(self):
         conn = connection.LibvirtConnection(False)
@@ -1704,6 +1786,10 @@ class IptablesFirewallTestCase(test.TestCase):
                                        'to_port': 81,
                                        'group_id': src_secgroup['id']})
 
+        db.security_group_rule_create(admin_ctxt,
+                                      {'parent_group_id': secgroup['id'],
+                                       'group_id': src_secgroup['id']})
+
         db.instance_add_security_group(admin_ctxt, instance_ref['uuid'],
                                        secgroup['id'])
         db.instance_add_security_group(admin_ctxt, src_instance_ref['uuid'],
@@ -1784,6 +1870,9 @@ class IptablesFirewallTestCase(test.TestCase):
                                '--dports 80:81 -s %s' % ip['address'])
             self.assertTrue(len(filter(regex.match, self.out_rules)) > 0,
                             "TCP port 80/81 acceptance rule wasn't added")
+            regex = re.compile('-A .* -j ACCEPT -s %s' % ip['address'])
+            self.assertTrue(len(filter(regex.match, self.out_rules)) > 0,
+                            "Protocol/port-less acceptance rule wasn't added")
 
         regex = re.compile('-A .* -j ACCEPT -p tcp '
                            '-m multiport --dports 80:81 -s 192.168.10.0/24')

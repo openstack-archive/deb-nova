@@ -1,7 +1,40 @@
-#!/bin/sh -e
+#!/bin/sh
 
-if [ "$1" = "configure" ]; then
-    adduser --quiet nova nova
+set -e
+
+XENAPI_CONFFILE=/etc/nova/nova-compute.conf
+
+if [ "$1" = "configure" -o "$1" = "reconfigure" ]; then
+	adduser --quiet nova nova
+	if ! [ -d /etc/nova ] ; then
+		mkdir /etc/nova
+	fi
+	if ! [ -f ${XENAPI_CONFFILE} ] ; then
+		cp /usr/share/doc/nova-compute-xen/nova-compute.conf.dist ${XENAPI_CONFFILE}
+	fi
+
+	. /usr/share/debconf/confmodule
+
+	db_get nova-compute-xen/xenapi_url
+	XENAPI_URL=$RET
+	if ! grep -E -q "^[- \t]*xenapi_connection_url=" ${XENAPI_CONFFILE} ; then
+		echo "xenapi_connection_url=" >> ${XENAPI_CONFFILE}
+	fi
+	sed -i "s#^[- \t]*xenapi_connection_url=.*#xenapi_connection_url=${XENAPI_URL}#" ${XENAPI_CONFFILE}
+
+	db_get nova-compute-xen/xenapi_username
+	XENAPI_USER=$RET
+	if ! grep -E -q "^[- \t]*xenapi_connection_username=" ${XENAPI_CONFFILE} ; then
+		echo "xenapi_connection_username=" >> ${XENAPI_CONFFILE}
+	fi
+	sed -i "s#^[- \t]*xenapi_connection_username=.*#xenapi_connection_username=${XENAPI_USER}#" ${XENAPI_CONFFILE}
+
+	db_get nova-compute-xen/xenapi_password
+	XENAPI_PASS=$RET
+	if ! grep -E -q "^[- \t]*xenapi_connection_password=" ${XENAPI_CONFFILE} ; then
+		echo "xenapi_connection_password=" >> ${XENAPI_CONFFILE}
+	fi
+	sed -i "s#^[- \t]*xenapi_connection_password=.*#xenapi_connection_password=${XENAPI_PASS}#" ${XENAPI_CONFFILE}
 fi
 
 #DEBHELPER#

@@ -20,6 +20,7 @@ import distutils.version as dist_version
 import os
 import sys
 
+from nova.db.sqlalchemy import fix_dns_domains
 from nova.db.sqlalchemy.session import get_engine
 from nova import exception
 from nova import flags
@@ -80,7 +81,8 @@ def db_sync(version=None):
     current_version = db_version()
     repository = _find_migrate_repo()
     if version is None or version > current_version:
-        return versioning_api.upgrade(get_engine(), repository, version)
+        versioning_api.upgrade(FLAGS.sql_connection, repo_path, version)
+        return fix_dns_domains.run(get_engine())
     else:
         return versioning_api.downgrade(get_engine(), repository,
                                         version)

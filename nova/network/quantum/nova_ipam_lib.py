@@ -47,6 +47,10 @@ class QuantumNovaIPAMLib(object):
         """
         self.net_manager = net_manager
 
+        # NOTE(s0mik) : If DHCP is not in use, we need to timeout IPs
+        # periodically.  See comment in deallocate_ips_by_vif for more
+        self.net_manager.timeout_fixed_ips = not self.net_manager.DHCP
+
     def create_subnet(self, context, label, tenant_id,
                       quantum_net_id, priority, cidr=None,
                       gateway=None, gateway_v6=None, cidr_v6=None,
@@ -213,10 +217,42 @@ class QuantumNovaIPAMLib(object):
         admin_context = context.elevated()
         fixed_ips = db.fixed_ips_by_virtual_interface(admin_context,
                                                          vif_ref['id'])
+        # NOTE(s0mik): Sets fixed-ip to deallocated, but leaves the entry
+        # associated with the instance-id.  This prevents us from handing it
+        # out again immediately, as allocating it to a new instance before
+        # a DHCP lease has timed-out is bad.  Instead, the fixed-ip will
+        # be disassociated with the instance-id by a call to one of two
+        # methods inherited from FlatManager:
+        # - if DHCP is in use, a lease expiring in dnsmasq triggers
+        #   a call to release_fixed_ip in the network manager.
+        # - otherwise, _disassociate_stale_fixed_ips is called periodically
+        #   to disassociate all fixed ips that are unallocated
+        #   but still associated with an instance-id.
+
+        read_deleted_context = admin_context.elevated(read_deleted='yes')
         for fixed_ip in fixed_ips:
             db.fixed_ip_update(admin_context, fixed_ip['address'],
                                {'allocated': False,
                                 'virtual_interface_id': None})
+            fixed_id = fixed_ip['id']
+            floating_ips = self.net_manager.db.floating_ip_get_by_fixed_ip_id(
+                                admin_context,
+                                fixed_id)
+            # disassociate floating ips related to fixed_ip
+            for floating_ip in floating_ips:
+                address = floating_ip['address']
+                manager.FloatingIP.disassociate_floating_ip(
+                    self.net_manager,
+                    read_deleted_context,
+                    address,
+                    affect_auto_assigned=True)
+                # deallocate if auto_assigned
+                if floating_ip['auto_assigned']:
+                    manager.FloatingIP.deallocate_floating_ip(
+                        read_deleted_context,
+                        address,
+                        affect_auto_assigned=True)
+
         if len(fixed_ips) == 0:
             LOG.error(_('No fixed IPs to deallocate for vif %s'),
                       vif_ref['id'])

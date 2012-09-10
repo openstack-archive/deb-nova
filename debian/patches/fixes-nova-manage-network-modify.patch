@@ -1,0 +1,22 @@
+Description: Fixes nova-manage network modify: 'bool' object has no attribute 'decode
+Author: Thomas Goirand <zigo@debian.org>
+Bug-Debian: http://bugs.debian.org/672350
+Origin: https://review.openstack.org/#/c/7298/1/bin/nova-manage
+Bug: https://review.openstack.org/#/c/7298/
+Forwarded: not-needed
+Reviewed-By: Thomas Goirand <zigo@debian.org>
+
+--- nova-2012.1.orig/bin/nova-manage
++++ nova-2012.1/bin/nova-manage
+@@ -1724,8 +1724,10 @@ def main():
+     for k, v in fn_kwargs.items():
+         if v is None:
+             del fn_kwargs[k]
+-        else:
++        elif isinstance(v, basestring):
+             fn_kwargs[k] = v.decode('utf-8')
++        else:
++            fn_kwargs[k] = v
+ 
+     fn_args = [arg.decode('utf-8') for arg in fn_args]
+ 
