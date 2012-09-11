@@ -33,11 +33,6 @@ authorize_update = extensions.extension_authorizer('compute', 'quotas:update')
 authorize_show = extensions.extension_authorizer('compute', 'quotas:show')
 
 
-quota_resources = ['metadata_items', 'injected_file_content_bytes',
-        'volumes', 'gigabytes', 'ram', 'floating_ips', 'instances',
-        'injected_files', 'cores', 'security_groups', 'security_group_rules']
-
-
 class QuotaTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('quota_set', selector='quota_set')

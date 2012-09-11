@@ -82,11 +82,6 @@ class NetworkController(object):
             self.network_api.disassociate(context, network_id)
         except exception.NetworkNotFound:
             raise exc.HTTPNotFound(_("Network not found"))
-        except common.RemoteError as ex:
-            if ex.exc_type in ["NetworkNotFound", "NetworkNotFoundForUUID"]:
-                raise exc.HTTPNotFound(_("Network not found"))
-            else:
-                raise
         return exc.HTTPAccepted()
 
     def index(self, req):
@@ -114,11 +109,6 @@ class NetworkController(object):
             self.network_api.delete(context, id)
         except exception.NetworkNotFound:
             raise exc.HTTPNotFound(_("Network not found"))
-        except common.RemoteError as ex:
-            if ex.exc_type in ["NetworkNotFound", "NetworkNotFoundForUUID"]:
-                raise exc.HTTPNotFound(_("Network not found"))
-            else:
-                raise
         return exc.HTTPAccepted()
 
     def create(self, req, id, body=None):

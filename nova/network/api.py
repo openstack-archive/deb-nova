@@ -229,11 +229,6 @@ class API(base.Base):
                  FLAGS.network_topic,
                  {'method': 'disassociate_floating_ip',
                   'args': {'address': address}})
-        self.invalidate_instance_cache(context, instance)
-
-    def invalidate_instance_cache(self, context, instance):
-        # NOTE(vish): get_instance_nw_info will recreate the cache for us
-        self.get_instance_nw_info(context, instance)
 
     @refresh_cache
     def allocate_for_instance(self, context, instance, **kwargs):

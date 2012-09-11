@@ -47,10 +47,6 @@ class QuantumNovaIPAMLib(object):
         """
         self.net_manager = net_manager
 
-        # NOTE(s0mik) : If DHCP is not in use, we need to timeout IPs
-        # periodically.  See comment in deallocate_ips_by_vif for more
-        self.net_manager.timeout_fixed_ips = not self.net_manager.DHCP
-
     def create_subnet(self, context, label, tenant_id,
                       quantum_net_id, priority, cidr=None,
                       gateway=None, gateway_v6=None, cidr_v6=None,

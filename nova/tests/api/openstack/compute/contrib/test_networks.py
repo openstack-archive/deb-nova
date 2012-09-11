@@ -20,7 +20,6 @@ import webob
 
 from nova.api.openstack.compute.contrib import networks
 from nova import exception
-from nova.rpc import common
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -94,7 +93,7 @@ class FakeNetworkAPI(object):
             if network.get('uuid') == network_uuid:
                 network['project_id'] = None
                 return True
-        raise common.RemoteError(type(exception.NetworkNotFound()).__name__)
+        raise exception.NetworkNotFound()
 
     def add_network_to_project(self, context,
                                project_id, network_uuid=None):

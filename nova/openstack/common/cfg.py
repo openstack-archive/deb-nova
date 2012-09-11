@@ -1052,7 +1052,6 @@ class ConfigOpts(collections.Mapping):
         """Return the number of options and option groups."""
         return len(self._opts) + len(self._groups)
 
-    @__clear_cache
     def reset(self):
         """Clear the object state and unset overrides and defaults."""
         self._unset_defaults_and_overrides()

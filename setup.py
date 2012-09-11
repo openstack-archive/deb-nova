@@ -19,7 +19,6 @@ import glob
 import os
 
 import setuptools
-from setuptools.command import sdist
 
 from nova.openstack.common import setup as common_setup
 from nova import version

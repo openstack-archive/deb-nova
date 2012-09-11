@@ -268,9 +268,10 @@ class LibvirtVolumeTestCase(test.TestCase):
         connection_info['data']['auth_username'] = user
         connection_info['data']['secret_type'] = secret_type
         connection_info['data']['secret_uuid'] = uuid
+
         mount_device = "vde"
-        xml = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = ElementTree.fromstring(xml)
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
         self.assertEqual(tree.get('type'), 'network')
         self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
         rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
@@ -294,9 +295,10 @@ class LibvirtVolumeTestCase(test.TestCase):
         connection_info['data']['auth_username'] = user
         connection_info['data']['secret_type'] = secret_type
         connection_info['data']['secret_uuid'] = uuid
+
         mount_device = "vde"
-        xml = libvirt_driver.connect_volume(connection_info, mount_device)
-        tree = ElementTree.fromstring(xml)
+        conf = libvirt_driver.connect_volume(connection_info, mount_device)
+        tree = conf.format_dom()
         self.assertEqual(tree.get('type'), 'network')
         self.assertEqual(tree.find('./source').get('protocol'), 'rbd')
         rbd_name = '%s/%s' % (FLAGS.rbd_pool, name)
