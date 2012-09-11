@@ -6,6 +6,13 @@
 %:
 	dh $@ --with python2
 
+override_dh_gencontrol:
+	if dpkg-vendor --derives-from ubuntu ; then \
+        dh_gencontrol -- -T$(CURDIR)/debian/ubuntu_control_vars ; \
+    else \
+        dh_gencontrol -- -T$(CURDIR)/debian/debian_control_vars ; \
+    fi
+
 override_dh_auto_clean:
 	dh_auto_clean
 	rm -fr doc/source/api

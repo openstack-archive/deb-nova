@@ -6,46 +6,48 @@ Uploaders: Loic Dachary (OuoU) <loic@debian.org>,
            Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
            Ghe Rivero <ghe.rivero@stackops.com>,
-	   Mehdi Abaakouk <sileht@sileht.net>
+           Mehdi Abaakouk <sileht@sileht.net>
 Build-Depends: debhelper (>= 7.0.50),
- python-netaddr,
- python-distutils-extra,
- python-eventlet,
- python-m2crypto,
  python-all (>= 2.6.6-3~),
- python-lockfile,
- python-novaclient (>= 2.6.7),
+Build-Depends-Indep:
+ openssh-client,
+ python-setuptools,
+ python-setuptools-git,
+ python-sphinx (>> 1.0),
+ python-distutils-extra,
  python-gflags,
- python-feedparser,
- python-suds (>= 0.4.0),
- python-coverage,
- python-greenlet,
- python-xattr,
- python-webob,
- python-glance,
- python-routes,
- python-libvirt,
- python-memcache,
- python-carrot,
- python-lxml,
  python-mox,
+ python-carrot,
  python-boto,
+ python-eventlet,
+ python-routes,
+ python-webob,
  python-cheetah,
  python-nose,
- python-paramiko,
  python-paste,
+ python-netaddr,
+ python-glance,
+ python-paramiko,
+ python-novaclient (>= 2.6.7),
+ python-lockfile,
  python-simplejson,
- python-xenapi,
+ python-lxml,
+ python-xattr,
+ python-feedparser,
+ python-m2crypto,
+ python-iso8601,
  euca2ools,
  ipython,
  bpython,
+ python-suds (>= 0.4.0),
+ python-coverage,
+ python-greenlet,
+ python-libvirt,
+ python-memcache,
+ python-xenapi,
+ python-tox,
  python-qpid,
- python-iso8601,
- openssh-client,
  pep8
-Build-Depends-Indep:
- python-setuptools,
- python-sphinx (>> 1.0)
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.3
 Homepage: http://launchpad.net/nova
@@ -56,15 +58,15 @@ Package: python-nova
 Architecture: all
 Section: python
 Depends: ${python:Depends},
+ openssh-client,
+ openssl,
  python-boto,
  python-m2crypto,
  python-pycurl,
  python-daemon,
  python-carrot,
- python-kombu,
  python-lockfile,
  python-gflags,
- openssl,
  python-libxml2,
  python-ldap,
  python-sqlalchemy-ext | python-sqlalchemy (<< 0.6.3-2),
@@ -81,9 +83,10 @@ Depends: ${python:Depends},
  python-novaclient,
  python-simplejson,
  python-lxml,
+ python-kombu,
  sudo,
-  ${misc:Depends}
-Suggests: python-suds (>= 0.4.0)
+ ${misc:Depends}
+Suggests: python-suds (>= 0.4.0),
 Conflicts: python-cjson
 Recommends: python-mysqldb
 Description: OpenStack Compute - libraries
@@ -102,9 +105,9 @@ Description: OpenStack Compute - libraries
 
 Package: nova-common
 Architecture: all
-Depends: sqlite3, python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends},
- adduser,
+Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends}, adduser,
  python-iso8601,
+ sqlite3, 
  dbconfig-common
 Suggests: python-pysqlite2 | python-mysqldb | python-pygresql
 Description: OpenStack Compute - common files
@@ -123,7 +126,9 @@ Description: OpenStack Compute - common files
 
 Package: nova-compute
 Architecture: all
-Depends: lsb-base (>= 3.0.6), adduser, qemu-utils, nova-common (= ${binary:Version}), kpartx, curl, parted, vlan, ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
+Depends: lsb-base (>= 3.0.6),  nova-common (= ${binary:Version}), qemu-utils, kpartx, curl, parted, vlan,
+ ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
+ adduser,
  ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
@@ -238,9 +243,67 @@ Description: OpenStack Compute - compute node (KVM)
  .
  This is a dependency package for compute nodes using KVM.
 
+
+Package: nova-xcp-plugins
+Architecture: all
+Depends: xcp-xapi, ${python:Depends}, ${misc:Depends}
+Description: OpenStack Compute plugin for the Xen Cloud Platform
+ OpenStack is a reliable cloud infrastructure. Its mission is to produce
+ the ubiquitous cloud computing platform that will meet the needs of public
+ and private cloud providers regardless of size, by being simple to implement
+ and massively scalable.
+ .
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
+ designed to be modular and easy to extend and adapt. In addition to its
+ "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+ many different database backends (including SQLite, MySQL, and PostgreSQL),
+ hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
+ .
+ This package is to be installed on the server where you have installed your
+ master Xen API server (see the xcp-xapi package), so that nova-compute can
+ remotely control your XCP nodes and start VM instances.
+
+Package: nova-xcp-network
+Architecture: all
+Depends: xcp-xapi, lsb-base (>= 3.0.6), ${python:Depends}, ${misc:Depends}, nova-xcp-plugins (= ${binary:Version}),
+ openvswitch-switch, ebtables, arptables, iproute
+Description: OpenStack Compute network plugin for the Xen Cloud Platform
+ OpenStack is a reliable cloud infrastructure. Its mission is to produce
+ the ubiquitous cloud computing platform that will meet the needs of public
+ and private cloud providers regardless of size, by being simple to implement
+ and massively scalable.
+ .
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
+ designed to be modular and easy to extend and adapt. In addition to its
+ "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+ many different database backends (including SQLite, MySQL, and PostgreSQL),
+ hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
+ .
+ This package is to be installed on the server where you have installed your
+ master Xen API server (see the xcp-xapi package), so that nova can remotely
+ configure the network of your XCP servers.
+
+Package: nova-cert
+Architecture: all
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Description: OpenStack Compute - certificate manager
+ OpenStack is a reliable cloud infrastructure. Its mission is to produce
+ the ubiquitous cloud computing platform that will meet the needs of public
+ and private cloud providers regardless of size, by being simple to implement
+ and massively scalable.
+ .
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
+ designed to be modular and easy to extend and adapt. In addition to its
+ "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+ many different database backends (including SQLite, MySQL, and PostgreSQL),
+ hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
+ .
+ This package provides the certificate manager. This enables the generation
+ and revocation of X.509 certificates used to access the plaform.
+
 Package: nova-scheduler
 Architecture: all
-Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - virtual machine scheduler
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -257,7 +320,7 @@ Description: OpenStack Compute - virtual machine scheduler
 
 Package: nova-volume
 Architecture: all
-Depends: lsb-base, nova-common (= ${binary:Version}), lvm2, tgt, ${python:Depends}, ${misc:Depends}
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), lvm2, tgt, ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
 Suggests: sheepdog
@@ -275,10 +338,29 @@ Description: OpenStack Compute - storage
  .
  This package equips a system to function as a storage node.
 
+Package: nova-xvpvncproxy
+Provides: nova-vncproxy
+Architecture: all
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Description: OpenStack Compute - XVP VNC proxy
+ OpenStack is a reliable cloud infrastructure. Its mission is to produce
+ the ubiquitous cloud computing platform that will meet the needs of public
+ and private cloud providers regardless of size, by being simple to implement
+ and massively scalable.
+ .
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
+ designed to be modular and easy to extend and adapt. In addition to its
+ "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+ many different database backends (including SQLite, MySQL, and PostgreSQL),
+ hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
+ .
+ This package provides the XVP VNC proxy. It is a publicly reachable
+ component which proxies access to VNCs running on compute nodes.
+
 Package: nova-api
 Architecture: all
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Recommends: python-keystone
-Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - compute API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -295,7 +377,8 @@ Description: OpenStack Compute - compute API frontend
 
 Package: nova-network
 Architecture: all
-Depends: lsb-base (>= 3.0.6), netcat, vlan, bridge-utils, dnsmasq-base, iputils-arping, dnsmasq-utils, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: ${ostack-lsb-base}, netcat, vlan, bridge-utils, dnsmasq-base, iputils-arping, dnsmasq-utils, iptables,
+ nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
 Suggests: radvd
@@ -319,7 +402,7 @@ Description: OpenStack Compute - network manager
 
 Package: nova-objectstore
 Architecture: all
-Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - object store
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -338,7 +421,7 @@ Description: OpenStack Compute - object store
 Package: nova-console
 Provides: nova-consoleauth
 Architecture: all
-Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - console
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -355,61 +438,6 @@ Description: OpenStack Compute - console
  with XVP and XenServer. It is a publicly reachable component which proxies
  access to VNCs running on compute nodes.
 
-Package: nova-cert
-Architecture: all
-Depends: lsb-base (>= 3.0.6), nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Description: OpenStack Compute - certificate manager
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package provides the certificate manager. This enables the generation
- and revocation of X.509 certificates used to access the plaform.
-
-Package: nova-xcp-plugins
-Architecture: all
-Depends: xcp-xapi, ${python:Depends}, ${misc:Depends}
-Description: OpenStack Compute plugin for the Xen Cloud Platform
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package is to be installed on the server where you have installed your
- master Xen API server (see the xcp-xapi package), so that nova-compute can
- remotely control your XCP nodes and start VM instances.
-
-Package: nova-xcp-network
-Architecture: all
-Depends: xcp-xapi, lsb-base (>= 3.0.6), ${python:Depends}, ${misc:Depends}, nova-xcp-plugins (= ${binary:Version}), openvswitch-switch, ebtables, arptables, iproute
-Description: OpenStack Compute network plugin for the Xen Cloud Platform
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package is to be installed on the server where you have installed your
- master Xen API server (see the xcp-xapi package), so that nova can remotely
- configure the network of your XCP servers.
 
 Package: nova-doc
 Architecture: all
@@ -428,25 +456,6 @@ Description: OpenStack Compute - documentation
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
  This package contains the documentation for Nova.
-
-Package: nova-xvpvncproxy
-Provides: nova-vncproxy
-Architecture: all
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Description: OpenStack Compute - XVP VNC proxy
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package provides the XVP VNC proxy. It is a publicly reachable
- component which proxies access to VNCs running on compute nodes.
 
 Package: nova-api-metadata
 Architecture: all
