@@ -1,4 +1,5 @@
 etc/nova
+etc/nova/rootwrap.d
 var/lib/nova/buckets
 var/lib/nova/CA
 var/lib/nova/CA/INTER

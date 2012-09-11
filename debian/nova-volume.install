@@ -1,2 +1,3 @@
 usr/bin/nova-volume
-usr/lib/python*/dist-packages/nova/rootwrap/volume.py
+etc/nova/rootwrap.d/volume.filters
+debian/nova_tgt etc/tgt/conf.d
