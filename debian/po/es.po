@@ -42,7 +42,6 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
-#| msgid "Start nova services at boot?"
 msgid "Start nova services at boot?"
 msgstr "¿Desea iniciar los servicios de nova en el arranque del sistema?"
 
@@ -50,26 +49,26 @@ msgstr "¿Desea iniciar los servicios de nova en el arranque del sistema?"
 #. Description
 #: ../nova-common.templates:2001
 msgid ""
-"Please choose whether you want to start nova services when the machine is "
+"Please choose whether you want to start Nova services when the machine is "
 "booted up."
 msgstr ""
-"Elija si desea iniciar los servicios de nova cuando la máquina está "
+"Elija si desea iniciar los servicios de Nova cuando la máquina está "
 "arrancando."
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
-msgid "Set up a database for nova?"
-msgstr "¿Desea configurar una base de datos para nova?"
+msgid "Set up a database for Nova?"
+msgstr "¿Desea configurar una base de datos para Nova?"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:3001
 msgid ""
-"No database has been set up for nova to use. If you want to set one up now, "
+"No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
 msgstr ""
-"No se ha configurado ninguna base de datos para utilizar con nova. Si desea "
+"No se ha configurado ninguna base de datos para utilizar con Nova. Si desea "
 "configurar una ahora, asegúrese de que tiene toda la información necesaria:"
 
 #. Type: boolean
@@ -90,10 +89,10 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:3001
 msgid ""
-"If you don't choose this option, no database will be set up and nova will "
+"If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
 msgstr ""
-"Si no elige esta opción, no se configurará ninguna base de datos y nova\n"
+"Si no elige esta opción, no se configurará ninguna base de datos y Nova "
 "utilizará SQLite"
 
 #. Type: boolean
@@ -116,11 +115,11 @@ msgstr "Dirección de la XenAPI dom0:"
 #. Description
 #: ../nova-compute-xen.templates:2001
 msgid ""
-"nova Compute Xen needs to know the address of the server running XenAPI. You "
+"Nova Compute Xen needs to know the address of the server running XenAPI. You "
 "can enter an IP address, or a fully qualified domain name if it resolves "
 "correctly."
 msgstr ""
-"nova Compute Xen necesita saber la dirección del servidor que ejecuta "
+"Nova Compute Xen necesita saber la dirección del servidor que ejecuta "
 "XenAPI. Puede introducir una dirección IP o un nombre de dominio completo si "
 "se resuelve correctamente."
 

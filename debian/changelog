@@ -1,3 +1,9 @@
+nova (2012.1.1-10) unstable; urgency=low
+
+  * Fixes capitalization in debian/po/es.po (Nova vs nova) (Closes: #687000).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 12 Sep 2012 07:23:36 +0000
+
 nova (2012.1.1-9) unstable; urgency=low
 
   * Added Debconf Chinese translation thanks to ben <duyujie.dyj@gmail.com>.
