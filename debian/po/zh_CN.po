@@ -49,7 +49,7 @@ msgid ""
 " * a username and password to access the database;\n"
 " * the type of database management software you want to use."
 msgstr ""
-" * 数据库服务器的主机名 （需要这台主机的TCP链接）；\n"
+" * 数据库服务器的主机名（需要这台主机的TCP链接）；\n"
 " * 访问这个数据库的用户名及密码；\n"
 " * 你希望使用的数据库管理软件的类型。"
 
@@ -63,7 +63,7 @@ msgstr "如果你没有选择该项，不会设置数据库并且Nova将会使�
 #. Description
 #: ../nova-common.templates:3001
 msgid "You can change this setting later on by running \"dpkg-reconfigure -plow nova-common\"."
-msgstr "您可以通过运行\"dpkg-reconfigure-plow nova-common\" 命令来修改配置。"
+msgstr "您可以通过运行\"dpkg-reconfigure -plow nova-common\" 命令来修改配置。"
 
 #. Type: string
 #. Description
