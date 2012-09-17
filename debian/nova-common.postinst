@@ -64,12 +64,15 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 
             sed -e "s,^[- \t]*sql_connection=.\+,sql_connection=$SQL_CONNECTION," -i /etc/nova/nova.conf
 
-            if [ "$dbc_upgrade" = "true" ]
-            then
-                nova-manage db sync || true
-            fi
         fi
     fi
+
+    if ! grep -q sql_connection /etc/nova/nova.conf
+    then
+        su -s /bin/sh -c 'nova-manage db sync' nova
+    fi
+
+
     db_get nova-common/start_services
     if [ " $RET" = "false" ]; then
         sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova
