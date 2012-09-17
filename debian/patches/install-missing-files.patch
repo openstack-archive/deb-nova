@@ -1,0 +1,13 @@
+Description: Install some missing files
+Author: Mehdi Abaakouk <sileht@sileht.net>
+
+--- nova-2012.2~e3.orig/MANIFEST.in
++++ nova-2012.2~e3/MANIFEST.in
+@@ -2,5 +2,6 @@ include AUTHORS
+ include ChangeLog
+ exclude .gitignore
+ exclude .gitreview
+-
++include nova/db/sqlalchemy/migrate_repo/migrate.cfg
++include nova/db/sqlalchemy/migrate_repo/versions/*.sql
+ global-exclude *.pyc
