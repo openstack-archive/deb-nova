@@ -14,7 +14,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="EC2 API server"
 NAME=nova-api-ec2
 DAEMON=/usr/bin/nova-api-ec2
-DAEMON_ARGS="--flagfile=/etc/nova/nova.conf"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
