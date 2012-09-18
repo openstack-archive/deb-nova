@@ -1,5 +1,6 @@
 nova (2012.2~e3-1) experimental; urgency=low
 
+  [ Mehdi Abaakouk ]
   * New upstream version
   * Removed patches included by upstream:
      nova-manage_flagfile_location.patch
@@ -9,6 +10,8 @@ nova (2012.2~e3-1) experimental; urgency=low
      CVE-2012-3371.patch
      CVE-2012-3447_compute-node-file-injection.patch
 
+  [ Thomas Goirand ]
+  * Now using xz compression level 9 for all debs.
 
  -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 10 Sep 2012 17:56:09 +0200
 
