@@ -39,6 +39,7 @@ def set_defaults(conf):
     conf.set_default('iscsi_num_targets', 8)
     conf.set_default('network_size', 8)
     conf.set_default('num_networks', 2)
+    conf.set_default('vlan_interface', 'eth0')
     conf.set_default('rpc_backend', 'nova.openstack.common.rpc.impl_fake')
     conf.set_default('sql_connection', "sqlite://")
     conf.set_default('sqlite_synchronous', False)
@@ -48,3 +49,4 @@ def set_defaults(conf):
     conf.set_default('api_paste_config', '$state_path/etc/nova/api-paste.ini')
     conf.set_default('rpc_response_timeout', 5)
     conf.set_default('rpc_cast_timeout', 5)
+    conf.set_default('lock_path', None)

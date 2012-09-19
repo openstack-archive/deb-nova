@@ -47,6 +47,7 @@ class LibvirtVolumeDriver(object):
         conf.source_path = connection_info['data']['device_path']
         conf.target_dev = mount_device
         conf.target_bus = "virtio"
+        conf.serial = connection_info.get('serial')
         return conf
 
     def disconnect_volume(self, connection_info, mount_device):
@@ -67,6 +68,7 @@ class LibvirtFakeVolumeDriver(LibvirtVolumeDriver):
         conf.source_host = "fake"
         conf.target_dev = mount_device
         conf.target_bus = "virtio"
+        conf.serial = connection_info.get('serial')
         return conf
 
 
@@ -83,6 +85,7 @@ class LibvirtNetVolumeDriver(LibvirtVolumeDriver):
         conf.source_host = connection_info['data']['name']
         conf.target_dev = mount_device
         conf.target_bus = "virtio"
+        conf.serial = connection_info.get('serial')
         netdisk_properties = connection_info['data']
         if netdisk_properties.get('auth_enabled'):
             conf.auth_username = netdisk_properties['auth_username']
@@ -200,4 +203,4 @@ class LibvirtISCSIVolumeDriver(LibvirtVolumeDriver):
             self._run_iscsiadm(iscsi_properties, ("--logout",),
                                check_exit_code=[0, 255])
             self._run_iscsiadm(iscsi_properties, ('--op', 'delete'),
-                               check_exit_code=[0, 255])
+                               check_exit_code=[0, 21, 255])

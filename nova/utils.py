@@ -35,13 +35,11 @@ import socket
 import struct
 import sys
 import tempfile
-import threading
 import time
 import uuid
 import weakref
 from xml.sax import saxutils
 
-from eventlet import corolocal
 from eventlet import event
 from eventlet.green import subprocess
 from eventlet import greenthread
@@ -190,15 +188,14 @@ def execute(*cmd, **kwargs):
                 result = obj.communicate()
             obj.stdin.close()  # pylint: disable=E1101
             _returncode = obj.returncode  # pylint: disable=E1101
-            if _returncode:
-                LOG.debug(_('Result was %s') % _returncode)
-                if not ignore_exit_code and _returncode not in check_exit_code:
-                    (stdout, stderr) = result
-                    raise exception.ProcessExecutionError(
-                            exit_code=_returncode,
-                            stdout=stdout,
-                            stderr=stderr,
-                            cmd=' '.join(cmd))
+            LOG.debug(_('Result was %s') % _returncode)
+            if not ignore_exit_code and _returncode not in check_exit_code:
+                (stdout, stderr) = result
+                raise exception.ProcessExecutionError(
+                        exit_code=_returncode,
+                        stdout=stdout,
+                        stderr=stderr,
+                        cmd=' '.join(cmd))
             return result
         except exception.ProcessExecutionError:
             if not attempts:
@@ -628,7 +625,7 @@ class _InterProcessLock(object):
             self.unlock()
             self.lockfile.close()
         except IOError:
-            LOG.exception(_("Could not release the aquired lock `%s`")
+            LOG.exception(_("Could not release the acquired lock `%s`")
                              % self.fname)
 
     def trylock(self):
@@ -664,7 +661,7 @@ else:
 _semaphores = weakref.WeakValueDictionary()
 
 
-def synchronized(name, external=False):
+def synchronized(name, external=False, lock_path=None):
     """Synchronization decorator.
 
     Decorating a method like so::
@@ -691,6 +688,10 @@ def synchronized(name, external=False):
     multiple processes. This means that if two different workers both run a
     a method decorated with @synchronized('mylock', external=True), only one
     of them will execute at a time.
+
+    The lock_path keyword argument is used to specify a special location for
+    external lock files to live. If nothing is set, then FLAGS.lock_path is
+    used as a default.
     """
 
     def wrap(f):
@@ -706,9 +707,6 @@ def synchronized(name, external=False):
                 # (only valid in greenthreads)
                 _semaphores[name] = sem
 
-            LOG.debug(_('Attempting to grab semaphore "%(lock)s" for method '
-                        '"%(method)s"...'), {'lock': name,
-                                             'method': f.__name__})
             with sem:
                 LOG.debug(_('Got semaphore "%(lock)s" for method '
                             '"%(method)s"...'), {'lock': name,
@@ -717,14 +715,39 @@ def synchronized(name, external=False):
                     LOG.debug(_('Attempting to grab file lock "%(lock)s" for '
                                 'method "%(method)s"...'),
                               {'lock': name, 'method': f.__name__})
-                    lock_file_path = os.path.join(FLAGS.lock_path,
-                                                  'nova-%s' % name)
-                    lock = InterProcessLock(lock_file_path)
-                    with lock:
-                        LOG.debug(_('Got file lock "%(lock)s" for '
-                                    'method "%(method)s"...'),
-                                  {'lock': name, 'method': f.__name__})
-                        retval = f(*args, **kwargs)
+                    cleanup_dir = False
+
+                    # We need a copy of lock_path because it is non-local
+                    local_lock_path = lock_path
+                    if not local_lock_path:
+                        local_lock_path = FLAGS.lock_path
+
+                    if not local_lock_path:
+                        cleanup_dir = True
+                        local_lock_path = tempfile.mkdtemp()
+
+                    if not os.path.exists(local_lock_path):
+                        cleanup_dir = True
+                        ensure_tree(local_lock_path)
+
+                    # NOTE(mikal): the lock name cannot contain directory
+                    # separators
+                    safe_name = name.replace(os.sep, '_')
+                    lock_file_path = os.path.join(local_lock_path,
+                                                  'nova-%s' % safe_name)
+                    try:
+                        lock = InterProcessLock(lock_file_path)
+                        with lock:
+                            LOG.debug(_('Got file lock "%(lock)s" for '
+                                        'method "%(method)s"...'),
+                                      {'lock': name, 'method': f.__name__})
+                            retval = f(*args, **kwargs)
+                    finally:
+                        # NOTE(vish): This removes the tempdir if we needed
+                        #             to create one. This is used to cleanup
+                        #             the locks left behind by unit tests.
+                        if cleanup_dir:
+                            shutil.rmtree(local_lock_path)
                 else:
                     retval = f(*args, **kwargs)
 
@@ -913,7 +936,18 @@ def bool_from_str(val):
     try:
         return True if int(val) else False
     except ValueError:
-        return val.lower() == 'true'
+        return val.lower() == 'true' or \
+               val.lower() == 'yes' or \
+               val.lower() == 'y'
+
+
+def is_valid_boolstr(val):
+    """Check if the provided string is a valid bool string or not. """
+    val = str(val).lower()
+    return val == 'true' or val == 'false' or \
+           val == 'yes' or val == 'no' or \
+           val == 'y' or val == 'n' or \
+           val == '1' or val == '0'
 
 
 def is_valid_ipv4(address):
@@ -1101,6 +1135,18 @@ def read_cached_file(filename, cache_info, reload_func=None):
     return cache_info['data']
 
 
+def file_open(*args, **kwargs):
+    """Open file
+
+    see built-in file() documentation for more details
+
+    Note: The reason this is kept in a separate module is to easily
+          be able to provide a stub module that doesn't alter system
+          state at all (for unit tests)
+    """
+    return file(*args, **kwargs)
+
+
 def hash_file(file_like_object):
     """Generate a hash for the contents of a file."""
     checksum = hashlib.sha1()
@@ -1221,15 +1267,6 @@ def strcmp_const_time(s1, s2):
     return result == 0
 
 
-def sys_platform_translate(arch):
-    """Translate cpu architecture into supported platforms."""
-    if (arch[0] == 'i' and arch[1].isdigit() and arch[2:4] == '86'):
-        arch = 'i686'
-    elif arch.startswith('arm'):
-        arch = 'arm'
-    return arch
-
-
 def walk_class_hierarchy(clazz, encountered=None):
     """Walk class hierarchy, yielding most derived classes first"""
     if not encountered:
@@ -1268,3 +1305,18 @@ class UndoManager(object):
                 LOG.exception(msg, **kwargs)
 
             self._rollback()
+
+
+def ensure_tree(path):
+    """Create a directory (and any ancestor directories required)
+
+    :param path: Directory to create
+    """
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST:
+            if not os.path.isdir(path):
+                raise
+        else:
+            raise

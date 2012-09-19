@@ -175,15 +175,6 @@ class VolumeApiTest(test.TestCase):
         self.assertEqual(resp_dict['volume']['availabilityZone'],
                          vol['availability_zone'])
 
-    def test_volume_create_no_body(self):
-        req = webob.Request.blank('/v2/fake/os-volumes')
-        req.method = 'POST'
-        req.body = jsonutils.dumps({})
-        req.headers['content-type'] = 'application/json'
-
-        resp = req.get_response(fakes.wsgi_app())
-        self.assertEqual(resp.status_int, 422)
-
     def test_volume_index(self):
         req = webob.Request.blank('/v2/fake/os-volumes')
         resp = req.get_response(fakes.wsgi_app())
@@ -311,10 +302,10 @@ class VolumeSerializerTest(test.TestCase):
             elif child.tag == 'metadata':
                 not_seen = set(vol['metadata'].keys())
                 for gr_child in child:
-                    self.assertTrue(gr_child.tag in not_seen)
-                    self.assertEqual(str(vol['metadata'][gr_child.tag]),
+                    self.assertTrue(gr_child.get("key") in not_seen)
+                    self.assertEqual(str(vol['metadata'][gr_child.get("key")]),
                                      gr_child.text)
-                    not_seen.remove(gr_child.tag)
+                    not_seen.remove(gr_child.get("key"))
                 self.assertEqual(0, len(not_seen))
 
     def test_attach_show_create_serializer(self):
@@ -435,3 +426,195 @@ class VolumeSerializerTest(test.TestCase):
         self.assertEqual(len(raw_volumes), len(tree))
         for idx, child in enumerate(tree):
             self._verify_volume(raw_volumes[idx], child)
+
+
+class TestVolumeCreateRequestXMLDeserializer(test.TestCase):
+
+    def setUp(self):
+        super(TestVolumeCreateRequestXMLDeserializer, self).setUp()
+        self.deserializer = volumes.CreateDeserializer()
+
+    def test_minimal_volume(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_display_name(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_display_description(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_volume_type(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "display_name": "Volume-xml",
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_availability_zone(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"
+        availability_zone="us-east1"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+                "availability_zone": "us-east1",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_metadata(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        display_name="Volume-xml"
+        size="1">
+        <metadata><meta key="Type">work</meta></metadata></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "display_name": "Volume-xml",
+                "size": "1",
+                "metadata": {
+                    "Type": "work",
+                },
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_full_volume(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"
+        availability_zone="us-east1">
+        <metadata><meta key="Type">work</meta></metadata></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+                "availability_zone": "us-east1",
+                "metadata": {
+                    "Type": "work",
+                },
+            },
+        }
+        self.maxDiff = None
+        self.assertEquals(request['body'], expected)
+
+
+class CommonUnprocessableEntityTestCase(object):
+
+    resource = None
+    entity_name = None
+    controller_cls = None
+    kwargs = {}
+
+    """
+    Tests of places we throw 422 Unprocessable Entity from
+    """
+
+    def setUp(self):
+        super(CommonUnprocessableEntityTestCase, self).setUp()
+        self.controller = self.controller_cls()
+
+    def _unprocessable_create(self, body):
+        req = fakes.HTTPRequest.blank('/v2/fake/' + self.resource)
+        req.method = 'POST'
+
+        kwargs = self.kwargs.copy()
+        kwargs['body'] = body
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create, req, **kwargs)
+
+    def test_create_no_body(self):
+        self._unprocessable_create(body=None)
+
+    def test_create_missing_volume(self):
+        body = {'foo': {'a': 'b'}}
+        self._unprocessable_create(body=body)
+
+    def test_create_malformed_entity(self):
+        body = {self.entity_name: 'string'}
+        self._unprocessable_create(body=body)
+
+
+class UnprocessableVolumeTestCase(CommonUnprocessableEntityTestCase,
+                                  test.TestCase):
+
+    resource = 'os-volumes'
+    entity_name = 'volume'
+    controller_cls = volumes.VolumeController
+
+
+class UnprocessableAttachmentTestCase(CommonUnprocessableEntityTestCase,
+                                      test.TestCase):
+
+    resource = 'servers/' + FAKE_UUID + '/os-volume_attachments'
+    entity_name = 'volumeAttachment'
+    controller_cls = volumes.VolumeAttachmentController
+    kwargs = {'server_id': FAKE_UUID}
+
+
+class UnprocessableSnapshotTestCase(CommonUnprocessableEntityTestCase,
+                                    test.TestCase):
+
+    resource = 'os-snapshots'
+    entity_name = 'snapshot'
+    controller_cls = volumes.SnapshotController

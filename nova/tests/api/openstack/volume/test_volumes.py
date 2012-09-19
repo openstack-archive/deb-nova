@@ -18,6 +18,7 @@ import datetime
 from lxml import etree
 import webob
 
+from nova.api.openstack.volume import extensions
 from nova.api.openstack.volume import volumes
 from nova import db
 from nova import exception
@@ -25,16 +26,36 @@ from nova import flags
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests.image import fake as fake_image
 from nova.volume import api as volume_api
 
 
 FLAGS = flags.FLAGS
 
+TEST_SNAPSHOT_UUID = '00000000-0000-0000-0000-000000000001'
+
+
+def stub_snapshot_get(self, context, snapshot_id):
+    if snapshot_id != TEST_SNAPSHOT_UUID:
+        raise exception.NotFound
+
+    return {
+            'id': snapshot_id,
+            'volume_id': 12,
+            'status': 'available',
+            'volume_size': 100,
+            'created_at': None,
+            'display_name': 'Default name',
+            'display_description': 'Default description',
+            }
+
 
 class VolumeApiTest(test.TestCase):
     def setUp(self):
         super(VolumeApiTest, self).setUp()
-        self.controller = volumes.VolumeController()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = volumes.VolumeController(self.ext_mgr)
 
         self.stubs.Set(db, 'volume_get_all', fakes.stub_volume_get_all)
         self.stubs.Set(db, 'volume_get_all_by_project',
@@ -42,10 +63,10 @@ class VolumeApiTest(test.TestCase):
         self.stubs.Set(volume_api.API, 'get', fakes.stub_volume_get)
         self.stubs.Set(volume_api.API, 'delete', fakes.stub_volume_delete)
 
-    def _do_test_volume_create(self, size):
+    def test_volume_create(self):
         self.stubs.Set(volume_api.API, "create", fakes.stub_volume_create)
 
-        vol = {"size": size,
+        vol = {"size": 100,
                "display_name": "Volume Test Name",
                "display_description": "Volume Test Desc",
                "availability_zone": "zone1:host1"}
@@ -71,12 +92,6 @@ class VolumeApiTest(test.TestCase):
         self.assertEqual(res.code, 200)
         self.assertTrue('location' in res.headers)
 
-    def test_volume_create_int_size(self):
-        self._do_test_volume_create(100)
-
-    def test_volume_create_str_size(self):
-        self._do_test_volume_create('100')
-
     def test_volume_creation_fails_with_bad_size(self):
         vol = {"size": '',
                "display_name": "Volume Test Name",
@@ -93,6 +108,84 @@ class VolumeApiTest(test.TestCase):
         body = {}
         req = fakes.HTTPRequest.blank('/v1/volumes')
         self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create,
+                          req,
+                          body)
+
+    def test_volume_create_with_image_id(self):
+        self.stubs.Set(volume_api.API, "create", fakes.stub_volume_create)
+        self.ext_mgr.extensions = {'os-image-create': 'fake'}
+        vol = {"size": '1',
+               "display_name": "Volume Test Name",
+               "display_description": "Volume Test Desc",
+               "availability_zone": "nova",
+               "imageRef": 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'}
+        expected = {'volume': {'status': 'fakestatus',
+                           'display_description': 'Volume Test Desc',
+                           'availability_zone': 'nova',
+                           'display_name': 'Volume Test Name',
+                           'attachments': [{'device': '/',
+                                            'server_id': 'fakeuuid',
+                                            'id': '1',
+                                            'volume_id': '1'}],
+                            'volume_type': 'vol_type_name',
+                            'image_id': 'c905cedb-7281-47e4-8a62-f26bc5fc4c77',
+                            'snapshot_id': None,
+                            'metadata': {},
+                            'id': '1',
+                            'created_at': datetime.datetime(1999, 1, 1,
+                                                            1, 1, 1),
+                            'size': '1'}
+                    }
+        body = {"volume": vol}
+        req = fakes.HTTPRequest.blank('/v1/volumes')
+        res = self.controller.create(req, body)
+        self.maxDiff = 4096
+        self.assertEqual(res.obj, expected)
+
+    def test_volume_create_with_image_id_and_snapshot_id(self):
+        self.stubs.Set(volume_api.API, "create", fakes.stub_volume_create)
+        self.stubs.Set(volume_api.API, "get_snapshot", stub_snapshot_get)
+        self.ext_mgr.extensions = {'os-image-create': 'fake'}
+        vol = {"size": '1',
+                "display_name": "Volume Test Name",
+                "display_description": "Volume Test Desc",
+                "availability_zone": "nova",
+                "imageRef": 'c905cedb-7281-47e4-8a62-f26bc5fc4c77',
+                "snapshot_id": TEST_SNAPSHOT_UUID}
+        body = {"volume": vol}
+        req = fakes.HTTPRequest.blank('/v1/volumes')
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req,
+                          body)
+
+    def test_volume_create_with_image_id_is_integer(self):
+        self.stubs.Set(volume_api.API, "create", fakes.stub_volume_create)
+        self.ext_mgr.extensions = {'os-image-create': 'fake'}
+        vol = {"size": '1',
+                "display_name": "Volume Test Name",
+                "display_description": "Volume Test Desc",
+                "availability_zone": "nova",
+                "imageRef": 1234}
+        body = {"volume": vol}
+        req = fakes.HTTPRequest.blank('/v1/volumes')
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          req,
+                          body)
+
+    def test_volume_create_with_image_id_not_uuid_format(self):
+        self.stubs.Set(volume_api.API, "create", fakes.stub_volume_create)
+        self.ext_mgr.extensions = {'os-image-create': 'fake'}
+        vol = {"size": '1',
+                "display_name": "Volume Test Name",
+                "display_description": "Volume Test Desc",
+                "availability_zone": "nova",
+                "imageRef": '12345'}
+        body = {"volume": vol}
+        req = fakes.HTTPRequest.blank('/v1/volumes')
+        self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create,
                           req,
                           body)
@@ -210,7 +303,7 @@ class VolumeApiTest(test.TestCase):
                           1)
 
     def test_admin_list_volumes_limited_to_project(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/volumes',
+        req = fakes.HTTPRequest.blank('/v1/fake/volumes',
                                       use_admin_context=True)
         res = self.controller.index(req)
 
@@ -218,20 +311,20 @@ class VolumeApiTest(test.TestCase):
         self.assertEqual(1, len(res['volumes']))
 
     def test_admin_list_volumes_all_tenants(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/volumes?all_tenants=1',
+        req = fakes.HTTPRequest.blank('/v1/fake/volumes?all_tenants=1',
                                       use_admin_context=True)
         res = self.controller.index(req)
         self.assertTrue('volumes' in res)
         self.assertEqual(3, len(res['volumes']))
 
     def test_all_tenants_non_admin_gets_all_tenants(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/volumes?all_tenants=1')
+        req = fakes.HTTPRequest.blank('/v1/fake/volumes?all_tenants=1')
         res = self.controller.index(req)
         self.assertTrue('volumes' in res)
         self.assertEqual(1, len(res['volumes']))
 
     def test_non_admin_get_by_project(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/volumes')
+        req = fakes.HTTPRequest.blank('/v1/fake/volumes')
         res = self.controller.index(req)
         self.assertTrue('volumes' in res)
         self.assertEqual(1, len(res['volumes']))
@@ -259,10 +352,10 @@ class VolumeSerializerTest(test.TestCase):
             elif child.tag == 'metadata':
                 not_seen = set(vol['metadata'].keys())
                 for gr_child in child:
-                    self.assertTrue(gr_child.tag in not_seen)
-                    self.assertEqual(str(vol['metadata'][gr_child.tag]),
+                    self.assertTrue(gr_child.get("key") in not_seen)
+                    self.assertEqual(str(vol['metadata'][gr_child.get("key")]),
                                      gr_child.text)
-                    not_seen.remove(gr_child.tag)
+                    not_seen.remove(gr_child.get("key"))
                 self.assertEqual(0, len(not_seen))
 
     def test_volume_show_create_serializer(self):
@@ -345,3 +438,165 @@ class VolumeSerializerTest(test.TestCase):
         self.assertEqual(len(raw_volumes), len(tree))
         for idx, child in enumerate(tree):
             self._verify_volume(raw_volumes[idx], child)
+
+
+class TestVolumeCreateRequestXMLDeserializer(test.TestCase):
+
+    def setUp(self):
+        super(TestVolumeCreateRequestXMLDeserializer, self).setUp()
+        self.deserializer = volumes.CreateDeserializer()
+
+    def test_minimal_volume(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_display_name(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_display_description(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_volume_type(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "display_name": "Volume-xml",
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_availability_zone(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"
+        availability_zone="us-east1"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+                "availability_zone": "us-east1",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_metadata(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        display_name="Volume-xml"
+        size="1">
+        <metadata><meta key="Type">work</meta></metadata></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "display_name": "Volume-xml",
+                "size": "1",
+                "metadata": {
+                    "Type": "work",
+                },
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_full_volume(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"
+        availability_zone="us-east1">
+        <metadata><meta key="Type">work</meta></metadata></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+                "availability_zone": "us-east1",
+                "metadata": {
+                    "Type": "work",
+                },
+            },
+        }
+        self.maxDiff = None
+        self.assertEquals(request['body'], expected)
+
+
+class VolumesUnprocessableEntityTestCase(test.TestCase):
+
+    """
+    Tests of places we throw 422 Unprocessable Entity from
+    """
+
+    def setUp(self):
+        super(VolumesUnprocessableEntityTestCase, self).setUp()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = volumes.VolumeController(self.ext_mgr)
+
+    def _unprocessable_volume_create(self, body):
+        req = fakes.HTTPRequest.blank('/v2/fake/volumes')
+        req.method = 'POST'
+
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create, req, body)
+
+    def test_create_no_body(self):
+        self._unprocessable_volume_create(body=None)
+
+    def test_create_missing_volume(self):
+        body = {'foo': {'a': 'b'}}
+        self._unprocessable_volume_create(body=body)
+
+    def test_create_malformed_entity(self):
+        body = {'volume': 'string'}
+        self._unprocessable_volume_create(body=body)

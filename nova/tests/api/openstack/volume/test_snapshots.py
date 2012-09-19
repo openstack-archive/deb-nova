@@ -114,6 +114,16 @@ class SnapshotApiTest(test.TestCase):
         self.assertEqual(resp_dict['snapshot']['display_description'],
                         snapshot['display_description'])
 
+        # Test invalid force paramter
+        snapshot = {"volume_id": 12,
+                "force": '**&&^^%%$$##@@'}
+        body = dict(snapshot=snapshot)
+        req = fakes.HTTPRequest.blank('/v1/snapshots')
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.controller.create,
+                          req,
+                          body)
+
     def test_snapshot_delete(self):
         self.stubs.Set(volume.api.API, "get_snapshot", stub_snapshot_get)
         self.stubs.Set(volume.api.API, "delete_snapshot", stub_snapshot_delete)
@@ -170,20 +180,20 @@ class SnapshotApiTest(test.TestCase):
         self.assertEqual(1, len(res['snapshots']))
 
     def test_admin_list_snapshots_all_tenants(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/snapshots?all_tenants=1',
+        req = fakes.HTTPRequest.blank('/v1/fake/snapshots?all_tenants=1',
                                       use_admin_context=True)
         res = self.controller.index(req)
         self.assertTrue('snapshots' in res)
         self.assertEqual(3, len(res['snapshots']))
 
     def test_all_tenants_non_admin_gets_all_tenants(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/snapshots?all_tenants=1')
+        req = fakes.HTTPRequest.blank('/v1/fake/snapshots?all_tenants=1')
         res = self.controller.index(req)
         self.assertTrue('snapshots' in res)
         self.assertEqual(1, len(res['snapshots']))
 
     def test_non_admin_get_by_project(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/snapshots')
+        req = fakes.HTTPRequest.blank('/v1/fake/snapshots')
         res = self.controller.index(req)
         self.assertTrue('snapshots' in res)
         self.assertEqual(1, len(res['snapshots']))
@@ -244,3 +254,32 @@ class SnapshotSerializerTest(test.TestCase):
         self.assertEqual(len(raw_snapshots), len(tree))
         for idx, child in enumerate(tree):
             self._verify_snapshot(raw_snapshots[idx], child)
+
+
+class SnapshotsUnprocessableEntityTestCase(test.TestCase):
+
+    """
+    Tests of places we throw 422 Unprocessable Entity from
+    """
+
+    def setUp(self):
+        super(SnapshotsUnprocessableEntityTestCase, self).setUp()
+        self.controller = snapshots.SnapshotsController()
+
+    def _unprocessable_snapshot_create(self, body):
+        req = fakes.HTTPRequest.blank('/v2/fake/snapshots')
+        req.method = 'POST'
+
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create, req, body)
+
+    def test_create_no_body(self):
+        self._unprocessable_snapshot_create(body=None)
+
+    def test_create_missing_snapshot(self):
+        body = {'foo': {'a': 'b'}}
+        self._unprocessable_snapshot_create(body=body)
+
+    def test_create_malformed_entity(self):
+        body = {'snapshot': 'string'}
+        self._unprocessable_snapshot_create(body=body)

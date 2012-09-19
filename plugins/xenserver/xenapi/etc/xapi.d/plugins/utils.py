@@ -1,4 +1,4 @@
-# Copyright (c) 2012 Openstack, LLC
+# Copyright (c) 2012 OpenStack, LLC
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -14,6 +14,7 @@
 
 """Various utilities used by XenServer plugins."""
 
+import cPickle as pickle
 import logging
 import os
 import shlex
@@ -21,6 +22,7 @@ import shutil
 import subprocess
 import tempfile
 
+import XenAPIPlugin
 
 CHUNK_SIZE = 8192
 
@@ -362,3 +364,21 @@ def extract_tarball(fileobj, path, callback=None):
         tar_proc.stdin.write(chunk)
 
     finish_subprocess(tar_proc, tar_cmd)
+
+
+def _handle_serialization(func):
+    def wrapped(session, params):
+        params = pickle.loads(params['params'])
+        rv = func(session, *params['args'], **params['kwargs'])
+        return pickle.dumps(rv)
+    return wrapped
+
+
+def register_plugin_calls(*funcs):
+    """Wrapper around XenAPIPlugin.dispatch which handles pickle
+    serialization.
+    """
+    wrapped_dict = {}
+    for func in funcs:
+        wrapped_dict[func.__name__] = _handle_serialization(func)
+    XenAPIPlugin.dispatch(wrapped_dict)

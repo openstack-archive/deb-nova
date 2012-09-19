@@ -42,19 +42,17 @@ class FilterScheduler(driver.Scheduler):
         self.cost_function_cache = {}
         self.options = scheduler_options.SchedulerOptions()
 
-    def schedule(self, context, topic, method, *args, **kwargs):
-        """The schedule() contract requires we return the one
-        best-suited host for this request.
-
-        NOTE: We're only focused on compute instances right now,
-        so this method will always raise NoValidHost()."""
-        msg = _("No host selection for %s defined.") % topic
+    def schedule_create_volume(self, context, volume_id, snapshot_id, image_id,
+                               reservations):
+        # NOTE: We're only focused on compute instances right now,
+        # so this method will always raise NoValidHost().
+        msg = _("No host selection for %s defined.") % FLAGS.volume_topic
         raise exception.NoValidHost(reason=msg)
 
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,
-                              filter_properties, reservations):
+                              filter_properties):
         """This method is called from nova.compute.api to provision
         an instance.  We first create a build plan (a list of WeightedHosts)
         and then provision.
@@ -62,7 +60,8 @@ class FilterScheduler(driver.Scheduler):
         Returns a list of the instances created.
         """
         elevated = context.elevated()
-        num_instances = request_spec.get('num_instances', 1)
+        instance_uuids = request_spec.get('instance_uuids')
+        num_instances = len(instance_uuids)
         LOG.debug(_("Attempting to build %(num_instances)d instance(s)") %
                 locals())
 
@@ -71,45 +70,45 @@ class FilterScheduler(driver.Scheduler):
                         'scheduler.run_instance.start', notifier.INFO, payload)
 
         weighted_hosts = self._schedule(context, "compute", request_spec,
-                                        filter_properties)
-
-        if not weighted_hosts:
-            raise exception.NoValidHost(reason="")
+                                        filter_properties, instance_uuids)
 
         # NOTE(comstud): Make sure we do not pass this through.  It
         # contains an instance of RpcContext that cannot be serialized.
         filter_properties.pop('context', None)
 
-        instances = []
-        for num in xrange(num_instances):
-            if not weighted_hosts:
-                break
-            weighted_host = weighted_hosts.pop(0)
-
+        for num, instance_uuid in enumerate(instance_uuids):
             request_spec['instance_properties']['launch_index'] = num
 
-            instance = self._provision_resource(elevated, weighted_host,
-                                                request_spec, reservations,
-                                                filter_properties,
-                                                requested_networks,
-                                                injected_files, admin_password,
-                                                is_first_time)
+            try:
+                try:
+                    weighted_host = weighted_hosts.pop(0)
+                except IndexError:
+                    raise exception.NoValidHost(reason="")
+
+                self._provision_resource(elevated, weighted_host,
+                                         request_spec,
+                                         filter_properties,
+                                         requested_networks,
+                                         injected_files, admin_password,
+                                         is_first_time,
+                                         instance_uuid=instance_uuid)
+            except Exception as ex:
+                # NOTE(vish): we don't reraise the exception here to make sure
+                #             that all instances in the request get set to
+                #             error properly
+                driver.handle_schedule_error(context, ex, instance_uuid,
+                                             request_spec)
             # scrub retry host list in case we're scheduling multiple
             # instances:
             retry = filter_properties.get('retry', {})
             retry['hosts'] = []
 
-            if instance:
-                instances.append(instance)
-
         notifier.notify(context, notifier.publisher_id("scheduler"),
                         'scheduler.run_instance.end', notifier.INFO, payload)
 
-        return instances
-
     def schedule_prep_resize(self, context, image, request_spec,
                              filter_properties, instance, instance_type,
-                             reservations=None):
+                             reservations):
         """Select a target for resize.
 
         Selects a target host for the instance, post-resize, and casts
@@ -117,7 +116,7 @@ class FilterScheduler(driver.Scheduler):
         """
 
         hosts = self._schedule(context, 'compute', request_spec,
-                               filter_properties)
+                               filter_properties, [instance['uuid']])
         if not hosts:
             raise exception.NoValidHost(reason="")
         host = hosts.pop(0)
@@ -127,24 +126,21 @@ class FilterScheduler(driver.Scheduler):
                 instance_type, host.host_state.host, reservations)
 
     def _provision_resource(self, context, weighted_host, request_spec,
-            reservations, filter_properties, requested_networks,
-            injected_files, admin_password, is_first_time):
+            filter_properties, requested_networks, injected_files,
+            admin_password, is_first_time, instance_uuid=None):
         """Create the requested resource in this Zone."""
-        instance = self.create_instance_db_entry(context, request_spec,
-                                                 reservations)
-
         # Add a retry entry for the selected compute host:
         self._add_retry_host(filter_properties, weighted_host.host_state.host)
 
         payload = dict(request_spec=request_spec,
                        weighted_host=weighted_host.to_dict(),
-                       instance_id=instance['uuid'])
+                       instance_id=instance_uuid)
         notifier.notify(context, notifier.publisher_id("scheduler"),
                         'scheduler.run_instance.scheduled', notifier.INFO,
                         payload)
 
-        updated_instance = driver.instance_update_db(context, instance['uuid'],
-                weighted_host.host_state.host)
+        updated_instance = driver.instance_update_db(context,
+                instance_uuid, weighted_host.host_state.host)
 
         self.compute_rpcapi.run_instance(context, instance=updated_instance,
                 host=weighted_host.host_state.host,
@@ -153,17 +149,8 @@ class FilterScheduler(driver.Scheduler):
                 injected_files=injected_files,
                 admin_password=admin_password, is_first_time=is_first_time)
 
-        inst = driver.encode_instance(updated_instance, local=True)
-
-        # So if another instance is created, create_instance_db_entry will
-        # actually create a new entry, instead of assume it's been created
-        # already
-        del request_spec['instance_properties']['uuid']
-
-        return inst
-
     def _add_retry_host(self, filter_properties, host):
-        """Add a retry entry for the selected computep host.  In the event that
+        """Add a retry entry for the selected compute host.  In the event that
         the request gets re-scheduled, this entry will signal that the given
         host has already been tried.
         """
@@ -212,11 +199,13 @@ class FilterScheduler(driver.Scheduler):
         filter_properties['retry'] = retry
 
         if retry['num_attempts'] > max_attempts:
-            uuid = instance_properties.get('uuid', None)
-            msg = _("Exceeded max scheduling attempts %d ") % max_attempts
-            raise exception.NoValidHost(msg, instance_uuid=uuid)
+            instance_uuid = instance_properties.get('uuid')
+            msg = _("Exceeded max scheduling attempts %(max_attempts)d for "
+                    "instance %(instance_uuid)s") % locals()
+            raise exception.NoValidHost(reason=msg)
 
-    def _schedule(self, context, topic, request_spec, filter_properties):
+    def _schedule(self, context, topic, request_spec, filter_properties,
+                  instance_uuids=None):
         """Returns a list of hosts that meet the required specs,
         ordered by their fitness.
         """
@@ -231,8 +220,13 @@ class FilterScheduler(driver.Scheduler):
         cost_functions = self.get_cost_functions()
         config_options = self._get_configuration_options()
 
-        # check retry policy:
-        self._populate_retry(filter_properties, instance_properties)
+        # check retry policy.  Rather ugly use of instance_uuids[0]...
+        # but if we've exceeded max retries... then we really only
+        # have a single instance.
+        properties = instance_properties.copy()
+        if instance_uuids:
+            properties['uuid'] = instance_uuids[0]
+        self._populate_retry(filter_properties, properties)
 
         filter_properties.update({'context': context,
                                   'request_spec': request_spec,
@@ -256,8 +250,11 @@ class FilterScheduler(driver.Scheduler):
         # are being scanned in a filter or weighing function.
         hosts = unfiltered_hosts_dict.itervalues()
 
-        num_instances = request_spec.get('num_instances', 1)
         selected_hosts = []
+        if instance_uuids:
+            num_instances = len(instance_uuids)
+        else:
+            num_instances = request_spec.get('num_instances', 1)
         for num in xrange(num_instances):
             # Filter local hosts based on requirements ...
             hosts = self.host_manager.filter_hosts(hosts,
@@ -285,7 +282,7 @@ class FilterScheduler(driver.Scheduler):
                     instance_properties)
 
         selected_hosts.sort(key=operator.attrgetter('weight'))
-        return selected_hosts[:num_instances]
+        return selected_hosts
 
     def get_cost_functions(self, topic=None):
         """Returns a list of tuples containing weights and cost functions to

@@ -29,7 +29,6 @@ from nova.compute import power_state
 from nova import db
 from nova import exception
 from nova.openstack.common import log as logging
-from nova import utils
 from nova.virt import driver
 
 
@@ -93,7 +92,8 @@ class FakeDriver(driver.ComputeDriver):
         if not instance['name'] in self.instances:
             raise exception.InstanceNotRunning()
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         pass
 
     @staticmethod
@@ -106,7 +106,8 @@ class FakeDriver(driver.ComputeDriver):
     def inject_file(self, instance, b64_path, b64_contents):
         pass
 
-    def resume_state_on_host_boot(self, context, instance, network_info):
+    def resume_state_on_host_boot(self, context, instance, network_info,
+                                  block_device_info=None):
         pass
 
     def rescue(self, context, instance, network_info, image_meta,
@@ -123,10 +124,12 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info):
+                                   instance_type, network_info,
+                                   block_device_info=None):
         pass
 
-    def finish_revert_migration(self, instance, network_info):
+    def finish_revert_migration(self, instance, network_info,
+                                block_device_info=None):
         pass
 
     def power_off(self, instance):
@@ -220,19 +223,13 @@ class FakeDriver(driver.ComputeDriver):
     def refresh_provider_fw_rules(self):
         pass
 
-    def update_available_resource(self, ctxt, host):
+    def get_available_resource(self):
         """Updates compute manager resource info on ComputeNode table.
 
            Since we don't have a real hypervisor, pretend we have lots of
            disk and ram.
         """
 
-        try:
-            service_ref = db.service_get_all_compute_by_host(ctxt, host)[0]
-        except exception.NotFound:
-            raise exception.ComputeServiceUnavailable(host=host)
-
-        # Updating host information
         dic = {'vcpus': 1,
                'memory_mb': 4096,
                'local_gb': 1028,
@@ -241,16 +238,8 @@ class FakeDriver(driver.ComputeDriver):
                'local_gb_used': 0,
                'hypervisor_type': 'fake',
                'hypervisor_version': '1.0',
-                  'service_id': service_ref['id'],
-                 'cpu_info': '?'}
-
-        compute_node_ref = service_ref['compute_node']
-        if not compute_node_ref:
-            LOG.info(_('Compute_service record created for %s ') % host)
-            db.compute_node_create(ctxt, dic)
-        else:
-            LOG.info(_('Compute_service record updated for %s ') % host)
-            db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
+               'cpu_info': '?'}
+        return dic
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         """This method is supported only by libvirt."""
@@ -265,7 +254,8 @@ class FakeDriver(driver.ComputeDriver):
         return
 
     def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, image_meta, resize_instance):
+                         network_info, image_meta, resize_instance,
+                         block_device_info=None):
         return
 
     def confirm_migration(self, migration, instance, network_info):

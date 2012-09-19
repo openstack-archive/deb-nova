@@ -41,19 +41,11 @@ class ViewBuilder(common.ViewBuilder):
                 "ram": flavor["memory_mb"],
                 "disk": flavor["root_gb"],
                 "vcpus": flavor.get("vcpus") or "",
-                "swap": flavor.get("swap") or "",
-                "rxtx_factor": flavor.get("rxtx_factor") or "",
                 "links": self._get_links(request,
                                          flavor["flavorid"],
                                          self._collection_name),
             },
         }
-
-        # NOTE(sirp): disabled attribute is namespaced for now for
-        # compatability with the OpenStack API. This should ultimately be made
-        # a first class attribute.
-        flavor_dict["flavor"]["OS-FLV-DISABLED:disabled"] =\
-                flavor.get("disabled", "")
 
         return flavor_dict
 

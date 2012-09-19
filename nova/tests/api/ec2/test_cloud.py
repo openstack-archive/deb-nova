@@ -42,9 +42,11 @@ from nova.network import api as network_api
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 from nova import test
+from nova.tests import fake_network
 from nova.tests.image import fake
 from nova import utils
 from nova.virt import fake as fake_virt
+from nova.volume import iscsi
 
 
 LOG = logging.getLogger(__name__)
@@ -95,8 +97,10 @@ class CloudTestCase(test.TestCase):
         super(CloudTestCase, self).setUp()
         vol_tmpdir = tempfile.mkdtemp()
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
-                   volumes_dir=vol_tmpdir,
-                   stub_network=True)
+                   volumes_dir=vol_tmpdir)
+        self.stubs.Set(iscsi.TgtAdm, '_get_target', self.fake_get_target)
+        self.stubs.Set(iscsi.TgtAdm, 'remove_iscsi_target',
+                       self.fake_remove_iscsi_target)
 
         def fake_show(meh, context, id):
             return {'id': id,
@@ -121,6 +125,8 @@ class CloudTestCase(test.TestCase):
             pass
 
         self.stubs.Set(compute_utils, 'notify_about_instance_usage', dumb)
+        fake_network.set_stub_network_methods(self.stubs)
+
         # set up our cloud
         self.cloud = cloud.CloudController()
         self.flags(compute_scheduler_driver='nova.scheduler.'
@@ -155,6 +161,12 @@ class CloudTestCase(test.TestCase):
             pass
         super(CloudTestCase, self).tearDown()
         fake.FakeImageService_reset()
+
+    def fake_get_target(obj, iqn):
+        return 1
+
+    def fake_remove_iscsi_target(obj, tid, lun, vol_id, **kwargs):
+        pass
 
     def _stub_instance_get_with_fixed_ips(self, func_name):
         orig_func = getattr(self.cloud.compute_api, func_name)
@@ -287,6 +299,38 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(
                 result['securityGroupInfo'][0]['groupName'],
                 sec['name'])
+        db.security_group_destroy(self.context, sec['id'])
+
+    def test_describe_security_groups_all_tenants(self):
+        """Makes sure describe_security_groups works and filters results."""
+        sec = db.security_group_create(self.context,
+                                       {'project_id': 'foobar',
+                                        'name': 'test'})
+
+        def _check_name(result, i, expected):
+            self.assertEqual(result['securityGroupInfo'][i]['groupName'],
+                             expected)
+
+        # include all tenants
+        filter = [{'name': 'all-tenants', 'value': {'1': 1}}]
+        result = self.cloud.describe_security_groups(self.context,
+                                                     filter=filter)
+        self.assertEqual(len(result['securityGroupInfo']), 2)
+        _check_name(result, 0, 'default')
+        _check_name(result, 1, sec['name'])
+
+        # exclude all tenants
+        filter = [{'name': 'all-tenants', 'value': {'1': 0}}]
+        result = self.cloud.describe_security_groups(self.context,
+                                                     filter=filter)
+        self.assertEqual(len(result['securityGroupInfo']), 1)
+        _check_name(result, 0, 'default')
+
+        # default all tenants
+        result = self.cloud.describe_security_groups(self.context)
+        self.assertEqual(len(result['securityGroupInfo']), 1)
+        _check_name(result, 0, 'default')
+
         db.security_group_destroy(self.context, sec['id'])
 
     def test_describe_security_groups_by_id(self):
@@ -685,6 +729,27 @@ class CloudTestCase(test.TestCase):
                                          'availability_zone': "zone2"})
         result = self.cloud.describe_availability_zones(self.context)
         self.assertEqual(len(result['availabilityZoneInfo']), 3)
+        db.service_destroy(self.context, service1['id'])
+        db.service_destroy(self.context, service2['id'])
+
+    def test_describe_availability_zones_verbose(self):
+        """Makes sure describe_availability_zones works and filters results."""
+        service1 = db.service_create(self.context, {'host': 'host1_zones',
+                                         'binary': "nova-compute",
+                                         'topic': 'compute',
+                                         'report_count': 0,
+                                         'availability_zone': "zone1"})
+        service2 = db.service_create(self.context, {'host': 'host2_zones',
+                                         'binary': "nova-compute",
+                                         'topic': 'compute',
+                                         'report_count': 0,
+                                         'availability_zone': "zone2"})
+
+        admin_ctxt = context.get_admin_context(read_deleted="no")
+        result = self.cloud.describe_availability_zones(admin_ctxt,
+                                                        zone_name='verbose')
+
+        self.assertEqual(len(result['availabilityZoneInfo']), 15)
         db.service_destroy(self.context, service1['id'])
         db.service_destroy(self.context, service2['id'])
 
@@ -1510,7 +1575,7 @@ class CloudTestCase(test.TestCase):
         self.stubs.Set(fake._FakeImageService, 'delete', fake_delete)
         # valid image
         result = deregister_image(self.context, 'ami-00000001')
-        self.assertEqual(result['imageId'], 'ami-00000001')
+        self.assertTrue(result)
         # invalid image
         self.stubs.UnsetAll()
 
@@ -1970,9 +2035,12 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(result)
 
     def _volume_create(self, volume_id=None):
+        location = '10.0.2.15:3260'
+        iqn = 'iqn.2010-10.org.openstack:%s' % volume_id
         kwargs = {'status': 'available',
                   'host': self.volume.host,
                   'size': 1,
+                  'provider_location': '1 %s,fake %s' % (location, iqn),
                   'attach_status': 'detached', }
         if volume_id:
             kwargs['id'] = volume_id
@@ -2067,7 +2135,7 @@ class CloudTestCase(test.TestCase):
         kwargs = {'image_id': 'ami-1',
                   'instance_type': FLAGS.default_instance_type,
                   'max_count': 1,
-                  'block_device_mapping': [{'device_name': '/dev/vdb',
+                  'block_device_mapping': [{'device_name': '/dev/sdb',
                                             'volume_id': vol1['id'],
                                             'delete_on_termination': True}]}
         ec2_instance_id = self._run_instance(**kwargs)
@@ -2079,7 +2147,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(len(vols), 1)
         for vol in vols:
             self.assertEqual(vol['id'], vol1['id'])
-            self._assert_volume_attached(vol, instance_uuid, '/dev/vdb')
+            self._assert_volume_attached(vol, instance_uuid, '/dev/sdb')
 
         vol = db.volume_get(self.context, vol2['id'])
         self._assert_volume_detached(vol)
@@ -2090,7 +2158,7 @@ class CloudTestCase(test.TestCase):
                                              volume_id=vol2['id'],
                                              device='/dev/vdc')
         vol = db.volume_get(self.context, vol2['id'])
-        self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
+        self._assert_volume_attached(vol, instance_uuid, '/dev/sdc')
 
         self.cloud.compute_api.detach_volume(self.context,
                                              volume_id=vol1['id'])
@@ -2101,14 +2169,14 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(result)
 
         vol = db.volume_get(self.context, vol2['id'])
-        self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
+        self._assert_volume_attached(vol, instance_uuid, '/dev/sdc')
 
         self.cloud.start_instances(self.context, [ec2_instance_id])
         vols = db.volume_get_all_by_instance_uuid(self.context, instance_uuid)
         self.assertEqual(len(vols), 1)
         for vol in vols:
             self.assertEqual(vol['id'], vol2['id'])
-            self._assert_volume_attached(vol, instance_uuid, '/dev/vdc')
+            self._assert_volume_attached(vol, instance_uuid, '/dev/sdc')
 
         vol = db.volume_get(self.context, vol1['id'])
         self._assert_volume_detached(vol)

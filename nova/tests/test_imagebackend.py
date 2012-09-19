@@ -35,7 +35,8 @@ class _ImageTestCase(test.TestCase):
 
     def setUp(self):
         super(_ImageTestCase, self).setUp()
-        self.flags(instances_path=self.INSTANCES_PATH)
+        self.flags(disable_process_locking=True,
+                   instances_path=self.INSTANCES_PATH)
         self.INSTANCE = 'instance'
         self.NAME = 'fake.vm'
         self.TEMPLATE = 'template'
@@ -55,8 +56,8 @@ class _ImageTestCase(test.TestCase):
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
         fn = self.mox.CreateMockAnything()
         fn(target=self.TEMPLATE_PATH)
-        self.mox.StubOutWithMock(imagebackend.libvirt_utils, 'ensure_tree')
-        imagebackend.libvirt_utils.ensure_tree(self.TEMPLATE_DIR)
+        self.mox.StubOutWithMock(imagebackend.utils, 'ensure_tree')
+        imagebackend.utils.ensure_tree(self.TEMPLATE_DIR)
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
@@ -82,7 +83,7 @@ class _ImageTestCase(test.TestCase):
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
         fn = self.mox.CreateMockAnything()
         fn(target=self.TEMPLATE_PATH)
-        self.mox.StubOutWithMock(imagebackend.libvirt_utils, 'ensure_tree')
+        self.mox.StubOutWithMock(imagebackend.utils, 'ensure_tree')
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)

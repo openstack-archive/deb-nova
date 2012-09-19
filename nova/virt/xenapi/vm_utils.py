@@ -2,7 +2,7 @@
 
 # Copyright (c) 2010 Citrix Systems, Inc.
 # Copyright 2011 Piston Cloud Computing, Inc.
-# Copyright 2012 Openstack, LLC.
+# Copyright 2012 OpenStack, LLC.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -22,7 +22,6 @@ their attributes like VDIs, VIFs, as well as their lookup functions.
 """
 
 import contextlib
-import cPickle as pickle
 import decimal
 import os
 import re
@@ -44,7 +43,6 @@ from nova import flags
 from nova.image import glance
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk import api as disk
@@ -467,17 +465,11 @@ def _safe_copy_vdi(session, sr_ref, instance, vdi_to_copy_ref):
     """
     with _dummy_vm(session, instance, vdi_to_copy_ref) as vm_ref:
         label = "snapshot"
-
         with snapshot_attached_here(
                 session, instance, vm_ref, label) as vdi_uuids:
-            params = {'sr_path': get_sr_path(session),
-                      'vdi_uuids': vdi_uuids,
-                      'uuid_stack': _make_uuid_stack()}
-
-            kwargs = {'params': pickle.dumps(params)}
-            result = session.call_plugin(
-                    'workarounds', 'safe_copy_vdis', kwargs)
-            imported_vhds = jsonutils.loads(result)
+            imported_vhds = session.call_plugin_serialized(
+                'workarounds', 'safe_copy_vdis', sr_path=get_sr_path(session),
+                vdi_uuids=vdi_uuids, uuid_stack=_make_uuid_stack())
 
     root_uuid = imported_vhds['root']['uuid']
 
@@ -649,7 +641,7 @@ def upload_image(context, session, instance, vdi_uuids, image_id):
                 " ID %(image_id)s"), locals(), instance=instance)
 
     glance_api_servers = glance.get_api_servers()
-    glance_host, glance_port = glance_api_servers.next()
+    glance_host, glance_port, glance_use_ssl = glance_api_servers.next()
 
     # TODO(sirp): this inherit-image-property code should probably go in
     # nova/compute/manager so it can be shared across hypervisors
@@ -669,12 +661,12 @@ def upload_image(context, session, instance, vdi_uuids, image_id):
               'image_id': image_id,
               'glance_host': glance_host,
               'glance_port': glance_port,
+              'glance_use_ssl': glance_use_ssl,
               'sr_path': get_sr_path(session),
               'auth_token': getattr(context, 'auth_token', None),
               'properties': properties}
 
-    kwargs = {'params': pickle.dumps(params)}
-    session.call_plugin('glance', 'upload_vhd', kwargs)
+    session.call_plugin_serialized('glance', 'upload_vhd', **params)
 
 
 def resize_disk(session, instance, vdi_ref, instance_type):
@@ -970,9 +962,9 @@ def _fetch_using_dom0_plugin_with_retry(context, session, image_id,
         try:
             if callback:
                 callback(params)
-            kwargs = {'params': pickle.dumps(params)}
-            result = session.call_plugin(plugin_name, 'download_vhd', kwargs)
-            return jsonutils.loads(result)
+
+            return session.call_plugin_serialized(
+                    plugin_name, 'download_vhd', **params)
         except session.XenAPI.Failure as exc:
             _type, _method, error = exc.details[:3]
             if error == 'RetryableError':
@@ -1011,9 +1003,10 @@ def _fetch_vhd_image(context, session, instance, image_id):
     glance_api_servers = glance.get_api_servers()
 
     def pick_glance(params):
-        glance_host, glance_port = glance_api_servers.next()
+        glance_host, glance_port, glance_use_ssl = glance_api_servers.next()
         params['glance_host'] = glance_host
         params['glance_port'] = glance_port
+        params['glance_use_ssl'] = glance_use_ssl
 
     plugin_name = 'glance'
     vdis = _fetch_using_dom0_plugin_with_retry(
@@ -1246,7 +1239,7 @@ def list_vms(session):
             yield vm_ref, vm_rec
 
 
-def lookup_vm_vdis(session, vm_ref, nodestroys=None):
+def lookup_vm_vdis(session, vm_ref):
     """Look for the VDIs that are attached to the VM"""
     # Firstly we get the VBDs, then the VDIs.
     # TODO(Armando): do we leave the read-only devices?
@@ -1259,11 +1252,13 @@ def lookup_vm_vdis(session, vm_ref, nodestroys=None):
                 # Test valid VDI
                 record = session.call_xenapi("VDI.get_record", vdi_ref)
                 LOG.debug(_('VDI %s is still available'), record['uuid'])
+                vbd_other_config = session.call_xenapi("VBD.get_other_config",
+                                                       vbd_ref)
+                if not vbd_other_config.get('osvol'):
+                    # This is not an attached volume
+                    vdi_refs.append(vdi_ref)
             except session.XenAPI.Failure, exc:
                 LOG.exception(exc)
-            else:
-                if not nodestroys or record['uuid'] not in nodestroys:
-                    vdi_refs.append(vdi_ref)
     return vdi_refs
 
 
@@ -1591,6 +1586,17 @@ def _get_all_vdis_in_sr(session, sr_ref):
         try:
             vdi_rec = session.call_xenapi('VDI.get_record', vdi_ref)
             yield vdi_ref, vdi_rec
+        except session.XenAPI.Failure:
+            continue
+
+
+def get_instance_vdis_for_sr(session, vm_ref, sr_ref):
+    """Return opaqueRef for all the vdis which live on sr"""
+    for vbd_ref in session.call_xenapi('VM.get_VBDs', vm_ref):
+        try:
+            vdi_ref = session.call_xenapi('VBD.get_VDI', vbd_ref)
+            if sr_ref == session.call_xenapi('VDI.get_SR', vdi_ref):
+                yield vdi_ref
         except session.XenAPI.Failure:
             continue
 
@@ -2159,13 +2165,9 @@ def ensure_correct_host(session):
 
 def move_disks(session, instance, disk_info):
     """Move and possibly link VHDs via the XAPI plugin."""
-    params = {'instance_uuid': instance['uuid'],
-              'sr_path': get_sr_path(session),
-              'uuid_stack': _make_uuid_stack()}
-
-    result = session.call_plugin(
-            'migration', 'move_vhds_into_sr', {'params': pickle.dumps(params)})
-    imported_vhds = jsonutils.loads(result)
+    imported_vhds = session.call_plugin_serialized(
+            'migration', 'move_vhds_into_sr', instance_uuid=instance['uuid'],
+            sr_path=get_sr_path(session), uuid_stack=_make_uuid_stack())
 
     # Now we rescan the SR so we find the VHDs
     scan_default_sr(session)

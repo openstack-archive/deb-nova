@@ -23,7 +23,6 @@ ONTAP 7-mode storage systems with installed iSCSI licenses.
 
 """
 
-import string
 import time
 
 import suds
@@ -107,7 +106,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             name = request.Name
             reason = response.Reason
             msg = _('API %(name)s failed: %(reason)s')
-            raise exception.NovaException(msg % locals())
+            raise exception.VolumeBackendAPIException(data=msg % locals())
 
     def _create_client(self, **kwargs):
         """Instantiate a web services client.
@@ -152,11 +151,12 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
                 'netapp_server_hostname', 'netapp_server_port']
         for flag in required_flags:
             if not getattr(FLAGS, flag, None):
-                raise exception.NovaException(_('%s is not set') % flag)
+                raise exception.InvalidInput(reason=_('%s is not set') % flag)
         if not (FLAGS.netapp_storage_service or
                 FLAGS.netapp_storage_service_prefix):
-            raise exception.NovaException(_('Either netapp_storage_service or '
-                'netapp_storage_service_prefix must be set'))
+            raise exception.InvalidInput(reason=_('Either '
+                'netapp_storage_service or netapp_storage_service_prefix must '
+                'be set'))
 
     def do_setup(self, context):
         """Setup the NetApp Volume driver.
@@ -294,8 +294,8 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             events = self._get_job_progress(job_id)
             for event in events:
                 if event.EventStatus == 'error':
-                    raise exception.NovaException(_('Job failed: %s') %
-                        (event.ErrorMessage))
+                    msg = _('Job failed: %s') % (event.ErrorMessage)
+                    raise exception.VolumeBackendAPIException(data=msg)
                 if event.EventType == 'job-end':
                     return events
             time.sleep(5)
@@ -325,11 +325,11 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         if ss_type and not self.storage_service_prefix:
             msg = _('Attempt to use volume_type without specifying '
                 'netapp_storage_service_prefix flag.')
-            raise exception.NovaException(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
         if not (ss_type or self.storage_service):
             msg = _('You must set the netapp_storage_service flag in order to '
                 'create volumes with no volume_type.')
-            raise exception.NovaException(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
         storage_service = self.storage_service
         if ss_type:
             storage_service = self.storage_service_prefix + ss_type
@@ -397,7 +397,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         except (suds.WebFault, Exception):
             server.DatasetEditRollback(EditLockId=lock_id)
             msg = _('Failed to provision dataset member')
-            raise exception.NovaException(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         lun_id = None
         lunpath = None
@@ -412,7 +412,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
 
         if not lun_id:
             msg = _('No LUN was created by the provision job')
-            raise exception.NovaException(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         lun = DfmLun(dataset, lunpath, lun_id)
         self.discovered_luns.append(lun)
@@ -450,7 +450,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         except (suds.WebFault, Exception):
             server.DatasetEditRollback(EditLockId=lock_id)
             msg = _('Failed to remove and delete dataset member')
-            raise exception.NovaException(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
     def create_volume(self, volume):
         """Driver entry point for creating a new volume."""
@@ -490,8 +490,8 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
             if lun.lunpath.endswith(lunpath_suffix):
                 self.lun_table[name] = lun
                 return lun
-        msg = _("No entry in LUN table for volume %s")
-        raise exception.NovaException(msg % (name))
+        msg = _("No entry in LUN table for volume %s") % (name)
+        raise exception.VolumeBackendAPIException(data=msg)
 
     def delete_volume(self, volume):
         """Driver entry point for destroying existing volumes."""
@@ -511,7 +511,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         finally:
             server.LunListInfoIterEnd(Tag=tag)
         msg = _('Failed to get LUN details for LUN ID %s')
-        raise exception.NovaException(msg % lun_id)
+        raise exception.VolumeBackendAPIException(data=msg % lun_id)
 
     def _get_host_details(self, host_id):
         """Given the ID of a host, get the details about it.
@@ -528,7 +528,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         finally:
             server.HostListInfoIterEnd(Tag=tag)
         msg = _('Failed to get host details for host ID %s')
-        raise exception.NovaException(msg % host_id)
+        raise exception.VolumeBackendAPIException(data=msg % host_id)
 
     def _get_iqn_for_host(self, host_id):
         """Get the iSCSI Target Name for a storage system."""
@@ -764,8 +764,8 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         initiator_name = connector['initiator']
         lun_id = volume['provider_location']
         if not lun_id:
-            msg = _("No LUN ID for volume %s")
-            raise exception.NovaException(msg % volume['name'])
+            msg = _("No LUN ID for volume %s") % volume['name']
+            raise exception.VolumeBackendAPIException(data=msg)
         lun = self._get_lun_details(lun_id)
         lun_num = self._ensure_initiator_mapped(lun.HostId, lun.LunPath,
                                                 initiator_name)
@@ -774,12 +774,12 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
                                                   host.HostAddress)
         if not portal:
             msg = _('Failed to get target portal for filer: %s')
-            raise exception.NovaException(msg % host.HostName)
+            raise exception.VolumeBackendAPIException(data=msg % host.HostName)
 
         iqn = self._get_iqn_for_host(host.HostId)
         if not iqn:
             msg = _('Failed to get target IQN for filer: %s')
-            raise exception.NovaException(msg % host.HostName)
+            raise exception.VolumeBackendAPIException(data=msg % host.HostName)
 
         properties = {}
         properties['target_discovered'] = False
@@ -811,8 +811,8 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         initiator_name = connector['initiator']
         lun_id = volume['provider_location']
         if not lun_id:
-            msg = _('No LUN ID for volume %s')
-            raise exception.NovaException(msg % (volume['name']))
+            msg = _('No LUN ID for volume %s') % volume['name']
+            raise exception.VolumeBackendAPIException(data=msg)
         lun = self._get_lun_details(lun_id)
         self._ensure_initiator_unmapped(lun.HostId, lun.LunPath,
                                         initiator_name)
@@ -967,7 +967,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         if vol_size != snap_size:
             msg = _('Cannot create volume of size %(vol_size)s from '
                 'snapshot of size %(snap_size)s')
-            raise exception.NovaException(msg % locals())
+            raise exception.VolumeBackendAPIException(data=msg % locals())
         vol_name = snapshot['volume_name']
         snapshot_name = snapshot['name']
         project = snapshot['project_id']
@@ -979,7 +979,7 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
         if new_type != old_type:
             msg = _('Cannot create volume of type %(new_type)s from '
                 'snapshot of type %(old_type)s')
-            raise exception.NovaException(msg % locals())
+            raise exception.VolumeBackendAPIException(data=msg % locals())
         lun = self._get_lun_details(lun_id)
         extra_gb = vol_size
         new_size = '+%dg' % extra_gb
@@ -995,3 +995,297 @@ class NetAppISCSIDriver(driver.ISCSIDriver):
 
     def check_for_export(self, context, volume_id):
         raise NotImplementedError()
+
+
+class NetAppLun(object):
+    """Represents a LUN on NetApp storage."""
+
+    def __init__(self, handle, name, size, metadata_dict):
+        self.handle = handle
+        self.name = name
+        self.size = size
+        self.metadata = metadata_dict
+
+    def get_metadata_property(self, prop):
+        """Get the metadata property of a LUN."""
+        if prop in self.metadata:
+            return self.metadata[prop]
+        name = self.name
+        msg = _("No metadata property %(prop)s defined for the LUN %(name)s")
+        LOG.debug(msg % locals())
+
+
+class NetAppCmodeISCSIDriver(driver.ISCSIDriver):
+    """NetApp C-mode iSCSI volume driver."""
+
+    def __init__(self, *args, **kwargs):
+        super(NetAppCmodeISCSIDriver, self).__init__(*args, **kwargs)
+        self.lun_table = {}
+
+    def _create_client(self, **kwargs):
+        """Instantiate a web services client.
+
+        This method creates a "suds" client to make web services calls to the
+        DFM server. Note that the WSDL file is quite large and may take
+        a few seconds to parse.
+        """
+        wsdl_url = kwargs['wsdl_url']
+        LOG.debug(_('Using WSDL: %s') % wsdl_url)
+        if kwargs['cache']:
+            self.client = client.Client(wsdl_url, username=kwargs['login'],
+                                        password=kwargs['password'])
+        else:
+            self.client = client.Client(wsdl_url, username=kwargs['login'],
+                                        password=kwargs['password'],
+                                        cache=None)
+
+    def _check_flags(self):
+        """Ensure that the flags we care about are set."""
+        required_flags = ['netapp_wsdl_url', 'netapp_login', 'netapp_password',
+                'netapp_server_hostname', 'netapp_server_port']
+        for flag in required_flags:
+            if not getattr(FLAGS, flag, None):
+                msg = _('%s is not set') % flag
+                raise exception.InvalidInput(data=msg)
+
+    def do_setup(self, context):
+        """Setup the NetApp Volume driver.
+
+        Called one time by the manager after the driver is loaded.
+        Validate the flags we care about and setup the suds (web services)
+        client.
+        """
+        self._check_flags()
+        self._create_client(wsdl_url=FLAGS.netapp_wsdl_url,
+            login=FLAGS.netapp_login, password=FLAGS.netapp_password,
+            hostname=FLAGS.netapp_server_hostname,
+            port=FLAGS.netapp_server_port, cache=True)
+
+    def check_for_setup_error(self):
+        """Check that the driver is working and can communicate.
+
+        Discovers the LUNs on the NetApp server.
+        """
+        self.lun_table = {}
+        luns = self.client.service.ListLuns()
+        for lun in luns:
+            meta_dict = {}
+            if hasattr(lun, 'Metadata'):
+                meta_dict = self._create_dict_from_meta(lun.Metadata)
+            discovered_lun = NetAppLun(lun.Handle, lun.Name, lun.Size,
+                meta_dict)
+            self._add_lun_to_table(discovered_lun)
+        LOG.debug(_("Success getting LUN list from server"))
+
+    def create_volume(self, volume):
+        """Driver entry point for creating a new volume."""
+        default_size = '104857600'  # 100 MB
+        gigabytes = 1073741824L  # 2^30
+        name = volume['name']
+        if int(volume['size']) == 0:
+            size = default_size
+        else:
+            size = str(int(volume['size']) * gigabytes)
+        extra_args = {}
+        extra_args['OsType'] = 'linux'
+        extra_args['QosType'] = self._get_qos_type(volume)
+        extra_args['Container'] = volume['project_id']
+        extra_args['Display'] = volume['display_name']
+        extra_args['Description'] = volume['display_description']
+        extra_args['SpaceReserved'] = True
+        server = self.client.service
+        metadata = self._create_metadata_list(extra_args)
+        lun = server.ProvisionLun(Name=name, Size=size,
+                                  Metadata=metadata)
+        LOG.debug(_("Created LUN with name %s") % name)
+        self._add_lun_to_table(NetAppLun(lun.Handle, lun.Name,
+             lun.Size, self._create_dict_from_meta(lun.Metadata)))
+
+    def delete_volume(self, volume):
+        """Driver entry point for destroying existing volumes."""
+        name = volume['name']
+        handle = self._get_lun_handle(name)
+        self.client.service.DestroyLun(Handle=handle)
+        LOG.debug(_("Destroyed LUN %s") % handle)
+        self.lun_table.pop(name)
+
+    def ensure_export(self, context, volume):
+        """Driver entry point to get the export info for an existing volume."""
+        handle = self._get_lun_handle(volume['name'])
+        return {'provider_location': handle}
+
+    def create_export(self, context, volume):
+        """Driver entry point to get the export info for a new volume."""
+        handle = self._get_lun_handle(volume['name'])
+        return {'provider_location': handle}
+
+    def remove_export(self, context, volume):
+        """Driver exntry point to remove an export for a volume.
+
+        Since exporting is idempotent in this driver, we have nothing
+        to do for unexporting.
+        """
+        pass
+
+    def initialize_connection(self, volume, connector):
+        """Driver entry point to attach a volume to an instance.
+
+        Do the LUN masking on the storage system so the initiator can access
+        the LUN on the target. Also return the iSCSI properties so the
+        initiator can find the LUN. This implementation does not call
+        _get_iscsi_properties() to get the properties because cannot store the
+        LUN number in the database. We only find out what the LUN number will
+        be during this method call so we construct the properties dictionary
+        ourselves.
+        """
+        initiator_name = connector['initiator']
+        handle = volume['provider_location']
+        server = self.client.service
+        server.MapLun(Handle=handle, InitiatorType="iscsi",
+                      InitiatorName=initiator_name)
+        msg = _("Mapped LUN %(handle)s to the initiator %(initiator_name)s")
+        LOG.debug(msg % locals())
+
+        target_details_list = server.GetLunTargetDetails(Handle=handle,
+                InitiatorType="iscsi", InitiatorName=initiator_name)
+        msg = _("Succesfully fetched target details for LUN %(handle)s and "
+                "initiator %(initiator_name)s")
+        LOG.debug(msg % locals())
+
+        if not target_details_list:
+            msg = _('Failed to get LUN target details for the LUN %s')
+            raise exception.VolumeBackendAPIException(msg % handle)
+        target_details = target_details_list[0]
+        if not target_details.Address and target_details.Port:
+            msg = _('Failed to get target portal for the LUN %s')
+            raise exception.VolumeBackendAPIException(msg % handle)
+        iqn = target_details.Iqn
+        if not iqn:
+            msg = _('Failed to get target IQN for the LUN %s')
+            raise exception.VolumeBackendAPIException(msg % handle)
+
+        properties = {}
+        properties['target_discovered'] = False
+        (address, port) = (target_details.Address, target_details.Port)
+        properties['target_portal'] = '%s:%s' % (address, port)
+        properties['target_iqn'] = iqn
+        properties['target_lun'] = target_details.LunNumber
+        properties['volume_id'] = volume['id']
+
+        auth = volume['provider_auth']
+        if auth:
+            (auth_method, auth_username, auth_secret) = auth.split()
+            properties['auth_method'] = auth_method
+            properties['auth_username'] = auth_username
+            properties['auth_password'] = auth_secret
+
+        return {
+            'driver_volume_type': 'iscsi',
+            'data': properties,
+        }
+
+    def terminate_connection(self, volume, connector):
+        """Driver entry point to unattach a volume from an instance.
+
+        Unmask the LUN on the storage system so the given intiator can no
+        longer access it.
+        """
+        initiator_name = connector['initiator']
+        handle = volume['provider_location']
+        self.client.service.UnmapLun(Handle=handle, InitiatorType="iscsi",
+                                     InitiatorName=initiator_name)
+        msg = _("Unmapped LUN %(handle)s from the initiator "
+                "%(initiator_name)s")
+        LOG.debug(msg % locals())
+
+    def create_snapshot(self, snapshot):
+        """Driver entry point for creating a snapshot.
+
+        This driver implements snapshots by using efficient single-file
+        (LUN) cloning.
+        """
+        vol_name = snapshot['volume_name']
+        snapshot_name = snapshot['name']
+        lun = self.lun_table[vol_name]
+        extra_args = {'SpaceReserved': False}
+        self._clone_lun(lun.handle, snapshot_name, extra_args)
+
+    def delete_snapshot(self, snapshot):
+        """Driver entry point for deleting a snapshot."""
+        handle = self._get_lun_handle(snapshot['name'])
+        self.client.service.DestroyLun(Handle=handle)
+        LOG.debug(_("Destroyed LUN %s") % handle)
+
+    def create_volume_from_snapshot(self, volume, snapshot):
+        """Driver entry point for creating a new volume from a snapshot.
+
+        Many would call this "cloning" and in fact we use cloning to implement
+        this feature.
+        """
+        snapshot_name = snapshot['name']
+        lun = self.lun_table[snapshot_name]
+        new_name = volume['name']
+        extra_args = {}
+        extra_args['OsType'] = 'linux'
+        extra_args['QosType'] = self._get_qos_type(volume)
+        extra_args['Container'] = volume['project_id']
+        extra_args['Display'] = volume['display_name']
+        extra_args['Description'] = volume['display_description']
+        extra_args['SpaceReserved'] = True
+        self._clone_lun(lun.handle, new_name, extra_args)
+
+    def check_for_export(self, context, volume_id):
+        raise NotImplementedError()
+
+    def _get_qos_type(self, volume):
+        """Get the storage service type for a volume."""
+        type_id = volume['volume_type_id']
+        if not type_id:
+            return None
+        volume_type = volume_types.get_volume_type(None, type_id)
+        if not volume_type:
+            return None
+        return volume_type['name']
+
+    def _add_lun_to_table(self, lun):
+        """Adds LUN to cache table."""
+        if not isinstance(lun, NetAppLun):
+            msg = _("Object is not a NetApp LUN.")
+            raise exception.VolumeBackendAPIException(data=msg)
+        self.lun_table[lun.name] = lun
+
+    def _clone_lun(self, handle, new_name, extra_args):
+        """Clone LUN with the given handle to the new name."""
+        server = self.client.service
+        metadata = self._create_metadata_list(extra_args)
+        lun = server.CloneLun(Handle=handle, NewName=new_name,
+                              Metadata=metadata)
+        LOG.debug(_("Cloned LUN with new name %s") % new_name)
+        self._add_lun_to_table(NetAppLun(lun.Handle, lun.Name,
+             lun.Size, self._create_dict_from_meta(lun.Metadata)))
+
+    def _create_metadata_list(self, extra_args):
+        """Creates metadata from kwargs."""
+        metadata = []
+        for key in extra_args.keys():
+            meta = self.client.factory.create("Metadata")
+            meta.Key = key
+            meta.Value = extra_args[key]
+            metadata.append(meta)
+        return metadata
+
+    def _get_lun_handle(self, name):
+        """Get the details for a LUN from our cache table."""
+        if not name in self.lun_table:
+            LOG.warn(_("Could not find handle for LUN named %s") % name)
+            return None
+        return self.lun_table[name]
+
+    def _create_dict_from_meta(self, metadata):
+        """Creates dictionary from metadata array."""
+        meta_dict = {}
+        if not metadata:
+            return meta_dict
+        for meta in metadata:
+            meta_dict[meta.Key] = meta.Value
+        return meta_dict

@@ -53,7 +53,7 @@ QUOTAS = quota.QUOTAS
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
 
-    RPC_API_VERSION = '1.5'
+    RPC_API_VERSION = '2.2'
 
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         if not scheduler_driver:
@@ -61,103 +61,64 @@ class SchedulerManager(manager.Manager):
         self.driver = importutils.import_object(scheduler_driver)
         super(SchedulerManager, self).__init__(*args, **kwargs)
 
-    def __getattr__(self, key):
-        """Converts all method calls to use the schedule method"""
-        # NOTE(russellb) Because of what this is doing, we must be careful
-        # when changing the API of the scheduler drivers, as that changes
-        # the rpc API as well, and the version should be updated accordingly.
-        return functools.partial(self._schedule, key)
-
-    def get_host_list(self, context):
-        """Get a list of hosts from the HostManager.
-
-        Currently unused, but left for backwards compatibility.
-        """
-        raise rpc_common.RPCException(message=_('Deprecated in version 1.0'))
-
-    def get_service_capabilities(self, context):
-        """Get the normalized set of capabilities for this zone.
-
-        Has been unused since pre-essex, but remains for rpc API 1.X
-        completeness.
-        """
-        raise rpc_common.RPCException(message=_('Deprecated in version 1.0'))
-
-    def update_service_capabilities(self, context, service_name=None,
-            host=None, capabilities=None, **kwargs):
+    def update_service_capabilities(self, context, service_name,
+                                    host, capabilities):
         """Process a capability update from a service node."""
         if capabilities is None:
             capabilities = {}
         self.driver.update_service_capabilities(service_name, host,
                 capabilities)
 
-    def _schedule(self, method, context, topic, *args, **kwargs):
-        """Tries to call schedule_* method on the driver to retrieve host.
-        Falls back to schedule(context, topic) if method doesn't exist.
-        """
-        driver_method_name = 'schedule_%s' % method
+    def create_volume(self, context, volume_id, snapshot_id,
+                      reservations=None, image_id=None):
         try:
-            driver_method = getattr(self.driver, driver_method_name)
-            args = (context,) + args
-        except AttributeError, e:
-            LOG.warning(_("Driver Method %(driver_method_name)s missing: "
-                       "%(e)s. Reverting to schedule()") % locals())
-            driver_method = self.driver.schedule
-            args = (context, topic, method) + args
-
-        # Scheduler methods are responsible for casting.
-        try:
-            return driver_method(*args, **kwargs)
+            self.driver.schedule_create_volume(
+                context, volume_id, snapshot_id, image_id)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
-                request_spec = kwargs.get('request_spec', {})
-                self._set_vm_state_and_notify(method,
+                self._set_vm_state_and_notify('create_volume',
                                              {'vm_state': vm_states.ERROR},
-                                             context, ex, request_spec)
+                                             context, ex, {})
+
+    def live_migration(self, context, instance, dest,
+                       block_migration, disk_over_commit):
+        try:
+            return self.driver.schedule_live_migration(
+                context, instance, dest,
+                block_migration, disk_over_commit)
+        except Exception as ex:
+            with excutils.save_and_reraise_exception():
+                self._set_vm_state_and_notify('live_migration',
+                                             {'vm_state': vm_states.ERROR},
+                                             context, ex, {})
 
     def run_instance(self, context, request_spec, admin_password,
             injected_files, requested_networks, is_first_time,
-            filter_properties, reservations, topic=None):
+            filter_properties):
         """Tries to call schedule_run_instance on the driver.
         Sets instance vm_state to ERROR on exceptions
         """
         try:
-            result = self.driver.schedule_run_instance(context,
+            return self.driver.schedule_run_instance(context,
                     request_spec, admin_password, injected_files,
-                    requested_networks, is_first_time, filter_properties,
-                    reservations)
-            return result
+                    requested_networks, is_first_time, filter_properties)
         except exception.NoValidHost as ex:
-            # don't reraise
+            # don't re-raise
             self._set_vm_state_and_notify('run_instance',
                                          {'vm_state': vm_states.ERROR},
                                           context, ex, request_spec)
-            if reservations:
-                QUOTAS.rollback(context, reservations)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
                 self._set_vm_state_and_notify('run_instance',
                                              {'vm_state': vm_states.ERROR},
                                              context, ex, request_spec)
-                if reservations:
-                    QUOTAS.rollback(context, reservations)
 
-    # FIXME(comstud): Remove 'update_db' in a future version.  It's only
-    # here for rpcapi backwards compatibility.
     def prep_resize(self, context, image, request_spec, filter_properties,
-                    update_db=None, instance=None, instance_uuid=None,
-                    instance_type=None, instance_type_id=None,
-                    reservations=None, topic=None):
+                    instance, instance_type, reservations):
         """Tries to call schedule_prep_resize on the driver.
         Sets instance vm_state to ACTIVE on NoHostFound
         Sets vm_state to ERROR on other exceptions
         """
-        if not instance:
-            instance = db.instance_get_by_uuid(context, instance_uuid)
-
-        if not instance_type:
-            instance_type = db.instance_type_get(context, instance_type_id)
-
         try:
             kwargs = {
                 'context': context,
@@ -202,7 +163,13 @@ class SchedulerManager(manager.Manager):
 
         vm_state = updates['vm_state']
         properties = request_spec.get('instance_properties', {})
-        instance_uuid = properties.get('uuid', {})
+        # FIXME(comstud): We really need to move error handling closer
+        # to where the errors occur so we can deal with errors on
+        # individual instances when scheduling multiple.
+        if 'instance_uuids' in request_spec:
+            instance_uuid = request_spec['instance_uuids'][0]
+        else:
+            instance_uuid = properties.get('uuid', {})
 
         if instance_uuid:
             state = vm_state.upper()

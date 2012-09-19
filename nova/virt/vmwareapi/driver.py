@@ -126,8 +126,8 @@ class VMWareESXDriver(driver.ComputeDriver):
         """List VM instances."""
         return self._vmops.list_instances()
 
-    def spawn(self, context, instance, image_meta, network_info,
-              block_device_mapping=None):
+    def spawn(self, context, instance, image_meta, injected_files,
+              admin_password, network_info=None, block_device_info=None):
         """Create VM instance."""
         self._vmops.spawn(context, instance, image_meta, network_info)
 
@@ -135,7 +135,8 @@ class VMWareESXDriver(driver.ComputeDriver):
         """Create snapshot from a running VM instance."""
         self._vmops.snapshot(context, instance, name)
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         """Reboot VM instance."""
         self._vmops.reboot(instance, network_info)
 
@@ -195,7 +196,7 @@ class VMWareESXDriver(driver.ComputeDriver):
                 'username': FLAGS.vmwareapi_host_username,
                 'password': FLAGS.vmwareapi_host_password}
 
-    def update_available_resource(self, ctxt, host):
+    def get_available_resource(self):
         """This method is supported only by libvirt."""
         return
 

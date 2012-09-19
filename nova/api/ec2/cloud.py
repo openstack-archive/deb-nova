@@ -208,20 +208,29 @@ class CloudController(object):
         else:
             return self._describe_availability_zones(context, **kwargs)
 
-    def _describe_availability_zones(self, context, **kwargs):
-        ctxt = context.elevated()
-        enabled_services = db.service_get_all(ctxt, False)
-        disabled_services = db.service_get_all(ctxt, True)
+    def _get_zones(self, context):
+        """Return available and unavailable zones."""
+        enabled_services = db.service_get_all(context, False)
+        disabled_services = db.service_get_all(context, True)
+
         available_zones = []
         for zone in [service.availability_zone for service
                      in enabled_services]:
             if not zone in available_zones:
                 available_zones.append(zone)
+
         not_available_zones = []
         for zone in [service.availability_zone for service in disabled_services
                      if not service['availability_zone'] in available_zones]:
             if not zone in not_available_zones:
                 not_available_zones.append(zone)
+
+        return (available_zones, not_available_zones)
+
+    def _describe_availability_zones(self, context, **kwargs):
+        ctxt = context.elevated()
+        available_zones, not_available_zones = self._get_zones(ctxt)
+
         result = []
         for zone in available_zones:
             result.append({'zoneName': zone,
@@ -232,30 +241,45 @@ class CloudController(object):
         return {'availabilityZoneInfo': result}
 
     def _describe_availability_zones_verbose(self, context, **kwargs):
-        rv = {'availabilityZoneInfo': [{'zoneName': 'nova',
-                                        'zoneState': 'available'}]}
+        ctxt = context.elevated()
+        available_zones, not_available_zones = self._get_zones(ctxt)
 
-        services = db.service_get_all(context, False)
-        hosts = []
-        for host in [service['host'] for service in services]:
-            if not host in hosts:
-                hosts.append(host)
-        for host in hosts:
-            rv['availabilityZoneInfo'].append({'zoneName': '|- %s' % host,
-                                               'zoneState': ''})
-            hsvcs = [service for service in services
-                     if service['host'] == host]
-            for svc in hsvcs:
-                alive = utils.service_is_up(svc)
-                art = (alive and ":-)") or "XXX"
-                active = 'enabled'
-                if svc['disabled']:
-                    active = 'disabled'
-                rv['availabilityZoneInfo'].append({
-                        'zoneName': '| |- %s' % svc['binary'],
-                        'zoneState': '%s %s %s' % (active, art,
-                                                   svc['updated_at'])})
-        return rv
+        # Available services
+        enabled_services = db.service_get_all(context, False)
+        zone_hosts = {}
+        host_services = {}
+        for service in enabled_services:
+            zone_hosts.setdefault(service.availability_zone, [])
+            if not service.host in zone_hosts[service.availability_zone]:
+                zone_hosts[service.availability_zone].append(service.host)
+
+            host_services.setdefault(service.host, [])
+            host_services[service.host].append(service)
+
+        result = []
+        for zone in available_zones:
+            result.append({'zoneName': zone,
+                           'zoneState': "available"})
+            for host in zone_hosts[zone]:
+                result.append({'zoneName': '|- %s' % host,
+                               'zoneState': ''})
+
+                for service in host_services[host]:
+                    alive = utils.service_is_up(service)
+                    art = (alive and ":-)") or "XXX"
+                    active = 'enabled'
+                    if service['disabled']:
+                        active = 'disabled'
+                    result.append({'zoneName': '| |- %s' % service['binary'],
+                                   'zoneState': ('%s %s %s'
+                                                 % (active, art,
+                                                    service['updated_at']))})
+
+        for zone in not_available_zones:
+            result.append({'zoneName': zone,
+                           'zoneState': "not available"})
+
+        return {'availabilityZoneInfo': result}
 
     def describe_regions(self, context, region_name=None, **kwargs):
         if FLAGS.region_list:
@@ -407,10 +431,13 @@ class CloudController(object):
 
     def describe_security_groups(self, context, group_name=None, group_id=None,
                                  **kwargs):
+        search_opts = ec2utils.search_opts_from_filters(kwargs.get('filter'))
+
         raw_groups = self.security_group_api.list(context,
                                                   group_name,
                                                   group_id,
-                                                  context.project_id)
+                                                  context.project_id,
+                                                  search_opts=search_opts)
 
         groups = [self._format_security_group(context, g) for g in raw_groups]
 
@@ -505,8 +532,6 @@ class CloudController(object):
                                   ip_protocol=None, cidr_ip=None, user_id=None,
                                   source_security_group_name=None,
                                   source_security_group_owner_id=None):
-
-        values = {}
 
         if source_security_group_name:
             source_project_id = self._get_source_project_id(context,
@@ -700,10 +725,11 @@ class CloudController(object):
         v['availabilityZone'] = volume['availability_zone']
         v['createTime'] = volume['created_at']
         if context.is_admin:
+            # NOTE(dprince): project_id and host_id are unset w/ Cinder
             v['status'] = '%s (%s, %s, %s, %s)' % (
                 volume['status'],
-                volume['project_id'],
-                volume['host'],
+                volume.get('project_id', ''),
+                volume.get('host', ''),
                 instance_data,
                 volume['mountpoint'])
         if volume['attach_status'] == 'attached':
@@ -735,14 +761,16 @@ class CloudController(object):
                         kwargs.get('size'),
                         context=context)
 
+        create_kwargs = dict(snapshot=snapshot,
+                             volume_type=kwargs.get('volume_type'),
+                             metadata=kwargs.get('metadata'),
+                             availability_zone=kwargs.get('availability_zone'))
+
         volume = self.volume_api.create(context,
                                         kwargs.get('size'),
                                         kwargs.get('name'),
                                         kwargs.get('description'),
-                                        snapshot,
-                                        kwargs.get('volume_type'),
-                                        kwargs.get('metadata'),
-                                        kwargs.get('availability_zone'))
+                                        **create_kwargs)
 
         db.ec2_volume_create(context, volume['id'])
         # TODO(vish): Instance should be None at db layer instead of
@@ -1086,8 +1114,8 @@ class CloudController(object):
         if floating_ip['fixed_ip_id']:
             fixed_id = floating_ip['fixed_ip_id']
             fixed = self.network_api.get_fixed_ip(context, fixed_id)
-            if fixed['instance_id'] is not None:
-                ec2_id = ec2utils.id_to_ec2_inst_id(fixed['instance_id'])
+            if fixed['instance_uuid'] is not None:
+                ec2_id = ec2utils.id_to_ec2_inst_id(fixed['instance_uuid'])
         address = {'public_ip': floating_ip['address'],
                    'instance_id': ec2_id}
         if context.is_admin:
@@ -1181,7 +1209,7 @@ class CloudController(object):
         if image:
             image_state = self._get_image_state(image)
         else:
-            raise exception.ImageNotFound(image_id=kwargs['image_id'])
+            raise exception.ImageNotFoundEC2(image_id=kwargs['image_id'])
 
         if image_state != 'available':
             raise exception.EC2APIError(_('Image must be available'))
@@ -1202,16 +1230,22 @@ class CloudController(object):
             block_device_mapping=kwargs.get('block_device_mapping', {}))
         return self._format_run_instances(context, resv_id)
 
-    def terminate_instances(self, context, instance_id, **kwargs):
-        """Terminate each instance in instance_id, which is a list of ec2 ids.
-        instance_id is a kwarg so its name cannot be modified."""
-        LOG.debug(_("Going to start terminating instances"))
-        previous_states = []
+    def _ec2_ids_to_instances(self, context, instance_id):
+        """Get all instances first, to prevent partial executions"""
+        instances = []
         for ec2_id in instance_id:
             validate_ec2_id(ec2_id)
             _instance_id = ec2utils.ec2_id_to_id(ec2_id)
             instance = self.compute_api.get(context, _instance_id)
-            previous_states.append(instance)
+            instances.append(instance)
+        return instances
+
+    def terminate_instances(self, context, instance_id, **kwargs):
+        """Terminate each instance in instance_id, which is a list of ec2 ids.
+        instance_id is a kwarg so its name cannot be modified."""
+        previous_states = self._ec2_ids_to_instances(context, instance_id)
+        LOG.debug(_("Going to start terminating instances"))
+        for instance in previous_states:
             self.compute_api.delete(context, instance)
         return self._format_terminate_instances(context,
                                                 instance_id,
@@ -1219,33 +1253,27 @@ class CloudController(object):
 
     def reboot_instances(self, context, instance_id, **kwargs):
         """instance_id is a list of instance ids"""
+        instances = self._ec2_ids_to_instances(context, instance_id)
         LOG.audit(_("Reboot instance %r"), instance_id, context=context)
-        for ec2_id in instance_id:
-            validate_ec2_id(ec2_id)
-            _instance_id = ec2utils.ec2_id_to_id(ec2_id)
-            instance = self.compute_api.get(context, _instance_id)
+        for instance in instances:
             self.compute_api.reboot(context, instance, 'HARD')
         return True
 
     def stop_instances(self, context, instance_id, **kwargs):
         """Stop each instances in instance_id.
         Here instance_id is a list of instance ids"""
+        instances = self._ec2_ids_to_instances(context, instance_id)
         LOG.debug(_("Going to stop instances"))
-        for ec2_id in instance_id:
-            validate_ec2_id(ec2_id)
-            _instance_id = ec2utils.ec2_id_to_id(ec2_id)
-            instance = self.compute_api.get(context, _instance_id)
+        for instance in instances:
             self.compute_api.stop(context, instance)
         return True
 
     def start_instances(self, context, instance_id, **kwargs):
         """Start each instances in instance_id.
         Here instance_id is a list of instance ids"""
+        instances = self._ec2_ids_to_instances(context, instance_id)
         LOG.debug(_("Going to start instances"))
-        for ec2_id in instance_id:
-            validate_ec2_id(ec2_id)
-            _instance_id = ec2utils.ec2_id_to_id(ec2_id)
-            instance = self.compute_api.get(context, _instance_id)
+        for instance in instances:
             self.compute_api.start(context, instance)
         return True
 
@@ -1339,7 +1367,7 @@ class CloudController(object):
         image = self._get_image(context, image_id)
         internal_id = image['id']
         self.image_service.delete(context, internal_id)
-        return {'imageId': image_id}
+        return True
 
     def _register_image(self, context, metadata):
         image = self.image_service.create(context, metadata)
@@ -1515,71 +1543,7 @@ class CloudController(object):
         glance_uuid = instance['image_ref']
         ec2_image_id = ec2utils.glance_id_to_ec2_id(context, glance_uuid)
         src_image = self._get_image(context, ec2_image_id)
-        new_image = dict(src_image)
-        properties = new_image['properties']
-        if instance['root_device_name']:
-            properties['root_device_name'] = instance['root_device_name']
-
-        # meaningful image name
-        name_map = dict(instance=instance['uuid'], now=timeutils.isotime())
-        new_image['name'] = (name or
-                             _('image of %(instance)s at %(now)s') % name_map)
-
-        mapping = []
-        for bdm in bdms:
-            if bdm.no_device:
-                continue
-            m = {}
-            for attr in ('device_name', 'snapshot_id', 'volume_id',
-                         'volume_size', 'delete_on_termination', 'no_device',
-                         'virtual_name'):
-                val = getattr(bdm, attr)
-                if val is not None:
-                    m[attr] = val
-
-            volume_id = m.get('volume_id')
-            snapshot_id = m.get('snapshot_id')
-            if snapshot_id and volume_id:
-                # create snapshot based on volume_id
-                volume = self.volume_api.get(context, volume_id)
-                # NOTE(yamahata): Should we wait for snapshot creation?
-                #                 Linux LVM snapshot creation completes in
-                #                 short time, it doesn't matter for now.
-                name = _('snapshot for %s') % new_image['name']
-                snapshot = self.volume_api.create_snapshot_force(
-                        context, volume, name, volume['display_description'])
-                m['snapshot_id'] = snapshot['id']
-                del m['volume_id']
-
-            if m:
-                mapping.append(m)
-
-        for m in _properties_get_mappings(properties):
-            virtual_name = m['virtual']
-            if virtual_name in ('ami', 'root'):
-                continue
-
-            assert block_device.is_swap_or_ephemeral(virtual_name)
-            device_name = m['device']
-            if device_name in [b['device_name'] for b in mapping
-                               if not b.get('no_device', False)]:
-                continue
-
-            # NOTE(yamahata): swap and ephemeral devices are specified in
-            #                 AMI, but disabled for this instance by user.
-            #                 So disable those device by no_device.
-            mapping.append({'device_name': device_name, 'no_device': True})
-
-        if mapping:
-            properties['block_device_mapping'] = mapping
-
-        for attr in ('status', 'location', 'id'):
-            new_image.pop(attr, None)
-
-        # the new image is simply a bucket of properties (particularly the
-        # block device mapping, kernel and ramdisk IDs) with no image data,
-        # hence the zero size
-        new_image['size'] = 0
+        image_meta = dict(src_image)
 
         def _unmap_id_property(properties, name):
             if properties[name]:
@@ -1587,11 +1551,18 @@ class CloudController(object):
                                                             properties[name])
 
         # ensure the ID properties are unmapped back to the glance UUID
-        _unmap_id_property(properties, 'kernel_id')
-        _unmap_id_property(properties, 'ramdisk_id')
+        _unmap_id_property(image_meta['properties'], 'kernel_id')
+        _unmap_id_property(image_meta['properties'], 'ramdisk_id')
 
-        new_image = self.image_service.service.create(context, new_image,
-                                                      data='')
+        # meaningful image name
+        name_map = dict(instance=instance['uuid'], now=timeutils.isotime())
+        name = name or _('image of %(instance)s at %(now)s') % name_map
+
+        new_image = self.compute_api.snapshot_volume_backed(context,
+                                                            instance,
+                                                            image_meta,
+                                                            name)
+
         ec2_id = ec2utils.glance_id_to_ec2_id(context, new_image['id'])
 
         if restart_instance:

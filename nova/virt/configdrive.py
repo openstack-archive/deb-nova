@@ -17,13 +17,10 @@
 
 """Config Drive v2 helper."""
 
-import base64
-import json
 import os
 import shutil
 import tempfile
 
-from nova.api.metadata import base as instance_metadata
 from nova import exception
 from nova import flags
 from nova.openstack.common import cfg
@@ -64,7 +61,7 @@ class ConfigDriveBuilder(object):
     def _add_file(self, path, data):
         filepath = os.path.join(self.tempdir, path)
         dirname = os.path.dirname(filepath)
-        virtutils.ensure_tree(dirname)
+        utils.ensure_tree(dirname)
         with open(filepath, 'w') as f:
             f.write(data)
 

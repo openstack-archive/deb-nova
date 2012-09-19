@@ -15,11 +15,14 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from nova.compute import api as compute_api
+from nova.compute import manager as compute_manager
 import nova.context
 from nova import db
 from nova import exception
 from nova import flags
 from nova.network import manager as network_manager
+from nova.network import model as network_model
 from nova.network import nova_ipam_lib
 from nova import utils
 
@@ -115,7 +118,7 @@ class FakeNetworkManager(network_manager.NetworkManager):
             fakenet['id'] = 999
             return fakenet
 
-        def network_get(self, context, network_id):
+        def network_get(self, context, network_id, project_only="allow_none"):
             return {'cidr_v6': '2001:db8:69:%x::/64' % network_id}
 
         def network_get_by_uuid(self, context, network_uuid):
@@ -124,7 +127,7 @@ class FakeNetworkManager(network_manager.NetworkManager):
         def network_get_all(self, context):
             raise exception.NoNetworksFound()
 
-        def network_get_all_by_uuids(self, context):
+        def network_get_all_by_uuids(self, context, project_only="allow_none"):
             raise exception.NoNetworksFound()
 
         def network_disassociate(self, context, network_id):
@@ -133,13 +136,6 @@ class FakeNetworkManager(network_manager.NetworkManager):
         def virtual_interface_get_all(self, context):
             return self.vifs
 
-        def instance_get_id_to_uuid_mapping(self, context, ids):
-            # NOTE(jkoelker): This is just here until we can rely on UUIDs
-            mapping = {}
-            for id in ids:
-                mapping[id] = str(utils.gen_uuid())
-            return mapping
-
         def fixed_ips_by_virtual_interface(self, context, vif_id):
             return [ip for ip in self.fixed_ips
                     if ip['virtual_interface_id'] == vif_id]
@@ -147,8 +143,12 @@ class FakeNetworkManager(network_manager.NetworkManager):
     def __init__(self):
         self.db = self.FakeDB()
         self.deallocate_called = None
+        self.deallocate_fixed_ip_calls = []
 
+    # TODO(matelakat) method signature should align with the faked one's
     def deallocate_fixed_ip(self, context, address=None, host=None):
+        self.deallocate_fixed_ip_calls.append((context, address, host))
+        # TODO(matelakat) use the deallocate_fixed_ip_calls instead
         self.deallocate_called = address
 
     def _create_fixed_ips(self, context, network_id, fixed_cidr=None):
@@ -294,7 +294,7 @@ def fake_get_instance_nw_info(stubs, num_networks=1, ips_per_vif=2,
                'network': None,
                'instance_uuid': 0}
 
-    def network_get_fake(context, network_id):
+    def network_get_fake(context, network_id, project_only='allow_none'):
         nets = [n for n in networks if n['id'] == network_id]
         if not nets:
             raise exception.NetworkNotFound(network_id=network_id)
@@ -373,3 +373,81 @@ def stub_out_nw_api_get_instance_nw_info(stubs, func=None,
     if func is None:
         func = get_instance_nw_info
     stubs.Set(nova.network.API, 'get_instance_nw_info', func)
+
+
+_real_functions = {}
+
+
+def set_stub_network_methods(stubs):
+    global _real_functions
+    cm = compute_manager.ComputeManager
+    if not _real_functions:
+        _real_functions = {
+                '_get_instance_nw_info': cm._get_instance_nw_info,
+                '_allocate_network': cm._allocate_network,
+                '_deallocate_network': cm._deallocate_network}
+
+    def fake_networkinfo(*args, **kwargs):
+        return network_model.NetworkInfo()
+
+    stubs.Set(cm, '_get_instance_nw_info', fake_networkinfo)
+    stubs.Set(cm, '_allocate_network', fake_networkinfo)
+    stubs.Set(cm, '_deallocate_network', lambda *args, **kwargs: None)
+
+
+def unset_stub_network_methods(stubs):
+    global _real_functions
+    if _real_functions:
+        cm = compute_manager.ComputeManager
+        for name in _real_functions:
+            stubs.Set(cm, name, _real_functions[name])
+
+
+def stub_compute_with_ips(stubs):
+    orig_get = compute_api.API.get
+    orig_get_all = compute_api.API.get_all
+
+    def fake_get(*args, **kwargs):
+        return _get_instances_with_cached_ips(orig_get, *args, **kwargs)
+
+    def fake_get_all(*args, **kwargs):
+        return _get_instances_with_cached_ips(orig_get_all, *args, **kwargs)
+
+    stubs.Set(compute_api.API, 'get', fake_get)
+    stubs.Set(compute_api.API, 'get_all', fake_get_all)
+
+
+def _get_fake_cache():
+    def _ip(ip, fixed=True, floats=None):
+        ip_dict = {'address': ip, 'type': 'fixed'}
+        if not fixed:
+            ip_dict['type'] = 'floating'
+        if fixed and floats:
+            ip_dict['floating_ips'] = [_ip(f, fixed=False) for f in floats]
+        return ip_dict
+
+    info = [{'address': 'aa:bb:cc:dd:ee:ff',
+             'id': 1,
+             'network': {'bridge': 'br0',
+                         'id': 1,
+                         'label': 'private',
+                         'subnets': [{'cidr': '192.168.0.0/24',
+                                      'ips': [_ip('192.168.0.3')]}]}}]
+    if FLAGS.use_ipv6:
+        ipv6_addr = 'fe80:b33f::a8bb:ccff:fedd:eeff'
+        info[0]['network']['subnets'].append({'cidr': 'fe80:b33f::/64',
+                                              'ips': [_ip(ipv6_addr)]})
+    return info
+
+
+def _get_instances_with_cached_ips(orig_func, *args, **kwargs):
+    """Kludge the cache into instance(s) without having to create DB
+    entries
+    """
+    instances = orig_func(*args, **kwargs)
+    if isinstance(instances, list):
+        for instance in instances:
+            instance['info_cache'] = {'network_info': _get_fake_cache()}
+    else:
+        instances['info_cache'] = {'network_info': _get_fake_cache()}
+    return instances

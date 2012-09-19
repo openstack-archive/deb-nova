@@ -70,8 +70,13 @@ class KeypairController(object):
 
         context = req.environ['nova.context']
         authorize(context)
-        params = body['keypair']
-        name = params['name']
+
+        try:
+            params = body['keypair']
+            name = params['name']
+        except KeyError:
+            msg = _("Invalid request body")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
 
         try:
             if 'public_key' in params:
@@ -175,7 +180,7 @@ class Controller(servers.Controller):
     @wsgi.extends
     def detail(self, req, resp_obj):
         context = req.environ['nova.context']
-        if 'servers' in resp_obj.obj and authorize(context):
+        if 'servers' in resp_obj.obj and soft_authorize(context):
             resp_obj.attach(xml=ServersKeyNameTemplate())
             servers = resp_obj.obj['servers']
             self._add_key_name(req, servers)

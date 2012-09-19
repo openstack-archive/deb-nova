@@ -37,7 +37,6 @@ from nova import utils
 
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
-flags.DECLARE('stub_network', 'nova.compute.manager')
 
 
 class ComputeValidateDeviceTestCase(test.TestCase):
@@ -111,6 +110,29 @@ class ComputeValidateDeviceTestCase(test.TestCase):
         device = self._validate_device()
         self.assertEqual(device, '/dev/vdc')
 
+    def test_lxc_names_work(self):
+        self.instance = {
+                'uuid': 'fake',
+                'root_device_name': '/dev/a',
+                'default_ephemeral_device': '/dev/b'
+        }
+        data = []
+        self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
+                       lambda context, instance: data)
+        device = self._validate_device()
+        self.assertEqual(device, '/dev/c')
+
+    def test_name_conversion(self):
+        data = []
+        self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
+                       lambda context, instance: data)
+        device = self._validate_device('/dev/c')
+        self.assertEqual(device, '/dev/vdc')
+        device = self._validate_device('/dev/sdc')
+        self.assertEqual(device, '/dev/vdc')
+        device = self._validate_device('/dev/xvdc')
+        self.assertEqual(device, '/dev/vdc')
+
     def test_invalid_bdms(self):
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        lambda context, instance: [])
@@ -144,8 +166,7 @@ class UsageInfoTestCase(test.TestCase):
                        fake_get_nw_info)
 
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
-                   stub_network=True,
-          notification_driver=['nova.openstack.common.notifier.test_notifier'],
+                   notification_driver=[test_notifier.__name__],
                    network_manager='nova.network.manager.FlatManager')
         self.compute = importutils.import_object(FLAGS.compute_manager)
         self.user_id = 'fake'
@@ -158,6 +179,7 @@ class UsageInfoTestCase(test.TestCase):
 
         self.stubs.Set(nova.tests.image.fake._FakeImageService,
                        'show', fake_show)
+        fake_network.set_stub_network_methods(self.stubs)
 
     def tearDown(self):
         notifier_api._reset_drivers()
@@ -211,8 +233,7 @@ class UsageInfoTestCase(test.TestCase):
                 {'md_key1': 'val1', 'md_key2': 'val2'})
         image_ref_url = "%s/images/1" % utils.generate_glance_url()
         self.assertEquals(payload['image_ref_url'], image_ref_url)
-        self.compute.terminate_instance(self.context,
-                instance_uuid=instance['uuid'])
+        self.compute.terminate_instance(self.context, instance)
 
     def test_notify_usage_exists_deleted_instance(self):
         """Ensure 'exists' notification generates appropriate usage data."""
@@ -224,8 +245,7 @@ class UsageInfoTestCase(test.TestCase):
                         'other_data': 'meow'}
         db.instance_system_metadata_update(self.context, instance['uuid'],
                 sys_metadata, False)
-        self.compute.terminate_instance(self.context,
-                instance_uuid=instance['uuid'])
+        self.compute.terminate_instance(self.context, instance)
         instance = db.instance_get(self.context.elevated(read_deleted='yes'),
                                    instance_id)
         compute_utils.notify_usage_exists(self.context, instance)
@@ -254,8 +274,7 @@ class UsageInfoTestCase(test.TestCase):
         """Ensure 'exists' notification generates appropriate usage data."""
         instance_id = self._create_instance()
         instance = db.instance_get(self.context, instance_id)
-        self.compute.terminate_instance(self.context,
-                instance_uuid=instance['uuid'])
+        self.compute.terminate_instance(self.context, instance)
         compute_utils.notify_usage_exists(self.context, instance)
         msg = test_notifier.NOTIFICATIONS[-1]
         self.assertEquals(msg['priority'], 'INFO')
@@ -309,5 +328,4 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEquals(payload['image_name'], 'fake_name')
         image_ref_url = "%s/images/1" % utils.generate_glance_url()
         self.assertEquals(payload['image_ref_url'], image_ref_url)
-        self.compute.terminate_instance(self.context,
-                instance_uuid=instance['uuid'])
+        self.compute.terminate_instance(self.context, instance)

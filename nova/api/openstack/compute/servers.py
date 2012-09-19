@@ -16,11 +16,12 @@
 
 import base64
 import os
+import re
 import socket
-from xml.dom import minidom
 
 import webob
 from webob import exc
+from xml.dom import minidom
 
 from nova.api.openstack import common
 from nova.api.openstack.compute import ips
@@ -158,14 +159,27 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         server_node = self.find_first_child_named(node, 'server')
 
         attributes = ["name", "imageRef", "flavorRef", "adminPass",
-                      "accessIPv4", "accessIPv6"]
+                      "accessIPv4", "accessIPv6", "key_name",
+                      "availability_zone", "min_count", "max_count"]
         for attr in attributes:
             if server_node.getAttribute(attr):
                 server[attr] = server_node.getAttribute(attr)
 
+        res_id = server_node.getAttribute('return_reservation_id')
+        if res_id:
+            server['return_reservation_id'] = utils.bool_from_str(res_id)
+
+        scheduler_hints = self._extract_scheduler_hints(server_node)
+        if scheduler_hints:
+            server['OS-SCH-HNT:scheduler_hints'] = scheduler_hints
+
         metadata_node = self.find_first_child_named(server_node, "metadata")
         if metadata_node is not None:
             server["metadata"] = self.extract_metadata(metadata_node)
+
+        user_data_node = self.find_first_child_named(server_node, "user_data")
+        if user_data_node is not None:
+            server["user_data"] = self.extract_text(user_data_node)
 
         personality = self._extract_personality(server_node)
         if personality is not None:
@@ -179,11 +193,37 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         if security_groups is not None:
             server["security_groups"] = security_groups
 
+        # NOTE(vish): Support this incorrect version because it was in the code
+        #             base for a while and we don't want to accidentally break
+        #             anyone that might be using it.
         auto_disk_config = server_node.getAttribute('auto_disk_config')
         if auto_disk_config:
-            server['auto_disk_config'] = utils.bool_from_str(auto_disk_config)
+            server['OS-DCF:diskConfig'] = utils.bool_from_str(auto_disk_config)
+
+        auto_disk_config = server_node.getAttribute('OS-DCF:diskConfig')
+        if auto_disk_config:
+            server['OS-DCF:diskConfig'] = utils.bool_from_str(auto_disk_config)
 
         return server
+
+    def _extract_scheduler_hints(self, server_node):
+        """Marshal the scheduler hints attribute of a parsed request"""
+        node = self.find_first_child_named(server_node,
+                                           "OS-SCH-HNT:scheduler_hints")
+        # NOTE(vish): Support the os: prefix because it is what we use
+        #             for json, even though OS-SCH-HNT: is more correct
+        if not node:
+            node = self.find_first_child_named(server_node,
+                                               "os:scheduler_hints")
+        if node:
+            scheduler_hints = {}
+            for child in self.extract_elements(node):
+                scheduler_hints.setdefault(child.nodeName, [])
+                value = self.extract_text(child).strip()
+                scheduler_hints[child.nodeName].append(value)
+            return scheduler_hints
+        else:
+            return None
 
     def _extract_networks(self, server_node):
         """Marshal the networks attribute of a parsed request."""
@@ -281,6 +321,15 @@ class ActionDeserializer(CommonDeserializer):
         if not node.hasAttribute("imageRef"):
             raise AttributeError("No imageRef was specified in request")
         rebuild["imageRef"] = node.getAttribute("imageRef")
+
+        if node.hasAttribute("adminPass"):
+            rebuild["adminPass"] = node.getAttribute("adminPass")
+
+        if node.hasAttribute("accessIPv4"):
+            rebuild["accessIPv4"] = node.getAttribute("accessIPv4")
+
+        if node.hasAttribute("accessIPv6"):
+            rebuild["accessIPv6"] = node.getAttribute("accessIPv6")
 
         return rebuild
 
@@ -428,6 +477,13 @@ class Controller(wsgi.Controller):
                 # No 'changes-since', so we only want non-deleted servers
                 search_opts['deleted'] = False
 
+        if search_opts.get("vm_state") == "deleted":
+            if context.is_admin:
+                search_opts['deleted'] = True
+            else:
+                msg = _("Only administrators may list deleted instances")
+                raise exc.HTTPBadRequest(explanation=msg)
+
         # NOTE(dprince) This prevents computes' get_all() from returning
         # instances from multiple tenants when an admin accounts is used.
         # By default non-admin accounts are always limited to project/user
@@ -439,16 +495,17 @@ class Controller(wsgi.Controller):
             else:
                 search_opts['user_id'] = context.user_id
 
+        limit, marker = common.get_limit_and_marker(req)
         instance_list = self.compute_api.get_all(context,
-                                                 search_opts=search_opts)
+                                                 search_opts=search_opts,
+                                                 limit=limit, marker=marker)
 
-        limited_list = self._limit_items(instance_list, req)
         if is_detail:
-            self._add_instance_faults(context, limited_list)
-            response = self._view_builder.detail(req, limited_list)
+            self._add_instance_faults(context, instance_list)
+            response = self._view_builder.detail(req, instance_list)
         else:
-            response = self._view_builder.index(req, limited_list)
-        req.cache_db_instances(limited_list)
+            response = self._view_builder.index(req, instance_list)
+        req.cache_db_instances(instance_list)
         return response
 
     def _get_server(self, context, req, instance_uuid):
@@ -492,9 +549,8 @@ class Controller(wsgi.Controller):
             except TypeError:
                 expl = _('Bad personality format')
                 raise exc.HTTPBadRequest(explanation=expl)
-            try:
-                contents = base64.b64decode(contents)
-            except TypeError:
+            contents = self._decode_base64(contents)
+            if contents is None:
                 expl = _('Personality content for %s cannot be decoded') % path
                 raise exc.HTTPBadRequest(explanation=expl)
             injected_files.append((path, contents))
@@ -564,13 +620,27 @@ class Controller(wsgi.Controller):
 
         return networks
 
+    # NOTE(vish): Without this regex, b64decode will happily
+    #             ignore illegal bytes in the base64 encoded
+    #             data.
+    B64_REGEX = re.compile('^(?:[A-Za-z0-9+\/]{4})*'
+                           '(?:[A-Za-z0-9+\/]{2}=='
+                           '|[A-Za-z0-9+\/]{3}=)?$')
+
+    def _decode_base64(self, data):
+        data = re.sub(r'\s', '', data)
+        if not self.B64_REGEX.match(data):
+            return None
+        try:
+            return base64.b64decode(data)
+        except TypeError:
+            return None
+
     def _validate_user_data(self, user_data):
         """Check if the user_data is encoded properly."""
         if not user_data:
             return
-        try:
-            user_data = base64.b64decode(user_data)
-        except TypeError:
+        if self._decode_base64(user_data) is None:
             expl = _('Userdata content cannot be decoded')
             raise exc.HTTPBadRequest(explanation=expl)
 
@@ -605,13 +675,8 @@ class Controller(wsgi.Controller):
     @wsgi.deserializers(xml=CreateDeserializer)
     def create(self, req, body):
         """Creates a new server for a given user."""
-        if not body:
+        if not self.is_valid_body(body, 'server'):
             raise exc.HTTPUnprocessableEntity()
-
-        if not 'server' in body:
-            raise exc.HTTPUnprocessableEntity()
-
-        body['server']['key_name'] = self._get_key_name(req, body)
 
         context = req.environ['nova.context']
         server_dict = body['server']
@@ -724,7 +789,7 @@ class Controller(wsgi.Controller):
             auto_disk_config = server_dict.get('auto_disk_config')
 
         scheduler_hints = {}
-        if self.ext_mgr.is_loaded('os-scheduler-hints'):
+        if self.ext_mgr.is_loaded('OS-SCH-HNT'):
             scheduler_hints = server_dict.get('scheduler_hints', {})
 
         try:
@@ -778,6 +843,9 @@ class Controller(wsgi.Controller):
             msg = "%(err_type)s: %(err_msg)s" % {'err_type': err.exc_type,
                                                  'err_msg': err.value}
             raise exc.HTTPBadRequest(explanation=msg)
+        except UnicodeDecodeError as error:
+            msg = "UnicodeError: %s" % unicode(error)
+            raise exc.HTTPBadRequest(explanation=msg)
         # Let the caller deal with unhandled exceptions.
 
         # If the caller wanted a reservation_id, return it
@@ -807,10 +875,7 @@ class Controller(wsgi.Controller):
     @wsgi.serializers(xml=ServerTemplate)
     def update(self, req, id, body):
         """Update server then pass on to version-specific controller."""
-        if len(req.body) == 0:
-            raise exc.HTTPUnprocessableEntity()
-
-        if not body:
+        if not self.is_valid_body(body, 'server'):
             raise exc.HTTPUnprocessableEntity()
 
         ctxt = req.environ['nova.context']
@@ -938,8 +1003,8 @@ class Controller(wsgi.Controller):
         except exception.FlavorNotFound:
             msg = _("Unable to locate requested flavor.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.CannotResizeToSameSize:
-            msg = _("Resize requires a change in size.")
+        except exception.CannotResizeToSameFlavor:
+            msg = _("Resize requires a flavor change.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
@@ -957,14 +1022,6 @@ class Controller(wsgi.Controller):
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'delete')
-
-    def _get_key_name(self, req, body):
-        if 'server' in body:
-            try:
-                return body['server'].get('key_name')
-            except AttributeError:
-                msg = _("Malformed server entity")
-                raise exc.HTTPBadRequest(explanation=msg)
 
     def _image_ref_from_req_data(self, data):
         try:
@@ -1010,9 +1067,6 @@ class Controller(wsgi.Controller):
         server = self._get_server(context, req, id)
         self.compute_api.set_admin_password(context, server, password)
         return webob.Response(status_int=202)
-
-    def _limit_items(self, items, req):
-        return common.limited_by_marker(items, req)
 
     def _validate_metadata(self, metadata):
         """Ensure that we can work with the metadata given."""
@@ -1165,14 +1219,29 @@ class Controller(wsgi.Controller):
 
         instance = self._get_server(context, req, id)
 
+        bdms = self.compute_api.get_instance_bdms(context, instance)
+
         try:
-            image = self.compute_api.snapshot(context,
-                                              instance,
-                                              image_name,
-                                              extra_properties=props)
+            if self.compute_api.is_volume_backed_instance(context, instance,
+                                                          bdms):
+                img = instance['image_ref']
+                src_image = self.compute_api.image_service.show(context, img)
+                image_meta = dict(src_image)
+
+                image = self.compute_api.snapshot_volume_backed(
+                                                       context,
+                                                       instance,
+                                                       image_meta,
+                                                       image_name,
+                                                       extra_properties=props)
+            else:
+                image = self.compute_api.snapshot(context,
+                                                  instance,
+                                                  image_name,
+                                                  extra_properties=props)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'createImage')
+                        'createImage')
 
         # build location of newly-created image entity
         image_id = str(image['id'])

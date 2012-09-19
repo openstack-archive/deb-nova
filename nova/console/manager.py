@@ -99,7 +99,7 @@ class ConsoleProxyManager(manager.Manager):
         try:
             console = self.db.console_get(context, console_id)
         except exception.NotFound:
-            LOG.debug(_('Tried to remove non-existant console '
+            LOG.debug(_('Tried to remove non-existent console '
                             '%(console_id)s.') %
                             {'console_id': console_id})
             return
@@ -123,7 +123,7 @@ class ConsoleProxyManager(manager.Manager):
                              'username': 'test',
                              'password': '1234pass'}
             else:
-                pool_info = compute_rpcapi.get_console_pool_info(context,
+                pool_info = self.compute_rpcapi.get_console_pool_info(context,
                         console_type, instance_host)
             pool_info['password'] = self.driver.fix_pool_password(
                                                     pool_info['password'])

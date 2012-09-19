@@ -52,16 +52,22 @@ def _parse_image_ref(image_href):
     port = o.port or 80
     host = o.netloc.split(':', 1)[0]
     image_id = o.path.split('/')[-1]
-    return (image_id, host, port)
+    use_ssl = (o.scheme == 'https')
+    return (image_id, host, port, use_ssl)
 
 
-def _create_glance_client(context, host, port):
+def _create_glance_client(context, host, port, use_ssl, version=1):
     """Instantiate a new glanceclient.Client object"""
+    if use_ssl:
+        scheme = 'https'
+    else:
+        scheme = 'http'
     params = {}
+    params['insecure'] = FLAGS.glance_api_insecure
     if FLAGS.auth_strategy == 'keystone':
         params['token'] = context.auth_token
-    endpoint = 'http://%s:%s' % (host, port)
-    return glanceclient.Client('1', endpoint, **params)
+    endpoint = '%s://%s:%s' % (scheme, host, port)
+    return glanceclient.Client(str(version), endpoint, **params)
 
 
 def get_api_servers():
@@ -72,8 +78,13 @@ def get_api_servers():
     """
     api_servers = []
     for api_server in FLAGS.glance_api_servers:
-        host, port_str = api_server.split(':')
-        api_servers.append((host, int(port_str)))
+        if '//' not in api_server:
+            api_server = 'http://' + api_server
+        o = urlparse.urlparse(api_server)
+        port = o.port or 80
+        host = o.netloc.split(':', 1)[0]
+        use_ssl = (o.scheme == 'https')
+        api_servers.append((host, port, use_ssl))
     random.shuffle(api_servers)
     return itertools.cycle(api_servers)
 
@@ -81,27 +92,36 @@ def get_api_servers():
 class GlanceClientWrapper(object):
     """Glance client wrapper class that implements retries."""
 
-    def __init__(self, context=None, host=None, port=None):
+    def __init__(self, context=None, host=None, port=None, use_ssl=False,
+                 version=1):
         if host is not None:
-            self.client = self._create_static_client(context, host, port)
+            self.client = self._create_static_client(context,
+                                                     host, port,
+                                                     use_ssl, version)
         else:
             self.client = None
         self.api_servers = None
 
-    def _create_static_client(self, context, host, port):
+    def _create_static_client(self, context, host, port, use_ssl, version):
         """Create a client that we'll use for every call."""
         self.host = host
         self.port = port
-        return _create_glance_client(context, self.host, self.port)
+        self.use_ssl = use_ssl
+        self.version = version
+        return _create_glance_client(context,
+                                     self.host, self.port,
+                                     self.use_ssl, self.version)
 
-    def _create_onetime_client(self, context):
+    def _create_onetime_client(self, context, version):
         """Create a client that will be used for one call."""
         if self.api_servers is None:
             self.api_servers = get_api_servers()
-        self.host, self.port = self.api_servers.next()
-        return _create_glance_client(context, self.host, self.port)
+        self.host, self.port, self.use_ssl = self.api_servers.next()
+        return _create_glance_client(context,
+                                     self.host, self.port,
+                                     self.use_ssl, version)
 
-    def call(self, context, method, *args, **kwargs):
+    def call(self, context, version, method, *args, **kwargs):
         """
         Call a glance client method.  If we get a connection error,
         retry the request according to FLAGS.glance_num_retries.
@@ -112,7 +132,8 @@ class GlanceClientWrapper(object):
         num_attempts = 1 + FLAGS.glance_num_retries
 
         for attempt in xrange(1, num_attempts + 1):
-            client = self.client or self._create_onetime_client(context)
+            client = self.client or self._create_onetime_client(context,
+                                                                version)
             try:
                 return getattr(client.images, method)(*args, **kwargs)
             except retry_excs as e:
@@ -140,7 +161,7 @@ class GlanceImageService(object):
         """Calls out to Glance for a list of detailed image information."""
         params = self._extract_query_params(kwargs)
         try:
-            images = self._client.call(context, 'list', **params)
+            images = self._client.call(context, 1, 'list', **params)
         except Exception:
             _reraise_translated_exception()
 
@@ -169,7 +190,7 @@ class GlanceImageService(object):
     def show(self, context, image_id):
         """Returns a dict with image data for the given opaque image id."""
         try:
-            image = self._client.call(context, 'get', image_id)
+            image = self._client.call(context, 1, 'get', image_id)
         except Exception:
             _reraise_translated_image_exception(image_id)
 
@@ -179,10 +200,24 @@ class GlanceImageService(object):
         base_image_meta = self._translate_from_glance(image)
         return base_image_meta
 
+    def get_location(self, context, image_id):
+        """Returns the direct url representing the backend storage location,
+        or None if this attribute is not shown by Glance."""
+        try:
+            client = GlanceClientWrapper()
+            image_meta = client.call(context, 2, 'get', image_id)
+        except Exception:
+            _reraise_translated_image_exception(image_id)
+
+        if not self._is_image_available(context, image_meta):
+            raise exception.ImageNotFound(image_id=image_id)
+
+        return getattr(image_meta, 'direct_url', None)
+
     def download(self, context, image_id, data):
         """Calls out to Glance for metadata and data and writes data."""
         try:
-            image_chunks = self._client.call(context, 'data', image_id)
+            image_chunks = self._client.call(context, 1, 'data', image_id)
         except Exception:
             _reraise_translated_image_exception(image_id)
 
@@ -196,7 +231,7 @@ class GlanceImageService(object):
         if data:
             sent_service_image_meta['data'] = data
 
-        recv_service_image_meta = self._client.call(context, 'create',
+        recv_service_image_meta = self._client.call(context, 1, 'create',
                                                     **sent_service_image_meta)
 
         return self._translate_from_glance(recv_service_image_meta)
@@ -212,7 +247,7 @@ class GlanceImageService(object):
         if data:
             image_meta['data'] = data
         try:
-            image_meta = self._client.call(context, 'update',
+            image_meta = self._client.call(context, 1, 'update',
                                            image_id, **image_meta)
         except Exception:
             _reraise_translated_image_exception(image_id)
@@ -227,7 +262,7 @@ class GlanceImageService(object):
 
         """
         try:
-            self._client.call(context, 'delete', image_id)
+            self._client.call(context, 1, 'delete', image_id)
         except glanceclient.exc.NotFound:
             raise exception.ImageNotFound(image_id=image_id)
         return True
@@ -346,35 +381,35 @@ def _remove_read_only(image_meta):
 def _reraise_translated_image_exception(image_id):
     """Transform the exception for the image but keep its traceback intact."""
     exc_type, exc_value, exc_trace = sys.exc_info()
-    new_exc = _translate_image_exception(image_id, exc_type, exc_value)
+    new_exc = _translate_image_exception(image_id, exc_value)
     raise new_exc, None, exc_trace
 
 
 def _reraise_translated_exception():
     """Transform the exception but keep its traceback intact."""
     exc_type, exc_value, exc_trace = sys.exc_info()
-    new_exc = _translate_plain_exception(exc_type, exc_value)
+    new_exc = _translate_plain_exception(exc_value)
     raise new_exc, None, exc_trace
 
 
-def _translate_image_exception(image_id, exc_type, exc_value):
-    if exc_type in (glanceclient.exc.Forbidden,
-                    glanceclient.exc.Unauthorized):
+def _translate_image_exception(image_id, exc_value):
+    if isinstance(exc_value, (glanceclient.exc.Forbidden,
+                    glanceclient.exc.Unauthorized)):
         return exception.ImageNotAuthorized(image_id=image_id)
-    if exc_type is glanceclient.exc.NotFound:
+    if isinstance(exc_value, glanceclient.exc.NotFound):
         return exception.ImageNotFound(image_id=image_id)
-    if exc_type is glanceclient.exc.BadRequest:
+    if isinstance(exc_value, glanceclient.exc.BadRequest):
         return exception.Invalid(exc_value)
     return exc_value
 
 
-def _translate_plain_exception(exc_type, exc_value):
-    if exc_type in (glanceclient.exc.Forbidden,
-                    glanceclient.exc.Unauthorized):
+def _translate_plain_exception(exc_value):
+    if isinstance(exc_value, (glanceclient.exc.Forbidden,
+                    glanceclient.exc.Unauthorized)):
         return exception.NotAuthorized(exc_value)
-    if exc_type is glanceclient.exc.NotFound:
+    if isinstance(exc_value, glanceclient.exc.NotFound):
         return exception.NotFound(exc_value)
-    if exc_type is glanceclient.exc.BadRequest:
+    if isinstance(exc_value, glanceclient.exc.BadRequest):
         return exception.Invalid(exc_value)
     return exc_value
 
@@ -398,9 +433,10 @@ def get_remote_image_service(context, image_href):
         return image_service, image_href
 
     try:
-        (image_id, glance_host, glance_port) = _parse_image_ref(image_href)
+        (image_id, glance_host, glance_port, use_ssl) = \
+            _parse_image_ref(image_href)
         glance_client = GlanceClientWrapper(context=context,
-                host=glance_host, port=glance_port)
+                host=glance_host, port=glance_port, use_ssl=use_ssl)
     except ValueError:
         raise exception.InvalidImageRef(image_href=image_href)
 

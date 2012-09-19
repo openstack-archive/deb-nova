@@ -26,6 +26,7 @@ import functools
 import warnings
 
 from nova import block_device
+from nova.common.sqlalchemyutils import paginate_query
 from nova.compute import vm_states
 from nova import db
 from nova.db.sqlalchemy import models
@@ -187,20 +188,21 @@ def require_aggregate_exists(f):
     return wrapper
 
 
-def model_query(context, *args, **kwargs):
+def model_query(context, model, *args, **kwargs):
     """Query helper that accounts for context's `read_deleted` field.
 
     :param context: context to query under
     :param session: if present, the session to use
     :param read_deleted: if present, overrides context's read_deleted field.
     :param project_only: if present and context is user-type, then restrict
-            query to match the context's project_id.
+            query to match the context's project_id. If set to 'allow_none',
+            restriction includes project_id = None.
     """
     session = kwargs.get('session') or get_session()
     read_deleted = kwargs.get('read_deleted') or context.read_deleted
-    project_only = kwargs.get('project_only')
+    project_only = kwargs.get('project_only', False)
 
-    query = session.query(*args)
+    query = session.query(model, *args)
 
     if read_deleted == 'no':
         query = query.filter_by(deleted=False)
@@ -212,8 +214,12 @@ def model_query(context, *args, **kwargs):
         raise Exception(
                 _("Unrecognized read_deleted value '%s'") % read_deleted)
 
-    if project_only and is_user_context(context):
-        query = query.filter_by(project_id=context.project_id)
+    if is_user_context(context) and project_only:
+        if project_only == 'allow_none':
+            query = query.filter(or_(model.project_id == context.project_id,
+                                     model.project_id == None))
+        else:
+            query = query.filter_by(project_id=context.project_id)
 
     return query
 
@@ -484,8 +490,10 @@ def service_update(context, service_id, values):
 
 def compute_node_get(context, compute_id, session=None):
     result = model_query(context, models.ComputeNode, session=session).\
-                     filter_by(id=compute_id).\
-                     first()
+            filter_by(id=compute_id).\
+            options(joinedload('service')).\
+            options(joinedload('stats')).\
+            first()
 
     if not result:
         raise exception.ComputeHostNotFound(host=compute_id)
@@ -496,55 +504,41 @@ def compute_node_get(context, compute_id, session=None):
 @require_admin_context
 def compute_node_get_all(context, session=None):
     return model_query(context, models.ComputeNode, session=session).\
-                    options(joinedload('service')).\
-                    all()
+            options(joinedload('service')).\
+            options(joinedload('stats')).\
+            all()
 
 
 @require_admin_context
 def compute_node_search_by_hypervisor(context, hypervisor_match):
     field = models.ComputeNode.hypervisor_hostname
     return model_query(context, models.ComputeNode).\
-                    options(joinedload('service')).\
-                    filter(field.like('%%%s%%' % hypervisor_match)).\
-                    all()
+            options(joinedload('service')).\
+            filter(field.like('%%%s%%' % hypervisor_match)).\
+            all()
 
 
-def _get_host_utilization(context, host, ram_mb, disk_gb):
-    """Compute the current utilization of a given host."""
-    instances = instance_get_all_by_host(context, host)
-    vms = len(instances)
-    free_ram_mb = ram_mb - FLAGS.reserved_host_memory_mb
-    free_disk_gb = disk_gb - (FLAGS.reserved_host_disk_mb * 1024)
-
-    work = 0
-    for instance in instances:
-        free_ram_mb -= instance.memory_mb
-        free_disk_gb -= instance.root_gb
-        free_disk_gb -= instance.ephemeral_gb
-        if instance.task_state is not None:
-            work += 1
-    return dict(free_ram_mb=free_ram_mb,
-                free_disk_gb=free_disk_gb,
-                current_workload=work,
-                running_vms=vms)
-
-
-def _adjust_compute_node_values_for_utilization(context, values, session):
-    service_ref = service_get(context, values['service_id'], session=session)
-    host = service_ref['host']
-    ram_mb = values['memory_mb']
-    disk_gb = values['local_gb']
-    values.update(_get_host_utilization(context, host, ram_mb, disk_gb))
+def _prep_stats_dict(values):
+    """Make list of ComputeNodeStats"""
+    stats = []
+    d = values.get('stats', {})
+    for k, v in d.iteritems():
+        stat = models.ComputeNodeStat()
+        stat['key'] = k
+        stat['value'] = v
+        stats.append(stat)
+    values['stats'] = stats
 
 
 @require_admin_context
 def compute_node_create(context, values, session=None):
     """Creates a new ComputeNode and populates the capacity fields
     with the most recent data."""
+    _prep_stats_dict(values)
+
     if not session:
         session = get_session()
 
-    _adjust_compute_node_values_for_utilization(context, values, session)
     with session.begin(subtransactions=True):
         compute_node_ref = models.ComputeNode()
         session.add(compute_node_ref)
@@ -552,17 +546,52 @@ def compute_node_create(context, values, session=None):
     return compute_node_ref
 
 
+def _update_stats(context, new_stats, compute_id, session, prune_stats=False):
+
+    existing = model_query(context, models.ComputeNodeStat, session=session,
+            read_deleted="no").filter_by(compute_node_id=compute_id).all()
+    statmap = {}
+    for stat in existing:
+        key = stat['key']
+        statmap[key] = stat
+
+    stats = []
+    for k, v in new_stats.iteritems():
+        old_stat = statmap.pop(k, None)
+        if old_stat:
+            # update existing value:
+            old_stat.update({'value': v})
+            stats.append(old_stat)
+        else:
+            # add new stat:
+            stat = models.ComputeNodeStat()
+            stat['compute_node_id'] = compute_id
+            stat['key'] = k
+            stat['value'] = v
+            stats.append(stat)
+
+    if prune_stats:
+        # prune un-touched old stats:
+        for stat in statmap.values():
+            session.add(stat)
+            stat.update({'deleted': True})
+
+    # add new and updated stats
+    for stat in stats:
+        session.add(stat)
+
+
 @require_admin_context
-def compute_node_update(context, compute_id, values, auto_adjust):
-    """Creates a new ComputeNode and populates the capacity fields
-    with the most recent data."""
+def compute_node_update(context, compute_id, values, prune_stats=False):
+    """Updates the ComputeNode record with the most recent data"""
+    stats = values.pop('stats', {})
+
     session = get_session()
-    if auto_adjust:
-        _adjust_compute_node_values_for_utilization(context, values, session)
     with session.begin(subtransactions=True):
+        _update_stats(context, stats, compute_id, session, prune_stats)
         compute_ref = compute_node_get(context, compute_id, session=session)
         compute_ref.update(values)
-        compute_ref.save(session=session)
+    return compute_ref
 
 
 def compute_node_get_by_host(context, host):
@@ -570,75 +599,10 @@ def compute_node_get_by_host(context, host):
     session = get_session()
     with session.begin():
         node = session.query(models.ComputeNode).\
-                             options(joinedload('service')).\
+                             join('service').\
                              filter(models.Service.host == host).\
                              filter_by(deleted=False)
         return node.first()
-
-
-def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
-                          free_disk_gb_delta=0, work_delta=0, vm_delta=0):
-    """Update a specific ComputeNode entry by a series of deltas.
-    Do this as a single atomic action and lock the row for the
-    duration of the operation. Requires that ComputeNode record exist."""
-    session = get_session()
-    compute_node = None
-    with session.begin(subtransactions=True):
-        compute_node = session.query(models.ComputeNode).\
-                              options(joinedload('service')).\
-                              filter(models.Service.host == host).\
-                              filter_by(deleted=False).\
-                              with_lockmode('update').\
-                              first()
-        if compute_node is None:
-            raise exception.NotFound(_("No ComputeNode for %(host)s") %
-                                     locals())
-
-        # This table thingy is how we get atomic UPDATE x = x + 1
-        # semantics.
-        table = models.ComputeNode.__table__
-        if free_ram_mb_delta != 0:
-            compute_node.free_ram_mb = table.c.free_ram_mb + free_ram_mb_delta
-        if free_disk_gb_delta != 0:
-            compute_node.free_disk_gb = (table.c.free_disk_gb +
-                                         free_disk_gb_delta)
-        if work_delta != 0:
-            compute_node.current_workload = (table.c.current_workload +
-                                             work_delta)
-        if vm_delta != 0:
-            compute_node.running_vms = table.c.running_vms + vm_delta
-    return compute_node
-
-
-def compute_node_utilization_set(context, host, free_ram_mb=None,
-                                 free_disk_gb=None, work=None, vms=None):
-    """Like compute_node_utilization_update() modify a specific host
-    entry. But this function will set the metrics absolutely
-    (vs. a delta update).
-    """
-    session = get_session()
-    compute_node = None
-    with session.begin(subtransactions=True):
-        compute_node = session.query(models.ComputeNode).\
-                              options(joinedload('service')).\
-                              filter(models.Service.host == host).\
-                              filter_by(deleted=False).\
-                              with_lockmode('update').\
-                              first()
-        if compute_node is None:
-            raise exception.NotFound(_("No ComputeNode for %(host)s") %
-                                     locals())
-
-        if free_ram_mb is not None:
-            compute_node.free_ram_mb = free_ram_mb
-        if free_disk_gb is not None:
-            compute_node.free_disk_gb = free_disk_gb
-        if work is not None:
-            compute_node.current_workload = work
-        if vms is not None:
-            compute_node.running_vms = vms
-
-    return compute_node
 
 
 def compute_node_statistics(context):
@@ -758,10 +722,50 @@ def floating_ip_allocate_address(context, project_id, pool):
 
 @require_context
 def floating_ip_bulk_create(context, ips):
+    existing_ips = {}
+    for floating in _floating_ip_get_all(context).all():
+        existing_ips[floating['address']] = floating
+
     session = get_session()
     with session.begin():
         for ip in ips:
-            floating_ip_create(context, ip, session)
+            addr = ip['address']
+            if (addr in existing_ips and
+                ip.get('id') != existing_ips[addr]['id']):
+                raise exception.FloatingIpExists(**dict(existing_ips[addr]))
+
+            model = models.FloatingIp()
+            model.update(ip)
+            session.add(model)
+
+
+def _ip_range_splitter(ips, block_size=256):
+    """Yields blocks of IPs no more than block_size elements long."""
+    out = []
+    count = 0
+    for ip in ips:
+        out.append(ip['address'])
+        count += 1
+
+        if count > block_size - 1:
+            yield out
+            out = []
+            count = 0
+
+    if out:
+        yield out
+
+
+@require_context
+def floating_ip_bulk_destroy(context, ips):
+    session = get_session()
+    with session.begin():
+        for ip_block in _ip_range_splitter(ips):
+            model_query(context, models.FloatingIp).\
+                filter(models.FloatingIp.address.in_(ip_block)).\
+                update({'deleted': True,
+                        'deleted_at': timeutils.utcnow()},
+                       synchronize_session='fetch')
 
 
 @require_context
@@ -868,8 +872,9 @@ def floating_ip_set_auto_assigned(context, address):
         floating_ip_ref.save(session=session)
 
 
-def _floating_ip_get_all(context):
-    return model_query(context, models.FloatingIp, read_deleted="no")
+def _floating_ip_get_all(context, session=None):
+    return model_query(context, models.FloatingIp, read_deleted="no",
+                       session=session)
 
 
 @require_admin_context
@@ -1170,7 +1175,8 @@ def fixed_ip_get(context, id, session=None):
     # FIXME(sirp): shouldn't we just use project_only here to restrict the
     # results?
     if is_user_context(context) and result['instance_uuid'] is not None:
-        instance = instance_get_by_uuid(context, result['instance_uuid'],
+        instance = instance_get_by_uuid(context.elevated(read_deleted='yes'),
+                                        result['instance_uuid'],
                                         session)
         authorize_project_context(context, instance.project_id)
 
@@ -1199,7 +1205,8 @@ def fixed_ip_get_by_address(context, address, session=None):
     # NOTE(sirp): shouldn't we just use project_only here to restrict the
     # results?
     if is_user_context(context) and result['instance_uuid'] is not None:
-        instance = instance_get_by_uuid(context, result['instance_uuid'],
+        instance = instance_get_by_uuid(context.elevated(read_deleted='yes'),
+                                        result['instance_uuid'],
                                         session)
         authorize_project_context(context, instance.project_id)
 
@@ -1416,8 +1423,8 @@ def instance_create(context, values):
 
     def _get_sec_group_models(session, security_groups):
         models = []
-        default_group = security_group_ensure_default(context,
-                session=session)
+        _existed, default_group = security_group_ensure_default(context,
+            session=session)
         if 'default' in security_groups:
             models.append(default_group)
             # Generate a new list, so we don't modify the original
@@ -1532,7 +1539,8 @@ def instance_get_all(context, columns_to_join=None):
 
 
 @require_context
-def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
+def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
+                                limit=None, marker=None):
     """Return instances that match all filters.  Deleted instances
     will be returned by default, unless there's a filter that says
     otherwise"""
@@ -1586,6 +1594,13 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir):
                                 filters, exact_match_filter_names)
 
     query_prefix = regex_filter(query_prefix, models.Instance, filters)
+
+    # paginate query
+    query_prefix = paginate_query(query_prefix, models.Instance, limit,
+                           [sort_key, 'created_at', 'id'],
+                           marker=marker,
+                           sort_dir=sort_dir)
+
     instances = query_prefix.all()
     return instances
 
@@ -1785,6 +1800,10 @@ def instance_update_and_get_original(context, instance_uuid, values):
     :param instance_uuid: = instance uuid
     :param values: = dict containing column values
 
+    If "expected_task_state" exists in values, the update can only happen
+    when the task state before update matches expected_task_state. Otherwise
+    a UnexpectedTaskStateError is thrown.
+
     :returns: a tuple of the form (old_instance_ref, new_instance_ref)
 
     Raises NotFound if instance does not exist.
@@ -1796,29 +1815,39 @@ def instance_update_and_get_original(context, instance_uuid, values):
 def _instance_update(context, instance_uuid, values, copy_old_instance=False):
     session = get_session()
 
-    if utils.is_uuid_like(instance_uuid):
-        instance_ref = instance_get_by_uuid(context, instance_uuid,
-                                            session=session)
-    else:
+    if not utils.is_uuid_like(instance_uuid):
         raise exception.InvalidUUID(instance_uuid)
 
-    if copy_old_instance:
-        old_instance_ref = copy.copy(instance_ref)
-    else:
-        old_instance_ref = None
-
-    metadata = values.get('metadata')
-    if metadata is not None:
-        instance_metadata_update(
-            context, instance_ref['uuid'], values.pop('metadata'), delete=True)
-
-    system_metadata = values.get('system_metadata')
-    if system_metadata is not None:
-        instance_system_metadata_update(
-             context, instance_ref['uuid'], values.pop('system_metadata'),
-             delete=True)
-
     with session.begin():
+        instance_ref = instance_get_by_uuid(context, instance_uuid,
+                                            session=session)
+        if "expected_task_state" in values:
+            # it is not a db column so always pop out
+            expected = values.pop("expected_task_state")
+            if not isinstance(expected, (tuple, list, set)):
+                expected = (expected,)
+            actual_state = instance_ref["task_state"]
+            if actual_state not in expected:
+                raise exception.UnexpectedTaskStateError(actual=actual_state,
+                                                         expected=expected)
+
+        if copy_old_instance:
+            old_instance_ref = copy.copy(instance_ref)
+        else:
+            old_instance_ref = None
+
+        metadata = values.get('metadata')
+        if metadata is not None:
+            instance_metadata_update(context, instance_ref['uuid'],
+                                     values.pop('metadata'), True,
+                                     session=session)
+
+        system_metadata = values.get('system_metadata')
+        if system_metadata is not None:
+            instance_system_metadata_update(
+                 context, instance_ref['uuid'], values.pop('system_metadata'),
+                 delete=True, session=session)
+
         instance_ref.update(values)
         instance_ref.save(session=session)
 
@@ -1850,18 +1879,6 @@ def instance_remove_security_group(context, instance_uuid, security_group_id):
                 update({'deleted': True,
                         'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
-
-
-@require_context
-def instance_get_id_to_uuid_mapping(context, ids):
-    session = get_session()
-    instances = session.query(models.Instance).\
-                        filter(models.Instance.id.in_(ids)).\
-                        all()
-    mapping = {}
-    for instance in instances:
-        mapping[instance['id']] = instance['uuid']
-    return mapping
 
 
 ###################
@@ -2118,9 +2135,9 @@ def network_disassociate(context, network_id):
 
 
 @require_context
-def network_get(context, network_id, session=None):
+def network_get(context, network_id, session=None, project_only='allow_none'):
     result = model_query(context, models.Network, session=session,
-                         project_only=True).\
+                         project_only=project_only).\
                     filter_by(id=network_id).\
                     first()
 
@@ -2140,23 +2157,16 @@ def network_get_all(context):
     return result
 
 
-@require_admin_context
-def network_get_all_by_uuids(context, network_uuids, project_id=None):
-    project_or_none = or_(models.Network.project_id == project_id,
-                          models.Network.project_id == None)
-    result = model_query(context, models.Network, read_deleted="no").\
+@require_context
+def network_get_all_by_uuids(context, network_uuids,
+                             project_only="allow_none"):
+    result = model_query(context, models.Network, read_deleted="no",
+                         project_only=project_only).\
                 filter(models.Network.uuid.in_(network_uuids)).\
-                filter(project_or_none).\
                 all()
 
     if not result:
         raise exception.NoNetworksFound()
-
-    #check if host is set to all of the networks
-    # returned in the result
-    for network in result:
-        if network['host'] is None:
-            raise exception.NetworkHostNotSet(network_id=network['id'])
 
     #check if the result contains all the networks
     #we are looking for
@@ -2167,7 +2177,7 @@ def network_get_all_by_uuids(context, network_uuids, project_id=None):
                 found = True
                 break
         if not found:
-            if project_id:
+            if project_only:
                 raise exception.NetworkNotFoundForProject(
                       network_uuid=network_uuid, project_id=context.project_id)
             raise exception.NetworkNotFound(network_id=network_uuid)
@@ -2921,7 +2931,7 @@ def volume_create(context, values):
     with session.begin():
         volume_ref.save(session=session)
 
-    return volume_ref
+    return volume_get(context, values['id'], session=session)
 
 
 @require_admin_context
@@ -3517,11 +3527,17 @@ def security_group_create(context, values, session=None):
 
 
 def security_group_ensure_default(context, session=None):
-    """Ensure default security group exists for a project_id."""
+    """Ensure default security group exists for a project_id.
+
+    Returns a tuple with the first element being a bool indicating
+    if the default security group previously existed. Second
+    element is the dict used to create the default security group.
+    """
     try:
         default_group = security_group_get_by_name(context,
                 context.project_id, 'default',
                 columns_to_join=[], session=session)
+        return (True, default_group)
     except exception.NotFound:
         values = {'name': 'default',
                   'description': 'default',
@@ -3529,7 +3545,7 @@ def security_group_ensure_default(context, session=None):
                   'project_id': context.project_id}
         default_group = security_group_create(context, values,
                 session=session)
-    return default_group
+        return (False, default_group)
 
 
 @require_context
@@ -3923,6 +3939,19 @@ def instance_type_get_all(context, inactive=False, filters=None):
         query = query.filter(
                 models.InstanceTypes.disabled == filters['disabled'])
 
+    if 'is_public' in filters and filters['is_public'] is not None:
+        the_filter = [models.InstanceTypes.is_public == filters['is_public']]
+        if filters['is_public'] and context.project_id is not None:
+            the_filter.extend([
+                models.InstanceTypes.projects.any(
+                    project_id=context.project_id, deleted=False)
+            ])
+        if len(the_filter) > 1:
+            query = query.filter(or_(*the_filter))
+        else:
+            query = query.filter(the_filter[0])
+        del filters['is_public']
+
     inst_types = query.order_by("name").all()
 
     return [_dict_with_extra_specs(i) for i in inst_types]
@@ -3987,6 +4016,71 @@ def instance_type_destroy(context, name):
                         'updated_at': literal_column('updated_at')})
 
 
+@require_context
+def _instance_type_access_query(context, session=None):
+    return model_query(context, models.InstanceTypeProjects, session=session,
+                       read_deleted="yes")
+
+
+@require_admin_context
+def instance_type_access_get_by_flavor_id(context, flavor_id):
+    """Get flavor access list by flavor id"""
+    instance_type_ref = _instance_type_get_query(context).\
+                    filter_by(flavorid=flavor_id).\
+                    first()
+
+    return [r for r in instance_type_ref.projects]
+
+
+@require_admin_context
+def instance_type_access_add(context, flavor_id, project_id):
+    """Add given tenant to the flavor access list"""
+    session = get_session()
+    with session.begin():
+        instance_type_ref = instance_type_get_by_flavor_id(context, flavor_id,
+                                                           session=session)
+        instance_type_id = instance_type_ref['id']
+        access_ref = _instance_type_access_query(context, session=session).\
+                        filter_by(instance_type_id=instance_type_id).\
+                        filter_by(project_id=project_id).first()
+
+        if not access_ref:
+            access_ref = models.InstanceTypeProjects()
+            access_ref.instance_type_id = instance_type_id
+            access_ref.project_id = project_id
+            access_ref.save(session=session)
+        elif access_ref.deleted:
+            access_ref.update({'deleted': False,
+                               'deleted_at': None})
+            access_ref.save(session=session)
+        else:
+            raise exception.FlavorAccessExists(flavor_id=flavor_id,
+                                               project_id=project_id)
+
+        return access_ref
+
+
+@require_admin_context
+def instance_type_access_remove(context, flavor_id, project_id):
+    """Remove given tenant from the flavor access list"""
+    session = get_session()
+    with session.begin():
+        instance_type_ref = instance_type_get_by_flavor_id(context, flavor_id,
+                                                           session=session)
+        instance_type_id = instance_type_ref['id']
+        access_ref = _instance_type_access_query(context, session=session).\
+                        filter_by(instance_type_id=instance_type_id).\
+                        filter_by(project_id=project_id).first()
+
+        if access_ref:
+            access_ref.update({'deleted': True,
+                               'deleted_at': timeutils.utcnow(),
+                               'updated_at': literal_column('updated_at')})
+        else:
+            raise exception.FlavorAccessNotFound(flavor_id=flavor_id,
+                                                 project_id=project_id)
+
+
 ########################
 # User-provided metadata
 
@@ -3997,8 +4091,9 @@ def _instance_metadata_get_query(context, instance_uuid, session=None):
 
 
 @require_context
-def instance_metadata_get(context, instance_uuid):
-    rows = _instance_metadata_get_query(context, instance_uuid).all()
+def instance_metadata_get(context, instance_uuid, session=None):
+    rows = _instance_metadata_get_query(context, instance_uuid,
+                                        session=session).all()
 
     result = {}
     for row in rows:
@@ -4031,12 +4126,14 @@ def instance_metadata_get_item(context, instance_uuid, key, session=None):
 
 
 @require_context
-def instance_metadata_update(context, instance_uuid, metadata, delete):
-    session = get_session()
-
+def instance_metadata_update(context, instance_uuid, metadata, delete,
+                             session=None):
+    if session is None:
+        session = get_session()
     # Set existing metadata to deleted if delete argument is True
     if delete:
-        original_metadata = instance_metadata_get(context, instance_uuid)
+        original_metadata = instance_metadata_get(context, instance_uuid,
+                                                  session=session)
         for meta_key, meta_value in original_metadata.iteritems():
             if meta_key not in metadata:
                 meta_ref = instance_metadata_get_item(context, instance_uuid,
@@ -4075,8 +4172,9 @@ def _instance_system_metadata_get_query(context, instance_uuid, session=None):
 
 
 @require_context
-def instance_system_metadata_get(context, instance_uuid):
-    rows = _instance_system_metadata_get_query(context, instance_uuid).all()
+def instance_system_metadata_get(context, instance_uuid, session=None):
+    rows = _instance_system_metadata_get_query(context, instance_uuid,
+                                               session=session).all()
 
     result = {}
     for row in rows:
@@ -4109,13 +4207,15 @@ def _instance_system_metadata_get_item(context, instance_uuid, key,
 
 
 @require_context
-def instance_system_metadata_update(context, instance_uuid, metadata, delete):
-    session = get_session()
+def instance_system_metadata_update(context, instance_uuid, metadata, delete,
+                                    session=None):
+    if session is None:
+        session = get_session()
 
     # Set existing metadata to deleted if delete argument is True
     if delete:
         original_metadata = instance_system_metadata_get(
-                context, instance_uuid)
+                context, instance_uuid, session=session)
         for meta_key, meta_value in original_metadata.iteritems():
             if meta_key not in metadata:
                 meta_ref = _instance_system_metadata_get_item(

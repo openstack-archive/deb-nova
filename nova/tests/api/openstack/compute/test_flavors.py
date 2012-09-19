@@ -44,14 +44,12 @@ FAKE_FLAVORS = {
         "name": 'flavor 1',
         "memory_mb": '256',
         "root_gb": '10',
-        "disabled": False,
     },
     'flavor 2': {
         "flavorid": '2',
         "name": 'flavor 2',
         "memory_mb": '512',
         "root_gb": '20',
-        "disabled": False,
     },
 }
 
@@ -89,6 +87,7 @@ def return_instance_type_not_found(flavor_id):
 class FlavorsTest(test.TestCase):
     def setUp(self):
         super(FlavorsTest, self).setUp()
+        self.flags(osapi_compute_extension=[])
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
         self.stubs.Set(nova.compute.instance_types, "get_all_types",
@@ -113,12 +112,9 @@ class FlavorsTest(test.TestCase):
         expected = {
             "flavor": {
                 "id": "1",
-                "OS-FLV-DISABLED:disabled": False,
                 "name": "flavor 1",
                 "ram": "256",
                 "disk": "10",
-                "rxtx_factor": "",
-                "swap": "",
                 "vcpus": "",
                 "links": [
                     {
@@ -142,12 +138,9 @@ class FlavorsTest(test.TestCase):
         expected = {
             "flavor": {
                 "id": "1",
-                "OS-FLV-DISABLED:disabled": False,
                 "name": "flavor 1",
                 "ram": "256",
                 "disk": "10",
-                "rxtx_factor": "",
-                "swap": "",
                 "vcpus": "",
                 "links": [
                     {
@@ -313,12 +306,9 @@ class FlavorsTest(test.TestCase):
             "flavors": [
                 {
                     "id": "1",
-                    "OS-FLV-DISABLED:disabled": False,
                     "name": "flavor 1",
                     "ram": "256",
                     "disk": "10",
-                    "rxtx_factor": "",
-                    "swap": "",
                     "vcpus": "",
                     "links": [
                         {
@@ -333,12 +323,9 @@ class FlavorsTest(test.TestCase):
                 },
                 {
                     "id": "2",
-                    "OS-FLV-DISABLED:disabled": False,
                     "name": "flavor 2",
                     "ram": "512",
                     "disk": "20",
-                    "rxtx_factor": "",
-                    "swap": "",
                     "vcpus": "",
                     "links": [
                         {
@@ -435,12 +422,9 @@ class FlavorsTest(test.TestCase):
             "flavors": [
                 {
                     "id": "2",
-                    "OS-FLV-DISABLED:disabled": False,
                     "name": "flavor 2",
                     "ram": "512",
                     "disk": "20",
-                    "rxtx_factor": "",
-                    "swap": "",
                     "vcpus": "",
                     "links": [
                         {
@@ -469,8 +453,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
                 "name": "asdf",
                 "ram": "256",
                 "disk": "10",
-                "rxtx_factor": "1",
-                "swap": "",
                 "vcpus": "",
                 "links": [
                     {
@@ -486,7 +468,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         has_dec = output.startswith("<?xml version='1.0' encoding='UTF-8'?>")
         self.assertTrue(has_dec)
 
@@ -499,8 +480,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
                 "name": "asdf",
                 "ram": "256",
                 "disk": "10",
-                "rxtx_factor": "1",
-                "swap": "",
                 "vcpus": "",
                 "links": [
                     {
@@ -516,7 +495,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'flavor')
         flavor_dict = fixture['flavor']
@@ -539,8 +517,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
                 "name": "asdf",
                 "ram": 256,
                 "disk": 10,
-                "rxtx_factor": "1",
-                "swap": "",
                 "vcpus": "",
                 "links": [
                     {
@@ -556,7 +532,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'flavor')
         flavor_dict = fixture['flavor']
@@ -580,8 +555,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
                     "name": "flavor 23",
                     "ram": "512",
                     "disk": "20",
-                    "rxtx_factor": "1",
-                    "swap": "",
                     "vcpus": "",
                     "links": [
                         {
@@ -599,8 +572,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
                     "name": "flavor 13",
                     "ram": "256",
                     "disk": "10",
-                    "rxtx_factor": "1",
-                    "swap": "",
                     "vcpus": "",
                     "links": [
                         {
@@ -617,7 +588,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'flavors')
         flavor_elems = root.findall('{0}flavor'.format(NS))
@@ -644,8 +614,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
                     "name": "flavor 23",
                     "ram": "512",
                     "disk": "20",
-                    "rxtx_factor": "1",
-                    "swap": "",
                     "vcpus": "",
                     "links": [
                         {
@@ -663,8 +631,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
                     "name": "flavor 13",
                     "ram": "256",
                     "disk": "10",
-                    "rxtx_factor": "1",
-                    "swap": "",
                     "vcpus": "",
                     "links": [
                         {
@@ -681,7 +647,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'flavors_index')
         flavor_elems = root.findall('{0}flavor'.format(NS))
@@ -706,7 +671,6 @@ class FlavorsXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'flavors_index')
         flavor_elems = root.findall('{0}flavor'.format(NS))
@@ -793,11 +757,6 @@ class DisabledFlavorsWithRealDBTest(test.TestCase):
 
         self.assertEqual(flavor['name'], self.disabled_type['name'])
 
-        # FIXME(sirp): the disabled field is currently namespaced so that we
-        # don't impact the Openstack API. Eventually this should probably be
-        # made a first-class attribute in the next OSAPI version.
-        self.assert_('OS-FLV-DISABLED:disabled' in flavor)
-
     def test_show_should_include_disabled_flavor_for_admin(self):
         self.context.is_admin = True
 
@@ -805,4 +764,3 @@ class DisabledFlavorsWithRealDBTest(test.TestCase):
                 self.req, self.disabled_type['flavorid'])['flavor']
 
         self.assertEqual(flavor['name'], self.disabled_type['name'])
-        self.assert_('OS-FLV-DISABLED:disabled' in flavor)

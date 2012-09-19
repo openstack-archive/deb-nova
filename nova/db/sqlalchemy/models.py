@@ -144,8 +144,6 @@ class ComputeNode(BASE, NovaBase):
     # Free Ram, amount of activity (resize, migration, boot, etc) and
     # the number of running VM's are a good starting point for what's
     # important when making scheduling decisions.
-    #
-    # NOTE(sandy): We'll need to make this extensible for other schedulers.
     free_ram_mb = Column(Integer)
     free_disk_gb = Column(Integer)
     current_workload = Column(Integer)
@@ -163,6 +161,24 @@ class ComputeNode(BASE, NovaBase):
     # (See libvirt.virtConnection).
     cpu_info = Column(Text, nullable=True)
     disk_available_least = Column(Integer)
+
+
+class ComputeNodeStat(BASE, NovaBase):
+    """Stats related to the current workload of a compute host that are
+    intended to aid in making scheduler decisions."""
+    __tablename__ = 'compute_node_stats'
+    id = Column(Integer, primary_key=True)
+    key = Column(String(511))
+    value = Column(String(255))
+    compute_node_id = Column(Integer, ForeignKey('compute_nodes.id'))
+
+    primary_join = ('and_(ComputeNodeStat.compute_node_id == '
+                    'ComputeNode.id, ComputeNodeStat.deleted == False)')
+    stats = relationship("ComputeNode", backref="stats",
+            primaryjoin=primary_join)
+
+    def __str__(self):
+        return "{%d: %s = %s}" % (self.compute_node_id, self.key, self.value)
 
 
 class Certificate(BASE, NovaBase):
@@ -320,6 +336,7 @@ class InstanceTypes(BASE, NovaBase):
     rxtx_factor = Column(Float, nullable=False, default=1)
     vcpu_weight = Column(Integer, nullable=True)
     disabled = Column(Boolean, default=False)
+    is_public = Column(Boolean, default=True)
 
     instances = relationship(Instance,
                            backref=backref('instance_type', uselist=False),
@@ -478,6 +495,12 @@ class Reservation(BASE, NovaBase):
 
     delta = Column(Integer)
     expire = Column(DateTime, nullable=False)
+
+    usage = relationship(
+        "QuotaUsage",
+        foreign_keys=usage_id,
+        primaryjoin='and_(Reservation.usage_id == QuotaUsage.id,'
+                         'QuotaUsage.deleted == False)')
 
 
 class Snapshot(BASE, NovaBase):
@@ -803,6 +826,21 @@ class InstanceSystemMetadata(BASE, NovaBase):
     instance = relationship(Instance, backref="system_metadata",
                             foreign_keys=instance_uuid,
                             primaryjoin=primary_join)
+
+
+class InstanceTypeProjects(BASE, NovaBase):
+    """Represent projects associated instance_types"""
+    __tablename__ = "instance_type_projects"
+    id = Column(Integer, primary_key=True)
+    instance_type_id = Column(Integer, ForeignKey('instance_types.id'),
+                              nullable=False)
+    project_id = Column(String(255))
+
+    instance_type = relationship(InstanceTypes, backref="projects",
+                 foreign_keys=instance_type_id,
+                 primaryjoin='and_('
+                 'InstanceTypeProjects.instance_type_id == InstanceTypes.id,'
+                 'InstanceTypeProjects.deleted == False)')
 
 
 class InstanceTypeExtraSpecs(BASE, NovaBase):

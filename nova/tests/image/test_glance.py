@@ -105,7 +105,7 @@ class TestGlanceImageService(test.TestCase):
         self.context = context.RequestContext('fake', 'fake', auth_token=True)
 
     def _create_image_service(self, client):
-        def _fake_create_glance_client(context, host, port):
+        def _fake_create_glance_client(context, host, port, use_ssl, version):
             return client
 
         self.stubs.Set(glance, '_create_glance_client',
@@ -464,9 +464,9 @@ class TestGlanceImageService(test.TestCase):
         self.flags(glance_num_retries=1)
         service.download(self.context, image_id, writer)
 
-    def test_client_raises_forbidden(self):
+    def test_client_forbidden_converts_to_imagenotauthed(self):
         class MyGlanceStubClient(glance_stubs.StubGlanceClient):
-            """A client that fails the first time, then succeeds."""
+            """A client that raises a Forbidden exception."""
             def get(self, image_id):
                 raise glanceclient.exc.Forbidden(image_id)
 
@@ -475,6 +475,45 @@ class TestGlanceImageService(test.TestCase):
         image_id = 1  # doesn't matter
         writer = NullWriter()
         self.assertRaises(exception.ImageNotAuthorized, service.download,
+                          self.context, image_id, writer)
+
+    def test_client_httpforbidden_converts_to_imagenotauthed(self):
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            """A client that raises a HTTPForbidden exception."""
+            def get(self, image_id):
+                raise glanceclient.exc.HTTPForbidden(image_id)
+
+        client = MyGlanceStubClient()
+        service = self._create_image_service(client)
+        image_id = 1  # doesn't matter
+        writer = NullWriter()
+        self.assertRaises(exception.ImageNotAuthorized, service.download,
+                          self.context, image_id, writer)
+
+    def test_client_notfound_converts_to_imagenotfound(self):
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            """A client that raises a NotFound exception."""
+            def get(self, image_id):
+                raise glanceclient.exc.NotFound(image_id)
+
+        client = MyGlanceStubClient()
+        service = self._create_image_service(client)
+        image_id = 1  # doesn't matter
+        writer = NullWriter()
+        self.assertRaises(exception.ImageNotFound, service.download,
+                          self.context, image_id, writer)
+
+    def test_client_httpnotfound_converts_to_imagenotfound(self):
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            """A client that raises a HTTPNotFound exception."""
+            def get(self, image_id):
+                raise glanceclient.exc.HTTPNotFound(image_id)
+
+        client = MyGlanceStubClient()
+        service = self._create_image_service(client)
+        image_id = 1  # doesn't matter
+        writer = NullWriter()
+        self.assertRaises(exception.ImageNotFound, service.download,
                           self.context, image_id, writer)
 
     def test_glance_client_image_id(self):
@@ -511,8 +550,9 @@ class TestGlanceClientWrapper(test.TestCase):
 
     def setUp(self):
         super(TestGlanceClientWrapper, self).setUp()
-        self.flags(glance_api_servers=['host1:9292', 'host2:9293',
-            'host3:9294'])
+        # host1 has no scheme, which is http by default
+        self.flags(glance_api_servers=['host1:9292', 'https://host2:9293',
+            'http://host3:9294'])
 
         # Make the test run fast
         def _fake_sleep(secs):
@@ -525,21 +565,23 @@ class TestGlanceClientWrapper(test.TestCase):
         ctxt = context.RequestContext('fake', 'fake')
         fake_host = 'host4'
         fake_port = 9295
+        fake_use_ssl = False
 
         info = {'num_calls': 0}
 
-        def _fake_create_glance_client(context, host, port):
+        def _fake_create_glance_client(context, host, port, use_ssl, version):
             self.assertEqual(host, fake_host)
             self.assertEqual(port, fake_port)
+            self.assertEqual(use_ssl, fake_use_ssl)
             return _create_failing_glance_client(info)
 
         self.stubs.Set(glance, '_create_glance_client',
                 _fake_create_glance_client)
 
         client = glance.GlanceClientWrapper(context=ctxt,
-                host=fake_host, port=fake_port)
+                host=fake_host, port=fake_port, use_ssl=fake_use_ssl)
         self.assertRaises(exception.GlanceConnectionFailed,
-                client.call, ctxt, 'get', 'meow')
+                client.call, ctxt, 1, 'get', 'meow')
         self.assertEqual(info['num_calls'], 1)
 
     def test_default_client_without_retries(self):
@@ -549,15 +591,17 @@ class TestGlanceClientWrapper(test.TestCase):
 
         info = {'num_calls': 0,
                 'host': 'host1',
-                'port': 9292}
+                'port': 9292,
+                'use_ssl': False}
 
         # Leave the list in a known-order
         def _fake_shuffle(servers):
             pass
 
-        def _fake_create_glance_client(context, host, port):
+        def _fake_create_glance_client(context, host, port, use_ssl, version):
             self.assertEqual(host, info['host'])
             self.assertEqual(port, info['port'])
+            self.assertEqual(use_ssl, info['use_ssl'])
             return _create_failing_glance_client(info)
 
         self.stubs.Set(random, 'shuffle', _fake_shuffle)
@@ -567,12 +611,13 @@ class TestGlanceClientWrapper(test.TestCase):
         client = glance.GlanceClientWrapper()
         client2 = glance.GlanceClientWrapper()
         self.assertRaises(exception.GlanceConnectionFailed,
-                client.call, ctxt, 'get', 'meow')
+                client.call, ctxt, 1, 'get', 'meow')
         self.assertEqual(info['num_calls'], 1)
 
         info = {'num_calls': 0,
                 'host': 'host2',
-                'port': 9293}
+                'port': 9293,
+                'use_ssl': True}
 
         def _fake_shuffle2(servers):
             # fake shuffle in a known manner
@@ -581,7 +626,7 @@ class TestGlanceClientWrapper(test.TestCase):
         self.stubs.Set(random, 'shuffle', _fake_shuffle2)
 
         self.assertRaises(exception.GlanceConnectionFailed,
-                client2.call, ctxt, 'get', 'meow')
+                client2.call, ctxt, 1, 'get', 'meow')
         self.assertEqual(info['num_calls'], 1)
 
     def test_static_client_with_retries(self):
@@ -590,20 +635,22 @@ class TestGlanceClientWrapper(test.TestCase):
         ctxt = context.RequestContext('fake', 'fake')
         fake_host = 'host4'
         fake_port = 9295
+        fake_use_ssl = False
 
         info = {'num_calls': 0}
 
-        def _fake_create_glance_client(context, host, port):
+        def _fake_create_glance_client(context, host, port, use_ssl, version):
             self.assertEqual(host, fake_host)
             self.assertEqual(port, fake_port)
+            self.assertEqual(use_ssl, fake_use_ssl)
             return _create_failing_glance_client(info)
 
         self.stubs.Set(glance, '_create_glance_client',
                 _fake_create_glance_client)
 
         client = glance.GlanceClientWrapper(context=ctxt,
-                host=fake_host, port=fake_port)
-        client.call(ctxt, 'get', 'meow')
+                host=fake_host, port=fake_port, use_ssl=fake_use_ssl)
+        client.call(ctxt, 1, 'get', 'meow')
         self.assertEqual(info['num_calls'], 2)
 
     def test_default_client_with_retries(self):
@@ -614,17 +661,20 @@ class TestGlanceClientWrapper(test.TestCase):
         info = {'num_calls': 0,
                 'host0': 'host1',
                 'port0': 9292,
+                'use_ssl0': False,
                 'host1': 'host2',
-                'port1': 9293}
+                'port1': 9293,
+                'use_ssl1': True}
 
         # Leave the list in a known-order
         def _fake_shuffle(servers):
             pass
 
-        def _fake_create_glance_client(context, host, port):
+        def _fake_create_glance_client(context, host, port, use_ssl, version):
             attempt = info['num_calls']
             self.assertEqual(host, info['host%s' % attempt])
             self.assertEqual(port, info['port%s' % attempt])
+            self.assertEqual(use_ssl, info['use_ssl%s' % attempt])
             return _create_failing_glance_client(info)
 
         self.stubs.Set(random, 'shuffle', _fake_shuffle)
@@ -633,7 +683,7 @@ class TestGlanceClientWrapper(test.TestCase):
 
         client = glance.GlanceClientWrapper()
         client2 = glance.GlanceClientWrapper()
-        client.call(ctxt, 'get', 'meow')
+        client.call(ctxt, 1, 'get', 'meow')
         self.assertEqual(info['num_calls'], 2)
 
         def _fake_shuffle2(servers):
@@ -645,8 +695,10 @@ class TestGlanceClientWrapper(test.TestCase):
         info = {'num_calls': 0,
                 'host0': 'host2',
                 'port0': 9293,
+                'use_ssl0': True,
                 'host1': 'host3',
-                'port1': 9294}
+                'port1': 9294,
+                'use_ssl1': False}
 
-        client2.call(ctxt, 'get', 'meow')
+        client2.call(ctxt, 1, 'get', 'meow')
         self.assertEqual(info['num_calls'], 2)

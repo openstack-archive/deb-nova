@@ -17,6 +17,7 @@
 
 import webob
 from webob import exc
+from xml.dom import minidom
 
 from nova.api.openstack import common
 from nova.api.openstack import extensions
@@ -26,6 +27,7 @@ from nova import compute
 from nova import exception
 from nova import flags
 from nova.openstack.common import log as logging
+from nova import utils
 from nova import volume
 from nova.volume import volume_types
 
@@ -74,10 +76,8 @@ def _translate_volume_summary_view(context, vol):
     LOG.audit(_("vol=%s"), vol, context=context)
 
     if vol.get('volume_metadata'):
-        meta_dict = {}
-        for i in vol['volume_metadata']:
-            meta_dict[i['key']] = i['value']
-        d['metadata'] = meta_dict
+        metadata = vol.get('volume_metadata')
+        d['metadata'] = dict((item['key'], item['value']) for item in metadata)
     else:
         d['metadata'] = {}
 
@@ -100,8 +100,8 @@ def make_volume(elem):
                                             selector='attachments')
     make_attachment(attachment)
 
-    metadata = xmlutil.make_flat_dict('metadata')
-    elem.append(metadata)
+    # Attach metadata node
+    elem.append(common.MetadataTemplate())
 
 
 class VolumeTemplate(xmlutil.TemplateBuilder):
@@ -119,7 +119,48 @@ class VolumesTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class VolumeController(object):
+class CommonDeserializer(wsgi.MetadataXMLDeserializer):
+    """Common deserializer to handle xml-formatted volume requests.
+
+       Handles standard volume attributes as well as the optional metadata
+       attribute
+    """
+
+    metadata_deserializer = common.MetadataXMLDeserializer()
+
+    def _extract_volume(self, node):
+        """Marshal the volume attribute of a parsed request."""
+        volume = {}
+        volume_node = self.find_first_child_named(node, 'volume')
+
+        attributes = ['display_name', 'display_description', 'size',
+                      'volume_type', 'availability_zone']
+        for attr in attributes:
+            if volume_node.getAttribute(attr):
+                volume[attr] = volume_node.getAttribute(attr)
+
+        metadata_node = self.find_first_child_named(volume_node, 'metadata')
+        if metadata_node is not None:
+            volume['metadata'] = self.extract_metadata(metadata_node)
+
+        return volume
+
+
+class CreateDeserializer(CommonDeserializer):
+    """Deserializer to handle xml-formatted create volume requests.
+
+       Handles standard volume attributes as well as the optional metadata
+       attribute
+    """
+
+    def default(self, string):
+        """Deserialize an xml-formatted volume create request."""
+        dom = minidom.parseString(string)
+        volume = self._extract_volume(dom)
+        return {'body': {'volume': volume}}
+
+
+class VolumeController(wsgi.Controller):
     """The Volumes API controller for the OpenStack API."""
 
     def __init__(self):
@@ -174,17 +215,16 @@ class VolumeController(object):
         return {'volumes': res}
 
     @wsgi.serializers(xml=VolumeTemplate)
+    @wsgi.deserializers(xml=CreateDeserializer)
     def create(self, req, body):
         """Creates a new volume."""
         context = req.environ['nova.context']
         authorize(context)
 
-        if not body:
+        if not self.is_valid_body(body, 'volume'):
             raise exc.HTTPUnprocessableEntity()
 
         vol = body['volume']
-        size = vol['size']
-        LOG.audit(_("Create volume of %s GB"), size, context=context)
 
         vol_type = vol.get('volume_type', None)
         if vol_type:
@@ -202,6 +242,12 @@ class VolumeController(object):
             snapshot = self.volume_api.get_snapshot(context, snapshot_id)
         else:
             snapshot = None
+
+        size = vol.get('size', None)
+        if size is None and snapshot is not None:
+            size = snapshot['volume_size']
+
+        LOG.audit(_("Create volume of %s GB"), size, context=context)
 
         availability_zone = vol.get('availability_zone', None)
 
@@ -277,7 +323,7 @@ class VolumeAttachmentsTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class VolumeAttachmentController(object):
+class VolumeAttachmentController(wsgi.Controller):
     """The volume attachment API controller for the OpenStack API.
 
     A child resource of the server.  Note that we use the volume id
@@ -335,7 +381,7 @@ class VolumeAttachmentController(object):
         context = req.environ['nova.context']
         authorize(context)
 
-        if not body:
+        if not self.is_valid_body(body, 'volumeAttachment'):
             raise exc.HTTPUnprocessableEntity()
 
         volume_id = body['volumeAttachment']['volumeId']
@@ -479,7 +525,7 @@ class SnapshotsTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class SnapshotController(object):
+class SnapshotController(wsgi.Controller):
     """The Volumes API controller for the OpenStack API."""
 
     def __init__(self):
@@ -539,8 +585,8 @@ class SnapshotController(object):
         context = req.environ['nova.context']
         authorize(context)
 
-        if not body:
-            return exc.HTTPUnprocessableEntity()
+        if not self.is_valid_body(body, 'snapshot'):
+            raise exc.HTTPUnprocessableEntity()
 
         snapshot = body['snapshot']
         volume_id = snapshot['volume_id']
@@ -550,7 +596,11 @@ class SnapshotController(object):
         LOG.audit(_("Create snapshot from volume %s"), volume_id,
                 context=context)
 
-        if force:
+        if not utils.is_valid_boolstr(force):
+            msg = _("Invalid value '%s' for force. ") % force
+            raise exception.InvalidParameterValue(err=msg)
+
+        if utils.bool_from_str(force):
             new_snapshot = self.volume_api.create_snapshot_force(context,
                                         volume,
                                         snapshot.get('display_name'),

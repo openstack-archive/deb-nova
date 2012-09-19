@@ -208,29 +208,16 @@ def compute_node_create(context, values):
     return IMPL.compute_node_create(context, values)
 
 
-def compute_node_update(context, compute_id, values, auto_adjust=True):
+def compute_node_update(context, compute_id, values, prune_stats=False):
     """Set the given properties on a computeNode and update it.
 
     Raises NotFound if computeNode does not exist.
     """
-    return IMPL.compute_node_update(context, compute_id, values, auto_adjust)
+    return IMPL.compute_node_update(context, compute_id, values, prune_stats)
 
 
 def compute_node_get_by_host(context, host):
     return IMPL.compute_node_get_by_host(context, host)
-
-
-def compute_node_utilization_update(context, host, free_ram_mb_delta=0,
-                          free_disk_gb_delta=0, work_delta=0, vm_delta=0):
-    return IMPL.compute_node_utilization_update(context, host,
-                          free_ram_mb_delta, free_disk_gb_delta, work_delta,
-                          vm_delta)
-
-
-def compute_node_utilization_set(context, host, free_ram_mb=None,
-                                 free_disk_gb=None, work=None, vms=None):
-    return IMPL.compute_node_utilization_set(context, host, free_ram_mb,
-                                             free_disk_gb, work, vms)
 
 
 def compute_node_statistics(context):
@@ -285,6 +272,11 @@ def floating_ip_allocate_address(context, project_id, pool):
 def floating_ip_bulk_create(context, ips):
     """Create a lot of floating ips from the values dictionary."""
     return IMPL.floating_ip_bulk_create(context, ips)
+
+
+def floating_ip_bulk_destroy(context, ips):
+    """Destroy a lot of floating ips from the values dictionary."""
+    return IMPL.floating_ip_bulk_destroy(context, ips)
 
 
 def floating_ip_create(context, values):
@@ -595,10 +587,11 @@ def instance_get_all(context, columns_to_join=None):
 
 
 def instance_get_all_by_filters(context, filters, sort_key='created_at',
-                                sort_dir='desc'):
+                                sort_dir='desc', limit=None, marker=None):
     """Get all instances that match all filters."""
     return IMPL.instance_get_all_by_filters(context, filters, sort_key,
-                                            sort_dir)
+                                            sort_dir, limit=limit,
+                                            marker=marker)
 
 
 def instance_get_active_by_window(context, begin, end=None, project_id=None,
@@ -698,11 +691,6 @@ def instance_remove_security_group(context, instance_id, security_group_id):
     """Disassociate the given security group from the given instance."""
     return IMPL.instance_remove_security_group(context, instance_id,
                                             security_group_id)
-
-
-def instance_get_id_to_uuid_mapping(context, ids):
-    """Return a dictionary containing 'ID: UUID' given the ids"""
-    return IMPL.instance_get_id_to_uuid_mapping(context, ids)
 
 
 ###################
@@ -822,9 +810,9 @@ def network_disassociate(context, network_id):
     return IMPL.network_disassociate(context, network_id)
 
 
-def network_get(context, network_id):
+def network_get(context, network_id, project_only="allow_none"):
     """Get a network or raise if it does not exist."""
-    return IMPL.network_get(context, network_id)
+    return IMPL.network_get(context, network_id, project_only=project_only)
 
 
 def network_get_all(context):
@@ -832,9 +820,11 @@ def network_get_all(context):
     return IMPL.network_get_all(context)
 
 
-def network_get_all_by_uuids(context, network_uuids, project_id=None):
+def network_get_all_by_uuids(context, network_uuids,
+                             project_only="allow_none"):
     """Return networks by ids."""
-    return IMPL.network_get_all_by_uuids(context, network_uuids, project_id)
+    return IMPL.network_get_all_by_uuids(context, network_uuids,
+                                         project_only=project_only)
 
 
 # pylint: disable=C0103
@@ -999,7 +989,7 @@ def quota_usage_get_all_by_project(context, project_id):
     return IMPL.quota_usage_get_all_by_project(context, project_id)
 
 
-def quota_usage_update(context, class_name, resource, in_use, reserved,
+def quota_usage_update(context, project_id, resource, in_use, reserved,
                        until_refresh):
     """Update a quota usage or raise if it does not exist."""
     return IMPL.quota_usage_update(context, project_id, resource,
@@ -1298,7 +1288,12 @@ def security_group_create(context, values):
 
 
 def security_group_ensure_default(context):
-    """Ensure default security group exists for a project_id."""
+    """Ensure default security group exists for a project_id.
+
+    Returns a tuple with the first element being a bool indicating
+    if the default security group previously existed. Second
+    element is the dict used to create the default security group.
+    """
     return IMPL.security_group_ensure_default(context)
 
 
@@ -1463,6 +1458,21 @@ def instance_type_destroy(context, name):
     return IMPL.instance_type_destroy(context, name)
 
 
+def instance_type_access_get_by_flavor_id(context, flavor_id):
+    """Get flavor access by flavor id."""
+    return IMPL.instance_type_access_get_by_flavor_id(context, flavor_id)
+
+
+def instance_type_access_add(context, flavor_id, project_id):
+    """Add flavor access for project."""
+    return IMPL.instance_type_access_add(context, flavor_id, project_id)
+
+
+def instance_type_access_remove(context, flavor_id, project_id):
+    """Remove flavor access for project."""
+    return IMPL.instance_type_access_remove(context, flavor_id, project_id)
+
+
 ####################
 
 
@@ -1478,7 +1488,8 @@ def instance_metadata_delete(context, instance_uuid, key):
 
 def instance_metadata_update(context, instance_uuid, metadata, delete):
     """Update metadata if it exists, otherwise create it."""
-    IMPL.instance_metadata_update(context, instance_uuid, metadata, delete)
+    return IMPL.instance_metadata_update(context, instance_uuid,
+                                             metadata, delete)
 
 
 ####################

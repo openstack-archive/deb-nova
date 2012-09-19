@@ -22,7 +22,6 @@ Driver base-classes:
     types that support that contract
 """
 
-from nova.compute import power_state
 from nova import flags
 from nova.openstack.common import log as logging
 
@@ -193,7 +192,8 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         """Reboot the specified instance.
 
         :param instance: Instance object as returned by DB layer.
@@ -242,7 +242,8 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info):
+                                   instance_type, network_info,
+                                   block_device_info=None):
         """
         Transfers the disk of a running instance in multiple phases, turning
         off the instance before the end.
@@ -261,7 +262,8 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, image_meta, resize_instance):
+                         network_info, image_meta, resize_instance,
+                         block_device_info=None):
         """Completes a resize, turning on the migrated instance
 
         :param network_info:
@@ -277,7 +279,8 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def finish_revert_migration(self, instance, network_info):
+    def finish_revert_migration(self, instance, network_info,
+                                block_device_info=None):
         """Finish reverting a resize, powering back on the instance"""
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
@@ -302,7 +305,8 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def resume_state_on_host_boot(self, context, instance, network_info):
+    def resume_state_on_host_boot(self, context, instance, network_info,
+                                  block_device_info=None):
         """resume guest state when a host is booted"""
         raise NotImplementedError()
 
@@ -324,15 +328,13 @@ class ComputeDriver(object):
         """Power on the specified instance"""
         raise NotImplementedError()
 
-    def update_available_resource(self, ctxt, host):
-        """Updates compute manager resource info on ComputeNode table.
+    def get_available_resource(self):
+        """Retrieve resource information.
 
         This method is called when nova-compute launches, and
-        whenever admin executes "nova-manage service update_resource".
+        as part of a periodic task
 
-        :param ctxt: security context
-        :param host: hostname that compute manager is currently running
-
+        :returns: Dictionary describing resources
         """
         raise NotImplementedError()
 

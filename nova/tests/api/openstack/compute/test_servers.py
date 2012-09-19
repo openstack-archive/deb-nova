@@ -16,6 +16,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import base64
 import datetime
 import urlparse
 
@@ -92,6 +93,43 @@ class MockSetAdminPassword(object):
     def __call__(self, context, instance_id, password):
         self.instance_id = instance_id
         self.password = password
+
+
+class Base64ValidationTest(test.TestCase):
+    def setUp(self):
+        super(Base64ValidationTest, self).setUp()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
+
+    def test_decode_base64(self):
+        value = "A random string"
+        result = self.controller._decode_base64(base64.b64encode(value))
+        self.assertEqual(result, value)
+
+    def test_decode_base64_binary(self):
+        value = "\x00\x12\x75\x99"
+        result = self.controller._decode_base64(base64.b64encode(value))
+        self.assertEqual(result, value)
+
+    def test_decode_base64_whitespace(self):
+        value = "A random string"
+        encoded = base64.b64encode(value)
+        white = "\n \n%s\t%s\n" % (encoded[:2], encoded[2:])
+        result = self.controller._decode_base64(white)
+        self.assertEqual(result, value)
+
+    def test_decode_base64_invalid(self):
+        invalid = "A random string"
+        result = self.controller._decode_base64(invalid)
+        self.assertEqual(result, None)
+
+    def test_decode_base64_illegal_bytes(self):
+        value = "A random string"
+        encoded = base64.b64encode(value)
+        white = ">\x01%s*%s()" % (encoded[:2], encoded[2:])
+        result = self.controller._decode_base64(white)
+        self.assertEqual(result, None)
 
 
 class ServersControllerTest(test.TestCase):
@@ -410,13 +448,13 @@ class ServersControllerTest(test.TestCase):
         }
         self.assertDictMatch(res_dict, expected)
 
-    def test_get_server_addresses_nonexistant_network(self):
+    def test_get_server_addresses_nonexistent_network(self):
         url = '/v2/fake/servers/%s/ips/network_0' % FAKE_UUID
         req = fakes.HTTPRequest.blank(url)
         self.assertRaises(webob.exc.HTTPNotFound, self.ips_controller.show,
                           req, FAKE_UUID, 'network_0')
 
-    def test_get_server_addresses_nonexistant_server(self):
+    def test_get_server_addresses_nonexistent_server(self):
         def fake_instance_get(*args, **kwargs):
             raise nova.exception.InstanceNotFound()
 
@@ -582,7 +620,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             return [fakes.stub_instance(100, uuid=server_uuid)]
 
         self.stubs.Set(nova.compute.API, 'get_all', fake_get_all)
@@ -597,7 +636,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('image' in search_opts)
             self.assertEqual(search_opts['image'], '12345')
@@ -613,7 +653,7 @@ class ServersControllerTest(test.TestCase):
 
     def test_tenant_id_filter_converts_to_project_id_for_admin(self):
         def fake_get_all(context, filters=None, sort_key=None,
-                         sort_dir='desc'):
+                         sort_dir='desc', limit=None, marker=None):
             self.assertNotEqual(filters, None)
             self.assertEqual(filters['project_id'], 'fake')
             self.assertFalse(filters.get('tenant_id'))
@@ -630,7 +670,7 @@ class ServersControllerTest(test.TestCase):
 
     def test_admin_restricted_tenant(self):
         def fake_get_all(context, filters=None, sort_key=None,
-                         sort_dir='desc'):
+                         sort_dir='desc', limit=None, marker=None):
             self.assertNotEqual(filters, None)
             self.assertEqual(filters['project_id'], 'fake')
             return [fakes.stub_instance(100)]
@@ -646,7 +686,7 @@ class ServersControllerTest(test.TestCase):
 
     def test_admin_all_tenants(self):
         def fake_get_all(context, filters=None, sort_key=None,
-                         sort_dir='desc'):
+                         sort_dir='desc', limit=None, marker=None):
             self.assertNotEqual(filters, None)
             self.assertTrue('project_id' not in filters)
             return [fakes.stub_instance(100)]
@@ -662,7 +702,7 @@ class ServersControllerTest(test.TestCase):
 
     def test_all_tenants(self):
         def fake_get_all(context, filters=None, sort_key=None,
-                         sort_dir='desc'):
+                         sort_dir='desc', limit=None, marker=None):
             self.assertNotEqual(filters, None)
             self.assertEqual(filters['project_id'], 'fake')
             return [fakes.stub_instance(100)]
@@ -679,7 +719,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('flavor' in search_opts)
             # flavor is an integer ID
@@ -698,7 +739,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('vm_state' in search_opts)
             self.assertEqual(search_opts['vm_state'], vm_states.ACTIVE)
@@ -718,11 +760,38 @@ class ServersControllerTest(test.TestCase):
                                       use_admin_context=False)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.index, req)
 
+    def test_get_servers_deleted_status_as_user(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/servers?status=deleted',
+                                      use_admin_context=False)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.detail, req)
+
+    def test_get_servers_deleted_status_as_admin(self):
+        server_uuid = str(utils.gen_uuid())
+
+        def fake_get_all(compute_self, context, search_opts=None,
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
+            self.assertTrue('vm_state' in search_opts)
+            self.assertEqual(search_opts['vm_state'], 'deleted')
+
+            return [fakes.stub_instance(100, uuid=server_uuid)]
+
+        self.stubs.Set(nova.compute.API, 'get_all', fake_get_all)
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers?status=deleted',
+                                      use_admin_context=True)
+
+        servers = self.controller.detail(req)['servers']
+        self.assertEqual(len(servers), 1)
+        self.assertEqual(servers[0]['id'], server_uuid)
+
     def test_get_servers_allows_name(self):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('name' in search_opts)
             self.assertEqual(search_opts['name'], 'whee.*')
@@ -740,7 +809,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('changes-since' in search_opts)
             changes_since = datetime.datetime(2011, 1, 24, 17, 8, 1,
@@ -771,7 +841,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             # Allowed by user
             self.assertTrue('name' in search_opts)
@@ -799,7 +870,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             # Allowed by user
             self.assertTrue('name' in search_opts)
@@ -827,7 +899,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('ip' in search_opts)
             self.assertEqual(search_opts['ip'], '10\..*')
@@ -849,7 +922,8 @@ class ServersControllerTest(test.TestCase):
         server_uuid = str(utils.gen_uuid())
 
         def fake_get_all(compute_self, context, search_opts=None,
-                         sort_key=None, sort_dir='desc'):
+                         sort_key=None, sort_dir='desc',
+                         limit=None, marker=None):
             self.assertNotEqual(search_opts, None)
             self.assertTrue('ip6' in search_opts)
             self.assertEqual(search_opts['ip6'], 'ffff.*')
@@ -863,13 +937,6 @@ class ServersControllerTest(test.TestCase):
 
         self.assertEqual(len(servers), 1)
         self.assertEqual(servers[0]['id'], server_uuid)
-
-    def test_update_server_no_body(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
-        req.method = 'PUT'
-
-        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
-                          self.controller.update, req, FAKE_UUID, None)
 
     def test_update_server_all_attributes(self):
         self.stubs.Set(nova.db, 'instance_get',
@@ -1905,7 +1972,7 @@ class ServersControllerCreateTest(test.TestCase):
         self._test_create_extra(params)
 
     def test_create_instance_with_scheduler_hints_enabled(self):
-        self.ext_mgr.extensions = {'os-scheduler-hints': 'fake'}
+        self.ext_mgr.extensions = {'OS-SCH-HNT': 'fake'}
         hints = {'a': 'b'}
         params = {'scheduler_hints': hints}
         old_create = nova.compute.api.API.create
@@ -2736,13 +2803,40 @@ class ServersControllerCreateTest(test.TestCase):
         # The fact that the action doesn't raise is enough validation
         self.controller.create(req, body)
 
-    def test_create_instance_malformed_entity(self):
+    def test_create_instance_invalid_personality(self):
+
+        def fake_create(*args, **kwargs):
+            codec = 'utf8'
+            content = 'b25zLiINCg0KLVJpY2hhcmQgQ$$%QQmFjaA=='
+            start_position = 19
+            end_position = 20
+            msg = 'invalid start byte'
+            raise UnicodeDecodeError(codec, content, start_position,
+                                                    end_position, msg)
+
+        self.stubs.Set(nova.compute.api.API,
+                                'create',
+                                fake_create)
+        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = 'http://localhost/v2/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_uuid,
+                'flavorRef': flavor_ref,
+                'personality': [
+                    {
+                        "path": "/etc/banner.txt",
+                        "contents": "b25zLiINCg0KLVJpY2hhcmQgQ$$%QQmFjaA==",
+                    },
+                ],
+            },
+        }
+
         req = fakes.HTTPRequest.blank('/v2/fake/servers')
         req.method = 'POST'
-        body = {'server': 'string'}
         req.body = jsonutils.dumps(body)
-        req.headers['content-type'] = "application/json"
-
+        req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, req, body)
 
@@ -3196,6 +3290,83 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 "flavorRef": "1",
                 "networks": [{"uuid": "1", "fixed_ip": "10.0.1.12"},
                              {"uuid": "1", "fixed_ip": "10.0.2.12"}],
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_availability_zone(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     name="new-server-test" imageRef="1" flavorRef="1"
+     availability_zone="some_zone:some_host">
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "availability_zone": "some_zone:some_host",
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_multiple_create_args(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     name="new-server-test" imageRef="1" flavorRef="1"
+     min_count="1" max_count="3" return_reservation_id="True">
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "min_count": "1",
+                "max_count": "3",
+                "return_reservation_id": True,
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_disk_config(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     xmlns:OS-DCF="http://docs.openstack.org/compute/ext/disk_config/api/v1.1"
+     name="new-server-test" imageRef="1" flavorRef="1"
+     OS-DCF:diskConfig="True">
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "OS-DCF:diskConfig": True,
+                }}
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_scheduler_hints(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v2"
+     xmlns:OS-SCH-HNT=
+     "http://docs.openstack.org/compute/ext/scheduler-hints/api/v2"
+     name="new-server-test" imageRef="1" flavorRef="1">
+       <OS-SCH-HNT:scheduler_hints>
+         <different_host>
+           7329b667-50c7-46a6-b913-cb2a09dfeee0
+         </different_host>
+         <different_host>
+           f31efb24-34d2-43e1-8b44-316052956a39
+         </different_host>
+       </OS-SCH-HNT:scheduler_hints>
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "1",
+                "OS-SCH-HNT:scheduler_hints": {
+                    "different_host": [
+                        "7329b667-50c7-46a6-b913-cb2a09dfeee0",
+                        "f31efb24-34d2-43e1-8b44-316052956a39",
+                    ]
+                }
                 }}
         self.assertEquals(request['body'], expected)
 
@@ -4755,6 +4926,22 @@ class ServerXMLSerializationTest(test.TestCase):
 class ServersAllExtensionsTestCase(test.TestCase):
     """
     Servers tests using default API router with all extensions enabled.
+
+    The intent here is to catch cases where extensions end up throwing
+    an exception because of a malformed request before the core API
+    gets a chance to validate the request and return a 422 response.
+
+    For example, ServerDiskConfigController extends servers.Controller:
+
+      @wsgi.extends
+      def create(self, req, body):
+          if 'server' in body:
+                self._set_disk_config(body['server'])
+          resp_obj = (yield)
+          self._show(req, resp_obj)
+
+    we want to ensure that the extension isn't barfing on an invalid
+    body.
     """
 
     def setUp(self):
@@ -4765,7 +4952,7 @@ class ServersAllExtensionsTestCase(test.TestCase):
         """Test create with malformed body"""
 
         def fake_create(*args, **kwargs):
-            raise Exception("Request should not reach the compute API.")
+            raise test.TestingException("Should not reach the compute API.")
 
         self.stubs.Set(nova.compute.api.API, 'create', fake_create)
 
@@ -4777,3 +4964,68 @@ class ServersAllExtensionsTestCase(test.TestCase):
         req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
         self.assertEqual(422, res.status_int)
+
+    def test_update_missing_server(self):
+        """Test create with malformed body"""
+
+        def fake_update(*args, **kwargs):
+            raise test.TestingException("Should not reach the compute API.")
+
+        self.stubs.Set(nova.compute.api.API, 'create', fake_update)
+
+        req = fakes.HTTPRequest.blank('/fake/servers/1')
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'foo': {'a': 'b'}}
+
+        req.body = jsonutils.dumps(body)
+        res = req.get_response(self.app)
+        self.assertEqual(422, res.status_int)
+
+
+class ServersUnprocessableEntityTestCase(test.TestCase):
+    """
+    Tests of places we throw 422 Unprocessable Entity from
+    """
+
+    def setUp(self):
+        super(ServersUnprocessableEntityTestCase, self).setUp()
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.controller = servers.Controller(self.ext_mgr)
+
+    def _unprocessable_server_create(self, body):
+        req = fakes.HTTPRequest.blank('/v2/fake/servers')
+        req.method = 'POST'
+
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create, req, body)
+
+    def test_create_server_no_body(self):
+        self._unprocessable_server_create(body=None)
+
+    def test_create_server_missing_server(self):
+        body = {'foo': {'a': 'b'}}
+        self._unprocessable_server_create(body=body)
+
+    def test_create_server_malformed_entity(self):
+        body = {'server': 'string'}
+        self._unprocessable_server_create(body=body)
+
+    def _unprocessable_server_update(self, body):
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.update, req, FAKE_UUID, body)
+
+    def test_update_server_no_body(self):
+        self._unprocessable_server_update(body=None)
+
+    def test_update_server_missing_server(self):
+        body = {'foo': {'a': 'b'}}
+        self._unprocessable_server_update(body=body)
+
+    def test_create_update_malformed_entity(self):
+        body = {'server': 'string'}
+        self._unprocessable_server_update(body=body)

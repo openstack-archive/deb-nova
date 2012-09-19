@@ -214,6 +214,15 @@ The copy of the code should never be directly modified here. Please
 always update openstack-common first and then run the script to copy
 the changes across.
 
+OpenStack Trademark
+-------------------
+
+OpenStack is a registered trademark of OpenStack, LLC, and uses the
+following capitalization:
+
+   OpenStack
+
+
 Commit Messages
 ---------------
 Using a common format for commit messages will help keep our git history
@@ -225,6 +234,10 @@ readable. Follow these guidelines:
   The first line of the commit message should provide an accurate
   description of the change, not just a reference to a bug or
   blueprint. It must be followed by a single blank line.
+
+  If the change relates to a specific driver (libvirt, xenapi, qpid, etc...),
+  begin the first line of the commit message with the driver name, lowercased,
+  followed by a colon.
 
   Following your brief summary, provide a more detailed description of
   the patch, manually wrapping the text at 72 characters. This

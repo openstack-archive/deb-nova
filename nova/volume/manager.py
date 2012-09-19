@@ -18,7 +18,7 @@
 """
 Volume manager manages creating, attaching, detaching, and persistent storage.
 
-Persistant storage volumes keep their state independent of instances.  You can
+Persistent storage volumes keep their state independent of instances.  You can
 attach to an instance, terminate the instance, spawn a new instance (even
 one from a different image) and re-attach the volume with the same data
 intact.
@@ -41,6 +41,7 @@ intact.
 from nova import context
 from nova import exception
 from nova import flags
+from nova.image import glance
 from nova import manager
 from nova.openstack.common import cfg
 from nova.openstack.common import excutils
@@ -105,8 +106,14 @@ class VolumeManager(manager.SchedulerDependentManager):
             else:
                 LOG.info(_("volume %s: skipping export"), volume['name'])
 
+        LOG.debug(_('Resuming any in progress delete operations'))
+        for volume in volumes:
+            if volume['status'] == 'deleting':
+                LOG.info(_("Resuming delete on volume: %s"), volume['id'])
+                self.delete_volume(ctxt, volume['id'])
+
     def create_volume(self, context, volume_id, snapshot_id=None,
-                      reservations=None):
+                      image_id=None, reservations=None):
         """Creates and exports the volume."""
         context = context.elevated()
         volume_ref = self.db.volume_get(context, volume_id)
@@ -120,18 +127,32 @@ class VolumeManager(manager.SchedulerDependentManager):
         #             before passing it to the driver.
         volume_ref['host'] = self.host
 
+        status = 'available'
+        model_update = False
+
         try:
             vol_name = volume_ref['name']
             vol_size = volume_ref['size']
             LOG.debug(_("volume %(vol_name)s: creating lv of"
                     " size %(vol_size)sG") % locals())
-            if snapshot_id is None:
+            if snapshot_id is None and image_id is None:
                 model_update = self.driver.create_volume(volume_ref)
-            else:
+            elif snapshot_id is not None:
                 snapshot_ref = self.db.snapshot_get(context, snapshot_id)
                 model_update = self.driver.create_volume_from_snapshot(
                     volume_ref,
                     snapshot_ref)
+            else:
+                # create the volume from an image
+                image_service, image_id = \
+                               glance.get_remote_image_service(context,
+                                                               image_id)
+                image_location = image_service.get_location(context, image_id)
+                cloned = self.driver.clone_image(volume_ref, image_location)
+                if not cloned:
+                    model_update = self.driver.create_volume(volume_ref)
+                    status = 'downloading'
+
             if model_update:
                 self.db.volume_update(context, volume_ref['id'], model_update)
 
@@ -139,24 +160,22 @@ class VolumeManager(manager.SchedulerDependentManager):
             model_update = self.driver.create_export(context, volume_ref)
             if model_update:
                 self.db.volume_update(context, volume_ref['id'], model_update)
-
-            # Commit the reservation
-            if reservations:
-                QUOTAS.commit(context, reservations)
         except Exception:
             with excutils.save_and_reraise_exception():
-                if reservations:
-                    QUOTAS.rollback(context, reservations)
                 self.db.volume_update(context,
                                       volume_ref['id'], {'status': 'error'})
 
         now = timeutils.utcnow()
         volume_ref = self.db.volume_update(context,
-                              volume_ref['id'], {'status': 'available',
+                              volume_ref['id'], {'status': status,
                                                  'launched_at': now})
         LOG.debug(_("volume %s: created successfully"), volume_ref['name'])
         self._reset_stats()
         self._notify_about_volume_usage(context, volume_ref, "create.end")
+
+        if image_id and not cloned:
+            #copy the image onto the volume.
+            self._copy_image_to_volume(context, volume_ref, image_id)
         return volume_id
 
     def delete_volume(self, context, volume_id):
@@ -164,10 +183,11 @@ class VolumeManager(manager.SchedulerDependentManager):
         context = context.elevated()
         volume_ref = self.db.volume_get(context, volume_id)
         if volume_ref['attach_status'] == "attached":
-            raise exception.NovaException(_("Volume is still attached"))
+            # Volume is still attached, need to detach first
+            raise exception.VolumeAttached(volume_id=volume_id)
         if volume_ref['host'] != self.host:
-            msg = _("Volume is not local to this node")
-            raise exception.NovaException(msg)
+            raise exception.InvalidVolume(
+                    reason=_("Volume is not local to this node"))
 
         self._notify_about_volume_usage(context, volume_ref, "delete.start")
         self._reset_stats()
@@ -176,7 +196,7 @@ class VolumeManager(manager.SchedulerDependentManager):
             self.driver.remove_export(context, volume_ref)
             LOG.debug(_("volume %s: deleting"), volume_ref['name'])
             self.driver.delete_volume(volume_ref)
-        except exception.VolumeIsBusy, e:
+        except exception.VolumeIsBusy:
             LOG.debug(_("volume %s: volume is busy"), volume_ref['name'])
             self.driver.ensure_export(context, volume_ref)
             self.db.volume_update(context, volume_ref['id'],
@@ -262,6 +282,17 @@ class VolumeManager(manager.SchedulerDependentManager):
         if not utils.is_uuid_like(instance_uuid):
             raise exception.InvalidUUID(instance_uuid)
 
+        try:
+            self.driver.attach_volume(context,
+                                      volume_id,
+                                      instance_uuid,
+                                      mountpoint)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_id,
+                                      {'status': 'error_attaching'})
+
         self.db.volume_attached(context,
                                 volume_id,
                                 instance_uuid,
@@ -270,7 +301,56 @@ class VolumeManager(manager.SchedulerDependentManager):
     def detach_volume(self, context, volume_id):
         """Updates db to show volume is detached"""
         # TODO(vish): refactor this into a more general "unreserve"
+        try:
+            self.driver.detach_volume(context, volume_id)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.db.volume_update(context,
+                                      volume_id,
+                                      {'status': 'error_detaching'})
+
         self.db.volume_detached(context, volume_id)
+
+    def _copy_image_to_volume(self, context, volume, image_id):
+        """Downloads Glance image to the specified volume. """
+        volume_id = volume['id']
+        payload = {'volume_id': volume_id, 'image_id': image_id}
+        try:
+            image_service, image_id = glance.get_remote_image_service(context,
+                                                                      image_id)
+            self.driver.copy_image_to_volume(context, volume, image_service,
+                                             image_id)
+            LOG.debug(_("Downloaded image %(image_id)s to %(volume_id)s "
+                        "successfully") % locals())
+            self.db.volume_update(context, volume_id,
+                                  {'status': 'available'})
+        except Exception, error:
+            with excutils.save_and_reraise_exception():
+                payload['message'] = unicode(error)
+                self.db.volume_update(context, volume_id, {'status': 'error'})
+
+    def copy_volume_to_image(self, context, volume_id, image_id):
+        """Uploads the specified volume to Glance."""
+        payload = {'volume_id': volume_id, 'image_id': image_id}
+        try:
+            volume = self.db.volume_get(context, volume_id)
+            self.driver.ensure_export(context.elevated(), volume)
+            image_service, image_id = glance.get_remote_image_service(context,
+                                                                      image_id)
+            self.driver.copy_volume_to_image(context, volume, image_service,
+                                             image_id)
+            LOG.debug(_("Uploaded volume %(volume_id)s to "
+                        "image (%(image_id)s) successfully") % locals())
+        except Exception, error:
+            with excutils.save_and_reraise_exception():
+                payload['message'] = unicode(error)
+        finally:
+            if volume['instance_uuid'] is None:
+                self.db.volume_update(context, volume_id,
+                                      {'status': 'available'})
+            else:
+                self.db.volume_update(context, volume_id,
+                                      {'status': 'in-use'})
 
     def initialize_connection(self, context, volume_id, connector):
         """Prepare volume for connection from host represented by connector.

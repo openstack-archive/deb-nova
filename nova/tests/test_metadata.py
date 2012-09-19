@@ -235,9 +235,9 @@ class MetadataTestCase(test.TestCase):
         self.assertTrue(md._check_version('2009-04-04', '2009-04-04'))
 
 
-class OpenstackMetadataTestCase(test.TestCase):
+class OpenStackMetadataTestCase(test.TestCase):
     def setUp(self):
-        super(OpenstackMetadataTestCase, self).setUp()
+        super(OpenStackMetadataTestCase, self).setUp()
         self.instance = INSTANCES[0]
         fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
                                                           spectacular=True)
@@ -287,6 +287,9 @@ class OpenstackMetadataTestCase(test.TestCase):
         self.assertTrue('public_keys' in mddict)
         self.assertEqual(mddict['public_keys'][self.instance['key_name']],
             self.instance['key_data'])
+
+        self.assertTrue('launch_index' in mddict)
+        self.assertEqual(mddict['launch_index'], self.instance['launch_index'])
 
         # verify that each of the things we put in content
         # resulted in an entry in 'files', that their content

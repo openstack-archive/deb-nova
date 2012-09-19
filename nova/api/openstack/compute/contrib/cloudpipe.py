@@ -14,8 +14,6 @@
 
 """Connect your vlan to the world."""
 
-import os
-
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
@@ -65,8 +63,7 @@ class CloudpipeController(object):
         # NOTE(vish): One of the drawbacks of doing this in the api is
         #             the keys will only be on the api node that launched
         #             the cloudpipe.
-        if not os.path.exists(FLAGS.keys_path):
-            os.makedirs(FLAGS.keys_path)
+        utils.ensure_tree(FLAGS.keys_path)
 
     def _get_all_cloudpipes(self, context):
         """Get all cloudpipes"""

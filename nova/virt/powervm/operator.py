@@ -100,11 +100,37 @@ class PowerVMOperator(object):
         """
         lpar_instances = self._operator.list_lpar_instances()
         # We filter out instances that haven't been created
-        # via Openstack. Notice that this is fragile and it can
+        # via OpenStack. Notice that this is fragile and it can
         # be improved later.
         instances = [instance for instance in lpar_instances
                      if re.search(r'^instance-[0-9]{8}$', instance)]
         return instances
+
+    def get_available_resource(self):
+        """Retrieve resource info.
+
+        :returns: dictionary containing resource info
+        """
+        data = self.get_host_stats()
+        # Memory data is in MB already.
+        memory_mb_used = data['host_memory_total'] - data['host_memory_free']
+
+        # Convert to GB
+        local_gb = data['disk_total'] / 1024
+        local_gb_used = data['disk_used'] / 1024
+
+        dic = {'vcpus': data['vcpus'],
+               'memory_mb': data['host_memory_total'],
+               'local_gb': local_gb,
+               'vcpus_used': data['vcpus_used'],
+               'memory_mb_used': memory_mb_used,
+               'local_gb_used': local_gb_used,
+               'hypervisor_type': data['hypervisor_type'],
+               'hypervisor_version': data['hypervisor_version'],
+               'hypervisor_hostname': self._operator.get_hostname(),
+               'cpu_info': ','.join(data['cpu_info']),
+               'disk_available_least': data['disk_total']}
+        return dic
 
     def get_host_stats(self, refresh=False):
         """Return currently known host stats"""
@@ -291,8 +317,12 @@ class BaseOperator(object):
                            information to connect to the remote
                            ssh.
         """
-        self._connection = common.ssh_connect(connection)
+        self._connection = None
         self.connection_data = connection
+
+    def _set_connection(self):
+        if self._connection is None:
+            self._connection = common.ssh_connect(self.connection_data)
 
     def get_lpar(self, instance_name, resource_type='lpar'):
         """Return a LPAR object by its instance name.
@@ -400,6 +430,14 @@ class BaseOperator(object):
             return output[0]
 
         return None
+
+    def get_hostname(self):
+        """Returns the managed system hostname.
+
+        :returns: string -- hostname
+        """
+        output = self.run_command(self.command.hostname())
+        return output[0]
 
     def remove_disk(self, disk_name):
         """Removes a disk.
@@ -606,6 +644,7 @@ class BaseOperator(object):
 
         :param command: String with the command to run.
         """
+        self._set_connection()
         stdout, stderr = utils.ssh_execute(self._connection, cmd,
                                            check_exit_code=check_exit_code)
         return stdout.strip().splitlines()
@@ -615,6 +654,7 @@ class BaseOperator(object):
 
         :param command: List of commands.
         """
+        self._set_connection()
         stdout, stderr = common.ssh_command_as_root(
             self._connection, command, check_exit_code=check_exit_code)
         return stdout.read().splitlines()

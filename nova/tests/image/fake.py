@@ -217,6 +217,10 @@ class _FakeImageService(object):
         if not removed:
             raise exception.ImageNotFound(image_id=image_id)
 
+    def get_location(self, context, image_id):
+        if image_id in self.images:
+            return 'fake_location'
+        return None
 
 _fakeImageService = _FakeImageService()
 
@@ -228,6 +232,10 @@ def FakeImageService():
 def FakeImageService_reset():
     global _fakeImageService
     _fakeImageService = _FakeImageService()
+
+
+def get_valid_image_id():
+    return _fakeImageService.images.keys()[0]
 
 
 def stub_out_image_service(stubs):

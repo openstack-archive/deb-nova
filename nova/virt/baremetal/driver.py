@@ -286,7 +286,7 @@ class BareMetalDriver(driver.ComputeDriver):
         raise NotImplementedError()
 
     @staticmethod
-    def _cache_image(fn, target, fname, cow=False, *args, **kwargs):
+    def _cache_image(fetch_func, target, fname, cow=False, *args, **kwargs):
         """Wrapper for a method that creates an image that caches the image.
 
         This wrapper will save the image into a common store and create a
@@ -303,15 +303,15 @@ class BareMetalDriver(driver.ComputeDriver):
         if not os.path.exists(target):
             base_dir = os.path.join(FLAGS.instances_path, '_base')
             if not os.path.exists(base_dir):
-                libvirt_utils.ensure_tree(base_dir)
+                utils.ensure_tree(base_dir)
             base = os.path.join(base_dir, fname)
 
             @utils.synchronized(fname)
-            def call_if_not_exists(base, fn, *args, **kwargs):
+            def call_if_not_exists(base, fetch_func, *args, **kwargs):
                 if not os.path.exists(base):
-                    fn(target=base, *args, **kwargs)
+                    fetch_func(target=base, *args, **kwargs)
 
-            call_if_not_exists(base, fn, *args, **kwargs)
+            call_if_not_exists(base, fetch_func, *args, **kwargs)
 
             if cow:
                 libvirt_utils.create_cow_image(base, target)
@@ -331,7 +331,7 @@ class BareMetalDriver(driver.ComputeDriver):
                                 fname + suffix)
 
         # ensure directories exist and are writable
-        libvirt_utils.ensure_tree(basepath(suffix=''))
+        utils.ensure_tree(basepath(suffix=''))
         utils.execute('chmod', '0777', basepath(suffix=''))
 
         LOG.info(_('instance %s: Creating image'), inst['name'],
@@ -339,7 +339,7 @@ class BareMetalDriver(driver.ComputeDriver):
 
         if FLAGS.baremetal_type == 'lxc':
             container_dir = '%s/rootfs' % basepath(suffix='')
-            libvirt_utils.ensure_tree(container_dir)
+            utils.ensure_tree(container_dir)
 
         # NOTE(vish): No need add the suffix to console.log
         libvirt_utils.write_to_file(basepath('console.log', ''), '', 007)
@@ -351,7 +351,7 @@ class BareMetalDriver(driver.ComputeDriver):
 
         if disk_images['kernel_id']:
             fname = disk_images['kernel_id']
-            self._cache_image(fn=libvirt_utils.fetch_image,
+            self._cache_image(fetch_func=libvirt_utils.fetch_image,
                               context=context,
                               target=basepath('kernel'),
                               fname=fname,
@@ -361,7 +361,7 @@ class BareMetalDriver(driver.ComputeDriver):
                               project_id=inst['project_id'])
             if disk_images['ramdisk_id']:
                 fname = disk_images['ramdisk_id']
-                self._cache_image(fn=libvirt_utils.fetch_image,
+                self._cache_image(fetch_func=libvirt_utils.fetch_image,
                                   context=context,
                                   target=basepath('ramdisk'),
                                   fname=fname,
@@ -381,7 +381,7 @@ class BareMetalDriver(driver.ComputeDriver):
         else:
             root_fname += "_%d" % inst['root_gb']
 
-        self._cache_image(fn=libvirt_utils.fetch_image,
+        self._cache_image(fetch_func=libvirt_utils.fetch_image,
                           context=context,
                           target=basepath('root'),
                           fname=root_fname,
@@ -659,21 +659,12 @@ class BareMetalDriver(driver.ComputeDriver):
         # Bare metal doesn't currently support security groups
         pass
 
-    def update_available_resource(self, ctxt, host):
+    def get_available_resource(self):
         """Updates compute manager resource info on ComputeNode table.
 
         This method is called when nova-coompute launches, and
         whenever admin executes "nova-manage service update_resource".
-
-        :param ctxt: security context
-        :param host: hostname that compute manager is currently running
-
         """
-
-        try:
-            service_ref = db.service_get_all_compute_by_host(ctxt, host)[0]
-        except exception.NotFound:
-            raise exception.ComputeServiceUnavailable(host=host)
 
         # Updating host information
         dic = {'vcpus': self.get_vcpu_total(),
@@ -685,18 +676,10 @@ class BareMetalDriver(driver.ComputeDriver):
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
                'cpu_info': self.get_cpu_info(),
-               'cpu_arch': FLAGS.cpu_arch,
-               'service_id': service_ref['id']}
+               'cpu_arch': FLAGS.cpu_arch}
 
-        compute_node_ref = service_ref['compute_node']
         LOG.info(_('#### RLK: cpu_arch = %s ') % FLAGS.cpu_arch)
-        if not compute_node_ref:
-            LOG.info(_('Compute_service record created for %s ') % host)
-            dic['service_id'] = service_ref['id']
-            db.compute_node_create(ctxt, dic)
-        else:
-            LOG.info(_('Compute_service record updated for %s ') % host)
-            db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
+        return dic
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         raise NotImplementedError()

@@ -63,21 +63,21 @@ class _FakeDriverBackendTestCase(test.TestCase):
         else:
             self.saved_libvirt = None
 
-        import fake_imagebackend
-        import fake_libvirt_utils
-        import fakelibvirt
+        import nova.tests.fake_imagebackend as fake_imagebackend
+        import nova.tests.fake_libvirt_utils as fake_libvirt_utils
+        import nova.tests.fakelibvirt as fakelibvirt
 
         sys.modules['libvirt'] = fakelibvirt
         import nova.virt.libvirt.driver
         import nova.virt.libvirt.firewall
 
+        self.saved_libvirt_imagebackend = nova.virt.libvirt.driver.imagebackend
         nova.virt.libvirt.driver.imagebackend = fake_imagebackend
         nova.virt.libvirt.driver.libvirt = fakelibvirt
         nova.virt.libvirt.driver.libvirt_utils = fake_libvirt_utils
         nova.virt.libvirt.firewall.libvirt = fakelibvirt
 
-        self.flags(firewall_driver=nova.virt.libvirt.firewall.drivers[0],
-                   rescue_image_id="2",
+        self.flags(rescue_image_id="2",
                    rescue_kernel_id="3",
                    rescue_ramdisk_id=None,
                    libvirt_snapshots_directory='./')
@@ -108,6 +108,7 @@ class _FakeDriverBackendTestCase(test.TestCase):
         # Restore libvirt
         import nova.virt.libvirt.driver
         import nova.virt.libvirt.firewall
+        nova.virt.libvirt.driver.imagebackend = self.saved_libvirt_imagebackend
         if self.saved_libvirt:
             sys.modules['libvirt'] = self.saved_libvirt
             nova.virt.libvirt.driver.libvirt = self.saved_libvirt
@@ -356,7 +357,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.connection.resume(instance_ref)
 
     @catch_notimplementederror
-    def test_destroy_instance_nonexistant(self):
+    def test_destroy_instance_nonexistent(self):
         fake_instance = {'id': 42, 'name': 'I just made this up!',
                          'uuid': 'bda5fb9e-b347-40e8-8256-42397848cb00'}
         network_info = test_utils.get_test_network_info()

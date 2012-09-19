@@ -66,49 +66,62 @@ class Request(webob.Request):
 
     def __init__(self, *args, **kwargs):
         super(Request, self).__init__(*args, **kwargs)
-        self._extension_data = {'db_instances': {}}
+        self._extension_data = {'db_items': {}}
 
-    def cache_db_instances(self, instances):
+    def cache_db_items(self, key, items, item_key='id'):
         """
-        Allow API methods to store instances from a DB query to be
+        Allow API methods to store objects from a DB query to be
         used by API extensions within the same API request.
 
         An instance of this class only lives for the lifetime of a
         single API request, so there's no need to implement full
         cache management.
         """
-        db_instances = self._extension_data['db_instances']
-        for instance in instances:
-            db_instances[instance['uuid']] = instance
+        db_items = self._extension_data['db_items'].setdefault(key, {})
+        for item in items:
+            db_items[item[item_key]] = item
 
-    def cache_db_instance(self, instance):
+    def get_db_items(self, key):
         """
-        Allow API methods to store an instance from a DB query to be
-        used by API extensions within the same API request.
-
-        An instance of this class only lives for the lifetime of a
-        single API request, so there's no need to implement full
-        cache management.
-        """
-        self.cache_db_instances([instance])
-
-    def get_db_instances(self):
-        """
-        Allow an API extension to get previously stored instances within
+        Allow an API extension to get previously stored objects within
         the same API request.
 
-        Note that the instance data will be slightly stale.
+        Note that the object data will be slightly stale.
         """
-        return self._extension_data['db_instances']
+        return self._extension_data['db_items'][key]
 
-    def get_db_instance(self, instance_uuid):
+    def get_db_item(self, key, item_key):
         """
-        Allow an API extension to get a previously stored instance
+        Allow an API extension to get a previously stored object
         within the same API request.
 
-        Note that the instance data will be slightly stale.
+        Note that the object data will be slightly stale.
         """
-        return self._extension_data['db_instances'].get(instance_uuid)
+        return self.get_db_items(key).get(item_key)
+
+    def cache_db_instances(self, instances):
+        self.cache_db_items('instances', instances, 'uuid')
+
+    def cache_db_instance(self, instance):
+        self.cache_db_items('instances', [instance], 'uuid')
+
+    def get_db_instances(self):
+        return self.get_db_items('instances')
+
+    def get_db_instance(self, instance_uuid):
+        return self.get_db_item('instances', instance_uuid)
+
+    def cache_db_flavors(self, flavors):
+        self.cache_db_items('flavors', flavors, 'flavorid')
+
+    def cache_db_flavor(self, flavor):
+        self.cache_db_items('flavors', [flavor], 'flavorid')
+
+    def get_db_flavors(self):
+        return self.get_db_items('flavors')
+
+    def get_db_flavor(self, flavorid):
+        return self.get_db_item('flavors', flavorid)
 
     def best_match_content_type(self):
         """Determine the requested response content-type."""
@@ -251,6 +264,14 @@ class XMLDeserializer(TextDeserializer):
             if child.nodeType == child.TEXT_NODE:
                 return child.nodeValue
         return ""
+
+    def extract_elements(self, node):
+        """Get only Element type childs from node"""
+        elements = []
+        for child in node.childNodes:
+            if child.nodeType == child.ELEMENT_NODE:
+                elements.append(child)
+        return elements
 
     def find_attribute_or_element(self, parent, name):
         """Get an attribute value; fallback to an element if not found"""
@@ -1057,6 +1078,9 @@ class ControllerMetaclass(type):
         # Find all actions
         actions = {}
         extensions = []
+        # start with wsgi actions from base classes
+        for base in bases:
+            actions.update(getattr(base, 'wsgi_actions', {}))
         for key, value in cls_dict.items():
             if not callable(value):
                 continue
@@ -1088,6 +1112,23 @@ class Controller(object):
             self._view_builder = self._view_builder_class()
         else:
             self._view_builder = None
+
+    @staticmethod
+    def is_valid_body(body, entity_name):
+        if not (body and entity_name in body):
+            return False
+
+        def is_dict(d):
+            try:
+                d.get(None)
+                return True
+            except AttributeError:
+                return False
+
+        if not is_dict(body[entity_name]):
+            return False
+
+        return True
 
 
 class Fault(webob.exc.HTTPException):

@@ -21,10 +21,13 @@
 Scheduler base class that all Schedulers should inherit from
 """
 
+import sys
+
 from nova.compute import api as compute_api
 from nova.compute import power_state
 from nova.compute import rpcapi as compute_rpcapi
-from nova.compute import task_states
+from nova.compute import utils as compute_utils
+from nova.compute import vm_states
 from nova import db
 from nova import exception
 from nova import flags
@@ -32,6 +35,7 @@ from nova import notifications
 from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import rpc
 from nova.openstack.common import timeutils
 from nova import utils
@@ -53,6 +57,34 @@ FLAGS.register_opts(scheduler_driver_opts)
 
 flags.DECLARE('instances_path', 'nova.compute.manager')
 flags.DECLARE('libvirt_type', 'nova.virt.libvirt.driver')
+
+
+def handle_schedule_error(context, ex, instance_uuid, request_spec):
+    if not isinstance(ex, exception.NoValidHost):
+        LOG.exception(_("Exception during scheduler.run_instance"))
+    compute_utils.add_instance_fault_from_exc(context,
+            instance_uuid, ex, sys.exc_info())
+    state = vm_states.ERROR.upper()
+    LOG.warning(_('Setting instance to %(state)s state.'),
+                locals(), instance_uuid=instance_uuid)
+
+    # update instance state and notify on the transition
+    (old_ref, new_ref) = db.instance_update_and_get_original(context,
+            instance_uuid, {'vm_state': vm_states.ERROR,
+                            'task_state': None})
+    notifications.send_update(context, old_ref, new_ref,
+            service="scheduler")
+
+    properties = request_spec.get('instance_properties', {})
+    payload = dict(request_spec=request_spec,
+                   instance_properties=properties,
+                   instance_id=instance_uuid,
+                   state=vm_states.ERROR,
+                   method='run_instance',
+                   reason=ex)
+
+    notifier.notify(context, notifier.publisher_id("scheduler"),
+                    'scheduler.run_instance', notifier.ERROR, payload)
 
 
 def cast_to_volume_host(context, host, method, **kwargs):
@@ -160,33 +192,9 @@ class Scheduler(object):
                 for service in services
                 if utils.service_is_up(service)]
 
-    def create_instance_db_entry(self, context, request_spec, reservations):
-        """Create instance DB entry based on request_spec"""
-        base_options = request_spec['instance_properties']
-        if base_options.get('uuid'):
-            # Instance was already created before calling scheduler
-            return db.instance_get_by_uuid(context, base_options['uuid'])
-        image = request_spec['image']
-        instance_type = request_spec.get('instance_type')
-        security_group = request_spec.get('security_group', 'default')
-        block_device_mapping = request_spec.get('block_device_mapping', [])
-
-        instance = self.compute_api.create_db_entry_for_new_instance(
-                context, instance_type, image, base_options,
-                security_group, block_device_mapping, reservations)
-        # NOTE(comstud): This needs to be set for the generic exception
-        # checking in scheduler manager, so that it'll set this instance
-        # to ERROR properly.
-        base_options['uuid'] = instance['uuid']
-        return instance
-
-    def schedule(self, context, topic, method, *_args, **_kwargs):
-        """Must override schedule method for scheduler to work."""
-        raise NotImplementedError(_("Must implement a fallback schedule"))
-
     def schedule_prep_resize(self, context, image, request_spec,
                              filter_properties, instance, instance_type,
-                             reservations=None):
+                             reservations):
         """Must override schedule_prep_resize method for scheduler to work."""
         msg = _("Driver must implement schedule_prep_resize")
         raise NotImplementedError(msg)
@@ -194,18 +202,21 @@ class Scheduler(object):
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,
-                              filter_properties, reservations):
+                              filter_properties):
         """Must override schedule_run_instance method for scheduler to work."""
         msg = _("Driver must implement schedule_run_instance")
         raise NotImplementedError(msg)
 
-    def schedule_live_migration(self, context, dest,
-                                block_migration=False, disk_over_commit=False,
-                                instance=None, instance_id=None):
+    def schedule_create_volume(self, context, volume_id, snapshot_id,
+                               image_id):
+        msg = _("Driver must implement schedule_create_volune")
+        raise NotImplementedError(msg)
+
+    def schedule_live_migration(self, context, instance, dest,
+                                block_migration, disk_over_commit):
         """Live migration scheduling method.
 
         :param context:
-        :param instance_id: (deprecated)
         :param instance: instance dict
         :param dest: destination host
         :param block_migration: if true, block_migration.
@@ -217,28 +228,16 @@ class Scheduler(object):
             Then scheduler send request that host.
         """
         # Check we can do live migration
-        if not instance:
-            instance = db.instance_get(context, instance_id)
-
         self._live_migration_src_check(context, instance)
         self._live_migration_dest_check(context, instance, dest)
         self._live_migration_common_check(context, instance, dest)
         migrate_data = self.compute_rpcapi.check_can_live_migrate_destination(
                 context, instance, dest, block_migration, disk_over_commit)
 
-        # Change instance_state
-        values = {"task_state": task_states.MIGRATING}
-
-        # update instance state and notify
-        (old_ref, new_instance_ref) = db.instance_update_and_get_original(
-                context, instance['uuid'], values)
-        notifications.send_update(context, old_ref, new_instance_ref,
-                service="scheduler")
-
         # Perform migration
         src = instance['host']
         self.compute_rpcapi.live_migration(context, host=src,
-                instance=new_instance_ref, dest=dest,
+                instance=instance, dest=dest,
                 block_migration=block_migration,
                 migrate_data=migrate_data)
 
@@ -296,7 +295,7 @@ class Scheduler(object):
     def _live_migration_common_check(self, context, instance_ref, dest):
         """Live migration common check routine.
 
-        Below checkings are followed by
+        The following checks are based on
         http://wiki.libvirt.org/page/TodoPreMigrationChecks
 
         :param context: security context
@@ -313,7 +312,7 @@ class Scheduler(object):
         if orig_hypervisor != dest_hypervisor:
             raise exception.InvalidHypervisorType()
 
-        # Checkng hypervisor version.
+        # Checking hypervisor version.
         orig_hypervisor = oservice_ref['hypervisor_version']
         dest_hypervisor = dservice_ref['hypervisor_version']
         if orig_hypervisor > dest_hypervisor:
@@ -334,7 +333,7 @@ class Scheduler(object):
 
         # Getting total used memory and disk of host
         # It should be sum of memories that are assigned as max value,
-        # because overcommiting is risky.
+        # because overcommitting is risky.
         instance_refs = db.instance_get_all_by_host(context, dest)
         used = sum([i['memory_mb'] for i in instance_refs])
 

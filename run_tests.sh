@@ -67,6 +67,10 @@ export NOSE_OPENSTACK_YELLOW=0.025
 export NOSE_OPENSTACK_SHOW_ELAPSED=1
 export NOSE_OPENSTACK_STDOUT=1
 
+export LANG=en_US.UTF-8
+export LANGUAGE=en_US:en
+export LC_ALL=C
+
 for arg in "$@"; do
   process_option $arg
 done
@@ -95,8 +99,6 @@ function run_tests {
         cat run_tests.log
     fi
   fi
-  # cleanup locks - not really needed, but stops pollution of the source tree
-  rm -f nova-ensure_bridge nova-ensure_vlan nova-iptables nova-testlock1 nova-testlock2
   return $RESULT
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright (c) 2012 Openstack, LLC
+# Copyright (c) 2012 OpenStack, LLC
 # Copyright (c) 2010 Citrix Systems, Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -20,18 +20,9 @@
 
 """Handle the uploading and downloading of images via Glance."""
 
-import cPickle as pickle
 import httplib
-try:
-    import json
-except ImportError:
-    import simplejson as json
 import md5
-import os
-import shutil
-
 import urllib2
-import XenAPIPlugin
 
 import utils
 
@@ -95,7 +86,7 @@ def _download_tarball_and_verify(request, staging_path):
 
 
 def _download_tarball(sr_path, staging_path, image_id, glance_host,
-                      glance_port, auth_token):
+                      glance_port, glance_use_ssl, auth_token):
     """Download the tarball image from Glance and extract it into the staging
     area. Retry if there is any failure.
     """
@@ -104,7 +95,12 @@ def _download_tarball(sr_path, staging_path, image_id, glance_host,
     if auth_token:
         headers['x-auth-token'] = auth_token
 
-    url = ("http://%(glance_host)s:%(glance_port)d/v1/images/"
+    if glance_use_ssl:
+        scheme = 'https'
+    else:
+        scheme = 'http'
+
+    url = ("%(scheme)s://%(glance_host)s:%(glance_port)d/v1/images/"
            "%(image_id)s" % locals())
     logging.info("Downloading %s" % url)
 
@@ -117,14 +113,23 @@ def _download_tarball(sr_path, staging_path, image_id, glance_host,
 
 
 def _upload_tarball(staging_path, image_id, glance_host, glance_port,
-                    auth_token, properties):
+                    glance_use_ssl, auth_token, properties):
     """
     Create a tarball of the image and then stream that into Glance
     using chunked-transfer-encoded HTTP.
     """
-    url = 'http://%s:%s/v1/images/%s' % (glance_host, glance_port, image_id)
+    if glance_use_ssl:
+        scheme = 'https'
+    else:
+        scheme = 'http'
+
+    url = '%s://%s:%s/v1/images/%s' % (scheme, glance_host, glance_port,
+                                       image_id)
     logging.info("Writing image data to %s" % url)
-    conn = httplib.HTTPConnection(glance_host, glance_port)
+    if glance_use_ssl:
+        conn = httplib.HTTPSConnection(glance_host, glance_port)
+    else:
+        conn = httplib.HTTPConnection(glance_host, glance_port)
 
     # NOTE(sirp): httplib under python2.4 won't accept a file-like object
     # to request
@@ -188,58 +193,36 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
     conn.close()
 
 
-def download_vhd(session, args):
+def download_vhd(session, image_id, glance_host, glance_port, glance_use_ssl,
+                 uuid_stack, sr_path, auth_token):
     """Download an image from Glance, unbundle it, and then deposit the VHDs
     into the storage repository
     """
-    params = pickle.loads(exists(args, 'params'))
-    image_id = params["image_id"]
-    glance_host = params["glance_host"]
-    glance_port = params["glance_port"]
-    uuid_stack = params["uuid_stack"]
-    sr_path = params["sr_path"]
-    auth_token = params["auth_token"]
-
     staging_path = utils.make_staging_area(sr_path)
     try:
         # Download tarball into staging area and extract it
         _download_tarball(
             sr_path, staging_path, image_id, glance_host, glance_port,
-            auth_token)
+            glance_use_ssl, auth_token)
 
         # Move the VHDs from the staging area into the storage repository
-        imported_vhds = utils.import_vhds(sr_path, staging_path, uuid_stack)
+        return utils.import_vhds(sr_path, staging_path, uuid_stack)
     finally:
         utils.cleanup_staging_area(staging_path)
 
-    # Right now, it's easier to return a single string via XenAPI,
-    # so we'll json encode the list of VHDs.
-    return json.dumps(imported_vhds)
 
-
-def upload_vhd(session, args):
+def upload_vhd(session, vdi_uuids, image_id, glance_host, glance_port,
+               glance_use_ssl, sr_path, auth_token, properties):
     """Bundle the VHDs comprising an image and then stream them into Glance.
     """
-    params = pickle.loads(exists(args, 'params'))
-    vdi_uuids = params["vdi_uuids"]
-    image_id = params["image_id"]
-    glance_host = params["glance_host"]
-    glance_port = params["glance_port"]
-    sr_path = params["sr_path"]
-    auth_token = params["auth_token"]
-    properties = params["properties"]
-
     staging_path = utils.make_staging_area(sr_path)
     try:
         utils.prepare_staging_area(sr_path, staging_path, vdi_uuids)
         _upload_tarball(staging_path, image_id, glance_host, glance_port,
-                        auth_token, properties)
+                        glance_use_ssl, auth_token, properties)
     finally:
         utils.cleanup_staging_area(staging_path)
 
-    return ""  # Nothing useful to return on an upload
-
 
 if __name__ == '__main__':
-    XenAPIPlugin.dispatch({'upload_vhd': upload_vhd,
-                           'download_vhd': download_vhd})
+    utils.register_plugin_calls(download_vhd, upload_vhd)

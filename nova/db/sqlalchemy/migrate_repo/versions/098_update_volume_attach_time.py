@@ -32,10 +32,10 @@ def upgrade(migrate_engine):
         volumes_list = list(volumes.select().execute())
         for v in volumes_list:
             attach_time = select([volumes.c.attach_time],
-                volumes.c.id == v['id'])
+                volumes.c.id == v['id']).execute().fetchone()[0]
             volumes.update().\
                 where(volumes.c.id == v['id']).\
-                values(attach_datetime=attach_time).execute()
+                values(attachtime_datetime=attach_time).execute()
     except Exception:
         attach_datetime.drop()
         raise
@@ -59,12 +59,12 @@ def downgrade(migrate_engine):
         volumes_list = list(volumes.select().execute())
         for v in volumes_list:
             attach_time = select([volumes.c.attach_time],
-                volumes.c.id == v['id'])
+                volumes.c.id == v['id']).execute().fetchone()[0]
             volumes.update().\
                 where(volumes.c.id == v['id']).\
-                values(attach_string=attach_time).execute()
+                values(attachtime_string=attach_time).execute()
     except Exception:
-        attach_datetime.drop()
+        attach_string.drop()
         raise
 
     old_attachtime.alter(name='attach_time_old')

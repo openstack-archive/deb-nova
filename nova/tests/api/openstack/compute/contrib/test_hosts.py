@@ -21,7 +21,6 @@ from nova.compute import power_state
 from nova.compute import vm_states
 from nova import context
 from nova import db
-from nova import exception
 from nova import flags
 from nova.openstack.common import log as logging
 from nova import test
@@ -215,7 +214,7 @@ class HostTestCase(test.TestCase):
                'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 16, 'memory_mb_used': 32, 'local_gb_used': 10,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_info': ''}
+               'cpu_info': '', 'stats': {}}
         db.compute_node_create(ctxt, dic)
 
         return db.service_get(ctxt, s_ref['id'])

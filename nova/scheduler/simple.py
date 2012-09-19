@@ -23,6 +23,7 @@ Simple Scheduler - for Volumes
 Note: Deprecated in Folsom.  Will be removed along with nova-volumes
 """
 
+from nova.common import deprecated
 from nova import db
 from nova import exception
 from nova import flags
@@ -45,8 +46,22 @@ FLAGS.register_opts(simple_scheduler_opts)
 class SimpleScheduler(chance.ChanceScheduler):
     """Implements Naive Scheduler that tries to find least loaded host."""
 
-    def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
+    def schedule_run_instance(self, context, request_spec, admin_password,
+                              injected_files, requested_networks,
+                              is_first_time, filter_properties):
+        deprecated.warn(_('SimpleScheduler now only covers volume scheduling '
+                'and is deprecated in Folsom. Non-volume functionality in '
+                'SimpleScheduler has been replaced by FilterScheduler'))
+        super(SimpleScheduler, self).schedule_run_instance(context,
+                request_spec, admin_password, injected_files,
+                requested_networks, is_first_time, filter_properties)
+
+    def schedule_create_volume(self, context, volume_id, snapshot_id,
+                               image_id):
         """Picks a host that is up and has the fewest volumes."""
+        deprecated.warn(_('nova-volume functionality is deprecated in Folsom '
+                'and will be removed in Grizzly.  Volumes are now handled '
+                'by Cinder'))
         elevated = context.elevated()
 
         volume_ref = db.volume_get(context, volume_id)
@@ -60,7 +75,8 @@ class SimpleScheduler(chance.ChanceScheduler):
             if not utils.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
             driver.cast_to_volume_host(context, host, 'create_volume',
-                    volume_id=volume_id, **_kwargs)
+                    volume_id=volume_id, snapshot_id=snapshot_id,
+                    image_id=image_id)
             return None
 
         results = db.service_get_all_volume_sorted(elevated)
@@ -74,7 +90,8 @@ class SimpleScheduler(chance.ChanceScheduler):
                 raise exception.NoValidHost(reason=msg)
             if utils.service_is_up(service) and not service['disabled']:
                 driver.cast_to_volume_host(context, service['host'],
-                        'create_volume', volume_id=volume_id, **_kwargs)
+                        'create_volume', volume_id=volume_id,
+                        snapshot_id=snapshot_id, image_id=image_id)
                 return None
         msg = _("Is the appropriate service running?")
         raise exception.NoValidHost(reason=msg)

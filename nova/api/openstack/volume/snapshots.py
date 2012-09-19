@@ -24,6 +24,7 @@ from nova.api.openstack import xmlutil
 from nova import exception
 from nova import flags
 from nova.openstack.common import log as logging
+from nova import utils
 from nova import volume
 
 
@@ -84,11 +85,12 @@ class SnapshotsTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class SnapshotsController(object):
+class SnapshotsController(wsgi.Controller):
     """The Volumes API controller for the OpenStack API."""
 
-    def __init__(self):
+    def __init__(self, ext_mgr=None):
         self.volume_api = volume.API()
+        self.ext_mgr = ext_mgr
         super(SnapshotsController, self).__init__()
 
     @wsgi.serializers(xml=SnapshotTemplate)
@@ -144,8 +146,8 @@ class SnapshotsController(object):
         """Creates a new snapshot."""
         context = req.environ['nova.context']
 
-        if not body:
-            return exc.HTTPUnprocessableEntity()
+        if not self.is_valid_body(body, 'snapshot'):
+            raise exc.HTTPUnprocessableEntity()
 
         snapshot = body['snapshot']
         volume_id = snapshot['volume_id']
@@ -154,7 +156,11 @@ class SnapshotsController(object):
         msg = _("Create snapshot from volume %s")
         LOG.audit(msg, volume_id, context=context)
 
-        if force:
+        if not utils.is_valid_boolstr(force):
+            msg = _("Invalid value '%s' for force. ") % force
+            raise exception.InvalidParameterValue(err=msg)
+
+        if utils.bool_from_str(force):
             new_snapshot = self.volume_api.create_snapshot_force(context,
                                         volume,
                                         snapshot.get('display_name'),
@@ -170,5 +176,5 @@ class SnapshotsController(object):
         return {'snapshot': retval}
 
 
-def create_resource():
-    return wsgi.Resource(SnapshotsController())
+def create_resource(ext_mgr):
+    return wsgi.Resource(SnapshotsController(ext_mgr))

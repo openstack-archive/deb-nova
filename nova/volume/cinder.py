@@ -27,9 +27,23 @@ from cinderclient.v1 import client as cinder_client
 from nova.db import base
 from nova import exception
 from nova import flags
+from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 
+cinder_opts = [
+    cfg.StrOpt('cinder_catalog_info',
+            default='volume:cinder:publicURL',
+            help='Info to match when looking for cinder in the service '
+                 'catalog. Format is : separated values of the form: '
+                 '<service_type>:<service_name>:<endpoint_type>'),
+    cfg.StrOpt('cinder_endpoint_template',
+               default=None,
+               help='Override service catalog lookup with template for cinder '
+                    'endpoint e.g. http://localhost:8776/v1/%(project_id)s'),
+]
+
 FLAGS = flags.FLAGS
+FLAGS.register_opts(cinder_opts)
 
 LOG = logging.getLogger(__name__)
 
@@ -39,10 +53,17 @@ def cinderclient(context):
     # FIXME: the cinderclient ServiceCatalog object is mis-named.
     #        It actually contains the entire access blob.
     compat_catalog = {
-        'access': {'serviceCatalog': context.service_catalog}
+        'access': {'serviceCatalog': context.service_catalog or {}}
     }
     sc = service_catalog.ServiceCatalog(compat_catalog)
-    url = sc.url_for(service_type='volume', service_name='cinder')
+    if FLAGS.cinder_endpoint_template:
+        url = FLAGS.cinder_endpoint_template % context.to_dict()
+    else:
+        info = FLAGS.cinder_catalog_info
+        service_type, service_name, endpoint_type = info.split(':')
+        url = sc.url_for(service_type=service_type,
+                         service_name=service_name,
+                         endpoint_type=endpoint_type)
 
     LOG.debug(_('Cinderclient connection created using URL: %s') % url)
 
@@ -50,7 +71,9 @@ def cinderclient(context):
                              context.auth_token,
                              project_id=context.project_id,
                              auth_url=url)
-    c.client.auth_token = context.auth_token
+    # noauth extracts user_id:project_id from auth_token
+    c.client.auth_token = context.auth_token or '%s:%s' % (context.user_id,
+                                                           context.project_id)
     c.client.management_url = url
     return c
 
@@ -149,7 +172,13 @@ class API(base.Base):
         cinderclient(context).volumes.reserve(volume['id'])
 
     def unreserve_volume(self, context, volume):
-        cinderclient(context).volumes.reserve(volume['id'])
+        cinderclient(context).volumes.unreserve(volume['id'])
+
+    def begin_detaching(self, context, volume):
+        cinderclient(context).volumes.begin_detaching(volume['id'])
+
+    def roll_detaching(self, context, volume):
+        cinderclient(context).volumes.roll_detaching(volume['id'])
 
     def attach(self, context, volume, instance_uuid, mountpoint):
         cinderclient(context).volumes.attach(volume['id'],
@@ -168,17 +197,25 @@ class API(base.Base):
                  volumes.terminate_connection(volume['id'], connector)
 
     def create(self, context, size, name, description, snapshot=None,
-               volume_type=None, metadata=None, availability_zone=None):
+               image_id=None, volume_type=None, metadata=None,
+               availability_zone=None):
 
-        item = cinderclient(context).volumes.create(size,
-                                                    snapshot,
-                                                    name,
-                                                    description,
-                                                    volume_type,
-                                                    context.user_id,
-                                                    context.project_id,
-                                                    availability_zone,
-                                                    metadata)
+        if snapshot is not None:
+            snapshot_id = snapshot['id']
+        else:
+            snapshot_id = None
+
+        kwargs = dict(snapshot_id=snapshot_id,
+                      display_name=name,
+                      display_description=description,
+                      volume_type=volume_type,
+                      user_id=context.user_id,
+                      project_id=context.project_id,
+                      availability_zone=availability_zone,
+                      metadata=metadata,
+                      imageRef=image_id)
+
+        item = cinderclient(context).volumes.create(size, **kwargs)
 
         return _untranslate_volume_summary_view(context, item)
 

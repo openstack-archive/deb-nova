@@ -47,7 +47,7 @@ logging.disable('LOG')
 
 IMPORT_EXCEPTIONS = ['sqlalchemy', 'migrate', 'nova.db.sqlalchemy.session']
 DOCSTRING_TRIPLE = ['"""', "'''"]
-VERBOSE_MISSING_IMPORT = False
+VERBOSE_MISSING_IMPORT = os.getenv('HACKING_VERBOSE_MISSING_IMPORT', 'False')
 
 
 # Monkey patch broken excluded filter in pep8
@@ -218,9 +218,10 @@ def nova_import_module_only(logical_line):
             else:
                 name = logical_line.split()[1]
                 if name not in _missingImport:
-                    if VERBOSE_MISSING_IMPORT:
-                        print >> sys.stderr, ("ERROR: import '%s' failed: %s" %
-                            (name, exc))
+                    if VERBOSE_MISSING_IMPORT != 'False':
+                        print >> sys.stderr, ("ERROR: import '%s' in %s "
+                                              "failed: %s" %
+                            (name, pep8.current_file, exc))
                     _missingImport.add(name)
                 added = False
                 sys.path.pop()
@@ -435,7 +436,7 @@ def once_git_check_commit_title():
     """
     #Get title of most recent commit
 
-    subp = subprocess.Popen(['git', 'log', '--pretty=%s', '-1'],
+    subp = subprocess.Popen(['git', 'log', '--no-merges', '--pretty=%s', '-1'],
             stdout=subprocess.PIPE)
     title = subp.communicate()[0]
     if subp.returncode:
@@ -449,20 +450,24 @@ def once_git_check_commit_title():
                     '([Bb]lue[Pp]rint|[Bb][Pp])[\s\#:]*([A-Za-z0-9\\-]+)')
     GIT_REGEX = re.compile(git_keywords)
 
+    error = False
     #NOTE(jogo) if match regex but over 3 words, acceptable title
     if GIT_REGEX.search(title) is not None and len(title.split()) <= 3:
         print ("N801: git commit title ('%s') should provide an accurate "
                "description of the change, not just a reference to a bug "
                "or blueprint" % title.strip())
+        error = True
     if len(title.decode('utf-8')) > 72:
         print ("N802: git commit title ('%s') should be under 50 chars"
                 % title.strip())
+        error = True
+    return error
 
 if __name__ == "__main__":
     #include nova path
     sys.path.append(os.getcwd())
     #Run once tests (not per line)
-    once_git_check_commit_title()
+    once_error = once_git_check_commit_title()
     #NOVA error codes start with an N
     pep8.ERRORCODE_REGEX = re.compile(r'[EWN]\d{3}')
     add_nova()
@@ -472,6 +477,7 @@ if __name__ == "__main__":
     pep8.input_dir = input_dir
     try:
         pep8._main()
+        sys.exit(once_error)
     finally:
         if len(_missingImport) > 0:
             print >> sys.stderr, ("%i imports missing in this test environment"

@@ -37,9 +37,6 @@ powervm_opts = [
     cfg.StrOpt('powervm_mgr',
                default=None,
                help='PowerVM manager host or ip'),
-    cfg.StrOpt('powervm_vios',
-               default='powervm_mgr',
-               help='PowerVM vios host or ip if different from manager'),
     cfg.StrOpt('powervm_mgr_user',
                default=None,
                help='PowerVM manager user name'),
@@ -101,14 +98,6 @@ class PowerVMDriver(driver.ComputeDriver):
     def list_instances(self):
         return self._powervm.list_instances()
 
-    def list_instances_detail(self):
-        """Return a list of InstanceInfo for all registered VMs"""
-        infos = []
-        for instance_name in self.list_instances():
-            state = self._powervm.get_info(instance_name)['state']
-            infos.append(driver.InstanceInfo(instance_name, state))
-        return infos
-
     def get_host_stats(self, refresh=False):
         """Return currently known host stats"""
         return self._powervm.get_host_stats(refresh=refresh)
@@ -116,29 +105,17 @@ class PowerVMDriver(driver.ComputeDriver):
     def plug_vifs(self, instance, network_info):
         pass
 
-    def spawn(self, context, instance, image_meta,
-              network_info=None, block_device_info=None):
-        """
-        Create a new instance/VM/domain on powerVM.
-
-        :param context: security context
-        :param instance: Instance object as returned by DB layer.
-                         This function should use the data there to guide
-                         the creation of the new instance.
-        :param image_meta: image object returned by nova.image.glance that
-                           defines the image from which to boot this instance
-        :param network_info:
-           :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
-        :param block_device_info: Information about block devices to be
-                                  attached to the instance.
-        """
+    def spawn(self, context, instance, image_meta, injected_files,
+              admin_password, network_info=None, block_device_info=None):
+        """Create a new instance/VM/domain on powerVM."""
         self._powervm.spawn(context, instance, image_meta['id'])
 
     def destroy(self, instance, network_info, block_device_info=None):
         """Destroy (shutdown and delete) the specified instance."""
         self._powervm.destroy(instance['name'])
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         """Reboot the specified instance.
 
         :param instance: Instance object as returned by DB layer.
@@ -179,17 +156,9 @@ class PowerVMDriver(driver.ComputeDriver):
         """Power on the specified instance"""
         self._powervm.power_on(instance['name'])
 
-    def update_available_resource(self, ctxt, host):
-        """Updates compute manager resource info on ComputeNode table.
-
-        This method is called when nova-compute launches, and
-        whenever admin executes "nova-manage service update_resource".
-
-        :param ctxt: security context
-        :param host: hostname that compute manager is currently running
-
-        """
-        pass
+    def get_available_resource(self):
+        """Retrieve resource info."""
+        return self._powervm.get_available_resource()
 
     def host_power_action(self, host, action):
         """Reboots, shuts down or powers up the host."""

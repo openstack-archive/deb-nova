@@ -28,9 +28,6 @@ import nova.virt.firewall as base_firewall
 LOG = logging.getLogger(__name__)
 FLAGS = flags.FLAGS
 
-# The default Firewall driver must be listed at position 0
-drivers = ['nova.virt.libvirt.firewall.IptablesFirewallDriver', ]
-
 try:
     import libvirt
 except ImportError:
@@ -177,29 +174,6 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
                 LOG.debug(_('The nwfilter(%(instance_filter_name)s) '
                             'is not found.') % locals(),
                           instance=instance)
-
-    def _create_network_filters(self, instance, network_info,
-                               instance_secgroup_filter_name):
-        if instance['image_ref'] == str(FLAGS.vpn_image_id):
-            base_filter = 'nova-vpn'
-        else:
-            base_filter = 'nova-base'
-
-        result = []
-        for (_n, mapping) in network_info:
-            nic_id = mapping['mac'].replace(':', '')
-            instance_filter_name = self._instance_filter_name(instance, nic_id)
-            instance_filter_children = [base_filter, 'nova-provider-rules',
-                                        instance_secgroup_filter_name]
-
-            if FLAGS.allow_same_net_traffic:
-                instance_filter_children.append('nova-project')
-                if FLAGS.use_ipv6:
-                    instance_filter_children.append('nova-project-v6')
-
-            result.append((instance_filter_name, instance_filter_children))
-
-        return result
 
     def _define_filters(self, filter_name, filter_children):
         self._define_filter(self._filter_container(filter_name,

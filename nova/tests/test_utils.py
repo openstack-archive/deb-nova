@@ -19,14 +19,11 @@ import datetime
 import hashlib
 import os
 import os.path
-import shutil
-import socket
 import StringIO
 import tempfile
 
 import eventlet
 from eventlet import greenpool
-import iso8601
 import mox
 
 import nova
@@ -332,8 +329,17 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertTrue(utils.bool_from_str('true'))
         self.assertTrue(utils.bool_from_str('True'))
         self.assertTrue(utils.bool_from_str('tRuE'))
+        self.assertTrue(utils.bool_from_str('yes'))
+        self.assertTrue(utils.bool_from_str('Yes'))
+        self.assertTrue(utils.bool_from_str('YeS'))
+        self.assertTrue(utils.bool_from_str('y'))
+        self.assertTrue(utils.bool_from_str('Y'))
         self.assertFalse(utils.bool_from_str('False'))
         self.assertFalse(utils.bool_from_str('false'))
+        self.assertFalse(utils.bool_from_str('no'))
+        self.assertFalse(utils.bool_from_str('No'))
+        self.assertFalse(utils.bool_from_str('n'))
+        self.assertFalse(utils.bool_from_str('N'))
         self.assertFalse(utils.bool_from_str('0'))
         self.assertFalse(utils.bool_from_str(None))
         self.assertFalse(utils.bool_from_str('junk'))
@@ -454,6 +460,10 @@ class GenericUtilsTestCase(test.TestCase):
     def test_xhtml_escape(self):
         self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
         self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
+        self.assertEqual('&amp;', utils.xhtml_escape('&'))
+        self.assertEqual('&gt;', utils.xhtml_escape('>'))
+        self.assertEqual('&lt;', utils.xhtml_escape('<'))
+        self.assertEqual('&lt;foo&gt;', utils.xhtml_escape('<foo>'))
 
     def test_hash_file(self):
         data = 'Mary had a little lamb, its fleece as white as snow'
@@ -756,3 +766,11 @@ class DiffDict(test.TestCase):
         diff = utils.diff_dict(old, new)
 
         self.assertEqual(diff, dict(b=['-']))
+
+
+class EnsureTree(test.TestCase):
+    def test_ensure_tree(self):
+        with utils.tempdir() as tmpdir:
+            testdir = '%s/foo/bar/baz' % (tmpdir,)
+            utils.ensure_tree(testdir)
+            self.assertTrue(os.path.isdir(testdir))

@@ -123,21 +123,6 @@ class KeypairsTest(test.TestCase):
         res_dict = jsonutils.loads(res.body)
         self.assertEqual(res.status_int, 400)
 
-    def test_keypair_create_quota_limit(self):
-
-        def fake_quotas_count(self, context, resource, *args, **kwargs):
-            return 100
-
-        self.stubs.Set(QUOTAS, "count", fake_quotas_count)
-
-        req = webob.Request.blank('/v2/fake/os-keypairs')
-        req.method = 'POST'
-        req.headers['Content-Type'] = 'application/json'
-        body = {'keypair': {'name': 'foo'}}
-        req.body = jsonutils.dumps(body)
-        res = req.get_response(fakes.wsgi_app())
-        self.assertEqual(res.status_int, 413)
-
     def test_keypair_import(self):
         body = {
             'keypair': {
@@ -299,15 +284,28 @@ class KeypairsTest(test.TestCase):
         self.assertEquals(res_dict['server']['key_name'], '')
 
     def test_detail_servers(self):
-        self.stubs.Set(db, 'instance_get',
-                        fakes.fake_instance_get())
+        self.stubs.Set(db, 'instance_get_all_by_filters',
+                        fakes.fake_instance_get_all_by_filters())
         req = fakes.HTTPRequest.blank('/v2/fake/servers/detail')
         res = req.get_response(fakes.wsgi_app())
         server_dicts = jsonutils.loads(res.body)['servers']
+        self.assertEquals(len(server_dicts), 5)
 
         for server_dict in server_dicts:
-            self.asserTrue('key_name' in server_dict)
+            self.assertTrue('key_name' in server_dict)
             self.assertEquals(server_dict['key_name'], '')
+
+    def test_keypair_create_with_invalid_keypairBody(self):
+        body = {'alpha': {'name': 'create_test'}}
+        req = webob.Request.blank('/v1.1/fake/os-keypairs')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers['Content-Type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app())
+        res_dict = jsonutils.loads(res.body)
+        self.assertEqual(res.status_int, 400)
+        self.assertEqual(res_dict['badRequest']['message'],
+                         "Invalid request body")
 
 
 class KeypairsXMLSerializerTest(test.TestCase):

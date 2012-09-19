@@ -22,7 +22,6 @@
 import errno
 import hashlib
 import os
-import random
 import re
 
 from nova import exception
@@ -139,6 +138,17 @@ def volume_group_free_space(vg):
     return int(out.strip())
 
 
+def list_logical_volumes(vg):
+    """List logical volumes paths for given volume group.
+
+    :param vg: volume group name
+    """
+    out, err = execute('lvs', '--noheadings', '-o', 'lv_path', vg,
+                       run_as_root=True)
+
+    return [line.strip() for line in out.splitlines()]
+
+
 def remove_logical_volumes(*paths):
     """Remove one or more logical volume."""
     if paths:
@@ -249,21 +259,6 @@ def mkfs(fs, path, label=None):
             args.extend(['-n', label])
         args.append(path)
         execute(*args)
-
-
-def ensure_tree(path):
-    """Create a directory (and any ancestor directories required)
-
-    :param path: Directory to create
-    """
-    try:
-        os.makedirs(path)
-    except OSError as exc:
-        if exc.errno == errno.EEXIST:
-            if not os.path.isdir(path):
-                raise
-        else:
-            raise
 
 
 def write_to_file(path, contents, umask=None):
@@ -480,7 +475,7 @@ def write_stored_info(target, field=None, value=None):
         return
 
     info_file = get_info_filename(target)
-    ensure_tree(os.path.dirname(info_file))
+    utils.ensure_tree(os.path.dirname(info_file))
 
     d = read_stored_info(info_file)
     d[field] = value

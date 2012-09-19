@@ -19,7 +19,6 @@
 Management class for VM-related functions (spawn, reboot, etc).
 """
 
-import cPickle as pickle
 import functools
 import itertools
 import time
@@ -42,9 +41,8 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import utils
-from nova.virt import driver
+from nova.virt import firewall
 from nova.virt.xenapi import agent
-from nova.virt.xenapi import firewall
 from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import volume_utils
@@ -71,6 +69,9 @@ FLAGS.register_opts(xenapi_vmops_opts)
 
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 
+DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
+    firewall.__name__,
+    firewall.IptablesFirewallDriver.__name__)
 
 RESIZE_TOTAL_STEPS = 5
 
@@ -152,10 +153,9 @@ class VMOps(object):
         self.compute_api = compute.API()
         self._session = session
         self.poll_rescue_last_ran = None
-        if FLAGS.firewall_driver not in firewall.drivers:
-            FLAGS.set_default('firewall_driver', firewall.drivers[0])
-        fw_class = importutils.import_class(FLAGS.firewall_driver)
-        self.firewall_driver = fw_class(xenapi_session=self._session)
+        self.firewall_driver = firewall.load_driver(
+            default=DEFAULT_FIREWALL_DRIVER,
+            xenapi_session=self._session)
         vif_impl = importutils.import_class(FLAGS.xenapi_vif_driver)
         self.vif_driver = vif_impl(xenapi_session=self._session)
         self.default_root_dev = '/dev/sda'
@@ -189,7 +189,8 @@ class VMOps(object):
         self._start(instance, vm_ref)
 
     def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, image_meta, resize_instance):
+                         network_info, image_meta, resize_instance,
+                         block_device_info=None):
         root_vdi = vm_utils.move_disks(self._session, instance, disk_info)
 
         if resize_instance:
@@ -303,6 +304,18 @@ class VMOps(object):
             undo_mgr.undo_with(undo_create_vm)
             return vm_ref
 
+        if rescue:
+            # NOTE(johannes): Attach root disk to rescue VM now, before
+            # booting the VM, since we can't hotplug block devices
+            # on non-PV guests
+            @step
+            def attach_root_disk_step(undo_mgr, vm_ref):
+                orig_vm_ref = vm_utils.lookup(self._session, instance['name'])
+                vdi_ref = self._find_root_vdi_ref(orig_vm_ref)
+
+                vm_utils.create_vbd(self._session, vm_ref, vdi_ref,
+                                    DEVICE_RESCUE, bootable=False)
+
         @step
         def prepare_security_group_filters_step(undo_mgr):
             try:
@@ -344,6 +357,9 @@ class VMOps(object):
 
             vm_ref = create_vm_step(undo_mgr, vdis, kernel_file, ramdisk_file)
             prepare_security_group_filters_step(undo_mgr)
+
+            if rescue:
+                attach_root_disk_step(undo_mgr, vm_ref)
 
             boot_instance_step(undo_mgr, vm_ref)
 
@@ -594,16 +610,10 @@ class VMOps(object):
         LOG.debug(_("Migrating VHD '%(vdi_uuid)s' with seq_num %(seq_num)d"),
                   locals(), instance=instance)
         instance_uuid = instance['uuid']
-        params = {'host': dest,
-                  'vdi_uuid': vdi_uuid,
-                  'instance_uuid': instance_uuid,
-                  'sr_path': sr_path,
-                  'seq_num': seq_num}
-
         try:
-            _params = {'params': pickle.dumps(params)}
-            self._session.call_plugin('migration', 'transfer_vhd',
-                                      _params)
+            self._session.call_plugin_serialized('migration', 'transfer_vhd',
+                    instance_uuid=instance_uuid, host=dest, vdi_uuid=vdi_uuid,
+                    sr_path=sr_path, seq_num=seq_num)
         except self._session.XenAPI.Failure:
             msg = _("Failed to transfer vhd to new host")
             raise exception.MigrationError(reason=msg)
@@ -773,17 +783,28 @@ class VMOps(object):
     def check_resize_func_name(self):
         """Check the function name used to resize an instance based
         on product_brand and product_version."""
-        if (self._session.product_brand == 'XCP' and
-            ((self._session.product_version[0] == 1 and
-              self._session.product_version[1] > 1) or
-             self._session.product_version[0] > 1)):
-            return 'VDI.resize'
 
-        if (self._session.product_brand == 'XenServer' and
-             self._session.product_version[0] > 5):
-            return 'VDI.resize'
+        brand = self._session.product_brand
+        version = self._session.product_version
 
-        return 'VDI.resize_online'
+        # To maintain backwards compatibility. All recent versions
+        # should use VDI.resize
+        if bool(version) and bool(brand):
+            xcp = brand == 'XCP'
+            r1_2_or_above = (
+                (
+                    version[0] == 1
+                    and version[1] > 1
+                )
+                or version[0] > 1)
+
+            xenserver = brand == 'XenServer'
+            r6_or_above = version[0] > 5
+
+            if (xcp and not r1_2_or_above) or (xenserver and not r6_or_above):
+                return 'VDI.resize_online'
+
+        return 'VDI.resize'
 
     def reboot(self, instance, reboot_type):
         """Reboot VM instance."""
@@ -886,28 +907,37 @@ class VMOps(object):
 
         raise exception.NotFound(_("Unable to find root VBD/VDI for VM"))
 
+    def _detach_vm_vols(self, instance, vm_ref, block_device_info=None):
+        """Detach any external nova/cinder volumes and purge the SRs.
+           This differs from a normal detach in that the VM has been
+           shutdown, so there is no need for unplugging VBDs. They do
+           need to be destroyed, so that the SR can be forgotten.
+        """
+        vbd_refs = self._session.call_xenapi("VM.get_VBDs", vm_ref)
+        for vbd_ref in vbd_refs:
+            other_config = self._session.call_xenapi("VBD.get_other_config",
+                                                   vbd_ref)
+            if other_config.get('osvol'):
+                # this is a nova/cinder volume
+                try:
+                    sr_ref = volume_utils.find_sr_from_vbd(self._session,
+                                                           vbd_ref)
+                    vm_utils.destroy_vbd(self._session, vbd_ref)
+                    # Forget SR only if not in use
+                    volume_utils.purge_sr(self._session, sr_ref)
+                except Exception as exc:
+                    LOG.exception(exc)
+                    raise
+
     def _destroy_vdis(self, instance, vm_ref, block_device_info=None):
         """Destroys all VDIs associated with a VM."""
         instance_uuid = instance['uuid']
         LOG.debug(_("Destroying VDIs for Instance %(instance_uuid)s")
                   % locals())
-        nodestroy = []
-        if block_device_info:
-            for bdm in block_device_info['block_device_mapping']:
-                LOG.debug(bdm)
-                # If there is no associated VDI, skip it
-                if 'vdi_uuid' not in bdm['connection_info']['data']:
-                    LOG.debug(_("BDM contains no vdi_uuid"), instance=instance)
-                    continue
-                # bdm vols should be left alone if delete_on_termination
-                # is false, or they will be destroyed on cleanup_volumes
-                nodestroy.append(bdm['connection_info']['data']['vdi_uuid'])
 
-        vdi_refs = vm_utils.lookup_vm_vdis(self._session, vm_ref, nodestroy)
-
+        vdi_refs = vm_utils.lookup_vm_vdis(self._session, vm_ref)
         if not vdi_refs:
             return
-
         for vdi_ref in vdi_refs:
             try:
                 vm_utils.destroy_vdi(self._session, vdi_ref)
@@ -1003,6 +1033,7 @@ class VMOps(object):
         vm_utils.shutdown_vm(self._session, instance, vm_ref)
 
         # Destroy VDIs
+        self._detach_vm_vols(instance, vm_ref, block_device_info)
         self._destroy_vdis(instance, vm_ref, block_device_info)
         self._destroy_kernel_ramdisk(instance, vm_ref)
 
@@ -1054,13 +1085,6 @@ class VMOps(object):
         self._acquire_bootlock(vm_ref)
         self.spawn(context, instance, image_meta, [], rescue_password,
                    network_info, name_label=rescue_name_label, rescue=True)
-        rescue_vm_ref = vm_utils.lookup(self._session, rescue_name_label)
-        vdi_ref = self._find_root_vdi_ref(vm_ref)
-
-        rescue_vbd_ref = vm_utils.create_vbd(self._session, rescue_vm_ref,
-                                             vdi_ref, DEVICE_RESCUE,
-                                             bootable=False)
-        self._session.call_xenapi('VBD.plug', rescue_vbd_ref)
 
     def unrescue(self, instance):
         """Unrescue the specified instance.
@@ -1511,10 +1535,12 @@ class VMOps(object):
 
         """
         if block_migration:
-            migrate_data = self._migrate_receive(ctxt)
-            dest_check_data = {}
-            dest_check_data["block_migration"] = block_migration
-            dest_check_data["migrate_data"] = migrate_data
+            migrate_send_data = self._migrate_receive(ctxt)
+            destination_sr_ref = vm_utils.safe_find_sr(self._session)
+            dest_check_data = {
+                "block_migration": block_migration,
+                "migrate_data": {"migrate_send_data": migrate_send_data,
+                                 "destination_sr_ref": destination_sr_ref}}
             return dest_check_data
         else:
             src = instance_ref['host']
@@ -1535,19 +1561,34 @@ class VMOps(object):
 
         """
         if dest_check_data and 'migrate_data' in dest_check_data:
-            vmref = self._get_vm_opaque_ref(instance_ref)
+            vm_ref = self._get_vm_opaque_ref(instance_ref)
             migrate_data = dest_check_data['migrate_data']
             try:
-                vdi_map = {}
-                vif_map = {}
-                options = {}
-                self._session.call_xenapi("VM.assert_can_migrate", vmref,
-                                          migrate_data, True, vdi_map, vif_map,
-                                          options)
+                self._call_live_migrate_command(
+                    "VM.assert_can_migrate", vm_ref, migrate_data)
             except self._session.XenAPI.Failure as exc:
                 LOG.exception(exc)
                 raise exception.MigrationError(_('VM.assert_can_migrate'
                                                  'failed'))
+
+    def _generate_vdi_map(self, destination_sr_ref, vm_ref):
+        """generate a vdi_map for _call_live_migrate_command """
+        sr_ref = vm_utils.safe_find_sr(self._session)
+        vm_vdis = vm_utils.get_instance_vdis_for_sr(self._session,
+                                                    vm_ref, sr_ref)
+        return dict((vdi, destination_sr_ref) for vdi in vm_vdis)
+
+    def _call_live_migrate_command(self, command_name, vm_ref, migrate_data):
+        """unpack xapi specific parameters, and call a live migrate command"""
+        destination_sr_ref = migrate_data['destination_sr_ref']
+        migrate_send_data = migrate_data['migrate_send_data']
+
+        vdi_map = self._generate_vdi_map(destination_sr_ref, vm_ref)
+        vif_map = {}
+        options = {}
+        self._session.call_xenapi(command_name, vm_ref,
+                                  migrate_send_data, True,
+                                  vdi_map, vif_map, options)
 
     def live_migrate(self, context, instance, destination_hostname,
                      post_method, recover_method, block_migration,
@@ -1559,12 +1600,8 @@ class VMOps(object):
                     raise exception.InvalidParameterValue('Block Migration '
                                     'requires migrate data from destination')
                 try:
-                    vdi_map = {}
-                    vif_map = {}
-                    options = {}
-                    self._session.call_xenapi("VM.migrate_send", vm_ref,
-                                              migrate_data, True,
-                                              vdi_map, vif_map, options)
+                    self._call_live_migrate_command(
+                        "VM.migrate_send", vm_ref, migrate_data)
                 except self._session.XenAPI.Failure as exc:
                     LOG.exception(exc)
                     raise exception.MigrationError(_('Migrate Send failed'))

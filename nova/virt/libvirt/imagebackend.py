@@ -61,6 +61,11 @@ class Image(object):
         self.driver_format = driver_format
         self.is_block_dev = is_block_dev
 
+        # NOTE(mikal): We need a lock directory which is shared along with
+        # instance files, to cover the scenario where multiple compute nodes
+        # are trying to create a base file at the same time
+        self.lock_path = os.path.join(FLAGS.instances_path, 'locks')
+
     @abc.abstractmethod
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         """Create image from template.
@@ -94,31 +99,31 @@ class Image(object):
         info.source_path = self.path
         return info
 
-    def cache(self, fn, fname, size=None, *args, **kwargs):
+    def cache(self, fetch_func, filename, size=None, *args, **kwargs):
         """Creates image from template.
 
         Ensures that template and image not already exists.
         Ensures that base directory exists.
         Synchronizes on template fetching.
 
-        :fn: function, that creates template.
-        Should accept `target` argument.
-        :fname: Template name
+        :fetch_func: Function that creates the base image
+                     Should accept `target` argument.
+        :filename: Name of the file in the image directory
         :size: Size of created image in bytes (optional)
         """
-        @utils.synchronized(fname)
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def call_if_not_exists(target, *args, **kwargs):
             if not os.path.exists(target):
-                fn(target=target, *args, **kwargs)
+                fetch_func(target=target, *args, **kwargs)
 
         if not os.path.exists(self.path):
             base_dir = os.path.join(FLAGS.instances_path, '_base')
             if not os.path.exists(base_dir):
-                libvirt_utils.ensure_tree(base_dir)
-            base = os.path.join(base_dir, fname)
+                utils.ensure_tree(base_dir)
+            base = os.path.join(base_dir, filename)
 
             self.create_image(call_if_not_exists, base, size,
-                               *args, **kwargs)
+                              *args, **kwargs)
 
 
 class Raw(Image):
@@ -129,7 +134,7 @@ class Raw(Image):
                                  instance, name)
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        @utils.synchronized(base)
+        @utils.synchronized(base, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
             libvirt_utils.copy_image(base, target)
             if size:
@@ -153,7 +158,7 @@ class Qcow2(Image):
                                  instance, name)
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        @utils.synchronized(base)
+        @utils.synchronized(base, external=True, lock_path=self.lock_path)
         def copy_qcow2_image(base, target, size):
             qcow2_base = base
             if size:
@@ -172,8 +177,8 @@ class Qcow2(Image):
 
 class Lvm(Image):
     @staticmethod
-    def escape(fname):
-        return fname.replace('_', '__')
+    def escape(filename):
+        return filename.replace('_', '__')
 
     def __init__(self, instance, name):
         super(Lvm, self).__init__("block", "raw", is_block_dev=True)
@@ -189,7 +194,7 @@ class Lvm(Image):
         self.sparse = FLAGS.libvirt_sparse_logical_volumes
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        @utils.synchronized(base)
+        @utils.synchronized(base, external=True, lock_path=self.lock_path)
         def create_lvm_image(base, size):
             base_size = disk.get_disk_size(base)
             resize = size > base_size
@@ -232,8 +237,7 @@ class Backend(object):
             'default': Qcow2 if use_cow else Raw
         }
 
-    def image(self, instance, name,
-              image_type=None):
+    def image(self, instance, name, image_type=None):
         """Constructs image for selected backend
 
         :instance: Instance name.

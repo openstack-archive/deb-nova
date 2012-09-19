@@ -1,4 +1,7 @@
 {
+    "admin_api": [["role:admin"]],
+
+    "context_is_admin": [["role:admin"], ["role:administrator"]],
     "compute:create": [],
     "compute:create:attach_network": [],
     "compute:create:attach_volume": [],
@@ -91,6 +94,10 @@
     "compute_extension:disk_config": [],
     "compute_extension:extended_server_attributes": [],
     "compute_extension:extended_status": [],
+    "compute_extension:flavor_access": [],
+    "compute_extension:flavor_disabled": [],
+    "compute_extension:flavor_rxtx": [],
+    "compute_extension:flavor_swap": [],
     "compute_extension:flavorextradata": [],
     "compute_extension:flavorextraspecs": [],
     "compute_extension:flavormanage": [],
@@ -132,6 +139,8 @@
     "volume:detach": [],
     "volume:reserve_volume": [],
     "volume:unreserve_volume": [],
+    "volume:begin_detaching": [],
+    "volume:roll_detaching": [],
     "volume:check_attach": [],
     "volume:check_detach": [],
     "volume:initialize_connection": [],
@@ -142,6 +151,10 @@
     "volume:get_all_snapshots": [],
 
 
+    "volume_extension:volume_admin_actions:reset_status": [["rule:admin_api"]],
+    "volume_extension:snapshot_admin_actions:reset_status": [["rule:admin_api"]],
+    "volume_extension:volume_admin_actions:force_delete": [["rule:admin_api"]],
+    "volume_extension:volume_actions:upload_image": [],
     "volume_extension:types_manage": [],
     "volume_extension:types_extra_specs": [],
 
@@ -167,6 +180,7 @@
     "network:disassociate_floating_ip": [],
 
     "network:get_fixed_ip": [],
+    "network:get_fixed_ip_by_address": [],
     "network:add_fixed_ip_to_instance": [],
     "network:remove_fixed_ip_from_instance": [],
     "network:add_network_to_project": [],

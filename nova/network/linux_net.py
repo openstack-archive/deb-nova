@@ -76,6 +76,9 @@ linux_net_opts = [
     cfg.BoolOpt('send_arp_for_ha',
                 default=False,
                 help='send gratuitous ARPs for HA setup'),
+    cfg.IntOpt('send_arp_for_ha_count',
+               default=3,
+               help='send this many gratuitous ARPs for HA setup'),
     cfg.BoolOpt('use_single_default_gateway',
                 default=False,
                 help='Use single default gateway. Only first nic of vm will '
@@ -500,19 +503,21 @@ def write_to_file(file, data, mode='w'):
         f.write(data)
 
 
-def ensure_path(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
-
-
 def metadata_forward():
     """Create forwarding rule for metadata."""
-    iptables_manager.ipv4['nat'].add_rule('PREROUTING',
+    if FLAGS.metadata_host != '127.0.0.1':
+        iptables_manager.ipv4['nat'].add_rule('PREROUTING',
                                           '-s 0.0.0.0/0 -d 169.254.169.254/32 '
                                           '-p tcp -m tcp --dport 80 -j DNAT '
                                           '--to-destination %s:%s' %
                                           (FLAGS.metadata_host,
                                            FLAGS.metadata_port))
+    else:
+        iptables_manager.ipv4['nat'].add_rule('PREROUTING',
+                                          '-s 0.0.0.0/0 -d 169.254.169.254/32 '
+                                          '-p tcp -m tcp --dport 80 '
+                                          '-j REDIRECT --to-ports %s' %
+                                           FLAGS.metadata_port)
     iptables_manager.apply()
 
 
@@ -528,11 +533,13 @@ def metadata_accept():
 
 
 def add_snat_rule(ip_range):
-    iptables_manager.ipv4['nat'].add_rule('snat',
-                                          '-s %s -j SNAT --to-source %s' %
-                                           (ip_range,
-                                            FLAGS.routing_source_ip))
-    iptables_manager.apply()
+    if FLAGS.routing_source_ip:
+        rule = '-s %s -j SNAT --to-source %s' % (ip_range,
+                                                 FLAGS.routing_source_ip)
+        if FLAGS.public_interface:
+            rule += ' -o %s' % FLAGS.public_interface
+        iptables_manager.ipv4['nat'].add_rule('snat', rule)
+        iptables_manager.apply()
 
 
 def init_host(ip_range=None):
@@ -561,15 +568,24 @@ def init_host(ip_range=None):
     iptables_manager.apply()
 
 
+def send_arp_for_ip(ip, device, count):
+    out, err = _execute('arping', '-U', ip,
+                        '-A', '-I', device,
+                        '-c', str(count),
+                        run_as_root=True, check_exit_code=False)
+
+    if err:
+        LOG.debug(_('arping error for ip %s'), ip)
+
+
 def bind_floating_ip(floating_ip, device):
     """Bind ip to public interface."""
     _execute('ip', 'addr', 'add', str(floating_ip) + '/32',
              'dev', device,
              run_as_root=True, check_exit_code=[0, 2, 254])
-    if FLAGS.send_arp_for_ha:
-        _execute('arping', '-U', floating_ip,
-                 '-A', '-I', device,
-                 '-c', 1, run_as_root=True, check_exit_code=False)
+
+    if FLAGS.send_arp_for_ha and FLAGS.send_arp_for_ha_count > 0:
+        send_arp_for_ip(floating_ip, device, FLAGS.send_arp_for_ha_count)
 
 
 def unbind_floating_ip(floating_ip, device):
@@ -603,25 +619,27 @@ def ensure_vpn_forward(public_ip, port, private_ip):
     iptables_manager.apply()
 
 
-def ensure_floating_forward(floating_ip, fixed_ip):
+def ensure_floating_forward(floating_ip, fixed_ip, device):
     """Ensure floating ip forwarding rule."""
-    for chain, rule in floating_forward_rules(floating_ip, fixed_ip):
+    for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].add_rule(chain, rule)
     iptables_manager.apply()
 
 
-def remove_floating_forward(floating_ip, fixed_ip):
+def remove_floating_forward(floating_ip, fixed_ip, device):
     """Remove forwarding for floating ip."""
-    for chain, rule in floating_forward_rules(floating_ip, fixed_ip):
+    for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].remove_rule(chain, rule)
     iptables_manager.apply()
 
 
-def floating_forward_rules(floating_ip, fixed_ip):
+def floating_forward_rules(floating_ip, fixed_ip, device):
+    rule = '-s %s -j SNAT --to %s' % (fixed_ip, floating_ip)
+    if device:
+        rule += ' -o %s' % device
     return [('PREROUTING', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
             ('OUTPUT', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
-            ('float-snat',
-             '-s %s -j SNAT --to %s' % (fixed_ip, floating_ip))]
+            ('float-snat', rule)]
 
 
 def initialize_gateway_device(dev, network_ref):
@@ -667,10 +685,9 @@ def initialize_gateway_device(dev, network_ref):
         for fields in old_routes:
             _execute('ip', 'route', 'add', *fields,
                      run_as_root=True)
-        if FLAGS.send_arp_for_ha:
-            _execute('arping', '-U', network_ref['dhcp_server'],
-                     '-A', '-I', dev,
-                     '-c', 1, run_as_root=True, check_exit_code=False)
+        if FLAGS.send_arp_for_ha and FLAGS.send_arp_for_ha_count > 0:
+            send_arp_for_ip(network_ref['dhcp_server'], dev,
+                            FLAGS.send_arp_for_ha_count)
     if(FLAGS.use_ipv6):
         _execute('ip', '-f', 'inet6', 'addr',
                  'change', network_ref['cidr_v6'],
@@ -940,7 +957,7 @@ def _device_exists(device):
 
 def _dhcp_file(dev, kind):
     """Return path to a pid, leases or conf file for a bridge/device."""
-    ensure_path(FLAGS.networks_path)
+    utils.ensure_tree(FLAGS.networks_path)
     return os.path.abspath('%s/nova-%s.%s' % (FLAGS.networks_path,
                                               dev,
                                               kind))
@@ -948,7 +965,7 @@ def _dhcp_file(dev, kind):
 
 def _ra_file(dev, kind):
     """Return path to a pid or conf file for a bridge/device."""
-    ensure_path(FLAGS.networks_path)
+    utils.ensure_tree(FLAGS.networks_path)
     return os.path.abspath('%s/nova-ra-%s.%s' % (FLAGS.networks_path,
                                               dev,
                                               kind))
@@ -993,6 +1010,26 @@ def _ip_bridge_cmd(action, params, device):
     cmd.extend(params)
     cmd.extend(['dev', device])
     return cmd
+
+
+def _create_veth_pair(dev1_name, dev2_name):
+    """Create a pair of veth devices with the specified names,
+    deleting any previous devices with those names.
+    """
+    for dev in [dev1_name, dev2_name]:
+        if _device_exists(dev):
+            try:
+                utils.execute('ip', 'link', 'delete', dev1_name,
+                              run_as_root=True, check_exit_code=[0, 2, 254])
+            except exception.ProcessExecutionError:
+                LOG.exception("Error clearing stale veth %s" % dev)
+
+    utils.execute('ip', 'link', 'add', dev1_name, 'type', 'veth', 'peer',
+                  'name', dev2_name, run_as_root=True)
+    for dev in [dev1_name, dev2_name]:
+        utils.execute('ip', 'link', 'set', dev, 'up', run_as_root=True)
+        utils.execute('ip', 'link', 'set', dev, 'promisc', 'on',
+                      run_as_root=True)
 
 
 # Similar to compute virt layers, the Linux network node

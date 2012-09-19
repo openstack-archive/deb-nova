@@ -25,10 +25,12 @@ Includes injection of SSH PGP keys into authorized_keys file.
 
 """
 
-import crypt
 import os
 import random
 import tempfile
+
+if os.name != 'nt':
+    import crypt
 
 from nova import exception
 from nova import flags
@@ -209,7 +211,7 @@ class _DiskImage(object):
         with open("/proc/mounts", 'r') as ifp:
             for line in ifp:
                 fields = line.split()
-                if fields[1] == path:
+                if fields[1] == os.path.realpath(path):
                     device = fields[0]
                     break
         return device
@@ -511,6 +513,9 @@ def _set_passwd(username, admin_passwd, passwd_file, shadow_file):
     :raises: exception.NovaException(), IOError()
 
     """
+    if os.name == 'nt':
+        raise exception.NovaException(_('Not implemented on Windows'))
+
     salt_set = ('abcdefghijklmnopqrstuvwxyz'
                 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
                 '0123456789./')

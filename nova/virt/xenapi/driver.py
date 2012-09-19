@@ -38,6 +38,7 @@ A driver for XenServer or Xen Cloud Platform.
 """
 
 import contextlib
+import cPickle as pickle
 import time
 import urlparse
 import xmlrpclib
@@ -182,13 +183,15 @@ class XenAPIDriver(driver.ComputeDriver):
         # TODO(Vek): Need to pass context in for access to auth_token
         self._vmops.confirm_migration(migration, instance, network_info)
 
-    def finish_revert_migration(self, instance, network_info):
+    def finish_revert_migration(self, instance, network_info,
+                                block_device_info=None):
         """Finish reverting a resize, powering back on the instance"""
         # NOTE(vish): Xen currently does not use network info.
         self._vmops.finish_revert_migration(instance)
 
     def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, image_meta, resize_instance=False):
+                         network_info, image_meta, resize_instance=False,
+                         block_device_info=None):
         """Completes a resize, turning on the migrated instance"""
         self._vmops.finish_migration(context, migration, instance, disk_info,
                                      network_info, image_meta, resize_instance)
@@ -197,7 +200,8 @@ class XenAPIDriver(driver.ComputeDriver):
         """ Create snapshot from a running VM instance """
         self._vmops.snapshot(context, instance, image_id)
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         """Reboot VM instance"""
         self._vmops.reboot(instance, reboot_type)
 
@@ -228,7 +232,8 @@ class XenAPIDriver(driver.ComputeDriver):
         self._vmops.unpause(instance)
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info):
+                                   instance_type, network_info,
+                                   block_device_info=None):
         """Transfers the VHD of a running instance to another host, then shuts
         off the instance copies over the COW disk"""
         # NOTE(vish): Xen currently does not use network info.
@@ -371,26 +376,22 @@ class XenAPIDriver(driver.ComputeDriver):
                 'username': FLAGS.xenapi_connection_username,
                 'password': FLAGS.xenapi_connection_password}
 
-    def update_available_resource(self, ctxt, host):
-        """Updates compute manager resource info on ComputeNode table.
+    def get_available_resource(self):
+        """Retrieve resource info.
 
         This method is called when nova-compute launches, and
-        whenever admin executes "nova-manage service update_resource".
+        as part of a periodic task.
 
-        :param ctxt: security context
-        :param host: hostname that compute manager is currently running
+        :returns: dictionary describing resources
 
         """
-        try:
-            service_ref = db.service_get_all_compute_by_host(ctxt, host)[0]
-        except exception.NotFound:
-            raise exception.ComputeServiceUnavailable(host=host)
-
         host_stats = self.get_host_stats(refresh=True)
 
         # Updating host information
         total_ram_mb = host_stats['host_memory_total'] / (1024 * 1024)
-        free_ram_mb = host_stats['host_memory_free'] / (1024 * 1024)
+        # NOTE(belliott) memory-free-computed is a value provided by XenServer
+        # for gauging free memory more conservatively than memory-free.
+        free_ram_mb = host_stats['host_memory_free_computed'] / (1024 * 1024)
         total_disk_gb = host_stats['disk_total'] / (1024 * 1024 * 1024)
         used_disk_gb = host_stats['disk_used'] / (1024 * 1024 * 1024)
 
@@ -403,16 +404,9 @@ class XenAPIDriver(driver.ComputeDriver):
                'hypervisor_type': 'xen',
                'hypervisor_version': 0,
                'hypervisor_hostname': host_stats['host_hostname'],
-               'service_id': service_ref['id'],
                'cpu_info': host_stats['host_cpu_info']['cpu_count']}
 
-        compute_node_ref = service_ref['compute_node']
-        if not compute_node_ref:
-            LOG.info(_('Compute_service record created for %s ') % host)
-            db.compute_node_create(ctxt, dic)
-        else:
-            LOG.info(_('Compute_service record updated for %s ') % host)
-            db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
+        return dic
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         # NOTE(salvatore-orlando): it enforces security groups on
@@ -662,13 +656,22 @@ class XenAPISession(object):
     def _get_product_version_and_brand(self):
         """Return a tuple of (major, minor, rev) for the host version and
         a string of the product brand"""
-        host = self.get_xenapi_host()
-        software_version = self.call_xenapi('host.get_software_version',
-                                            host)
+        software_version = self._get_software_version()
+
+        product_version_str = software_version.get('product_version')
+        product_brand = software_version.get('product_brand')
+
+        if None in (product_version_str, product_brand):
+            return (None, None)
+
         product_version = tuple(int(part) for part in
-                                software_version['product_version'].split('.'))
-        product_brand = software_version['product_brand']
+                                product_version_str.split('.'))
+
         return product_version, product_brand
+
+    def _get_software_version(self):
+        host = self.get_xenapi_host()
+        return self.call_xenapi('host.get_software_version', host)
 
     def get_session_id(self):
         """Return a string session_id.  Used for vnc consoles."""
@@ -710,6 +713,11 @@ class XenAPISession(object):
             return self._unwrap_plugin_exceptions(
                                  session.xenapi.host.call_plugin,
                                  host, plugin, fn, args)
+
+    def call_plugin_serialized(self, plugin, fn, *args, **kwargs):
+        params = {'params': pickle.dumps(dict(args=args, kwargs=kwargs))}
+        rv = self.call_plugin(plugin, fn, params)
+        return pickle.loads(rv)
 
     def _create_session(self, url):
         """Stubout point. This can be replaced with a mock session."""

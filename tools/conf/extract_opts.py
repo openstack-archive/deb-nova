@@ -20,6 +20,7 @@
 
 import os
 import re
+import socket
 import sys
 import textwrap
 
@@ -41,17 +42,19 @@ OPTION_REGEX = re.compile(r"(%s)" % "|".join([STROPT, BOOLOPT, INTOPT,
 OPTION_HELP_INDENT = "####"
 
 PY_EXT = ".py"
-BASEDIR = os.path.abspath(os.path.dirname(__file__) + "../../")
+BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 WORDWRAP_WIDTH = 60
 
 
 def main(srcfiles):
     print '\n'.join(['#' * 20, '# nova.conf sample #', '#' * 20,
                      '', '[DEFAULT]', ''])
+    _list_opts(cfg.CommonConfigOpts,
+               cfg.__name__ + ':' + cfg.CommonConfigOpts.__name__)
     mods_by_pkg = dict()
     for filepath in srcfiles:
-        pkg_name = filepath.split(os.sep)[3]
-        mod_str = '.'.join(['.'.join(filepath.split(os.sep)[2:-1]),
+        pkg_name = filepath.split(os.sep)[1]
+        mod_str = '.'.join(['.'.join(filepath.split(os.sep)[:-1]),
                             os.path.basename(filepath).split('.')[0]])
         mods_by_pkg.setdefault(pkg_name, list()).append(mod_str)
     # NOTE(lzyeval): place top level modules before packages
@@ -69,8 +72,6 @@ def main(srcfiles):
 
 
 def _print_module(mod_str):
-    global OPTION_COUNT
-    opts = list()
     mod_obj = None
     if mod_str.endswith('.__init__'):
         mod_str = mod_str[:mod_str.rfind(".")]
@@ -83,28 +84,54 @@ def _print_module(mod_str):
         return
     except Exception, e:
         return
-    for attr_str in dir(mod_obj):
-        attr_obj = getattr(mod_obj, attr_str)
+    _list_opts(mod_obj, mod_str)
+
+
+def _list_opts(obj, name):
+    opts = list()
+    for attr_str in dir(obj):
+        attr_obj = getattr(obj, attr_str)
         if isinstance(attr_obj, cfg.Opt):
             opts.append(attr_obj)
         elif (isinstance(attr_obj, list) and
               all(map(lambda x: isinstance(x, cfg.Opt), attr_obj))):
             opts.extend(attr_obj)
-    # NOTE(lzyeval): return if module has no options
     if not opts:
         return
+    global OPTION_COUNT
     OPTION_COUNT += len(opts)
-    print '######## defined in %s ########\n' % mod_str
+    print '######## defined in %s ########\n' % name
     for opt in opts:
         _print_opt(opt)
     print
 
 
-def _convert_abspath(s):
-    """Set up a reasonably sensible default for pybasedir."""
-    if not s.startswith(BASEDIR):
-        return s
-    return s.replace(BASEDIR, '/usr/lib/python/site-packages')
+def _get_my_ip():
+    try:
+        csock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        csock.connect(('8.8.8.8', 80))
+        (addr, port) = csock.getsockname()
+        csock.close()
+        return addr
+    except socket.error:
+        return None
+
+
+MY_IP = _get_my_ip()
+HOST = socket.gethostname()
+
+
+def _sanitize_default(s):
+    """Set up a reasonably sensible default for pybasedir, my_ip and host."""
+    if s.startswith(BASEDIR):
+        return s.replace(BASEDIR, '/usr/lib/python/site-packages')
+    elif s == MY_IP:
+        return '10.0.0.1'
+    elif s == HOST:
+        return 'nova'
+    elif s.strip() != s:
+        return '"%s"' % s
+    return s
 
 
 def _wrap(msg, indent):
@@ -114,7 +141,7 @@ def _wrap(msg, indent):
 
 
 def _print_opt(opt):
-    opt_name, opt_default, opt_help = opt.name, opt.default, opt.help
+    opt_name, opt_default, opt_help = opt.dest, opt.default, opt.help
     if not opt_help:
         sys.stderr.write('WARNING: "%s" is missing help string.\n' % opt_name)
     opt_type = None
@@ -128,7 +155,7 @@ def _print_opt(opt):
             print '# %s=<None>' % opt_name
         elif opt_type == STROPT:
             assert(isinstance(opt_default, basestring))
-            print '# %s=%s' % (opt_name, _convert_abspath(opt_default))
+            print '# %s=%s' % (opt_name, _sanitize_default(opt_default))
         elif opt_type == BOOLOPT:
             assert(isinstance(opt_default, bool))
             print '# %s=%s' % (opt_name, str(opt_default).lower())

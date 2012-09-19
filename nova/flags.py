@@ -137,8 +137,13 @@ global_opts = [
                help='default glance port'),
     cfg.ListOpt('glance_api_servers',
                 default=['$glance_host:$glance_port'],
-                help='A list of the glance api servers available to nova '
+                help='A list of the glance api servers available to nova. '
+                     'Prefix with https:// for ssl-based glance api servers. '
                      '([hostname|ip]:port)'),
+    cfg.BoolOpt('glance_api_insecure',
+                default=False,
+                help='Allow to perform insecure SSL (https) requests to '
+                     'glance'),
     cfg.IntOpt('glance_num_retries',
                default=0,
                help='Number retries when downloading an image from glance'),
@@ -148,10 +153,6 @@ global_opts = [
     cfg.StrOpt('s3_host',
                default='$my_ip',
                help='hostname or ip for openstack to use when accessing '
-                    'the s3 api'),
-    cfg.StrOpt('s3_dmz',
-               default='$my_ip',
-               help='hostname or ip for the instances to use when accessing '
                     'the s3 api'),
     cfg.StrOpt('cert_topic',
                default='cert',
@@ -213,10 +214,6 @@ global_opts = [
                       'nova.api.openstack.volume.contrib.standard_extensions'
                       ],
                     help='osapi volume extension to load'),
-    cfg.StrOpt('osapi_scheme',
-               default='http',
-               help='the protocol to use when connecting to the openstack api '
-                    'server (http, https)'),
     cfg.StrOpt('osapi_path',
                default='/v1.1/',
                help='the path prefix used to call the openstack api server'),
@@ -238,9 +235,6 @@ global_opts = [
     cfg.IntOpt('metadata_port',
                default=8775,
                help='the port for the metadata api port'),
-    cfg.StrOpt('default_project',
-               default='openstack',
-               help='the default project to use for openstack'),
     cfg.StrOpt('default_image',
                default='ami-11111',
                help='default image to use, testing only'),
@@ -257,9 +251,6 @@ global_opts = [
     cfg.StrOpt('vpn_key_suffix',
                default='-vpn',
                help='Suffix to add to project name for vpn key and secgroups'),
-    cfg.IntOpt('auth_token_ttl',
-               default=3600,
-               help='Seconds for auth tokens to linger'),
     cfg.StrOpt('sqlite_db',
                default='nova.sqlite',
                help='the filename to use with sqlite'),
@@ -303,9 +294,6 @@ global_opts = [
     cfg.StrOpt('scheduler_manager',
                default='nova.scheduler.manager.SchedulerManager',
                help='full class name for the Manager for scheduler'),
-    cfg.StrOpt('firewall_driver',
-               default='nova.virt.firewall.IptablesFirewallDriver',
-               help='Firewall driver (defaults to iptables)'),
     cfg.StrOpt('host',
                default=socket.gethostname(),
                help='Name of this node.  This can be an opaque identifier.  '
@@ -323,7 +311,8 @@ global_opts = [
                default='month',
                help='time period to generate instance usages for.  '
                     'Time period must be hour, day, month or year'),
-    cfg.IntOpt('bandwith_poll_interval',
+    cfg.IntOpt('bandwidth_poll_interval',
+               deprecated_name='bandwith_poll_interval',
                default=600,
                help='interval to pull bandwidth usage info'),
     cfg.BoolOpt('start_guests_on_host_boot',
@@ -370,9 +359,6 @@ global_opts = [
                 default=False,
                 help='Allow destination machine to match source for resize. '
                      'Useful when testing in single-host environments.'),
-    cfg.BoolOpt('stub_network',
-                default=False,
-                help='Stub network related code'),
     cfg.IntOpt('reclaim_instance_interval',
                default=0,
                help='Interval in seconds for reclaiming deleted instances'),

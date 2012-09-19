@@ -63,7 +63,6 @@ import optparse
 import os
 import sys
 
-
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
 POSSIBLE_TOPDIR = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
@@ -92,7 +91,6 @@ from nova import quota
 from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova import utils
 from nova import version
-from nova.volume import volume_types
 
 FLAGS = flags.FLAGS
 flags.DECLARE('flat_network_bridge', 'nova.network.manager')
@@ -116,13 +114,13 @@ def args(*args, **kwargs):
 
 
 def param2id(object_id):
-    """Helper function to convert various id types to internal id.
+    """Helper function to convert various volume id types to internal id.
     args: [object_id], e.g. 'vol-0000000a' or 'volume-0000000a' or '10'
     """
     if '-' in object_id:
-        return ec2utils.ec2_id_to_id(object_id)
+        return ec2utils.ec2_vol_id_to_uuid(object_id)
     else:
-        return int(object_id)
+        return object_id
 
 
 class VpnCommands(object):
@@ -396,12 +394,11 @@ class FloatingIpCommands(object):
     @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
     def delete(self, ip_range):
         """Deletes floating ips by range"""
-        for address in self.address_to_hosts(ip_range):
-            try:
-                db.floating_ip_destroy(context.get_admin_context(),
-                                       str(address))
-            except exception.FloatingIpNotFoundForAddress as ex:
-                print "Warning: %s" % ex
+        admin_context = context.get_admin_context()
+
+        ips = ({'address': str(address)}
+               for address in self.address_to_hosts(ip_range))
+        db.floating_ip_bulk_destroy(admin_context, ips)
 
     @args('--host', dest="host", metavar='<host>', help='Host')
     def list(self, host=None):
@@ -434,7 +431,7 @@ class NetworkCommands(object):
 
     @args('--label', dest="label", metavar='<label>',
             help='Label for network (ex: public)')
-    @args('--fixed_range_v4', dest="fixed_range_v4", metavar='<x.x.x.x/yy>',
+    @args('--fixed_range_v4', dest="cidr", metavar='<x.x.x.x/yy>',
             help='IPv4 subnet (ex: 10.0.0.0/8)')
     @args('--num_networks', dest="num_networks", metavar='<number>',
             help='Number of networks to create')
@@ -442,7 +439,7 @@ class NetworkCommands(object):
             help='Number of IPs per network')
     @args('--vlan', dest="vlan_start", metavar='<vlan id>', help='vlan id')
     @args('--vpn', dest="vpn_start", help='vpn start')
-    @args('--fixed_range_v6', dest="fixed_range_v6",
+    @args('--fixed_range_v6', dest="cidr_v6",
           help='IPv6 subnet (ex: fe80::/64')
     @args('--gateway', dest="gateway", help='gateway')
     @args('--gateway_v6', dest="gateway_v6", help='ipv6 gateway')
@@ -464,91 +461,19 @@ class NetworkCommands(object):
       help='Project id')
     @args('--priority', dest="priority", metavar="<number>",
       help='Network interface priority')
-    def create(self, label=None, fixed_range_v4=None, num_networks=None,
+    def create(self, label=None, cidr=None, num_networks=None,
                network_size=None, multi_host=None, vlan_start=None,
-               vpn_start=None, fixed_range_v6=None, gateway=None,
+               vpn_start=None, cidr_v6=None, gateway=None,
                gateway_v6=None, bridge=None, bridge_interface=None,
                dns1=None, dns2=None, project_id=None, priority=None,
                uuid=None, fixed_cidr=None):
         """Creates fixed ips for host by range"""
-
-        # check for certain required inputs
-        if not label:
-            raise exception.NetworkNotCreated(req='--label')
-        # Size of "label" column in nova.networks is 255, hence the restriction
-        if len(label) > 255:
-            reason = _("Maximum allowed length for 'label' is 255.")
-            raise exception.InvalidInput(reason=reason)
-        if not (fixed_range_v4 or fixed_range_v6):
-            req = '--fixed_range_v4 or --fixed_range_v6'
-            raise exception.NetworkNotCreated(req=req)
-
-        bridge = bridge or FLAGS.flat_network_bridge
-        if not bridge:
-            bridge_required = ['nova.network.manager.FlatManager',
-                               'nova.network.manager.FlatDHCPManager']
-            if FLAGS.network_manager in bridge_required:
-                raise exception.NetworkNotCreated(req='--bridge')
-
-        bridge_interface = (bridge_interface or FLAGS.flat_interface or
-                            FLAGS.vlan_interface)
-        if not bridge_interface:
-            interface_required = ['nova.network.manager.VlanManager']
-            if FLAGS.network_manager in interface_required:
-                raise exception.NetworkNotCreated(req='--bridge_interface')
-
-        # sanitize other input using FLAGS if necessary
-        if not num_networks:
-            num_networks = FLAGS.num_networks
-        if not network_size and fixed_range_v4:
-            fixnet = netaddr.IPNetwork(fixed_range_v4)
-            each_subnet_size = fixnet.size / int(num_networks)
-            if each_subnet_size > FLAGS.network_size:
-                network_size = FLAGS.network_size
-                subnet = 32 - int(math.log(network_size, 2))
-                oversize_msg = _('Subnet(s) too large, defaulting to /%s.'
-                         '  To override, specify network_size flag.') % subnet
-                print oversize_msg
-            else:
-                network_size = fixnet.size
-        if not multi_host:
-            multi_host = FLAGS.multi_host
-        else:
-            multi_host = multi_host == 'T'
-        if not vlan_start:
-            vlan_start = FLAGS.vlan_start
-        if not vpn_start:
-            vpn_start = FLAGS.vpn_start
-        if not dns1 and FLAGS.flat_network_dns:
-            dns1 = FLAGS.flat_network_dns
-
-        if not network_size:
-            network_size = FLAGS.network_size
-
-        if fixed_cidr:
-            fixed_cidr = netaddr.IPNetwork(fixed_cidr)
-
-        # create the network
+        kwargs = dict(((k, v) for k, v in locals().iteritems()
+                       if v and k != "self"))
+        if multi_host is not None:
+            kwargs['multi_host'] = multi_host == 'T'
         net_manager = importutils.import_object(FLAGS.network_manager)
-        net_manager.create_networks(context.get_admin_context(),
-                                    label=label,
-                                    cidr=fixed_range_v4,
-                                    multi_host=multi_host,
-                                    num_networks=int(num_networks),
-                                    network_size=int(network_size),
-                                    vlan_start=int(vlan_start),
-                                    vpn_start=int(vpn_start),
-                                    cidr_v6=fixed_range_v6,
-                                    gateway=gateway,
-                                    gateway_v6=gateway_v6,
-                                    bridge=bridge,
-                                    bridge_interface=bridge_interface,
-                                    dns1=dns1,
-                                    dns2=dns2,
-                                    project_id=project_id,
-                                    priority=priority,
-                                    uuid=uuid,
-                                    fixed_cidr=fixed_cidr)
+        net_manager.create_networks(context.get_admin_context(), **kwargs)
 
     def list(self):
         """List all created networks"""
@@ -856,8 +781,17 @@ class VolumeCommands(object):
     @args('--volume', dest='volume_id', metavar='<volume id>',
             help='Volume ID')
     def delete(self, volume_id):
-        """Delete a volume, bypassing the check that it
+        """WARNING: This method is deprecated and will be removed.
+        Delete a volume, bypassing the check that it
         must be available."""
+
+        print(_("\"nova-manage volume delete\" is deprecated; use"
+                " the os-reset_status os-admin-actions extension instead."))
+        if 'cinder' in FLAGS.volume_api_class:
+            print(_("\"nova-manage volume delete\" only valid "
+                    "when using nova-volume service"))
+            sys.exit(1)
+
         ctxt = context.get_admin_context()
         volume = db.volume_get(ctxt, param2id(volume_id))
         host = volume['host']
@@ -865,7 +799,7 @@ class VolumeCommands(object):
         if not host:
             print "Volume not yet assigned to host."
             print "Deleting volume from database and skipping rpc."
-            db.volume_destroy(ctxt, param2id(volume_id))
+            db.volume_destroy(ctxt, volume_id)
             return
 
         if volume['status'] == 'in-use':
@@ -884,8 +818,15 @@ class VolumeCommands(object):
         """Re-attach a volume that has previously been attached
         to an instance.  Typically called after a compute host
         has been rebooted."""
+
+        if 'cinder' in FLAGS.volume_api_class:
+            print(_("\"nova-manage volume reattach\" only valid "
+                    "when using nova-volume service"))
+            sys.exit(1)
+
         ctxt = context.get_admin_context()
         volume = db.volume_get(ctxt, param2id(volume_id))
+
         if not volume['instance_id']:
             print "volume is not attached to an instance"
             return
@@ -900,11 +841,12 @@ class InstanceTypeCommands(object):
 
     def _print_instance_types(self, name, val):
         deleted = ('', ', inactive')[val["deleted"] == 1]
+        is_public = ('private', 'public')[val["is_public"] == 1]
         print ("%s: Memory: %sMB, VCPUS: %s, Root: %sGB, Ephemeral: %sGb, "
-            "FlavorID: %s, Swap: %sMB, RXTX Factor: %s, ExtraSpecs %s") % (
+            "FlavorID: %s, Swap: %sMB, RXTX Factor: %s, %s, ExtraSpecs %s") % (
             name, val["memory_mb"], val["vcpus"], val["root_gb"],
             val["ephemeral_gb"], val["flavorid"], val["swap"],
-            val["rxtx_factor"], val["extra_specs"])
+            val["rxtx_factor"], is_public, val["extra_specs"])
 
     @args('--name', dest='name', metavar='<name>',
             help='Name of instance type/flavor')
@@ -920,12 +862,15 @@ class InstanceTypeCommands(object):
     @args('--swap', dest='swap', metavar='<swap>', help='Swap')
     @args('--rxtx_factor', dest='rxtx_factor', metavar='<rxtx_factor>',
             help='rxtx_factor')
-    def create(self, name, memory, vcpus, root_gb, ephemeral_gb, flavorid,
-               swap=0, rxtx_factor=1):
+    @args('--is_public', dest="is_public", metavar='<is_public>',
+            help='Make flavor accessible to the public')
+    def create(self, name, memory, vcpus, root_gb, ephemeral_gb, flavorid=None,
+               swap=0, rxtx_factor=1, is_public=True):
         """Creates instance types / flavors"""
         try:
             instance_types.create(name, memory, vcpus, root_gb,
-                                  ephemeral_gb, flavorid, swap, rxtx_factor)
+                                  ephemeral_gb, flavorid, swap, rxtx_factor,
+                                  is_public)
         except exception.InvalidInput, e:
             print "Must supply valid parameters to create instance_type"
             print e
