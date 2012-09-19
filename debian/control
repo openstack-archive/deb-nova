@@ -29,6 +29,8 @@ Build-Depends-Indep:
  python-glance,
  python-paramiko,
  python-novaclient (>= 2.6.7),
+ python-glanceclient,
+ python-quantumclient,
  python-lockfile,
  python-simplejson,
  python-lxml,
