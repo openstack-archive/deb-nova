@@ -49,7 +49,8 @@ Build-Depends-Indep:
  python-xenapi,
  python-tox,
  python-qpid,
- pep8
+ pep8,
+ procps
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.3
 Homepage: http://launchpad.net/nova
