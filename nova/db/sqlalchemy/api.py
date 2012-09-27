@@ -47,8 +47,6 @@ from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.sql import func
 
 FLAGS = flags.FLAGS
-flags.DECLARE('reserved_host_disk_mb', 'nova.scheduler.host_manager')
-flags.DECLARE('reserved_host_memory_mb', 'nova.scheduler.host_manager')
 
 LOG = logging.getLogger(__name__)
 
@@ -1596,6 +1594,11 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
     query_prefix = regex_filter(query_prefix, models.Instance, filters)
 
     # paginate query
+    if marker is not None:
+        try:
+            marker = instance_get_by_uuid(context, marker, session=session)
+        except exception.InstanceNotFound as e:
+            raise exception.MarkerNotFound(marker)
     query_prefix = paginate_query(query_prefix, models.Instance, limit,
                            [sort_key, 'created_at', 'id'],
                            marker=marker,
@@ -4856,14 +4859,9 @@ def aggregate_create(context, values, metadata=None):
                                      models.Aggregate.name,
                                      values['name'],
                                      session=session,
-                                     read_deleted='yes').first()
+                                     read_deleted='no').first()
     if not aggregate:
         aggregate = models.Aggregate()
-        aggregate.update(values)
-        aggregate.save(session=session)
-    elif aggregate.deleted:
-        values['deleted'] = False
-        values['deleted_at'] = None
         aggregate.update(values)
         aggregate.save(session=session)
     else:
@@ -4949,6 +4947,14 @@ def aggregate_delete(context, aggregate_id):
                       'updated_at': literal_column('updated_at')})
     else:
         raise exception.AggregateNotFound(aggregate_id=aggregate_id)
+
+    #Delete Metadata
+    rows = model_query(context,
+                       models.AggregateMetadata).\
+                       filter_by(aggregate_id=aggregate_id).\
+                       update({'deleted': True,
+                      'deleted_at': timeutils.utcnow(),
+                      'updated_at': literal_column('updated_at')})
 
 
 @require_admin_context

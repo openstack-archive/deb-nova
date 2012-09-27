@@ -213,7 +213,7 @@ def _get_image_meta(context, image_ref):
 class ComputeManager(manager.SchedulerDependentManager):
     """Manages the running instances from creation to destruction."""
 
-    RPC_API_VERSION = '2.1'
+    RPC_API_VERSION = '2.2'
 
     def __init__(self, compute_driver=None, *args, **kwargs):
         """Load configuration options and connect to the hypervisor."""
@@ -253,8 +253,7 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         (old_ref, instance_ref) = self.db.instance_update_and_get_original(
                 context, instance_uuid, kwargs)
-        self.resource_tracker.update_load_stats_for_instance(context,
-                instance_ref)
+        self.resource_tracker.update_usage(context, instance_ref)
         notifications.send_update(context, old_ref, instance_ref)
 
         return instance_ref
@@ -482,10 +481,14 @@ class ComputeManager(manager.SchedulerDependentManager):
             network_info = self._allocate_network(context, instance,
                                                   requested_networks)
             try:
-                memory_mb_limit = filter_properties.get('memory_mb_limit',
-                        None)
-                with self.resource_tracker.instance_resource_claim(context,
-                        instance, memory_mb_limit=memory_mb_limit):
+                limits = filter_properties.get('limits', {})
+                with self.resource_tracker.resource_claim(context, instance,
+                        limits):
+                    # Resources are available to build this instance here,
+                    # mark it as belonging to this host:
+                    self._instance_update(context, instance['uuid'],
+                            host=self.host, launched_on=self.host)
+
                     block_device_info = self._prep_block_device(context,
                             instance)
                     instance = self._spawn(context, instance, image_meta,
@@ -686,7 +689,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         LOG.audit(_('Starting instance...'), context=context,
                   instance=instance)
         self._instance_update(context, instance['uuid'],
-                              host=self.host, launched_on=self.host,
                               vm_state=vm_states.BUILDING,
                               task_state=None,
                               expected_task_state=(task_states.SCHEDULING,
@@ -880,7 +882,19 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_info_cache_delete(context, instance_uuid)
         self._notify_about_instance_usage(context, instance, "delete.start")
         self._shutdown_instance(context, instance)
-        self._cleanup_volumes(context, instance_uuid)
+        # NOTE(vish): We have already deleted the instance, so we have
+        #             to ignore problems cleaning up the volumes. It would
+        #             be nice to let the user know somehow that the volume
+        #             deletion failed, but it is not acceptable to have an
+        #             instance that can not be deleted. Perhaps this could
+        #             be reworked in the future to set an instance fault
+        #             the first time and to only ignore the failure if the
+        #             instance is already in ERROR.
+        try:
+            self._cleanup_volumes(context, instance_uuid)
+        except Exception as exc:
+            LOG.warn(_("Ignoring volume cleanup failure due to %s") % exc,
+                     instance_uuid=instance_uuid)
         # if a delete task succeed, always update vm state and task state
         # without expecting task state to be DELETING
         instance = self._instance_update(context,
@@ -891,8 +905,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.db.instance_destroy(context, instance_uuid)
         system_meta = self.db.instance_system_metadata_get(context,
             instance_uuid)
-        # mark resources free
-        self.resource_tracker.free_resources(context)
         self._notify_about_instance_usage(context, instance, "delete.end",
                 system_metadata=system_meta)
 
@@ -2141,14 +2153,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         """
         try:
-            # Checking volume node is working correctly when any volumes
-            # are attached to instances.
-            if self._get_instance_volume_bdms(context, instance['uuid']):
-                rpc.call(context,
-                          FLAGS.volume_topic,
-                          {'method': 'check_for_export',
-                           'args': {'instance_id': instance['id']}})
-
             if block_migration:
                 disk = self.driver.get_instance_disk_info(instance['name'])
             else:
@@ -2812,11 +2816,12 @@ class ComputeManager(manager.SchedulerDependentManager):
                 self._set_instance_error_state(context, instance_uuid)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    def add_aggregate_host(self, context, aggregate_id, host):
+    def add_aggregate_host(self, context, aggregate_id, host, slave_info=None):
         """Notify hypervisor of change (for hypervisor pools)."""
         aggregate = self.db.aggregate_get(context, aggregate_id)
         try:
-            self.driver.add_to_aggregate(context, aggregate, host)
+            self.driver.add_to_aggregate(context, aggregate, host,
+                                         slave_info=slave_info)
         except exception.AggregateError:
             with excutils.save_and_reraise_exception():
                 self.driver.undo_aggregate_operation(context,
@@ -2824,11 +2829,13 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                aggregate.id, host)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    def remove_aggregate_host(self, context, aggregate_id, host):
+    def remove_aggregate_host(self, context, aggregate_id,
+                              host, slave_info=None):
         """Removes a host from a physical hypervisor pool."""
         aggregate = self.db.aggregate_get(context, aggregate_id)
         try:
-            self.driver.remove_from_aggregate(context, aggregate, host)
+            self.driver.remove_from_aggregate(context, aggregate, host,
+                                              slave_info=slave_info)
         except (exception.AggregateError,
                 exception.InvalidAggregateAction) as e:
             with excutils.save_and_reraise_exception():

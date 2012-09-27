@@ -605,6 +605,11 @@ class FixedIpAlreadyInUse(NovaException):
                 "%(instance_uuid)s.")
 
 
+class FixedIpAssociatedWithMultipleInstances(NovaException):
+    message = _("More than one instance is associated with fixed ip address "
+                "'%(address)s'.")
+
+
 class FixedIpInvalid(Invalid):
     message = _("Fixed IP address %(address)s is invalid.")
 
@@ -1065,6 +1070,10 @@ class DuplicateVlan(Duplicate):
 
 class InstanceNotFound(NotFound):
     message = _("Instance %(instance_id)s could not be found.")
+
+
+class MarkerNotFound(NotFound):
+    message = _("Marker %(marker)s could not be found.")
 
 
 class InvalidInstanceIDMalformed(Invalid):

@@ -126,18 +126,23 @@ class DbApiTestCase(test.TestCase):
         result = db.instance_get_all_by_filters(self.context,
                                                 {'display_name': '%test%'},
                                                 sort_dir="asc",
-                                                marker=test1)
+                                                marker=test1['uuid'])
         self.assertEqual(2, len(result))
         result = db.instance_get_all_by_filters(self.context,
                                                 {'display_name': '%test%'},
                                                 sort_dir="asc",
-                                                marker=test2)
+                                                marker=test2['uuid'])
         self.assertEqual(1, len(result))
         result = db.instance_get_all_by_filters(self.context,
                                                 {'display_name': '%test%'},
                                                 sort_dir="asc",
-                                                marker=test3)
+                                                marker=test3['uuid'])
         self.assertEqual(0, len(result))
+
+        self.assertRaises(exception.MarkerNotFound,
+                          db.instance_get_all_by_filters,
+                          self.context, {'display_name': '%test%'},
+                          marker=str(utils.gen_uuid()))
 
     def test_migration_get_unconfirmed_by_dest_compute(self):
         ctxt = context.get_admin_context()
@@ -604,6 +609,17 @@ class AggregateDBApiTestCase(test.TestCase):
         result = _create_aggregate(context=ctxt)
         expected_metadata = db.aggregate_metadata_get(ctxt, result['id'])
         self.assertDictMatch(expected_metadata, _get_fake_aggr_metadata())
+
+    def test_aggregate_create_delete_create_with_metadata(self):
+        """Ensure aggregate metadata is deleted bug 1052479."""
+        ctxt = context.get_admin_context()
+        result = _create_aggregate(context=ctxt)
+        expected_metadata = db.aggregate_metadata_get(ctxt, result['id'])
+        self.assertDictMatch(expected_metadata, _get_fake_aggr_metadata())
+        db.aggregate_delete(ctxt, result['id'])
+        result = _create_aggregate(metadata=None)
+        expected_metadata = db.aggregate_metadata_get(ctxt, result['id'])
+        self.assertEqual(expected_metadata, {})
 
     def test_aggregate_create_low_privi_context(self):
         """Ensure right context is applied when creating aggregate."""

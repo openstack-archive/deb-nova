@@ -86,8 +86,8 @@ class SanISCSIDriver(nova.volume.driver.ISCSIDriver):
     remote protocol.
     """
 
-    def __init__(self):
-        super(SanISCSIDriver, self).__init__()
+    def __init__(self, *args, **kwargs):
+        super(SanISCSIDriver, self).__init__(*args, **kwargs)
         self.run_local = FLAGS.san_is_local
 
     def _build_iscsi_target_name(self, volume):
@@ -120,7 +120,7 @@ class SanISCSIDriver(nova.volume.driver.ISCSIDriver):
             return utils.execute(*cmd, **kwargs)
         else:
             check_exit_code = kwargs.pop('check_exit_code', None)
-            command = ' '.join(*cmd)
+            command = ' '.join(cmd)
             return self._run_ssh(command, check_exit_code)
 
     def _run_ssh(self, command, check_exit_code=True):
@@ -211,9 +211,8 @@ class SolarisISCSIDriver(SanISCSIDriver):
 
     def _execute(self, *cmd, **kwargs):
         new_cmd = ['pfexec']
-        new_cmd.extend(*cmd)
-        return super(SolarisISCSIDriver, self)._execute(self,
-                                                        *new_cmd,
+        new_cmd.extend(cmd)
+        return super(SolarisISCSIDriver, self)._execute(*new_cmd,
                                                         **kwargs)
 
     def _view_exists(self, luid):
@@ -579,9 +578,12 @@ class HpSanISCSIDriver(SanISCSIDriver):
         iscsi_portal = cluster_vip + ":3260," + cluster_interface
 
         model_update = {}
-        model_update['provider_location'] = ("%s %s" %
+
+        # NOTE(jdg): LH volumes always at lun 0 ?
+        model_update['provider_location'] = ("%s %s %s" %
                                              (iscsi_portal,
-                                              iscsi_iqn))
+                                              iscsi_iqn,
+                                              0))
 
         return model_update
 

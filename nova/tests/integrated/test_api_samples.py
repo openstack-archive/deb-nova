@@ -917,3 +917,74 @@ class KeyPairsSampleJsonTest(ApiSampleTestBase):
 
 class KeyPairsSampleXmlTest(KeyPairsSampleJsonTest):
     ctype = 'xml'
+
+
+class RescueJsonTest(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib"
+                     ".rescue.Rescue")
+
+    def _rescue(self, uuid):
+        req_subs = {
+            'password': 'MySecretPass'
+        }
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'server-rescue-req', req_subs)
+        self._verify_response('server-rescue', req_subs, response)
+
+    def _unrescue(self, uuid):
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'server-unrescue-req', {})
+        self.assertEqual(response.status, 202)
+
+    def test_server_rescue(self):
+        uuid = self._post_server()
+
+        self._rescue(uuid)
+
+        # Do a server get to make sure that the 'RESCUE' state is set
+        response = self._do_get('servers/%s' % uuid)
+        subs = self._get_regexes()
+        subs['hostid'] = '[a-f0-9]+'
+        subs['id'] = uuid
+        subs['status'] = 'RESCUE'
+
+        self._verify_response('server-get-resp-rescue', subs, response)
+
+    def test_server_unrescue(self):
+        uuid = self._post_server()
+
+        self._rescue(uuid)
+        self._unrescue(uuid)
+
+        # Do a server get to make sure that the 'ACTIVE' state is back
+        response = self._do_get('servers/%s' % uuid)
+        subs = self._get_regexes()
+        subs['hostid'] = '[a-f0-9]+'
+        subs['id'] = uuid
+        subs['status'] = 'ACTIVE'
+
+        self._verify_response('server-get-resp-unrescue', subs, response)
+
+
+class RescueXmlTest(RescueJsonTest):
+    ctype = 'xml'
+
+
+class VirtualInterfacesJsonTest(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib"
+                     ".virtual_interfaces.Virtual_interfaces")
+
+    def test_vifs_list(self):
+        uuid = self._post_server()
+
+        response = self._do_get('servers/%s/os-virtual-interfaces' % uuid)
+        self.assertEqual(response.status, 200)
+
+        subs = self._get_regexes()
+        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
+
+        self._verify_response('vifs-list-resp', subs, response)
+
+
+class VirtualInterfacesXmlTest(VirtualInterfacesJsonTest):
+    ctype = 'xml'

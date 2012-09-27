@@ -75,7 +75,7 @@ class TargetAdmin(object):
         """Delete a target."""
         raise NotImplementedError()
 
-    def show_target(self, tid, **kwargs):
+    def show_target(self, tid, iqn=None, **kwargs):
         """Query the given target ID."""
         raise NotImplementedError()
 
@@ -119,7 +119,8 @@ class TgtAdm(TargetAdmin):
         """ % (name, path)
 
         LOG.info(_('Creating volume: %s') % vol_id)
-        volume_path = os.path.join(FLAGS.volumes_dir, vol_id)
+        volumes_dir = FLAGS.volumes_dir
+        volume_path = os.path.join(volumes_dir, vol_id)
 
         f = open(volume_path, 'w+')
         f.write(volume_conf)
@@ -127,8 +128,6 @@ class TgtAdm(TargetAdmin):
 
         try:
             (out, err) = self._execute('tgt-admin',
-                                       '--conf',
-                                       volume_path,
                                        '--update',
                                        name,
                                        run_as_root=True)
@@ -143,6 +142,9 @@ class TgtAdm(TargetAdmin):
         iqn = '%s%s' % (FLAGS.iscsi_target_prefix, vol_id)
         tid = self._get_target(iqn)
         if tid is None:
+            LOG.error(_("Failed to create iscsi target for volume "
+                        "id:%(vol_id)s. Please ensure your tgtd config file "
+                        "contains 'include %(volumes_dir)s/*'") % locals())
             raise exception.NotFound()
 
         return tid
@@ -168,9 +170,7 @@ class TgtAdm(TargetAdmin):
 
         os.unlink(volume_path)
 
-    def show_target(self, tid, **kwargs):
-        iqn = kwargs.get('iqn', None)
-
+    def show_target(self, tid, iqn=None, **kwargs):
         if iqn is None:
             raise exception.InvalidParameterValue(
                 err=_('valid iqn needed for show_target'))
@@ -193,8 +193,8 @@ class IetAdm(TargetAdmin):
 
     def remove_iscsi_target(self, tid, lun, vol_id, **kwargs):
         LOG.info(_('Removing volume: %s') % vol_id)
-        self._delete_target(tid, **kwargs)
         self._delete_logicalunit(tid, lun, **kwargs)
+        self._delete_target(tid, **kwargs)
 
     def _new_target(self, name, tid, **kwargs):
         self._run('--op', 'new',
@@ -207,7 +207,7 @@ class IetAdm(TargetAdmin):
                   '--tid=%s' % tid,
                   **kwargs)
 
-    def show_target(self, tid, **kwargs):
+    def show_target(self, tid, iqn=None, **kwargs):
         self._run('--op', 'show',
                   '--tid=%s' % tid,
                   **kwargs)
