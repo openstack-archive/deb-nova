@@ -3,6 +3,5 @@ usr/bin/nova-rootwrap
 etc/nova/policy.json etc/nova
 etc/nova/api-paste.ini etc/nova
 etc/nova/rootwrap.conf etc/nova
-debian/nova_sudoers etc/sudoers.d
 debian/nova.conf.dist usr/share/doc/nova-common
 etc/nova/policy.json etc/nova
