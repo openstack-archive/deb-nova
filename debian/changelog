@@ -1,6 +1,12 @@
 nova (2012.2-1) experimental; urgency=low
 
-  * New upstream version
+  [ Mehdi Abaakouk ]
+  * New upstream version.
+
+  [ Thomas Goirand ]
+  * Ordered debian/control build-depends and python-nova depends by alpha
+  order.
+  * Added new dependency to python-babel.
 
  -- Mehdi Abaakouk <sileht@sileht.net>  Thu, 27 Sep 2012 10:58:39 +0200
 
