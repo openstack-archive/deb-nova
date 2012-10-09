@@ -8,6 +8,8 @@ PACKAGE_NAME=python-nova
 debroot = debian/tmp
 site_packages_dir=$(debroot)$(call py_libdir,$(shell pyversions -d))
 
+export UPSTR_VER=$(shell dpkg-parsechangelog | grep Version: | cut -d" " -f2 | cut -d"-" -f1)
+
 %:
 	dh $@ --with python2
 
@@ -84,7 +86,7 @@ override_dh_python2:
 get-vcs-source:
 	git remote add upstream git://github.com/openstack/nova.git || true
 	git fetch upstream
-	git archive --prefix=nova-2012.1/ 2012.1 | xz >../nova_2012.1.orig.tar.xz
+	git archive --prefix=nova-$(UPSTR_VER)/ $(UPSTR_VER) | xz >../nova_$(UPSTR_VER).orig.tar.xz
 	if ! git checkout master ; then \
 		echo "No upstream branch: checking out" ; \
 		git checkout -b master upstream/master ; \
