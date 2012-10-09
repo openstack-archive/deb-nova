@@ -91,7 +91,7 @@ get-vcs-source:
 		echo "No upstream branch: checking out" ; \
 		git checkout -b master upstream/master ; \
 	fi
-	git checkout debian/unstable
+	git checkout debian/experimental
 
 display-po-stats:
 	cd $(CURDIR)/debian/po ; for i in *.po ; do \
