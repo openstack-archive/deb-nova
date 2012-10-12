@@ -25,7 +25,6 @@ Build-Depends-Indep:
  python-eventlet,
  python-feedparser,
  python-gflags,
- python-glance,
  python-glanceclient,
  python-greenlet,
  python-iso8601,
