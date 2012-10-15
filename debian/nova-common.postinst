@@ -67,11 +67,9 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
         fi
     fi
 
-    if ! grep -q sql_connection /etc/nova/nova.conf
-    then
+    if [ -z "$2" ] ; then
         su -s /bin/sh -c 'nova-manage db sync' nova
     fi
-
 
     db_get nova-common/start_services
     if [ " $RET" = "false" ]; then
