@@ -75,7 +75,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 
     db_get nova-common/start_services
     if [ " $RET" = "false" ]; then
-        sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova
+        sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova-common
     fi
 fi
 
