@@ -30,6 +30,9 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
     if ! [ -e ${NOVA_CONF} ] ; then
         cp /usr/share/doc/nova-common/nova.conf.dist ${NOVA_CONF}
     fi
+    if ! [ -e ${NOVA_API_CONF} ] ; then
+        cp /usr/share/doc/nova-common/api-paste.ini ${NOVA_API_CONF}
+    fi
 
     chown nova:nova /var/log/nova ${NOVA_CONF}
     if [ -z "$2" ]; then

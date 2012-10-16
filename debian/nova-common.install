@@ -1,7 +1,7 @@
 usr/bin/nova-manage
 usr/bin/nova-rootwrap
 etc/nova/policy.json etc/nova
-etc/nova/api-paste.ini etc/nova
+etc/nova/api-paste.ini usr/share/doc/nova-common
 etc/nova/rootwrap.conf etc/nova
 debian/nova.conf.dist usr/share/doc/nova-common
 etc/nova/policy.json etc/nova
