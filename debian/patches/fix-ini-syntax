@@ -1,0 +1,42 @@
+Index: nova/etc/nova/api-paste.ini
+===================================================================
+--- nova.orig/etc/nova/api-paste.ini
++++ nova/etc/nova/api-paste.ini
+@@ -3,7 +3,7 @@
+ ############
+ [composite:metadata]
+ use = egg:Paste#urlmap
+-/: meta
++/ = meta
+ 
+ [pipeline:meta]
+ pipeline = ec2faultwrap logrequest metaapp
+@@ -17,7 +17,7 @@
+ 
+ [composite:ec2]
+ use = egg:Paste#urlmap
+-/services/Cloud: ec2cloud
++/services/Cloud = ec2cloud
+ 
+ [composite:ec2cloud]
+ use = call:nova.api.auth:pipeline_factory
+@@ -58,14 +58,14 @@
+ 
+ [composite:osapi_compute]
+ use = call:nova.api.openstack.urlmap:urlmap_factory
+-/: oscomputeversions
+-/v1.1: openstack_compute_api_v2
+-/v2: openstack_compute_api_v2
++/ = oscomputeversions
++/v1.1 = openstack_compute_api_v2
++/v2 = openstack_compute_api_v2
+ 
+ [composite:osapi_volume]
+ use = call:nova.api.openstack.urlmap:urlmap_factory
+-/: osvolumeversions
+-/v1: openstack_volume_api_v1
++/ = osvolumeversions
++/v1 = openstack_volume_api_v1
+ 
+ [composite:openstack_compute_api_v2]
+ use = call:nova.api.auth:pipeline_factory
