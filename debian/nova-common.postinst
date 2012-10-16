@@ -2,6 +2,17 @@
 
 set -e
 
+confset () {
+    file="$1"
+    section="$2"
+    var="$3"
+    value="$4"
+    python -c "import configobj
+config=configobj.ConfigObj('$file')
+config['$section']['$var']='$value'
+config.write()"
+}
+
 if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
     . /usr/share/debconf/confmodule
     . /usr/share/dbconfig-common/dpkg/postinst
@@ -30,7 +41,6 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
             -group nogroup -a -user nova -exec chown nova:nova {} \;
     fi
 
-
     db_get nova-common/configure_db
     if [ "$RET" = "true" ]; then
         dbc_dbfile_owner="nova:nova"
@@ -56,7 +66,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 		esac
 	    fi
 
-            sed -e "s,^[- \t]*sql_connection=.\+,sql_connection=$SQL_CONNECTION," -i /etc/nova/nova.conf
+	    confset /etc/nova/nova.conf DEFAULT sql_connection "$SQL_CONNECTION"
 
 	    if [ "$dbc_upgrade" = "true" ] ; then
 		nova-manage db sync
