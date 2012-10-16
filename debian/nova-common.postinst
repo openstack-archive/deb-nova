@@ -77,13 +77,13 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
     fi
 
     db_get nova-common/auth-host
-    confset ${NOVA_CONF} keystone_authtoken auth_host ${RET}
+    confset ${NOVA_CONF} filter:authtoken auth_host ${RET}
     db_get nova-common/admin-tenant-name
-    confset ${NOVA_CONF} keystone_authtoken admin_tenant_name ${RET}
+    confset ${NOVA_CONF} filter:authtoken admin_tenant_name ${RET}
     db_get nova-common/admin-user
-    confset ${NOVA_CONF} keystone_authtoken admin_user ${RET}
+    confset ${NOVA_CONF} filter:authtoken admin_user ${RET}
     db_get nova-common/admin-password
-    confset ${NOVA_CONF} keystone_authtoken admin_password ${RET}
+    confset ${NOVA_CONF} filter:authtoken admin_password ${RET}
 
     db_get nova-common/start_services
     if [ " $RET" = "false" ]; then
