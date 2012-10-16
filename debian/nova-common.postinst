@@ -13,6 +13,8 @@ config['$section']['$var']='$value'
 config.write()"
 }
 
+NOVA_CONF=/etc/nova/nova.conf
+
 if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
     . /usr/share/debconf/confmodule
     . /usr/share/dbconfig-common/dpkg/postinst
@@ -24,11 +26,11 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
     if ! [ -d /etc/nova ] ; then
         mkdir /etc/nova
     fi
-    if ! [ -e /etc/nova/nova.conf ] ; then
-        cp /usr/share/doc/nova-common/nova.conf.dist /etc/nova/nova.conf
+    if ! [ -e ${NOVA_CONF} ] ; then
+        cp /usr/share/doc/nova-common/nova.conf.dist ${NOVA_CONF}
     fi
 
-    chown nova:nova /var/log/nova /etc/nova/nova.conf
+    chown nova:nova /var/log/nova ${NOVA_CONF}
     if [ -z "$2" ]; then
         # New install - blanket permissions
         chown -R nova:nova /var/lib/nova/
@@ -66,7 +68,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 		esac
 	    fi
 
-	    confset /etc/nova/nova.conf DEFAULT sql_connection "$SQL_CONNECTION"
+	    confset ${NOVA_CONF} DEFAULT sql_connection "$SQL_CONNECTION"
 
 	    if [ "$dbc_upgrade" = "true" ] ; then
 		nova-manage db sync
@@ -74,13 +76,22 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
         fi
     fi
 
+    db_get nova-common/auth-host
+    confset ${NOVA_CONF} keystone_authtoken auth_host ${RET}
+    db_get nova-common/admin-tenant-name
+    confset ${NOVA_CONF} keystone_authtoken admin_tenant_name ${RET}
+    db_get nova-common/admin-user
+    confset ${NOVA_CONF} keystone_authtoken admin_user ${RET}
+    db_get nova-common/admin-password
+    confset ${NOVA_CONF} keystone_authtoken admin_password ${RET}
+
     db_get nova-common/start_services
     if [ " $RET" = "false" ]; then
         sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova-common
     fi
 fi
 
-chmod 0640 /etc/nova/nova.conf
+chmod 0640 ${NOVA_CONF}
 chmod 0440 /etc/sudoers.d/nova_sudoers
 chmod 0750 /var/log/nova
 chmod 0755 /var/lib/nova
