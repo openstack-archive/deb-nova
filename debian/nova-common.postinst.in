@@ -2,104 +2,52 @@
 
 set -e
 
-confset () {
-    file="$1"
-    section="$2"
-    var="$3"
-    value="$4"
-    python -c "import configobj
-config=configobj.ConfigObj('$file')
-config['$section']['$var']='$value'
-config.write()"
-}
-
 NOVA_CONF=/etc/nova/nova.conf
 NOVA_API_CONF=/etc/nova/api-paste.ini
 
 #PKGOS-INCLUDE#
 
 if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
-    . /usr/share/debconf/confmodule
-    . /usr/share/dbconfig-common/dpkg/postinst
+	. /usr/share/debconf/confmodule
+	. /usr/share/dbconfig-common/dpkg/postinst
 
-    addgroup --quiet --system nova
-    adduser --quiet --system --home /var/lib/nova --ingroup nova --no-create-home --shell /bin/bash nova
+	# Create config files if they don't exist
+	pkgos_var_user_group nova
+	pkgos_write_new_conf nova nova.conf
+	pkgos_write_new_conf nova api-paste.ini
+	if [ -z "$2" ]; then
+		# New install - blanket permissions
+		chown -R nova:nova /var/lib/nova/
+	elif dpkg --compare-versions "$2" lt "2011.3"; then
+		# Make sure the LXC rootfs mount points are excluded
+		# during upgrades from previous versions
+		find /var/lib/nova/ -name 'rootfs' -prune -o \
+			-group root -a -user nova -exec chown nova:nova {} \;
+		find /var/lib/nova/ -name 'rootfs' -prune -o \
+			-group nogroup -a -user nova -exec chown nova:nova {} \;
+	fi
+	pkgos_dbc_postinst -sh /etc/nova/nova.conf nova sql_connection $@
 
-    # Create config files if they don't exist
-    if ! [ -d /etc/nova ] ; then
-        mkdir /etc/nova
-    fi
-    if ! [ -e ${NOVA_CONF} ] ; then
-        cp /usr/share/doc/nova-common/nova.conf.dist ${NOVA_CONF}
-    fi
-    if ! [ -e ${NOVA_API_CONF} ] ; then
-        cp /usr/share/doc/nova-common/api-paste.ini ${NOVA_API_CONF}
-    fi
-
-    chown nova:nova /var/log/nova ${NOVA_CONF} ${NOVA_API_CONF}
-    chmod 0640 ${NOVA_CONF} ${NOVA_API_CONF}
-    if [ -z "$2" ]; then
-        # New install - blanket permissions
-        chown -R nova:nova /var/lib/nova/
-    elif dpkg --compare-versions "$2" lt "2011.3"; then
-        # Make sure the LXC rootfs mount points are excluded
-        # during upgrades from previous versions
-        find /var/lib/nova/ -name 'rootfs' -prune -o \
-            -group root -a -user nova -exec chown nova:nova {} \;
-        find /var/lib/nova/ -name 'rootfs' -prune -o \
-            -group nogroup -a -user nova -exec chown nova:nova {} \;
-    fi
-
-    db_get nova-common/configure_db
-    if [ "$RET" = "true" ]; then
-        dbc_dbfile_owner="nova:nova"
-        dbc_go nova-common $@
-
-        if [ "$dbc_install" = "true" ] ; then
-	    if [ "$dbc_install" = "true" ] ; then
-		case "$dbc_dbtype" in
-		    mysql)
-			if [ -n "$dbc_dbport" ] ; then
-			    dbport=:$dbc_dbport
-			fi
-			SQL_CONNECTION="mysql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
-			;;
-		    postgresql*|pgsql)
-			if [ -n "$dbc_dbport" ] ; then
-			    dbport=:$dbc_dbport
-			fi
-			SQL_CONNECTION="postgresql://$dbc_dbuser:$dbc_dbpass@${dbc_dbserver:-localhost}$dbport/$dbc_dbname"
-			;;
-		    *)
-			SQL_CONNECTION="sqlite:///$dbc_basepath/$dbc_dbname"
-		esac
-	    fi
-
-	    confset ${NOVA_CONF} DEFAULT sql_connection "$SQL_CONNECTION"
-
-	    if [ "$dbc_upgrade" = "true" ] ; then
+	db_get nova/configure_db
+	if [ "$RET" = "true" ]; then
+		echo "Now running \"nova-manage db sync\", this make take a while..."
 		nova-manage db sync
-	    fi
-        fi
-    fi
+	fi
 
-    db_get nova-common/auth-host
-    confset ${NOVA_API_CONF} filter:authtoken auth_host ${RET}
-    db_get nova-common/admin-tenant-name
-    confset ${NOVA_API_CONF} filter:authtoken admin_tenant_name ${RET}
-    db_get nova-common/admin-user
-    confset ${NOVA_API_CONF} filter:authtoken admin_user ${RET}
-    db_get nova-common/admin-password
-    confset ${NOVA_API_CONF} filter:authtoken admin_password ${RET}
+	db_get nova/auth-host
+	pkgos_edit_config auth_host ${RET} ${NOVA_API_CONF} filter:authtoken
+	db_get nova/admin-tenant-name
+	pkgos_edit_config admin_tenant_name ${RET} ${NOVA_API_CONF} filter:authtoken
+	db_get nova/admin-user
+	pkgos_edit_config admin_user ${RET} ${NOVA_API_CONF} filter:authtoken
+	db_get nova/admin-password
+	pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
 
-    db_get nova-common/start_services
-    if [ " $RET" = "false" ]; then
-        sed -e "s,^NOVA_ENABLE=.\+,NOVA_ENABLE=false," -i /etc/default/nova-common
-    fi
+	chmod 0440 /etc/sudoers.d/nova_sudoers
+	chmod 0750 /var/log/nova
+	chmod 0755 /var/lib/nova
 fi
 
-chmod 0440 /etc/sudoers.d/nova_sudoers
-chmod 0750 /var/log/nova
-chmod 0755 /var/lib/nova
-
 #DEBHELPER#
+
+exit 0

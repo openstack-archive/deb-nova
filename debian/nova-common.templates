@@ -7,33 +7,33 @@
 # Even minor modifications require translation updates and such
 # changes should be coordinated with translators and reviewers.
 
-Template: nova-common/start_services
+Template: nova/start_services
 Type: boolean
 Default: true
 _Description: Start nova services at boot?
  Please choose whether you want to start Nova services when the
  machine is booted up.
 
-Template: nova-common/auth-host
+Template: nova/auth-host
 Type: string
 Default: 127.0.0.1
 _Description: Auth server hostname:
  Please specify the URL of your Nova authentication server. Typically
  this is also the URL of your OpenStack Identity Service (Keystone).
 
-Template: nova-common/admin-tenant-name
+Template: nova/admin-tenant-name
 Type: string
 _Description: Auth server tenant name:
 
-Template: nova-common/admin-user
+Template: nova/admin-user
 Type: string
 _Description: Auth server username:
 
-Template: nova-common/admin-password
+Template: nova/admin-password
 Type: password
 _Description: Auth server password:
 
-Template: nova-common/configure_db
+Template: nova/configure_db
 Type: boolean
 Default: false
 _Description: Set up a database for Nova?

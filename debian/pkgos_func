@@ -12,7 +12,11 @@ pkgos_gen_pass () {
 # pkgos_edit_config auth_protocol ssh glance-api.conf keystone_authtoken
 # To be used in: postinst (make sure the file exists before call)
 pkgos_edit_config () {
-	local DIRECTIVE VALUE FILE SECTION TMP_FILE TMP_FILE2 TMP_FILE3 TMP_FILE4 NBR_LINES START_LINE NBR_LINE_SECTION END_FILE_NUM_LINES
+	local DIRECTIVE VALUE FILE SECTION TMP_FILE TMP_FILE2 TMP_FILE3 TMP_FILE4 NBR_LINES START_LINE NBR_LINE_SECTION END_FILE_NUM_LINES SHELL_SCRIPT_MODE
+	if [ "${1}" = "-sh" ] ; then
+		SHELL_SCRIPT_MODE="yes"
+		shift
+	fi
 	DIRECTIVE=${1}
 	VALUE=${2}
 	FILE=${3}
@@ -21,7 +25,11 @@ pkgos_edit_config () {
 		exit 1
 	fi
 	if [ -z "${4}" ] ; then
-		sed -ie 's|^[ \t#]*'${DIRECTIVE}'[ \t]*=.*|'${DIRECTIVE}' = '${VALUE}'|' ${FILE}
+		if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+			sed -ie 's|^[ \t#]*'${DIRECTIVE}'=.*|'${DIRECTIVE}'='${VALUE}'|' ${FILE}
+		else
+			sed -ie 's|^[ \t#]*'${DIRECTIVE}'[ \t]*=.*|'${DIRECTIVE}' = '${VALUE}'|' ${FILE}
+		fi
 	else
 		SECTION=${4}
 		# 1/ Fine line where the section starts
@@ -75,13 +83,17 @@ pkgos_edit_config () {
 # Example:
 # pkgos_get_config /etc/keystone/keystone.conf admin_token DEFAULT
 pkgos_get_config () {
-	local DIRECTIVE FILE SECTION
+	local DIRECTIVE FILE SECTION SHELL_SCRIPT_MODE
+	if [ "${1}" = "-sh" ] ; then
+		SHELL_SCRIPT_MODE="yes"
+		shift
+	fi
 	FILE=${1}
 	DIRECTIVE=${2}
 	if [ ! -r ${FILE} ] ; then
 		RET=""
 	else
-		if [ -n ${3} ] ; then
+		if [ -n "${3}" ] ; then
 			SECTION=${3}
 			NBR_LINES=`cat ${FILE} | wc -l`
 			START_LINE=`grep -n ^\\\[${SECTION}\\\] ${FILE} | cut -d":" -f1`
@@ -104,27 +116,43 @@ pkgos_get_config () {
 			rm -f ${TMP_FILE}
 		# Called without a section
 		else
-			RET=`grep -E "^([ \t])*${DIRECTIVE}([ \t])*=([ \t])*" ${FILE} | awk '{print $3}'`
+			if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+				RET=`grep -E "^([ \t])*${DIRECTIVE}=" ${FILE} | cut -d"=" -f2`
+			else
+				RET=`grep -E "^([ \t])*${DIRECTIVE}([ \t])*=([ \t])*" ${FILE} | awk '{print $3}'`
+			fi
 		fi
 	fi
 }
 
 # Read the value of a directive in a config file,
 # then prompt the user about it.
-# Example: 
-# pkgos_read_config -r /etc/keystone/keystone.conf auth_token keystone/auth-token DEFAULT
+# Example (options in this order please...):
+# pkgos_read_config -r -sh /etc/keystone/keystone.conf auth_token keystone/auth-token DEFAULT
 # To be used in: config
 pkgos_read_config () {
-	local DIRECTIVE CONF_PATH DEBCONF_NAME VALUE SECTION
+	local DIRECTIVE CONF_PATH DEBCONF_NAME VALUE SECTION FSET_SEEN SHELL_SCRIPT_MODE
 	if [ "${1}" = "-r" ] ; then
 		FSET_SEEN="yes"
+		shift
+	fi
+	if [ "${1}" = "-sh" ] ; then
+		SHELL_SCRIPT_MODE="yes"
 		shift
 	fi
 	CONF_PATH=${1}
 	DIRECTIVE=${2}
 	DEBCONF_NAME=${3}
 	SECTION=${4}
-	pkgos_get_config ${CONF_PATH} ${DIRECTIVE} ${SECTION}
+	if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+		pkgos_get_config -sh ${CONF_PATH} ${DIRECTIVE}
+	else
+		if [ -n "${4}" ] ; then
+			pkgos_get_config ${CONF_PATH} ${DIRECTIVE} ${SECTION}
+		else
+			pkgos_get_config ${CONF_PATH} ${DIRECTIVE}
+		fi
+	fi
 	if [ -n ${RET} ] ; then
 		db_set ${DEBCONF_NAME} ${RET}
 	fi
@@ -141,7 +169,11 @@ pkgos_read_config () {
 # then call dbconfig to do the actual configuration.
 # To be used in: config
 pkgos_dbc_read_conf () {
-	local ADDR BEFORE_AT AFTER_AT SERVER_PORT CONN_STRING PKG_NAME CONF_PATH PARSED_DB_TYPE PARSED_USER PARSED_PASS PARSED_DB_NAME PARSED_SERVER PARSED_PORT
+	local ADDR BEFORE_AT AFTER_AT SERVER_PORT CONN_STRING PKG_NAME CONF_PATH PARSED_DB_TYPE PARSED_USER PARSED_PASS PARSED_DB_NAME PARSED_SERVER PARSED_PORT SHELL_SCRIPT_MODE
+	if [ "${1}" = "-sh" ] ; then
+		SHELL_SCRIPT_MODE="yes"
+		shift
+	fi
 	CONF_PATH=${1}
 	PKG_NAME=${2}
 	CONN_DIRECTIVE=${3}
@@ -156,7 +188,11 @@ pkgos_dbc_read_conf () {
 	if [ "$RET" = "true" ] && [ -f /usr/share/dbconfig-common/dpkg/config ] ; then
 		. /usr/share/dbconfig-common/dpkg/config
 		if [ -e "${CONF_PATH}" ] ; then
-			CONN_STRING=`grep -E "^([ \t])*${CONN_DIRECTIVE}([ \t])*=([ \t])*" ${CONF_PATH} | awk '{print $3}'`
+			if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+				CONN_STRING=`grep -E "^([ \t])*${CONN_DIRECTIVE}=" ${CONF_PATH} | cut -d"=" -f2`
+			else
+				CONN_STRING=`grep -E "^([ \t])*${CONN_DIRECTIVE}([ \t])*=([ \t])*" ${CONF_PATH} | awk '{print $3}'`
+			fi
 		else
 			CONN_STRING=""
 		fi
@@ -227,8 +263,11 @@ pkgos_dbc_read_conf () {
 # pkgos_dbc_postinst /etc/keystone/keystone.conf keystone connection $@
 # since dbc_go expect $@ as well.
 pkgos_dbc_postinst () {
-	local CONF_PATH CONF_DIR CONF_FNAME PKG_NAME
-
+	local CONF_PATH CONF_DIR CONF_FNAME PKG_NAME SHELL_SCRIPT_MODE
+	if [ "${1}" = "-sh" ] ; then
+		SHELL_SCRIPT_MODE="yes"
+		shift
+	fi
 	CONF_PATH=${1}
 	PKG_NAME=${2}
 	CONN_DIRECTIVE=${3}
@@ -271,7 +310,11 @@ pkgos_dbc_postinst () {
 					SQL_CONNECTION="sqlite:///$dbc_basepath/$dbc_dbname"
 					;;
 			esac
-			pkgos_edit_config ${CONN_DIRECTIVE} ${SQL_CONNECTION} ${CONF_PATH}
+			if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+				pkgos_edit_config -sh ${CONN_DIRECTIVE} ${SQL_CONNECTION} ${CONF_PATH}
+			else
+				pkgos_edit_config ${CONN_DIRECTIVE} ${SQL_CONNECTION} ${CONF_PATH}
+			fi
 		fi
 	fi
 }
@@ -302,12 +345,13 @@ pkgos_var_user_group () {
 	if ! getent group ${PKG_NAME} > /dev/null 2>&1 ; then
 		addgroup --quiet --system ${PKG_NAME}
 	fi
-	if ! getent passwd glance > /dev/null 2>&1 ; then
+	if ! getent passwd ${PKG_NAME} > /dev/null 2>&1 ; then
 		adduser --system \
 			--home /var/lib/${PKG_NAME} \
 			--no-create-home \
 			--quiet \
 			--disabled-password \
+			--shell /bin/bash \
 			--group ${PKG_NAME}
 	fi
 

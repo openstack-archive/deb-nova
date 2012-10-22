@@ -2,12 +2,15 @@
 
 set -e
 
-. /usr/share/debconf/confmodule
-
-db_get nova-common/configure_db
-if [ "$RET" = "true" ]; then
-    . /usr/share/dbconfig-common/dpkg/prerm
-    dbc_go nova-common $@
+if [ "${1}" = "remove" ] && [ -r /usr/share/debconf/confmodule ] ; then
+	. /usr/share/debconf/confmodule
+	db_get nova/configure_db || true
+	if [ "$RET" = "true" ] && [ -r /usr/share/dbconfig-common/dpkg/prerm ] ; then
+		. /usr/share/dbconfig-common/dpkg/prerm
+		dbc_go nova-common $@
+	fi
 fi
 
 #DEBHELPER#
+
+exit 0

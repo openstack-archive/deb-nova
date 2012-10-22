@@ -4,153 +4,36 @@ set -e
 . /usr/share/debconf/confmodule
 
 NOVA_COM_DEF=/etc/default/nova-common
+NOVA_CONF=/etc/nova/nova.conf
+NOVA_API_CONF=/etc/nova/api-paste.ini
 
 #PKGOS-INCLUDE#
 
-# Set the debconf value to whatever is in the config file
-if [ -f ${NOVA_COM_DEF} ] ; then
-	. ${NOVA_COM_DEF}
-fi
-if ! [ "${NOVA_ENABLE}" = "true" ] ; then
-	NOVA_ENABLE=false
-fi
-db_set nova-common/start_services ${NOVA_ENABLE}
-
-db_input low nova-common/start_services || true
-db_go
-
-# Write a default config file if it doesn't exist yet
-# note that the value will be overwritten by the postinst
-if ! [ -f ${NOVA_COM_DEF} ] ; then
+manage_nova_enable () {
+	# pkgos_read_config -r /etc/keystone/keystone.conf auth_token keystone/auth-token DEFAULT
+	pkgos_read_config -sh ${NOVA_COM_DEF} NOVA_ENABLE nova/start_services
+	NOVA_ENABLE=${RET}
+	if [ "${RET}" = "false" ] ; then
+		NOVA_ENABLE=false
+	else
+		NOVA_ENABLE=true
+	fi
+	# Write a default config file
 	echo "# defaults file for nova daemons
 
 # start nova daemons from init.d script?
 #  only allowed values are \"true\" and \"false\"
-NOVA_ENABLE=true" >${NOVA_COM_DEF}
-fi
-
-db_input high nova-common/configure_db || true
-db_go
-
-parse_connstring () {
-    local ADDR BEFORE_AT AFTER_AT SERVER_PORT CONN_STRING PKG_NAME
-
-    CONN_STRING=$1
-    PKG_NAME=$2
-
-    PARSED_DB_TYPE=${CONN_STRING%%:*}
-    
-    # If we have an undefined SQL type, we go back to a more sane default (eg: SQLite)
-    case "${PARSED_DB_TYPE}" in
-	sqlite|mysql|pgsql)
-	    ;;
-	postgresql*)
-	    PARSED_DB_TYPE=pgsql
-	    ;;
-	*)
-	    CONN_STRING="sqlite:///var/lib/${PKG_NAME}/${PKG_NAME}db"
-	    PARSED_DB_TYPE="sqlite"
-    esac
-    if [ "${DB_TYPE}" = "sqlite" ] ; then
-	if [ "${CONN_STRING}" = "sqlite:///${PKG_NAME}.db" ] ; then
-	    CONN_STRING="sqlite:///var/lib/${PKG_NAME}/${PKG_NAME}db"
-	fi
-	
-	PARSED_DB_PATH=${CONN_STRING#sqlite://}
-	if [ -z "${PARSED_DB_PATH}" ] ; then
-	    PARSED_DB_PATH=/var/lib/${PKG_NAME}/${PKG_NAME}db
-	fi
-    else
-	ADDR=${CONN_STRING#*sql://}
-	BEFORE_AT=${ADDR%%@*}
-	AFTER_AT=${ADDR#*@}
-	SERVER_PORT=${AFTER_AT%%/*}
-	
-	PARSED_USER=${BEFORE_AT%%:*}
-	PARSED_PASS=${BEFORE_AT#*:}
-	PARSED_DB_NAME=${AFTER_AT#*/}
-	PARSED_SERVER=${SERVER_PORT%%:*}
-	case "${SERVER_PORT}" in
-	    *:*)
-		PARSED_PORT=${SERVER_PORT#*:}
-		;;
-	    *)
-		PARSED_PORT=""
-	esac
-    fi
+NOVA_ENABLE=${NOVA_ENABLE}" >${NOVA_COM_DEF}
 }
 
-confget () {
-    file="$1"
-    section="$2"
-    var="$3"
-    
-    if [ -x /usr/bin/confget ] ; then
-	/usr/bin/confget -f "$file" -s "$section" "$var"
-    else
-perl -e'
-$file=$ARGV[0];
-$section=$ARGV[1];
-$var=$ARGV[2];
-open F, $file;
-$cs="DEFAULT";
-while (<F>) {
-  if (/^\s*\[(.*?)\]/) { $cs=$1; next; }
-  next unless $cs eq $section;
-  if (/^\s*$var\s*=\s*(.*?)\s*$/) { $cv=$1; next; }
-}
-print "$cv\n";
-' "$file" "$section" "$var"
-    fi
-}
+pkgos_var_user_group nova
+pkgos_dbc_read_conf -sh ${NOVA_CONF} nova sql_connection $@
 
-### Reading of values in the nova config file           ###
-### and setting default for dbconfig-common accordingly ###
-NOVA_CONF=/etc/nova/nova.conf
-NOVA_API_CONF=/etc/nova/api-paste.ini
+manage_nova_enable
 
-db_get nova-common/configure_db
-if [ "$RET" = "true" ] && [ -f /usr/share/dbconfig-common/dpkg/config ] ; then
-	. /usr/share/dbconfig-common/dpkg/config
-	if [ -e "${NOVA_CONF}" ] ; then
-		CON_INFO=$(confget ${NOVA_CONF} DEFAULT sql_connection)
-	else
-		CON_INFO=""
-	fi
+pkgos_read_config ${NOVA_API_CONF} auth_host		nova/auth-host		filter:authtoken
+pkgos_read_config ${NOVA_API_CONF} admin_tenant_name	nova/admin-tenant-name	filter:authtoken
+pkgos_read_config ${NOVA_API_CONF} admin_user		nova/admin-user 	filter:authtoken
+pkgos_read_config ${NOVA_API_CONF} admin_password	nova/admin-password	filter:authtoken
 
-	parse_connstring "$CON_INFO" nova
-
-	# dbc_dbtype=${PARSED_DB_TYPE}
-	if [ "${PARSED_DB_TYPE}" = "sqlite" ] ; then
-		dbc_basepath=`dirname "${PARSED_DB_PATH}"`
-		dbc_dbname=`basename "${PARSED_DB_PATH}"`
-		dbc_dbtypes="sqlite3, mysql, pgsql"
-	else
-		if [ -n "${PARSED_USER}" ] && [ -n "${PARSED_PASS}" ] && [ -n "${PARSED_SERVER}" ] && [ -n "${PARSED_DB_NAME}" ] ; then
-			dbc_dbuser=${PARSED_USER}
-			dbc_dbpass=${PARSED_PASS}
-			dbc_dbserver=${PARSED_SERVER}
-			dbc_dbport=${PARSED_PORT}
-			dbc_dbname=${PARSED_DB_NAME}
-		fi
-		if [ "${PARSED_DB_TYPE}" = "mysql" ] ; then
-			dbc_dbtypes="mysql, pgsql, sqlite3"
-		else
-			dbc_dbtypes="pgsql, mysql, sqlite3"
-		fi
-		db_authmethod_user="password"
-	fi
-	dbc_go nova-common $@
-fi
-
-if [ -r ${NOVA_API_CONF} ] ; then
-    db_set nova-common/auth-host $(confget ${NOVA_API_CONF} filter:authtoken auth_host)
-    db_set nova-common/admin-tenant-name $(confget ${NOVA_API_CONF} filter:authtoken admin_tenant_name)
-    db_set nova-common/admin-user $(confget ${NOVA_API_CONF} filter:authtoken admin_user)
-    db_set nova-common/admin-password $(confget ${NOVA_API_CONF} filter:authtoken admin_password)
-fi
-db_input high nova-common/auth-host || true
-db_input high nova-common/admin-tenant-name || true
-db_input high nova-common/admin-user || true
-db_input high nova-common/admin-password || true
-db_go || true
+exit 0

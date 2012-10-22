@@ -8,6 +8,7 @@ nova (2012.2-1) experimental; urgency=low
   order.
   * Added new dependency to python-babel.
   * Now uses setup.py to install python-nova.
+  * Switched to using pkgos_func functions.
 
   [ Roland Mas ]
   * No more build-dependency on python-glance (only -glanceclient).
