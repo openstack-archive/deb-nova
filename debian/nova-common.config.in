@@ -5,6 +5,8 @@ set -e
 
 NOVA_COM_DEF=/etc/default/nova-common
 
+#PKGOS-INCLUDE#
+
 # Set the debconf value to whatever is in the config file
 if [ -f ${NOVA_COM_DEF} ] ; then
 	. ${NOVA_COM_DEF}

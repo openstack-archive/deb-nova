@@ -16,6 +16,8 @@ config.write()"
 NOVA_CONF=/etc/nova/nova.conf
 NOVA_API_CONF=/etc/nova/api-paste.ini
 
+#PKGOS-INCLUDE#
+
 if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
     . /usr/share/debconf/confmodule
     . /usr/share/dbconfig-common/dpkg/postinst
