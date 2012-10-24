@@ -24,59 +24,15 @@ pkgos_edit_config () {
 		echo "pkgos_edit_config called with non readable file: ${3}"
 		exit 1
 	fi
-	if [ -z "${4}" ] ; then
-		if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
-			sed -ie 's|^[ \t#]*'${DIRECTIVE}'=.*|'${DIRECTIVE}'='${VALUE}'|' ${FILE}
-		else
-			sed -ie 's|^[ \t#]*'${DIRECTIVE}'[ \t]*=.*|'${DIRECTIVE}' = '${VALUE}'|' ${FILE}
-		fi
-	else
-		SECTION=${4}
-		# 1/ Fine line where the section starts
-		NBR_LINES=`cat ${FILE} | wc -l`
-		START_LINE=`grep -n ^\\\[${SECTION}\\\] ${FILE} | cut -d":" -f1`
-
-		# Copy the file starting from that section
-		TMP_FILE=`mktemp -t pkgos.XXXXXX` || exit 1
-		tail -n $((${NBR_LINES} - ${START_LINE} )) ${FILE} >${TMP_FILE}
-
-		# If section isn't the last one
-		if grep -Eq ^\\\[ ${TMP_FILE} ; then
-			END_FILE_NUM_LINES=`cat ${TMP_FILE} | wc -l`
-			# Copy what's before the section
-			TMP_FILE2=`mktemp -t pkgos.XXXXXX` || exit 1
-			head -n $((${START_LINE} - 1 )) ${FILE} > $TMP_FILE2
-
-			# Copy the section only			
-			NBR_LINE_SECTION=`grep -n ^\\\[ ${TMP_FILE} | cut -d":" -f1 | head -n 1`
-			TMP_FILE3=`mktemp -t pkgos.XXXXXX` || exit 1
-			head -n $((${NBR_LINE_SECTION} - 1 )) ${TMP_FILE} >${TMP_FILE3}
-
-			# Edit the file
-			sed -ie 's|^[ \t#]*'${DIRECTIVE}'[ \t]*=.*|'${DIRECTIVE}' = '${VALUE}'|' ${TMP_FILE3}
-
-			# Copy what's after the section
-			TMP_FILE4=`mktemp -t pkgos.XXXXXX` || exit 1
-			tail -n $((${END_FILE_NUM_LINES} - ${NBR_LINE_SECTION} + 1 )) ${TMP_FILE} >${TMP_FILE4}
-
-			# Finally, copy all back to the original file
-			cat ${TMP_FILE2} >${FILE}
-			echo \[${SECTION}\] >>${FILE}
-			cat ${TMP_FILE3} >>${FILE}
-			cat ${TMP_FILE4} >>${FILE}
-			rm -f ${TMP_FILE2} ${TMP_FILE3} ${TMP_FILE4}
-		# We are editing the last section
-		else
-			sed -ie 's|^[ \t#]*'${DIRECTIVE}'[ \t]*=.*|'${DIRECTIVE}' = '${VALUE}'|' ${TMP_FILE}
-			TMP_FILE2=`mktemp -t pkgos.XXXXXX` || exit 1
-			head -n $((${START_LINE} - 1 )) ${FILE} > $TMP_FILE2
-			cat ${TMP_FILE2} >${FILE}
-			echo \[${SECTION}\] >>${FILE}
-			cat ${TMP_FILE} >>${FILE}
-			rm -f ${TMP_FILE2}
-		fi
-		rm -f ${TMP_FILE}
+	if [ -z "${4}" ] && [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+	    sed -i -e 's|^[ \t#]*'${DIRECTIVE}'=.*|'${DIRECTIVE}'='${VALUE}'|' ${FILE}
+	    return
 	fi
+	SECTION=${4:-DEFAULT}
+	python -c "import configobj
+config=configobj.ConfigObj('${FILE}')
+config['${SECTION}']['${DIRECTIVE}']='${VALUE}'
+config.write()"
 }
 
 # Read the value of a directive in a config file
@@ -91,38 +47,17 @@ pkgos_get_config () {
 	FILE=${1}
 	DIRECTIVE=${2}
 	if [ ! -r ${FILE} ] ; then
-		RET=""
-	else
-		if [ -n "${3}" ] ; then
-			SECTION=${3}
-			NBR_LINES=`cat ${FILE} | wc -l`
-			START_LINE=`grep -n ^\\\[${SECTION}\\\] ${FILE} | cut -d":" -f1`
-			# Copy the file starting from that section
-			TMP_FILE=`mktemp -t pkgos.XXXXXX` || exit 1
-			tail -n $((${NBR_LINES} - ${START_LINE} )) ${FILE} >${TMP_FILE}
-			# This isn't the last section of the file
-			if grep -Eq ^\\\[ ${TMP_FILE} ; then
-				END_FILE_NUM_LINES=`cat ${TMP_FILE} | wc -l`
-				# Copy the section only
-				NBR_LINE_SECTION=`grep -n ^\\\[ ${TMP_FILE} | cut -d":" -f1 | head -n 1`
-				TMP_FILE2=`mktemp -t pkgos.XXXXXX` || exit 1
-				head -n $((${NBR_LINE_SECTION} - 1 )) ${TMP_FILE} >${TMP_FILE2}
-				RET=`grep -E "^([ \t])*${DIRECTIVE}([ \t])*=([ \t])*" ${TMP_FILE2} | awk '{print $3}'`
-				rm -f ${TMP_FILE2}
-			# This is the last section of the file
-			else
-				RET=`grep -E "^([ \t])*${DIRECTIVE}([ \t])*=([ \t])*" ${TMP_FILE} | awk '{print $3}'`
-			fi
-			rm -f ${TMP_FILE}
-		# Called without a section
-		else
-			if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
-				RET=`grep -E "^([ \t])*${DIRECTIVE}=" ${FILE} | cut -d"=" -f2`
-			else
-				RET=`grep -E "^([ \t])*${DIRECTIVE}([ \t])*=([ \t])*" ${FILE} | awk '{print $3}'`
-			fi
-		fi
+	    RET=""
+	    return
 	fi
+	if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+	    RET=`grep -E "^([ \t])*${DIRECTIVE}=" ${FILE} | cut -d"=" -f2`
+	    return
+	fi
+	SECTION=${3:-DEFAULT}
+	RET=$(python -c "import configobj
+config=configobj.ConfigObj('${FILE}')
+print config['${SECTION}']['${DIRECTIVE}']")
 }
 
 # Read the value of a directive in a config file,
@@ -153,7 +88,7 @@ pkgos_read_config () {
 			pkgos_get_config ${CONF_PATH} ${DIRECTIVE}
 		fi
 	fi
-	if [ -n ${RET} ] ; then
+	if [ -n "${RET}" ] ; then
 		db_set ${DEBCONF_NAME} ${RET}
 	fi
 	if [ "${FSET_SEEN}" = "yes" ] ; then
@@ -176,10 +111,17 @@ pkgos_dbc_read_conf () {
 	fi
 	CONF_PATH=${1}
 	PKG_NAME=${2}
-	CONN_DIRECTIVE=${3}
 	shift
 	shift
-	shift
+	if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+	    CONN_DIRECTIVE=${1}
+	    shift
+	else
+	    CONN_SECTION=${1}
+	    CONN_DIRECTIVE=${2}
+	    shift
+	    shift
+	fi	    
 
 	db_fset ${PKG_NAME}/configure_db seen false
 	db_input high ${PKG_NAME}/configure_db || true
@@ -188,13 +130,9 @@ pkgos_dbc_read_conf () {
 	if [ "$RET" = "true" ] && [ -f /usr/share/dbconfig-common/dpkg/config ] ; then
 		. /usr/share/dbconfig-common/dpkg/config
 		if [ -e "${CONF_PATH}" ] ; then
-			if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
-				CONN_STRING=`grep -E "^([ \t])*${CONN_DIRECTIVE}=" ${CONF_PATH} | cut -d"=" -f2`
-			else
-				CONN_STRING=`grep -E "^([ \t])*${CONN_DIRECTIVE}([ \t])*=([ \t])*" ${CONF_PATH} | awk '{print $3}'`
-			fi
+		    CONN_STRING=$(pkgos_get_config "${CONF_PATH}" "${CONN_DIRECTIVE}" "${CONN_SECTION}")
 		else
-			CONN_STRING=""
+		    CONN_STRING=""
 		fi
 		PARSED_DB_TYPE=${CONN_STRING%%:*}
 		# If we have an undefined SQL type, we go back to a more sane default (eg: SQLite)
@@ -223,6 +161,7 @@ pkgos_dbc_read_conf () {
 		else
 			ADDR=${CONN_STRING#*sql://}
 			BEFORE_AT=${ADDR%%@*}
+			AFTER_AT=${ADDR#*@}
 			SERVER_PORT=${AFTER_AT%%/*}
 
 			PARSED_USER=${BEFORE_AT%%:*}
@@ -251,7 +190,7 @@ pkgos_dbc_read_conf () {
 			fi
 			dbc_authmethod_user="password"
 		fi
-		dbc_go ${DPKG_MAINTSCRIPT_PACKAGE} $@
+		dbc_go "${DPKG_MAINTSCRIPT_PACKAGE}" $@
 	fi
 }
 
@@ -266,14 +205,20 @@ pkgos_dbc_postinst () {
 	local CONF_PATH CONF_DIR CONF_FNAME PKG_NAME SHELL_SCRIPT_MODE
 	if [ "${1}" = "-sh" ] ; then
 		SHELL_SCRIPT_MODE="yes"
-		shift
 	fi
 	CONF_PATH=${1}
 	PKG_NAME=${2}
-	CONN_DIRECTIVE=${3}
 	shift
 	shift
-	shift
+	if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
+	    CONN_DIRECTIVE=${1}
+	    shift
+	else
+	    CONN_SECTION=${1}
+	    CONN_DIRECTIVE=${2}
+	    shift
+	    shift
+	fi	    
 
 	CONF_DIR=`dirname ${CONF_PATH}`
 	CONF_FNAME=`basename ${CONF_PATH}`
@@ -291,7 +236,7 @@ pkgos_dbc_postinst () {
 	if [ "$RET" = "true" ] && [ -r /usr/share/dbconfig-common/dpkg/postinst ] ; then
 		. /usr/share/dbconfig-common/dpkg/postinst
 		dbc_dbfile_owner="${PKG_NAME}:${PKG_NAME}"
-		dbc_go ${DPKG_MAINTSCRIPT_PACKAGE} $@
+		dbc_go "${DPKG_MAINTSCRIPT_PACKAGE}" $@
 		if [ "$dbc_install" = "true" ] ; then
 			case "$dbc_dbtype" in
 				mysql)
@@ -311,9 +256,9 @@ pkgos_dbc_postinst () {
 					;;
 			esac
 			if [ "${SHELL_SCRIPT_MODE}" = "yes" ] ; then
-				pkgos_edit_config -sh ${CONN_DIRECTIVE} ${SQL_CONNECTION} ${CONF_PATH}
+				pkgos_edit_config -sh "${CONN_DIRECTIVE}" "${SQL_CONNECTION}" "${CONF_PATH}"
 			else
-				pkgos_edit_config ${CONN_DIRECTIVE} ${SQL_CONNECTION} ${CONF_PATH}
+				pkgos_edit_config "${CONN_DIRECTIVE}" "${SQL_CONNECTION}" "${CONF_PATH}" "${CONN_SECTION}"
 			fi
 		fi
 	fi
