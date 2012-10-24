@@ -51,7 +51,7 @@ override_dh_install:
 	mkdir -p $(debroot)/usr/share/apport/package-hooks
 
 	dh_install
-	install -D -m 440 $(CURDIR)/debian/nova_sudoers $(CURDIR)/debian/nova-common/etc/sudoers.d/nova_sudoers
+	install -D -m 440 $(CURDIR)/debian/nova-common.sudoers $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
 	#install -D -m 0664 $(CURDIR)/debian/nova-volume.default $(CURDIR)/debian/nova-volume/etc/default/nova-volume
 	install -D -m 0655 $(CURDIR)/etc/nova/logging_sample.conf $(CURDIR)/debian/nova-common/etc/nova/logging.conf
 	for hypervisor in qemu kvm uml lxc; do \
