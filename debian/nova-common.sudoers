@@ -1,1 +1,1 @@
-nova ALL = (root) NOPASSWD: nova-rootwrap *
+nova ALL = (root) NOPASSWD: /usr/bin/nova-rootwrap *
