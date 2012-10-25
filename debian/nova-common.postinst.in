@@ -41,7 +41,9 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	db_get nova/admin-user
 	pkgos_edit_config admin_user ${RET} ${NOVA_API_CONF} filter:authtoken
 	db_get nova/admin-password
-	pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
+	if [ -n "${RET}" ] ; then
+		pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
+	fi
 
 	chmod 0440 /etc/sudoers.d/nova-common
 	[ -f /etc/sudoers.d/nova_sudoers ] && rm -f /etc/sudoers.d/nova_sudoers # That's the old file that we get rid of
