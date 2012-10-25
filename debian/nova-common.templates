@@ -23,10 +23,12 @@ _Description: Auth server hostname:
 
 Template: nova/admin-tenant-name
 Type: string
+Default: admin
 _Description: Auth server tenant name:
 
 Template: nova/admin-user
 Type: string
+Default: admin
 _Description: Auth server username:
 
 Template: nova/admin-password
