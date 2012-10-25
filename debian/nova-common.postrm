@@ -25,6 +25,7 @@ if [ "$1" = "purge" ] ; then
 	rm -f /var/lib/nova/.rnd
 	rm -f /etc/nova/nova.conf
 	rm -f /etc/default/nova-common
+	rm -f /etc/nova/api-paste.ini
 fi
 
 #DEBHELPER#
