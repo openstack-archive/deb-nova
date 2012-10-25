@@ -43,7 +43,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	db_get nova/admin-password
 	pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
 
-	chmod 0440 /etc/sudoers.d/nova_sudoers
+	chmod 0440 /etc/sudoers.d/nova-common
 	chmod 0750 /var/log/nova
 	chmod 0755 /var/lib/nova
 fi

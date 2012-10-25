@@ -205,6 +205,7 @@ pkgos_dbc_postinst () {
 	local CONF_PATH CONF_DIR CONF_FNAME PKG_NAME SHELL_SCRIPT_MODE
 	if [ "${1}" = "-sh" ] ; then
 		SHELL_SCRIPT_MODE="yes"
+		shift
 	fi
 	CONF_PATH=${1}
 	PKG_NAME=${2}
