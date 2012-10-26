@@ -265,8 +265,43 @@ pkgos_dbc_postinst () {
 	fi
 }
 
+# Reads auth_host, admin_tenant_name, admin_user and admin_password
+# values with debconf
+# Prototype: pkgos_read_admin_creds <conf-file> <PKG_NAME> <section>
+# Example calls:
+# pkgos_read_admin_creds /etc/glance/glance-api.conf glance keystone_authtoken
+# To be used in: config
+pkgos_read_admin_creds () {
+	local CONF_FNAME PKG_NAME SECTION
+	CONF_FNAME=${1}
+	PKG_NAME=${2}
+	SECTION=${3}
+
+	pkgos_read_config ${CONF_FNAME} auth_host         ${PKG_NAME}/auth-host         ${SECTION}
+        pkgos_read_config ${CONF_FNAME} admin_tenant_name ${PKG_NAME}/admin-tenant-name ${SECTION}
+        pkgos_read_config ${CONF_FNAME} admin_user        ${PKG_NAME}/admin-user        ${SECTION}
+        pkgos_read_config ${CONF_FNAME} admin_password    ${PKG_NAME}/admin-password    ${SECTION}
+}
+
+# To be used in: postinst
+pkgos_write_admin_creds () {
+	local CONF_FNAME PKG_NAME SECTION
+	CONF_FNAME=${1}
+	PKG_NAME=${2}
+	SECTION=${3}
+
+	db_get ${PKG_NAME}/auth-host
+	pkgos_edit_config auth_host "${RET}" ${CONF_FNAME} ${SECTION}
+	db_get ${PKG_NAME}/admin-tenant-name
+	pkgos_edit_config admin_tenant_name "${RET}" ${CONF_FNAME} ${SECTION}
+	db_get ${PKG_NAME}/admin-user
+	pkgos_edit_config admin_user "${RET}" ${CONF_FNAME} ${SECTION}
+	db_get ${PKG_NAME}/admin-password
+	pkgos_edit_config admin_password "${RET}" ${CONF_FNAME} ${SECTION}
+}
+
 pkgos_write_new_conf () {
-	local PKG_NAME
+	local PKG_NAME CONF_FNAME
 	PKG_NAME=${1}
 	CONF_FNAME=${2}
 
