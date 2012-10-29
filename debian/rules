@@ -37,8 +37,9 @@ override_dh_auto_clean:
 
 override_dh_auto_build:
 	dh_auto_build
-	$(CURDIR)/debian/pkgos_insert_include pkgos_func nova-common.config
-	$(CURDIR)/debian/pkgos_insert_include pkgos_func nova-common.postinst
+
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.config
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.postinst
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	python setup.py build_sphinx
 

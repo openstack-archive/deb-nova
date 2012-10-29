@@ -14,6 +14,7 @@ Build-Depends-Indep:
  euca2ools,
  ipython,
  openssh-client,
+ openstack-pkg-tools,
  pep8,
  procps,
  python-babel,
