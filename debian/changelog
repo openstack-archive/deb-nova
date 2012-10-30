@@ -12,8 +12,10 @@ nova (2012.2-1) experimental; urgency=low
 
   [ Roland Mas ]
   * No more build-dependency on python-glance (only -glanceclient).
+  * Stop providing the Volume service by default (now handled by Cinder).
+    Note: manual database migration required.
 
- -- Roland Mas <roland@gnurandal.com>  Fri, 12 Oct 2012 11:24:55 +0200
+ -- Roland Mas <roland@gnurandal.com>  Tue, 30 Oct 2012 15:13:11 +0100
 
 nova (2012.2~rc1+git1-292a5e5-1) experimental; urgency=low
 
