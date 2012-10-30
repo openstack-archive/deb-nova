@@ -1,2 +1,2 @@
 [DEFAULT]
-connection_type=xenapi
+compute_driver=xenapi.XenAPIDriver
