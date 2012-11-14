@@ -28,7 +28,6 @@ NOVA_ENABLE=${NOVA_ENABLE}" >${NOVA_COM_DEF}
 
 pkgos_var_user_group nova
 pkgos_dbc_read_conf -sh ${NOVA_CONF} nova sql_connection $@
-pkgos_nodbc_config nova
 
 manage_nova_enable
 
