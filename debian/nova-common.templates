@@ -54,13 +54,18 @@ _Description: Set up a database for Nova?
  You can change this setting later on by running "dpkg-reconfigure
  -plow nova-common".
 
+Template: nova/remote_db_type
+Type: string
+Default: mysql
+_Description: Remote database type
+
 Template: nova/remote_db_user
 Type: string
 Default: nova
 _Description: Remote database user
 
 Template: nova/remote_db_pass
-Type: string
+Type: password
 _Description: Remote database password
 
 Template: nova/remote_db_host

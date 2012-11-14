@@ -30,6 +30,7 @@ pkgos_var_user_group nova
 pkgos_dbc_read_conf -sh ${NOVA_CONF} nova sql_connection $@
 db_get nova/configure_db || true
 if ! [ "$RET" = true ] ; then
+    db_input high nova/remote_db_type || true
     db_input high nova/remote_db_host || true
     db_input high nova/remote_db_port || true
     db_input high nova/remote_db_user || true
