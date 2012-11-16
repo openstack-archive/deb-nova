@@ -4,17 +4,15 @@ set -e
 
 XENAPI_CONFFILE=/etc/nova/nova-compute.conf
 
-if [ "$1" = "configure" -o "$1" = "reconfigure" ]; then
-	adduser --quiet nova nova
-	if ! [ -d /etc/nova ] ; then
-		mkdir /etc/nova
-	fi
-	if ! [ -f ${XENAPI_CONFFILE} ] ; then
-		cp /usr/share/doc/nova-compute-xen/nova-compute.conf.dist ${XENAPI_CONFFILE}
-	fi
+#PKGOS-INCLUDE#
 
+if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	. /usr/share/debconf/confmodule
 
+	pkgos_var_user_group nova
+	pkgos_write_new_conf nova nova-compute.conf
+
+	# DEFAULT
 	db_get nova-compute-xen/xenapi_url
 	XENAPI_URL=$RET
 	if ! grep -E -q "^[- \t]*xenapi_connection_url=" ${XENAPI_CONFFILE} ; then
