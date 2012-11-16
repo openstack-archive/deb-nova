@@ -2,24 +2,6 @@ nova (2012.2-1) experimental; urgency=low
 
   [ Mehdi Abaakouk ]
   * New upstream version.
-
-  [ Thomas Goirand ]
-  * Ordered debian/control build-depends and python-nova depends by alpha
-  order.
-  * Added new dependency to python-babel.
-  * Now uses setup.py to install python-nova.
-  * Switched to using pkgos_func functions.
-
-  [ Roland Mas ]
-  * No more build-dependency on python-glance (only -glanceclient).
-  * Stop providing the Volume service by default (now handled by Cinder).
-    Note: manual database migration required.
-
- -- Roland Mas <roland@gnurandal.com>  Tue, 30 Oct 2012 15:13:11 +0100
-
-nova (2012.2~rc1+git1-292a5e5-1) experimental; urgency=low
-
-  [ Mehdi Abaakouk ]
   * New upstream version
   * Add patches:
      fix-ubuntu-tests.patch
@@ -33,9 +15,20 @@ nova (2012.2~rc1+git1-292a5e5-1) experimental; urgency=low
      CVE-2012-3447_compute-node-file-injection.patch
 
   [ Thomas Goirand ]
+  * Ordered debian/control build-depends and python-nova depends by alpha
+  order.
+  * Added new dependency to python-babel.
+  * Now uses setup.py to install python-nova.
+  * Switched to using pkgos_func functions.
+  * Sets compat level to 9.
   * Now using xz compression level 9 for all debs.
 
- -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 10 Sep 2012 17:56:09 +0200
+  [ Roland Mas ]
+  * No more build-dependency on python-glance (only -glanceclient).
+  * Stop providing the Volume service by default (now handled by Cinder).
+    Note: manual database migration required.
+
+ -- Roland Mas <roland@gnurandal.com>  Tue, 30 Oct 2012 15:13:11 +0100
 
 nova (2012.1.1-9) unstable; urgency=low
 

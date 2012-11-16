@@ -7,7 +7,8 @@ Uploaders: Loic Dachary (OuoU) <loic@debian.org>,
            Thomas Goirand <zigo@debian.org>,
            Ghe Rivero <ghe.rivero@stackops.com>,
            Mehdi Abaakouk <sileht@sileht.net>
-Build-Depends: debhelper (>= 7.0.50),
+Build-Depends: debhelper (>= 9),
+ po-debconf,
  python-all (>= 2.6.6-3~),
 Build-Depends-Indep:
  bpython,
