@@ -62,6 +62,7 @@ Vcs-Git: git://anonscm.debian.org/openstack/nova.git
 Package: python-nova
 Architecture: all
 Section: python
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${python:Depends},
  openssh-client,
  openssl,
@@ -111,6 +112,7 @@ Description: OpenStack Compute - libraries
 
 Package: nova-common
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends}, adduser,
  python-iso8601,
  python-configobj,
@@ -133,7 +135,8 @@ Description: OpenStack Compute - common files
 
 Package: nova-compute
 Architecture: all
-Depends: lsb-base (>= 3.0.6),  nova-common (= ${binary:Version}), qemu-utils, kpartx, curl, parted, vlan,
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: ${ostack-lsb-base},  nova-common (= ${binary:Version}), qemu-utils, kpartx, curl, parted, vlan,
  ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
  adduser,
  ${python:Depends}, ${misc:Depends}
@@ -156,6 +159,7 @@ Description: OpenStack Compute - compute node
 
 Package: nova-compute-lxc
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, libvirt-bin, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-kvm, nova-compute-qemu, nova-compute-uml, nova-compute-xen
@@ -175,6 +179,7 @@ Description: OpenStack Compute - compute node (LXC)
 
 Package: nova-compute-uml
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, libvirt-bin, user-mode-linux, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-xen, nova-compute-qemu, nova-compute-kvm
@@ -194,6 +199,7 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 
 Package: nova-compute-xen
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-xenapi, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-qemu, nova-compute-kvm
@@ -214,6 +220,7 @@ Description: OpenStack Compute - compute node (Xen)
 
 Package: nova-compute-qemu
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, libvirt-bin, qemu, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-kvm
@@ -233,6 +240,7 @@ Description: OpenStack Compute - compute node (QEmu)
 
 Package: nova-compute-kvm
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-qemu
@@ -253,6 +261,7 @@ Description: OpenStack Compute - compute node (KVM)
 
 Package: nova-xcp-plugins
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: xcp-xapi, ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute plugin for the Xen Cloud Platform
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -272,7 +281,8 @@ Description: OpenStack Compute plugin for the Xen Cloud Platform
 
 Package: nova-xcp-network
 Architecture: all
-Depends: xcp-xapi, lsb-base (>= 3.0.6), ${python:Depends}, ${misc:Depends}, nova-xcp-plugins (= ${binary:Version}),
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: xcp-xapi, ${ostack-lsb-base}, ${python:Depends}, ${misc:Depends}, nova-xcp-plugins (= ${binary:Version}),
  openvswitch-switch, ebtables, arptables, iproute
 Description: OpenStack Compute network plugin for the Xen Cloud Platform
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -292,6 +302,7 @@ Description: OpenStack Compute network plugin for the Xen Cloud Platform
 
 Package: nova-cert
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - certificate manager
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -310,6 +321,7 @@ Description: OpenStack Compute - certificate manager
 
 Package: nova-scheduler
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - virtual machine scheduler
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -327,6 +339,7 @@ Description: OpenStack Compute - virtual machine scheduler
 
 Package: nova-volume
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), lvm2, tgt, ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
@@ -348,6 +361,7 @@ Description: OpenStack Compute - storage
 Package: nova-xvpvncproxy
 Provides: nova-vncproxy
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - XVP VNC proxy
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -366,6 +380,7 @@ Description: OpenStack Compute - XVP VNC proxy
 
 Package: nova-api
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Recommends: python-keystone
 Description: OpenStack Compute - compute API frontend
@@ -384,6 +399,7 @@ Description: OpenStack Compute - compute API frontend
 
 Package: nova-network
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, netcat, vlan, bridge-utils, dnsmasq-base, iputils-arping, dnsmasq-utils, iptables,
  nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
@@ -409,6 +425,7 @@ Description: OpenStack Compute - network manager
 
 Package: nova-objectstore
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - object store
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -428,6 +445,7 @@ Description: OpenStack Compute - object store
 Package: nova-console
 Provides: nova-consoleauth
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Description: OpenStack Compute - console
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -449,6 +467,7 @@ Description: OpenStack Compute - console
 Package: nova-doc
 Architecture: all
 Section: doc
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${misc:Depends}, libjs-jquery, libjs-underscore
 Description: OpenStack Compute - documentation
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -466,6 +485,7 @@ Description: OpenStack Compute - documentation
 
 Package: nova-api-metadata
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Breaks: nova-api (<< 2012.1-6)
 Replaces: nova-api
@@ -485,6 +505,7 @@ Description: OpenStack Compute - metadata API frontend
 
 Package: nova-api-os-compute
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Breaks: nova-api (<< 2012.1-6)
 Replaces: nova-api
@@ -504,6 +525,7 @@ Description: OpenStack Compute - compute API frontend
 
 Package: nova-api-os-volume
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Breaks: nova-api (<< 2012.1-6)
 Replaces: nova-api
@@ -523,6 +545,7 @@ Description: OpenStack Compute - Volume API frontend
 
 Package: nova-api-ec2
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
 Breaks: nova-api (<< 2012.1-6)
 Replaces: nova-api
