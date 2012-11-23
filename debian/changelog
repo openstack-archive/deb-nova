@@ -22,13 +22,14 @@ nova (2012.2-1) experimental; urgency=low
   * Switched to using pkgos_func functions.
   * Sets compat level to 9.
   * Now using xz compression level 9 for all debs.
+  * Configuring Keystone endpoint for nova-api.
 
   [ Roland Mas ]
   * No more build-dependency on python-glance (only -glanceclient).
   * Stop providing the Volume service by default (now handled by Cinder).
     Note: manual database migration required.
 
- -- Roland Mas <roland@gnurandal.com>  Tue, 30 Oct 2012 15:13:11 +0100
+ -- Thomas Goirand <zigo@debian.org>  Fri, 23 Nov 2012 06:53:06 +0000
 
 nova (2012.1.1-9) unstable; urgency=low
 
