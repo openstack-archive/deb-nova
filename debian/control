@@ -22,6 +22,7 @@ Build-Depends-Indep:
  python-boto,
  python-carrot,
  python-cheetah,
+ python-cinderclient,
  python-coverage,
  python-distutils-extra,
  python-eventlet,
@@ -41,6 +42,7 @@ Build-Depends-Indep:
  python-paramiko,
  python-paste,
  python-qpid,
+ python-quantum,
  python-quantumclient,
  python-routes,
  python-setuptools,
@@ -52,7 +54,8 @@ Build-Depends-Indep:
  python-webob,
  python-xattr,
  python-memcache,
- python-xenapi
+ python-xenapi,
+ python-zmq
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.3
 Homepage: http://launchpad.net/nova
