@@ -1,6 +1,6 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: nova
-Source: https://code.launchpad.net/nova
+Source: https://github.com/openstack/nova.git
 
 Files: *
 Copyright: (c) 2010-2011 United States Government as represented
