@@ -53,6 +53,7 @@ override_dh_install:
 		install -D -m 0600 $(CURDIR)/debian/nova-compute-$${hypervisor}.conf $(CURDIR)/debian/nova-compute-$${hypervisor}/etc/nova/nova-compute.conf; \
 	done
 	install -D -m 0600 $(CURDIR)/debian/nova-compute-xen.conf.dist $(CURDIR)/debian/nova-compute-xen/usr/share/nova-compute-xen/nova-compute.conf
+	find $(CURDIR)/debian -name .gitignore -delete
 
 override_dh_fixperms:
 	dh_fixperms -Xnova_sudoers
