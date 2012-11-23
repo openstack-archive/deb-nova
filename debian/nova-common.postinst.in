@@ -15,6 +15,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	pkgos_var_user_group nova
 	pkgos_write_new_conf nova nova.conf
 	pkgos_write_new_conf nova api-paste.ini
+	pkgos_write_new_conf nova logging.conf
 	if [ -z "$2" ]; then
 		# New install - blanket permissions
 		chown -R nova:nova /var/lib/nova/

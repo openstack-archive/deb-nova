@@ -48,7 +48,7 @@ override_dh_install:
 	dh_install
 	install -D -m 440 $(CURDIR)/debian/nova-common.sudoers $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
 	#install -D -m 0664 $(CURDIR)/debian/nova-volume.default $(CURDIR)/debian/nova-volume/etc/default/nova-volume
-	install -D -m 0655 $(CURDIR)/etc/nova/logging_sample.conf $(CURDIR)/debian/nova-common/etc/nova/logging.conf
+	install -D -m 0655 $(CURDIR)/etc/nova/logging_sample.conf $(CURDIR)/debian/nova-common/usr/share/nova-common/logging.conf
 	for hypervisor in qemu kvm uml lxc; do \
 		install -D -m 0600 $(CURDIR)/debian/nova-compute-$${hypervisor}.conf $(CURDIR)/debian/nova-compute-$${hypervisor}/etc/nova/nova-compute.conf; \
 	done
