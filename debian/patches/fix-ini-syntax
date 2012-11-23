@@ -1,3 +1,7 @@
+Description: Fixes the syntax of the api-paste.ini
+Author: Roland Mas <lolando@debian.org>
+Forwarded: not-needed
+
 Index: nova/etc/nova/api-paste.ini
 ===================================================================
 --- nova.orig/etc/nova/api-paste.ini
