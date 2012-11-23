@@ -16,7 +16,7 @@ _Description: Keystone IP address:
  contact Keystone to do the Nova service and endpoint creation.
 
 Template: nova/keystone-auth-token
-Type: string
+Type: password
 _Description: Keystone Auth Token:
  To configure its endpoint in Keystone, nova-api needs the Keystone auth
  token.
