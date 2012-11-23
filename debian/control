@@ -381,7 +381,7 @@ Description: OpenStack Compute - XVP VNC proxy
 Package: nova-api
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: debconf, ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}, python-keystoneclient
 Recommends: python-keystone
 Description: OpenStack Compute - compute API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
