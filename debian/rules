@@ -9,8 +9,6 @@ PACKAGE_NAME=python-nova
 debroot = debian/tmp
 site_packages_dir=$(debroot)$(call py_libdir,$(shell pyversions -d))
 
-export UPSTR_VER=$(shell dpkg-parsechangelog | grep Version: | cut -d" " -f2 | cut -d"-" -f1)
-
 %:
 	dh $@ --with python2
 
