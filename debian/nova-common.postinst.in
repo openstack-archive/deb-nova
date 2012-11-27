@@ -7,15 +7,30 @@ NOVA_API_CONF=/etc/nova/api-paste.ini
 
 #PKGOS-INCLUDE#
 
-if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
-	. /usr/share/debconf/confmodule
-	. /usr/share/dbconfig-common/dpkg/postinst
+manage_nova_api_field () {
+	db_get nova/active-api
+	if [ -n "${RET}" ] ; then
+		# We get an answer from a multiselect debconf, so we trim spaces out
+		# before putting it in the config file
+		NOVA_APIS=`echo ${RET} | sed "s/ //g"`
+		pkgos_edit_config enabled_apis ${NOVA_APIS} /etc/nova/nova.conf
+	fi
+}
 
-	# Create config files if they don't exist
-	pkgos_var_user_group nova
-	pkgos_write_new_conf nova nova.conf
-	pkgos_write_new_conf nova api-paste.ini
-	pkgos_write_new_conf nova logging.conf
+manage_keystone_auth_fields () {
+	db_get nova/auth-host
+	pkgos_edit_config auth_host ${RET} ${NOVA_API_CONF} filter:authtoken
+	db_get nova/admin-tenant-name
+	pkgos_edit_config admin_tenant_name ${RET} ${NOVA_API_CONF} filter:authtoken
+	db_get nova/admin-user
+	pkgos_edit_config admin_user ${RET} ${NOVA_API_CONF} filter:authtoken
+	db_get nova/admin-password
+	if [ -n "${RET}" ] ; then
+		pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
+	fi
+}
+
+maintain_var_lib_nova_perms () {
 	if [ -z "$2" ]; then
 		# New install - blanket permissions
 		chown -R nova:nova /var/lib/nova/
@@ -27,7 +42,25 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 		find /var/lib/nova/ -name 'rootfs' -prune -o \
 			-group nogroup -a -user nova -exec chown nova:nova {} \;
 	fi
+	chmod 0755 /var/lib/nova
+}
+
+if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
+	. /usr/share/debconf/confmodule
+	. /usr/share/dbconfig-common/dpkg/postinst
+
+	pkgos_var_user_group nova
+	maintain_var_lib_nova_perms $@
+
+	# Create config files if they don't exist
+	pkgos_write_new_conf nova nova.conf
+	pkgos_write_new_conf nova api-paste.ini
+	pkgos_write_new_conf nova logging.conf
+
+	# Tweak config files depending on debconf answers
 	pkgos_dbc_postinst -sh /etc/nova/nova.conf nova sql_connection $@
+	manage_nova_api_field
+	manage_keystone_auth_fields
 
 	db_get nova/configure_db
 	if [ "$RET" = "true" ]; then
@@ -35,23 +68,11 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 		nova-manage db sync
 	fi
 
-	db_get nova/auth-host
-	pkgos_edit_config auth_host ${RET} ${NOVA_API_CONF} filter:authtoken
-	db_get nova/admin-tenant-name
-	pkgos_edit_config admin_tenant_name ${RET} ${NOVA_API_CONF} filter:authtoken
-	db_get nova/admin-user
-	pkgos_edit_config admin_user ${RET} ${NOVA_API_CONF} filter:authtoken
-	db_get nova/admin-password
-	if [ -n "${RET}" ] ; then
-		pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
-	fi
-
 	db_stop
 
+	# Fixup sudoers rights and clean old config file location
 	chmod 0440 /etc/sudoers.d/nova-common
 	[ -f /etc/sudoers.d/nova_sudoers ] && rm -f /etc/sudoers.d/nova_sudoers # That's the old file that we get rid of
-	chmod 0750 /var/log/nova
-	chmod 0755 /var/lib/nova
 fi
 
 #DEBHELPER#

@@ -53,3 +53,15 @@ _Description: Set up a database for Nova?
  .
  You can change this setting later on by running "dpkg-reconfigure
  -plow nova-common".
+
+Template: nova/active-api
+Type: multiselect
+Choices: ec2, osapi_compute, metadata, osapi_volume
+_Description: API to activate:
+ Openstack Nova supports different API services, each of them binding on a
+ different port. Select which one nova-api should support.
+ .
+ If it is a compute node that you are setting-up, then you only need to run the
+ metadata API server. If you run Cinder, then you don't need osapi_volume (you
+ cannot run osapi_volume and cinder-api on the same server: they bind on the
+ same port).

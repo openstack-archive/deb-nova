@@ -9,6 +9,25 @@ NOVA_API_CONF=/etc/nova/api-paste.ini
 
 #PKGOS-INCLUDE#
 
+set_enabled_apis_multiselect () {
+	local NOVA_APIS NOVA_API MULTISEL_VAL
+	pkgos_get_config -sh /etc/nova/nova.conf enabled_apis DEFAULT
+	if [ -n "${RET}" ] ; then
+		NOVA_APIS=`echo $RET | sed "s/,/ /g"`
+		for NOVA_API in ${NOVA_APIS} ; do
+			if [ -n "${MULTISEL_VAL}" ] ; then
+				MULTISEL_VAL="${MULTISEL_VAL}, "
+			fi
+			MULTISEL_VAL="${MULTISEL_VAL}${NOVA_API}"
+		done
+		if [ -n "${MULTISEL_VAL}" ] ; then
+			db_set nova/active-api ${MULTISEL_VAL}
+		fi
+	fi
+	db_input high nova/active-api || true
+	db_go
+}
+
 manage_nova_enable () {
 	# pkgos_read_config -r /etc/keystone/keystone.conf auth_token keystone/auth-token DEFAULT
 	pkgos_read_config -sh ${NOVA_COM_DEF} NOVA_ENABLE nova/start_services
@@ -27,9 +46,10 @@ NOVA_ENABLE=${NOVA_ENABLE}" >${NOVA_COM_DEF}
 }
 
 pkgos_var_user_group nova
-pkgos_dbc_read_conf -sh ${NOVA_CONF} nova sql_connection $@
 
 manage_nova_enable
+pkgos_dbc_read_conf -sh ${NOVA_CONF} nova sql_connection $@
+set_enabled_apis_multiselect
 
 pkgos_read_config ${NOVA_API_CONF} auth_host		nova/auth-host		filter:authtoken
 pkgos_read_config ${NOVA_API_CONF} admin_tenant_name	nova/admin-tenant-name	filter:authtoken
