@@ -466,7 +466,6 @@ Description: OpenStack Compute - console
  with XVP and XenServer. It is a publicly reachable component which proxies
  access to VNCs running on compute nodes.
 
-
 Package: nova-doc
 Architecture: all
 Section: doc

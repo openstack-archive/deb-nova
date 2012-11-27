@@ -46,6 +46,8 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 		pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
 	fi
 
+	db_stop
+
 	chmod 0440 /etc/sudoers.d/nova-common
 	[ -f /etc/sudoers.d/nova_sudoers ] && rm -f /etc/sudoers.d/nova_sudoers # That's the old file that we get rid of
 	chmod 0750 /var/log/nova
