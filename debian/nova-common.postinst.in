@@ -17,6 +17,20 @@ manage_nova_api_field () {
 	fi
 }
 
+manage_nova_network_manager_field () {
+	db_get nova/network-manager
+	if [ -n "${RET}" ] ; then
+		pkgos_edit_config network_manager nova.network.manager.${RET} ${NOVA_CONF}
+	fi
+}
+
+manage_nova_my_ip_field () {
+	db_get nova/my-ip
+	if [ -n "${RET}" ] ; then
+		pkgos_edit_config my_ip ${RET} ${NOVA_CONF}
+	fi
+}
+
 manage_keystone_auth_fields () {
 	db_get nova/auth-host
 	pkgos_edit_config auth_host ${RET} ${NOVA_API_CONF} filter:authtoken
@@ -60,6 +74,8 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	# Tweak config files depending on debconf answers
 	pkgos_dbc_postinst -sh /etc/nova/nova.conf nova sql_connection $@
 	manage_nova_api_field
+	manage_nova_network_manager_field
+	manage_nova_my_ip_field
 	manage_keystone_auth_fields
 
 	db_get nova/configure_db
