@@ -44,6 +44,7 @@ from nova.tests.xenapi import stubs
 from nova.virt.xenapi import agent
 from nova.virt.xenapi import driver as xenapi_conn
 from nova.virt.xenapi import fake as xenapi_fake
+from nova.virt.xenapi import host
 from nova.virt.xenapi import pool
 from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
@@ -357,7 +358,8 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.assertDictMatch(fake_diagnostics, expected)
 
     def test_instance_snapshot_fails_with_no_primary_vdi(self):
-        def create_bad_vbd(vm_ref, vdi_ref):
+        def create_bad_vbd(session, vm_ref, vdi_ref, userdevice,
+                           vbd_type='disk', read_only=False, bootable=False):
             vbd_rec = {'VM': vm_ref,
                'VDI': vdi_ref,
                'userdevice': 'fake',
@@ -366,7 +368,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             xenapi_fake.after_VBD_create(vbd_ref, vbd_rec)
             return vbd_ref
 
-        self.stubs.Set(xenapi_fake, 'create_vbd', create_bad_vbd)
+        self.stubs.Set(vm_utils, 'create_vbd', create_bad_vbd)
         stubs.stubout_instance_snapshot(self.stubs)
         # Stubbing out firewall driver as previous stub sets alters
         # xml rpc result parsing
@@ -1172,11 +1174,25 @@ class XenAPIImageTypeTestCase(test.TestCase):
             vm_utils.ImageType.to_string(vm_utils.ImageType.KERNEL),
             vm_utils.ImageType.KERNEL_STR)
 
-    def test_from_string(self):
-        """Can convert from string to type id."""
+    def _assert_role(self, expected_role, image_type_id):
         self.assertEquals(
-            vm_utils.ImageType.from_string(vm_utils.ImageType.KERNEL_STR),
-            vm_utils.ImageType.KERNEL)
+            expected_role,
+            vm_utils.ImageType.get_role(image_type_id))
+
+    def test_get_image_role_kernel(self):
+        self._assert_role('kernel', vm_utils.ImageType.KERNEL)
+
+    def test_get_image_role_ramdisk(self):
+        self._assert_role('ramdisk', vm_utils.ImageType.RAMDISK)
+
+    def test_get_image_role_disk(self):
+        self._assert_role('root', vm_utils.ImageType.DISK)
+
+    def test_get_image_role_disk_raw(self):
+        self._assert_role('root', vm_utils.ImageType.DISK_RAW)
+
+    def test_get_image_role_disk_vhd(self):
+        self._assert_role('root', vm_utils.ImageType.DISK_VHD)
 
 
 class XenAPIDetermineDiskImageTestCase(test.TestCase):
@@ -1274,6 +1290,43 @@ class XenAPIHostTestCase(stubs.XenAPITestBase):
     def test_get_host_uptime(self):
         result = self.conn.get_host_uptime('host')
         self.assertEqual(result, 'fake uptime')
+
+    def test_supported_instances_is_included_in_host_state(self):
+        stats = self.conn.get_host_stats()
+        self.assertTrue('supported_instances' in stats)
+
+    def test_supported_instances_is_calculated_by_to_supported_instances(self):
+
+        def to_supported_instances(somedata):
+            self.assertEquals(None, somedata)
+            return "SOMERETURNVALUE"
+        self.stubs.Set(host, 'to_supported_instances', to_supported_instances)
+
+        stats = self.conn.get_host_stats()
+        self.assertEquals("SOMERETURNVALUE", stats['supported_instances'])
+
+
+class ToSupportedInstancesTestCase(test.TestCase):
+    def test_default_return_value(self):
+        self.assertEquals([],
+            host.to_supported_instances(None))
+
+    def test_return_value(self):
+        self.assertEquals([('x86_64', 'xapi', 'xen')],
+             host.to_supported_instances([u'xen-3.0-x86_64']))
+
+    def test_invalid_values_do_not_break(self):
+        self.assertEquals([('x86_64', 'xapi', 'xen')],
+             host.to_supported_instances([u'xen-3.0-x86_64', 'spam']))
+
+    def test_multiple_values(self):
+        self.assertEquals(
+            [
+                ('x86_64', 'xapi', 'xen'),
+                ('x86_32', 'xapi', 'hvm')
+            ],
+            host.to_supported_instances([u'xen-3.0-x86_64', 'hvm-3.0-x86_32'])
+        )
 
 
 class XenAPIAutoDiskConfigTestCase(stubs.XenAPITestBase):

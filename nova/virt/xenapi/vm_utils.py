@@ -134,8 +134,16 @@ class ImageType(object):
         return dict(zip(ImageType._ids, ImageType._strs)).get(image_type)
 
     @classmethod
-    def from_string(cls, image_type_str):
-        return dict(zip(ImageType._strs, ImageType._ids)).get(image_type_str)
+    def get_role(cls, image_type_id):
+        " Get the role played by the image, based on its type "
+        return {
+            cls.KERNEL: 'kernel',
+            cls.RAMDISK: 'ramdisk',
+            cls.DISK: 'root',
+            cls.DISK_RAW: 'root',
+            cls.DISK_VHD: 'root',
+            cls.DISK_ISO: 'iso'
+        }.get(image_type_id)
 
 
 def create_vm(session, instance, name_label, kernel, ramdisk,
@@ -510,44 +518,26 @@ def get_vdi_for_vm_safely(session, vm_ref):
 
 @contextlib.contextmanager
 def snapshot_attached_here(session, instance, vm_ref, label):
+    """Snapshot the root disk only.  Return a list of uuids for the vhds
+    in the chain.
+    """
     LOG.debug(_("Starting snapshot for VM"), instance=instance)
 
     # Memorize the original_parent_uuid so we can poll for coalesce
     vm_vdi_ref, vm_vdi_rec = get_vdi_for_vm_safely(session, vm_ref)
     original_parent_uuid = _get_vhd_parent_uuid(session, vm_vdi_ref)
+    sr_ref = vm_vdi_rec["SR"]
 
-    template_vm_ref, template_vdi_uuid = _create_snapshot(
-            session, instance, vm_ref, label)
-
+    snapshot_ref = session.call_xenapi("VDI.snapshot", vm_vdi_ref, {})
     try:
-        sr_ref = vm_vdi_rec["SR"]
-        parent_uuid, base_uuid = _wait_for_vhd_coalesce(
-                session, instance, sr_ref, vm_vdi_ref, original_parent_uuid)
-
+        snapshot_rec = session.call_xenapi("VDI.get_record", snapshot_ref)
+        _wait_for_vhd_coalesce(session, instance, sr_ref, vm_vdi_ref,
+                original_parent_uuid)
         vdi_uuids = [vdi_rec['uuid'] for vdi_rec in
-                     _walk_vdi_chain(session, template_vdi_uuid)]
-
+                _walk_vdi_chain(session, snapshot_rec['uuid'])]
         yield vdi_uuids
     finally:
-        _destroy_snapshot(session, instance, template_vm_ref)
-
-
-def _create_snapshot(session, instance, vm_ref, label):
-    template_vm_ref = session.call_xenapi('VM.snapshot', vm_ref, label)
-    template_vdi_rec = get_vdi_for_vm_safely(session, template_vm_ref)[1]
-    template_vdi_uuid = template_vdi_rec["uuid"]
-
-    LOG.debug(_("Created snapshot %(template_vdi_uuid)s with label"
-                " '%(label)s'"), locals(), instance=instance)
-
-    return template_vm_ref, template_vdi_uuid
-
-
-def _destroy_snapshot(session, instance, vm_ref):
-    vdi_refs = lookup_vm_vdis(session, vm_ref)
-    safe_destroy_vdis(session, vdi_refs)
-
-    destroy_vm(session, instance, vm_ref)
+        safe_destroy_vdis(session, [snapshot_ref])
 
 
 def get_sr_path(session):
@@ -864,8 +854,7 @@ def _create_cached_image(context, session, instance, name_label,
     session.call_xenapi('VDI.remove_from_other_config',
                         new_vdi_ref, 'image-id')
 
-    vdi_type = ("root" if image_type == ImageType.DISK_VHD
-                else ImageType.to_string(image_type))
+    vdi_type = ImageType.get_role(image_type)
     vdi_uuid = session.call_xenapi('VDI.get_uuid', new_vdi_ref)
     vdis[vdi_type] = dict(uuid=vdi_uuid, file=None)
 
@@ -1136,11 +1125,11 @@ def _fetch_disk_image(context, session, instance, name_label, image_id,
             destroy_vdi(session, vdi_ref)
             LOG.debug(_("Kernel/Ramdisk VDI %s destroyed"), vdi_ref,
                       instance=instance)
-            vdi_type = ImageType.to_string(image_type)
-            return {vdi_type: dict(uuid=None, file=filename)}
+            vdi_role = ImageType.get_role(image_type)
+            return {vdi_role: dict(uuid=None, file=filename)}
         else:
-            vdi_type = ImageType.to_string(image_type)
-            return {vdi_type: dict(uuid=vdi_uuid, file=None)}
+            vdi_role = ImageType.get_role(image_type)
+            return {vdi_role: dict(uuid=vdi_uuid, file=None)}
     except (session.XenAPI.Failure, IOError, OSError) as e:
         # We look for XenAPI and OS failures.
         LOG.exception(_("Failed to fetch glance image"),

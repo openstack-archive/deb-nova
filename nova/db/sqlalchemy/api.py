@@ -1278,7 +1278,7 @@ def virtual_interface_create(context, values):
         vif_ref = models.VirtualInterface()
         vif_ref.update(values)
         vif_ref.save()
-    except IntegrityError:
+    except exception.DBError:
         raise exception.VirtualInterfaceCreateException()
 
     return vif_ref
@@ -2981,6 +2981,7 @@ def volume_detached(context, volume_id):
         volume_ref['mountpoint'] = None
         volume_ref['attach_status'] = 'detached'
         volume_ref['instance_uuid'] = None
+        volume_ref['attach_time'] = None
         volume_ref.save(session=session)
 
 
@@ -2994,12 +2995,14 @@ def _volume_get_query(context, session=None, project_only=False):
 
 @require_context
 def _ec2_volume_get_query(context, session=None):
-    return model_query(context, models.VolumeIdMapping, session=session)
+    return model_query(context, models.VolumeIdMapping,
+                       session=session, read_deleted='yes')
 
 
 @require_context
 def _ec2_snapshot_get_query(context, session=None):
-    return model_query(context, models.SnapshotIdMapping, session=session)
+    return model_query(context, models.SnapshotIdMapping,
+                       session=session, read_deleted='yes')
 
 
 @require_context
@@ -3567,6 +3570,12 @@ def security_group_destroy(context, security_group_id):
                         'updated_at': literal_column('updated_at')})
         session.query(models.SecurityGroupIngressRule).\
                 filter_by(group_id=security_group_id).\
+                update({'deleted': True,
+                        'deleted_at': timeutils.utcnow(),
+                        'updated_at': literal_column('updated_at')})
+
+        session.query(models.SecurityGroupIngressRule).\
+                filter_by(parent_group_id=security_group_id).\
                 update({'deleted': True,
                         'deleted_at': timeutils.utcnow(),
                         'updated_at': literal_column('updated_at')})
@@ -5164,7 +5173,10 @@ def get_instance_uuid_by_ec2_id(context, ec2_id, session=None):
 
 @require_context
 def _ec2_instance_get_query(context, session=None):
-    return model_query(context, models.InstanceIdMapping, session=session)
+    return model_query(context,
+                       models.InstanceIdMapping,
+                       session=session,
+                       read_deleted='yes')
 
 
 @require_admin_context

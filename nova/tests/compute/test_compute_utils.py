@@ -25,6 +25,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import flags
+from nova.network import api as network_api
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier_api
@@ -43,12 +44,21 @@ class ComputeValidateDeviceTestCase(test.TestCase):
     def setUp(self):
         super(ComputeValidateDeviceTestCase, self).setUp()
         self.context = context.RequestContext('fake', 'fake')
-        self.instance = {
-                'uuid': 'fake',
-                'root_device_name': '/dev/vda',
-                'default_ephemeral_device': '/dev/vdb',
-                'instance_type_id': 'fake',
-        }
+        # check if test name includes "xen"
+        if 'xen' in self.id():
+            self.flags(compute_driver='xenapi.XenAPIDriver')
+            self.instance = {
+                    'uuid': 'fake',
+                    'root_device_name': None,
+                    'instance_type_id': 'fake',
+            }
+        else:
+            self.instance = {
+                    'uuid': 'fake',
+                    'root_device_name': '/dev/vda',
+                    'default_ephemeral_device': '/dev/vdb',
+                    'instance_type_id': 'fake',
+            }
         self.data = []
 
         def fake_get(instance_type_id, ctxt=None):
@@ -149,8 +159,6 @@ class ComputeValidateDeviceTestCase(test.TestCase):
         self.assertEqual(device, '/dev/vdc')
 
     def test_ephemeral_xenapi(self):
-        self.flags(compute_driver='xenapi.XenAPIDriver')
-        del self.instance['default_ephemeral_device']
         self.instance_type = {
             'ephemeral_gb': 10,
             'swap': 0,
@@ -161,8 +169,6 @@ class ComputeValidateDeviceTestCase(test.TestCase):
         self.assertEqual(device, '/dev/xvdc')
 
     def test_swap_xenapi(self):
-        self.flags(compute_driver='xenapi.XenAPIDriver')
-        del self.instance['default_ephemeral_device']
         self.instance_type = {
             'ephemeral_gb': 0,
             'swap': 10,
@@ -173,14 +179,25 @@ class ComputeValidateDeviceTestCase(test.TestCase):
         self.assertEqual(device, '/dev/xvdb')
 
     def test_swap_and_ephemeral_xenapi(self):
-        self.flags(compute_driver='xenapi.XenAPIDriver')
-        del self.instance['default_ephemeral_device']
         self.instance_type = {
             'ephemeral_gb': 10,
             'swap': 10,
         }
         self.stubs.Set(instance_types, 'get_instance_type',
                        lambda instance_type_id, ctxt=None: self.instance_type)
+        device = self._validate_device()
+        self.assertEqual(device, '/dev/xvdd')
+
+    def test_swap_and_one_attachment_xenapi(self):
+        self.instance_type = {
+            'ephemeral_gb': 0,
+            'swap': 10,
+        }
+        self.stubs.Set(instance_types, 'get_instance_type',
+                       lambda instance_type_id, ctxt=None: self.instance_type)
+        device = self._validate_device()
+        self.assertEqual(device, '/dev/xvdb')
+        self.data.append(self._fake_bdm(device))
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdd')
 
@@ -194,7 +211,7 @@ class UsageInfoTestCase(test.TestCase):
                                                           spectacular=True)
 
         super(UsageInfoTestCase, self).setUp()
-        self.stubs.Set(nova.network.API, 'get_instance_nw_info',
+        self.stubs.Set(network_api.API, 'get_instance_nw_info',
                        fake_get_nw_info)
 
         self.flags(compute_driver='nova.virt.fake.FakeDriver',

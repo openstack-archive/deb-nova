@@ -14,8 +14,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import __builtin__
 import base64
+import mox
 import netaddr
+import StringIO
 import sys
 import traceback
 
@@ -24,6 +27,7 @@ from nova import exception
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova import test
+from nova.tests import fake_libvirt_utils
 from nova.tests.image import fake as fake_image
 from nova.tests import utils as test_utils
 
@@ -390,6 +394,18 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                                       '/mnt/nova/something')
 
     @catch_notimplementederror
+    def test_attach_detach_different_power_states(self):
+        instance_ref, network_info = self._get_running_instance()
+        self.connection.power_off(instance_ref)
+        self.connection.attach_volume({'driver_volume_type': 'fake'},
+                                      instance_ref['name'],
+                                      '/mnt/nova/something')
+        self.connection.power_on(instance_ref)
+        self.connection.detach_volume({'driver_volume_type': 'fake'},
+                                      instance_ref['name'],
+                                      '/mnt/nova/something')
+
+    @catch_notimplementederror
     def test_get_info(self):
         instance_ref, network_info = self._get_running_instance()
         info = self.connection.get_info(instance_ref)
@@ -424,6 +440,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
 
     @catch_notimplementederror
     def test_get_console_output(self):
+        fake_libvirt_utils.files['dummy.log'] = ''
         instance_ref, network_info = self._get_running_instance()
         console_output = self.connection.get_console_output(instance_ref)
         self.assertTrue(isinstance(console_output, basestring))

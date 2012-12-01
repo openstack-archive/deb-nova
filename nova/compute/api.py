@@ -33,6 +33,7 @@ from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
+from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import crypto
@@ -269,11 +270,11 @@ class API(base.Base):
             if len(k) > 255:
                 msg = _("Metadata property key greater than 255 characters")
                 LOG.warn(msg)
-                raise exception.InvalidMetadata(reason=msg)
+                raise exception.InvalidMetadataSize(reason=msg)
             if len(v) > 255:
                 msg = _("Metadata property value greater than 255 characters")
                 LOG.warn(msg)
-                raise exception.InvalidMetadata(reason=msg)
+                raise exception.InvalidMetadataSize(reason=msg)
 
     def _check_requested_networks(self, context, requested_networks):
         """ Check if the networks requested belongs to the project
@@ -391,111 +392,114 @@ class API(base.Base):
             raise exception.InstanceTypeNotFound(
                     instance_type_id=instance_type['id'])
 
-        # Check quotas
+        # Reserve quotas
         num_instances, quota_reservations = self._check_num_instances_quota(
                 context, instance_type, min_count, max_count)
-        self._check_metadata_properties_quota(context, metadata)
-        self._check_injected_file_quota(context, injected_files)
-        self._check_requested_networks(context, requested_networks)
 
-        (image_service, image_id) = glance.get_remote_image_service(context,
-                                                                    image_href)
-        image = image_service.show(context, image_id)
-
-        if instance_type['memory_mb'] < int(image.get('min_ram') or 0):
-            QUOTAS.rollback(context, quota_reservations)
-            raise exception.InstanceTypeMemoryTooSmall()
-        if instance_type['root_gb'] < int(image.get('min_disk') or 0):
-            QUOTAS.rollback(context, quota_reservations)
-            raise exception.InstanceTypeDiskTooSmall()
-
-        # Handle config_drive
-        config_drive_id = None
-        if config_drive and config_drive is not True:
-            # config_drive is volume id
-            config_drive_id = config_drive
-            config_drive = None
-
-            # Ensure config_drive image exists
-            image_service.show(context, config_drive_id)
-
-        kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
-                context, kernel_id, ramdisk_id, image, image_service)
-
-        if key_data is None and key_name:
-            key_pair = self.db.key_pair_get(context, context.user_id, key_name)
-            key_data = key_pair['public_key']
-
-        if reservation_id is None:
-            reservation_id = utils.generate_uid('r')
-
-        # grab the architecture from glance
-        architecture = image['properties'].get('architecture', 'Unknown')
-
-        root_device_name = block_device.properties_root_device_name(
-            image['properties'])
-
-        availability_zone, forced_host = self._handle_availability_zone(
-                availability_zone)
-
-        base_options = {
-            'reservation_id': reservation_id,
-            'image_ref': image_href,
-            'kernel_id': kernel_id or '',
-            'ramdisk_id': ramdisk_id or '',
-            'power_state': power_state.NOSTATE,
-            'vm_state': vm_states.BUILDING,
-            'config_drive_id': config_drive_id or '',
-            'config_drive': config_drive or '',
-            'user_id': context.user_id,
-            'project_id': context.project_id,
-            'launch_time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'instance_type_id': instance_type['id'],
-            'memory_mb': instance_type['memory_mb'],
-            'vcpus': instance_type['vcpus'],
-            'root_gb': instance_type['root_gb'],
-            'ephemeral_gb': instance_type['ephemeral_gb'],
-            'display_name': display_name,
-            'display_description': display_description or '',
-            'user_data': user_data,
-            'key_name': key_name,
-            'key_data': key_data,
-            'locked': False,
-            'metadata': metadata,
-            'access_ip_v4': access_ip_v4,
-            'access_ip_v6': access_ip_v6,
-            'availability_zone': availability_zone,
-            'root_device_name': root_device_name,
-            'architecture': architecture,
-            'progress': 0}
-
-        if user_data:
-            l = len(user_data)
-            if l > MAX_USERDATA_SIZE:
-                # NOTE(mikal): user_data is stored in a text column, and the
-                # database might silently truncate if its over length.
-                raise exception.InstanceUserDataTooLarge(
-                    length=l, maxsize=MAX_USERDATA_SIZE)
-
-            try:
-                base64.decodestring(user_data)
-            except base64.binascii.Error:
-                raise exception.InstanceUserDataMalformed()
-
-        options_from_image = self._inherit_properties_from_image(
-                image, auto_disk_config)
-
-        base_options.update(options_from_image)
-
-        LOG.debug(_("Going to run %s instances...") % num_instances)
-
-        filter_properties = dict(scheduler_hints=scheduler_hints)
-        if context.is_admin and forced_host:
-            filter_properties['force_hosts'] = [forced_host]
-
-        instances = []
-        instance_uuids = []
+        # Try to create the instance
         try:
+            instances = []
+            instance_uuids = []
+
+            self._check_metadata_properties_quota(context, metadata)
+            self._check_injected_file_quota(context, injected_files)
+            self._check_requested_networks(context, requested_networks)
+
+            (image_service, image_id) = glance.get_remote_image_service(
+                    context, image_href)
+            image = image_service.show(context, image_id)
+
+            if instance_type['memory_mb'] < int(image.get('min_ram') or 0):
+                raise exception.InstanceTypeMemoryTooSmall()
+            if instance_type['root_gb'] < int(image.get('min_disk') or 0):
+                raise exception.InstanceTypeDiskTooSmall()
+
+            # Handle config_drive
+            config_drive_id = None
+            if config_drive and config_drive is not True:
+                # config_drive is volume id
+                config_drive_id = config_drive
+                config_drive = None
+
+                # Ensure config_drive image exists
+                image_service.show(context, config_drive_id)
+
+            kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
+                    context, kernel_id, ramdisk_id, image, image_service)
+
+            if key_data is None and key_name:
+                key_pair = self.db.key_pair_get(context, context.user_id,
+                        key_name)
+                key_data = key_pair['public_key']
+
+            if reservation_id is None:
+                reservation_id = utils.generate_uid('r')
+
+            # grab the architecture from glance
+            architecture = image['properties'].get('architecture', 'Unknown')
+
+            root_device_name = block_device.properties_root_device_name(
+                image['properties'])
+
+            availability_zone, forced_host = self._handle_availability_zone(
+                    availability_zone)
+
+            base_options = {
+                'reservation_id': reservation_id,
+                'image_ref': image_href,
+                'kernel_id': kernel_id or '',
+                'ramdisk_id': ramdisk_id or '',
+                'power_state': power_state.NOSTATE,
+                'vm_state': vm_states.BUILDING,
+                'config_drive_id': config_drive_id or '',
+                'config_drive': config_drive or '',
+                'user_id': context.user_id,
+                'project_id': context.project_id,
+                'launch_time': time.strftime('%Y-%m-%dT%H:%M:%SZ',
+                    time.gmtime()),
+                'instance_type_id': instance_type['id'],
+                'memory_mb': instance_type['memory_mb'],
+                'vcpus': instance_type['vcpus'],
+                'root_gb': instance_type['root_gb'],
+                'ephemeral_gb': instance_type['ephemeral_gb'],
+                'display_name': display_name,
+                'display_description': display_description or '',
+                'user_data': user_data,
+                'key_name': key_name,
+                'key_data': key_data,
+                'locked': False,
+                'metadata': metadata,
+                'access_ip_v4': access_ip_v4,
+                'access_ip_v6': access_ip_v6,
+                'availability_zone': availability_zone,
+                'root_device_name': root_device_name,
+                'architecture': architecture,
+                'progress': 0}
+
+            if user_data:
+                l = len(user_data)
+                if l > MAX_USERDATA_SIZE:
+                    # NOTE(mikal): user_data is stored in a text column, and
+                    # the database might silently truncate if its over length.
+                    raise exception.InstanceUserDataTooLarge(
+                        length=l, maxsize=MAX_USERDATA_SIZE)
+
+                try:
+                    base64.decodestring(user_data)
+                except base64.binascii.Error:
+                    raise exception.InstanceUserDataMalformed()
+
+            options_from_image = self._inherit_properties_from_image(
+                    image, auto_disk_config)
+
+            base_options.update(options_from_image)
+
+            LOG.debug(_("Going to run %s instances...") % num_instances)
+
+            filter_properties = dict(scheduler_hints=scheduler_hints)
+            if context.is_admin and forced_host:
+                filter_properties['force_hosts'] = [forced_host]
+
             for i in xrange(num_instances):
                 options = base_options.copy()
                 instance = self.create_db_entry_for_new_instance(
@@ -503,13 +507,14 @@ class API(base.Base):
                         security_group, block_device_mapping)
                 instances.append(instance)
                 instance_uuids.append(instance['uuid'])
+
+        # In the case of any exceptions, attempt DB cleanup and rollback the
+        # quota reservations.
         except Exception:
-            # Clean up as best we can.
             with excutils.save_and_reraise_exception():
                 try:
                     for instance_uuid in instance_uuids:
-                        self.db.instance_destroy(context,
-                                instance_uuid)
+                        self.db.instance_destroy(context, instance_uuid)
                 finally:
                     QUOTAS.rollback(context, quota_reservations)
 
@@ -721,6 +726,10 @@ class API(base.Base):
         self._populate_instance_shutdown_terminate(instance, image,
                                                    block_device_mapping)
 
+        # ensure_default security group is called before the instance
+        # is created so the creation of the default security group is
+        # proxied to the sgh.
+        self.security_group_api.ensure_default(context)
         instance = self.db.instance_create(context, instance)
 
         self._populate_instance_for_bdm(context, instance,
@@ -880,8 +889,12 @@ class API(base.Base):
             if instance['vm_state'] == vm_states.RESIZED:
                 # If in the middle of a resize, use confirm_resize to
                 # ensure the original instance is cleaned up too
-                migration_ref = self.db.migration_get_by_instance_and_status(
-                        context, instance['uuid'], 'finished')
+                get_migration = self.db.migration_get_by_instance_and_status
+                try:
+                    migration_ref = get_migration(context.elevated(),
+                            instance['uuid'], 'finished')
+                except exception.MigrationNotFoundByStatus:
+                    migration_ref = None
                 if migration_ref:
                     src_host = migration_ref['source_compute']
                     # Call since this can race with the terminate_instance.
@@ -897,26 +910,28 @@ class API(base.Base):
                                                         migration_ref)
                     downsize_reservations = self._reserve_quota_delta(context,
                                                                       deltas)
-                    self.compute_rpcapi.confirm_resize(context,
+                    self.compute_rpcapi.confirm_resize(context.elevated(),
                             instance, migration_ref['id'],
                             host=src_host, cast=False,
                             reservations=downsize_reservations)
 
-            services = self.db.service_get_all_compute_by_host(
-                    context.elevated(), instance['host'])
             is_up = False
+            bdms = self.db.block_device_mapping_get_all_by_instance(
+                    context, instance["uuid"])
             #Note(jogo): db allows for multiple compute services per host
+            try:
+                services = self.db.service_get_all_compute_by_host(
+                        context.elevated(), instance['host'])
+            except exception.ComputeHostNotFound:
+                services = []
             for service in services:
                 if utils.service_is_up(service):
                     is_up = True
                     self.compute_rpcapi.terminate_instance(context, instance)
                     break
-            if is_up == False:
+            if not is_up:
                 # If compute node isn't up, just delete from DB
-                LOG.warning(_('host for instance is down, deleting from '
-                        'database'), instance=instance)
-                self.db.instance_destroy(context, instance['uuid'])
-
+                self._local_delete(context, instance, bdms)
             if reservations:
                 QUOTAS.commit(context, reservations)
         except exception.InstanceNotFound:
@@ -927,6 +942,45 @@ class API(base.Base):
             with excutils.save_and_reraise_exception():
                 if reservations:
                     QUOTAS.rollback(context, reservations)
+
+    def _local_delete(self, context, instance, bdms):
+        LOG.warning(_('host for instance is down, deleting from '
+                      'database'), instance=instance)
+        instance_uuid = instance['uuid']
+        self.db.instance_info_cache_delete(context, instance_uuid)
+        compute_utils.notify_about_instance_usage(
+            context, instance, "delete.start")
+
+        elevated = context.elevated()
+        self.network_api.deallocate_for_instance(elevated,
+                instance)
+        system_meta = self.db.instance_system_metadata_get(context,
+                instance_uuid)
+
+        # cleanup volumes
+        for bdm in bdms:
+            if bdm['volume_id']:
+                volume = self.volume_api.get(context, bdm['volume_id'])
+                # NOTE(vish): We don't have access to correct volume
+                #             connector info, so just pass a fake
+                #             connector. This can be improved when we
+                #             expose get_volume_connector to rpc.
+                connector = {'ip': '127.0.0.1', 'initiator': 'iqn.fake'}
+                self.volume_api.terminate_connection(context,
+                                                     volume,
+                                                     connector)
+                self.volume_api.detach(elevated, volume)
+                if bdm['delete_on_termination']:
+                    self.volume_api.delete(context, volume)
+            self.db.block_device_mapping_destroy(context, bdm['id'])
+        instance = self._instance_update(context,
+                                         instance_uuid,
+                                         vm_state=vm_states.DELETED,
+                                         task_state=None,
+                                         terminated_at=timeutils.utcnow())
+        self.db.instance_destroy(context, instance_uuid)
+        compute_utils.notify_about_instance_usage(
+            context, instance, "delete.end", system_metadata=system_meta)
 
     # NOTE(maoy): we allow delete to be called no matter what vm_state says.
     @wrap_check_policy
@@ -1382,6 +1436,12 @@ class API(base.Base):
         if instance_type['root_gb'] < int(image.get('min_disk') or 0):
             raise exception.InstanceTypeDiskTooSmall()
 
+        (image_service, image_id) = glance.get_remote_image_service(context,
+                                                                 image_href)
+        image = image_service.show(context, image_id)
+        kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
+                context, None, None, image, image_service)
+
         def _reset_image_metadata():
             """
             Remove old image properties that we're storing as instance
@@ -1415,7 +1475,9 @@ class API(base.Base):
                                expected_task_state=None,
                                # Unfortunately we need to set image_ref early,
                                # so API users can see it.
-                               image_ref=image_href, progress=0, **kwargs)
+                               image_ref=image_href, kernel_id=kernel_id or "",
+                               ramdisk_id=ramdisk_id or "",
+                               progress=0, **kwargs)
 
         # On a rebuild, since we're potentially changing images, we need to
         # wipe out the old image properties that we're storing as instance

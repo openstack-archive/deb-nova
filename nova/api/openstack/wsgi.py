@@ -244,17 +244,26 @@ class XMLDeserializer(TextDeserializer):
                                                                  listnames)
             return result
 
+    def find_first_child_named_in_namespace(self, parent, namespace, name):
+        """Search a nodes children for the first child with a given name"""
+        for node in parent.childNodes:
+            if (node.localName == name and
+                node.namespaceURI and
+                node.namespaceURI == namespace):
+                return node
+        return None
+
     def find_first_child_named(self, parent, name):
         """Search a nodes children for the first child with a given name"""
         for node in parent.childNodes:
-            if node.nodeName == name:
+            if node.localName == name:
                 return node
         return None
 
     def find_children_named(self, parent, name):
         """Return all of a nodes children who have the given name"""
         for node in parent.childNodes:
-            if node.nodeName == name:
+            if node.localName == name:
                 yield node
 
     def extract_text(self, node):
@@ -1162,8 +1171,9 @@ class Fault(webob.exc.HTTPException):
                 'code': code,
                 'message': self.wrapped_exc.explanation}}
         if code == 413:
-            retry = self.wrapped_exc.headers['Retry-After']
-            fault_data[fault_name]['retryAfter'] = retry
+            retry = self.wrapped_exc.headers.get('Retry-After', None)
+            if retry:
+                fault_data[fault_name]['retryAfter'] = retry
 
         # 'code' is an attribute on the fault tag itself
         metadata = {'attributes': {fault_name: 'code'}}

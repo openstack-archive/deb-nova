@@ -37,6 +37,8 @@ from nova.compute import vm_states
 import nova.db
 from nova.db.sqlalchemy import models
 from nova import flags
+from nova.network import manager
+from nova.network.quantumv2 import api as quantum_api
 from nova.openstack.common import jsonutils
 import nova.openstack.common.rpc
 from nova import test
@@ -132,6 +134,11 @@ class Base64ValidationTest(test.TestCase):
         self.assertEqual(result, None)
 
 
+class QuantumV2Subclass(quantum_api.API):
+    """Used to ensure that API handles subclasses properly."""
+    pass
+
+
 class ServersControllerTest(test.TestCase):
 
     def setUp(self):
@@ -171,6 +178,52 @@ class ServersControllerTest(test.TestCase):
         requested_networks = [{'uuid': uuid}]
         res = self.controller._get_requested_networks(requested_networks)
         self.assertTrue((uuid, None) in res)
+
+    def test_requested_networks_quantumv2_enabled_with_port(self):
+        self.flags(network_api_class='nova.network.quantumv2.api.API')
+        port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'port': port}]
+        res = self.controller._get_requested_networks(requested_networks)
+        self.assertEquals(res, [(None, None, port)])
+
+    def test_requested_networks_quantumv2_enabled_with_network(self):
+        self.flags(network_api_class='nova.network.quantumv2.api.API')
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        requested_networks = [{'uuid': network}]
+        res = self.controller._get_requested_networks(requested_networks)
+        self.assertEquals(res, [(network, None, None)])
+
+    def test_requested_networks_quantumv2_enabled_with_network_and_port(self):
+        self.flags(network_api_class='nova.network.quantumv2.api.API')
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'uuid': network, 'port': port}]
+        res = self.controller._get_requested_networks(requested_networks)
+        self.assertEquals(res, [(None, None, port)])
+
+    def test_requested_networks_quantumv2_disabled_with_port(self):
+        port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'port': port}]
+        self.assertRaises(
+            webob.exc.HTTPBadRequest,
+            self.controller._get_requested_networks,
+            requested_networks)
+
+    def test_requested_networks_api_enabled_with_v2_subclass(self):
+        self.flags(network_api_class='nova.network.quantumv2.api.API')
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'uuid': network, 'port': port}]
+        res = self.controller._get_requested_networks(requested_networks)
+        self.assertEquals(res, [(None, None, port)])
+
+    def test_requested_networks_quantumv2_subclass_with_port(self):
+        cls = 'nova.tests.api.openstack.compute.test_servers.QuantumV2Subclass'
+        self.flags(network_api_class=cls)
+        port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'port': port}]
+        res = self.controller._get_requested_networks(requested_networks)
+        self.assertEquals(res, [(None, None, port)])
 
     def test_get_server_by_uuid(self):
         req = fakes.HTTPRequest.blank('/v2/fake/servers/%s' % FAKE_UUID)
@@ -1234,7 +1287,7 @@ class ServersControllerTest(test.TestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
             self.controller._action_rebuild, req, FAKE_UUID, body)
 
     def test_rebuild_instance_with_metadata_value_too_long(self):
@@ -1268,7 +1321,7 @@ class ServersControllerTest(test.TestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
             self.controller._action_rebuild, req, FAKE_UUID, body)
 
     def test_rebuild_instance_fails_when_min_ram_too_small(self):
@@ -2021,6 +2074,29 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(nova.compute.api.API, 'create', create)
         self._test_create_extra(params)
 
+    def test_create_instance_with_bdm_delete_on_termination(self):
+        self.ext_mgr.extensions = {'os-volumes': 'fake'}
+        bdm = [{'device_name': 'foo1', 'delete_on_termination': 1},
+               {'device_name': 'foo2', 'delete_on_termination': True},
+               {'device_name': 'foo3', 'delete_on_termination': 'invalid'},
+               {'device_name': 'foo4', 'delete_on_termination': 0},
+               {'device_name': 'foo5', 'delete_on_termination': False}]
+        expected_dbm = [
+            {'device_name': 'foo1', 'delete_on_termination': True},
+            {'device_name': 'foo2', 'delete_on_termination': True},
+            {'device_name': 'foo3', 'delete_on_termination': False},
+            {'device_name': 'foo4', 'delete_on_termination': False},
+            {'device_name': 'foo5', 'delete_on_termination': False}]
+        params = {'block_device_mapping': bdm}
+        old_create = nova.compute.api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], expected_dbm)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(nova.compute.api.API, 'create', create)
+        self._test_create_extra(params)
+
     def test_create_instance_with_user_data_enabled(self):
         self.ext_mgr.extensions = {'os-user-data': 'fake'}
         user_data = 'fake'
@@ -2463,7 +2539,7 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
                           self.controller.create, req, body)
 
     def test_create_instance_metadata_value_too_long(self):
@@ -2487,7 +2563,7 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
                           self.controller.create, req, body)
 
     def test_create_instance_metadata_key_blank(self):
@@ -2925,6 +3001,57 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 "imageRef": "1",
                 "flavorRef": "2",
             },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_alternate_namespace_prefix(self):
+        serial_request = """
+<ns2:server xmlns:ns2="http://docs.openstack.org/compute/api/v2"
+        name="new-server-test"
+        imageRef="1"
+        flavorRef="2">
+        <ns2:metadata><ns2:meta key="hello">world</ns2:meta></ns2:metadata>
+        </ns2:server>
+        """
+        request = self.deserializer.deserialize(serial_request)
+        expected = {
+            "server": {
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "2",
+                'metadata': {"hello": "world"},
+                },
+            }
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_scheduler_hints_and_alternate_namespace_prefix(self):
+        serial_request = """
+<ns2:server xmlns:ns2="http://docs.openstack.org/compute/api/v2"
+     name="new-server-test"
+     imageRef="1"
+     flavorRef="2">
+     <ns2:metadata><ns2:meta key="hello">world</ns2:meta></ns2:metadata>
+     <os:scheduler_hints
+     xmlns:os="http://docs.openstack.org/compute/ext/scheduler-hints/api/v2">
+             <hypervisor>xen</hypervisor>
+             <near>eb999657-dd6b-464e-8713-95c532ac3b18</near>
+     </os:scheduler_hints>
+     </ns2:server>
+        """
+        request = self.deserializer.deserialize(serial_request)
+        expected = {
+            "server": {
+                'OS-SCH-HNT:scheduler_hints': {
+                    'hypervisor': ['xen'],
+                    'near': ['eb999657-dd6b-464e-8713-95c532ac3b18']
+                },
+                "name": "new-server-test",
+                "imageRef": "1",
+                "flavorRef": "2",
+                "metadata": {
+                    "hello": "world"
+                }
+            }
         }
         self.assertEquals(request['body'], expected)
 

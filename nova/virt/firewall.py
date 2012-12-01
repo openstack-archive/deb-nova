@@ -20,6 +20,8 @@
 from nova import context
 from nova import db
 from nova import flags
+from nova import network
+from nova.network import linux_net
 from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
@@ -138,7 +140,6 @@ class IptablesFirewallDriver(FirewallDriver):
     """Driver which enforces security groups through iptables rules."""
 
     def __init__(self, **kwargs):
-        from nova.network import linux_net
         self.iptables = linux_net.iptables_manager
         self.instances = {}
         self.network_infos = {}
@@ -181,7 +182,8 @@ class IptablesFirewallDriver(FirewallDriver):
 
         self.instances[instance['id']] = instance
         self.network_infos[instance['id']] = network_info
-        self.add_filters_for_instance(instance)
+        ipv4_rules, ipv6_rules = self.instance_rules(instance, network_info)
+        self.add_filters_for_instance(instance, ipv4_rules, ipv6_rules)
         LOG.debug(_('Filters added to instance'), instance=instance)
         self.refresh_provider_fw_rules()
         LOG.debug(_('Provider Firewall Rules refreshed'), instance=instance)
@@ -217,7 +219,8 @@ class IptablesFirewallDriver(FirewallDriver):
             for rule in ipv6_rules:
                 self.iptables.ipv6['filter'].add_rule(chain_name, rule)
 
-    def add_filters_for_instance(self, instance):
+    def add_filters_for_instance(self, instance, inst_ipv4_rules,
+                                 inst_ipv6_rules):
         network_info = self.network_infos[instance['id']]
         chain_name = self._instance_chain_name(instance)
         if FLAGS.use_ipv6:
@@ -226,8 +229,7 @@ class IptablesFirewallDriver(FirewallDriver):
         ipv4_rules, ipv6_rules = self._filters_for_instance(chain_name,
                                                             network_info)
         self._add_filters('local', ipv4_rules, ipv6_rules)
-        ipv4_rules, ipv6_rules = self.instance_rules(instance, network_info)
-        self._add_filters(chain_name, ipv4_rules, ipv6_rules)
+        self._add_filters(chain_name, inst_ipv4_rules, inst_ipv6_rules)
 
     def remove_filters_for_instance(self, instance):
         chain_name = self._instance_chain_name(instance)
@@ -392,8 +394,7 @@ class IptablesFirewallDriver(FirewallDriver):
                         #                 has access to a nw_api handle,
                         #                 and should be the only one making
                         #                 making rpc calls.
-                        import nova.network
-                        nw_api = nova.network.API()
+                        nw_api = network.API()
                         for instance in rule['grantee_group']['instances']:
                             nw_info = nw_api.get_instance_nw_info(ctxt,
                                                                   instance)
@@ -430,15 +431,22 @@ class IptablesFirewallDriver(FirewallDriver):
         self.iptables.apply()
 
     @utils.synchronized('iptables', external=True)
+    def _inner_do_refresh_rules(self, instance, ipv4_rules,
+                                               ipv6_rules):
+        self.remove_filters_for_instance(instance)
+        self.add_filters_for_instance(instance, ipv4_rules, ipv6_rules)
+
     def do_refresh_security_group_rules(self, security_group):
         for instance in self.instances.values():
-            self.remove_filters_for_instance(instance)
-            self.add_filters_for_instance(instance)
+            network_info = self.network_infos[instance['id']]
+            ipv4_rules, ipv6_rules = self.instance_rules(instance,
+                                                         network_info)
+            self._inner_do_refresh_rules(instance, ipv4_rules, ipv6_rules)
 
-    @utils.synchronized('iptables', external=True)
     def do_refresh_instance_rules(self, instance):
-        self.remove_filters_for_instance(instance)
-        self.add_filters_for_instance(instance)
+        network_info = self.network_infos[instance['id']]
+        ipv4_rules, ipv6_rules = self.instance_rules(instance, network_info)
+        self._inner_do_refresh_rules(instance, ipv4_rules, ipv6_rules)
 
     def refresh_provider_fw_rules(self):
         """See :class:`FirewallDriver` docs."""

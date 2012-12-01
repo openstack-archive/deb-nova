@@ -164,10 +164,7 @@ class EC2APIError(NovaException):
     def __init__(self, message=None, code=None):
         self.msg = message
         self.code = code
-        if code:
-            outstr = '%s: %s' % (code, message)
-        else:
-            outstr = '%s' % message
+        outstr = '%s' % message
         super(EC2APIError, self).__init__(outstr)
 
 
@@ -260,6 +257,10 @@ class InvalidVolume(Invalid):
 
 class InvalidMetadata(Invalid):
     message = _("Invalid metadata") + ": %(reason)s"
+
+
+class InvalidMetadataSize(Invalid):
+    message = _("Invalid metadata size") + ": %(reason)s"
 
 
 class InvalidPortRange(Invalid):
@@ -647,6 +648,15 @@ class FloatingIpNotFoundForHost(FloatingIpNotFound):
     message = _("Floating ip not found for host %(host)s.")
 
 
+class FloatingIpMultipleFoundForAddress(NovaException):
+    message = _("Multiple floating ips are found for address %(address)s.")
+
+
+class FloatingIpPoolNotFound(NotFound):
+    message = _("Floating ip pool not found.")
+    safe = True
+
+
 class NoMoreFloatingIps(FloatingIpNotFound):
     message = _("Zero floating ips available.")
     safe = True
@@ -666,6 +676,10 @@ class NoFloatingIpsDefined(NotFound):
 
 class NoFloatingIpInterface(NotFound):
     message = _("Interface %(interface)s not found.")
+
+
+class CannotDisassociateAutoAssignedFloatingIP(NovaException):
+    message = _("Cannot disassociate auto assigined floating ip")
 
 
 class KeypairNotFound(NotFound):
