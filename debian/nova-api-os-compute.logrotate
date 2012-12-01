@@ -1,4 +1,0 @@
-/var/log/nova/nova-api-os-compute.log {
-    daily
-    missingok
-}

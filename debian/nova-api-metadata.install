@@ -1,2 +1,0 @@
-usr/bin/nova-api-metadata
-etc/nova/rootwrap.d/api-metadata.filters
