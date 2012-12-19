@@ -246,6 +246,7 @@ Package: nova-compute-kvm
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser, nova-common
+Recommends: guestmount
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-qemu
 Description: OpenStack Compute - compute node (KVM)
