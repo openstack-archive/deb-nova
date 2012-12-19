@@ -1,0 +1,36 @@
+Description: Fixes path to some binaries in the rootwrap config
+Author: Thomas Goirand <zigo@debian.org>
+Bug-Debian: http://bugs.debian.org/695791
+Forwarded: no
+
+--- nova-2012.1.1.orig/nova/rootwrap/compute.py
++++ nova-2012.1.1/nova/rootwrap/compute.py
+@@ -95,7 +95,7 @@ filterlist = [
+     # nova/network/linux_net.py: 'ip', 'addr', 'show', 'dev', interface, ..
+     # nova/network/linux_net.py: 'ip', 'link', 'set', dev, "address", ..
+     # nova/network/linux_net.py: 'ip', 'link', 'set', dev, 'up'
+-    filters.CommandFilter("/sbin/ip", "root"),
++    filters.CommandFilter("/bin/ip", "root"),
+ 
+     # nova/virt/libvirt/vif.py: 'tunctl', '-b', '-t', dev
+     # nova/network/linux_net.py: 'tunctl', '-b', '-t', dev
+@@ -113,7 +113,7 @@ filterlist = [
+     filters.CommandFilter("/bin/dd", "root"),
+ 
+     # nova/virt/xenapi/volume_utils.py: 'iscsiadm', '-m', ...
+-    filters.CommandFilter("/sbin/iscsiadm", "root"),
++    filters.CommandFilter("/usr/bin/iscsiadm", "root"),
+ 
+     # nova/virt/xenapi/vm_utils.py: "parted", "--script", ...
+     # nova/virt/xenapi/vm_utils.py: 'parted', '--script', dev_path, ..*.
+--- nova-2012.1.1.orig/nova/rootwrap/network.py
++++ nova-2012.1.1/nova/rootwrap/network.py
+@@ -36,7 +36,7 @@ filterlist = [
+     # nova/network/linux_net.py: 'ip', 'link', 'set', dev, "address", ..
+     # nova/network/linux_net.py: 'ip', 'link', 'set', dev, 'up'
+     # nova/network/linux_net.py: 'ip', 'tuntap', 'add', dev, 'mode', 'tap'
+-    filters.CommandFilter("/sbin/ip", "root"),
++    filters.CommandFilter("/bin/ip", "root"),
+ 
+     # nova/network/linux_net.py: 'ip[6]tables-save' % (cmd,), '-t', ...
+     filters.CommandFilter("/sbin/iptables-save", "root"),

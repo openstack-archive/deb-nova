@@ -1,3 +1,9 @@
+nova (2012.1.1-11) unstable; urgency=low
+
+  * Fixes some wrong path to binaries in the rootwrap config (Closes: #695791).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 19 Dec 2012 15:57:49 +0000
+
 nova (2012.1.1-10) unstable; urgency=low
 
   * Fixes capitalization in debian/po/es.po (Nova vs nova) (Closes: #687000).
