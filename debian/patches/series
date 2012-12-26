@@ -3,5 +3,4 @@ install-missing-files.patch
 fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
 fix-ini-syntax
-CVE-2012-5625_nova_physical_not_wiped.patch
 fixes-etcnovarootwrap.dcompute.filters.patch
