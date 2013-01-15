@@ -61,7 +61,7 @@ manage_nova_my_ip () {
 }
 
 pkgos_var_user_group nova
-pkgos_dbc_read_conf -sh ${NOVA_CONF} nova sql_connection $@
+pkgos_dbc_read_conf -pkg nova-common -sh ${NOVA_CONF} nova sql_connection $@
 pkgos_read_admin_creds ${NOVA_API_CONF} nova filter:authtoken
 
 manage_nova_enable
