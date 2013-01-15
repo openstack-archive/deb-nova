@@ -141,7 +141,7 @@ Package: nova-compute
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${ostack-lsb-base},  nova-common (= ${binary:Version}), qemu-utils, kpartx, curl, parted, vlan,
- ebtables, gawk, iptables, open-iscsi, nova-compute-kvm | nova-compute-hypervisor,
+ ebtables, gawk, iptables, open-iscsi, python-cinderclient, nova-compute-kvm | nova-compute-hypervisor,
  adduser,
  ${python:Depends}, ${misc:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
