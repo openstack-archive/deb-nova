@@ -66,13 +66,6 @@ _Description: API to activate:
  cannot run osapi_volume and cinder-api on the same server: they bind on the
  same port).
 
-Template: nova/network-manager
-Type: select
-Choices: FlatDHCPManager, FlatManager, FloatingIP, VlanManager, RPCAllocateFixedIP
-_Description: Nova network manager type:
- Openstack Nova supports different networking models. Select which one you wish
- to use.
-
 Template: nova/my-ip
 Type: string
 _Description: Value for my_ip:
