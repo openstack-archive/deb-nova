@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2012-11-23 06:39+0000\n"
+"POT-Creation-Date: 2013-01-18 07:18+0000\n"
 "PO-Revision-Date: 2012-06-28 20:40+0100\n"
 "Last-Translator: Ivan Masár <helix84@centrum.sk>\n"
 "Language-Team: Slovak <sk-i18n@lists.linux.sk>\n"
@@ -112,6 +112,59 @@ msgid ""
 msgstr ""
 "Toto nastavenie môžete zmeniť neskôr spustením „dpkg-reconfigure -plow nova-"
 "common“."
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid "API to activate:"
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid ""
+"Openstack Nova supports different API services, each of them binding on a "
+"different port. Select which one nova-api should support."
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid ""
+"If it is a compute node that you are setting-up, then you only need to run "
+"the metadata API server. If you run Cinder, then you don't need osapi_volume "
+"(you cannot run osapi_volume and cinder-api on the same server: they bind on "
+"the same port)."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid "Value for my_ip:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid ""
+"Enter the IP address that will be set in the my_ip directive of nova.conf."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "Ip address of your rabbitmq host:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid ""
+"Enter the IP address that will be set in the rabbitmq_host directive of nova."
+"conf. If you are installing openstack-proxy-node, then the default to use "
+"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
+"then enter the IP address of your proxy-node host."
+msgstr ""
 
 #. Type: string
 #. Description
@@ -218,13 +271,13 @@ msgid ""
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
 
-#. Type: string
+#. Type: password
 #. Description
 #: ../nova-api.templates:3001
 msgid "Keystone Auth Token:"
 msgstr ""
 
-#. Type: string
+#. Type: password
 #. Description
 #: ../nova-api.templates:3001
 msgid ""

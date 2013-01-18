@@ -24,6 +24,13 @@ manage_nova_my_ip_field () {
 	fi
 }
 
+manage_nova_rabbitmq_host () {
+	db_get nova/rabbit-host
+	if [ -n "${RET}" ] ; then
+		pkgos_edit_config rabbit_host ${RET} ${NOVA_CONF}
+	fi
+}
+
 manage_keystone_auth_fields () {
 	db_get nova/auth-host
 	pkgos_edit_config auth_host ${RET} ${NOVA_API_CONF} filter:authtoken
@@ -69,6 +76,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	manage_nova_api_field
 	manage_nova_my_ip_field
 	manage_keystone_auth_fields
+
 
 	db_get nova/configure_db
 	if [ "$RET" = "true" ]; then
