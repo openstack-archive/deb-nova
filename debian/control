@@ -571,26 +571,6 @@ Description: OpenStack Compute - documentation
  .
  This package contains the documentation for Nova.
 
-Package: nova-api-os-volume
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Breaks: nova-api (<< 2012.1-6)
-Replaces: nova-api
-Description: OpenStack Compute - Volume API frontend
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package provides the OpenStack Volume API frontend.
-
 Package: nova-cells
 Architecture: all   
 Depends: nova-common (= ${binary:Version}),
