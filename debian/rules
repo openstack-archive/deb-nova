@@ -41,7 +41,10 @@ override_dh_install:
 	python setup.py install -f --install-layout=deb --root=$(debroot)
 	mkdir -p $(debroot)/usr/share
 	mv $(site_packages_dir)/nova/locale $(debroot)/usr/share
-	mkdir -p $(debroot)/usr/share/apport/package-hooks
+
+	rm debian/tmp/usr/bin/nova-api-os-compute
+	rm debian/tmp/usr/bin/nova-api-metadata
+	rm debian/tmp/usr/bin/nova-api-ec2
 
 	dh_install --fail-missing -Xbin/nova-all
 	install -D -m 440 $(CURDIR)/debian/nova-common.sudoers $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
