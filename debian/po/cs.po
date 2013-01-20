@@ -1,0 +1,324 @@
+# Czech PO debconf template translation of nova.
+# Copyright (C) 2012 Michal Simunek <michal.simunek@gmail.com>
+# This file is distributed under the same license as the nova package.
+# Michal Simunek <michal.simunek@gmail.com>, 2012.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: nova 2012.1-8\n"
+"Report-Msgid-Bugs-To: nova@packages.debian.org\n"
+"POT-Creation-Date: 2013-01-18 07:18+0000\n"
+"PO-Revision-Date: 2012-06-30 12:31+0200\n"
+"Last-Translator: Michal Simunek <michal.simunek@gmail.com>\n"
+"Language-Team: Czech <debian-l10n-czech@lists.debian.org>\n"
+"Language: cs\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid "Start nova services at boot?"
+msgstr "Spouštět služby Nova při zavádění?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+"Please choose whether you want to start Nova services when the machine is "
+"booted up."
+msgstr ""
+"Zvolte si prosím, zda chcete, aby se služby Nova spouštěly při zavádění "
+"systému."
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:3001
+msgid "Auth server hostname:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"Please specify the URL of your Nova authentication server. Typically this is "
+"also the URL of your OpenStack Identity Service (Keystone)."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:4001
+msgid "Auth server tenant name:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:5001
+msgid "Auth server username:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:6001
+msgid "Auth server password:"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid "Set up a database for Nova?"
+msgstr "Nastavit databázi pro Nova?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+"No database has been set up for Nova to use. If you want to set one up now, "
+"please make sure you have all needed information:"
+msgstr ""
+"Nebyla nastavena žádná databáze k použití s Nova. Chcete-li ji nyní "
+"nastavit, ujistěte se prosím, že máte všechny potřebné údaje:"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+" * the host name of the database server (which must allow TCP\n"
+"   connections from this machine);\n"
+" * a username and password to access the database;\n"
+" * the type of database management software you want to use."
+msgstr ""
+" * název hostitele databázového serveru (který musí přijímat TCP\n"
+"   spojení z tohoto počítače);\n"
+" * uživatelské jméno a heslo pro přístup k databázi;\n"
+" * typ softwaru pro správu databáze, který chcete používat."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+"If you don't choose this option, no database will be set up and Nova will "
+"use regular SQLite support."
+msgstr ""
+"Pokud tuto volbu nezadáte, databáze nebude vytvořena a Nova bude používat "
+"běžnou podporu pro SQLite."
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-common\"."
+msgstr ""
+"Toto nastavení můžete později změnit spuštěním \"dpkg-reconfigure -plow nova-"
+"common\"."
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid "API to activate:"
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid ""
+"Openstack Nova supports different API services, each of them binding on a "
+"different port. Select which one nova-api should support."
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid ""
+"If it is a compute node that you are setting-up, then you only need to run "
+"the metadata API server. If you run Cinder, then you don't need osapi_volume "
+"(you cannot run osapi_volume and cinder-api on the same server: they bind on "
+"the same port)."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid "Value for my_ip:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid ""
+"Enter the IP address that will be set in the my_ip directive of nova.conf."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "Ip address of your rabbitmq host:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid ""
+"Enter the IP address that will be set in the rabbitmq_host directive of nova."
+"conf. If you are installing openstack-proxy-node, then the default to use "
+"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
+"then enter the IP address of your proxy-node host."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Address of the XenAPI dom0:"
+msgstr "Adresa dom0 v XenAPI:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"Nova Compute Xen needs to know the address of the server running XenAPI. You "
+"can enter an IP address, or a fully qualified domain name if it resolves "
+"correctly."
+msgstr ""
+"Nova Compute Xen potřebuje znát adresu serveru, kde běží XenAPI. Zadat "
+"můžete IP adresu, nebo plně kvalifikované doménové jméno, pokud s správně "
+"překládá."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform "
+"(XCP) appliance installed from an ISO image, or even the Kronos Project's "
+"XCP (available in Debian and Ubuntu as the package xcp-xapi)."
+msgstr ""
+"Může to být server, na kterém běží Citrix XenServer, server CentOS Xen Cloud "
+"Platform (XCP) nainstalovaný z ISO obrazů, nebo i z projektu Kronos Project "
+"XCP (v Debianu a Ubuntu dostupném jako balíček xcp-xapi)."
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
+#: ../nova-compute-xen.templates:4001
+msgid "This can later be edited in /etc/nova/nova-compute.conf."
+msgstr ""
+"Toto nastavení lze později upravit v souboru /etc/nova/nova-compute.conf."
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Username to connect to XenAPI:"
+msgstr "Uživatelské jméno pro připojení ke XenAPI:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Please enter the username used to connect to your XenAPI (XCP server)."
+msgstr ""
+"Zadejte prosím uživatelské jméno pro připojení ke XenAPI (XCP serveru)."
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Password to connect to XenAPI:"
+msgstr "Heslo pro připojení ke XenAPI:"
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Please enter the password used to connect to your XenAPI (XCP server)."
+msgstr "Zadejte prosím heslo pro připojení ke XenAPI (XCP serveru)."
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:1001
+msgid "Register Nova in the keystone endpoint catalog?"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:1001
+msgid ""
+"Each Openstack services (each API) should be registered in order to be "
+"accessible. This is done using \"keystone service-create\" and \"keystone "
+"endpoint-create\". Select if you want to run these commands now."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:1001
+msgid ""
+"Note that you will need to have an up and running keystone server on which "
+"to connect using the Keystone auth token."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:2001
+msgid "Keystone IP address:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:2001
+msgid ""
+"Enter the IP address of your keystone server, so that nova-api can contact "
+"Keystone to do the Nova service and endpoint creation."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-api.templates:3001
+msgid "Keystone Auth Token:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-api.templates:3001
+msgid ""
+"To configure its endpoint in Keystone, nova-api needs the Keystone auth "
+"token."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:4001
+msgid "Nova endpoint IP address:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:4001
+msgid ""
+"Enter the IP address that will be used to contact Nova (eg: the Nova "
+"endpoint IP address)."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:4001
+msgid ""
+"This IP address should be accessible from the clients that will use this "
+"service, so if you are installing a public cloud, this should be a public IP "
+"address."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:5001
+msgid "Name of the region to register:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:5001
+msgid ""
+"Openstack can be used using availability zones, with each region "
+"representing a location. Please enter the zone that you wish to use when "
+"registering the endpoint."
+msgstr ""

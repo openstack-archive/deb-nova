@@ -1,0 +1,243 @@
+This file intends to be a quick howto on how to setup openstack together with
+XCP. This should also apply to the commercial version of XCP: XenServer, but
+this hasn't been tested by the author of this file.
+
+1/ Setting-up XCP
+-----------------
+Please follow the XCP README.Debian howto. Make sure that you can create,
+boot, shutdown and destroy virtual machines using the xe command line.
+
+2/ Setting-up a domU to install openstack on it
+-----------------------------------------------
+Best way to setup Openstack with XCP is to set it up in a XCP domU. Again,
+follow the XCP README.debian located in /usr/share/doc/xcp-xapi once you have
+installed the XenAPI package (eg: apt-get install xcp-xapi).
+
+About 1GB of RAM should be enough for your first Openstack domU.
+
+With nova-compute-kvm, you would install nova-compute on each physical server.
+Not with nova-compute-xen. Here, you need only one instance of nova-compute,
+which will "talk" to XenAPI. XCP will then manage pooling of servers and
+storage.
+
+3/ Preparing the server
+-----------------------
+You may want to lower the debconf priority to have all questions prompted to
+you when you install software:
+
+dpkg-reconfigure debconf
+
+Then make sure you select priority medium (by default on Debian systems, the
+priority is set to high, asking you less things).
+
+Because you're on a server environment, it's better not to install the
+packages that are in the Recommends: of each package:
+
+echo "APT { Install-Recommends \"false\"; }" >/etc/apt/apt.conf.d/20norecommends
+
+You might also want to receive mail for root, so installing postfix might be
+a good idea:
+
+apt-get install postfix
+
+then make sure that /etc/aliases has something like this (not needed if you
+have changed the debconf priority to medium):
+
+root: your-email@example.com
+
+and run "newaliases".
+
+You can check if sending mail to root forwards to your email address by
+installing the bsd-mailx package, watching the /var/log/mail.log and using the
+below command:
+
+Mailx root
+
+4/ Getting all needed packages installed on your server
+-------------------------------------------------------
+You will need to install all nova packages, plus a bit more:
+apt-get install nova-network nova-compute-xen nova-compute nova-api \
+  nova-scheduler nova-console glance-api glance-registry python-glance glance \
+  keystone python-keystoneclient mysql-server rabbitmq-server dnsmasq \
+  python-software-properties python-mysqldb
+
+python-mysqldb is only needed if you wish to use MySQL as SQL server (eg:
+you could also use postgres if you like, in which case... I don't know!).
+
+5. Setting-up the MySQL server and the nova and glance dbs
+----------------------------------------------------------
+5.1 MySQL root password
+- - - - - - - - - - - -
+Make sure you have changed the default root password for mysql-server. If
+needed, do dpkg-reconfigure mysql-server-5.1 to set the password after the
+MySQL server is installed.
+
+5.2 Listening on all IPs
+- - - - - - - - - - - -
+If you wish to setup nova components using a remote MySQL server (eg not on the
+domU where nova will run), then you should set your MySQL server to listen on
+the network. To do so, configure /etc/mysql/my.cnf so that it listen not just
+on 127.0.0.1 (which is the default in Debian):
+sed -i "s/127.0.0.1/0.0.0.0/" /etc/mysql/my.cnf
+
+Then restart MySQL:
+invoke-rc.d mysql start
+
+5.3 Setting-up glance and nova dbs
+- - - - - - - - - - - - - - - - -
+Create the nova and glance dbs:
+
+mysql --defaults-file=/etc/mysql/debian.cnf -e \
+  "CREATE DATABASE nova; CREATE DATABASE glance;"
+
+then create the nova and glance users, give them passwords,
+and access to their respective databases:
+
+mysql --defaults-file=/etc/mysql/debian.cnf -e \
+  "CREATE USER 'nova'@'localhost' IDENTIFIED BY 'change-this-pass';"
+mysql --defaults-file=/etc/mysql/debian.cnf -e \
+  "GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'localhost' WITH GRANT OPTION;"
+mysql --defaults-file=/etc/mysql/debian.cnf -e \
+  "GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'%' WITH GRANT OPTION;"
+
+mysql --defaults-file=/etc/mysql/debian.cnf -e \
+  "CREATE USER 'glance'@'localhost' IDENTIFIED BY 'change-this-pass';"
+mysql --defaults-file=/etc/mysql/debian.cnf -e \
+  "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' WITH GRANT OPTION;
+mysql --defaults-file=/etc/mysql/debian.cnf -e \
+  "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'%' WITH GRANT OPTION;
+
+The above lines with "localhost" are to grant access only on the local network,
+the one with % for everything else (take your pick).
+
+6/ Configuring Openstack
+------------------------
+6.1 Configuration file for nova
+- - - - - - - - - - - - - - - -
+In /etc/nova/nova.conf, you will need a configuration file
+looking like this one:
+
+--sql_connection=mysql://nova:change-this-pass@127.0.0.1/nova
+--rabbit_host=127.0.0.1
+--network_manager=nova.network.manager.FlatManager
+--flat_network_bridge=xenbr0
+--connection_type=xenapi
+--xenapi_connection_url=https://<ip-of-your-xcp-dom0>
+--xenapi_connection_username=root
+--xenapi_connection_password=XXXXXXXXXXXX
+--reboot_timeout=600
+--rescue_timeout=86400
+--resize_confirm_window=86400
+--allow_admin_api
+--allow_resize_to_same_host
+--logdir=/var/log/nova
+--state_path=/var/lib/nova
+--lock_path=/var/lock/nova
+--force_dhcp_release
+--use_deprecated_auth
+--use_project_ca
+--verbose
+
+If you decide to install rabbitmq or MySQL on another server, of course, you
+should set the matching IP address above.
+
+Options for --network_manager are:
+nova.network.manager.FlatManager
+nova.network.manager.FlatDHCPManager
+nova.network.manager.VlanManager
+
+VLAN networking with DHCP (the 3rd one above) is the Default if no network
+manager is defined in nova.conf. In this mode, each projects will have its
+virtual machines isolated in a VLAN. If you don't know, just choose that one.
+
+6.2 Getting the dbs in sync with the latest nova and glance
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Make sure all tables and SQL schema are up-to-date with what Nova and
+glance are using:
+
+nova-manage db sync
+glance-manage db_sync
+
+Then restart all nova daemons.
+
+7/ Install the XCP nova plugin on the XCP dom0
+----------------------------------------------
+XCP has a plugin architecture, and nova implements it. So you need to install
+the nova plugin for XCP in your dom0 running XenAPI:
+apt-get install nova-xcp-pluggins
+
+XCP is supposed to report a PRODUCT_VERSION, but as of now, this isn't yet
+ready. So for the moment, you need to do:
+
+echo 6.0.0 >/etc/xcp/xapi_version_override
+
+and then restart xcp-xapi. (Do not worry too much about this.)
+
+8/ Restarting daemons
+---------------------
+Restart nova-compute, nova-api, nova-scheduler, nova-objectstore and
+nova-network and check that they really are started, then check the
+logs files in /var/log/nova to make sure no daemon crashed and did a
+python stack dump.
+
+Particularly, you should be seeing nova-compute polling XCP every X seconds
+and ouput something like this:
+
+<date> nova...vm_utils [uuid] (VM_UTILS) xenserver vm state -> |Halted|
+<date> nova...vm_utils [uuid] (VM_UTILS) xenapi power_state -> |4|
+<date> nova...vm_utils [uuid] (VM_UTILS) xenserver vm state -> |Running|
+<date> nova...vm_utils [uuid] (VM_UTILS) xenapi power_state -> |1|
+
+Note: I have reformated the log output (removed some of it) so that the log
+line can fit on 80 cols of this text file. This should match more or less what
+you see on the dom0 when you do "xe vm-list".
+
+That's it, you have a working nova installation! Now, let's play with our new
+cloud computing infrastructure by creating projects, users and VMs.
+
+9/ Create a nova user and project
+---------------------------------
+In Nova, each user owns projects, and in each projects, you can start virtual
+machines. So we need to first create a user, attach a project to it, and
+finally assign a private network to it. Everything is done using the
+nova-manage userland tool, where you've installed nova. The syntax is like
+this:
+nova-manage user create <user_name>
+nova-manage project create <project_name> <user_name>
+nova-manage network create <project-network> <num-of-networks-in-proj> \
+	<addresses-in-each-network>
+
+So, let's say I want to have a user "zigo" with project name "proj1",
+and a simple private network, it goes like this:
+
+nova-manage user create zigo
+nova-manage project create proj1 zigo
+nova-manage network create 192.168.0.0/24 1 256
+
+When you create the new user, you will see the EC2 keys printed on the
+screen. You don't need to write them down though, we will later on fetch all
+of these in a convenient .zip file:
+
+nova-manage project zipfile proj1 zigo
+
+This will save a nova.zip file for the proj1 of zigo. Unzip that file with:
+unzip nova.zip
+
+This will extract the below files:
+cacert.pem cert.pem novarc pk.pem
+
+novarc contains all the script variables needed for you to remote control nova
+as a user. The above .pem files contain the keys that are referenced by the
+novarc. Then everything is done with the "nova" command if you want to use the
+native "nova-client", or with euca-* if you wish to use the EC2 API (the novarc
+define variables for both).
+
+10/ Upload a VM image and start the VM to check everything is working
+
+
+
+6/ Generate the Openstack CA
+
+<FIX ME: insert here how to do that>
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 28 Dec 2011 12:19:41 +0000

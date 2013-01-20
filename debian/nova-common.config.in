@@ -1,0 +1,72 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+NOVA_COM_DEF=/etc/default/nova-common
+NOVA_CONF=/etc/nova/nova.conf
+NOVA_API_CONF=/etc/nova/api-paste.ini
+
+#PKGOS-INCLUDE#
+
+set_enabled_apis_multiselect () {
+	local NOVA_APIS NOVA_API MULTISEL_VAL
+	pkgos_get_config -sh ${NOVA_CONF} enabled_apis DEFAULT
+	if [ -n "${RET}" ] ; then
+		NOVA_APIS=`echo $RET | sed "s/,/ /g"`
+		for NOVA_API in ${NOVA_APIS} ; do
+			if [ -n "${MULTISEL_VAL}" ] ; then
+				MULTISEL_VAL="${MULTISEL_VAL}, "
+			fi
+			MULTISEL_VAL="${MULTISEL_VAL}${NOVA_API}"
+		done
+		if [ -n "${MULTISEL_VAL}" ] ; then
+			db_set nova/active-api ${MULTISEL_VAL}
+		fi
+	fi
+	db_input high nova/active-api || true
+	db_go
+}
+
+manage_nova_enable () {
+	# pkgos_read_config -r /etc/keystone/keystone.conf auth_token keystone/auth-token DEFAULT
+	pkgos_read_config -sh ${NOVA_COM_DEF} NOVA_ENABLE nova/start_services
+	NOVA_ENABLE=${RET}
+	if [ "${RET}" = "false" ] ; then
+		NOVA_ENABLE=false
+	else
+		NOVA_ENABLE=true
+	fi
+	# Write a default config file
+	echo "# defaults file for nova daemons
+
+# start nova daemons from init.d script?
+#  only allowed values are \"true\" and \"false\"
+NOVA_ENABLE=${NOVA_ENABLE}" >${NOVA_COM_DEF}
+}
+
+manage_nova_my_ip () {
+	pkgos_get_config -sh ${NOVA_CONF} my_ip DEFAULT
+	if [ -n "${RET}" ] ; then
+		db_set nova/my-ip "${RET}"
+	else
+		DEFROUTE_IF=`LC_ALL=C /sbin/route | grep default |awk -- '{ print $8 }'`
+		DEFROUTE_IP=`LC_ALL=C ip addr show "${DEFROUTE_IF}" | grep inet | head -n 1 | awk '{print $2}' | cut -d/ -f1 | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'`
+		if [ -n "${DEFROUTE_IP}" ] ; then
+			db_set nova/my-ip ${DEFROUTE_IP}
+		fi
+	fi
+	db_input high nova/my-ip || true
+	db_go
+}
+
+pkgos_var_user_group nova
+pkgos_dbc_read_conf -pkg nova-common -sh ${NOVA_CONF} nova sql_connection $@
+pkgos_read_admin_creds ${NOVA_API_CONF} nova filter:authtoken
+pkgos_read_config -p high -sh ${NOVA_CONF} rabbit_host nova/rabbit-host DEFAULT
+
+manage_nova_enable
+set_enabled_apis_multiselect
+manage_nova_my_ip
+
+exit 0

@@ -1,0 +1,3 @@
+nova/rootwrap/compute.py
+nova/rootwrap/network.py
+nova/rootwrap/volume.py

@@ -1,0 +1,27 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "configure" ] ; then
+	# Don't ask, that's as stupid as it seems...
+	if ! [ -e /etc/xcp/xenhost.conf ] ; then
+		echo "{}" >/etc/xcp/xenhost.conf
+	fi
+
+	# Make sure all our plugins are executable
+	for i in	/usr/lib/xcp/plugins/migration \
+			/usr/lib/xcp/plugins/xenstore.py \
+			/usr/lib/xcp/plugins/glance \
+			/usr/lib/xcp/plugins/agent \
+			/usr/lib/xcp/plugins/xenhost \
+			/usr/lib/xcp/plugins/pluginlib_nova.py ; do
+		if [ -e ${i} ] ; then
+			chmod +x $i
+		fi
+	done
+fi
+
+
+#DEBHELPER#
+
+exit 0

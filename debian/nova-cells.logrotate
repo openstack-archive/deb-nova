@@ -1,0 +1,7 @@
+/var/log/nova/nova-cells.log {
+	daily
+	missingok
+	compress
+	delaycompress
+	notifempty
+}

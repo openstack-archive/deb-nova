@@ -1,0 +1,35 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "purge" ] ; then
+	if [ -r /usr/share/debconf/confmodule ] ; then
+		. /usr/share/debconf/confmodule
+		db_get nova/configure_db || true
+		if [ "$RET" = "true" ] ; then
+			if [ -f /usr/share/dbconfig-common/dpkg/postrm ] ; then
+				. /usr/share/dbconfig-common/dpkg/postrm
+				dbc_go nova-common $@
+			else
+				rm -f /etc/dbconfig-common/nova-common.conf
+				if which ucf >/dev/null 2>&1; then
+					ucf --purge /etc/dbconfig-common/nova-common.conf
+					ucfr --purge nova-common /etc/dbconfig-common/nova-common.conf
+				fi
+			fi
+		fi
+	fi
+
+	rm -f /var/log/nova/nova-manage.log
+	rm -rf /var/lib/nova/CA
+	rm -f /var/lib/nova/.rnd
+	rm -f /etc/nova/nova.conf
+	rm -f /etc/default/nova-common
+	rm -f /etc/nova/api-paste.ini
+	rm -f /etc/nova/logging_sample.conf
+	rmdir --ignore-fail-on-non-empty /etc/nova
+fi
+
+#DEBHELPER#
+
+exit 0

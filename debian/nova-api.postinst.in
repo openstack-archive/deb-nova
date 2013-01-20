@@ -1,0 +1,21 @@
+#!/bin/sh
+
+set -e
+
+#PKGOS-INCLUDE#
+
+if [ "$1" = "configure" ] ; then
+	. /usr/share/debconf/confmodule
+	pkgos_register_endpoint_postinst nova nova compute "Nova Compute Service" 8774 /v2/'%(tenant_id)s'
+
+	db_get nova/active-api
+	if [ -n "${RET}" ] ; then
+		NOVA_APIS=`echo ${RET} | sed "s/ //g"`
+		pkgos_edit_config enabled_apis ${NOVA_APIS} /etc/nova/nova.conf
+	fi
+	db_stop
+fi
+
+#DEBHELPER#
+
+exit 0

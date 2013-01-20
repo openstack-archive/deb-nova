@@ -1,0 +1,26 @@
+Description: Fixes etc/nova/rootwrap.d/compute.filters path
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+
+--- nova-2012.2.1.orig/etc/nova/rootwrap.d/compute.filters
++++ nova-2012.2.1/etc/nova/rootwrap.d/compute.filters
+@@ -83,7 +83,7 @@ cp: CommandFilter, /bin/cp, root
+ # nova/network/linux_net.py: 'ip', 'route', 'add', ..
+ # nova/network/linux_net.py: 'ip', 'route', 'del', .
+ # nova/network/linux_net.py: 'ip', 'route', 'show', 'dev', dev
+-ip: CommandFilter, /sbin/ip, root
++ip: CommandFilter, /bin/ip, root
+ 
+ # nova/virt/libvirt/vif.py: 'tunctl', '-b', '-t', dev
+ # nova/network/linux_net.py: 'tunctl', '-b', '-t', dev
+--- nova-2012.2.1.orig/etc/nova/rootwrap.d/network.filters
++++ nova-2012.2.1/etc/nova/rootwrap.d/network.filters
+@@ -24,7 +24,7 @@
+ # nova/network/linux_net.py: 'ip', 'route', 'add', ..
+ # nova/network/linux_net.py: 'ip', 'route', 'del', .
+ # nova/network/linux_net.py: 'ip', 'route', 'show', 'dev', dev
+-ip: CommandFilter, /sbin/ip, root
++ip: CommandFilter, /bin/ip, root
+ 
+ # nova/virt/libvirt/vif.py: 'ovs-vsctl', ...
+ # nova/virt/libvirt/vif.py: 'ovs-vsctl', 'del-port', ...

@@ -1,0 +1,7 @@
+/var/log/nova/nova-objectstore.log {
+    daily
+    missingok
+    postrotate
+        invoke-rc.d nova-objectstore restart 2>&1 >/dev/null
+    endscript
+}

@@ -1,0 +1,40 @@
+Template: nova/register-endpoint
+Type: boolean
+Default: false
+_Description: Register Nova in the keystone endpoint catalog?
+ Each Openstack services (each API) should be registered in order to be
+ accessible. This is done using "keystone service-create" and "keystone
+ endpoint-create". Select if you want to run these commands now.
+ .
+ Note that you will need to have an up and running keystone server on which to
+ connect using the Keystone auth token.
+
+Template: nova/keystone-ip
+Type: string
+_Description: Keystone IP address:
+ Enter the IP address of your keystone server, so that nova-api can
+ contact Keystone to do the Nova service and endpoint creation.
+
+Template: nova/keystone-auth-token
+Type: password
+_Description: Keystone Auth Token:
+ To configure its endpoint in Keystone, nova-api needs the Keystone auth
+ token.
+
+Template: nova/endpoint-ip
+Type: string
+_Description: Nova endpoint IP address:
+ Enter the IP address that will be used to contact Nova (eg: the Nova
+ endpoint IP address).
+ .
+ This IP address should be accessible from the clients that will use this
+ service, so if you are installing a public cloud, this should be a public
+ IP address.
+
+Template: nova/region-name
+Type: string
+Default: regionOne
+_Description: Name of the region to register:
+ Openstack can be used using availability zones, with each region representing
+ a location. Please enter the zone that you wish to use when registering the
+ endpoint.

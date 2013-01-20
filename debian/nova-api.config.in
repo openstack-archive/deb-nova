@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -e
+
+. /usr/share/debconf/confmodule
+
+#PKGOS-INCLUDE#
+
+pkgos_register_endpoint_config nova
+
+exit 0
