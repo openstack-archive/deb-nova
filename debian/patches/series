@@ -6,3 +6,4 @@ iscsiadm_path.patch
 CVE-2012-3371.patch
 CVE-2012-3447_compute-node-file-injection.patch
 fixes-path-to-binaries-in-rootwrap-config.patch
+CVE-2013-0208_disallow-boot-from-volume-from-specifying-arbitrary-volumes.patch

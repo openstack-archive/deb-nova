@@ -1,3 +1,10 @@
+nova (2012.1.1-12) unstable; urgency=high
+
+  * CVE-2013-0208: Fixes boot from volume allows access to random volumes, with
+  special thanks to TTX for making sure I was aware of it (Closes: #699266).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 29 Jan 2013 15:25:58 +0000
+
 nova (2012.1.1-11) unstable; urgency=low
 
   * Fixes some wrong path to binaries in the rootwrap config (Closes: #695791).
