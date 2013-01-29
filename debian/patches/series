@@ -4,3 +4,4 @@ fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
 fix-ini-syntax
 fixes-etcnovarootwrap.dcompute.filters.patch
+CVE-2013-0208_disallow-boot-from-volume-from-specifying-arbitrary-volumes.patch
