@@ -43,7 +43,6 @@ Build-Depends-Indep:
  python-paramiko,
  python-paste,
  python-qpid,
- python-quantum,
  python-quantumclient,
  python-routes,
  python-setuptools,
