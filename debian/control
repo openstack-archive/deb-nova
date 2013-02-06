@@ -49,6 +49,7 @@ Build-Depends-Indep:
  python-setuptools-git,
  python-simplejson,
  python-sphinx (>> 1.0),
+ python-sqlalchemy,
  python-suds (>= 0.4.0),
  python-tox,
  python-webob,
