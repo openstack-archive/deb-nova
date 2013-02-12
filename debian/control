@@ -36,6 +36,7 @@ Build-Depends-Indep:
  python-lockfile,
  python-lxml,
  python-m2crypto,
+ python-migrate,
  python-mox,
  python-netaddr,
  python-novaclient (>= 2.6.7),
