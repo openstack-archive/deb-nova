@@ -42,6 +42,7 @@ Build-Depends-Indep:
  python-nose,
  python-paramiko,
  python-paste,
+ python-pastedeploy,
  python-qpid,
  python-quantumclient,
  python-routes,

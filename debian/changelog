@@ -1,8 +1,12 @@
 nova (2012.2.3-1) experimental; urgency=low
 
+  [ Thomas Goirand ]
   * New upstream release.
   * Removed CVE-2013-0208 patch now applied upstream.
   * Removed useless dependency python-quantum (-quantumclient is enough).
+
+  [ Mehdi Abaakouk ]
+  * Add build-depends on python-pastedeploy 
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 03 Feb 2013 11:15:53 +0800
 
