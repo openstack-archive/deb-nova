@@ -4,3 +4,4 @@ fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
 fix-ini-syntax
 fixes-etcnovarootwrap.dcompute.filters.patch
+skip-tests-broken-in-buildd.patch
