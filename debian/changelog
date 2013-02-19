@@ -43,6 +43,33 @@ nova (2012.2.2-1) experimental; urgency=low
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 23 Nov 2012 06:53:06 +0000
 
+nova (2012.1.1-13) unstable; urgency=high
+
+  * CVE-2013-0280: Information leak and Denial of Service using XML entities
+    (Closes: #)
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 19 Feb 2013 13:39:34 +0800
+
+nova (2012.1.1-12) unstable; urgency=high
+
+  * CVE-2013-0208: Fixes boot from volume allows access to random volumes, with
+  special thanks to TTX for making sure I was aware of it (Closes: #699266).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 29 Jan 2013 15:25:58 +0000
+
+nova (2012.1.1-11) unstable; urgency=low
+
+  * Fixes some wrong path to binaries in the rootwrap config (Closes: #695791).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 19 Dec 2012 15:57:49 +0000
+
+nova (2012.1.1-10) unstable; urgency=low
+
+  * Fixes capitalization in debian/po/es.po (Nova vs nova) (Closes: #687000).
+  * Fixes some spaces in debian/po/zh_CN.po.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 12 Sep 2012 07:23:36 +0000
+
 nova (2012.1.1-9) unstable; urgency=low
 
   [ Thomas Goirand ]
