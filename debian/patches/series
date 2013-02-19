@@ -5,3 +5,4 @@ fix-docs-build-without-network.patch
 fix-ini-syntax
 fixes-etcnovarootwrap.dcompute.filters.patch
 skip-tests-broken-in-buildd.patch
+CVE-2013-0280_Information-leak-and-Denial-of-Service-using-XML-entities.patch
