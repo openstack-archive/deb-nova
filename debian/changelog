@@ -4,8 +4,8 @@ nova (2012.2.3-1) experimental; urgency=low
   * New upstream release.
   * Removed CVE-2013-0208 patch now applied upstream.
   * Removed useless dependency python-quantum (-quantumclient is enough).
-  * CVE-2013-0280: Information leak and Denial of Service using XML entities
-    (Closes: #700949).
+  * CVE-2013-1664 & CVE-2013-1665: Information leak and Denial of Service using
+    XML entities (Closes: #700949).
 
   [ Mehdi Abaakouk ]
   * Add build-depends on python-pastedeploy, python-migrate
