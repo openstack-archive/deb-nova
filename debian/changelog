@@ -1,7 +1,7 @@
 nova (2012.1.1-13) unstable; urgency=high
 
-  * CVE-2013-0280: Information leak and Denial of Service using XML entities
-    (Closes: #700949).
+  * CVE-2013-1664 & CVE-2013-1665: Information leak and Denial of Service using
+    XML entities (Closes: #700949).
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 19 Feb 2013 13:39:34 +0800
 
