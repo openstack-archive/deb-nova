@@ -25,16 +25,17 @@ Build-Depends-Indep:
  python-boto,
  python-carrot,
  python-cheetah,
- python-cinderclient,
+ python-cinderclient (>= 1:1.0.1),
  python-coverage,
  python-distutils-extra,
  python-eventlet (>= 0.9.17),
  python-fixtures (>= 0.3.12),
  python-feedparser,
  python-gflags,
- python-glanceclient,
+ python-glanceclient (>= 1:0.5.0),
  python-greenlet,
  python-iso8601,
+ python-keystoneclient (>= 1:0.2.0),
  python-libvirt,
  python-lockfile,
  python-lxml,
@@ -48,8 +49,7 @@ Build-Depends-Indep:
  python-paste,
  python-pastedeploy,
  python-qpid,
- python-quantum,
- python-quantumclient,
+ python-quantumclient (>= 1:2.1),
  python-paramiko,
  python-routes,
  python-setuptools,
@@ -69,12 +69,13 @@ Build-Depends-Indep:
  python-xenapi,
  python-zmq,
  pep8,
- testrepository
+ testrepository,
+ websockify
 Build-Conflicts: python-cjson
-Standards-Version: 3.9.3
-Homepage: http://launchpad.net/nova
+Standards-Version: 3.9.4
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/nova.git
+Homepage: http://www.openstack.org/software/openstack-compute/
 
 Package: python-nova
 Architecture: all
@@ -90,14 +91,14 @@ Depends: ${python:Depends},
  python-boto,
  python-carrot,  
  python-cheetah,
+ python-cinderclient (>= 1:1.0.1),
  python-daemon,  
  python-eventlet (>= 0.9.17),
  python-feedparser,
- python-gflags, 
- python-glance,
- python-glanceclient,
+ python-gflags,
+ python-glanceclient (>= 1:0.5.0),
  python-iso8601,
- python-keystone,
+ python-keystoneclient (>= 1:0.2.0),
  python-kombu,
  python-ldap,
  python-libxml2,
@@ -110,7 +111,8 @@ Depends: ${python:Depends},
  python-paramiko,
  python-paste,
  python-pastedeploy,
- python-pycurl,  
+ python-pycurl,
+ python-quantumclient (>= 1:2.1),
  python-routes,
  python-simplejson,
  python-sqlalchemy-ext (>= 0.7.8-1~) | python-sqlalchemy (<< 0.6.3-2),
@@ -121,6 +123,7 @@ Depends: ${python:Depends},
  python-webob (>= 1.2.3),
  python-xattr,
  sudo,
+ websockify
  ${misc:Depends}
 Suggests: python-suds (>= 0.4.0),
 Conflicts: python-cjson
