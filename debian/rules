@@ -4,6 +4,8 @@
 
 include /usr/share/openstack-pkg-tools/pkgos.make
 
+export OSLO_PACKAGE_VERSION=$(VERSION)
+
 include /usr/share/python/python.mk
 PACKAGE_NAME=python-nova
 debroot = debian/tmp
