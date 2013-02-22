@@ -18,6 +18,7 @@
 
 import iso8601
 from lxml import etree
+from oslo.config import cfg
 import webob
 
 from nova.api.openstack import compute
@@ -25,14 +26,12 @@ from nova.api.openstack.compute import extensions as compute_extensions
 from nova.api.openstack import extensions as base_extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.openstack.common import cfg
 from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import matchers
 
 CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension', 'nova.config')
 
 NS = "{http://docs.openstack.org/common/api/v1.0}"
 ATOMNS = "{http://www.w3.org/2005/Atom}"
@@ -99,7 +98,7 @@ class StubLateExtensionController(wsgi.Controller):
 
 
 class StubExtensionManager(object):
-    """Provides access to Tweedle Beetles"""
+    """Provides access to Tweedle Beetles."""
 
     name = "Tweedle Beetle Extension"
     alias = "TWDLBETL"
@@ -167,6 +166,9 @@ class ExtensionControllerTest(ExtensionTestCase):
             "Createserverext",
             "DeferredDelete",
             "DiskConfig",
+            "ExtendedAvailabilityZone",
+            "ExtendedIps",
+            "Evacuate",
             "ExtendedStatus",
             "ExtendedServerAttributes",
             "FixedIPs",
@@ -183,14 +185,16 @@ class ExtensionControllerTest(ExtensionTestCase):
             "FloatingIpsBulk",
             "Fox In Socks",
             "Hosts",
+            "ImageSize",
+            "InstanceActions",
             "Keypairs",
             "Multinic",
             "MultipleCreate",
-            "Networks",
             "QuotaClasses",
             "Quotas",
             "Rescue",
             "SchedulerHints",
+            "SecurityGroupDefaultRules",
             "SecurityGroups",
             "ServerDiagnostics",
             "ServerPassword",
@@ -228,7 +232,7 @@ class ExtensionControllerTest(ExtensionTestCase):
                 'namespace': 'http://www.fox.in.socks/api/ext/pie/v1.0',
                 'name': 'Fox In Socks',
                 'updated': '2011-01-22T13:25:27-06:00',
-                'description': 'The Fox In Socks Extension',
+                'description': 'The Fox In Socks Extension.',
                 'alias': 'FOXNSOX',
                 'links': []
             },
@@ -252,7 +256,7 @@ class ExtensionControllerTest(ExtensionTestCase):
                 "namespace": "http://www.fox.in.socks/api/ext/pie/v1.0",
                 "name": "Fox In Socks",
                 "updated": "2011-01-22T13:25:27-06:00",
-                "description": "The Fox In Socks Extension",
+                "description": "The Fox In Socks Extension.",
                 "alias": "FOXNSOX",
                 "links": []})
 
@@ -283,7 +287,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             'http://www.fox.in.socks/api/ext/pie/v1.0')
         self.assertEqual(fox_ext.get('updated'), '2011-01-22T13:25:27-06:00')
         self.assertEqual(fox_ext.findtext('{0}description'.format(NS)),
-            'The Fox In Socks Extension')
+            'The Fox In Socks Extension.')
 
         xmlutil.validate_schema(root, 'extensions')
 
@@ -303,7 +307,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             'http://www.fox.in.socks/api/ext/pie/v1.0')
         self.assertEqual(root.get('updated'), '2011-01-22T13:25:27-06:00')
         self.assertEqual(root.findtext('{0}description'.format(NS)),
-            'The Fox In Socks Extension')
+            'The Fox In Socks Extension.')
 
         xmlutil.validate_schema(root, 'extension')
 

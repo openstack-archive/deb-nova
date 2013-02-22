@@ -20,16 +20,16 @@
 Handles all requests relating to volumes + cinder.
 """
 
-from copy import deepcopy
+import copy
 import sys
 
 from cinderclient import exceptions as cinder_exception
 from cinderclient import service_catalog
 from cinderclient.v1 import client as cinder_client
+from oslo.config import cfg
 
 from nova.db import base
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 
 cinder_opts = [
@@ -42,9 +42,19 @@ cinder_opts = [
                default=None,
                help='Override service catalog lookup with template for cinder '
                     'endpoint e.g. http://localhost:8776/v1/%(project_id)s'),
+    cfg.StrOpt('os_region_name',
+                default=None,
+                help='region name of this node'),
     cfg.IntOpt('cinder_http_retries',
                default=3,
                help='Number of cinderclient retries on failed http calls'),
+    cfg.BoolOpt('cinder_api_insecure',
+               default=False,
+               help='Allow to perform insecure SSL requests to cinder'),
+    cfg.BoolOpt('cinder_cross_az_attach',
+               default=True,
+               help='Allow attach between instance and volume in different '
+                    'availability zones.'),
 ]
 
 CONF = cfg.CONF
@@ -57,8 +67,10 @@ def cinderclient(context):
 
     # FIXME: the cinderclient ServiceCatalog object is mis-named.
     #        It actually contains the entire access blob.
+    # Only needed parts of the service catalog are passed in, see
+    # nova/context.py.
     compat_catalog = {
-        'access': {'serviceCatalog': context.service_catalog or {}}
+        'access': {'serviceCatalog': context.service_catalog or []}
     }
     sc = service_catalog.ServiceCatalog(compat_catalog)
     if CONF.cinder_endpoint_template:
@@ -66,7 +78,16 @@ def cinderclient(context):
     else:
         info = CONF.cinder_catalog_info
         service_type, service_name, endpoint_type = info.split(':')
-        url = sc.url_for(service_type=service_type,
+        # extract the region if set in configuration
+        if CONF.os_region_name:
+            attr = 'region'
+            filter_value = CONF.os_region_name
+        else:
+            attr = None
+            filter_value = None
+        url = sc.url_for(attr=attr,
+                         filter_value=filter_value,
+                         service_type=service_type,
                          service_name=service_name,
                          endpoint_type=endpoint_type)
 
@@ -76,6 +97,7 @@ def cinderclient(context):
                              context.auth_token,
                              project_id=context.project_id,
                              auth_url=url,
+                             insecure=CONF.cinder_api_insecure,
                              retries=CONF.cinder_http_retries)
     # noauth extracts user_id:project_id from auth_token
     c.client.auth_token = context.auth_token or '%s:%s' % (context.user_id,
@@ -123,7 +145,7 @@ def _untranslate_volume_summary_view(context, vol):
         d['volume_metadata'].append(item)
 
     if hasattr(vol, 'volume_image_metadata'):
-        d['volume_image_metadata'] = deepcopy(vol.volume_image_metadata)
+        d['volume_image_metadata'] = copy.deepcopy(vol.volume_image_metadata)
 
     return d
 
@@ -177,7 +199,7 @@ class API(base.Base):
 
         return rval
 
-    def check_attach(self, context, volume):
+    def check_attach(self, context, volume, instance=None):
         # TODO(vish): abstract status checking?
         if volume['status'] != "available":
             msg = _("status must be available")
@@ -185,6 +207,10 @@ class API(base.Base):
         if volume['attach_status'] == "attached":
             msg = _("already attached")
             raise exception.InvalidVolume(reason=msg)
+        if instance and not CONF.cinder_cross_az_attach:
+            if instance['availability_zone'] != volume['availability_zone']:
+                msg = _("Instance and volume not in same availability_zone")
+                raise exception.InvalidVolume(reason=msg)
 
     def check_detach(self, context, volume):
         # TODO(vish): abstract status checking?

@@ -20,37 +20,36 @@ import contextlib
 import cStringIO
 import hashlib
 import json
-import logging
 import os
 import time
 
-from nova import test
+from oslo.config import cfg
 
 from nova.compute import vm_states
 from nova import conductor
 from nova import db
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
-from nova.openstack.common import log
+from nova.openstack.common import log as logging
+from nova import test
 from nova import utils
 from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import utils as virtutils
 
 CONF = cfg.CONF
 CONF.import_opt('compute_manager', 'nova.service')
-CONF.import_opt('host', 'nova.config')
+CONF.import_opt('host', 'nova.netconf')
 
-LOG = log.getLogger(__name__)
+LOG = logging.getLogger(__name__)
 
 
 class ImageCacheManagerTestCase(test.TestCase):
 
     def setUp(self):
         super(ImageCacheManagerTestCase, self).setUp()
-        self.stock_instance_names = {'instance-00000001': '123',
-                                     'instance-00000002': '456',
-                                     'instance-00000003': '789',
-                                     'banana-42-hamster': '444'}
+        self.stock_instance_names = set(['instance-00000001',
+                                         'instance-00000002',
+                                         'instance-00000003',
+                                         'banana-42-hamster'])
 
     def test_read_stored_checksum_missing(self):
         self.stubs.Set(os.path, 'exists', lambda x: False)
@@ -181,6 +180,9 @@ class ImageCacheManagerTestCase(test.TestCase):
         self.assertTrue(image_cache_manager.used_images['2'] ==
                         (1, 1, ['inst-2', 'inst-3']))
 
+        self.assertTrue('inst-1' in image_cache_manager.instance_names)
+        self.assertTrue('123' in image_cache_manager.instance_names)
+
         self.assertEqual(len(image_cache_manager.image_popularity), 2)
         self.assertEqual(image_cache_manager.image_popularity['1'], 1)
         self.assertEqual(image_cache_manager.image_popularity['2'], 2)
@@ -200,7 +202,7 @@ class ImageCacheManagerTestCase(test.TestCase):
         self.assertTrue(image_cache_manager.used_images['1'] ==
                         (1, 0, ['inst-1']))
         self.assertTrue(image_cache_manager.instance_names ==
-                        set(['inst-1', 'inst-1_resize']))
+                        set(['inst-1', '123', 'inst-1_resize', '123_resize']))
 
         self.assertEqual(len(image_cache_manager.image_popularity), 1)
         self.assertEqual(image_cache_manager.image_popularity['1'], 1)
@@ -331,7 +333,6 @@ class ImageCacheManagerTestCase(test.TestCase):
         base_file1 = os.path.join(base_dir, fingerprint)
         base_file2 = os.path.join(base_dir, fingerprint + '_sm')
         base_file3 = os.path.join(base_dir, fingerprint + '_10737418240')
-        print res
         self.assertTrue(res == [(base_file1, False, False),
                                 (base_file2, True, False),
                                 (base_file3, False, True)])
@@ -339,10 +340,10 @@ class ImageCacheManagerTestCase(test.TestCase):
     @contextlib.contextmanager
     def _intercept_log_messages(self):
         try:
-            mylog = log.getLogger('nova')
+            mylog = logging.getLogger('nova')
             stream = cStringIO.StringIO()
-            handler = logging.StreamHandler(stream)
-            handler.setFormatter(log.LegacyFormatter())
+            handler = logging.logging.StreamHandler(stream)
+            handler.setFormatter(logging.LegacyFormatter())
             mylog.logger.addHandler(handler)
             yield stream
         finally:
@@ -721,7 +722,7 @@ class ImageCacheManagerTestCase(test.TestCase):
         def fq_path(path):
             return os.path.join('/instance_path/_base/', path)
 
-        # Fake base directory existance
+        # Fake base directory existence
         orig_exists = os.path.exists
 
         def exists(path):
@@ -747,7 +748,7 @@ class ImageCacheManagerTestCase(test.TestCase):
                         '/instance_path/_base/%s_sm' % hashed_42]:
                 return False
 
-            self.fail('Unexpected path existance check: %s' % path)
+            self.fail('Unexpected path existence check: %s' % path)
 
         self.stubs.Set(os.path, 'exists', lambda x: exists(x))
 

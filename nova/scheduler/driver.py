@@ -23,15 +23,17 @@ Scheduler base class that all Schedulers should inherit from
 
 import sys
 
-from nova.compute import api as compute_api
+from oslo.config import cfg
+
 from nova.compute import power_state
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+from nova.conductor import api as conductor_api
 from nova import db
 from nova import exception
+from nova.image import glance
 from nova import notifications
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier
@@ -51,16 +53,11 @@ scheduler_driver_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(scheduler_driver_opts)
-CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
-CONF.import_opt('instances_path', 'nova.compute.manager')
-CONF.import_opt('libvirt_type', 'nova.virt.libvirt.driver')
 
 
 def handle_schedule_error(context, ex, instance_uuid, request_spec):
     if not isinstance(ex, exception.NoValidHost):
         LOG.exception(_("Exception during scheduler.run_instance"))
-    compute_utils.add_instance_fault_from_exc(context,
-            instance_uuid, ex, sys.exc_info())
     state = vm_states.ERROR.upper()
     LOG.warning(_('Setting instance to %(state)s state.'),
                 locals(), instance_uuid=instance_uuid)
@@ -71,6 +68,9 @@ def handle_schedule_error(context, ex, instance_uuid, request_spec):
                             'task_state': None})
     notifications.send_update(context, old_ref, new_ref,
             service="scheduler")
+    compute_utils.add_instance_fault_from_exc(context,
+            conductor_api.LocalAPI(),
+            new_ref, ex, sys.exc_info())
 
     properties = request_spec.get('instance_properties', {})
     payload = dict(request_spec=request_spec,
@@ -84,18 +84,21 @@ def handle_schedule_error(context, ex, instance_uuid, request_spec):
                     'scheduler.run_instance', notifier.ERROR, payload)
 
 
-def instance_update_db(context, instance_uuid):
+def instance_update_db(context, instance_uuid, extra_values=None):
     '''Clear the host and node - set the scheduled_at field of an Instance.
 
     :returns: An Instance with the updated fields set properly.
     '''
     now = timeutils.utcnow()
     values = {'host': None, 'node': None, 'scheduled_at': now}
+    if extra_values:
+        values.update(extra_values)
+
     return db.instance_update(context, instance_uuid, values)
 
 
 def encode_instance(instance, local=True):
-    """Encode locally created instance for return via RPC"""
+    """Encode locally created instance for return via RPC."""
     # TODO(comstud): I would love to be able to return the full
     # instance information here, but we'll need some modifications
     # to the RPC code to handle datetime conversions with the
@@ -118,9 +121,9 @@ class Scheduler(object):
     def __init__(self):
         self.host_manager = importutils.import_object(
                 CONF.scheduler_host_manager)
-        self.compute_api = compute_api.API()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.servicegroup_api = servicegroup.API()
+        self.image_service = glance.get_default_image_service()
 
     def update_service_capabilities(self, service_name, host, capabilities):
         """Process a capability update from a service node."""
@@ -135,6 +138,16 @@ class Scheduler(object):
                 for service in services
                 if self.servicegroup_api.service_is_up(service)]
 
+    def group_hosts(self, context, group):
+        """Return the list of hosts that have VM's from the group."""
+
+        # The system_metadata 'group' will be filtered
+        members = db.instance_get_all_by_filters(context,
+                {'deleted': False, 'group': group})
+        return [member['host']
+                for member in members
+                if member.get('host') is not None]
+
     def schedule_prep_resize(self, context, image, request_spec,
                              filter_properties, instance, instance_type,
                              reservations):
@@ -148,6 +161,11 @@ class Scheduler(object):
                               filter_properties):
         """Must override schedule_run_instance method for scheduler to work."""
         msg = _("Driver must implement schedule_run_instance")
+        raise NotImplementedError(msg)
+
+    def select_hosts(self, context, request_spec, filter_properties):
+        """Must override select_hosts method for scheduler to work."""
+        msg = _("Driver must implement select_hosts")
         raise NotImplementedError(msg)
 
     def schedule_live_migration(self, context, instance, dest,
@@ -167,10 +185,33 @@ class Scheduler(object):
         """
         # Check we can do live migration
         self._live_migration_src_check(context, instance)
-        self._live_migration_dest_check(context, instance, dest)
-        self._live_migration_common_check(context, instance, dest)
-        migrate_data = self.compute_rpcapi.check_can_live_migrate_destination(
-                context, instance, dest, block_migration, disk_over_commit)
+
+        if dest is None:
+            # Let scheduler select a dest host, retry next best until success
+            # or no more valid hosts.
+            ignore_hosts = [instance['host']]
+            while dest is None:
+                dest = self._live_migration_dest_check(context, instance, dest,
+                                                       ignore_hosts)
+                try:
+                    self._live_migration_common_check(context, instance, dest)
+                    migrate_data = self.compute_rpcapi.\
+                        check_can_live_migrate_destination(context, instance,
+                                                           dest,
+                                                           block_migration,
+                                                           disk_over_commit)
+                except exception.Invalid:
+                    ignore_hosts.append(dest)
+                    dest = None
+                    continue
+        else:
+            # Test the given dest host
+            self._live_migration_dest_check(context, instance, dest)
+            self._live_migration_common_check(context, instance, dest)
+            migrate_data = self.compute_rpcapi.\
+                check_can_live_migrate_destination(context, instance, dest,
+                                                   block_migration,
+                                                   disk_over_commit)
 
         # Perform migration
         src = instance['host']
@@ -195,29 +236,34 @@ class Scheduler(object):
         # Checking src host exists and compute node
         src = instance_ref['host']
         try:
-            services = db.service_get_all_compute_by_host(context, src)
+            service = db.service_get_by_compute_host(context, src)
         except exception.NotFound:
             raise exception.ComputeServiceUnavailable(host=src)
 
         # Checking src host is alive.
-        if not self.servicegroup_api.service_is_up(services[0]):
+        if not self.servicegroup_api.service_is_up(service):
             raise exception.ComputeServiceUnavailable(host=src)
 
-    def _live_migration_dest_check(self, context, instance_ref, dest):
+    def _live_migration_dest_check(self, context, instance_ref, dest,
+                                   ignore_hosts=None):
         """Live migration check routine (for destination host).
 
         :param context: security context
         :param instance_ref: nova.db.sqlalchemy.models.Instance object
         :param dest: destination host
+        :param ignore_hosts: hosts that should be avoided as dest host
         """
 
-        # Checking dest exists and compute node.
-        dservice_refs = db.service_get_all_compute_by_host(context, dest)
-        dservice_ref = dservice_refs[0]
-
-        # Checking dest host is alive.
-        if not self.servicegroup_api.service_is_up(dservice_ref):
-            raise exception.ComputeServiceUnavailable(host=dest)
+        # If dest is not specified, have scheduler pick one.
+        if dest is None:
+            image = self.image_service.show(context, instance_ref['image_ref'])
+            request_spec = {'instance_properties': instance_ref,
+                            'instance_type': instance_ref['instance_type'],
+                            'instance_uuids': [instance_ref['uuid']],
+                            'image': image}
+            filter_properties = {'ignore_hosts': ignore_hosts}
+            return self.select_hosts(context, request_spec,
+                                     filter_properties)[0]
 
         # Checking whether The host where instance is running
         # and dest is not same.
@@ -226,9 +272,21 @@ class Scheduler(object):
             raise exception.UnableToMigrateToSelf(
                     instance_id=instance_ref['uuid'], host=dest)
 
+        # Checking dest exists and compute node.
+        try:
+            dservice_ref = db.service_get_by_compute_host(context, dest)
+        except exception.NotFound:
+            raise exception.ComputeServiceUnavailable(host=dest)
+
+        # Checking dest host is alive.
+        if not self.servicegroup_api.service_is_up(dservice_ref):
+            raise exception.ComputeServiceUnavailable(host=dest)
+
         # Check memory requirements
         self._assert_compute_node_has_enough_memory(context,
                                                    instance_ref, dest)
+
+        return dest
 
     def _live_migration_common_check(self, context, instance_ref, dest):
         """Live migration common check routine.
@@ -267,16 +325,9 @@ class Scheduler(object):
 
         """
         # Getting total available memory of host
-        avail = self._get_compute_info(context, dest)['memory_mb']
-
-        # Getting total used memory and disk of host
-        # It should be sum of memories that are assigned as max value,
-        # because overcommitting is risky.
-        instance_refs = db.instance_get_all_by_host(context, dest)
-        used = sum([i['memory_mb'] for i in instance_refs])
+        avail = self._get_compute_info(context, dest)['free_ram_mb']
 
         mem_inst = instance_ref['memory_mb']
-        avail = avail - used
         if not mem_inst or avail <= mem_inst:
             instance_uuid = instance_ref['uuid']
             reason = _("Unable to migrate %(instance_uuid)s to %(dest)s: "
@@ -293,5 +344,5 @@ class Scheduler(object):
         :return: value specified by key
 
         """
-        compute_node_ref = db.service_get_all_compute_by_host(context, host)
-        return compute_node_ref[0]['compute_node'][0]
+        service_ref = db.service_get_by_compute_host(context, host)
+        return service_ref['compute_node'][0]

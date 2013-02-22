@@ -25,6 +25,8 @@ import gettext
 import os
 import sys
 
+from oslo.config import cfg
+
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
 possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
@@ -38,16 +40,13 @@ gettext.install('nova', unicode=1)
 from nova import config
 from nova import context
 from nova import db
-from nova.network import linux_net
 from nova.network import rpcapi as network_rpcapi
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
-from nova import utils
 
 CONF = cfg.CONF
-CONF.import_opt('host', 'nova.config')
+CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('network_manager', 'nova.service')
 LOG = logging.getLogger('nova.dhcpbridge')
 
@@ -96,10 +95,15 @@ def init_leases(network_id):
 def add_action_parsers(subparsers):
     parser = subparsers.add_parser('init')
 
+    # NOTE(cfb): dnsmasq always passes mac, and ip. hostname
+    #            is passed if known. We don't care about
+    #            hostname, but argparse will complain if we
+    #            do not accept it.
     for action in ['add', 'del', 'old']:
         parser = subparsers.add_parser(action)
         parser.add_argument('mac')
         parser.add_argument('ip')
+        parser.add_argument('hostname', nargs='?', default='')
         parser.set_defaults(func=globals()[action + '_lease'])
 
 
@@ -111,7 +115,7 @@ CONF.register_cli_opt(
 
 
 def main():
-    """Parse environment and arguments and call the approproate action."""
+    """Parse environment and arguments and call the appropriate action."""
     try:
         config_file = os.environ['CONFIG_FILE']
     except KeyError:

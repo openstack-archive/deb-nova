@@ -15,19 +15,48 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Tests for network API"""
+"""Tests for network API."""
 
+import itertools
 import random
+
+import mox
 
 from nova import context
 from nova import exception
 from nova import network
+from nova.network import api
+from nova.network import floating_ips
 from nova.network import rpcapi as network_rpcapi
-from nova.openstack.common import rpc
+from nova import policy
 from nova import test
 
 
 FAKE_UUID = 'a47ae74e-ab08-547f-9eee-ffd23fc46c16'
+
+
+class NetworkPolicyTestCase(test.TestCase):
+    def setUp(self):
+        super(NetworkPolicyTestCase, self).setUp()
+
+        policy.reset()
+        policy.init()
+
+        self.context = context.get_admin_context()
+
+    def tearDown(self):
+        super(NetworkPolicyTestCase, self).tearDown()
+        policy.reset()
+
+    def test_check_policy(self):
+        self.mox.StubOutWithMock(policy, 'enforce')
+        target = {
+            'project_id': self.context.project_id,
+            'user_id': self.context.user_id,
+        }
+        policy.enforce(self.context, 'network:get_all', target)
+        self.mox.ReplayAll()
+        api.check_policy(self.context, 'get_all')
 
 
 class ApiTestCase(test.TestCase):
@@ -37,15 +66,35 @@ class ApiTestCase(test.TestCase):
         self.context = context.RequestContext('fake-user',
                                               'fake-project')
 
+    def test_allocate_for_instance_handles_macs_passed(self):
+        # If a macs argument is supplied to the 'nova-network' API, it is just
+        # ignored. This test checks that the call down to the rpcapi layer
+        # doesn't pass macs down: nova-network doesn't support hypervisor
+        # mac address limits (today anyhow).
+        macs = set(['ab:cd:ef:01:23:34'])
+        self.mox.StubOutWithMock(
+            self.network_api.network_rpcapi, "allocate_for_instance")
+        kwargs = dict(zip(['host', 'instance_id', 'project_id',
+                'requested_networks', 'rxtx_factor', 'vpn', 'macs'],
+                itertools.repeat(mox.IgnoreArg())))
+        self.network_api.network_rpcapi.allocate_for_instance(
+            mox.IgnoreArg(), **kwargs).AndReturn([])
+        self.mox.ReplayAll()
+        instance = dict(id='id', uuid='uuid', project_id='project_id',
+            host='host', instance_type={'rxtx_factor': 0})
+        self.network_api.allocate_for_instance(
+            self.context, instance, 'vpn', 'requested_networks', macs=macs)
+
     def _do_test_associate_floating_ip(self, orig_instance_uuid):
-        """Test post-association logic"""
+        """Test post-association logic."""
 
         new_instance = {'uuid': 'new-uuid'}
 
-        def fake_rpc_call(context, topic, msg, timeout=None):
+        def fake_associate(*args, **kwargs):
             return orig_instance_uuid
 
-        self.stubs.Set(rpc, 'call', fake_rpc_call)
+        self.stubs.Set(floating_ips.FloatingIP, 'associate_floating_ip',
+                       fake_associate)
 
         def fake_instance_get_by_uuid(context, instance_uuid):
             return {'uuid': instance_uuid}

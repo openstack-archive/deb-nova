@@ -20,18 +20,18 @@
 Unit Tests for remote procedure calls using queue
 """
 
-import mox
 import sys
+
+import mox
+from oslo.config import cfg
 
 from nova import context
 from nova import db
 from nova import exception
 from nova import manager
-from nova.openstack.common import cfg
 from nova import service
 from nova import test
 from nova import wsgi
-
 
 test_service_opts = [
     cfg.StrOpt("fake_manager",
@@ -50,7 +50,7 @@ CONF.register_opts(test_service_opts)
 
 
 class FakeManager(manager.Manager):
-    """Fake manager for tests"""
+    """Fake manager for tests."""
     def test_method(self):
         return 'manager'
 
@@ -61,7 +61,7 @@ class ExtendedService(service.Service):
 
 
 class ServiceManagerTestCase(test.TestCase):
-    """Test cases for Services"""
+    """Test cases for Services."""
 
     def test_message_gets_to_manager(self):
         serv = service.Service('test',
@@ -105,14 +105,16 @@ class ServiceFlagsTestCase(test.TestCase):
 
 
 class ServiceTestCase(test.TestCase):
-    """Test cases for Services"""
+    """Test cases for Services."""
 
     def setUp(self):
         super(ServiceTestCase, self).setUp()
         self.host = 'foo'
         self.binary = 'nova-fake'
         self.topic = 'fake'
-        self.mox.StubOutWithMock(service, 'db')
+        self.mox.StubOutWithMock(db, 'service_create')
+        self.mox.StubOutWithMock(db, 'service_get_by_args')
+        self.flags(use_local=True, group='conductor')
 
     def test_create(self):
 
@@ -134,9 +136,9 @@ class ServiceTestCase(test.TestCase):
                           'report_count': 0,
                           'id': 1}
 
-        service.db.service_get_by_args(mox.IgnoreArg(),
+        db.service_get_by_args(mox.IgnoreArg(),
                 self.host, self.binary).AndRaise(exception.NotFound())
-        service.db.service_create(mox.IgnoreArg(),
+        db.service_create(mox.IgnoreArg(),
                 service_create).AndReturn(service_ref)
         return service_ref
 
@@ -179,6 +181,14 @@ class TestWSGIService(test.TestCase):
     def test_service_random_port(self):
         test_service = service.WSGIService("test_service")
         test_service.start()
+        self.assertNotEqual(0, test_service.port)
+        test_service.stop()
+
+    def test_service_random_port_with_ipv6(self):
+        CONF.set_default("test_service_listen", "::1")
+        test_service = service.WSGIService("test_service")
+        test_service.start()
+        self.assertEqual("::1", test_service.host)
         self.assertNotEqual(0, test_service.port)
         test_service.stop()
 

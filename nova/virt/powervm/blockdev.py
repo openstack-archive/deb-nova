@@ -18,16 +18,12 @@ import hashlib
 import os
 import re
 
-from eventlet import greenthread
-
-from nova import utils
+from oslo.config import cfg
 
 from nova.image import glance
-
-from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
-
+from nova import utils
 from nova.virt import images
 from nova.virt.powervm import command
 from nova.virt.powervm import common
@@ -39,7 +35,74 @@ CONF = cfg.CONF
 
 
 class PowerVMDiskAdapter(object):
-    pass
+    """PowerVM disk adapter interface
+    Provides a contract to implement multiple ways to generate
+    and attach volumes to virtual machines using local and/or
+    external storage
+    """
+
+    def create_volume(self, size):
+        """Creates a volume with a minimum size
+
+        :param size: size of the volume in bytes
+        :returns: string -- the name of the disk device.
+      """
+        pass
+
+    def delete_volume(self, volume_info):
+        """Removes the disk and its associated vSCSI connection
+
+        :param volume_info: dictionary with volume info including name of
+        disk device in /dev/
+        """
+        pass
+
+    def create_volume_from_image(self, context, instance, image_id):
+        """Creates a Volume and copies the specified image to it
+
+        :param context: nova context used to retrieve image from glance
+        :param instance: instance to create the volume for
+        :param image_id: image_id reference used to locate image in glance
+        :returns: dictionary with the name of the created
+                  disk device in 'device_name' key
+        """
+        pass
+
+    def create_image_from_volume(self, device_name, context,
+                                 image_id, image_meta):
+        """Capture the contents of a volume and upload to glance
+
+        :param device_name: device in /dev/ to capture
+        :param context: nova context for operation
+        :param image_id: image reference to pre-created image in glance
+        :param image_meta: metadata for new image
+        """
+        pass
+
+    def migrate_volume(self, lv_name, src_host, dest, image_path,
+            instance_name=None):
+        """Copy a logical volume to file, compress, and transfer
+
+        :param lv_name: volume device name
+        :param src_host: source IP or DNS name.
+        :param dest: destination IP or DNS name
+        :param image_path: path to remote image storage directory
+        :param instance_name: name of instance that is being migrated
+        :returns: file path on destination of image file that was moved
+        """
+        pass
+
+    def attach_volume_to_host(self, *args, **kargs):
+        """
+        Attaches volume to host using info passed in *args and **kargs
+        """
+        pass
+
+    def detach_volume_from_host(self, *args, **kargs):
+        """
+        Detaches volume from host using info passed in *args and **kargs
+        """
+        pass
 
 
 class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
@@ -70,11 +133,13 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
         """
         return self._create_logical_volume(size)
 
-    def delete_volume(self, disk_name):
+    def delete_volume(self, volume_info):
         """Removes the Logical Volume and its associated vSCSI connection
 
-        :param disk_name: name of Logical Volume device in /dev/
+        :param volume_info: Dictionary with volume info including name of
+        Logical Volume device in /dev/ via device_name key
         """
+        disk_name = volume_info["device_name"]
         LOG.debug(_("Removing the logical volume '%s'") % disk_name)
         self._remove_logical_volume(disk_name)
 
@@ -169,8 +234,47 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
             LOG.warn(_("Failed to clean up snapshot file "
                        "%(snapshot_file_path)s") % locals())
 
-    def migrate_volume(self):
-        raise NotImplementedError()
+    def migrate_volume(self, lv_name, src_host, dest, image_path,
+            instance_name=None):
+        """Copy a logical volume to file, compress, and transfer
+
+        :param lv_name: logical volume device name
+        :param dest: destination IP or DNS name
+        :param image_path: path to remote image storage directory
+        :param instance_name: name of instance that is being migrated
+        :returns: file path on destination of image file that was moved
+        """
+        if instance_name:
+            file_name = ''.join([instance_name, '_rsz'])
+        else:
+            file_name = ''.join([lv_name, '_rsz'])
+        file_path = os.path.join(image_path, file_name)
+        self._copy_device_to_file(lv_name, file_path)
+        cmds = 'gzip %s' % file_path
+        self.run_vios_command_as_root(cmds)
+        file_path = file_path + '.gz'
+        # If destination is not same host
+        # transfer file to destination VIOS system
+        if (src_host != dest):
+            with common.vios_to_vios_auth(self.connection_data.host,
+                                          dest,
+                                          self.connection_data) as key_name:
+                cmd = ''.join(['scp -o "StrictHostKeyChecking no"',
+                                ('-i %s' % key_name),
+                                file_path,
+                                '%s@%s:%s' % (self.connection_data.username,
+                                              dest,
+                                              image_path)
+                                ])
+                # do the remote copy
+                self.run_vios_command(cmd)
+
+            # cleanup local file only if transferring to remote system
+            # otherwise keep the file to boot from locally and clean up later
+            cleanup_cmd = 'rm %s' % file_path
+            self.run_vios_command_as_root(cleanup_cmd)
+
+        return file_path
 
     def attach_volume_to_host(self, *args, **kargs):
         pass

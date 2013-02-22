@@ -21,11 +21,11 @@ import os
 import signal
 
 from Cheetah import Template
+from oslo.config import cfg
 
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova import paths
 from nova import utils
@@ -51,7 +51,7 @@ xvp_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(xvp_opts)
-CONF.import_opt('host', 'nova.config')
+CONF.import_opt('host', 'nova.netconf')
 LOG = logging.getLogger(__name__)
 
 

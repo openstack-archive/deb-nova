@@ -473,6 +473,34 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               <target bus="virtio" dev="/dev/vda"/>
             </disk>""")
 
+    def test_config_iotune(self):
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "file"
+        obj.source_path = "/tmp/hello"
+        obj.target_dev = "/dev/hda"
+        obj.target_bus = "ide"
+        obj.disk_read_bytes_sec = 1024000
+        obj.disk_read_iops_sec = 1000
+        obj.disk_total_bytes_sec = 2048000
+        obj.disk_write_bytes_sec = 1024000
+        obj.disk_write_iops_sec = 1000
+        obj.disk_total_iops_sec = 2000
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="file" device="disk">
+              <source file="/tmp/hello"/>
+              <target bus="ide" dev="/dev/hda"/>
+              <iotune>
+                <read_bytes_sec>1024000</read_bytes_sec>
+                <read_iops_sec>1000</read_iops_sec>
+                <write_bytes_sec>1024000</write_bytes_sec>
+                <write_iops_sec>1000</write_iops_sec>
+                <total_bytes_sec>2048000</total_bytes_sec>
+                <total_iops_sec>2000</total_iops_sec>
+              </iotune>
+            </disk>""")
+
 
 class LibvirtConfigGuestFilesysTest(LibvirtConfigBaseTest):
 
@@ -539,6 +567,29 @@ class LibvirtConfigGuestConsoleTest(LibvirtConfigBaseTest):
             <console type="pty"/>""")
 
 
+class LibvirtConfigGuestChannelTest(LibvirtConfigBaseTest):
+    def test_config_spice_minimal(self):
+        obj = config.LibvirtConfigGuestChannel()
+        obj.type = "spicevmc"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <channel type="spicevmc">
+              <target type='virtio'/>
+            </channel>""")
+
+    def test_config_spice_full(self):
+        obj = config.LibvirtConfigGuestChannel()
+        obj.type = "spicevmc"
+        obj.target_name = "com.redhat.spice.0"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <channel type="spicevmc">
+              <target type='virtio' name='com.redhat.spice.0'/>
+            </channel>""")
+
+
 class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
     def test_config_ethernet(self):
         obj = config.LibvirtConfigGuestInterface()
@@ -547,6 +598,12 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
         obj.model = "virtio"
         obj.target_dev = "vnet0"
         obj.driver_name = "vhost"
+        obj.vif_inbound_average = 1024000
+        obj.vif_inbound_peak = 10240000
+        obj.vif_inbound_burst = 1024000
+        obj.vif_outbound_average = 1024000
+        obj.vif_outbound_peak = 10240000
+        obj.vif_outbound_burst = 1024000
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
@@ -555,6 +612,10 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
               <model type="virtio"/>
               <driver name="vhost"/>
               <target dev="vnet0"/>
+              <bandwidth>
+                <inbound average="1024000" peak="10240000" burst="1024000"/>
+                <outbound average="1024000" peak="10240000" burst="1024000"/>
+              </bandwidth>
             </interface>""")
 
     def test_config_bridge(self):
@@ -566,6 +627,12 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
         obj.target_dev = "tap12345678"
         obj.filtername = "clean-traffic"
         obj.filterparams.append({"key": "IP", "value": "192.168.122.1"})
+        obj.vif_inbound_average = 1024000
+        obj.vif_inbound_peak = 10240000
+        obj.vif_inbound_burst = 1024000
+        obj.vif_outbound_average = 1024000
+        obj.vif_outbound_peak = 10240000
+        obj.vif_outbound_burst = 1024000
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
@@ -577,6 +644,10 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
               <filterref filter="clean-traffic">
                 <parameter name="IP" value="192.168.122.1"/>
               </filterref>
+              <bandwidth>
+                <inbound average="1024000" peak="10240000" burst="1024000"/>
+                <outbound average="1024000" peak="10240000" burst="1024000"/>
+              </bandwidth>
             </interface>""")
 
     def test_config_bridge_ovs(self):
@@ -753,6 +824,9 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.virt_type = "kvm"
         obj.memory = 1024 * 1024 * 100
         obj.vcpus = 2
+        obj.cpu_shares = 100
+        obj.cpu_quota = 50000
+        obj.cpu_period = 25000
         obj.name = "demo"
         obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
         obj.os_type = "linux"
@@ -797,6 +871,11 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
                 <acpi/>
                 <apic/>
               </features>
+              <cputune>
+                <shares>100</shares>
+                <quota>50000</quota>
+                <period>25000</period>
+              </cputune>
               <devices>
                 <disk type="file" device="disk">
                   <source file="/tmp/img"/>

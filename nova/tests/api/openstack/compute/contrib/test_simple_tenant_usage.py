@@ -65,7 +65,8 @@ def get_fake_db_instance(start, end, instance_id, tenant_id):
             'terminated_at': end}
 
 
-def fake_instance_get_active_by_window(self, context, begin, end, project_id):
+def fake_instance_get_active_by_window_joined(self, context, begin, end,
+        project_id):
             return [get_fake_db_instance(START,
                                          STOP,
                                          x,
@@ -79,7 +80,7 @@ class SimpleTenantUsageTest(test.TestCase):
         self.stubs.Set(api.API, "get_instance_type",
                        fake_instance_type_get)
         self.stubs.Set(api.API, "get_active_by_window",
-                       fake_instance_get_active_by_window)
+                       fake_instance_get_active_by_window_joined)
         self.admin_context = context.RequestContext('fakeadmin_0',
                                                     'faketenant_0',
                                                     is_admin=True)
@@ -217,6 +218,21 @@ class SimpleTenantUsageTest(test.TestCase):
         finally:
             policy.reset()
 
+    def test_get_tenants_usage_with_bad_start_date(self):
+        future = NOW + datetime.timedelta(hours=HOURS)
+        tenant_id = 0
+        req = webob.Request.blank(
+                  '/v2/faketenant_0/os-simple-tenant-usage/'
+                  'faketenant_%s?start=%s&end=%s' %
+                  (tenant_id, future.isoformat(), NOW.isoformat()))
+        req.method = "GET"
+        req.headers["content-type"] = "application/json"
+
+        res = req.get_response(fakes.wsgi_app(
+                               fake_auth_context=self.user_context,
+                               init_only=('os-simple-tenant-usage',)))
+        self.assertEqual(res.status_int, 400)
+
 
 class SimpleTenantUsageSerializerTest(test.TestCase):
     def _verify_server_usage(self, raw_usage, tree):
@@ -293,7 +309,6 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
         tenant_usage = dict(tenant_usage=raw_usage)
         text = serializer.serialize(tenant_usage)
 
-        print text
         tree = etree.fromstring(text)
 
         self._verify_tenant_usage(raw_usage, tree)
@@ -378,7 +393,6 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
         tenant_usages = dict(tenant_usages=raw_usages)
         text = serializer.serialize(tenant_usages)
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('tenant_usages', tree.tag)

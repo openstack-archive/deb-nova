@@ -26,10 +26,12 @@ import string
 import tempfile
 
 import fixtures
+from oslo.config import cfg
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
+from nova.api.metadata import password
 from nova.compute import api as compute_api
 from nova.compute import power_state
 from nova.compute import utils as compute_utils
@@ -39,7 +41,6 @@ from nova import db
 from nova import exception
 from nova.image import s3
 from nova.network import api as network_api
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 from nova import test
@@ -53,7 +54,7 @@ from nova import volume
 CONF = cfg.CONF
 CONF.import_opt('compute_driver', 'nova.virt.driver')
 CONF.import_opt('default_instance_type', 'nova.compute.instance_types')
-CONF.import_opt('use_ipv6', 'nova.config')
+CONF.import_opt('use_ipv6', 'nova.netconf')
 LOG = logging.getLogger(__name__)
 
 HOST = "testhost"
@@ -187,7 +188,7 @@ class CloudTestCase(test.TestCase):
                                            name)
 
     def test_describe_regions(self):
-        """Makes sure describe regions runs without raising an exception"""
+        # Makes sure describe regions runs without raising an exception.
         result = self.cloud.describe_regions(self.context)
         self.assertEqual(len(result['regionInfo']), 1)
         self.flags(region_list=["one=test_host1", "two=test_host2"])
@@ -195,7 +196,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(len(result['regionInfo']), 2)
 
     def test_describe_addresses(self):
-        """Makes sure describe addresses runs without raising an exception"""
+        # Makes sure describe addresses runs without raising an exception.
         address = "10.10.10.10"
         db.floating_ip_create(self.context,
                               {'address': address,
@@ -207,7 +208,7 @@ class CloudTestCase(test.TestCase):
         db.floating_ip_destroy(self.context, address)
 
     def test_describe_specific_address(self):
-        """Makes sure describe specific address works"""
+        # Makes sure describe specific address works.
         addresses = ["10.10.10.10", "10.10.10.11"]
         for address in addresses:
             db.floating_ip_create(self.context,
@@ -246,7 +247,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(result.get('return', None), 'true')
 
     def test_associate_disassociate_address(self):
-        """Verifies associate runs cleanly without raising an exception"""
+        # Verifies associate runs cleanly without raising an exception.
         address = "10.10.10.10"
         db.floating_ip_create(self.context,
                               {'address': address,
@@ -268,7 +269,8 @@ class CloudTestCase(test.TestCase):
                                                  host=inst['host'],
                                                  vpn=None,
                                                  rxtx_factor=3,
-                                                 project_id=project_id)
+                                                 project_id=project_id,
+                                                 macs=None)
 
         fixed_ips = nw_info.fixed_ips()
         ec2_id = ec2utils.id_to_ec2_inst_id(inst['uuid'])
@@ -326,7 +328,7 @@ class CloudTestCase(test.TestCase):
         db.floating_ip_destroy(self.context, address)
 
     def test_describe_security_groups(self):
-        """Makes sure describe_security_groups works and filters results."""
+        # Makes sure describe_security_groups works and filters results.
         sec = db.security_group_create(self.context,
                                        {'project_id': self.context.project_id,
                                         'name': 'test'})
@@ -342,7 +344,7 @@ class CloudTestCase(test.TestCase):
         db.security_group_destroy(self.context, sec['id'])
 
     def test_describe_security_groups_all_tenants(self):
-        """Makes sure describe_security_groups works and filters results."""
+        # Makes sure describe_security_groups works and filters results.
         sec = db.security_group_create(self.context,
                                        {'project_id': 'foobar',
                                         'name': 'test'})
@@ -459,7 +461,7 @@ class CloudTestCase(test.TestCase):
         sec = db.security_group_create(self.context, kwargs)
         authz = self.cloud.authorize_security_group_ingress
         kwargs = {'ip_permissions': [{'to_port': 81, 'from_port': 81,
-                  'ip_ranges':{'1': {'cidr_ip': u'0.0.0.0/0'},
+                  'ip_ranges': {'1': {'cidr_ip': u'0.0.0.0/0'},
                                 '2': {'cidr_ip': u'10.10.10.10/32'}},
                   'groups': {'1': {'user_id': u'someuser',
                                    'group_name': u'somegroup1'}},
@@ -673,7 +675,7 @@ class CloudTestCase(test.TestCase):
         self.assertFalse(get_rules(self.context, group1['id']))
 
     def test_delete_security_group_in_use_by_instance(self):
-        """Ensure that a group can not be deleted if in use by an instance."""
+        # Ensure that a group can not be deleted if in use by an instance.
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         args = {'reservation_id': 'a',
                  'image_ref': image_uuid,
@@ -699,7 +701,7 @@ class CloudTestCase(test.TestCase):
         self.cloud.delete_security_group(self.context, 'testgrp')
 
     def test_describe_availability_zones(self):
-        """Makes sure describe_availability_zones works and filters results."""
+        # Makes sure describe_availability_zones works and filters results.
         service1 = db.service_create(self.context, {'host': 'host1_zones',
                                          'binary': "nova-compute",
                                          'topic': 'compute',
@@ -711,10 +713,10 @@ class CloudTestCase(test.TestCase):
         # Aggregate based zones
         agg = db.aggregate_create(self.context,
                 {'name': 'agg1'}, {'availability_zone': 'zone1'})
-        db.aggregate_host_add(self.context, agg.id, 'host1_zones')
+        db.aggregate_host_add(self.context, agg['id'], 'host1_zones')
         agg = db.aggregate_create(self.context,
                 {'name': 'agg2'}, {'availability_zone': 'zone2'})
-        db.aggregate_host_add(self.context, agg.id, 'host2_zones')
+        db.aggregate_host_add(self.context, agg['id'], 'host2_zones')
         result = self.cloud.describe_availability_zones(self.context)
         self.assertEqual(len(result['availabilityZoneInfo']), 3)
         admin_ctxt = context.get_admin_context(read_deleted="no")
@@ -725,7 +727,7 @@ class CloudTestCase(test.TestCase):
         db.service_destroy(self.context, service2['id'])
 
     def test_describe_availability_zones_verbose(self):
-        """Makes sure describe_availability_zones works and filters results."""
+        # Makes sure describe_availability_zones works and filters results.
         service1 = db.service_create(self.context, {'host': 'host1_zones',
                                          'binary': "nova-compute",
                                          'topic': 'compute',
@@ -736,7 +738,7 @@ class CloudTestCase(test.TestCase):
                                          'report_count': 0})
         agg = db.aggregate_create(self.context,
                 {'name': 'agg1'}, {'availability_zone': 'second_zone'})
-        db.aggregate_host_add(self.context, agg.id, 'host2_zones')
+        db.aggregate_host_add(self.context, agg['id'], 'host2_zones')
 
         admin_ctxt = context.get_admin_context(read_deleted="no")
         result = self.cloud.describe_availability_zones(admin_ctxt,
@@ -747,7 +749,7 @@ class CloudTestCase(test.TestCase):
         db.service_destroy(self.context, service2['id'])
 
     def test_describe_instances(self):
-        """Makes sure describe_instances works and filters results."""
+        # Makes sure describe_instances works and filters results.
         self.flags(use_ipv6=True)
 
         self._stub_instance_get_with_fixed_ips('get_all')
@@ -770,13 +772,13 @@ class CloudTestCase(test.TestCase):
                                                  'topic': "compute"})
         agg = db.aggregate_create(self.context,
                 {'name': 'agg1'}, {'availability_zone': 'zone1'})
-        db.aggregate_host_add(self.context, agg.id, 'host1')
+        db.aggregate_host_add(self.context, agg['id'], 'host1')
 
         comp2 = db.service_create(self.context, {'host': 'host2',
                                                  'topic': "compute"})
         agg2 = db.aggregate_create(self.context,
                 {'name': 'agg2'}, {'availability_zone': 'zone2'})
-        db.aggregate_host_add(self.context, agg2.id, 'host2')
+        db.aggregate_host_add(self.context, agg2['id'], 'host2')
 
         result = self.cloud.describe_instances(self.context)
         result = result['reservationSet'][0]
@@ -812,7 +814,7 @@ class CloudTestCase(test.TestCase):
         db.service_destroy(self.context, comp2['id'])
 
     def test_describe_instances_all_invalid(self):
-        """Makes sure describe_instances works and filters results."""
+        # Makes sure describe_instances works and filters results.
         self.flags(use_ipv6=True)
 
         self._stub_instance_get_with_fixed_ips('get_all')
@@ -823,8 +825,21 @@ class CloudTestCase(test.TestCase):
                           self.cloud.describe_instances, self.context,
                           instance_id=[instance_id])
 
+    def test_describe_instances_with_filters(self):
+        # Makes sure describe_instances works and filters results.
+        filters = {'filter': [{'name': 'test',
+                               'value': ['a', 'b']},
+                              {'name': 'another_test',
+                               'value': 'a string'}]}
+
+        self._stub_instance_get_with_fixed_ips('get_all')
+        self._stub_instance_get_with_fixed_ips('get')
+
+        result = self.cloud.describe_instances(self.context, **filters)
+        self.assertEqual(result, {'reservationSet': []})
+
     def test_describe_instances_sorting(self):
-        """Makes sure describe_instances works and is sorted as expected."""
+        # Makes sure describe_instances works and is sorted as expected.
         self.flags(use_ipv6=True)
 
         self._stub_instance_get_with_fixed_ips('get_all')
@@ -878,7 +893,7 @@ class CloudTestCase(test.TestCase):
         db.service_destroy(self.context, comp2['id'])
 
     def test_describe_instance_state(self):
-        """Makes sure describe_instances for instanceState works."""
+        # Makes sure describe_instances for instanceState works.
 
         def test_instance_state(expected_code, expected_name,
                                 power_state_, vm_state_, values=None):
@@ -908,7 +923,7 @@ class CloudTestCase(test.TestCase):
                             {'shutdown_terminate': False})
 
     def test_describe_instances_no_ipv6(self):
-        """Makes sure describe_instances w/ no ipv6 works."""
+        # Makes sure describe_instances w/ no ipv6 works.
         self.flags(use_ipv6=False)
 
         self._stub_instance_get_with_fixed_ips('get_all')
@@ -1153,7 +1168,7 @@ class CloudTestCase(test.TestCase):
     #    deleteOnTermination
     #  noDevice
     def test_describe_image_mapping(self):
-        """test for rootDeviceName and blockDeiceMapping"""
+        # test for rootDeviceName and blockDeviceMapping.
         describe_images = self.cloud.describe_images
         self._setUpImageSet()
 
@@ -1387,6 +1402,17 @@ class CloudTestCase(test.TestCase):
         instance_id = rv['instancesSet'][0]['instanceId']
         return instance_id
 
+    def test_get_password_data(self):
+        instance_id = self._run_instance(
+            image_id='ami-1',
+            instance_type=CONF.default_instance_type,
+            max_count=1)
+        self.stubs.Set(password, 'extract_password', lambda i: 'fakepass')
+        output = self.cloud.get_password_data(context=self.context,
+                                              instance_id=[instance_id])
+        self.assertEquals(output['passwordData'], 'fakepass')
+        rv = self.cloud.terminate_instances(self.context, [instance_id])
+
     def test_console_output(self):
         instance_id = self._run_instance(
             image_id='ami-1',
@@ -1428,7 +1454,7 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(filter(lambda k: k['keyName'] == 'test2', keys))
 
     def test_describe_bad_key_pairs(self):
-        self.assertRaises(exception.EC2APIError,
+        self.assertRaises(exception.KeypairNotFound,
             self.cloud.describe_key_pairs, self.context,
             key_name=['DoesNotExist'])
 
@@ -1478,7 +1504,7 @@ class CloudTestCase(test.TestCase):
             self.assertEqual(result['keyName'], key_name)
 
         for key_name in bad_names:
-            self.assertRaises(exception.EC2APIError,
+            self.assertRaises(exception.InvalidKeypair,
                               self.cloud.create_key_pair,
                               self.context,
                               key_name)
@@ -1645,7 +1671,7 @@ class CloudTestCase(test.TestCase):
             self.compute = self.start_service('compute')
 
     def test_stop_start_instance(self):
-        """Makes sure stop/start instance works"""
+        # Makes sure stop/start instance works.
         # enforce periodic tasks run in short time to avoid wait for 60s.
         self._restart_compute_service(periodic_interval_max=0.3)
 
@@ -1848,7 +1874,7 @@ class CloudTestCase(test.TestCase):
         return result['snapshotId']
 
     def _do_test_create_image(self, no_reboot):
-        """Make sure that CreateImage works"""
+        """Make sure that CreateImage works."""
         # enforce periodic tasks run in short time to avoid wait for 60s.
         self._restart_compute_service(periodic_interval_max=0.3)
 
@@ -1891,7 +1917,7 @@ class CloudTestCase(test.TestCase):
                                        connection_info='{"foo":"bar"}')
 
                 def __getattr__(self, name):
-                    """Properly delegate dotted lookups"""
+                    """Properly delegate dotted lookups."""
                     if name in self.__dict__['values']:
                         return self.values.get(name)
                     try:
@@ -1945,11 +1971,11 @@ class CloudTestCase(test.TestCase):
         self._restart_compute_service()
 
     def test_create_image_no_reboot(self):
-        """Make sure that CreateImage works"""
+        # Make sure that CreateImage works.
         self._do_test_create_image(True)
 
     def test_create_image_with_reboot(self):
-        """Make sure that CreateImage works"""
+        # Make sure that CreateImage works.
         self._do_test_create_image(False)
 
     def test_create_image_instance_store(self):
@@ -1980,7 +2006,7 @@ class CloudTestCase(test.TestCase):
                                        delete_on_termination=False)
 
                 def __getattr__(self, name):
-                    """Properly delegate dotted lookups"""
+                    """Properly delegate dotted lookups."""
                     if name in self.__dict__['values']:
                         return self.values.get(name)
                     try:
@@ -2052,7 +2078,7 @@ class CloudTestCase(test.TestCase):
                     ]
 
     def test_describe_instance_attribute(self):
-        """Make sure that describe_instance_attribute works"""
+        # Make sure that describe_instance_attribute works.
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        self._fake_bdm_get)
 

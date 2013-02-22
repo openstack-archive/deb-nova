@@ -54,15 +54,11 @@
   CLI interface for nova bare-metal management.
 """
 
-import ast
-import errno
 import gettext
-import math
-import netaddr
-import optparse
 import os
 import sys
 
+from oslo.config import cfg
 
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
@@ -75,15 +71,8 @@ if os.path.exists(os.path.join(POSSIBLE_TOPDIR, 'nova', '__init__.py')):
 gettext.install('nova', unicode=1)
 
 from nova import config
-from nova import context
-from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import cliutils
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import rpc
-from nova.openstack.common import timeutils
-from nova import utils
 from nova import version
 from nova.virt.baremetal import db as bmdb
 from nova.virt.baremetal.db import migration as bmdb_migration
@@ -187,9 +176,7 @@ def main():
         sys.exit(2)
 
     if CONF.category.name == "version":
-        print(_("%(version)s (%(vcs)s)") %
-               {'version': version.version_string(),
-                'vcs': version.version_string_with_vcs()})
+        print(version.version_string_with_package())
         sys.exit(0)
 
     if CONF.category.name == "bash-completion":

@@ -34,8 +34,10 @@ class BareMetalNode(BASE, models.NovaBase):
 
     __tablename__ = 'bm_nodes'
     id = Column(Integer, primary_key=True)
+    uuid = Column(String(36))
     service_host = Column(String(255))
     instance_uuid = Column(String(36), nullable=True)
+    instance_name = Column(String(255), nullable=True)
     cpus = Column(Integer)
     memory_mb = Column(Integer)
     local_gb = Column(Integer)
@@ -47,6 +49,11 @@ class BareMetalNode(BASE, models.NovaBase):
     task_state = Column(String(255))
     prov_vlan_id = Column(Integer)
     terminal_port = Column(Integer)
+    image_path = Column(String(255), nullable=True)
+    pxe_config_path = Column(String(255), nullable=True)
+    deploy_key = Column(String(255), nullable=True)
+    root_mb = Column(Integer)
+    swap_mb = Column(Integer)
 
 
 class BareMetalPxeIp(BASE, models.NovaBase):
@@ -65,13 +72,3 @@ class BareMetalInterface(BASE, models.NovaBase):
     datapath_id = Column(String(255))
     port_no = Column(Integer)
     vif_uuid = Column(String(36), unique=True)
-
-
-class BareMetalDeployment(BASE, models.NovaBase):
-    __tablename__ = 'bm_deployments'
-    id = Column(Integer, primary_key=True)
-    key = Column(String(255))
-    image_path = Column(String(255))
-    pxe_config_path = Column(String(255))
-    root_mb = Column(Integer)
-    swap_mb = Column(Integer)

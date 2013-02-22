@@ -53,17 +53,17 @@ This module provides Manager, a base class for managers.
 
 """
 
-import eventlet
 import time
+
+import eventlet
+from oslo.config import cfg
 
 from nova.db import base
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.openstack.common.plugin import pluginmanager
 from nova.openstack.common.rpc import dispatcher as rpc_dispatcher
 from nova.scheduler import rpcapi as scheduler_rpcapi
-from nova import version
 
 
 periodic_opts = [
@@ -75,7 +75,7 @@ periodic_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(periodic_opts)
-CONF.import_opt('host', 'nova.config')
+CONF.import_opt('host', 'nova.netconf')
 LOG = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL = 60.0
@@ -89,9 +89,15 @@ def periodic_task(*args, **kwargs):
         1. Without arguments '@periodic_task', this will be run on every cycle
            of the periodic scheduler.
 
-        2. With arguments, @periodic_task(periodic_spacing=N), this will be
-           run on approximately every N seconds. If this number is negative the
-           periodic task will be disabled.
+        2. With arguments:
+           @periodic_task(spacing=N [, run_immediately=[True|False]])
+           this will be run on approximately every N seconds. If this number is
+           negative the periodic task will be disabled. If the run_immediately
+           argument is provided and has a value of 'True', the first run of the
+           task will be shortly after task scheduler starts.  If
+           run_immediately is omitted or set to 'False', the first time the
+           task runs will be approximately N seconds after the task scheduler
+           starts.
     """
     def decorator(f):
         # Test for old style invocation
@@ -108,7 +114,10 @@ def periodic_task(*args, **kwargs):
 
         # Control frequency
         f._periodic_spacing = kwargs.pop('spacing', 0)
-        f._periodic_last_run = time.time()
+        if kwargs.pop('run_immediately', False):
+            f._periodic_last_run = None
+        else:
+            f._periodic_last_run = time.time()
         return f
 
     # NOTE(sirp): The `if` is necessary to allow the decorator to be used with
@@ -214,9 +223,12 @@ class Manager(base.Base):
             # If a periodic task is _nearly_ due, then we'll run it early
             if self._periodic_spacing[task_name] is None:
                 wait = 0
+            elif self._periodic_last_run[task_name] is None:
+                wait = 0
             else:
-                wait = time.time() - (self._periodic_last_run[task_name] +
-                                      self._periodic_spacing[task_name])
+                due = (self._periodic_last_run[task_name] +
+                       self._periodic_spacing[task_name])
+                wait = max(0, due - time.time())
                 if wait > 0.2:
                     if wait < idle_for:
                         idle_for = wait
@@ -267,15 +279,6 @@ class Manager(base.Base):
         Child classes should override this method.
         """
         pass
-
-    def service_version(self, context):
-        return version.version_string()
-
-    def service_config(self, context):
-        config = {}
-        for key in CONF:
-            config[key] = CONF.get(key, None)
-        return config
 
 
 class SchedulerDependentManager(Manager):

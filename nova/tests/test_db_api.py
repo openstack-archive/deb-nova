@@ -17,23 +17,32 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Unit tests for the DB API"""
+"""Unit tests for the DB API."""
 
 import datetime
 import uuid as stdlib_uuid
 
+from oslo.config import cfg
+from sqlalchemy import MetaData
+from sqlalchemy.schema import Table
+from sqlalchemy.sql.expression import select
+
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
+from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests import matchers
+from nova import utils
 
 
 CONF = cfg.CONF
 CONF.import_opt('reserved_host_memory_mb', 'nova.compute.resource_tracker')
 CONF.import_opt('reserved_host_disk_mb', 'nova.compute.resource_tracker')
+
+get_engine = db_session.get_engine
+get_session = db_session.get_session
 
 
 class DbApiTestCase(test.TestCase):
@@ -114,7 +123,7 @@ class DbApiTestCase(test.TestCase):
         self.assertEqual(2, len(result))
 
     def test_instance_get_all_by_filters_regex_unsupported_db(self):
-        """Ensure that the 'LIKE' operator is used for unsupported dbs."""
+        # Ensure that the 'LIKE' operator is used for unsupported dbs.
         self.flags(sql_connection="notdb://")
         self.create_instances_with_args(display_name='test1')
         self.create_instances_with_args(display_name='test.*')
@@ -253,13 +262,39 @@ class DbApiTestCase(test.TestCase):
         values = {'address': 'fixed'}
         fixed = db.fixed_ip_create(ctxt, values)
         res = db.floating_ip_fixed_ip_associate(ctxt, floating, fixed, 'foo')
-        self.assertEqual(res, fixed)
+        self.assertEqual(res['address'], fixed)
         res = db.floating_ip_fixed_ip_associate(ctxt, floating, fixed, 'foo')
         self.assertEqual(res, None)
         res = db.floating_ip_disassociate(ctxt, floating)
-        self.assertEqual(res, fixed)
+        self.assertEqual(res['address'], fixed)
         res = db.floating_ip_disassociate(ctxt, floating)
         self.assertEqual(res, None)
+
+    def test_fixed_ip_get_by_floating_address(self):
+        ctxt = context.get_admin_context()
+        values = {'address': 'fixed'}
+        fixed = db.fixed_ip_create(ctxt, values)
+        fixed_ip_ref = db.fixed_ip_get_by_address(ctxt, fixed)
+        values = {'address': 'floating',
+                  'fixed_ip_id': fixed_ip_ref['id']}
+        floating = db.floating_ip_create(ctxt, values)
+        fixed_ip_ref = db.fixed_ip_get_by_floating_address(ctxt, floating)
+        self.assertEqual(fixed, fixed_ip_ref['address'])
+
+    def test_floating_ip_get_by_fixed_address(self):
+        ctxt = context.get_admin_context()
+        values = {'address': 'fixed'}
+        fixed = db.fixed_ip_create(ctxt, values)
+        fixed_ip_ref = db.fixed_ip_get_by_address(ctxt, fixed)
+        values = {'address': 'floating1',
+                  'fixed_ip_id': fixed_ip_ref['id']}
+        floating1 = db.floating_ip_create(ctxt, values)
+        values = {'address': 'floating2',
+                  'fixed_ip_id': fixed_ip_ref['id']}
+        floating2 = db.floating_ip_create(ctxt, values)
+        floating_ip_refs = db.floating_ip_get_by_fixed_address(ctxt, fixed)
+        self.assertEqual(floating1, floating_ip_refs[0]['address'])
+        self.assertEqual(floating2, floating_ip_refs[1]['address'])
 
     def test_network_create_safe(self):
         ctxt = context.get_admin_context()
@@ -299,29 +334,18 @@ class DbApiTestCase(test.TestCase):
         self.assertRaises(exception.DuplicateVlan,
                           db.network_create_safe, ctxt, values2)
 
-    def test_instance_test_and_set(self):
+    def test_network_update_with_duplicate_vlan(self):
         ctxt = context.get_admin_context()
-        states = [
-            (None, [None, 'some'], 'building'),
-            (None, [None], 'building'),
-            ('building', ['building'], 'ready'),
-            ('building', [None, 'building'], 'ready')]
-        for st in states:
-            inst = db.instance_create(ctxt, {'vm_state': st[0]})
-            uuid = inst['uuid']
-            db.instance_test_and_set(ctxt, uuid, 'vm_state', st[1], st[2])
-            inst = db.instance_get_by_uuid(ctxt, uuid)
-            self.assertEqual(inst["vm_state"], st[2])
-
-    def test_instance_test_and_set_exception(self):
-        ctxt = context.get_admin_context()
-        inst = db.instance_create(ctxt, {'vm_state': 'building'})
-        self.assertRaises(exception.InstanceInvalidState,
-                          db.instance_test_and_set, ctxt,
-                          inst['uuid'], 'vm_state', [None, 'disable'], 'run')
+        values1 = {'host': 'localhost', 'project_id': 'project1', 'vlan': 1}
+        values2 = {'host': 'something', 'project_id': 'project1', 'vlan': 2}
+        network_ref = db.network_create_safe(ctxt, values1)
+        db.network_create_safe(ctxt, values2)
+        self.assertRaises(exception.DuplicateVlan,
+                          db.network_update,
+                          ctxt, network_ref["id"], values2)
 
     def test_instance_update_with_instance_uuid(self):
-        """test instance_update() works when an instance UUID is passed """
+        # test instance_update() works when an instance UUID is passed.
         ctxt = context.get_admin_context()
 
         # Create an instance with some metadata
@@ -428,7 +452,7 @@ class DbApiTestCase(test.TestCase):
         self.assertEquals("needscoffee", new_ref["vm_state"])
 
     def test_instance_update_with_extra_specs(self):
-        """Ensure _extra_specs are returned from _instance_update"""
+        # Ensure _extra_specs are returned from _instance_update.
         ctxt = context.get_admin_context()
 
         # create a flavor
@@ -462,8 +486,36 @@ class DbApiTestCase(test.TestCase):
         self.assertEquals(spec, old_ref['extra_specs'])
         self.assertEquals(spec, new_ref['extra_specs'])
 
+    def _test_instance_update_updates_metadata(self, metadata_type):
+        ctxt = context.get_admin_context()
+
+        instance = db.instance_create(ctxt, {})
+
+        def set_and_check(meta):
+            inst = db.instance_update(ctxt, instance['uuid'],
+                               {metadata_type: dict(meta)})
+            _meta = utils.metadata_to_dict(inst[metadata_type])
+            self.assertEqual(meta, _meta)
+
+        meta = {'speed': '88', 'units': 'MPH'}
+        set_and_check(meta)
+
+        meta['gigawatts'] = '1.21'
+        set_and_check(meta)
+
+        del meta['gigawatts']
+        set_and_check(meta)
+
+    def test_instance_update_updates_system_metadata(self):
+        # Ensure that system_metadata is updated during instance_update
+        self._test_instance_update_updates_metadata('system_metadata')
+
+    def test_instance_update_updates_metadata(self):
+        # Ensure that metadata is updated during instance_update
+        self._test_instance_update_updates_metadata('metadata')
+
     def test_instance_fault_create(self):
-        """Ensure we can create an instance fault"""
+        # Ensure we can create an instance fault.
         ctxt = context.get_admin_context()
         uuid = str(stdlib_uuid.uuid4())
 
@@ -481,7 +533,7 @@ class DbApiTestCase(test.TestCase):
         self.assertEqual(404, faults[uuid][0]['code'])
 
     def test_instance_fault_get_by_instance(self):
-        """ensure we can retrieve an instance fault by  instance UUID """
+        # ensure we can retrieve an instance fault by  instance UUID.
         ctxt = context.get_admin_context()
         instance1 = db.instance_create(ctxt, {})
         instance2 = db.instance_create(ctxt, {})
@@ -530,7 +582,7 @@ class DbApiTestCase(test.TestCase):
         self.assertEqual(instance_faults, expected)
 
     def test_instance_faults_get_by_instance_uuids_no_faults(self):
-        """None should be returned when no faults exist"""
+        # None should be returned when no faults exist.
         ctxt = context.get_admin_context()
         instance1 = db.instance_create(ctxt, {})
         instance2 = db.instance_create(ctxt, {})
@@ -538,6 +590,253 @@ class DbApiTestCase(test.TestCase):
         instance_faults = db.instance_fault_get_by_instance_uuids(ctxt, uuids)
         expected = {uuids[0]: [], uuids[1]: []}
         self.assertEqual(expected, instance_faults)
+
+    def test_instance_action_start(self):
+        """Create an instance action."""
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+
+        start_time = timeutils.utcnow()
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid,
+                         'request_id': ctxt.request_id,
+                         'user_id': ctxt.user_id,
+                         'project_id': ctxt.project_id,
+                         'start_time': start_time}
+        db.action_start(ctxt, action_values)
+
+        # Retrieve the action to ensure it was successfully added
+        actions = db.actions_get(ctxt, uuid)
+        self.assertEqual(1, len(actions))
+        self.assertEqual('run_instance', actions[0]['action'])
+        self.assertEqual(start_time, actions[0]['start_time'])
+        self.assertEqual(ctxt.request_id, actions[0]['request_id'])
+        self.assertEqual(ctxt.user_id, actions[0]['user_id'])
+        self.assertEqual(ctxt.project_id, actions[0]['project_id'])
+
+    def test_instance_action_finish(self):
+        """Create an instance action."""
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+
+        start_time = timeutils.utcnow()
+        action_start_values = {'action': 'run_instance',
+                               'instance_uuid': uuid,
+                               'request_id': ctxt.request_id,
+                               'user_id': ctxt.user_id,
+                               'project_id': ctxt.project_id,
+                               'start_time': start_time}
+        db.action_start(ctxt, action_start_values)
+
+        finish_time = timeutils.utcnow() + datetime.timedelta(seconds=5)
+        action_finish_values = {'instance_uuid': uuid,
+                                'request_id': ctxt.request_id,
+                                'finish_time': finish_time}
+        db.action_finish(ctxt, action_finish_values)
+
+        # Retrieve the action to ensure it was successfully added
+        actions = db.actions_get(ctxt, uuid)
+        self.assertEqual(1, len(actions))
+        self.assertEqual('run_instance', actions[0]['action'])
+        self.assertEqual(start_time, actions[0]['start_time'])
+        self.assertEqual(finish_time, actions[0]['finish_time'])
+        self.assertEqual(ctxt.request_id, actions[0]['request_id'])
+        self.assertEqual(ctxt.user_id, actions[0]['user_id'])
+        self.assertEqual(ctxt.project_id, actions[0]['project_id'])
+
+    def test_instance_actions_get_by_instance(self):
+        """Ensure we can get actions by UUID."""
+        ctxt1 = context.get_admin_context()
+        ctxt2 = context.get_admin_context()
+        uuid1 = str(stdlib_uuid.uuid4())
+        uuid2 = str(stdlib_uuid.uuid4())
+
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid1,
+                         'request_id': ctxt1.request_id,
+                         'user_id': ctxt1.user_id,
+                         'project_id': ctxt1.project_id,
+                         'start_time': timeutils.utcnow()}
+        db.action_start(ctxt1, action_values)
+        action_values['action'] = 'resize'
+        db.action_start(ctxt1, action_values)
+
+        action_values = {'action': 'reboot',
+                         'instance_uuid': uuid2,
+                         'request_id': ctxt2.request_id,
+                         'user_id': ctxt2.user_id,
+                         'project_id': ctxt2.project_id,
+                         'start_time': timeutils.utcnow()}
+        db.action_start(ctxt2, action_values)
+        db.action_start(ctxt2, action_values)
+
+        # Retrieve the action to ensure it was successfully added
+        actions = db.actions_get(ctxt1, uuid1)
+        self.assertEqual(2, len(actions))
+        self.assertEqual('resize', actions[0]['action'])
+        self.assertEqual('run_instance', actions[1]['action'])
+
+    def test_instance_action_get_by_instance_and_action(self):
+        """Ensure we can get an action by instance UUID and action id."""
+        ctxt1 = context.get_admin_context()
+        ctxt2 = context.get_admin_context()
+        uuid1 = str(stdlib_uuid.uuid4())
+        uuid2 = str(stdlib_uuid.uuid4())
+
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid1,
+                         'request_id': ctxt1.request_id,
+                         'user_id': ctxt1.user_id,
+                         'project_id': ctxt1.project_id,
+                         'start_time': timeutils.utcnow()}
+        db.action_start(ctxt1, action_values)
+        action_values['action'] = 'resize'
+        db.action_start(ctxt1, action_values)
+
+        action_values = {'action': 'reboot',
+                         'instance_uuid': uuid2,
+                         'request_id': ctxt2.request_id,
+                         'user_id': ctxt2.user_id,
+                         'project_id': ctxt2.project_id,
+                         'start_time': timeutils.utcnow()}
+        db.action_start(ctxt2, action_values)
+        db.action_start(ctxt2, action_values)
+
+        actions = db.actions_get(ctxt1, uuid1)
+        request_id = actions[0]['request_id']
+        action = db.action_get_by_request_id(ctxt1, uuid1, request_id)
+        self.assertEqual('run_instance', action['action'])
+        self.assertEqual(ctxt1.request_id, action['request_id'])
+
+    def test_instance_action_event_start(self):
+        """Create an instance action event."""
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+
+        start_time = timeutils.utcnow()
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid,
+                         'request_id': ctxt.request_id,
+                         'user_id': ctxt.user_id,
+                         'project_id': ctxt.project_id,
+                         'start_time': start_time}
+        action = db.action_start(ctxt, action_values)
+
+        event_values = {'event': 'schedule',
+                        'instance_uuid': uuid,
+                        'request_id': ctxt.request_id,
+                        'start_time': start_time}
+        db.action_event_start(ctxt, event_values)
+
+        # Retrieve the event to ensure it was successfully added
+        events = db.action_events_get(ctxt, action['id'])
+        self.assertEqual(1, len(events))
+        self.assertEqual('schedule', events[0]['event'])
+        self.assertEqual(start_time, events[0]['start_time'])
+
+    def test_instance_action_event_finish(self):
+        """Finish an instance action event."""
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+
+        start_time = timeutils.utcnow()
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid,
+                         'request_id': ctxt.request_id,
+                         'user_id': ctxt.user_id,
+                         'project_id': ctxt.project_id,
+                         'start_time': start_time}
+        action = db.action_start(ctxt, action_values)
+
+        event_values = {'event': 'schedule',
+                        'request_id': ctxt.request_id,
+                        'instance_uuid': uuid,
+                        'start_time': start_time}
+        db.action_event_start(ctxt, event_values)
+
+        finish_time = timeutils.utcnow() + datetime.timedelta(seconds=5)
+        event_finish_values = {'event': 'schedule',
+                                'request_id': ctxt.request_id,
+                                'instance_uuid': uuid,
+                                'finish_time': finish_time}
+        db.action_event_finish(ctxt, event_finish_values)
+
+        # Retrieve the event to ensure it was successfully added
+        events = db.action_events_get(ctxt, action['id'])
+        self.assertEqual(1, len(events))
+        self.assertEqual('schedule', events[0]['event'])
+        self.assertEqual(start_time, events[0]['start_time'])
+        self.assertEqual(finish_time, events[0]['finish_time'])
+
+    def test_instance_action_and_event_start_string_time(self):
+        """Create an instance action and event with a string start_time."""
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+
+        start_time = timeutils.utcnow()
+        start_time_str = timeutils.strtime(start_time)
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid,
+                         'request_id': ctxt.request_id,
+                         'user_id': ctxt.user_id,
+                         'project_id': ctxt.project_id,
+                         'start_time': start_time_str}
+        action = db.action_start(ctxt, action_values)
+
+        event_values = {'event': 'schedule',
+                        'instance_uuid': uuid,
+                        'request_id': ctxt.request_id,
+                        'start_time': start_time_str}
+        db.action_event_start(ctxt, event_values)
+
+        # Retrieve the event to ensure it was successfully added
+        events = db.action_events_get(ctxt, action['id'])
+        self.assertEqual(1, len(events))
+        self.assertEqual('schedule', events[0]['event'])
+        # db api still returns models with datetime, not str, values
+        self.assertEqual(start_time, events[0]['start_time'])
+
+    def test_instance_action_event_get_by_id(self):
+        """Get a specific instance action event."""
+        ctxt1 = context.get_admin_context()
+        ctxt2 = context.get_admin_context()
+        uuid1 = str(stdlib_uuid.uuid4())
+        uuid2 = str(stdlib_uuid.uuid4())
+
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid1,
+                         'request_id': ctxt1.request_id,
+                         'user_id': ctxt1.user_id,
+                         'project_id': ctxt1.project_id,
+                         'start_time': timeutils.utcnow()}
+        added_action = db.action_start(ctxt1, action_values)
+
+        action_values = {'action': 'reboot',
+                         'instance_uuid': uuid2,
+                         'request_id': ctxt2.request_id,
+                         'user_id': ctxt2.user_id,
+                         'project_id': ctxt2.project_id,
+                         'start_time': timeutils.utcnow()}
+        db.action_start(ctxt2, action_values)
+
+        start_time = timeutils.utcnow()
+        event_values = {'event': 'schedule',
+                        'instance_uuid': uuid1,
+                        'request_id': ctxt1.request_id,
+                        'start_time': start_time}
+        added_event = db.action_event_start(ctxt1, event_values)
+
+        event_values = {'event': 'reboot',
+                        'instance_uuid': uuid2,
+                        'request_id': ctxt2.request_id,
+                        'start_time': timeutils.utcnow()}
+        db.action_event_start(ctxt2, event_values)
+
+        # Retrieve the event to ensure it was successfully added
+        event = db.action_event_get_by_id(ctxt1, added_action['id'],
+                                                     added_event['id'])
+        self.assertEqual('schedule', event['event'])
+        self.assertEqual(start_time, event['start_time'])
 
     def test_dns_registration(self):
         domain1 = 'test.domain.one'
@@ -957,7 +1256,7 @@ class AggregateDBApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt, metadata={'availability_zone':
             'fake_avail_zone'})
-        self.assertEqual(result.availability_zone, 'fake_avail_zone')
+        self.assertEqual(result['availability_zone'], 'fake_avail_zone')
         new_values = _get_fake_aggr_values()
         new_values['availability_zone'] = 'different_avail_zone'
         updated = db.aggregate_update(ctxt, 1, new_values)
@@ -975,8 +1274,8 @@ class AggregateDBApiTestCase(test.TestCase):
         updated = db.aggregate_get(ctxt, result['id'])
         self.assertThat(values['metadata'],
                         matchers.DictMatches(expected))
-        self.assertNotEqual(result.availability_zone,
-                            updated.availability_zone)
+        self.assertNotEqual(result['availability_zone'],
+                            updated['availability_zone'])
 
     def test_aggregate_update_with_existing_metadata(self):
         ctxt = context.get_admin_context()
@@ -1054,10 +1353,10 @@ class AggregateDBApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt, metadata={'availability_zone':
             'fake_avail_zone'})
-        db.aggregate_metadata_delete(ctxt, result.id, 'availability_zone')
-        expected = db.aggregate_metadata_get(ctxt, result.id)
-        aggregate = db.aggregate_get(ctxt, result.id)
-        self.assertEquals(aggregate.availability_zone, None)
+        db.aggregate_metadata_delete(ctxt, result['id'], 'availability_zone')
+        expected = db.aggregate_metadata_get(ctxt, result['id'])
+        aggregate = db.aggregate_get(ctxt, result['id'])
+        self.assertEquals(aggregate['availability_zone'], None)
         self.assertThat({}, matchers.DictMatches(expected))
 
     def test_aggregate_metadata_delete_raise_not_found(self):
@@ -1286,6 +1585,25 @@ class MigrationTestCase(test.TestCase):
             self.assertEqual(migration['instance_uuid'], instance['uuid'])
 
 
+class TestFixedIPGetByNetworkHost(test.TestCase):
+    def test_not_found_exception(self):
+        ctxt = context.get_admin_context()
+
+        self.assertRaises(
+            exception.FixedIpNotFoundForNetworkHost,
+            db.fixed_ip_get_by_network_host,
+            ctxt, 1, 'ignore')
+
+    def test_fixed_ip_found(self):
+        ctxt = context.get_admin_context()
+        db.fixed_ip_create(ctxt, dict(network_id=1, host='host'))
+
+        fip = db.fixed_ip_get_by_network_host(ctxt, 1, 'host')
+
+        self.assertEquals(1, fip['network_id'])
+        self.assertEquals('host', fip['host'])
+
+
 class TestIpAllocation(test.TestCase):
 
     def setUp(self):
@@ -1447,3 +1765,207 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         for key, value in expected_vol_usages.items():
             self.assertEqual(vol_usages[0][key], value)
         timeutils.clear_time_override()
+
+
+class TaskLogTestCase(test.TestCase):
+
+    def setUp(self):
+        super(TaskLogTestCase, self).setUp()
+        self.context = context.get_admin_context()
+        now = timeutils.utcnow()
+        self.begin = now - datetime.timedelta(seconds=10)
+        self.end = now - datetime.timedelta(seconds=5)
+        self.task_name = 'fake-task-name'
+        self.host = 'fake-host'
+        self.message = 'Fake task message'
+        db.task_log_begin_task(self.context, self.task_name, self.begin,
+                               self.end, self.host, message=self.message)
+
+    def test_task_log_get(self):
+        result = db.task_log_get(self.context, self.task_name, self.begin,
+                                 self.end, self.host)
+        self.assertEqual(result['task_name'], self.task_name)
+        self.assertEqual(result['period_beginning'], self.begin)
+        self.assertEqual(result['period_ending'], self.end)
+        self.assertEqual(result['host'], self.host)
+        self.assertEqual(result['message'], self.message)
+
+    def test_task_log_get_all(self):
+        result = db.task_log_get_all(self.context, self.task_name, self.begin,
+                                     self.end, host=self.host)
+        self.assertEqual(len(result), 1)
+
+    def test_task_log_begin_task(self):
+        db.task_log_begin_task(self.context, 'fake', self.begin,
+                               self.end, self.host, message=self.message)
+        result = db.task_log_get(self.context, 'fake', self.begin,
+                                 self.end, self.host)
+        self.assertEqual(result['task_name'], 'fake')
+
+    def test_task_log_begin_task_duplicate(self):
+        params = (self.context, 'fake', self.begin, self.end, self.host)
+        db.task_log_begin_task(*params, message=self.message)
+        self.assertRaises(exception.TaskAlreadyRunning,
+                          db.task_log_begin_task,
+                          *params, message=self.message)
+
+    def test_task_log_end_task(self):
+        errors = 1
+        db.task_log_end_task(self.context, self.task_name, self.begin,
+                            self.end, self.host, errors, message=self.message)
+        result = db.task_log_get(self.context, self.task_name, self.begin,
+                                 self.end, self.host)
+        self.assertEqual(result['errors'], 1)
+
+
+class ArchiveTestCase(test.TestCase):
+
+    def setUp(self):
+        super(ArchiveTestCase, self).setUp()
+        self.context = context.get_admin_context()
+        engine = get_engine()
+        self.conn = engine.connect()
+        self.metadata = MetaData()
+        self.metadata.bind = engine
+        self.table1 = Table("instance_id_mappings",
+                           self.metadata,
+                           autoload=True)
+        self.shadow_table1 = Table("shadow_instance_id_mappings",
+                                  self.metadata,
+                                  autoload=True)
+        self.table2 = Table("dns_domains",
+                           self.metadata,
+                           autoload=True)
+        self.shadow_table2 = Table("shadow_dns_domains",
+                                  self.metadata,
+                                  autoload=True)
+        self.uuidstrs = []
+        for unused in xrange(6):
+            self.uuidstrs.append(stdlib_uuid.uuid4().hex)
+
+    def tearDown(self):
+        super(ArchiveTestCase, self).tearDown()
+        delete_statement1 = self.table1.delete(
+                                self.table1.c.uuid.in_(self.uuidstrs))
+        self.conn.execute(delete_statement1)
+        delete_statement2 = self.shadow_table1.delete(
+                                self.shadow_table1.c.uuid.in_(self.uuidstrs))
+        self.conn.execute(delete_statement2)
+        delete_statement3 = self.table2.delete(self.table2.c.domain.in_(
+                                               self.uuidstrs))
+        self.conn.execute(delete_statement3)
+        delete_statement4 = self.shadow_table2.delete(
+                                self.shadow_table2.c.domain.in_(self.uuidstrs))
+        self.conn.execute(delete_statement4)
+
+    def test_archive_deleted_rows(self):
+        # Add 6 rows to table
+        for uuidstr in self.uuidstrs:
+            insert_statement = self.table1.insert().values(uuid=uuidstr)
+            self.conn.execute(insert_statement)
+        # Set 4 to deleted
+        update_statement = self.table1.update().\
+                where(self.table1.c.uuid.in_(self.uuidstrs[:4]))\
+                .values(deleted=True)
+        self.conn.execute(update_statement)
+        query1 = select([self.table1]).where(self.table1.c.uuid.in_(
+                                             self.uuidstrs))
+        rows1 = self.conn.execute(query1).fetchall()
+        # Verify we have 6 in main
+        self.assertEqual(len(rows1), 6)
+        query2 = select([self.shadow_table1]).\
+                where(self.shadow_table1.c.uuid.in_(self.uuidstrs))
+        rows2 = self.conn.execute(query2).fetchall()
+        # Verify we have 0 in shadow
+        self.assertEqual(len(rows2), 0)
+        # Archive 2 rows
+        db.archive_deleted_rows(self.context, max_rows=2)
+        rows3 = self.conn.execute(query1).fetchall()
+        # Verify we have 4 left in main
+        self.assertEqual(len(rows3), 4)
+        rows4 = self.conn.execute(query2).fetchall()
+        # Verify we have 2 in shadow
+        self.assertEqual(len(rows4), 2)
+        # Archive 2 more rows
+        db.archive_deleted_rows(self.context, max_rows=2)
+        rows5 = self.conn.execute(query1).fetchall()
+        # Verify we have 2 left in main
+        self.assertEqual(len(rows5), 2)
+        rows6 = self.conn.execute(query2).fetchall()
+        # Verify we have 4 in shadow
+        self.assertEqual(len(rows6), 4)
+        # Try to archive more, but there are no deleted rows left.
+        db.archive_deleted_rows(self.context, max_rows=2)
+        rows7 = self.conn.execute(query1).fetchall()
+        # Verify we still have 2 left in main
+        self.assertEqual(len(rows7), 2)
+        rows8 = self.conn.execute(query2).fetchall()
+        # Verify we still have 4 in shadow
+        self.assertEqual(len(rows8), 4)
+
+    def test_archive_deleted_rows_for_table(self):
+        tablename = "instance_id_mappings"
+        # Add 6 rows to table
+        for uuidstr in self.uuidstrs:
+            insert_statement = self.table1.insert().values(uuid=uuidstr)
+            self.conn.execute(insert_statement)
+        # Set 4 to deleted
+        update_statement = self.table1.update().\
+                where(self.table1.c.uuid.in_(self.uuidstrs[:4]))\
+                .values(deleted=True)
+        self.conn.execute(update_statement)
+        query1 = select([self.table1]).where(self.table1.c.uuid.in_(
+                                             self.uuidstrs))
+        rows1 = self.conn.execute(query1).fetchall()
+        # Verify we have 6 in main
+        self.assertEqual(len(rows1), 6)
+        query2 = select([self.shadow_table1]).\
+                where(self.shadow_table1.c.uuid.in_(self.uuidstrs))
+        rows2 = self.conn.execute(query2).fetchall()
+        # Verify we have 0 in shadow
+        self.assertEqual(len(rows2), 0)
+        # Archive 2 rows
+        db.archive_deleted_rows_for_table(self.context, tablename, max_rows=2)
+        rows3 = self.conn.execute(query1).fetchall()
+        # Verify we have 4 left in main
+        self.assertEqual(len(rows3), 4)
+        rows4 = self.conn.execute(query2).fetchall()
+        # Verify we have 2 in shadow
+        self.assertEqual(len(rows4), 2)
+        # Archive 2 more rows
+        db.archive_deleted_rows_for_table(self.context, tablename, max_rows=2)
+        rows5 = self.conn.execute(query1).fetchall()
+        # Verify we have 2 left in main
+        self.assertEqual(len(rows5), 2)
+        rows6 = self.conn.execute(query2).fetchall()
+        # Verify we have 4 in shadow
+        self.assertEqual(len(rows6), 4)
+        # Try to archive more, but there are no deleted rows left.
+        db.archive_deleted_rows_for_table(self.context, tablename, max_rows=2)
+        rows7 = self.conn.execute(query1).fetchall()
+        # Verify we still have 2 left in main
+        self.assertEqual(len(rows7), 2)
+        rows8 = self.conn.execute(query2).fetchall()
+        # Verify we still have 4 in shadow
+        self.assertEqual(len(rows8), 4)
+
+    def test_archive_deleted_rows_no_id_column(self):
+        uuidstr0 = self.uuidstrs[0]
+        insert_statement = self.table2.insert().values(domain=uuidstr0)
+        self.conn.execute(insert_statement)
+        update_statement = self.table2.update().\
+                           where(self.table2.c.domain == uuidstr0).\
+                           values(deleted=True)
+        self.conn.execute(update_statement)
+        query1 = select([self.table2], self.table2.c.domain == uuidstr0)
+        rows1 = self.conn.execute(query1).fetchall()
+        self.assertEqual(len(rows1), 1)
+        query2 = select([self.shadow_table2],
+                        self.shadow_table2.c.domain == uuidstr0)
+        rows2 = self.conn.execute(query2).fetchall()
+        self.assertEqual(len(rows2), 0)
+        db.archive_deleted_rows(self.context, max_rows=1)
+        rows3 = self.conn.execute(query1).fetchall()
+        self.assertEqual(len(rows3), 0)
+        rows4 = self.conn.execute(query2).fetchall()
+        self.assertEqual(len(rows4), 1)

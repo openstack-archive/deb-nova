@@ -18,9 +18,10 @@
 Unit Tests for nova.network.rpcapi
 """
 
+from oslo.config import cfg
+
 from nova import context
 from nova.network import rpcapi as network_rpcapi
-from nova.openstack.common import cfg
 from nova.openstack.common import rpc
 from nova import test
 
@@ -28,6 +29,10 @@ CONF = cfg.CONF
 
 
 class NetworkRpcAPITestCase(test.TestCase):
+    def setUp(self):
+        super(NetworkRpcAPITestCase, self).setUp()
+        self.flags(multi_host=True)
+
     def _test_network_api(self, method, rpc_method, **kwargs):
         ctxt = context.RequestContext('fake_user', 'fake_project')
         rpcapi = network_rpcapi.NetworkAPI()
@@ -45,13 +50,18 @@ class NetworkRpcAPITestCase(test.TestCase):
             '_rpc_allocate_fixed_ip', 'deallocate_fixed_ip', 'update_dns',
             '_associate_floating_ip', '_disassociate_floating_ip',
             'lease_fixed_ip', 'release_fixed_ip', 'migrate_instance_start',
-            'migrate_instance_finish', 'get_backdoor_port'
+            'migrate_instance_finish', 'get_backdoor_port',
+            'allocate_for_instance', 'deallocate_for_instance',
         ]
         if method in targeted_methods and 'host' in kwargs:
-            if method != 'deallocate_fixed_ip':
+            if method not in ['allocate_for_instance',
+                              'deallocate_for_instance',
+                              'deallocate_fixed_ip']:
                 del expected_msg['args']['host']
             host = kwargs['host']
-            expected_topic = rpc.queue_get_for(ctxt, CONF.network_topic, host)
+            if CONF.multi_host:
+                expected_topic = rpc.queue_get_for(ctxt, CONF.network_topic,
+                                                   host)
         expected_msg['version'] = expected_version
 
         self.fake_args = None
@@ -108,8 +118,9 @@ class NetworkRpcAPITestCase(test.TestCase):
     def test_get_floating_ip(self):
         self._test_network_api('get_floating_ip', rpc_method='call', id='id')
 
-    def test_get_floating_pools(self):
-        self._test_network_api('get_floating_pools', rpc_method='call')
+    def test_get_floating_ip_pools(self):
+        self._test_network_api('get_floating_ip_pools', rpc_method='call',
+                               version="1.7")
 
     def test_get_floating_ip_by_address(self):
         self._test_network_api('get_floating_ip_by_address', rpc_method='call',
@@ -147,6 +158,16 @@ class NetworkRpcAPITestCase(test.TestCase):
         self._test_network_api('deallocate_floating_ip', rpc_method='call',
                 address='addr', affect_auto_assigned=True)
 
+    def test_allocate_floating_ip_no_multi(self):
+        self.flags(multi_host=False)
+        self._test_network_api('allocate_floating_ip', rpc_method='call',
+                project_id='fake_id', pool='fake_pool', auto_assigned=False)
+
+    def test_deallocate_floating_ip_no_multi(self):
+        self.flags(multi_host=False)
+        self._test_network_api('deallocate_floating_ip', rpc_method='call',
+                address='addr', affect_auto_assigned=True)
+
     def test_associate_floating_ip(self):
         self._test_network_api('associate_floating_ip', rpc_method='call',
                 floating_address='blah', fixed_address='foo',
@@ -158,9 +179,9 @@ class NetworkRpcAPITestCase(test.TestCase):
 
     def test_allocate_for_instance(self):
         self._test_network_api('allocate_for_instance', rpc_method='call',
-                instance_id='fake_id', instance_uuid='fake_uuid',
-                project_id='fake_id', host='fake_host',
-                rxtx_factor='fake_factor', vpn=False, requested_networks={})
+                instance_id='fake_id', project_id='fake_id', host='fake_host',
+                rxtx_factor='fake_factor', vpn=False, requested_networks={},
+                macs=set(), version='1.9')
 
     def test_deallocate_for_instance(self):
         self._test_network_api('deallocate_for_instance', rpc_method='call',
@@ -168,12 +189,14 @@ class NetworkRpcAPITestCase(test.TestCase):
 
     def test_add_fixed_ip_to_instance(self):
         self._test_network_api('add_fixed_ip_to_instance', rpc_method='call',
-                instance_id='fake_id', host='fake_host', network_id='fake_id')
+                instance_id='fake_id', rxtx_factor='fake_factor',
+                host='fake_host', network_id='fake_id', version='1.9')
 
     def test_remove_fixed_ip_from_instance(self):
         self._test_network_api('remove_fixed_ip_from_instance',
-                rpc_method='call', instance_id='fake_id', host='fake_host',
-                address='fake_address')
+                rpc_method='call', instance_id='fake_id',
+                rxtx_factor='fake_factor', host='fake_host',
+                address='fake_address', version='1.9')
 
     def test_add_network_to_project(self):
         self._test_network_api('add_network_to_project', rpc_method='call',
@@ -181,9 +204,8 @@ class NetworkRpcAPITestCase(test.TestCase):
 
     def test_get_instance_nw_info(self):
         self._test_network_api('get_instance_nw_info', rpc_method='call',
-                instance_id='fake_id', instance_uuid='fake_uuid',
-                rxtx_factor='fake_factor', host='fake_host',
-                project_id='fake_id')
+                instance_id='fake_id', rxtx_factor='fake_factor',
+                host='fake_host', project_id='fake_id', version='1.9')
 
     def test_validate_networks(self):
         self._test_network_api('validate_networks', rpc_method='call',

@@ -23,38 +23,41 @@ LOG = logging.getLogger(__name__)
 
 
 class L3Driver(object):
-    """Abstract class that defines a generic L3 API"""
+    """Abstract class that defines a generic L3 API."""
 
     def __init__(self, l3_lib=None):
         raise NotImplementedError()
 
     def initialize(self, **kwargs):
-        """Set up basic L3 networking functionality"""
+        """Set up basic L3 networking functionality."""
         raise NotImplementedError()
 
     def initialize_network(self, network):
-        """Enable rules for a specific network"""
+        """Enable rules for a specific network."""
         raise NotImplementedError()
 
     def initialize_gateway(self, network):
-        """Set up a gateway on this network"""
+        """Set up a gateway on this network."""
         raise NotImplementedError()
 
     def remove_gateway(self, network_ref):
-        """Remove an existing gateway on this network"""
+        """Remove an existing gateway on this network."""
         raise NotImplementedError()
 
     def is_initialized(self):
-        """:returns: True/False (whether the driver is initialized)"""
+        """:returns: True/False (whether the driver is initialized)."""
         raise NotImplementedError()
 
-    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id,
+                        network=None):
         """Add a floating IP bound to the fixed IP with an optional
            l3_interface_id.  Some drivers won't care about the
-           l3_interface_id so just pass None in that case"""
+           l3_interface_id so just pass None in that case. Network
+           is also an optional parameter."""
         raise NotImplementedError()
 
-    def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id,
+                           network=None):
         raise NotImplementedError()
 
     def add_vpn(self, public_ip, port, private_ip):
@@ -68,7 +71,7 @@ class L3Driver(object):
 
 
 class LinuxNetL3(L3Driver):
-    """L3 driver that uses linux_net as the backend"""
+    """L3 driver that uses linux_net as the backend."""
     def __init__(self):
         self.initialized = False
 
@@ -96,15 +99,17 @@ class LinuxNetL3(L3Driver):
     def remove_gateway(self, network_ref):
         linux_net.unplug(network_ref)
 
-    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
-        linux_net.bind_floating_ip(floating_ip, l3_interface_id)
+    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id,
+                        network=None):
         linux_net.ensure_floating_forward(floating_ip, fixed_ip,
-                                          l3_interface_id)
+                                          l3_interface_id, network)
+        linux_net.bind_floating_ip(floating_ip, l3_interface_id)
 
-    def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id,
+                           network=None):
         linux_net.unbind_floating_ip(floating_ip, l3_interface_id)
         linux_net.remove_floating_forward(floating_ip, fixed_ip,
-                                          l3_interface_id)
+                                          l3_interface_id, network)
 
     def add_vpn(self, public_ip, port, private_ip):
         linux_net.ensure_vpn_forward(public_ip, port, private_ip)
@@ -120,8 +125,8 @@ class LinuxNetL3(L3Driver):
 
 class NullL3(L3Driver):
     """The L3 driver that doesn't do anything.  This class can be used when
-       nova-network shuld not manipulate L3 forwarding at all (e.g., in a Flat
-       or FlatDHCP scenario"""
+       nova-network should not manipulate L3 forwarding at all (e.g., in a Flat
+       or FlatDHCP scenario)."""
     def __init__(self):
         pass
 
@@ -140,10 +145,12 @@ class NullL3(L3Driver):
     def remove_gateway(self, network_ref):
         pass
 
-    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def add_floating_ip(self, floating_ip, fixed_ip, l3_interface_id,
+                        network=None):
         pass
 
-    def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id):
+    def remove_floating_ip(self, floating_ip, fixed_ip, l3_interface_id,
+                           network=None):
         pass
 
     def add_vpn(self, public_ip, port, private_ip):

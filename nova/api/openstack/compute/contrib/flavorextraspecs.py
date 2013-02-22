@@ -15,7 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""The instance type extra specs extension"""
+"""The instance type extra specs extension."""
 
 from webob import exc
 
@@ -34,8 +34,17 @@ class ExtraSpecsTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(xmlutil.make_flat_dict('extra_specs'), 1)
 
 
+class ExtraSpecTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        sel = xmlutil.Selector(xmlutil.get_items, 0)
+        root = xmlutil.TemplateElement('extra_spec', selector=sel)
+        root.set('key', 0)
+        root.text = 1
+        return xmlutil.MasterTemplate(root, 1)
+
+
 class FlavorExtraSpecsController(object):
-    """The flavor extra specs API controller for the OpenStack API """
+    """The flavor extra specs API controller for the OpenStack API."""
 
     def _get_extra_specs(self, context, flavor_id):
         extra_specs = db.instance_type_extra_specs_get(context, flavor_id)
@@ -51,15 +60,15 @@ class FlavorExtraSpecsController(object):
 
     @wsgi.serializers(xml=ExtraSpecsTemplate)
     def index(self, req, flavor_id):
-        """Returns the list of extra specs for a givenflavor """
+        """Returns the list of extra specs for a given flavor."""
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='index')
         return self._get_extra_specs(context, flavor_id)
 
     @wsgi.serializers(xml=ExtraSpecsTemplate)
     def create(self, req, flavor_id, body):
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='create')
         self._check_body(body)
         specs = body.get('extra_specs')
         try:
@@ -70,12 +79,12 @@ class FlavorExtraSpecsController(object):
             raise exc.HTTPBadRequest(explanation=unicode(error))
         return body
 
-    @wsgi.serializers(xml=ExtraSpecsTemplate)
+    @wsgi.serializers(xml=ExtraSpecTemplate)
     def update(self, req, flavor_id, id, body):
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='update')
         self._check_body(body)
-        if not id in body:
+        if id not in body:
             expl = _('Request body and URI mismatch')
             raise exc.HTTPBadRequest(explanation=expl)
         if len(body) > 1:
@@ -87,14 +96,13 @@ class FlavorExtraSpecsController(object):
                                                                body)
         except exception.MetadataLimitExceeded as error:
             raise exc.HTTPBadRequest(explanation=unicode(error))
-
         return body
 
-    @wsgi.serializers(xml=ExtraSpecsTemplate)
+    @wsgi.serializers(xml=ExtraSpecTemplate)
     def show(self, req, flavor_id, id):
-        """Return a single extra spec item """
+        """Return a single extra spec item."""
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='show')
         specs = self._get_extra_specs(context, flavor_id)
         if id in specs['extra_specs']:
             return {id: specs['extra_specs'][id]}
@@ -102,14 +110,14 @@ class FlavorExtraSpecsController(object):
             raise exc.HTTPNotFound()
 
     def delete(self, req, flavor_id, id):
-        """Deletes an existing extra spec """
+        """Deletes an existing extra spec."""
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='delete')
         db.instance_type_extra_specs_delete(context, flavor_id, id)
 
 
 class Flavorextraspecs(extensions.ExtensionDescriptor):
-    """Instance type (flavor) extra specs"""
+    """Instance type (flavor) extra specs."""
 
     name = "FlavorExtraSpecs"
     alias = "os-flavor-extra-specs"

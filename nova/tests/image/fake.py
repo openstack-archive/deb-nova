@@ -16,17 +16,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Implementation of a fake image service"""
+"""Implementation of a fake image service."""
 
 import copy
 import datetime
 import uuid
 
+from oslo.config import cfg
+
 from nova import exception
 import nova.image.glance
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
-
 
 CONF = cfg.CONF
 CONF.import_opt('null_kernel', 'nova.compute.api')
@@ -52,6 +52,7 @@ class _FakeImageService(object):
                  'is_public': False,
                  'container_format': 'raw',
                  'disk_format': 'raw',
+                 'size': '25165824',
                  'properties': {'kernel_id': CONF.null_kernel,
                                 'ramdisk_id': CONF.null_kernel,
                                 'architecture': 'x86_64'}}
@@ -66,6 +67,7 @@ class _FakeImageService(object):
                  'is_public': True,
                  'container_format': 'ami',
                  'disk_format': 'ami',
+                 'size': '58145823',
                  'properties': {'kernel_id': CONF.null_kernel,
                                 'ramdisk_id': CONF.null_kernel}}
 
@@ -79,6 +81,7 @@ class _FakeImageService(object):
                  'is_public': True,
                  'container_format': None,
                  'disk_format': None,
+                 'size': '83594576',
                  'properties': {'kernel_id': CONF.null_kernel,
                                 'ramdisk_id': CONF.null_kernel}}
 
@@ -92,6 +95,7 @@ class _FakeImageService(object):
                  'is_public': True,
                  'container_format': 'ami',
                  'disk_format': 'ami',
+                 'size': '84035174',
                  'properties': {'kernel_id': CONF.null_kernel,
                                 'ramdisk_id': CONF.null_kernel}}
 
@@ -105,6 +109,7 @@ class _FakeImageService(object):
                  'is_public': True,
                  'container_format': 'ami',
                  'disk_format': 'ami',
+                 'size': '26360814',
                  'properties': {'kernel_id':
                                     '155d900f-4e14-4e4c-a73d-069cbf4541e6',
                                 'ramdisk_id': None}}
@@ -119,6 +124,7 @@ class _FakeImageService(object):
                  'is_public': False,
                  'container_format': 'ova',
                  'disk_format': 'vhd',
+                 'size': '49163826',
                  'properties': {'kernel_id': CONF.null_kernel,
                                 'ramdisk_id': CONF.null_kernel,
                                 'architecture': 'x86_64',
@@ -134,6 +140,7 @@ class _FakeImageService(object):
                  'is_public': False,
                  'container_format': 'ova',
                  'disk_format': 'vhd',
+                 'size': '74185822',
                  'properties': {'kernel_id': CONF.null_kernel,
                                 'ramdisk_id': CONF.null_kernel,
                                 'architecture': 'x86_64',

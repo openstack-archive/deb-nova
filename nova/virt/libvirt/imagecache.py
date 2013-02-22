@@ -28,16 +28,16 @@ import os
 import re
 import time
 
+from oslo.config import cfg
+
 from nova.compute import task_states
 from nova.compute import vm_states
-from nova.openstack.common import cfg
 from nova.openstack.common import fileutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.libvirt import utils as virtutils
-
 
 LOG = logging.getLogger(__name__)
 
@@ -72,12 +72,12 @@ imagecache_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(imagecache_opts)
-CONF.import_opt('host', 'nova.config')
+CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('instances_path', 'nova.compute.manager')
 
 
 def get_info_filename(base_path):
-    """Construct a filename for storing addtional information about a base
+    """Construct a filename for storing additional information about a base
     image.
 
     Returns a filename.
@@ -220,7 +220,7 @@ class ImageCacheManager(object):
 
         self.used_images = {}
         self.image_popularity = {}
-        self.instance_names = {}
+        self.instance_names = set()
 
         self.active_base_files = []
         self.corrupt_base_files = []
@@ -263,7 +263,11 @@ class ImageCacheManager(object):
         self.instance_names = set()
 
         for instance in all_instances:
+            # NOTE(mikal): "instance name" here means "the name of a directory
+            # which might contain an instance" and therefore needs to include
+            # historical permutations as well as the current one.
             self.instance_names.add(instance['name'])
+            self.instance_names.add(instance['uuid'])
 
             resize_states = [task_states.RESIZE_PREP,
                              task_states.RESIZE_MIGRATING,
@@ -272,6 +276,7 @@ class ImageCacheManager(object):
             if instance['task_state'] in resize_states or \
                 instance['vm_state'] == vm_states.RESIZED:
                 self.instance_names.add(instance['name'] + '_resize')
+                self.instance_names.add(instance['uuid'] + '_resize')
 
             image_ref_str = str(instance['image_ref'])
             local, remote, insts = self.used_images.get(image_ref_str,
@@ -305,7 +310,7 @@ class ImageCacheManager(object):
                         backing_path = os.path.join(CONF.instances_path,
                                                     CONF.base_dir_name,
                                                     backing_file)
-                        if not backing_path in inuse_images:
+                        if backing_path not in inuse_images:
                             inuse_images.append(backing_path)
 
                         if backing_path in self.unexplained_images:
@@ -464,7 +469,7 @@ class ImageCacheManager(object):
             # _verify_checksum returns True if the checksum is ok, and None if
             # there is no checksum file
             checksum_result = self._verify_checksum(img_id, base_file)
-            if not checksum_result is None:
+            if checksum_result is not None:
                 image_bad = not checksum_result
 
             # Give other threads a chance to run
@@ -555,7 +560,7 @@ class ImageCacheManager(object):
         # Elements remaining in unexplained_images might be in use
         inuse_backing_images = self._list_backing_images()
         for backing_path in inuse_backing_images:
-            if not backing_path in self.active_base_files:
+            if backing_path not in self.active_base_files:
                 self.active_base_files.append(backing_path)
 
         # Anything left is an unknown base image

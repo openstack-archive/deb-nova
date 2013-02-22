@@ -28,8 +28,8 @@ import kombu
 import kombu.connection
 import kombu.entity
 import kombu.messaging
+from oslo.config import cfg
 
-from nova.openstack.common import cfg
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import network_utils
 from nova.openstack.common.rpc import amqp as rpc_amqp
@@ -66,7 +66,8 @@ kombu_opts = [
                help='the RabbitMQ userid'),
     cfg.StrOpt('rabbit_password',
                default='guest',
-               help='the RabbitMQ password'),
+               help='the RabbitMQ password',
+               secret=True),
     cfg.StrOpt('rabbit_virtual_host',
                default='/',
                help='the RabbitMQ virtual host'),
@@ -164,9 +165,10 @@ class ConsumerBase(object):
             try:
                 msg = rpc_common.deserialize_msg(message.payload)
                 callback(msg)
-                message.ack()
             except Exception:
                 LOG.exception(_("Failed to process message... skipping it."))
+            finally:
+                message.ack()
 
         self.queue.consume(*args, callback=_callback, **options)
 
@@ -302,9 +304,15 @@ class Publisher(object):
                                                  channel=channel,
                                                  routing_key=self.routing_key)
 
-    def send(self, msg):
+    def send(self, msg, timeout=None):
         """Send a message"""
-        self.producer.publish(msg)
+        if timeout:
+            #
+            # AMQP TTL is in milliseconds when set in the header.
+            #
+            self.producer.publish(msg, headers={'ttl': (timeout * 1000)})
+        else:
+            self.producer.publish(msg)
 
 
 class DirectPublisher(Publisher):
@@ -653,7 +661,7 @@ class Connection(object):
         for proxy_cb in self.proxy_callbacks:
             proxy_cb.wait()
 
-    def publisher_send(self, cls, topic, msg, **kwargs):
+    def publisher_send(self, cls, topic, msg, timeout=None, **kwargs):
         """Send to a publisher based on the publisher class"""
 
         def _error_callback(exc):
@@ -663,7 +671,7 @@ class Connection(object):
 
         def _publish():
             publisher = cls(self.conf, self.channel, topic, **kwargs)
-            publisher.send(msg)
+            publisher.send(msg, timeout)
 
         self.ensure(_error_callback, _publish)
 
@@ -691,9 +699,9 @@ class Connection(object):
         """Send a 'direct' message"""
         self.publisher_send(DirectPublisher, msg_id, msg)
 
-    def topic_send(self, topic, msg):
+    def topic_send(self, topic, msg, timeout=None):
         """Send a 'topic' message"""
-        self.publisher_send(TopicPublisher, topic, msg)
+        self.publisher_send(TopicPublisher, topic, msg, timeout)
 
     def fanout_send(self, topic, msg):
         """Send a 'fanout' message"""
@@ -701,7 +709,7 @@ class Connection(object):
 
     def notify_send(self, topic, msg, **kwargs):
         """Send a notify message on a topic"""
-        self.publisher_send(NotifyPublisher, topic, msg, **kwargs)
+        self.publisher_send(NotifyPublisher, topic, msg, None, **kwargs)
 
     def consume(self, limit=None):
         """Consume from all queues/consumers"""
@@ -742,6 +750,30 @@ class Connection(object):
             rpc_amqp.get_connection_pool(self.conf, Connection))
         self.proxy_callbacks.append(proxy_cb)
         self.declare_topic_consumer(topic, proxy_cb, pool_name)
+
+    def join_consumer_pool(self, callback, pool_name, topic,
+                           exchange_name=None):
+        """Register as a member of a group of consumers for a given topic from
+        the specified exchange.
+
+        Exactly one member of a given pool will receive each message.
+
+        A message will be delivered to multiple pools, if more than
+        one is created.
+        """
+        callback_wrapper = rpc_amqp.CallbackWrapper(
+            conf=self.conf,
+            callback=callback,
+            connection_pool=rpc_amqp.get_connection_pool(self.conf,
+                                                         Connection),
+        )
+        self.proxy_callbacks.append(callback_wrapper)
+        self.declare_topic_consumer(
+            queue_name=pool_name,
+            topic=topic,
+            exchange_name=exchange_name,
+            callback=callback_wrapper,
+        )
 
 
 def create_connection(conf, new=True):

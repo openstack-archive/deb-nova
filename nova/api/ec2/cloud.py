@@ -25,11 +25,15 @@ datastore.
 import base64
 import time
 
+from oslo.config import cfg
+
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
+from nova.api.metadata import password
 from nova.api import validator
 from nova import availability_zones
 from nova import block_device
+from nova.cloudpipe import pipelib
 from nova import compute
 from nova.compute import api as compute_api
 from nova.compute import instance_types
@@ -38,7 +42,6 @@ from nova import db
 from nova import exception
 from nova.image import s3
 from nova import network
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import quota
@@ -70,9 +73,8 @@ ec2_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(ec2_opts)
-CONF.import_opt('my_ip', 'nova.config')
-CONF.import_opt('vpn_image_id', 'nova.config')
-CONF.import_opt('vpn_key_suffix', 'nova.config')
+CONF.import_opt('my_ip', 'nova.netconf')
+CONF.import_opt('vpn_key_suffix', 'nova.cloudpipe.pipelib')
 CONF.import_opt('internal_service_availability_zone',
         'nova.availability_zones')
 
@@ -110,7 +112,7 @@ _STATE_DESCRIPTION_MAP = {
 
 
 def _state_description(vm_state, _shutdown_terminate):
-    """Map the vm state to the server status string"""
+    """Map the vm state to the server status string."""
     # Note(maoy): We do not provide EC2 compatibility
     # in shutdown_terminate flag behavior. So we ignore
     # it here.
@@ -148,7 +150,7 @@ def _properties_get_mappings(properties):
 
 
 def _format_block_device_mapping(bdm):
-    """Contruct BlockDeviceMappingItemType
+    """Construct BlockDeviceMappingItemType
     {'device_name': '...', 'snapshot_id': , ...}
     => BlockDeviceMappingItemType
     """
@@ -180,7 +182,7 @@ def _format_block_device_mapping(bdm):
 
 
 def _format_mappings(properties, result):
-    """Format multiple BlockDeviceMappingItemType"""
+    """Format multiple BlockDeviceMappingItemType."""
     mappings = [{'virtualName': m['virtual'], 'deviceName': m['device']}
                 for m in _properties_get_mappings(properties)
                 if block_device.is_swap_or_ephemeral(m['virtual'])]
@@ -212,7 +214,7 @@ class CloudController(object):
         self.image_service = s3.S3ImageService()
         self.network_api = network.API()
         self.volume_api = volume.API()
-        self.security_group_api = CloudSecurityGroupAPI()
+        self.security_group_api = get_cloud_security_group_api()
         self.compute_api = compute.API(network_api=self.network_api,
                                    volume_api=self.volume_api,
                                    security_group_api=self.security_group_api)
@@ -249,32 +251,10 @@ class CloudController(object):
         else:
             return self._describe_availability_zones(context, **kwargs)
 
-    def _get_zones(self, context):
-        """Return available and unavailable zones."""
-        enabled_services = db.service_get_all(context, False)
-        disabled_services = db.service_get_all(context, True)
-        enabled_services = availability_zones.set_availability_zones(context,
-                enabled_services)
-        disabled_services = availability_zones.set_availability_zones(context,
-                disabled_services)
-
-        available_zones = []
-        for zone in [service['availability_zone'] for service
-                     in enabled_services]:
-            if not zone in available_zones:
-                available_zones.append(zone)
-
-        not_available_zones = []
-        zones = [service['available_zones'] for service in disabled_services
-                if service['available_zones'] not in available_zones]
-        for zone in zones:
-            if zone not in not_available_zones:
-                not_available_zones.append(zone)
-        return (available_zones, not_available_zones)
-
     def _describe_availability_zones(self, context, **kwargs):
         ctxt = context.elevated()
-        available_zones, not_available_zones = self._get_zones(ctxt)
+        available_zones, not_available_zones = \
+            availability_zones.get_availability_zones(ctxt)
 
         result = []
         for zone in available_zones:
@@ -290,7 +270,8 @@ class CloudController(object):
 
     def _describe_availability_zones_verbose(self, context, **kwargs):
         ctxt = context.elevated()
-        available_zones, not_available_zones = self._get_zones(ctxt)
+        available_zones, not_available_zones = \
+            availability_zones.get_availability_zones(ctxt)
 
         # Available services
         enabled_services = db.service_get_all(context, False)
@@ -300,7 +281,7 @@ class CloudController(object):
         host_services = {}
         for service in enabled_services:
             zone_hosts.setdefault(service['availability_zone'], [])
-            if not service['host'] in zone_hosts[service['availability_zone']]:
+            if service['host'] not in zone_hosts[service['availability_zone']]:
                 zone_hosts[service['availability_zone']].append(
                     service['host'])
 
@@ -427,13 +408,14 @@ class CloudController(object):
 
     def describe_key_pairs(self, context, key_name=None, **kwargs):
         key_pairs = self.keypair_api.get_key_pairs(context, context.user_id)
-        if not key_name is None:
+        if key_name is not None:
             key_pairs = [x for x in key_pairs if x['name'] in key_name]
 
         #If looking for non existent key pair
         if key_name is not None and not key_pairs:
             msg = _('Could not find key pair(s): %s') % ','.join(key_name)
-            raise exception.EC2APIError(msg)
+            raise exception.KeypairNotFound(msg,
+                                            code="InvalidKeyPair.Duplicate")
 
         result = []
         for key_pair in key_pairs:
@@ -456,13 +438,7 @@ class CloudController(object):
                                                        key_name)
         except exception.KeypairLimitExceeded:
             msg = _("Quota exceeded, too many key pairs.")
-            raise exception.EC2APIError(msg)
-        except exception.InvalidKeypair:
-            msg = _("Keypair data is invalid")
-            raise exception.EC2APIError(msg)
-        except exception.KeyPairExists:
-            msg = _("Key pair '%s' already exists.") % key_name
-            raise exception.KeyPairExists(msg)
+            raise exception.EC2APIError(msg, code='ResourceLimitExceeded')
         return {'keyName': key_name,
                 'keyFingerprint': keypair['fingerprint'],
                 'keyMaterial': keypair['private_key']}
@@ -484,9 +460,6 @@ class CloudController(object):
             raise exception.EC2APIError(msg)
         except exception.InvalidKeypair:
             msg = _("Keypair data is invalid")
-            raise exception.EC2APIError(msg)
-        except exception.KeyPairExists:
-            msg = _("Key pair '%s' already exists.") % key_name
             raise exception.EC2APIError(msg)
 
         return {'keyName': key_name,
@@ -555,7 +528,7 @@ class CloudController(object):
 
     def _rule_args_to_dict(self, context, kwargs):
         rules = []
-        if not 'groups' in kwargs and not 'ip_ranges' in kwargs:
+        if 'groups' not in kwargs and 'ip_ranges' not in kwargs:
             rule = self._rule_dict_last_step(context, **kwargs)
             if rule:
                 rules.append(rule)
@@ -739,8 +712,8 @@ class CloudController(object):
             self.security_group_api.validate_property(group_name, 'name',
                                                       allowed)
 
-        group_ref = self.security_group_api.create(context, group_name,
-                                                   group_description)
+        group_ref = self.security_group_api.create_security_group(
+            context, group_name, group_description)
 
         return {'securityGroupSet': [self._format_security_group(context,
                                                                  group_ref)]}
@@ -757,6 +730,23 @@ class CloudController(object):
         self.security_group_api.destroy(context, security_group)
 
         return True
+
+    def get_password_data(self, context, instance_id, **kwargs):
+        # instance_id may be passed in as a list of instances
+        if isinstance(instance_id, list):
+            ec2_id = instance_id[0]
+        else:
+            ec2_id = instance_id
+        validate_ec2_id(ec2_id)
+        instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
+        instance = self.compute_api.get(context, instance_uuid)
+        output = password.extract_password(instance)
+        # NOTE(vish): this should be timestamp from the metadata fields
+        #             but it isn't important enough to implement properly
+        now = timeutils.utcnow()
+        return {"InstanceId": ec2_id,
+                "Timestamp": now,
+                "passwordData": output}
 
     def get_console_output(self, context, instance_id, **kwargs):
         LOG.audit(_("Get console output for instance %s"), instance_id,
@@ -1002,18 +992,22 @@ class CloudController(object):
     def describe_instances(self, context, **kwargs):
         # Optional DescribeInstances argument
         instance_id = kwargs.get('instance_id', None)
-        instances = self._enforce_valid_instance_ids(context, instance_id)
-        return self._format_describe_instances(context,
-                                               instance_id=instance_id,
-                                               instance_cache=instances)
-
-    def describe_instances_v6(self, context, **kwargs):
-        # Optional DescribeInstancesV6 argument
-        instance_id = kwargs.get('instance_id', None)
+        filters = kwargs.get('filter', None)
         instances = self._enforce_valid_instance_ids(context, instance_id)
         return self._format_describe_instances(context,
                                                instance_id=instance_id,
                                                instance_cache=instances,
+                                               filter=filters)
+
+    def describe_instances_v6(self, context, **kwargs):
+        # Optional DescribeInstancesV6 argument
+        instance_id = kwargs.get('instance_id', None)
+        filters = kwargs.get('filter', None)
+        instances = self._enforce_valid_instance_ids(context, instance_id)
+        return self._format_describe_instances(context,
+                                               instance_id=instance_id,
+                                               instance_cache=instances,
+                                               filter=filters,
                                                use_v6=True)
 
     def _format_describe_instances(self, context, **kwargs):
@@ -1045,7 +1039,7 @@ class CloudController(object):
 
     def _format_instance_bdm(self, context, instance_uuid, root_device_name,
                              result):
-        """Format InstanceBlockDeviceMappingResponseItemType"""
+        """Format InstanceBlockDeviceMappingResponseItemType."""
         root_device_type = 'instance-store'
         mapping = []
         for bdm in db.block_device_mapping_get_all_by_instance(context,
@@ -1132,7 +1126,7 @@ class CloudController(object):
 
         for instance in instances:
             if not context.is_admin:
-                if instance['image_ref'] == str(CONF.vpn_image_id):
+                if pipelib.is_vpn_image(instance['image_ref']):
                     continue
             i = {}
             instance_uuid = instance['uuid']
@@ -1328,7 +1322,7 @@ class CloudController(object):
         return self._format_run_instances(context, resv_id)
 
     def _ec2_ids_to_instances(self, context, instance_id):
-        """Get all instances first, to prevent partial executions"""
+        """Get all instances first, to prevent partial executions."""
         instances = []
         for ec2_id in instance_id:
             validate_ec2_id(ec2_id)
@@ -1349,7 +1343,7 @@ class CloudController(object):
                                                 previous_states)
 
     def reboot_instances(self, context, instance_id, **kwargs):
-        """instance_id is a list of instance ids"""
+        """instance_id is a list of instance ids."""
         instances = self._ec2_ids_to_instances(context, instance_id)
         LOG.audit(_("Reboot instance %r"), instance_id, context=context)
         for instance in instances:
@@ -1556,11 +1550,11 @@ class CloudController(object):
         if attribute != 'launchPermission':
             raise exception.EC2APIError(_('attribute not supported: %s')
                                      % attribute)
-        if not 'user_group' in kwargs:
+        if 'user_group' not in kwargs:
             raise exception.EC2APIError(_('user or group not specified'))
         if len(kwargs['user_group']) != 1 and kwargs['user_group'][0] != 'all':
             raise exception.EC2APIError(_('only group "all" is supported'))
-        if not operation_type in ['add', 'remove']:
+        if operation_type not in ['add', 'remove']:
             msg = _('operation_type must be add or remove')
             raise exception.EC2APIError(msg)
         LOG.audit(_("Updating image %s publicity"), image_id, context=context)
@@ -1668,7 +1662,7 @@ class CloudController(object):
         return {'imageId': ec2_id}
 
 
-class CloudSecurityGroupAPI(compute_api.SecurityGroupAPI):
+class EC2SecurityGroupExceptions(object):
     @staticmethod
     def raise_invalid_property(msg):
         raise exception.InvalidParameterValue(err=msg)
@@ -1695,3 +1689,13 @@ class CloudSecurityGroupAPI(compute_api.SecurityGroupAPI):
     @staticmethod
     def raise_not_found(msg):
         pass
+
+
+class CloudSecurityGroupNovaAPI(compute_api.SecurityGroupAPI,
+                                EC2SecurityGroupExceptions):
+    pass
+
+
+def get_cloud_security_group_api():
+    if cfg.CONF.security_group_api.lower() == 'nova':
+        return CloudSecurityGroupNovaAPI()

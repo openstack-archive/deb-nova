@@ -12,15 +12,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Handles all requests to the conductor service"""
+"""Handles all requests to the conductor service."""
 
-import functools
+from oslo.config import cfg
 
 from nova.conductor import manager
 from nova.conductor import rpcapi
 from nova import exception as exc
-from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
+from nova import utils
 
 conductor_opts = [
     cfg.BoolOpt('use_local',
@@ -39,24 +40,7 @@ CONF = cfg.CONF
 CONF.register_group(conductor_group)
 CONF.register_opts(conductor_opts, conductor_group)
 
-
-class ExceptionHelper(object):
-    """Class to wrap another and translate the ClientExceptions raised by its
-    function calls to the actual ones"""
-
-    def __init__(self, target):
-        self._target = target
-
-    def __getattr__(self, name):
-        func = getattr(self._target, name)
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except rpc_common.ClientException, e:
-                raise (e._exc_info[1], None, e._exc_info[2])
-        return wrapper
+LOG = logging.getLogger(__name__)
 
 
 class LocalAPI(object):
@@ -66,14 +50,19 @@ class LocalAPI(object):
     def __init__(self):
         # TODO(danms): This needs to be something more generic for
         # other/future users of this sort of functionality.
-        self._manager = ExceptionHelper(manager.ConductorManager())
+        self._manager = utils.ExceptionHelper(manager.ConductorManager())
+
+    def wait_until_ready(self, context, *args, **kwargs):
+        # nothing to wait for in the local case.
+        pass
 
     def ping(self, context, arg, timeout=None):
         return self._manager.ping(context, arg)
 
     def instance_update(self, context, instance_uuid, **updates):
-        """Perform an instance update in the database"""
-        return self._manager.instance_update(context, instance_uuid, updates)
+        """Perform an instance update in the database."""
+        return self._manager.instance_update(context, instance_uuid,
+                                             updates, 'compute')
 
     def instance_get(self, context, instance_id):
         return self._manager.instance_get(context, instance_id)
@@ -90,6 +79,9 @@ class LocalAPI(object):
     def instance_get_all_by_host(self, context, host):
         return self._manager.instance_get_all_by_host(context, host)
 
+    def instance_get_all_by_host_and_node(self, context, host, node):
+        return self._manager.instance_get_all_by_host(context, host, node)
+
     def instance_get_all_by_filters(self, context, filters,
                                     sort_key='created_at',
                                     sort_dir='desc'):
@@ -102,16 +94,24 @@ class LocalAPI(object):
         return self._manager.instance_get_all_hung_in_rebooting(context,
                                                                 timeout)
 
-    def instance_get_active_by_window(self, context, begin, end=None,
-                                       project_id=None, host=None):
-        return self._manager.instance_get_active_by_window(
+    def instance_get_active_by_window_joined(self, context, begin, end=None,
+                                             project_id=None, host=None):
+        return self._manager.instance_get_active_by_window_joined(
             context, begin, end, project_id, host)
+
+    def instance_info_cache_update(self, context, instance, values):
+        return self._manager.instance_info_cache_update(context,
+                                                        instance,
+                                                        values)
 
     def instance_info_cache_delete(self, context, instance):
         return self._manager.instance_info_cache_delete(context, instance)
 
     def instance_type_get(self, context, instance_type_id):
         return self._manager.instance_type_get(context, instance_type_id)
+
+    def instance_fault_create(self, context, values):
+        return self._manager.instance_fault_create(context, values)
 
     def migration_get(self, context, migration_id):
         return self._manager.migration_get(context, migration_id)
@@ -121,6 +121,13 @@ class LocalAPI(object):
                                                   dest_compute):
         return self._manager.migration_get_unconfirmed_by_dest_compute(
             context, confirm_window, dest_compute)
+
+    def migration_get_in_progress_by_host_and_node(self, context, host, node):
+        return self._manager.migration_get_in_progress_by_host_and_node(
+            context, host, node)
+
+    def migration_create(self, context, instance, values):
+        return self._manager.migration_create(context, instance, values)
 
     def migration_update(self, context, migration, status):
         return self._manager.migration_update(context, migration, status)
@@ -147,6 +154,12 @@ class LocalAPI(object):
         return self._manager.aggregate_metadata_delete(context,
                                                        aggregate,
                                                        key)
+
+    def aggregate_metadata_get_by_host(self, context, host,
+                                       key='availability_zone'):
+        return self._manager.aggregate_metadata_get_by_host(context,
+                                                            host,
+                                                            key)
 
     def bw_usage_get(self, context, uuid, start_period, mac):
         return self._manager.bw_usage_update(context, uuid, mac, start_period)
@@ -234,23 +247,134 @@ class LocalAPI(object):
     def service_get_by_host_and_topic(self, context, host, topic):
         return self._manager.service_get_all_by(context, topic, host)
 
-    def service_get_all_compute_by_host(self, context, host):
-        return self._manager.service_get_all_by(context, 'compute', host)
+    def service_get_by_compute_host(self, context, host):
+        result = self._manager.service_get_all_by(context, 'compute', host)
+        # FIXME(comstud): A major revision bump to 2.0 should return a
+        # single entry, so we should just return 'result' at that point.
+        return result[0]
+
+    def service_get_by_args(self, context, host, binary):
+        return self._manager.service_get_all_by(context, host=host,
+                                                binary=binary)
+
+    def action_event_start(self, context, values):
+        return self._manager.action_event_start(context, values)
+
+    def action_event_finish(self, context, values):
+        return self._manager.action_event_finish(context, values)
+
+    def service_create(self, context, values):
+        return self._manager.service_create(context, values)
+
+    def service_destroy(self, context, service_id):
+        return self._manager.service_destroy(context, service_id)
+
+    def compute_node_create(self, context, values):
+        return self._manager.compute_node_create(context, values)
+
+    def compute_node_update(self, context, node, values, prune_stats=False):
+        return self._manager.compute_node_update(context, node, values,
+                                                 prune_stats)
+
+    def service_update(self, context, service, values):
+        return self._manager.service_update(context, service, values)
+
+    def task_log_get(self, context, task_name, begin, end, host, state=None):
+        return self._manager.task_log_get(context, task_name, begin, end,
+                                          host, state)
+
+    def task_log_begin_task(self, context, task_name, begin, end, host,
+                            task_items=None, message=None):
+        return self._manager.task_log_begin_task(context, task_name,
+                                                 begin, end, host,
+                                                 task_items, message)
+
+    def task_log_end_task(self, context, task_name, begin, end, host,
+                          errors, message=None):
+        return self._manager.task_log_end_task(context, task_name,
+                                               begin, end, host,
+                                               errors, message)
+
+    def notify_usage_exists(self, context, instance, current_period=False,
+                            ignore_missing_network_data=True,
+                            system_metadata=None, extra_usage_info=None):
+        return self._manager.notify_usage_exists(
+            context, instance, current_period, ignore_missing_network_data,
+            system_metadata, extra_usage_info)
+
+    def security_groups_trigger_handler(self, context, event, *args):
+        return self._manager.security_groups_trigger_handler(context,
+                                                             event, args)
+
+    def security_groups_trigger_members_refresh(self, context, group_ids):
+        return self._manager.security_groups_trigger_members_refresh(context,
+                                                                     group_ids)
+
+    def network_migrate_instance_start(self, context, instance, migration):
+        return self._manager.network_migrate_instance_start(context,
+                                                            instance,
+                                                            migration)
+
+    def network_migrate_instance_finish(self, context, instance, migration):
+        return self._manager.network_migrate_instance_finish(context,
+                                                             instance,
+                                                             migration)
+
+    def quota_commit(self, context, reservations):
+        return self._manager.quota_commit(context, reservations)
+
+    def quota_rollback(self, context, reservations):
+        return self._manager.quota_rollback(context, reservations)
+
+    def get_ec2_ids(self, context, instance):
+        return self._manager.get_ec2_ids(context, instance)
+
+    def compute_stop(self, context, instance, do_cast=True):
+        return self._manager.compute_stop(context, instance, do_cast)
 
 
 class API(object):
-    """Conductor API that does updates via RPC to the ConductorManager"""
+    """Conductor API that does updates via RPC to the ConductorManager."""
 
     def __init__(self):
         self.conductor_rpcapi = rpcapi.ConductorAPI()
+
+    def wait_until_ready(self, context, early_timeout=10, early_attempts=10):
+        '''Wait until a conductor service is up and running.
+
+        This method calls the remote ping() method on the conductor topic until
+        it gets a response.  It starts with a shorter timeout in the loop
+        (early_timeout) up to early_attempts number of tries.  It then drops
+        back to the globally configured timeout for rpc calls for each retry.
+        '''
+        attempt = 0
+        timeout = early_timeout
+        while True:
+            # NOTE(danms): Try ten times with a short timeout, and then punt
+            # to the configured RPC timeout after that
+            if attempt == early_attempts:
+                timeout = None
+            attempt += 1
+
+            # NOTE(russellb): This is running during service startup. If we
+            # allow an exception to be raised, the service will shut down.
+            # This may fail the first time around if nova-conductor wasn't
+            # running when this service started.
+            try:
+                self.ping(context, '1.21 GigaWatts', timeout=timeout)
+                break
+            except rpc_common.Timeout as e:
+                LOG.exception(_('Timed out waiting for nova-conductor. '
+                                'Is it running? Or did this service start '
+                                'before nova-conductor?'))
 
     def ping(self, context, arg, timeout=None):
         return self.conductor_rpcapi.ping(context, arg, timeout)
 
     def instance_update(self, context, instance_uuid, **updates):
-        """Perform an instance update in the database"""
+        """Perform an instance update in the database."""
         return self.conductor_rpcapi.instance_update(context, instance_uuid,
-                                                     updates)
+                                                     updates, 'conductor')
 
     def instance_destroy(self, context, instance):
         return self.conductor_rpcapi.instance_destroy(context, instance)
@@ -268,6 +392,10 @@ class API(object):
     def instance_get_all_by_host(self, context, host):
         return self.conductor_rpcapi.instance_get_all_by_host(context, host)
 
+    def instance_get_all_by_host_and_node(self, context, host, node):
+        return self.conductor_rpcapi.instance_get_all_by_host(context,
+                                                              host, node)
+
     def instance_get_all_by_filters(self, context, filters,
                                     sort_key='created_at',
                                     sort_dir='desc'):
@@ -280,10 +408,14 @@ class API(object):
         return self.conductor_rpcapi.instance_get_all_hung_in_rebooting(
             context, timeout)
 
-    def instance_get_active_by_window(self, context, begin, end=None,
-                                      project_id=None, host=None):
-        return self.conductor_rpcapi.instance_get_active_by_window(
+    def instance_get_active_by_window_joined(self, context, begin, end=None,
+                                             project_id=None, host=None):
+        return self.conductor_rpcapi.instance_get_active_by_window_joined(
             context, begin, end, project_id, host)
+
+    def instance_info_cache_update(self, context, instance, values):
+        return self.conductor_rpcapi.instance_info_cache_update(context,
+                instance, values)
 
     def instance_info_cache_delete(self, context, instance):
         return self.conductor_rpcapi.instance_info_cache_delete(context,
@@ -292,6 +424,9 @@ class API(object):
     def instance_type_get(self, context, instance_type_id):
         return self.conductor_rpcapi.instance_type_get(context,
                                                        instance_type_id)
+
+    def instance_fault_create(self, context, values):
+        return self.conductor_rpcapi.instance_fault_create(context, values)
 
     def migration_get(self, context, migration_id):
         return self.conductor_rpcapi.migration_get(context, migration_id)
@@ -302,6 +437,15 @@ class API(object):
         crpcapi = self.conductor_rpcapi
         return crpcapi.migration_get_unconfirmed_by_dest_compute(
             context, confirm_window, dest_compute)
+
+    def migration_get_in_progress_by_host_and_node(self, context, host, node):
+        crpcapi = self.conductor_rpcapi
+        return crpcapi.migration_get_in_progress_by_host_and_node(context,
+                                                                  host, node)
+
+    def migration_create(self, context, instance, values):
+        return self.conductor_rpcapi.migration_create(context, instance,
+                                                      values)
 
     def migration_update(self, context, migration, status):
         return self.conductor_rpcapi.migration_update(context, migration,
@@ -331,6 +475,12 @@ class API(object):
         return self.conductor_rpcapi.aggregate_metadata_delete(context,
                                                                aggregate,
                                                                key)
+
+    def aggregate_metadata_get_by_host(self, context, host,
+                                       key='availability_zone'):
+        return self.conductor_rpcapi.aggregate_metadata_get_by_host(context,
+                                                                    host,
+                                                                    key)
 
     def bw_usage_get(self, context, uuid, start_period, mac):
         return self.conductor_rpcapi.bw_usage_update(context, uuid, mac,
@@ -425,6 +575,89 @@ class API(object):
     def service_get_by_host_and_topic(self, context, host, topic):
         return self.conductor_rpcapi.service_get_all_by(context, topic, host)
 
-    def service_get_all_compute_by_host(self, context, host):
-        return self.conductor_rpcapi.service_get_all_by(context, 'compute',
-                                                        host)
+    def service_get_by_compute_host(self, context, host):
+        result = self.conductor_rpcapi.service_get_all_by(context, 'compute',
+                                                          host)
+        # FIXME(comstud): A major revision bump to 2.0 should return a
+        # single entry, so we should just return 'result' at that point.
+        return result[0]
+
+    def service_get_by_args(self, context, host, binary):
+        return self.conductor_rpcapi.service_get_all_by(context, host=host,
+                                                        binary=binary)
+
+    def action_event_start(self, context, values):
+        return self.conductor_rpcapi.action_event_start(context, values)
+
+    def action_event_finish(self, context, values):
+        return self.conductor_rpcapi.action_event_finish(context, values)
+
+    def service_create(self, context, values):
+        return self.conductor_rpcapi.service_create(context, values)
+
+    def service_destroy(self, context, service_id):
+        return self.conductor_rpcapi.service_destroy(context, service_id)
+
+    def compute_node_create(self, context, values):
+        return self.conductor_rpcapi.compute_node_create(context, values)
+
+    def compute_node_update(self, context, node, values, prune_stats=False):
+        return self.conductor_rpcapi.compute_node_update(context, node,
+                                                         values, prune_stats)
+
+    def service_update(self, context, service, values):
+        return self.conductor_rpcapi.service_update(context, service, values)
+
+    def task_log_get(self, context, task_name, begin, end, host, state=None):
+        return self.conductor_rpcapi.task_log_get(context, task_name, begin,
+                                                  end, host, state)
+
+    def task_log_begin_task(self, context, task_name, begin, end, host,
+                            task_items=None, message=None):
+        return self.conductor_rpcapi.task_log_begin_task(context, task_name,
+                                                         begin, end, host,
+                                                         task_items, message)
+
+    def task_log_end_task(self, context, task_name, begin, end, host,
+                          errors, message=None):
+        return self.conductor_rpcapi.task_log_end_task(context, task_name,
+                                                       begin, end, host,
+                                                       errors, message)
+
+    def notify_usage_exists(self, context, instance, current_period=False,
+                            ignore_missing_network_data=True,
+                            system_metadata=None, extra_usage_info=None):
+        return self.conductor_rpcapi.notify_usage_exists(
+            context, instance, current_period, ignore_missing_network_data,
+            system_metadata, extra_usage_info)
+
+    def security_groups_trigger_handler(self, context, event, *args):
+        return self.conductor_rpcapi.security_groups_trigger_handler(context,
+                                                                     event,
+                                                                     args)
+
+    def security_groups_trigger_members_refresh(self, context, group_ids):
+        return self.conductor_rpcapi.security_groups_trigger_members_refresh(
+            context, group_ids)
+
+    def network_migrate_instance_start(self, context, instance, migration):
+        return self.conductor_rpcapi.network_migrate_instance_start(context,
+                                                                    instance,
+                                                                    migration)
+
+    def network_migrate_instance_finish(self, context, instance, migration):
+        return self.conductor_rpcapi.network_migrate_instance_finish(context,
+                                                                     instance,
+                                                                     migration)
+
+    def quota_commit(self, context, reservations):
+        return self.conductor_rpcapi.quota_commit(context, reservations)
+
+    def quota_rollback(self, context, reservations):
+        return self.conductor_rpcapi.quota_rollback(context, reservations)
+
+    def get_ec2_ids(self, context, instance):
+        return self.conductor_rpcapi.get_ec2_ids(context, instance)
+
+    def compute_stop(self, context, instance, do_cast=True):
+        return self.conductor_rpcapi.compute_stop(context, instance, do_cast)

@@ -16,12 +16,13 @@
 """
 Test multiprocess enabled API service.
 """
+import fixtures
 import os
 import signal
 import time
 import traceback
 
-from nova.openstack.common.log import logging
+from nova.openstack.common import log as logging
 from nova import service
 from nova.tests.integrated import integrated_helpers
 
@@ -63,7 +64,7 @@ class MultiprocessWSGITest(integrated_helpers._IntegratedTestBase):
                 try:
                     traceback.print_exc()
                 except BaseException:
-                    print "Couldn't print traceback"
+                    LOG.error("Couldn't print traceback")
                 status = 2
 
             # Really exit
@@ -71,25 +72,39 @@ class MultiprocessWSGITest(integrated_helpers._IntegratedTestBase):
 
         self.pid = pid
 
-        # Wait for up to a second for workers to get started
-        start = time.time()
-        while time.time() - start < 1:
-            workers = self._get_workers()
-            if len(workers) == self.workers:
-                break
+        # Wait at most 10 seconds to spawn workers
+        cond = lambda: self.workers == len(self._get_workers())
+        timeout = 10
+        self._wait(cond, timeout)
 
-            time.sleep(.1)
-
+        workers = self._get_workers()
         self.assertEqual(len(workers), self.workers)
         return workers
+
+    def _wait(self, cond, timeout):
+        start = time.time()
+        while True:
+            if cond():
+                break
+            if time.time() - start > timeout:
+                break
+            time.sleep(.1)
 
     def tearDown(self):
         if self.pid:
             # Make sure all processes are stopped
             os.kill(self.pid, signal.SIGTERM)
 
-            # Make sure we reap our test process
-            self._reap_test()
+            try:
+                # Make sure we reap our test process
+                self._reap_test()
+            except fixtures.TimeoutException:
+                # If the child gets stuck or is too slow in existing
+                # after receiving the SIGTERM, gracefully handle the
+                # timeout exception and try harder to kill it. We need
+                # to do this otherwise the child process can hold up
+                # the test run
+                os.kill(self.pid, signal.SIGKILL)
 
         super(MultiprocessWSGITest, self).tearDown()
 
@@ -114,18 +129,14 @@ class MultiprocessWSGITest(integrated_helpers._IntegratedTestBase):
         LOG.info('pid of first child is %s' % start_workers[0])
         os.kill(start_workers[0], signal.SIGTERM)
 
-        # loop and check if new worker is spawned (for 1 second max)
-        start = time.time()
-        while time.time() - start < 1:
-            end_workers = self._get_workers()
-            LOG.info('workers: %r' % end_workers)
-
-            if start_workers != end_workers:
-                break
-
-            time.sleep(.1)
+        # Wait at most 5 seconds to respawn a worker
+        cond = lambda: start_workers != self._get_workers()
+        timeout = 5
+        self._wait(cond, timeout)
 
         # Make sure worker pids don't match
+        end_workers = self._get_workers()
+        LOG.info('workers: %r' % end_workers)
         self.assertNotEqual(start_workers, end_workers)
 
         # check if api service still works
@@ -141,18 +152,14 @@ class MultiprocessWSGITest(integrated_helpers._IntegratedTestBase):
 
         os.kill(self.pid, sig)
 
-        # loop and check if all processes are killed (for 1 second max)
-        start = time.time()
-        while time.time() - start < 1:
-            workers = self._get_workers()
-            LOG.info('workers: %r' % workers)
+        # Wait at most 5 seconds to kill all workers
+        cond = lambda: not self._get_workers()
+        timeout = 5
+        self._wait(cond, timeout)
 
-            if not workers:
-                break
-
-            time.sleep(.1)
-
-        self.assertFalse(workers, 'No OS processes left.')
+        workers = self._get_workers()
+        LOG.info('workers: %r' % workers)
+        self.assertFalse(workers, 'OS processes left %r' % workers)
 
     def test_terminate_sigkill(self):
         self._terminate_with_signal(signal.SIGKILL)

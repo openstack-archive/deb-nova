@@ -15,14 +15,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.config import cfg
+
 # Import extensions to pull in osapi_compute_extension CONF option used below.
-from nova.api.openstack.compute import extensions
-from nova.openstack.common import cfg
-from nova.openstack.common.log import logging
+from nova.openstack.common import log as logging
 from nova.tests.integrated import integrated_helpers
 
 CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension', 'nova.config')
 LOG = logging.getLogger(__name__)
 
 
@@ -36,7 +35,7 @@ class ExtensionsTest(integrated_helpers._IntegratedTestBase):
         return f
 
     def test_get_foxnsocks(self):
-        """Simple check that fox-n-socks works."""
+        # Simple check that fox-n-socks works.
         response = self.api.api_request('/foxnsocks')
         foxnsocks = response.read()
         LOG.debug("foxnsocks: %s" % foxnsocks)

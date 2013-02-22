@@ -15,6 +15,7 @@
 import datetime
 import uuid
 
+from oslo.config import cfg
 import webob
 
 from nova.api.openstack import compute
@@ -23,7 +24,6 @@ from nova.compute import api as compute_api
 from nova.compute import vm_states
 from nova import context
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import jsonutils
 from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova import test
@@ -64,13 +64,6 @@ def fake_compute_api_get(self, context, instance_id):
             'task_state': None}
 
 
-def fake_scheduler_api_live_migration(self, context, dest,
-                                      block_migration=False,
-                                      disk_over_commit=False, instance=None,
-                                      instance_id=None, topic=None):
-    return None
-
-
 class AdminActionsTest(test.TestCase):
 
     _actions = ('pause', 'unpause', 'suspend', 'resume', 'migrate',
@@ -93,9 +86,6 @@ class AdminActionsTest(test.TestCase):
         self.UUID = uuid.uuid4()
         for _method in self._methods:
             self.stubs.Set(compute_api.API, _method, fake_compute_api)
-        self.stubs.Set(scheduler_rpcapi.SchedulerAPI,
-                       'live_migration',
-                       fake_scheduler_api_live_migration)
         self.flags(
             osapi_compute_extension=[
                 'nova.api.openstack.compute.contrib.select_extensions'],
@@ -150,7 +140,16 @@ class AdminActionsTest(test.TestCase):
                         task_state, expected_task_state):
             return None
 
+        def fake_scheduler_api_live_migration(self, context, dest,
+                                        block_migration=False,
+                                        disk_over_commit=False, instance=None,
+                                        instance_id=None, topic=None):
+            return None
+
         self.stubs.Set(compute_api.API, 'update', fake_update)
+        self.stubs.Set(scheduler_rpcapi.SchedulerAPI,
+                       'live_migration',
+                       fake_scheduler_api_live_migration)
 
         res = req.get_response(app)
         self.assertEqual(res.status_int, 202)
@@ -173,6 +172,44 @@ class AdminActionsTest(test.TestCase):
         req.content_type = 'application/json'
         res = req.get_response(app)
         self.assertEqual(res.status_int, 400)
+
+    def test_migrate_live_compute_service_unavailable(self):
+        ctxt = context.get_admin_context()
+        ctxt.user_id = 'fake'
+        ctxt.project_id = 'fake'
+        ctxt.is_admin = True
+        app = fakes.wsgi_app(fake_auth_context=ctxt, init_only=('servers',))
+        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
+        req.method = 'POST'
+        req.body = jsonutils.dumps({
+            'os-migrateLive': {
+                'host': 'hostname',
+                'block_migration': False,
+                'disk_over_commit': False,
+            }
+        })
+        req.content_type = 'application/json'
+
+        def fake_update(inst, context, instance,
+                        task_state, expected_task_state):
+            return None
+
+        def fake_scheduler_api_live_migration(context, dest,
+                                        block_migration=False,
+                                        disk_over_commit=False, instance=None,
+                                        instance_id=None, topic=None):
+            raise exception.ComputeServiceUnavailable(host='host')
+
+        self.stubs.Set(compute_api.API, 'update', fake_update)
+        self.stubs.Set(scheduler_rpcapi.SchedulerAPI,
+                       'live_migration',
+                       fake_scheduler_api_live_migration)
+
+        res = req.get_response(app)
+        self.assertEqual(res.status_int, 400)
+        self.assertIn(
+            unicode(exception.ComputeServiceUnavailable(host='host')),
+            res.body)
 
 
 class CreateBackupTests(test.TestCase):
@@ -226,7 +263,7 @@ class CreateBackupTests(test.TestCase):
         self.assertEqual(response.status_int, 413)
 
     def test_create_backup_no_name(self):
-        """Name is required for backups"""
+        # Name is required for backups.
         body = {
             'createBackup': {
                 'backup_type': 'daily',
@@ -239,7 +276,7 @@ class CreateBackupTests(test.TestCase):
         self.assertEqual(response.status_int, 400)
 
     def test_create_backup_no_rotation(self):
-        """Rotation is required for backup requests"""
+        # Rotation is required for backup requests.
         body = {
             'createBackup': {
                 'name': 'Backup 1',
@@ -268,7 +305,7 @@ class CreateBackupTests(test.TestCase):
         self.assertEqual(response.status_int, 400)
 
     def test_create_backup_no_backup_type(self):
-        """Backup Type (daily or weekly) is required for backup requests"""
+        # Backup Type (daily or weekly) is required for backup requests.
         body = {
             'createBackup': {
                 'name': 'Backup 1',
@@ -288,7 +325,7 @@ class CreateBackupTests(test.TestCase):
         self.assertEqual(response.status_int, 400)
 
     def test_create_backup_rotation_is_zero(self):
-        """The happy path for creating backups if rotation is zero"""
+        # The happy path for creating backups if rotation is zero.
         body = {
             'createBackup': {
                 'name': 'Backup 1',
@@ -304,7 +341,7 @@ class CreateBackupTests(test.TestCase):
         self.assertFalse('Location' in response.headers)
 
     def test_create_backup_rotation_is_positive(self):
-        """The happy path for creating backups if rotation is positive"""
+        # The happy path for creating backups if rotation is positive.
         body = {
             'createBackup': {
                 'name': 'Backup 1',

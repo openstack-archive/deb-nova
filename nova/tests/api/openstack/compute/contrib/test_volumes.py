@@ -16,19 +16,19 @@
 import datetime
 
 from lxml import etree
+from oslo.config import cfg
 import webob
+from webob import exc
 
 from nova.api.openstack.compute.contrib import volumes
 from nova.compute import api as compute_api
 from nova.compute import instance_types
 from nova import context
-from nova.openstack.common import cfg
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.volume import cinder
-from webob import exc
 
 CONF = cfg.CONF
 CONF.import_opt('password_length', 'nova.utils')
@@ -86,7 +86,7 @@ def fake_get_instance_bdms(self, context, instance):
              'volume_id': FAKE_UUID_A,
              'volume_size': 1},
             {'id': 2,
-             'instance_uuid':instance['uuid'],
+             'instance_uuid': instance['uuid'],
              'device_name': '/dev/fake1',
              'delete_on_termination': 'False',
              'virtual_name': 'MyNamesVirtual',
@@ -348,7 +348,6 @@ class VolumeSerializerTest(test.TestCase):
             device='/foo')
         text = serializer.serialize(dict(volumeAttachment=raw_attach))
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('volumeAttachment', tree.tag)
@@ -368,7 +367,6 @@ class VolumeSerializerTest(test.TestCase):
                 device='/foo2')]
         text = serializer.serialize(dict(volumeAttachments=raw_attaches))
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('volumeAttachments', tree.tag)
@@ -401,7 +399,6 @@ class VolumeSerializerTest(test.TestCase):
             )
         text = serializer.serialize(dict(volume=raw_volume))
 
-        print text
         tree = etree.fromstring(text)
 
         self._verify_volume(raw_volume, tree)
@@ -450,7 +447,6 @@ class VolumeSerializerTest(test.TestCase):
                 )]
         text = serializer.serialize(dict(volumes=raw_volumes))
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('volumes', tree.tag)

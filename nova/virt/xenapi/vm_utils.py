@@ -33,19 +33,20 @@ from xml.dom import minidom
 from xml.parsers import expat
 
 from eventlet import greenthread
+from oslo.config import cfg
 
+from nova.api.metadata import base as instance_metadata
 from nova import block_device
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
 from nova.image import glance
-from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova import utils
+from nova.virt import configdrive
 from nova.virt.disk import api as disk
 from nova.virt.disk.vfs import localfs as vfsimpl
-from nova.virt import driver
 from nova.virt.xenapi import agent
 from nova.virt.xenapi import volume_utils
 
@@ -126,7 +127,7 @@ CONF.register_opts(xenapi_vm_utils_opts)
 CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
 CONF.import_opt('use_cow_images', 'nova.virt.driver')
 CONF.import_opt('glance_num_retries', 'nova.image.glance')
-CONF.import_opt('use_ipv6', 'nova.config')
+CONF.import_opt('use_ipv6', 'nova.netconf')
 
 XENAPI_POWER_STATE = {
     'Halted': power_state.SHUTDOWN,
@@ -153,6 +154,7 @@ class ImageType(object):
     | 4 - vhd disk image (local SR, NOT inspected by XS, PV assumed for
     |     linux, HVM assumed for Windows)
     | 5 - ISO disk image (local SR, NOT partitioned by plugin)
+    | 6 - config drive
     """
 
     KERNEL = 0
@@ -161,7 +163,9 @@ class ImageType(object):
     DISK_RAW = 3
     DISK_VHD = 4
     DISK_ISO = 5
-    _ids = (KERNEL, RAMDISK, DISK, DISK_RAW, DISK_VHD, DISK_ISO)
+    DISK_CONFIGDRIVE = 6
+    _ids = (KERNEL, RAMDISK, DISK, DISK_RAW, DISK_VHD, DISK_ISO,
+            DISK_CONFIGDRIVE)
 
     KERNEL_STR = "kernel"
     RAMDISK_STR = "ramdisk"
@@ -169,8 +173,9 @@ class ImageType(object):
     DISK_RAW_STR = "os_raw"
     DISK_VHD_STR = "vhd"
     DISK_ISO_STR = "iso"
+    DISK_CONFIGDRIVE_STR = "configdrive"
     _strs = (KERNEL_STR, RAMDISK_STR, DISK_STR, DISK_RAW_STR, DISK_VHD_STR,
-                DISK_ISO_STR)
+             DISK_ISO_STR, DISK_CONFIGDRIVE_STR)
 
     @classmethod
     def to_string(cls, image_type):
@@ -178,22 +183,16 @@ class ImageType(object):
 
     @classmethod
     def get_role(cls, image_type_id):
-        " Get the role played by the image, based on its type "
+        """Get the role played by the image, based on its type."""
         return {
             cls.KERNEL: 'kernel',
             cls.RAMDISK: 'ramdisk',
             cls.DISK: 'root',
             cls.DISK_RAW: 'root',
             cls.DISK_VHD: 'root',
-            cls.DISK_ISO: 'iso'
+            cls.DISK_ISO: 'iso',
+            cls.DISK_CONFIGDRIVE: 'configdrive'
         }.get(image_type_id)
-
-
-def _system_metadata_to_dict(system_metadata):
-    result = {}
-    for item in system_metadata:
-        result[item['key']] = item['value']
-    return result
 
 
 def create_vm(session, instance, name_label, kernel, ramdisk,
@@ -231,8 +230,7 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
         'memory_target': mem,
         'name_description': '',
         'name_label': name_label,
-        'other_config': {'allowvssprovider': str(False),
-                         'nova_uuid': str(instance['uuid'])},
+        'other_config': {'nova_uuid': str(instance['uuid'])},
         'PCI_bus': '',
         'platform': {'acpi': 'true', 'apic': 'true', 'pae': 'true',
                      'viridian': 'true', 'timeoffset': '0'},
@@ -248,7 +246,7 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
         'VCPUs_at_startup': vcpus,
         'VCPUs_max': vcpus,
         'VCPUs_params': {},
-        'xenstore_data': {}}
+        'xenstore_data': {'allowvssprovider': 'false'}}
 
     # Complete VM configuration record according to the image type
     # non-raw/raw with PV kernel/raw in HVM mode
@@ -333,7 +331,7 @@ def ensure_free_mem(session, instance):
 
 
 def find_vbd_by_number(session, vm_ref, number):
-    """Get the VBD reference from the device number"""
+    """Get the VBD reference from the device number."""
     vbd_refs = session.call_xenapi("VM.get_VBDs", vm_ref)
     if vbd_refs:
         for vbd_ref in vbd_refs:
@@ -348,7 +346,7 @@ def find_vbd_by_number(session, vm_ref, number):
 
 
 def unplug_vbd(session, vbd_ref):
-    """Unplug VBD from VM"""
+    """Unplug VBD from VM."""
     # Call VBD.unplug on the given VBD, with a retry if we get
     # DEVICE_DETACH_REJECTED.  For reasons which we don't understand,
     # we're seeing the device still in use, even when all processes
@@ -379,7 +377,7 @@ def unplug_vbd(session, vbd_ref):
 
 
 def destroy_vbd(session, vbd_ref):
-    """Destroy VBD from host database"""
+    """Destroy VBD from host database."""
     try:
         session.call_xenapi('VBD.destroy', vbd_ref)
     except session.XenAPI.Failure, exc:
@@ -461,66 +459,66 @@ def create_vdi(session, sr_ref, instance, name_label, disk_type, virtual_size,
     return vdi_ref
 
 
-def get_vdis_for_boot_from_vol(session, dev_params):
-    vdis = {}
-    sr_uuid, label, sr_params = volume_utils.parse_sr_info(dev_params)
+def get_vdi_uuid_for_volume(session, connection_data):
+    sr_uuid, label, sr_params = volume_utils.parse_sr_info(connection_data)
     sr_ref = volume_utils.find_sr_by_uuid(session, sr_uuid)
-    # Try introducing SR if it is not present
+
     if not sr_ref:
         sr_ref = volume_utils.introduce_sr(session, sr_uuid, label, sr_params)
 
     if sr_ref is None:
         raise exception.NovaException(_('SR not present and could not be '
                                         'introduced'))
+
+    vdi_uuid = None
+
+    if 'vdi_uuid' in connection_data:
+        session.call_xenapi("SR.scan", sr_ref)
+        vdi_uuid = connection_data['vdi_uuid']
     else:
-        if 'vdi_uuid' in dev_params:
-            session.call_xenapi("SR.scan", sr_ref)
-            vdis = {'root': dict(uuid=dev_params['vdi_uuid'],
-                    file=None, osvol=True)}
-        else:
-            try:
-                vdi_ref = volume_utils.introduce_vdi(session, sr_ref)
-                vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
-                vdis = {'root': dict(uuid=vdi_rec['uuid'],
-                                     file=None, osvol=True)}
-            except volume_utils.StorageError, exc:
-                LOG.exception(exc)
-                volume_utils.forget_sr(session, sr_uuid)
-    return vdis
+        try:
+            vdi_ref = volume_utils.introduce_vdi(session, sr_ref)
+            vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
+            vdi_uuid = vdi_rec['uuid']
+        except volume_utils.StorageError, exc:
+            LOG.exception(exc)
+            volume_utils.forget_sr(session, sr_ref)
 
-
-def _volume_in_mapping(mount_device, block_device_info):
-    block_device_list = [block_device.strip_prefix(vol['mount_device'])
-                         for vol in
-                         driver.block_device_info_get_mapping(
-                         block_device_info)]
-    swap = driver.block_device_info_get_swap(block_device_info)
-    if driver.swap_is_usable(swap):
-        swap_dev = swap['device_name']
-        block_device_list.append(block_device.strip_prefix(swap_dev))
-    block_device_list += [block_device.strip_prefix(ephemeral['device_name'])
-                          for ephemeral in
-                          driver.block_device_info_get_ephemerals(
-                          block_device_info)]
-    LOG.debug(_("block_device_list %s"), block_device_list)
-    return block_device.strip_prefix(mount_device) in block_device_list
+    return vdi_uuid
 
 
 def get_vdis_for_instance(context, session, instance, name_label, image,
                           image_type, block_device_info=None):
+    vdis = {}
+
     if block_device_info:
         LOG.debug(_("block device info: %s"), block_device_info)
-        rootdev = block_device_info['root_device_name']
-        if _volume_in_mapping(rootdev, block_device_info):
-            # call function to return the vdi in connection info of block
-            # device.
-            # make it a point to return from here.
-            bdm_root_dev = block_device_info['block_device_mapping'][0]
-            dev_params = bdm_root_dev['connection_info']['data']
-            LOG.debug(dev_params)
-            return get_vdis_for_boot_from_vol(session, dev_params)
-    return _create_image(context, session, instance, name_label, image,
-                        image_type)
+        root_device_name = block_device_info['root_device_name']
+
+        for bdm in block_device_info['block_device_mapping']:
+            if (block_device.strip_prefix(bdm['mount_device']) ==
+                block_device.strip_prefix(root_device_name)):
+                # If we're a root-device, record that fact so we don't download
+                # a root image via Glance
+                type_ = 'root'
+            else:
+                # Otherwise, use mount_device as `type_` so that we have easy
+                # access to it in _attach_disks to create the VBD
+                type_ = bdm['mount_device']
+
+            connection_data = bdm['connection_info']['data']
+            vdi_uuid = get_vdi_uuid_for_volume(session, connection_data)
+            if vdi_uuid:
+                vdis[type_] = dict(uuid=vdi_uuid, file=None, osvol=True)
+
+    # If we didn't get a root VDI from volumes, then use the Glance image as
+    # the root device
+    if 'root' not in vdis:
+        create_image_vdis = _create_image(
+                context, session, instance, name_label, image, image_type)
+        vdis.update(create_image_vdis)
+
+    return vdis
 
 
 @contextlib.contextmanager
@@ -592,7 +590,7 @@ def set_vdi_name(session, vdi_uuid, label, description, vdi_ref=None):
 
 
 def get_vdi_for_vm_safely(session, vm_ref):
-    """Retrieves the primary VDI for a VM"""
+    """Retrieves the primary VDI for a VM."""
     vbd_refs = session.call_xenapi("VM.get_VBDs", vm_ref)
     for vbd in vbd_refs:
         vbd_rec = session.call_xenapi("VBD.get_record", vbd)
@@ -713,35 +711,6 @@ def _find_cached_image(session, image_id, sr_ref):
     """Returns the vdi-ref of the cached image."""
     cached_images = _find_cached_images(session, sr_ref)
     return cached_images.get(image_id)
-
-
-def upload_image(context, session, instance, vdi_uuids, image_id):
-    """Requests that the Glance plugin bundle the specified VDIs and
-    push them into Glance using the specified human-friendly name.
-    """
-    # NOTE(sirp): Currently we only support uploading images as VHD, there
-    # is no RAW equivalent (yet)
-    LOG.debug(_("Asking xapi to upload %(vdi_uuids)s as"
-                " ID %(image_id)s"), locals(), instance=instance)
-
-    glance_api_servers = glance.get_api_servers()
-    glance_host, glance_port, glance_use_ssl = glance_api_servers.next()
-
-    properties = {
-        'auto_disk_config': instance['auto_disk_config'],
-        'os_type': instance['os_type'] or CONF.default_os_type,
-    }
-
-    params = {'vdi_uuids': vdi_uuids,
-              'image_id': image_id,
-              'glance_host': glance_host,
-              'glance_port': glance_port,
-              'glance_use_ssl': glance_use_ssl,
-              'sr_path': get_sr_path(session),
-              'auth_token': getattr(context, 'auth_token', None),
-              'properties': properties}
-
-    session.call_plugin_serialized('glance', 'upload_vhd', **params)
 
 
 def resize_disk(session, instance, vdi_ref, instance_type):
@@ -868,6 +837,38 @@ def generate_ephemeral(session, instance, vm_ref, userdevice, name_label,
                    CONF.default_ephemeral_format)
 
 
+def generate_configdrive(session, instance, vm_ref, userdevice,
+                         admin_password=None, files=None):
+    sr_ref = safe_find_sr(session)
+    vdi_ref = create_vdi(session, sr_ref, instance, 'config-2',
+                         'configdrive', configdrive.CONFIGDRIVESIZE_BYTES)
+
+    try:
+        with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
+            extra_md = {}
+            if admin_password:
+                extra_md['admin_pass'] = admin_password
+            inst_md = instance_metadata.InstanceMetadata(instance,
+                                                         content=files,
+                                                         extra_md=extra_md)
+            with configdrive.ConfigDriveBuilder(instance_md=inst_md) as cdb:
+                with utils.tempdir() as tmp_path:
+                    tmp_file = os.path.join(tmp_path, 'configdrive')
+                    cdb.make_drive(tmp_file)
+
+                    dev_path = utils.make_dev_path(dev)
+                    utils.execute('dd',
+                                  'if=%s' % tmp_file,
+                                  'of=%s' % dev_path,
+                                  run_as_root=True)
+
+        create_vbd(session, vm_ref, vdi_ref, userdevice, bootable=False,
+                   read_only=True)
+    except Exception:
+        with excutils.save_and_reraise_exception():
+            destroy_vdi(session, vdi_ref)
+
+
 def create_kernel_image(context, session, instance, name_label, image_id,
                         image_type):
     """Creates kernel/ramdisk file from the image stored in the cache.
@@ -955,7 +956,7 @@ def _create_image(context, session, instance, name_label, image_id,
     elif cache_images == 'all':
         cache = True
     elif cache_images == 'some':
-        sys_meta = _system_metadata_to_dict(instance['system_metadata'])
+        sys_meta = utils.metadata_to_dict(instance['system_metadata'])
         try:
             cache = utils.bool_from_str(sys_meta['image_cache_in_nova'])
         except KeyError:
@@ -1048,7 +1049,7 @@ def _image_uses_bittorrent(context, instance):
     if xenapi_torrent_images == 'all':
         bittorrent = True
     elif xenapi_torrent_images == 'some':
-        sys_meta = _system_metadata_to_dict(instance['system_metadata'])
+        sys_meta = utils.metadata_to_dict(instance['system_metadata'])
         try:
             bittorrent = utils.bool_from_str(sys_meta['image_bittorrent'])
         except KeyError:
@@ -1352,7 +1353,7 @@ def list_vms(session):
 
 
 def lookup_vm_vdis(session, vm_ref):
-    """Look for the VDIs that are attached to the VM"""
+    """Look for the VDIs that are attached to the VM."""
     # Firstly we get the VBDs, then the VDIs.
     # TODO(Armando): do we leave the read-only devices?
     vbd_refs = session.call_xenapi("VM.get_VBDs", vm_ref)
@@ -1375,7 +1376,7 @@ def lookup_vm_vdis(session, vm_ref):
 
 
 def lookup(session, name_label):
-    """Look the instance up and return it if available"""
+    """Look the instance up and return it if available."""
     vm_refs = session.call_xenapi("VM.get_by_name_label", name_label)
     n = len(vm_refs)
     if n == 0:
@@ -1420,7 +1421,7 @@ def is_snapshot(session, vm):
 
 
 def compile_info(record):
-    """Fill record with VM status information"""
+    """Fill record with VM status information."""
     return {'state': XENAPI_POWER_STATE[record['power_state']],
             'max_mem': long(record['memory_static_max']) >> 10,
             'mem': long(record['memory_dynamic_max']) >> 10,
@@ -1429,7 +1430,7 @@ def compile_info(record):
 
 
 def compile_diagnostics(record):
-    """Compile VM diagnostics data"""
+    """Compile VM diagnostics data."""
     try:
         keys = []
         diags = {}
@@ -1471,7 +1472,7 @@ def fetch_bandwidth(session):
 def compile_metrics(start_time, stop_time=None):
     """Compile bandwidth usage, cpu, and disk metrics for all VMs on
        this host.
-       Note that some stats, like bandwith, do not seem to be very
+       Note that some stats, like bandwidth, do not seem to be very
        accurate in some of the data from XenServer (mdragon). """
     start_time = int(start_time)
 
@@ -1484,14 +1485,14 @@ def compile_metrics(start_time, stop_time=None):
 
 
 def _scan_sr(session, sr_ref=None):
-    """Scans the SR specified by sr_ref"""
+    """Scans the SR specified by sr_ref."""
     if sr_ref:
         LOG.debug(_("Re-scanning SR %s"), sr_ref)
         session.call_xenapi('SR.scan', sr_ref)
 
 
 def scan_default_sr(session):
-    """Looks for the system default SR and triggers a re-scan"""
+    """Looks for the system default SR and triggers a re-scan."""
     _scan_sr(session, _find_sr(session))
 
 
@@ -1506,7 +1507,7 @@ def safe_find_sr(session):
 
 
 def _find_sr(session):
-    """Return the storage repository to hold VM images"""
+    """Return the storage repository to hold VM images."""
     host = session.get_xenapi_host()
     try:
         tokens = CONF.sr_matching_filter.split(':')
@@ -1550,14 +1551,14 @@ def _safe_find_iso_sr(session):
 
 
 def _find_iso_sr(session):
-    """Return the storage repository to hold ISO images"""
+    """Return the storage repository to hold ISO images."""
     host = session.get_xenapi_host()
     for sr_ref, sr_rec in session.get_all_refs_and_recs('SR'):
         LOG.debug(_("ISO: looking at SR %(sr_rec)s") % locals())
         if not sr_rec['content_type'] == 'iso':
             LOG.debug(_("ISO: not iso content"))
             continue
-        if not 'i18n-key' in sr_rec['other_config']:
+        if 'i18n-key' not in sr_rec['other_config']:
             LOG.debug(_("ISO: iso content_type, no 'i18n-key' key"))
             continue
         if not sr_rec['other_config']['i18n-key'] == 'local-storage-iso':
@@ -1588,7 +1589,7 @@ def _get_rrd_server():
 
 
 def _get_rrd(server, vm_uuid):
-    """Return the VM RRD XML as a string"""
+    """Return the VM RRD XML as a string."""
     try:
         xml = urllib.urlopen("%s://%s:%s@%s/vm_rrd?uuid=%s" % (
             server[0],
@@ -1604,7 +1605,7 @@ def _get_rrd(server, vm_uuid):
 
 
 def _get_rrd_updates(server, start_time):
-    """Return the RRD updates XML as a string"""
+    """Return the RRD updates XML as a string."""
     try:
         xml = urllib.urlopen("%s://%s:%s@%s/rrd_updates?start=%s" % (
             server[0],
@@ -1710,7 +1711,7 @@ def _get_all_vdis_in_sr(session, sr_ref):
 
 
 def get_instance_vdis_for_sr(session, vm_ref, sr_ref):
-    """Return opaqueRef for all the vdis which live on sr"""
+    """Return opaqueRef for all the vdis which live on sr."""
     for vbd_ref in session.call_xenapi('VM.get_VBDs', vm_ref):
         try:
             vdi_ref = session.call_xenapi('VBD.get_VDI', vbd_ref)
@@ -1733,7 +1734,7 @@ def _get_vhd_parent_uuid(session, vdi_ref):
 
 
 def _walk_vdi_chain(session, vdi_uuid):
-    """Yield vdi_recs for each element in a VDI chain"""
+    """Yield vdi_recs for each element in a VDI chain."""
     scan_default_sr(session)
     while True:
         vdi_ref = session.call_xenapi("VDI.get_by_uuid", vdi_uuid)
@@ -1852,7 +1853,7 @@ def _remap_vbd_dev(dev):
 
 
 def _wait_for_device(dev):
-    """Wait for device node to appear"""
+    """Wait for device node to appear."""
     for i in xrange(0, CONF.block_device_creation_timeout):
         dev_path = utils.make_dev_path(dev)
         if os.path.exists(dev_path):
@@ -1864,7 +1865,7 @@ def _wait_for_device(dev):
 
 
 def cleanup_attached_vdis(session):
-    """Unplug any instance VDIs left after an unclean restart"""
+    """Unplug any instance VDIs left after an unclean restart."""
     this_vm_ref = _get_this_vm_ref(session)
 
     vbd_refs = session.call_xenapi('VM.get_VBDs', this_vm_ref)
@@ -2082,6 +2083,7 @@ def _sparse_copy(src_path, dst_path, virtual_size, block_size=4096):
                             break
 
                         data = src.read(min(block_size, left))
+                        greenthread.sleep(0)
 
     duration = time.time() - start_time
     compression_pct = float(skipped_bytes) / bytes_read * 100
@@ -2114,7 +2116,7 @@ def _copy_partition(session, src_ref, dst_ref, partition, virtual_size):
 
 
 def _mount_filesystem(dev_path, dir):
-    """mounts the device specified by dev_path in dir"""
+    """mounts the device specified by dev_path in dir."""
     try:
         _out, err = utils.execute('mount',
                                  '-t', 'ext2,ext3,ext4,reiserfs',
@@ -2125,7 +2127,7 @@ def _mount_filesystem(dev_path, dir):
 
 
 def _mounted_processing(device, key, net, metadata):
-    """Callback which runs with the image VDI attached"""
+    """Callback which runs with the image VDI attached."""
     # NB: Partition 1 hardcoded
     dev_path = utils.make_dev_path(device, partition=1)
     with utils.tempdir() as tmpdir:

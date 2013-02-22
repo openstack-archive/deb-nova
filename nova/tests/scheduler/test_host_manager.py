@@ -38,17 +38,14 @@ class FakeFilterClass2(filters.BaseHostFilter):
 
 
 class HostManagerTestCase(test.TestCase):
-    """Test case for HostManager class"""
+    """Test case for HostManager class."""
 
     def setUp(self):
         super(HostManagerTestCase, self).setUp()
         self.host_manager = host_manager.HostManager()
         self.fake_hosts = [host_manager.HostState('fake_host%s' % x,
                 'fake-node') for x in xrange(1, 5)]
-
-    def tearDown(self):
-        timeutils.clear_time_override()
-        super(HostManagerTestCase, self).tearDown()
+        self.addCleanup(timeutils.clear_time_override)
 
     def test_choose_host_filters_not_found(self):
         self.flags(scheduler_default_filters='FakeFilterClass3')
@@ -82,11 +79,12 @@ class HostManagerTestCase(test.TestCase):
         self.host_manager._choose_host_filters(specified_filters).AndReturn(
                 [FakeFilterClass1])
 
-    def _verify_result(self, info, result):
+    def _verify_result(self, info, result, filters=True):
         for x in info['got_fprops']:
             self.assertEqual(x, info['expected_fprops'])
-        self.assertEqual(set(info['expected_objs']), set(info['got_objs']))
-        self.assertEqual(set(result), set(info['got_objs']))
+        if filters:
+            self.assertEqual(set(info['expected_objs']), set(info['got_objs']))
+        self.assertEqual(set(info['expected_objs']), set(result))
 
     def test_get_filtered_hosts(self):
         fake_properties = {'moo': 1, 'cow': 2}
@@ -143,7 +141,7 @@ class HostManagerTestCase(test.TestCase):
 
         result = self.host_manager.get_filtered_hosts(self.fake_hosts,
                 fake_properties)
-        self._verify_result(info, result)
+        self._verify_result(info, result, False)
 
     def test_get_filtered_hosts_with_no_matching_force_hosts(self):
         fake_properties = {'force_hosts': ['fake_host5', 'fake_host6']}
@@ -156,10 +154,10 @@ class HostManagerTestCase(test.TestCase):
 
         result = self.host_manager.get_filtered_hosts(self.fake_hosts,
                 fake_properties)
-        self._verify_result(info, result)
+        self._verify_result(info, result, False)
 
     def test_get_filtered_hosts_with_ignore_and_force(self):
-        """Ensure ignore_hosts processed before force_hosts in host filters"""
+        # Ensure ignore_hosts processed before force_hosts in host filters.
         fake_properties = {'force_hosts': ['fake_host3', 'fake_host1'],
                            'ignore_hosts': ['fake_host1']}
 
@@ -172,7 +170,7 @@ class HostManagerTestCase(test.TestCase):
 
         result = self.host_manager.get_filtered_hosts(self.fake_hosts,
                 fake_properties)
-        self._verify_result(info, result)
+        self._verify_result(info, result, False)
 
     def test_update_service_capabilities(self):
         service_states = self.host_manager.service_states
@@ -267,8 +265,66 @@ class HostManagerTestCase(test.TestCase):
                          8388608)
 
 
+class HostManagerChangedNodesTestCase(test.TestCase):
+    """Test case for HostManager class."""
+
+    def setUp(self):
+        super(HostManagerChangedNodesTestCase, self).setUp()
+        self.host_manager = host_manager.HostManager()
+        self.fake_hosts = [
+              host_manager.HostState('host1', 'node1'),
+              host_manager.HostState('host2', 'node2'),
+              host_manager.HostState('host3', 'node3'),
+              host_manager.HostState('host4', 'node4')
+            ]
+        self.addCleanup(timeutils.clear_time_override)
+
+    def test_get_all_host_states(self):
+        context = 'fake_context'
+
+        self.mox.StubOutWithMock(db, 'compute_node_get_all')
+        db.compute_node_get_all(context).AndReturn(fakes.COMPUTE_NODES)
+        self.mox.ReplayAll()
+
+        self.host_manager.get_all_host_states(context)
+        host_states_map = self.host_manager.host_state_map
+        self.assertEqual(len(host_states_map), 4)
+
+    def test_get_all_host_states_after_delete_one(self):
+        context = 'fake_context'
+
+        self.mox.StubOutWithMock(db, 'compute_node_get_all')
+        # all nodes active for first call
+        db.compute_node_get_all(context).AndReturn(fakes.COMPUTE_NODES)
+        # remove node4 for second call
+        running_nodes = [n for n in fakes.COMPUTE_NODES
+                         if n.get('hypervisor_hostname') != 'node4']
+        db.compute_node_get_all(context).AndReturn(running_nodes)
+        self.mox.ReplayAll()
+
+        self.host_manager.get_all_host_states(context)
+        self.host_manager.get_all_host_states(context)
+        host_states_map = self.host_manager.host_state_map
+        self.assertEqual(len(host_states_map), 3)
+
+    def test_get_all_host_states_after_delete_all(self):
+        context = 'fake_context'
+
+        self.mox.StubOutWithMock(db, 'compute_node_get_all')
+        # all nodes active for first call
+        db.compute_node_get_all(context).AndReturn(fakes.COMPUTE_NODES)
+        # remove all nodes for second call
+        db.compute_node_get_all(context).AndReturn([])
+        self.mox.ReplayAll()
+
+        self.host_manager.get_all_host_states(context)
+        self.host_manager.get_all_host_states(context)
+        host_states_map = self.host_manager.host_state_map
+        self.assertEqual(len(host_states_map), 0)
+
+
 class HostStateTestCase(test.TestCase):
-    """Test case for HostState class"""
+    """Test case for HostState class."""
 
     # update_from_compute_node() and consume_from_instance() are tested
     # in HostManagerTestCase.test_get_all_host_states()

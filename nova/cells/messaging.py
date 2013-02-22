@@ -25,18 +25,21 @@ The interface into this module is the MessageRunner class.
 import sys
 
 from eventlet import queue
+from oslo.config import cfg
 
 from nova.cells import state as cells_state
+from nova.cells import utils as cells_utils
 from nova import compute
 from nova import context
 from nova.db import base
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import rpc
 from nova.openstack.common.rpc import common as rpc_common
+from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import utils
 
@@ -58,7 +61,7 @@ LOG = logging.getLogger(__name__)
 
 # Separator used between cell names for the 'full cell name' and routing
 # path.
-_PATH_CELL_SEP = '!'
+_PATH_CELL_SEP = cells_utils._PATH_CELL_SEP
 
 
 def _reverse_path(path):
@@ -597,6 +600,22 @@ class _BaseMessageMethods(base.Base):
         self.state_manager = msg_runner.state_manager
         self.compute_api = compute.API()
 
+    def task_log_get_all(self, message, task_name, period_beginning,
+                         period_ending, host, state):
+        """Get task logs from the DB.  The message could have
+        directly targeted this cell, or it could have been a broadcast
+        message.
+
+        If 'host' is not None, filter by host.
+        If 'state' is not None, filter by state.
+        """
+        task_logs = self.db.task_log_get_all(message.ctxt, task_name,
+                                             period_beginning,
+                                             period_ending,
+                                             host=host,
+                                             state=state)
+        return jsonutils.to_primitive(task_logs)
+
 
 class _ResponseMessageMethods(_BaseMessageMethods):
     """Methods that are called from a ResponseMessage.  There's only
@@ -675,6 +694,28 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         do so.
         """
         self.msg_runner.tell_parents_our_capacities(message.ctxt)
+
+    def service_get_by_compute_host(self, message, host_name):
+        """Return the service entry for a compute host."""
+        service = self.db.service_get_by_compute_host(message.ctxt,
+                                                      host_name)
+        return jsonutils.to_primitive(service)
+
+    def proxy_rpc_to_manager(self, message, host_name, rpc_message,
+                             topic, timeout):
+        """Proxy RPC to the given compute topic."""
+        # Check that the host exists.
+        self.db.service_get_by_compute_host(message.ctxt, host_name)
+        if message.need_response:
+            return rpc.call(message.ctxt, topic, rpc_message,
+                    timeout=timeout)
+        rpc.cast(message.ctxt, topic, rpc_message)
+
+    def compute_node_get(self, message, compute_id):
+        """Get compute node by ID."""
+        compute_node = self.db.compute_node_get(message.ctxt,
+                                                compute_id)
+        return jsonutils.to_primitive(compute_node)
 
 
 class _BroadcastMessageMethods(_BaseMessageMethods):
@@ -777,6 +818,54 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         if not self._at_the_top():
             return
         self.db.bw_usage_update(message.ctxt, **bw_update_info)
+
+    def _sync_instance(self, ctxt, instance):
+        if instance['deleted']:
+            self.msg_runner.instance_destroy_at_top(ctxt, instance)
+        else:
+            self.msg_runner.instance_update_at_top(ctxt, instance)
+
+    def sync_instances(self, message, project_id, updated_since, deleted,
+                       **kwargs):
+        projid_str = project_id is None and "<all>" or project_id
+        since_str = updated_since is None and "<all>" or updated_since
+        LOG.info(_("Forcing a sync of instances, project_id="
+                   "%(projid_str)s, updated_since=%(since_str)s"), locals())
+        if updated_since is not None:
+            updated_since = timeutils.parse_isotime(updated_since)
+        instances = cells_utils.get_instances_to_sync(message.ctxt,
+                updated_since=updated_since, project_id=project_id,
+                deleted=deleted)
+        for instance in instances:
+            self._sync_instance(message.ctxt, instance)
+
+    def service_get_all(self, message, filters):
+        if filters is None:
+            filters = {}
+        disabled = filters.pop('disabled', None)
+        services = self.db.service_get_all(message.ctxt, disabled=disabled)
+        ret_services = []
+        for service in services:
+            service = jsonutils.to_primitive(service)
+            for key, val in filters.iteritems():
+                if service[key] != val:
+                    break
+            else:
+                ret_services.append(service)
+        return ret_services
+
+    def compute_node_get_all(self, message, hypervisor_match):
+        """Return compute nodes in this cell."""
+        if hypervisor_match is not None:
+            nodes = self.db.compute_node_search_by_hypervisor(message.ctxt,
+                    hypervisor_match)
+        else:
+            nodes = self.db.compute_node_get_all(message.ctxt)
+        return jsonutils.to_primitive(nodes)
+
+    def compute_node_stats(self, message):
+        """Return compute node stats from this cell."""
+        return self.db.compute_node_statistics(message.ctxt)
 
 
 _CELL_MESSAGE_TYPE_TO_MESSAGE_CLS = {'targeted': _TargetedMessage,
@@ -1003,6 +1092,96 @@ class MessageRunner(object):
                                     dict(bw_update_info=bw_update_info),
                                     'up', run_locally=False)
         message.process()
+
+    def sync_instances(self, ctxt, project_id, updated_since, deleted):
+        """Force a sync of all instances, potentially by project_id,
+        and potentially since a certain date/time.
+        """
+        method_kwargs = dict(project_id=project_id,
+                             updated_since=updated_since,
+                             deleted=deleted)
+        message = _BroadcastMessage(self, ctxt, 'sync_instances',
+                                    method_kwargs, 'down',
+                                    run_locally=False)
+        message.process()
+
+    def service_get_all(self, ctxt, filters=None):
+        method_kwargs = dict(filters=filters)
+        message = _BroadcastMessage(self, ctxt, 'service_get_all',
+                                    method_kwargs, 'down',
+                                    run_locally=True, need_response=True)
+        return message.process()
+
+    def service_get_by_compute_host(self, ctxt, cell_name, host_name):
+        method_kwargs = dict(host_name=host_name)
+        message = _TargetedMessage(self, ctxt,
+                                  'service_get_by_compute_host',
+                                  method_kwargs, 'down', cell_name,
+                                  need_response=True)
+        return message.process()
+
+    def proxy_rpc_to_manager(self, ctxt, cell_name, host_name, topic,
+                             rpc_message, call, timeout):
+        method_kwargs = {'host_name': host_name,
+                         'topic': topic,
+                         'rpc_message': rpc_message,
+                         'timeout': timeout}
+        message = _TargetedMessage(self, ctxt,
+                                   'proxy_rpc_to_manager',
+                                   method_kwargs, 'down', cell_name,
+                                   need_response=call)
+        return message.process()
+
+    def task_log_get_all(self, ctxt, cell_name, task_name,
+                         period_beginning, period_ending,
+                         host=None, state=None):
+        """Get task logs from the DB from all cells or a particular
+        cell.
+
+        If 'cell_name' is None or '', get responses from all cells.
+        If 'host' is not None, filter by host.
+        If 'state' is not None, filter by state.
+
+        Return a list of Response objects.
+        """
+        method_kwargs = dict(task_name=task_name,
+                             period_beginning=period_beginning,
+                             period_ending=period_ending,
+                             host=host, state=state)
+        if cell_name:
+            message = _TargetedMessage(self, ctxt, 'task_log_get_all',
+                                    method_kwargs, 'down',
+                                    cell_name, need_response=True)
+            # Caller should get a list of Responses.
+            return [message.process()]
+        message = _BroadcastMessage(self, ctxt, 'task_log_get_all',
+                                    method_kwargs, 'down',
+                                    run_locally=True, need_response=True)
+        return message.process()
+
+    def compute_node_get_all(self, ctxt, hypervisor_match=None):
+        """Return list of compute nodes in all child cells."""
+        method_kwargs = dict(hypervisor_match=hypervisor_match)
+        message = _BroadcastMessage(self, ctxt, 'compute_node_get_all',
+                                    method_kwargs, 'down',
+                                    run_locally=True, need_response=True)
+        return message.process()
+
+    def compute_node_stats(self, ctxt):
+        """Return compute node stats from all child cells."""
+        method_kwargs = dict()
+        message = _BroadcastMessage(self, ctxt, 'compute_node_stats',
+                                    method_kwargs, 'down',
+                                    run_locally=True, need_response=True)
+        return message.process()
+
+    def compute_node_get(self, ctxt, cell_name, compute_id):
+        """Return compute node entry from a specific cell by ID."""
+        method_kwargs = dict(compute_id=compute_id)
+        message = _TargetedMessage(self, ctxt, 'compute_node_get',
+                                    method_kwargs, 'down',
+                                    cell_name, need_response=True)
+        return message.process()
 
     @staticmethod
     def get_message_types():

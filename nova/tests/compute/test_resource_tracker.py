@@ -15,10 +15,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Tests for compute resource tracking"""
+"""Tests for compute resource tracking."""
 
 import uuid
 
+from oslo.config import cfg
+
+from nova.compute import instance_types
 from nova.compute import resource_tracker
 from nova.compute import task_states
 from nova.compute import vm_states
@@ -35,10 +38,11 @@ LOG = logging.getLogger(__name__)
 FAKE_VIRT_MEMORY_MB = 5
 FAKE_VIRT_LOCAL_GB = 6
 FAKE_VIRT_VCPUS = 1
+CONF = cfg.CONF
 
 
 class UnsupportedVirtDriver(driver.ComputeDriver):
-    """Pretend version of a lame virt driver"""
+    """Pretend version of a lame virt driver."""
 
     def __init__(self):
         super(UnsupportedVirtDriver, self).__init__(None)
@@ -49,6 +53,9 @@ class UnsupportedVirtDriver(driver.ComputeDriver):
     def get_available_resource(self, nodename):
         # no support for getting resource usage info
         return {}
+
+    def legacy_nwinfo(self):
+        return True
 
 
 class FakeVirtDriver(driver.ComputeDriver):
@@ -80,6 +87,9 @@ class FakeVirtDriver(driver.ComputeDriver):
         }
         return d
 
+    def legacy_nwinfo(self):
+        return True
+
 
 class BaseTestCase(test.TestCase):
 
@@ -91,14 +101,21 @@ class BaseTestCase(test.TestCase):
 
         self.context = context.get_admin_context()
 
+        self.flags(use_local=True, group='conductor')
+        self.conductor = self.start_service('conductor',
+                                            manager=CONF.conductor.manager)
+
         self._instances = {}
         self._instance_types = {}
 
-        self.stubs.Set(db, 'instance_get_all_by_host_and_node',
+        self.stubs.Set(self.conductor.db,
+                       'instance_get_all_by_host_and_node',
                        self._fake_instance_get_all_by_host_and_node)
-        self.stubs.Set(db, 'instance_update_and_get_original',
+        self.stubs.Set(self.conductor.db,
+                       'instance_update_and_get_original',
                        self._fake_instance_update_and_get_original)
-        self.stubs.Set(db, 'instance_type_get', self._fake_instance_type_get)
+        self.stubs.Set(self.conductor.db,
+                       'instance_type_get', self._fake_instance_type_get)
 
         self.host = 'fakehost'
 
@@ -137,7 +154,21 @@ class BaseTestCase(test.TestCase):
         }
         return service
 
+    def _fake_instance_system_metadata(self, instance_type, prefix=''):
+        sys_meta = []
+        for key in instance_types.system_metadata_instance_type_props.keys():
+            sys_meta.append({'key': '%sinstance_type_%s' % (prefix, key),
+                             'value': instance_type[key]})
+        return sys_meta
+
     def _fake_instance(self, *args, **kwargs):
+
+        # Default to an instance ready to resize to or from the same
+        # instance_type
+        itype = self._fake_instance_type_create()
+        sys_meta = (self._fake_instance_system_metadata(itype) +
+                    self._fake_instance_system_metadata(itype, 'new_') +
+                    self._fake_instance_system_metadata(itype, 'old_'))
 
         instance_uuid = str(uuid.uuid1())
         instance = {
@@ -154,6 +185,7 @@ class BaseTestCase(test.TestCase):
             'node': None,
             'instance_type_id': 1,
             'launched_on': None,
+            'system_metadata': sys_meta,
         }
         instance.update(kwargs)
 
@@ -168,6 +200,9 @@ class BaseTestCase(test.TestCase):
             'vcpus': FAKE_VIRT_VCPUS,
             'root_gb': FAKE_VIRT_LOCAL_GB / 2,
             'ephemeral_gb': FAKE_VIRT_LOCAL_GB / 2,
+            'swap': 0,
+            'rxtx_factor': 1.0,
+            'vcpu_weight': 1,
             'flavorid': 'fakeflavor'
         }
         instance_type.update(**kwargs)
@@ -282,8 +317,8 @@ class MissingComputeNodeTestCase(BaseTestCase):
         super(MissingComputeNodeTestCase, self).setUp()
         self.tracker = self._tracker()
 
-        self.stubs.Set(db, 'service_get_all_compute_by_host',
-                self._fake_service_get_all_compute_by_host)
+        self.stubs.Set(db, 'service_get_by_compute_host',
+                self._fake_service_get_by_compute_host)
         self.stubs.Set(db, 'compute_node_create',
                 self._fake_create_compute_node)
 
@@ -291,10 +326,10 @@ class MissingComputeNodeTestCase(BaseTestCase):
         self.created = True
         return self._create_compute_node()
 
-    def _fake_service_get_all_compute_by_host(self, ctx, host):
+    def _fake_service_get_by_compute_host(self, ctx, host):
         # return a service with no joined compute
         service = self._create_service()
-        return [service]
+        return service
 
     def test_create_compute_node(self):
         self.tracker.update_available_resource(self.context)
@@ -315,8 +350,8 @@ class BaseTrackerTestCase(BaseTestCase):
         self.tracker = self._tracker()
         self._migrations = {}
 
-        self.stubs.Set(db, 'service_get_all_compute_by_host',
-                self._fake_service_get_all_compute_by_host)
+        self.stubs.Set(db, 'service_get_by_compute_host',
+                self._fake_service_get_by_compute_host)
         self.stubs.Set(db, 'compute_node_update',
                 self._fake_compute_node_update)
         self.stubs.Set(db, 'migration_update',
@@ -327,10 +362,10 @@ class BaseTrackerTestCase(BaseTestCase):
         self.tracker.update_available_resource(self.context)
         self.limits = self._limits()
 
-    def _fake_service_get_all_compute_by_host(self, ctx, host):
+    def _fake_service_get_by_compute_host(self, ctx, host):
         self.compute = self._create_compute_node()
         self.service = self._create_service(host, compute=self.compute)
-        return [self.service]
+        return self.service
 
     def _fake_compute_node_update(self, ctx, compute_node_id, values,
             prune_stats=False):
@@ -363,7 +398,7 @@ class BaseTrackerTestCase(BaseTestCase):
 
     def _limits(self, memory_mb=FAKE_VIRT_MEMORY_MB,
                 disk_gb=FAKE_VIRT_LOCAL_GB, vcpus=FAKE_VIRT_VCPUS):
-        """Create limits dictionary used for oversubscribing resources"""
+        """Create limits dictionary used for oversubscribing resources."""
 
         return {
             'memory_mb': memory_mb,
@@ -376,7 +411,7 @@ class BaseTrackerTestCase(BaseTestCase):
         if tracker is None:
             tracker = self.tracker
 
-        if not field in tracker.compute_node:
+        if field not in tracker.compute_node:
             raise test.TestingException(
                 "'%(field)s' not in compute node." % locals())
         x = tracker.compute_node[field]
@@ -616,7 +651,8 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
     def setUp(self):
         super(ResizeClaimTestCase, self).setUp()
 
-        self.stubs.Set(db, 'migration_create', self._fake_migration_create)
+        self.stubs.Set(self.conductor.db,
+                       'migration_create', self._fake_migration_create)
 
         self.instance = self._fake_instance()
         self.instance_type = self._fake_instance_type_create()
@@ -639,7 +675,7 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
         if values:
             migration.update(values)
 
-        self._migrations[instance_uuid] = migration
+        self._migrations[migration['instance_uuid']] = migration
         return migration
 
     def test_claim(self):
@@ -698,11 +734,12 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
         # make an instance of src_type:
         instance = self._fake_instance(memory_mb=1, root_gb=1, ephemeral_gb=0,
                 vcpus=1, instance_type_id=2)
-
+        instance['system_metadata'] = self._fake_instance_system_metadata(
+            dest_type)
         self.tracker.instance_claim(self.context, instance, self.limits)
 
         # resize to dest_type:
-        claim = self.tracker.resize_claim(self.context, self.instance,
+        claim = self.tracker.resize_claim(self.context, instance,
                 dest_type, self.limits)
 
         self._assert(3, 'memory_mb_used')

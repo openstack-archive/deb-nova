@@ -15,19 +15,22 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import fixtures
 import os
 
-from nova.openstack.common import cfg
+import fixtures
+from oslo.config import cfg
+
+from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests import fake_libvirt_utils
+from nova.tests import fake_utils
 from nova.virt.libvirt import imagebackend
 
 CONF = cfg.CONF
 
 
 class _ImageTestCase(object):
-    INSTANCES_PATH = '/fake'
+    INSTANCES_PATH = '/instances_path'
 
     def mock_create_image(self, image):
         def create_image(fn, base, size, *args, **kwargs):
@@ -38,14 +41,19 @@ class _ImageTestCase(object):
         super(_ImageTestCase, self).setUp()
         self.flags(disable_process_locking=True,
                    instances_path=self.INSTANCES_PATH)
-        self.INSTANCE = 'instance'
+        self.INSTANCE = {'name': 'instance',
+                         'uuid': uuidutils.generate_uuid()}
         self.NAME = 'fake.vm'
         self.TEMPLATE = 'template'
 
-        self.PATH = os.path.join(CONF.instances_path, self.INSTANCE,
-                                 self.NAME)
-        self.TEMPLATE_DIR = os.path.join(CONF.instances_path,
-                                         '_base')
+        self.OLD_STYLE_INSTANCE_PATH = \
+            fake_libvirt_utils.get_instance_path(self.INSTANCE, forceold=True)
+        self.PATH = os.path.join(
+            fake_libvirt_utils.get_instance_path(self.INSTANCE), self.NAME)
+
+        # TODO(mikal): rename template_dir to base_dir and template_path
+        # to cached_image_path. This will be less confusing.
+        self.TEMPLATE_DIR = os.path.join(CONF.instances_path, '_base')
         self.TEMPLATE_PATH = os.path.join(self.TEMPLATE_DIR, 'template')
 
         self.useFixture(fixtures.MonkeyPatch(
@@ -54,8 +62,10 @@ class _ImageTestCase(object):
 
     def test_cache(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        os.path.exists(self.PATH).AndReturn(False)
+        if self.OLD_STYLE_INSTANCE_PATH:
+            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(False)
+        os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
         fn = self.mox.CreateMockAnything()
         fn(target=self.TEMPLATE_PATH)
@@ -71,7 +81,11 @@ class _ImageTestCase(object):
 
     def test_cache_image_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
+        if self.OLD_STYLE_INSTANCE_PATH:
+            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
+        os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
         os.path.exists(self.PATH).AndReturn(True)
+        os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
@@ -81,8 +95,10 @@ class _ImageTestCase(object):
 
     def test_cache_base_dir_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        os.path.exists(self.PATH).AndReturn(False)
+        if self.OLD_STYLE_INSTANCE_PATH:
+            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
+        os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
         fn = self.mox.CreateMockAnything()
         fn(target=self.TEMPLATE_PATH)
@@ -97,8 +113,10 @@ class _ImageTestCase(object):
 
     def test_cache_template_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        os.path.exists(self.PATH).AndReturn(False)
+        if self.OLD_STYLE_INSTANCE_PATH:
+            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
+        os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
         fn = self.mox.CreateMockAnything()
         self.mox.ReplayAll()
@@ -108,6 +126,27 @@ class _ImageTestCase(object):
         image.cache(fn, self.TEMPLATE)
 
         self.mox.VerifyAll()
+
+    def test_prealloc_image(self):
+        CONF.set_override('preallocate_images', 'space')
+
+        fake_utils.fake_execute_clear_log()
+        fake_utils.stub_out_utils_execute(self.stubs)
+        image = self.image_class(self.INSTANCE, self.NAME)
+
+        def fake_fetch(target, *args, **kwargs):
+            return
+
+        self.stubs.Set(os.path, 'exists', lambda _: True)
+
+        # Call twice to verify testing fallocate is only called once.
+        image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
+        image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
+
+        self.assertEqual(fake_utils.fake_execute_get_log(),
+            ['fallocate -n -l 1 %s.fallocate_test' % self.PATH,
+             'fallocate -n -l %s %s' % (self.SIZE, self.PATH),
+             'fallocate -n -l %s %s' % (self.SIZE, self.PATH)])
 
 
 class RawTestCase(_ImageTestCase, test.TestCase):
@@ -195,6 +234,10 @@ class Qcow2TestCase(_ImageTestCase, test.TestCase):
         fn = self.prepare_mocks()
         fn(target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
+        if self.OLD_STYLE_INSTANCE_PATH:
+            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
+        os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
+        os.path.exists(self.PATH).AndReturn(False)
         imagebackend.libvirt_utils.create_cow_image(self.TEMPLATE_PATH,
                                                     self.PATH)
         imagebackend.disk.extend(self.PATH, self.SIZE)
@@ -215,7 +258,8 @@ class LvmTestCase(_ImageTestCase, test.TestCase):
         self.image_class = imagebackend.Lvm
         super(LvmTestCase, self).setUp()
         self.flags(libvirt_images_volume_group=self.VG)
-        self.LV = '%s_%s' % (self.INSTANCE, self.NAME)
+        self.LV = '%s_%s' % (self.INSTANCE['name'], self.NAME)
+        self.OLD_STYLE_INSTANCE_PATH = None
         self.PATH = os.path.join('/dev', self.VG, self.LV)
 
         self.disk = imagebackend.disk
@@ -239,8 +283,8 @@ class LvmTestCase(_ImageTestCase, test.TestCase):
                                             sparse=sparse)
         self.disk.get_disk_size(self.TEMPLATE_PATH
                                          ).AndReturn(self.TEMPLATE_SIZE)
-        cmd = ('dd', 'if=%s' % self.TEMPLATE_PATH,
-               'of=%s' % self.PATH, 'bs=4M')
+        cmd = ('qemu-img', 'convert', '-O', 'raw', self.TEMPLATE_PATH,
+               self.PATH)
         self.utils.execute(*cmd, run_as_root=True)
         self.mox.ReplayAll()
 
@@ -269,10 +313,10 @@ class LvmTestCase(_ImageTestCase, test.TestCase):
                                             self.SIZE, sparse=sparse)
         self.disk.get_disk_size(self.TEMPLATE_PATH
                                          ).AndReturn(self.TEMPLATE_SIZE)
-        cmd = ('dd', 'if=%s' % self.TEMPLATE_PATH,
-               'of=%s' % self.PATH, 'bs=4M')
+        cmd = ('qemu-img', 'convert', '-O', 'raw', self.TEMPLATE_PATH,
+               self.PATH)
         self.utils.execute(*cmd, run_as_root=True)
-        self.disk.resize2fs(self.PATH)
+        self.disk.resize2fs(self.PATH, run_as_root=True)
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
@@ -340,9 +384,26 @@ class LvmTestCase(_ImageTestCase, test.TestCase):
                           ephemeral_size=None)
         self.mox.VerifyAll()
 
+    def test_prealloc_image(self):
+        CONF.set_override('preallocate_images', 'space')
+
+        fake_utils.fake_execute_clear_log()
+        fake_utils.stub_out_utils_execute(self.stubs)
+        image = self.image_class(self.INSTANCE, self.NAME)
+
+        def fake_fetch(target, *args, **kwargs):
+            return
+
+        self.stubs.Set(os.path, 'exists', lambda _: True)
+
+        image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
+
+        self.assertEqual(fake_utils.fake_execute_get_log(), [])
+
 
 class BackendTestCase(test.TestCase):
-    INSTANCE = 'fake-instance'
+    INSTANCE = {'name': 'fake-instance',
+                'uuid': uuidutils.generate_uuid()}
     NAME = 'fake-name.suffix'
 
     def get_image(self, use_cow, image_type):

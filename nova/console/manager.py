@@ -19,10 +19,11 @@
 
 import socket
 
+from oslo.config import cfg
+
 from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
 from nova import manager
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova import utils
@@ -65,7 +66,6 @@ class ConsoleProxyManager(manager.Manager):
     def init_host(self):
         self.driver.init_host()
 
-    @exception.wrap_exception()
     def add_console(self, context, instance_id, password=None,
                     port=None, **kwargs):
         instance = self.db.instance_get(context, instance_id)
@@ -93,7 +93,6 @@ class ConsoleProxyManager(manager.Manager):
 
         return console['id']
 
-    @exception.wrap_exception()
     def remove_console(self, context, console_id, **_kwargs):
         try:
             console = self.db.console_get(context, console_id)

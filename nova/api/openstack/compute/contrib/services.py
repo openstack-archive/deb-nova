@@ -15,24 +15,23 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
+from oslo.config import cfg
 import webob.exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova import availability_zones
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import utils
 
-
 LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'services')
 CONF = cfg.CONF
-CONF.import_opt('service_down_time', 'nova.config')
+CONF.import_opt('service_down_time', 'nova.service')
 
 
 class ServicesIndexTemplate(xmlutil.TemplateBuilder):
@@ -69,6 +68,7 @@ class ServiceController(object):
         authorize(context)
         now = timeutils.utcnow()
         services = db.service_get_all(context)
+        services = availability_zones.set_availability_zones(context, services)
 
         host = ''
         if 'host' in req.GET:
@@ -97,7 +97,7 @@ class ServiceController(object):
 
     @wsgi.serializers(xml=ServicesUpdateTemplate)
     def update(self, req, id, body):
-        """Enable/Disable scheduling for a service"""
+        """Enable/Disable scheduling for a service."""
         context = req.environ['nova.context']
         authorize(context)
 
@@ -127,7 +127,7 @@ class ServiceController(object):
 
 
 class Services(extensions.ExtensionDescriptor):
-    """Services support"""
+    """Services support."""
 
     name = "Services"
     alias = "os-services"

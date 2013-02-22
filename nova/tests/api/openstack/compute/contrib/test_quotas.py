@@ -51,8 +51,7 @@ class QuotaSetsTest(test.TestCase):
             'injected_file_content_bytes': 10240,
             'security_groups': 10,
             'security_group_rules': 20,
-            'key_pairs': 100,
-            }
+            'key_pairs': 100}
 
         quota_set = self.controller._format_quota_set('1234', raw_quota_set)
         qs = quota_set['quota_set']
@@ -88,8 +87,7 @@ class QuotaSetsTest(test.TestCase):
                     'injected_file_content_bytes': 10240,
                     'security_groups': 10,
                     'security_group_rules': 20,
-                    'key_pairs': 100,
-                    }}
+                    'key_pairs': 100}}
 
         self.assertEqual(res_dict, expected)
 
@@ -145,6 +143,45 @@ class QuotaSetsTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                           req, 'update_me', body)
 
+    def test_quotas_update_invalid_value(self):
+        expected_resp = {'quota_set': {
+                              'instances': 50, 'cores': 50,
+                              'ram': 51200, 'floating_ips': 10,
+                              'metadata_items': 128, 'injected_files': 5,
+                              'injected_file_content_bytes': 10240,
+                              'injected_file_path_bytes': 255,
+                              'security_groups': 10,
+                              'security_group_rules': 20,
+                              'key_pairs': 100}}
+
+        # when PUT JSON format with empty string for quota
+        body = {'quota_set': {'instances': 50, 'cores': 50,
+                              'ram': '', 'floating_ips': 10,
+                              'metadata_items': 128, 'injected_files': 5,
+                              'injected_file_content_bytes': 10240,
+                              'injected_file_path_bytes': 255,
+                              'security_groups': 10,
+                              'security_group_rules': 20,
+                              'key_pairs': 100}}
+        req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me',
+                                      use_admin_context=True)
+        res_dict = self.controller.update(req, 'update_me', body)
+        self.assertEqual(res_dict, expected_resp)
+
+        # when PUT XML format with empty string for quota
+        body = {'quota_set': {'instances': 50, 'cores': 50,
+                              'ram': {}, 'floating_ips': 10,
+                              'metadata_items': 128, 'injected_files': 5,
+                              'injected_file_content_bytes': 10240,
+                              'injected_file_path_bytes': 255,
+                              'security_groups': 10,
+                              'security_group_rules': 20,
+                              'key_pairs': 100}}
+        req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me',
+                                      use_admin_context=True)
+        res_dict = self.controller.update(req, 'update_me', body)
+        self.assertEqual(res_dict, expected_resp)
+
 
 class QuotaXMLSerializerTest(test.TestCase):
     def setUp(self):
@@ -168,7 +205,6 @@ class QuotaXMLSerializerTest(test.TestCase):
                 cores=90))
         text = self.serializer.serialize(exemplar)
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('quota_set', tree.tag)

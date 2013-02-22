@@ -23,17 +23,21 @@ Scheduler Service
 
 import sys
 
+from oslo.config import cfg
+
 from nova.compute import rpcapi as compute_rpcapi
+from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+from nova.conductor import api as conductor_api
 import nova.context
 from nova import db
 from nova import exception
 from nova import manager
 from nova import notifications
-from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier
 from nova import quota
@@ -54,7 +58,7 @@ QUOTAS = quota.QUOTAS
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
 
-    RPC_API_VERSION = '2.5'
+    RPC_API_VERSION = '2.6'
 
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         if not scheduler_driver:
@@ -91,6 +95,16 @@ class SchedulerManager(manager.Manager):
             return self.driver.schedule_live_migration(
                 context, instance, dest,
                 block_migration, disk_over_commit)
+        except exception.ComputeServiceUnavailable as ex:
+            request_spec = {'instance_properties': {
+                'uuid': instance['uuid'], },
+            }
+            with excutils.save_and_reraise_exception():
+                self._set_vm_state_and_notify('live_migration',
+                            dict(vm_state=instance['vm_state'],
+                                 task_state=None,
+                                 expected_task_state=task_states.MIGRATING,),
+                                              context, ex, request_spec)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
                 self._set_vm_state_and_notify('live_migration',
@@ -103,22 +117,26 @@ class SchedulerManager(manager.Manager):
         """Tries to call schedule_run_instance on the driver.
         Sets instance vm_state to ERROR on exceptions
         """
-        try:
-            return self.driver.schedule_run_instance(context,
-                    request_spec, admin_password, injected_files,
-                    requested_networks, is_first_time, filter_properties)
-        except exception.NoValidHost as ex:
-            # don't re-raise
-            self._set_vm_state_and_notify('run_instance',
-                                         {'vm_state': vm_states.ERROR,
-                                          'task_state': None},
-                                          context, ex, request_spec)
-        except Exception as ex:
-            with excutils.save_and_reraise_exception():
+        instance_uuids = request_spec['instance_uuids']
+        with compute_utils.EventReporter(context, conductor_api.LocalAPI(),
+                                         'schedule', *instance_uuids):
+            try:
+                return self.driver.schedule_run_instance(context,
+                        request_spec, admin_password, injected_files,
+                        requested_networks, is_first_time, filter_properties)
+
+            except exception.NoValidHost as ex:
+                # don't re-raise
                 self._set_vm_state_and_notify('run_instance',
-                                             {'vm_state': vm_states.ERROR,
+                                              {'vm_state': vm_states.ERROR,
                                               'task_state': None},
-                                             context, ex, request_spec)
+                                              context, ex, request_spec)
+            except Exception as ex:
+                with excutils.save_and_reraise_exception():
+                    self._set_vm_state_and_notify('run_instance',
+                                                  {'vm_state': vm_states.ERROR,
+                                                  'task_state': None},
+                                                  context, ex, request_spec)
 
     def prep_resize(self, context, image, request_spec, filter_properties,
                     instance, instance_type, reservations):
@@ -126,36 +144,39 @@ class SchedulerManager(manager.Manager):
         Sets instance vm_state to ACTIVE on NoHostFound
         Sets vm_state to ERROR on other exceptions
         """
-        try:
-            kwargs = {
-                'context': context,
-                'image': image,
-                'request_spec': request_spec,
-                'filter_properties': filter_properties,
-                'instance': instance,
-                'instance_type': instance_type,
-                'reservations': reservations,
-            }
-            return self.driver.schedule_prep_resize(**kwargs)
-        except exception.NoValidHost as ex:
-            self._set_vm_state_and_notify('prep_resize',
-                                         {'vm_state': vm_states.ACTIVE,
-                                          'task_state': None},
-                                         context, ex, request_spec)
-            if reservations:
-                QUOTAS.rollback(context, reservations)
-        except Exception as ex:
-            with excutils.save_and_reraise_exception():
+        instance_uuid = instance['uuid']
+        with compute_utils.EventReporter(context, conductor_api.LocalAPI(),
+                                         'schedule', instance_uuid):
+            try:
+                kwargs = {
+                    'context': context,
+                    'image': image,
+                    'request_spec': request_spec,
+                    'filter_properties': filter_properties,
+                    'instance': instance,
+                    'instance_type': instance_type,
+                    'reservations': reservations,
+                }
+                return self.driver.schedule_prep_resize(**kwargs)
+            except exception.NoValidHost as ex:
                 self._set_vm_state_and_notify('prep_resize',
-                                             {'vm_state': vm_states.ERROR,
+                                             {'vm_state': vm_states.ACTIVE,
                                               'task_state': None},
                                              context, ex, request_spec)
                 if reservations:
                     QUOTAS.rollback(context, reservations)
+            except Exception as ex:
+                with excutils.save_and_reraise_exception():
+                    self._set_vm_state_and_notify('prep_resize',
+                                                 {'vm_state': vm_states.ERROR,
+                                                  'task_state': None},
+                                                 context, ex, request_spec)
+                    if reservations:
+                        QUOTAS.rollback(context, reservations)
 
     def _set_vm_state_and_notify(self, method, updates, context, ex,
                                  request_spec):
-        """changes VM state and notifies"""
+        """changes VM state and notifies."""
         # FIXME(comstud): Re-factor this somehow. Not sure this belongs in the
         # scheduler manager like this. We should make this easier.
         # run_instance only sends a request_spec, and an instance may or may
@@ -180,8 +201,6 @@ class SchedulerManager(manager.Manager):
         uuids = [properties.get('uuid')]
         for instance_uuid in request_spec.get('instance_uuids') or uuids:
             if instance_uuid:
-                compute_utils.add_instance_fault_from_exc(context,
-                        instance_uuid, ex, sys.exc_info())
                 state = vm_state.upper()
                 LOG.warning(_('Setting instance to %(state)s state.'),
                             locals(), instance_uuid=instance_uuid)
@@ -191,6 +210,9 @@ class SchedulerManager(manager.Manager):
                         context, instance_uuid, updates)
                 notifications.send_update(context, old_ref, new_ref,
                         service="scheduler")
+                compute_utils.add_instance_fault_from_exc(context,
+                        conductor_api.LocalAPI(),
+                        new_ref, ex, sys.exc_info())
 
             payload = dict(request_spec=request_spec,
                            instance_properties=properties,
@@ -220,13 +242,12 @@ class SchedulerManager(manager.Manager):
 
         """
         # Getting compute node info and related instances info
-        compute_ref = db.service_get_all_compute_by_host(context, host)
-        compute_ref = compute_ref[0]
+        service_ref = db.service_get_by_compute_host(context, host)
         instance_refs = db.instance_get_all_by_host(context,
-                                                    compute_ref['host'])
+                                                    service_ref['host'])
 
         # Getting total available/used resource
-        compute_ref = compute_ref['compute_node'][0]
+        compute_ref = service_ref['compute_node'][0]
         resource = {'vcpus': compute_ref['vcpus'],
                     'memory_mb': compute_ref['memory_mb'],
                     'local_gb': compute_ref['local_gb'],
@@ -266,3 +287,10 @@ class SchedulerManager(manager.Manager):
 
     def get_backdoor_port(self, context):
         return self.backdoor_port
+
+    def select_hosts(self, context, request_spec, filter_properties):
+        """Returns host(s) best suited for this request_spec and
+        filter_properties"""
+        hosts = self.driver.select_hosts(context, request_spec,
+            filter_properties)
+        return jsonutils.to_primitive(hosts)

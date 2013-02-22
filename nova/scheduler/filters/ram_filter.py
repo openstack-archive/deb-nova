@@ -14,7 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -29,7 +30,7 @@ CONF.register_opt(ram_allocation_ratio_opt)
 
 
 class RamFilter(filters.BaseHostFilter):
-    """Ram Filter with over subscription flag"""
+    """Ram Filter with over subscription flag."""
 
     def host_passes(self, host_state, filter_properties):
         """Only return hosts with sufficient available RAM."""

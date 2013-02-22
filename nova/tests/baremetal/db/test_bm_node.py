@@ -46,10 +46,6 @@ class BareMetalNodesTestCase(base.BMDBTestCase):
             ref = db.bm_node_create(self.context, n)
             self.ids.append(ref['id'])
 
-    def test_get_all0(self):
-        r = db.bm_node_get_all(self.context)
-        self.assertEquals(r, [])
-
     def test_get_all(self):
         r = db.bm_node_get_all(self.context)
         self.assertEquals(r, [])
@@ -69,7 +65,7 @@ class BareMetalNodesTestCase(base.BMDBTestCase):
         self.assertEquals(r['pm_address'], '1')
 
         self.assertRaises(
-              exception.InstanceNotFound,
+              exception.NodeNotFound,
               db.bm_node_get,
               self.context, -1)
 
@@ -95,13 +91,63 @@ class BareMetalNodesTestCase(base.BMDBTestCase):
         r = db.bm_node_get_all(self.context, service_host="host3")
         self.assertEquals(r, [])
 
+    def test_get_associated(self):
+        self._create_nodes()
+
+        r = db.bm_node_get_associated(self.context, service_host=None)
+        self.assertEquals(len(r), 1)
+        self.assertEquals(r[0]['pm_address'], '1')
+
+        r = db.bm_node_get_unassociated(self.context, service_host=None)
+        self.assertEquals(len(r), 5)
+        pmaddrs = [x['pm_address'] for x in r]
+        self.assertIn('0', pmaddrs)
+        self.assertIn('2', pmaddrs)
+        self.assertIn('3', pmaddrs)
+        self.assertIn('4', pmaddrs)
+        self.assertIn('5', pmaddrs)
+
     def test_destroy(self):
         self._create_nodes()
 
         db.bm_node_destroy(self.context, self.ids[0])
 
         self.assertRaises(
-              exception.InstanceNotFound,
+              exception.NodeNotFound,
+              db.bm_node_get,
+              self.context, self.ids[0])
+
+        r = db.bm_node_get_all(self.context)
+        self.assertEquals(len(r), 5)
+
+    def test_destroy_with_interfaces(self):
+        self._create_nodes()
+
+        if_a_id = db.bm_interface_create(self.context, self.ids[0],
+                                         'aa:aa:aa:aa:aa:aa', None, None)
+        if_b_id = db.bm_interface_create(self.context, self.ids[0],
+                                         'bb:bb:bb:bb:bb:bb', None, None)
+        if_x_id = db.bm_interface_create(self.context, self.ids[1],
+                                         '11:22:33:44:55:66', None, None)
+
+        db.bm_node_destroy(self.context, self.ids[0])
+
+        self.assertRaises(
+              exception.NovaException,
+              db.bm_interface_get,
+              self.context, if_a_id)
+
+        self.assertRaises(
+              exception.NovaException,
+              db.bm_interface_get,
+              self.context, if_b_id)
+
+        # Another node's interface is not affected
+        if_x = db.bm_interface_get(self.context, if_x_id)
+        self.assertEqual(self.ids[1], if_x['bm_node_id'])
+
+        self.assertRaises(
+              exception.NodeNotFound,
               db.bm_node_get,
               self.context, self.ids[0])
 

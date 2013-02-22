@@ -18,6 +18,7 @@ import webob
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+import nova.context
 from nova import db
 from nova import exception
 from nova import quota
@@ -45,7 +46,7 @@ class QuotaClassTemplate(xmlutil.TemplateBuilder):
 class QuotaClassSetsController(object):
 
     def _format_quota_set(self, quota_class, quota_set):
-        """Convert the quota object to a result dict"""
+        """Convert the quota object to a result dict."""
 
         result = dict(id=str(quota_class))
 
@@ -59,7 +60,7 @@ class QuotaClassSetsController(object):
         context = req.environ['nova.context']
         authorize(context)
         try:
-            db.sqlalchemy.api.authorize_quota_class_context(context, id)
+            nova.context.authorize_quota_class_context(context, id)
             return self._format_quota_set(id,
                                           QUOTAS.get_class_quotas(context, id))
         except exception.NotAuthorized:
@@ -84,7 +85,7 @@ class QuotaClassSetsController(object):
 
 
 class Quota_classes(extensions.ExtensionDescriptor):
-    """Quota classes management support"""
+    """Quota classes management support."""
 
     name = "QuotaClasses"
     alias = "os-quota-class-sets"

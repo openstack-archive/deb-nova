@@ -24,8 +24,7 @@ import traceback
 import eventlet
 import eventlet.backdoor
 import greenlet
-
-from nova.openstack.common import cfg
+from oslo.config import cfg
 
 eventlet_backdoor_opts = [
     cfg.IntOpt('backdoor_port',
@@ -46,7 +45,7 @@ def _find_objects(t):
 
 
 def _print_greenthreads():
-    for i, gt in enumerate(find_objects(greenlet.greenlet)):
+    for i, gt in enumerate(_find_objects(greenlet.greenlet)):
         print i, gt
         traceback.print_stack(gt.gr_frame)
         print

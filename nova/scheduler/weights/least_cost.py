@@ -25,8 +25,9 @@ NOTE(comstud): This is deprecated. One should use the RAMWeigher and/or
 create other weight modules.
 """
 
+from oslo.config import cfg
+
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 
@@ -52,7 +53,7 @@ CONF.register_opts(least_cost_opts)
 
 
 def noop_cost_fn(host_state, weight_properties):
-    """Return a pre-weight cost of 1 for each host"""
+    """Return a pre-weight cost of 1 for each host."""
     return 1
 
 

@@ -40,11 +40,14 @@ class ServerStartStopActionController(wsgi.Controller):
 
     @wsgi.action('os-start')
     def _start_server(self, req, id, body):
-        """Start an instance. """
+        """Start an instance."""
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
         LOG.debug(_('start instance'), instance=instance)
-        self.compute_api.start(context, instance)
+        try:
+            self.compute_api.start(context, instance)
+        except exception.InstanceNotReady as e:
+            raise webob.exc.HTTPConflict(explanation=unicode(e))
         return webob.Response(status_int=202)
 
     @wsgi.action('os-stop')
@@ -53,12 +56,15 @@ class ServerStartStopActionController(wsgi.Controller):
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
         LOG.debug(_('stop instance'), instance=instance)
-        self.compute_api.stop(context, instance)
+        try:
+            self.compute_api.stop(context, instance)
+        except exception.InstanceNotReady as e:
+            raise webob.exc.HTTPConflict(explanation=unicode(e))
         return webob.Response(status_int=202)
 
 
 class Server_start_stop(extensions.ExtensionDescriptor):
-    """Start/Stop instance compute API support"""
+    """Start/Stop instance compute API support."""
 
     name = "ServerStartStop"
     alias = "os-server-start-stop"

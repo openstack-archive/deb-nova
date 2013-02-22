@@ -23,11 +23,12 @@ import random
 import string
 import uuid
 
+from oslo.config import cfg
+
 import nova.image.glance
-from nova.openstack.common import cfg
-from nova.openstack.common.log import logging
+from nova.openstack.common import log as logging
 from nova import service
-from nova import test  # For the flags
+from nova import test
 from nova.tests import fake_crypto
 import nova.tests.image.fake
 from nova.tests.integrated.api import client
@@ -35,6 +36,8 @@ from nova.tests.integrated.api import client
 
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
+CONF.import_opt('manager', 'nova.cells.opts', group='cells')
 
 
 def generate_random_alphanumeric(length):
@@ -56,7 +59,7 @@ def generate_new_element(items, prefix, numeric=False):
             candidate = prefix + generate_random_numeric(8)
         else:
             candidate = prefix + generate_random_alphanumeric(8)
-        if not candidate in items:
+        if candidate not in items:
             return candidate
         LOG.debug("Random collision on %s" % candidate)
 
@@ -81,6 +84,7 @@ class _IntegratedTestBase(test.TestCase):
         self.scheduler = self.start_service('cert')
         self.network = self.start_service('network')
         self.scheduler = self.start_service('scheduler')
+        self.cells = self.start_service('cells', manager=CONF.cells.manager)
 
         self._start_api_service()
 

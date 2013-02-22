@@ -15,9 +15,11 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import calendar
 import os
 
 import mox
+from oslo.config import cfg
 
 from nova import context
 from nova import db
@@ -25,10 +27,12 @@ from nova.network import driver
 from nova.network import linux_net
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova import test
 from nova import utils
 
 LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
 
 HOST = "testhost"
 
@@ -107,6 +111,7 @@ fixed_ips = [{'id': 0,
               'address': '192.168.0.100',
               'instance_id': 0,
               'allocated': True,
+              'leased': True,
               'virtual_interface_id': 0,
               'instance_uuid': '00000000-0000-0000-0000-0000000000000000',
               'floating_ips': []},
@@ -115,6 +120,7 @@ fixed_ips = [{'id': 0,
               'address': '192.168.1.100',
               'instance_id': 0,
               'allocated': True,
+              'leased': True,
               'virtual_interface_id': 1,
               'instance_uuid': '00000000-0000-0000-0000-0000000000000000',
               'floating_ips': []},
@@ -123,6 +129,7 @@ fixed_ips = [{'id': 0,
               'address': '192.168.0.101',
               'instance_id': 1,
               'allocated': True,
+              'leased': True,
               'virtual_interface_id': 2,
               'instance_uuid': '00000000-0000-0000-0000-0000000000000001',
               'floating_ips': []},
@@ -131,6 +138,7 @@ fixed_ips = [{'id': 0,
               'address': '192.168.1.101',
               'instance_id': 1,
               'allocated': True,
+              'leased': True,
               'virtual_interface_id': 3,
               'instance_uuid': '00000000-0000-0000-0000-0000000000000001',
               'floating_ips': []},
@@ -139,6 +147,7 @@ fixed_ips = [{'id': 0,
               'address': '192.168.0.102',
               'instance_id': 0,
               'allocated': True,
+              'leased': False,
               'virtual_interface_id': 4,
               'instance_uuid': '00000000-0000-0000-0000-0000000000000000',
               'floating_ips': []},
@@ -147,6 +156,7 @@ fixed_ips = [{'id': 0,
               'address': '192.168.1.102',
               'instance_id': 1,
               'allocated': True,
+              'leased': False,
               'virtual_interface_id': 5,
               'instance_uuid': '00000000-0000-0000-0000-0000000000000001',
               'floating_ips': []}]
@@ -184,7 +194,7 @@ vifs = [{'id': 0,
          'instance_uuid': '00000000-0000-0000-0000-0000000000000001'}]
 
 
-def get_associated(context, network_id, host=None):
+def get_associated(context, network_id, host=None, address=None):
     result = []
     for datum in fixed_ips:
         if (datum['network_id'] == network_id and datum['allocated']
@@ -192,6 +202,8 @@ def get_associated(context, network_id, host=None):
             and datum['virtual_interface_id'] is not None):
             instance = instances[datum['instance_uuid']]
             if host and host != instance['host']:
+                continue
+            if address and address != datum['address']:
                 continue
             cleaned = {}
             cleaned['address'] = datum['address']
@@ -203,6 +215,8 @@ def get_associated(context, network_id, host=None):
             cleaned['instance_hostname'] = instance['hostname']
             cleaned['instance_updated'] = instance['updated_at']
             cleaned['instance_created'] = instance['created_at']
+            cleaned['allocated'] = datum['allocated']
+            cleaned['leased'] = datum['leased']
             result.append(cleaned)
     return result
 
@@ -299,7 +313,6 @@ class LinuxNetworkTestCase(test.TestCase):
                 "192.168.1.102,net:NW-5"
         )
         actual_hosts = self.driver.get_dhcp_hosts(self.context, networks[1])
-
         self.assertEquals(actual_hosts, expected)
 
     def test_get_dns_hosts_for_nw00(self):
@@ -332,6 +345,41 @@ class LinuxNetworkTestCase(test.TestCase):
         actual_opts = self.driver.get_dhcp_opts(self.context, networks[1])
 
         self.assertEquals(actual_opts, expected_opts)
+
+    def test_get_dhcp_leases_for_nw00(self):
+        timestamp = timeutils.utcnow()
+        seconds_since_epoch = calendar.timegm(timestamp.utctimetuple())
+
+        leases = self.driver.get_dhcp_leases(self.context, networks[0])
+        leases = leases.split('\n')
+        for lease in leases:
+            lease = lease.split(' ')
+            data = get_associated(self.context, 0, address=lease[2])[0]
+            self.assertTrue(data['allocated'])
+            self.assertTrue(data['leased'])
+            self.assertTrue(lease[0] > seconds_since_epoch)
+            self.assertTrue(lease[1] == data['vif_address'])
+            self.assertTrue(lease[2] == data['address'])
+            self.assertTrue(lease[3] == data['instance_hostname'])
+            self.assertTrue(lease[4] == '*')
+
+    def test_get_dhcp_leases_for_nw01(self):
+        self.flags(host='fake_instance01')
+        timestamp = timeutils.utcnow()
+        seconds_since_epoch = calendar.timegm(timestamp.utctimetuple())
+
+        leases = self.driver.get_dhcp_leases(self.context, networks[1])
+        leases = leases.split('\n')
+        for lease in leases:
+            lease = lease.split(' ')
+            data = get_associated(self.context, 1, address=lease[2])[0]
+            self.assertTrue(data['allocated'])
+            self.assertTrue(data['leased'])
+            self.assertTrue(lease[0] > seconds_since_epoch)
+            self.assertTrue(lease[1] == data['vif_address'])
+            self.assertTrue(lease[2] == data['address'])
+            self.assertTrue(lease[3] == data['instance_hostname'])
+            self.assertTrue(lease[4] == '*')
 
     def test_dhcp_opts_not_default_gateway_network(self):
         expected = "NW-0,3"
@@ -426,6 +474,71 @@ class LinuxNetworkTestCase(test.TestCase):
         driver.plug(network, "fakemac")
         self.assertEqual(info['passed_interface'], "override_interface")
 
+    def _test_dnsmasq_execute(self, extra_expected=None):
+        network_ref = {'id': 'fake',
+                       'label': 'fake',
+                       'multi_host': False,
+                       'cidr': '10.0.0.0/24',
+                       'dns1': '8.8.4.4',
+                       'dhcp_start': '1.0.0.2',
+                       'dhcp_server': '10.0.0.1'}
+        executes = []
+
+        def fake_execute(*args, **kwargs):
+            executes.append(args)
+            return "", ""
+
+        self.stubs.Set(linux_net, '_execute', fake_execute)
+
+        self.stubs.Set(os, 'chmod', lambda *a, **kw: None)
+        self.stubs.Set(linux_net, 'write_to_file', lambda *a, **kw: None)
+        self.stubs.Set(linux_net, '_dnsmasq_pid_for', lambda *a, **kw: None)
+        dev = 'br100'
+        linux_net.restart_dhcp(self.context, dev, network_ref)
+        expected = ['env',
+          'CONFIG_FILE=%s' % CONF.dhcpbridge_flagfile,
+          'NETWORK_ID=fake',
+          'dnsmasq',
+          '--strict-order',
+          '--bind-interfaces',
+          '--conf-file=%s' % CONF.dnsmasq_config_file,
+          '--domain=%s' % CONF.dhcp_domain,
+          '--pid-file=%s' % linux_net._dhcp_file(dev, 'pid'),
+          '--listen-address=%s' % network_ref['dhcp_server'],
+          '--except-interface=lo',
+          "--dhcp-range=set:'%s',%s,static,%ss" % (network_ref['label'],
+                                                   network_ref['dhcp_start'],
+                                                   CONF.dhcp_lease_time),
+          '--dhcp-lease-max=256',
+          '--dhcp-hostsfile=%s' % linux_net._dhcp_file(dev, 'conf'),
+          '--dhcp-script=%s' % CONF.dhcpbridge,
+          '--leasefile-ro']
+        if extra_expected:
+            expected += extra_expected
+        self.assertEqual([tuple(expected)], executes)
+
+    def test_dnsmasq_execute(self):
+        self._test_dnsmasq_execute()
+
+    def test_dnsmasq_execute_dns_servers(self):
+        self.flags(dns_server=['1.1.1.1', '2.2.2.2'])
+        expected = [
+            '--no-hosts',
+            '--no-resolv',
+            '--server=1.1.1.1',
+            '--server=2.2.2.2',
+        ]
+        self._test_dnsmasq_execute(expected)
+
+    def test_dnsmasq_execute_use_network_dns_servers(self):
+        self.flags(use_network_dns_servers=True)
+        expected = [
+            '--no-hosts',
+            '--no-resolv',
+            '--server=8.8.4.4',
+        ]
+        self._test_dnsmasq_execute(expected)
+
     def test_isolated_host(self):
         self.flags(fake_network=False,
                    share_dhcp_address=True)
@@ -461,21 +574,17 @@ class LinuxNetworkTestCase(test.TestCase):
                    'bridge_interface': iface}
         driver.plug(network, 'fakemac')
         expected = [
-            ('ebtables', '-D', 'INPUT', '-p', 'ARP', '-i', iface,
-             '--arp-ip-dst', dhcp, '-j', 'DROP'),
-            ('ebtables', '-I', 'INPUT', '-p', 'ARP', '-i', iface,
-             '--arp-ip-dst', dhcp, '-j', 'DROP'),
-            ('ebtables', '-D', 'OUTPUT', '-p', 'ARP', '-o', iface,
-             '--arp-ip-src', dhcp, '-j', 'DROP'),
-            ('ebtables', '-I', 'OUTPUT', '-p', 'ARP', '-o', iface,
-             '--arp-ip-src', dhcp, '-j', 'DROP'),
-            ('iptables-save', '-c', '-t', 'filter'),
+            ('ebtables', '-t', 'filter', '-D', 'INPUT', '-p', 'ARP', '-i',
+             iface, '--arp-ip-dst', dhcp, '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-I', 'INPUT', '-p', 'ARP', '-i',
+             iface, '--arp-ip-dst', dhcp, '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-D', 'OUTPUT', '-p', 'ARP', '-o',
+             iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-I', 'OUTPUT', '-p', 'ARP', '-o',
+             iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
+            ('iptables-save', '-c'),
             ('iptables-restore', '-c'),
-            ('iptables-save', '-c', '-t', 'mangle'),
-            ('iptables-restore', '-c'),
-            ('iptables-save', '-c', '-t', 'nat'),
-            ('iptables-restore', '-c'),
-            ('ip6tables-save', '-c', '-t', 'filter'),
+            ('ip6tables-save', '-c'),
             ('ip6tables-restore', '-c'),
         ]
         self.assertEqual(executes, expected)
@@ -504,17 +613,13 @@ class LinuxNetworkTestCase(test.TestCase):
 
         driver.unplug(network)
         expected = [
-            ('ebtables', '-D', 'INPUT', '-p', 'ARP', '-i', iface,
-             '--arp-ip-dst', dhcp, '-j', 'DROP'),
-            ('ebtables', '-D', 'OUTPUT', '-p', 'ARP', '-o', iface,
-             '--arp-ip-src', dhcp, '-j', 'DROP'),
-            ('iptables-save', '-c', '-t', 'filter'),
+            ('ebtables', '-t', 'filter', '-D', 'INPUT', '-p', 'ARP', '-i',
+             iface, '--arp-ip-dst', dhcp, '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-D', 'OUTPUT', '-p', 'ARP', '-o',
+             iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
+            ('iptables-save', '-c'),
             ('iptables-restore', '-c'),
-            ('iptables-save', '-c', '-t', 'mangle'),
-            ('iptables-restore', '-c'),
-            ('iptables-save', '-c', '-t', 'nat'),
-            ('iptables-restore', '-c'),
-            ('ip6tables-save', '-c', '-t', 'filter'),
+            ('ip6tables-save', '-c'),
             ('ip6tables-restore', '-c'),
         ]
         self.assertEqual(executes, expected)

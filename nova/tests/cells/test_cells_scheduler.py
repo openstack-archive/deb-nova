@@ -17,11 +17,12 @@ Tests For CellsScheduler
 """
 import time
 
+from oslo.config import cfg
+
 from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.cells import fakes
@@ -31,7 +32,7 @@ CONF.import_opt('scheduler_retries', 'nova.cells.scheduler', group='cells')
 
 
 class CellsSchedulerTestCase(test.TestCase):
-    """Test case for CellsScheduler class"""
+    """Test case for CellsScheduler class."""
 
     def setUp(self):
         super(CellsSchedulerTestCase, self).setUp()
@@ -78,7 +79,8 @@ class CellsSchedulerTestCase(test.TestCase):
         for instance_uuid in self.instance_uuids:
             instance = db.instance_get_by_uuid(self.ctxt, instance_uuid)
             self.assertEqual('meow', instance['hostname'])
-            self.assertEqual('moo', instance['display_name'])
+            self.assertEqual('moo-%s' % instance['uuid'],
+                             instance['display_name'])
             self.assertEqual('fake_image_ref', instance['image_ref'])
 
     def test_run_instance_selects_child_cell(self):

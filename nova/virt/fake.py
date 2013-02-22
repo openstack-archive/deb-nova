@@ -76,9 +76,10 @@ class FakeInstance(object):
 class FakeDriver(driver.ComputeDriver):
     capabilities = {
         "has_imagecache": True,
+        "supports_recreate": True,
         }
 
-    """Fake hypervisor driver"""
+    """Fake hypervisor driver."""
 
     def __init__(self, virtapi, read_only=False):
         super(FakeDriver, self).__init__(virtapi)
@@ -101,6 +102,7 @@ class FakeDriver(driver.ComputeDriver):
           'hypervisor_hostname': 'fake-mini',
           }
         self._mounts = {}
+        self._interfaces = {}
 
     def init_host(self, host):
         return
@@ -124,11 +126,11 @@ class FakeDriver(driver.ComputeDriver):
         self.instances[name] = fake_instance
 
     def snapshot(self, context, instance, name, update_task_state):
-        if not instance['name'] in self.instances:
+        if instance['name'] not in self.instances:
             raise exception.InstanceNotRunning(instance_id=instance['uuid'])
         update_task_state(task_state=task_states.IMAGE_UPLOADING)
 
-    def reboot(self, instance, network_info, reboot_type,
+    def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None):
         pass
 
@@ -163,6 +165,12 @@ class FakeDriver(driver.ComputeDriver):
 
     def finish_revert_migration(self, instance, network_info,
                                 block_device_info=None):
+        pass
+
+    def post_live_migration_at_destination(self, context, instance,
+                                           network_info,
+                                           block_migration=False,
+                                           block_device_info=None):
         pass
 
     def power_off(self, instance):
@@ -200,20 +208,33 @@ class FakeDriver(driver.ComputeDriver):
                          'inst': self.instances}, instance=instance)
 
     def attach_volume(self, connection_info, instance, mountpoint):
-        """Attach the disk to the instance at mountpoint using info"""
+        """Attach the disk to the instance at mountpoint using info."""
         instance_name = instance['name']
-        if not instance_name in self._mounts:
+        if instance_name not in self._mounts:
             self._mounts[instance_name] = {}
         self._mounts[instance_name][mountpoint] = connection_info
         return True
 
     def detach_volume(self, connection_info, instance, mountpoint):
-        """Detach the disk attached to the instance"""
+        """Detach the disk attached to the instance."""
         try:
             del self._mounts[instance['name']][mountpoint]
         except KeyError:
             pass
         return True
+
+    def attach_interface(self, instance, image_meta, network_info):
+        for (network, mapping) in network_info:
+            if mapping['vif_uuid'] in self._interfaces:
+                raise exception.InterfaceAttachFailed('duplicate')
+            self._interfaces[mapping['vif_uuid']] = mapping
+
+    def detach_interface(self, instance, network_info):
+        for (network, mapping) in network_info:
+            try:
+                del self._interfaces[mapping['vif_uuid']]
+            except KeyError:
+                raise exception.InterfaceDetachFailed('not attached')
 
     def get_info(self, instance):
         if instance['name'] not in self.instances:
@@ -269,6 +290,12 @@ class FakeDriver(driver.ComputeDriver):
         return {'internal_access_path': 'FAKE',
                 'host': 'fakevncconsole.com',
                 'port': 6969}
+
+    def get_spice_console(self, instance):
+        return {'internal_access_path': 'FAKE',
+                'host': 'fakespiceconsole.com',
+                'port': 6969,
+                'tlsPort': 6970}
 
     def get_console_pool_info(self, console_type):
         return {'address': '127.0.0.1',
@@ -351,7 +378,7 @@ class FakeDriver(driver.ComputeDriver):
         raise NotImplementedError('This method is supported only by libvirt.')
 
     def test_remove_vm(self, instance_name):
-        """Removes the named VM, as if it crashed. For testing"""
+        """Removes the named VM, as if it crashed. For testing."""
         self.instances.pop(instance_name)
 
     def get_host_stats(self, refresh=False):
@@ -401,6 +428,9 @@ class FakeDriver(driver.ComputeDriver):
 
     def list_instance_uuids(self):
         return []
+
+    def legacy_nwinfo(self):
+        return True
 
 
 class FakeVirtAPI(virtapi.VirtAPI):

@@ -22,18 +22,17 @@
 import os
 
 import mox
-from testtools.matchers import Contains
-from testtools.matchers import MatchesAll
-from testtools.matchers import Not
-from testtools.matchers import StartsWith
+
+from oslo.config import cfg
+from testtools import matchers
 
 from nova import exception
-from nova.openstack.common import cfg
-from nova import test
+from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.tests.baremetal.db import base as bm_db_base
 from nova.tests.baremetal.db import utils as bm_db_utils
 from nova.tests.image import fake as fake_image
 from nova.tests import utils
+from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import db
 from nova.virt.baremetal import pxe
 from nova.virt.baremetal import utils as bm_utils
@@ -71,9 +70,8 @@ class BareMetalPXETestCase(bm_db_base.BMDBTestCase):
         self.instance = utils.get_test_instance()
         self.test_network_info = utils.get_test_network_info(),
         self.node_info = bm_db_utils.new_bm_node(
-                id=123,
                 service_host='test_host',
-                cpus=2,
+                cpus=4,
                 memory_mb=2048,
                 prov_mac_address='11:11:11:11:11:11',
             )
@@ -120,26 +118,26 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
                 'ari_path': 'ggg',
             }
         config = pxe.build_pxe_config(**args)
-        self.assertThat(config, StartsWith('default deploy'))
+        self.assertThat(config, matchers.StartsWith('default deploy'))
 
         # deploy bits are in the deploy section
         start = config.index('label deploy')
         end = config.index('label boot')
-        self.assertThat(config[start:end], MatchesAll(
-            Contains('kernel ddd'),
-            Contains('initrd=eee'),
-            Contains('deployment_id=aaa'),
-            Contains('deployment_key=bbb'),
-            Contains('iscsi_target_iqn=ccc'),
-            Not(Contains('kernel fff')),
+        self.assertThat(config[start:end], matchers.MatchesAll(
+            matchers.Contains('kernel ddd'),
+            matchers.Contains('initrd=eee'),
+            matchers.Contains('deployment_id=aaa'),
+            matchers.Contains('deployment_key=bbb'),
+            matchers.Contains('iscsi_target_iqn=ccc'),
+            matchers.Not(matchers.Contains('kernel fff')),
             ))
 
         # boot bits are in the boot section
         start = config.index('label boot')
-        self.assertThat(config[start:], MatchesAll(
-            Contains('kernel fff'),
-            Contains('initrd=ggg'),
-            Not(Contains('kernel ddd')),
+        self.assertThat(config[start:], matchers.MatchesAll(
+            matchers.Contains('kernel fff'),
+            matchers.Contains('initrd=ggg'),
+            matchers.Not(matchers.Contains('kernel ddd')),
             ))
 
     def test_build_network_config(self):
@@ -147,12 +145,6 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
         config = pxe.build_network_config(net)
         self.assertIn('eth0', config)
         self.assertNotIn('eth1', config)
-        self.assertIn('hwaddress ether fake', config)
-        self.assertNotIn('hwaddress ether aa:bb:cc:dd', config)
-
-        net[0][1]['mac'] = 'aa:bb:cc:dd'
-        config = pxe.build_network_config(net)
-        self.assertIn('hwaddress ether aa:bb:cc:dd', config)
 
         net = utils.get_test_network_info(2)
         config = pxe.build_network_config(net)
@@ -231,25 +223,33 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
                 pxe.get_deploy_ari_id(self.instance), 'bbbb')
 
     def test_get_partition_sizes(self):
-        # m1.tiny: 10GB root, 0GB swap
-        self.instance['instance_type_id'] = 1
-        sizes = pxe.get_partition_sizes(self.instance)
-        self.assertEqual(sizes[0], 10240)
-        self.assertEqual(sizes[1], 1)
-
-        # kinda.big: 40GB root, 1GB swap
-        ref = utils.get_test_instance_type()
-        self.instance['instance_type_id'] = ref['id']
-        self.instance['root_gb'] = ref['root_gb']
+        # default "kinda.big" instance
         sizes = pxe.get_partition_sizes(self.instance)
         self.assertEqual(sizes[0], 40960)
         self.assertEqual(sizes[1], 1024)
+
+    def test_swap_not_zero(self):
+        # override swap to 0
+        instance_type = utils.get_test_instance_type(self.context)
+        instance_type['swap'] = 0
+        self.instance = utils.get_test_instance(self.context, instance_type)
+
+        sizes = pxe.get_partition_sizes(self.instance)
+        self.assertEqual(sizes[0], 40960)
+        self.assertEqual(sizes[1], 1)
 
     def test_get_tftp_image_info(self):
         # Raises an exception when options are neither specified
         # on the instance nor in configuration file
         CONF.baremetal.deploy_kernel = None
         CONF.baremetal.deploy_ramdisk = None
+        self.assertRaises(exception.NovaException,
+                pxe.get_tftp_image_info,
+                self.instance)
+
+        # Test that other non-true values also raise an exception
+        CONF.baremetal.deploy_kernel = ""
+        CONF.baremetal.deploy_ramdisk = ""
         self.assertRaises(exception.NovaException,
                 pxe.get_tftp_image_info,
                 self.instance)
@@ -295,6 +295,17 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
         self.assertEqual(res['deploy_kernel'][0], 'eeee')
         self.assertEqual(res['deploy_ramdisk'][0], 'ffff')
 
+        # However, if invalid values are passed on the image extra_specs,
+        # this should still raise an exception.
+        extra_specs = {
+                'deploy_kernel_id': '',
+                'deploy_ramdisk_id': '',
+            }
+        self.instance['extra_specs'] = extra_specs
+        self.assertRaises(exception.NovaException,
+                pxe.get_tftp_image_info,
+                self.instance)
+
 
 class PXEPrivateMethodsTestCase(BareMetalPXETestCase):
 
@@ -305,15 +316,6 @@ class PXEPrivateMethodsTestCase(BareMetalPXETestCase):
         address_list.sort()
         macs = self.driver._collect_mac_addresses(self.context, self.node)
         self.assertEqual(macs, address_list)
-
-    def test_generate_udev_rules(self):
-        self._create_node()
-        address_list = [nic['address'] for nic in self.nic_info]
-        address_list.append(self.node_info['prov_mac_address'])
-
-        rules = self.driver._generate_udev_rules(self.context, self.node)
-        for address in address_list:
-            self.assertIn('ATTR{address}=="%s"' % address, rules)
 
     def test_cache_tftp_images(self):
         self.instance['kernel_id'] = 'aaaa'
@@ -357,8 +359,6 @@ class PXEPrivateMethodsTestCase(BareMetalPXETestCase):
         #             nova.virt.disk.api._inject_*_into_fs
         self._create_node()
         files = []
-        files.append(('/etc/udev/rules.d/70-persistent-net.rules',
-                 self.driver._generate_udev_rules(self.context, self.node)))
         self.instance['hostname'] = 'fake hostname'
         files.append(('/etc/hostname', 'fake hostname'))
         self.instance['key_data'] = 'fake ssh key'
@@ -413,16 +413,17 @@ class PXEPublicMethodsTestCase(BareMetalPXETestCase):
 
     def test_destroy_images(self):
         self._create_node()
-        self.mox.StubOutWithMock(os, 'unlink')
+        self.mox.StubOutWithMock(bm_utils, 'unlink_without_raise')
+        self.mox.StubOutWithMock(bm_utils, 'rmtree_without_raise')
 
-        os.unlink(pxe.get_image_file_path(self.instance))
-        os.unlink(pxe.get_image_dir_path(self.instance))
+        bm_utils.unlink_without_raise(pxe.get_image_file_path(self.instance))
+        bm_utils.rmtree_without_raise(pxe.get_image_dir_path(self.instance))
         self.mox.ReplayAll()
 
         self.driver.destroy_images(self.context, self.node, self.instance)
         self.mox.VerifyAll()
 
-    def test_activate_bootloader(self):
+    def test_activate_bootloader_passes_details(self):
         self._create_node()
         macs = [nic['address'] for nic in self.nic_info]
         macs.append(self.node_info['prov_mac_address'])
@@ -442,7 +443,6 @@ class PXEPublicMethodsTestCase(BareMetalPXETestCase):
         self.mox.StubOutWithMock(pxe, 'get_tftp_image_info')
         self.mox.StubOutWithMock(pxe, 'get_partition_sizes')
         self.mox.StubOutWithMock(bm_utils, 'random_alnum')
-        self.mox.StubOutWithMock(db, 'bm_deployment_create')
         self.mox.StubOutWithMock(pxe, 'build_pxe_config')
         self.mox.StubOutWithMock(bm_utils, 'write_to_file')
         self.mox.StubOutWithMock(bm_utils, 'create_link_without_raise')
@@ -450,71 +450,78 @@ class PXEPublicMethodsTestCase(BareMetalPXETestCase):
         pxe.get_tftp_image_info(self.instance).AndReturn(image_info)
         pxe.get_partition_sizes(self.instance).AndReturn((0, 0))
         bm_utils.random_alnum(32).AndReturn('alnum')
-        db.bm_deployment_create(
-                self.context, 'alnum', image_path, pxe_path, 0, 0).\
-                        AndReturn(1234)
         pxe.build_pxe_config(
-                1234, 'alnum', iqn, 'aaaa', 'bbbb', 'cccc', 'dddd').\
-                        AndReturn(pxe_config)
+                self.node['id'], 'alnum', iqn,
+                'aaaa', 'bbbb', 'cccc', 'dddd').AndReturn(pxe_config)
         bm_utils.write_to_file(pxe_path, pxe_config)
         for mac in macs:
             bm_utils.create_link_without_raise(
                     pxe_path, pxe.get_pxe_mac_path(mac))
+
         self.mox.ReplayAll()
 
-        self.driver.activate_bootloader(
-                self.context, self.node, self.instance)
+        self.driver.activate_bootloader(self.context, self.node, self.instance)
+
         self.mox.VerifyAll()
 
-    def test_deactivate_bootloader(self):
+    def test_activate_and_deactivate_bootloader(self):
         self._create_node()
-        macs = [nic['address'] for nic in self.nic_info]
-        macs.append(self.node_info['prov_mac_address'])
-        macs.sort()
-        image_info = {
-                'deploy_kernel': [None, 'aaaa'],
-                'deploy_ramdisk': [None, 'bbbb'],
-                'kernel': [None, 'cccc'],
-                'ramdisk': [None, 'dddd'],
+        extra_specs = {
+                'deploy_kernel_id': 'eeee',
+                'deploy_ramdisk_id': 'ffff',
             }
+        self.instance['extra_specs'] = extra_specs
         self.instance['uuid'] = 'fake-uuid'
-        pxe_path = pxe.get_pxe_config_file_path(self.instance)
 
+        self.mox.StubOutWithMock(bm_utils, 'write_to_file')
+        self.mox.StubOutWithMock(bm_utils, 'create_link_without_raise')
         self.mox.StubOutWithMock(bm_utils, 'unlink_without_raise')
-        self.mox.StubOutWithMock(pxe, 'get_tftp_image_info')
-        self.mox.StubOutWithMock(self.driver, '_collect_mac_addresses')
+        self.mox.StubOutWithMock(bm_utils, 'rmtree_without_raise')
 
-        pxe.get_tftp_image_info(self.instance).AndReturn(image_info)
-        for uuid, path in [image_info[label] for label in image_info]:
-            bm_utils.unlink_without_raise(path)
-        bm_utils.unlink_without_raise(pxe_path)
-        self.driver._collect_mac_addresses(self.context, self.node).\
-                AndReturn(macs)
-        for mac in macs:
-            bm_utils.unlink_without_raise(pxe.get_pxe_mac_path(mac))
-        bm_utils.unlink_without_raise(
-                os.path.join(CONF.baremetal.tftp_root, 'fake-uuid'))
+        # create the config file
+        bm_utils.write_to_file(mox.StrContains('fake-uuid'),
+                               mox.StrContains(CONF.baremetal.tftp_root))
+        # unlink and link the 3 interfaces
+        for i in range(3):
+            bm_utils.unlink_without_raise(mox.Or(
+                    mox.StrContains('fake-uuid'),
+                    mox.StrContains(CONF.baremetal.tftp_root)))
+            bm_utils.create_link_without_raise(
+                    mox.StrContains('fake-uuid'),
+                    mox.StrContains(CONF.baremetal.tftp_root))
+        # unlink all 3 interfaces, 4 images, and the config file
+        for i in range(8):
+            bm_utils.unlink_without_raise(mox.Or(
+                    mox.StrContains('fake-uuid'),
+                    mox.StrContains(CONF.baremetal.tftp_root)))
+        bm_utils.rmtree_without_raise(mox.StrContains('fake-uuid'))
+
         self.mox.ReplayAll()
 
-        self.driver.deactivate_bootloader(
-            self.context, self.node, self.instance)
+        # activate and deactivate the bootloader
+        # and check the deployment task_state in the database
+        row = db.bm_node_get(self.context, 1)
+        self.assertTrue(row['deploy_key'] is None)
+
+        self.driver.activate_bootloader(self.context, self.node,
+                                            self.instance)
+        row = db.bm_node_get(self.context, 1)
+        self.assertTrue(row['deploy_key'] is not None)
+
+        self.driver.deactivate_bootloader(self.context, self.node,
+                                            self.instance)
+        row = db.bm_node_get(self.context, 1)
+        self.assertTrue(row['deploy_key'] is None)
+
         self.mox.VerifyAll()
 
     def test_deactivate_bootloader_for_nonexistent_instance(self):
         self._create_node()
-        macs = [nic['address'] for nic in self.nic_info]
-        macs.append(self.node_info['prov_mac_address'])
-        macs.sort()
-        image_info = {
-                'deploy_kernel': [None, 'aaaa'],
-                'deploy_ramdisk': [None, 'bbbb'],
-                'kernel': [None, 'cccc'],
-                'ramdisk': [None, 'dddd'],
-            }
         self.instance['uuid'] = 'fake-uuid'
         pxe_path = pxe.get_pxe_config_file_path(self.instance)
 
         self.mox.StubOutWithMock(bm_utils, 'unlink_without_raise')
+        self.mox.StubOutWithMock(bm_utils, 'rmtree_without_raise')
         self.mox.StubOutWithMock(pxe, 'get_tftp_image_info')
         self.mox.StubOutWithMock(self.driver, '_collect_mac_addresses')
 
@@ -522,11 +529,41 @@ class PXEPublicMethodsTestCase(BareMetalPXETestCase):
                 AndRaise(exception.NovaException)
         bm_utils.unlink_without_raise(pxe_path)
         self.driver._collect_mac_addresses(self.context, self.node).\
-                AndRaise(exception.DBError)
-        bm_utils.unlink_without_raise(
+                AndRaise(db_session.DBError)
+        bm_utils.rmtree_without_raise(
                 os.path.join(CONF.baremetal.tftp_root, 'fake-uuid'))
         self.mox.ReplayAll()
 
         self.driver.deactivate_bootloader(
             self.context, self.node, self.instance)
         self.mox.VerifyAll()
+
+    def test_activate_node(self):
+        self._create_node()
+        self.instance['uuid'] = 'fake-uuid'
+        self.flags(pxe_deploy_timeout=1, group='baremetal')
+
+        db.bm_node_update(self.context, 1,
+                {'task_state': baremetal_states.DEPLOYING,
+                 'instance_uuid': 'fake-uuid'})
+
+        # test timeout
+        self.assertRaises(exception.InstanceDeployFailure,
+                self.driver.activate_node,
+                self.context, self.node, self.instance)
+
+        # test DEPLOYDONE
+        db.bm_node_update(self.context, 1,
+                {'task_state': baremetal_states.DEPLOYDONE})
+        self.driver.activate_node(self.context, self.node, self.instance)
+
+        # test no deploy -- state is just ACTIVE
+        db.bm_node_update(self.context, 1,
+                {'task_state': baremetal_states.ACTIVE})
+        self.driver.activate_node(self.context, self.node, self.instance)
+
+        # test node gone
+        db.bm_node_destroy(self.context, 1)
+        self.assertRaises(exception.InstanceDeployFailure,
+                self.driver.activate_node,
+                self.context, self.node, self.instance)

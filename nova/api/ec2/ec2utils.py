@@ -73,7 +73,7 @@ def glance_id_to_ec2_id(context, glance_id, image_type='ami'):
 
 
 def ec2_id_to_id(ec2_id):
-    """Convert an ec2 ID (i-[base 16 number]) to an instance id (int)"""
+    """Convert an ec2 ID (i-[base 16 number]) to an instance id (int)."""
     try:
         return int(ec2_id.split('-')[-1], 16)
     except ValueError:
@@ -104,7 +104,7 @@ def get_ip_info_for_instance_from_nw_info(nw_info):
 
 
 def get_ip_info_for_instance(context, instance):
-    """Return a dictionary of IP information for an instance"""
+    """Return a dictionary of IP information for an instance."""
 
     info_cache = instance['info_cache'] or {}
     cached_nwinfo = info_cache.get('network_info')
@@ -115,14 +115,15 @@ def get_ip_info_for_instance(context, instance):
     return get_ip_info_for_instance_from_nw_info(nw_info)
 
 
-def get_availability_zone_by_host(services, host):
+def get_availability_zone_by_host(services, host, conductor_api=None):
     if len(services) > 0:
-        return availability_zones.get_host_availability_zone(context, host)
+        return availability_zones.get_host_availability_zone(
+            context.get_admin_context(), host, conductor_api)
     return 'unknown zone'
 
 
 def id_to_ec2_id(instance_id, template='i-%08x'):
-    """Convert an instance ID (int) to an ec2 ID (i-[base 16 number])"""
+    """Convert an instance ID (int) to an ec2 ID (i-[base 16 number])."""
     return template % int(instance_id)
 
 
@@ -178,7 +179,7 @@ def ec2_vol_id_to_uuid(ec2_id):
 
 
 def is_ec2_timestamp_expired(request, expires=None):
-    """Checks the timestamp or expiry time included in a EC2 request
+    """Checks the timestamp or expiry time included in an EC2 request
     and returns true if the request is expired
     """
     query_time = None

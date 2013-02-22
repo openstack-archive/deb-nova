@@ -17,9 +17,11 @@
 #    under the License.
 
 import base64
-import logging
 import re
 import socket
+
+from nova.openstack.common import log as logging
+
 
 LOG = logging.getLogger(__name__)
 
@@ -101,7 +103,7 @@ def validate_ipv4(addr):
 
 
 def validate_user_data(user_data):
-    """Check if the user_data is encoded properly"""
+    """Check if the user_data is encoded properly."""
     try:
         user_data = base64.b64decode(user_data)
     except TypeError:

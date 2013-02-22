@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack LLC.
 #
@@ -20,31 +21,39 @@ A connection to the VMware ESX platform.
 
 **Related Flags**
 
-:vmwareapi_host_ip:        IPAddress of VMware ESX server.
-:vmwareapi_host_username:  Username for connection to VMware ESX Server.
-:vmwareapi_host_password:  Password for connection to VMware ESX Server.
-:vmwareapi_task_poll_interval:  The interval (seconds) used for polling of
-                             remote tasks
-                             (default: 1.0).
-:vmwareapi_api_retry_count:  The API retry count in case of failure such as
-                             network failures (socket errors etc.)
-                             (default: 10).
-
+:vmwareapi_host_ip:         IP address or Name of VMware ESX/VC server.
+:vmwareapi_host_username:   Username for connection to VMware ESX/VC Server.
+:vmwareapi_host_password:   Password for connection to VMware ESX/VC Server.
+:vmwareapi_cluster_name:    Name of a VMware Cluster ComputeResource.
+:vmwareapi_task_poll_interval: The interval (seconds) used for polling of
+                            remote tasks
+                            (default: 5.0).
+:vmwareapi_api_retry_count: The API retry count in case of failure such as
+                            network failures (socket errors etc.)
+                            (default: 10).
+:vnc_port:                  VNC starting port (default: 5900)
+:vnc_port_total:            Total number of VNC ports (default: 10000)
+:vnc_password:              VNC password
+:use_linked_clone:          Whether to use linked clone (default: True)
 """
 
 import time
 
 from eventlet import event
+from oslo.config import cfg
 
 from nova import exception
-from nova.openstack.common import cfg
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import driver
 from nova.virt.vmwareapi import error_util
+from nova.virt.vmwareapi import host
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
+from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
+from nova.virt.vmwareapi import volumeops
 
 
 LOG = logging.getLogger(__name__)
@@ -52,29 +61,50 @@ LOG = logging.getLogger(__name__)
 vmwareapi_opts = [
     cfg.StrOpt('vmwareapi_host_ip',
                default=None,
-               help='URL for connection to VMWare ESX host.Required if '
-                    'compute_driver is vmwareapi.VMWareESXDriver.'),
+               help='URL for connection to VMware ESX/VC host. Required if '
+                    'compute_driver is vmwareapi.VMwareESXDriver or '
+                    'vmwareapi.VMwareVCDriver.'),
     cfg.StrOpt('vmwareapi_host_username',
                default=None,
-               help='Username for connection to VMWare ESX host. '
+               help='Username for connection to VMware ESX/VC host. '
                     'Used only if compute_driver is '
-                    'vmwareapi.VMWareESXDriver.'),
+                    'vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.'),
     cfg.StrOpt('vmwareapi_host_password',
                default=None,
-               help='Password for connection to VMWare ESX host. '
+               help='Password for connection to VMware ESX/VC host. '
                     'Used only if compute_driver is '
-                    'vmwareapi.VMWareESXDriver.'),
+                    'vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.',
+               secret=True),
+    cfg.StrOpt('vmwareapi_cluster_name',
+               default=None,
+               help='Name of a VMware Cluster ComputeResource. '
+                    'Used only if compute_driver is '
+                    'vmwareapi.VMwareVCDriver.'),
     cfg.FloatOpt('vmwareapi_task_poll_interval',
                  default=5.0,
                  help='The interval used for polling of remote tasks. '
                        'Used only if compute_driver is '
-                       'vmwareapi.VMWareESXDriver.'),
+                       'vmwareapi.VMwareESXDriver or '
+                       'vmwareapi.VMwareVCDriver.'),
     cfg.IntOpt('vmwareapi_api_retry_count',
                default=10,
                help='The number of times we retry on failures, e.g., '
                     'socket error, etc. '
                     'Used only if compute_driver is '
-                    'vmwareapi.VMWareESXDriver.'),
+                    'vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.'),
+    cfg.IntOpt('vnc_port',
+               default=5900,
+               help='VNC starting port'),
+    cfg.IntOpt('vnc_port_total',
+               default=10000,
+               help='Total number of VNC ports'),
+    cfg.StrOpt('vnc_password',
+               default=None,
+               help='VNC password',
+               secret=True),
+    cfg.BoolOpt('use_linked_clone',
+                default=True,
+                help='Whether to use linked clone'),
     ]
 
 CONF = cfg.CONF
@@ -93,30 +123,48 @@ class Failure(Exception):
         return str(self.details)
 
 
-class VMWareESXDriver(driver.ComputeDriver):
+class VMwareESXDriver(driver.ComputeDriver):
     """The ESX host connection object."""
 
     def __init__(self, virtapi, read_only=False, scheme="https"):
-        super(VMWareESXDriver, self).__init__(virtapi)
+        super(VMwareESXDriver, self).__init__(virtapi)
 
-        host_ip = CONF.vmwareapi_host_ip
+        self._host_ip = CONF.vmwareapi_host_ip
         host_username = CONF.vmwareapi_host_username
         host_password = CONF.vmwareapi_host_password
         api_retry_count = CONF.vmwareapi_api_retry_count
-        if not host_ip or host_username is None or host_password is None:
+        if not self._host_ip or host_username is None or host_password is None:
             raise Exception(_("Must specify vmwareapi_host_ip,"
                               "vmwareapi_host_username "
                               "and vmwareapi_host_password to use"
-                              "compute_driver=vmwareapi.VMWareESXDriver"))
+                              "compute_driver=vmwareapi.VMwareESXDriver or "
+                              "vmwareapi.VMwareVCDriver"))
 
-        session = VMWareAPISession(host_ip, host_username, host_password,
-                                   api_retry_count, scheme=scheme)
-        self._vmops = vmops.VMWareVMOps(session)
+        self._session = VMwareAPISession(self._host_ip,
+                                         host_username, host_password,
+                                         api_retry_count, scheme=scheme)
+        self._cluster_name = CONF.vmwareapi_cluster_name
+        self._volumeops = volumeops.VMwareVolumeOps(self._session,
+                                                    self._cluster_name)
+        self._vmops = vmops.VMwareVMOps(self._session, self.virtapi,
+                                        self._volumeops, self._cluster_name)
+        self._host = host.Host(self._session)
+        self._host_state = None
+
+    @property
+    def host_state(self):
+        if not self._host_state:
+            self._host_state = host.HostState(self._session,
+                                              self._host_ip)
+        return self._host_state
 
     def init_host(self, host):
         """Do the initialization that needs to be done."""
         # FIXME(sateesh): implement this
         pass
+
+    def legacy_nwinfo(self):
+        return False
 
     def list_instances(self):
         """List VM instances."""
@@ -125,13 +173,14 @@ class VMWareESXDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         """Create VM instance."""
-        self._vmops.spawn(context, instance, image_meta, network_info)
+        self._vmops.spawn(context, instance, image_meta, network_info,
+                          block_device_info)
 
     def snapshot(self, context, instance, name, update_task_state):
         """Create snapshot from a running VM instance."""
         self._vmops.snapshot(context, instance, name, update_task_state)
 
-    def reboot(self, instance, network_info, reboot_type,
+    def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None):
         """Reboot VM instance."""
         self._vmops.reboot(instance, network_info)
@@ -157,6 +206,27 @@ class VMWareESXDriver(driver.ComputeDriver):
         """Resume the suspended VM instance."""
         self._vmops.resume(instance)
 
+    def rescue(self, context, instance, network_info, image_meta,
+               rescue_password):
+        """Rescue the specified instance."""
+        self._vmops.rescue(context, instance, network_info, image_meta)
+
+    def unrescue(self, instance, network_info):
+        """Unrescue the specified instance."""
+        self._vmops.unrescue(instance)
+
+    def power_off(self, instance):
+        """Power off the specified instance."""
+        self._vmops.power_off(instance)
+
+    def power_on(self, instance):
+        """Power on the specified instance."""
+        self._vmops.power_on(instance)
+
+    def poll_rebooting_instances(self, timeout, instances):
+        """Poll for rebooting instances."""
+        self._vmops.poll_rebooting_instances(timeout, instances)
+
     def get_info(self, instance):
         """Return info about the VM instance."""
         return self._vmops.get_info(instance)
@@ -169,23 +239,29 @@ class VMWareESXDriver(driver.ComputeDriver):
         """Return snapshot of console."""
         return self._vmops.get_console_output(instance)
 
-    def get_volume_connector(self, _instance):
-        """Return volume connector information"""
-        # TODO(vish): When volume attaching is supported, return the
-        #             proper initiator iqn and host.
-        return {
-            'ip': CONF.vmwareapi_host_ip,
-            'initiator': None,
-            'host': None
-        }
+    def get_vnc_console(self, instance):
+        """Return link to instance's VNC console."""
+        return self._vmops.get_vnc_console(instance)
+
+    def get_volume_connector(self, instance):
+        """Return volume connector information."""
+        return self._volumeops.get_volume_connector(instance)
+
+    def get_host_ip_addr(self):
+        """Retrieves the IP address of the ESX host."""
+        return self._host_ip
 
     def attach_volume(self, connection_info, instance, mountpoint):
         """Attach volume storage to VM instance."""
-        pass
+        return self._volumeops.attach_volume(connection_info,
+                                             instance,
+                                             mountpoint)
 
     def detach_volume(self, connection_info, instance, mountpoint):
         """Detach volume storage to VM instance."""
-        pass
+        return self._volumeops.detach_volume(connection_info,
+                                             instance,
+                                             mountpoint)
 
     def get_console_pool_info(self, console_type):
         """Get info about the host on which the VM resides."""
@@ -194,8 +270,57 @@ class VMWareESXDriver(driver.ComputeDriver):
                 'password': CONF.vmwareapi_host_password}
 
     def get_available_resource(self, nodename):
-        """This method is supported only by libvirt."""
-        return
+        """Retrieve resource info.
+
+        This method is called when nova-compute launches, and
+        as part of a periodic task.
+
+        :returns: dictionary describing resources
+
+        """
+        host_stats = self.get_host_stats(refresh=True)
+
+        # Updating host information
+        dic = {'vcpus': host_stats["vcpus"],
+               'memory_mb': host_stats['host_memory_total'],
+               'local_gb': host_stats['disk_total'],
+               'vcpus_used': 0,
+               'memory_mb_used': host_stats['host_memory_total'] -
+                                 host_stats['host_memory_free'],
+               'local_gb_used': host_stats['disk_used'],
+               'hypervisor_type': host_stats['hypervisor_type'],
+               'hypervisor_version': host_stats['hypervisor_version'],
+               'hypervisor_hostname': host_stats['hypervisor_hostname'],
+               'cpu_info': jsonutils.dumps(host_stats['cpu_info'])}
+
+        return dic
+
+    def update_host_status(self):
+        """Update the status info of the host, and return those values
+           to the calling program."""
+        return self.host_state.update_status()
+
+    def get_host_stats(self, refresh=False):
+        """Return the current state of the host. If 'refresh' is
+           True, run the update first."""
+        return self.host_state.get_host_stats(refresh=refresh)
+
+    def host_power_action(self, host, action):
+        """Reboots, shuts down or powers up the host."""
+        return self._host.host_power_action(host, action)
+
+    def host_maintenance_mode(self, host, mode):
+        """Start/Stop host maintenance window. On start, it triggers
+           guest VMs evacuation."""
+        return self._host.host_maintenance_mode(host, mode)
+
+    def set_host_enabled(self, host, enabled):
+        """Sets the specified host's ability to accept new instances."""
+        return self._host.set_host_enabled(host, enabled)
+
+    def inject_network_info(self, instance, network_info):
+        """inject network info for specified instance."""
+        self._vmops.inject_network_info(instance, network_info)
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
@@ -205,8 +330,76 @@ class VMWareESXDriver(driver.ComputeDriver):
         """Unplug VIFs from networks."""
         self._vmops.unplug_vifs(instance, network_info)
 
+    def list_interfaces(self, instance_name):
+        """
+        Return the IDs of all the virtual network interfaces attached to the
+        specified instance, as a list.  These IDs are opaque to the caller
+        (they are only useful for giving back to this layer as a parameter to
+        interface_stats).  These IDs only need to be unique for a given
+        instance.
+        """
+        return self._vmops.list_interfaces(instance_name)
 
-class VMWareAPISession(object):
+
+class VMwareVCDriver(VMwareESXDriver):
+    """The ESX host connection object."""
+
+    def __init__(self, virtapi, read_only=False, scheme="https"):
+        super(VMwareVCDriver, self).__init__(virtapi)
+        if not self._cluster_name:
+            self._cluster = None
+        else:
+            self._cluster = vm_util.get_cluster_ref_from_name(
+                self._session, self._cluster_name)
+            if self._cluster is None:
+                raise exception.NotFound(_("VMware Cluster %s is not found")
+                                           % self._cluster_name)
+        self._vc_state = None
+
+    @property
+    def host_state(self):
+        if not self._vc_state:
+            self._vc_state = host.VCState(self._session,
+                                          self._host_ip,
+                                          self._cluster)
+        return self._vc_state
+
+    def migrate_disk_and_power_off(self, context, instance, dest,
+                                   instance_type, network_info,
+                                   block_device_info=None):
+        """
+        Transfers the disk of a running instance in multiple phases, turning
+        off the instance before the end.
+        """
+        return self._vmops.migrate_disk_and_power_off(context, instance,
+                                                      dest, instance_type)
+
+    def confirm_migration(self, migration, instance, network_info):
+        """Confirms a resize, destroying the source VM."""
+        self._vmops.confirm_migration(migration, instance, network_info)
+
+    def finish_revert_migration(self, instance, network_info,
+                                block_device_info=None):
+        """Finish reverting a resize, powering back on the instance."""
+        self._vmops.finish_revert_migration(instance)
+
+    def finish_migration(self, context, migration, instance, disk_info,
+                         network_info, image_meta, resize_instance=False,
+                         block_device_info=None):
+        """Completes a resize, turning on the migrated instance."""
+        self._vmops.finish_migration(context, migration, instance, disk_info,
+                                     network_info, image_meta, resize_instance)
+
+    def live_migration(self, context, instance_ref, dest,
+                       post_method, recover_method, block_migration=False,
+                       migrate_data=None):
+        """Live migration of an instance to another host."""
+        self._vmops.live_migration(context, instance_ref, dest,
+                                   post_method, recover_method,
+                                   block_migration)
+
+
+class VMwareAPISession(object):
     """
     Sets up a session with the ESX host and handles all
     the calls made to the host.

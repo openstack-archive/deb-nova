@@ -19,11 +19,12 @@ Cells Scheduler
 import random
 import time
 
+from oslo.config import cfg
+
 from nova import compute
 from nova.compute import vm_states
 from nova.db import base
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.scheduler import rpcapi as scheduler_rpcapi
 
@@ -55,7 +56,8 @@ class CellsScheduler(base.Base):
 
     def _create_instances_here(self, ctxt, request_spec):
         instance_values = request_spec['instance_properties']
-        for instance_uuid in request_spec['instance_uuids']:
+        num_instances = len(request_spec['instance_uuids'])
+        for i, instance_uuid in enumerate(request_spec['instance_uuids']):
             instance_values['uuid'] = instance_uuid
             instance = self.compute_api.create_db_entry_for_new_instance(
                     ctxt,
@@ -63,7 +65,9 @@ class CellsScheduler(base.Base):
                     request_spec['image'],
                     instance_values,
                     request_spec['security_group'],
-                    request_spec['block_device_mapping'])
+                    request_spec['block_device_mapping'],
+                    num_instances, i)
+
             self.msg_runner.instance_update_at_top(ctxt, instance)
 
     def _get_possible_cells(self):

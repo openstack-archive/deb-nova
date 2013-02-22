@@ -13,14 +13,15 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-"""Support for mounting images with qemu-nbd"""
+"""Support for mounting images with qemu-nbd."""
 
 import os
 import random
 import re
 import time
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk.mount import api

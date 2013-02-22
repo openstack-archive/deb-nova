@@ -19,13 +19,13 @@
 the system.
 """
 
+from oslo.config import cfg
+
 import nova.context
 from nova import db
-from nova import exception
 from nova.image import glance
 from nova import network
 from nova.network import model as network_model
-from nova.openstack.common import cfg
 from nova.openstack.common import log
 from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common import timeutils
@@ -283,12 +283,8 @@ def info_from_instance(context, instance_ref, network_info,
     instance_type_name = instance_ref.get('instance_type', {}).get('name', '')
 
     if system_metadata is None:
-        try:
-            system_metadata = db.instance_system_metadata_get(
-                    context, instance_ref['uuid'])
-
-        except exception.NotFound:
-            system_metadata = {}
+        system_metadata = utils.metadata_to_dict(
+                instance_ref['system_metadata'])
 
     instance_info = dict(
         # Owner properties

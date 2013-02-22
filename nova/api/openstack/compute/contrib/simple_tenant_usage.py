@@ -18,6 +18,8 @@
 import datetime
 import urlparse
 
+from webob import exc
+
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
@@ -159,7 +161,7 @@ class SimpleTenantUsageController(object):
 
             info['uptime'] = delta.days * 24 * 3600 + delta.seconds
 
-            if not info['tenant_id'] in rval:
+            if info['tenant_id'] not in rval:
                 summary = {}
                 summary['tenant_id'] = info['tenant_id']
                 if detailed:
@@ -204,12 +206,17 @@ class SimpleTenantUsageController(object):
         period_start = self._parse_datetime(env.get('start', [None])[0])
         period_stop = self._parse_datetime(env.get('end', [None])[0])
 
+        if not period_start < period_stop:
+            msg = _("Invalid start time. The start time cannot occur after "
+                    "the end time.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
         detailed = env.get('detailed', ['0'])[0] == '1'
         return (period_start, period_stop, detailed)
 
     @wsgi.serializers(xml=SimpleTenantUsagesTemplate)
     def index(self, req):
-        """Retrieve tenant_usage for all tenants"""
+        """Retrieve tenant_usage for all tenants."""
         context = req.environ['nova.context']
 
         authorize_list(context)
@@ -226,7 +233,7 @@ class SimpleTenantUsageController(object):
 
     @wsgi.serializers(xml=SimpleTenantUsageTemplate)
     def show(self, req, id):
-        """Retrieve tenant_usage for a specified tenant"""
+        """Retrieve tenant_usage for a specified tenant."""
         tenant_id = id
         context = req.environ['nova.context']
 
@@ -249,7 +256,7 @@ class SimpleTenantUsageController(object):
 
 
 class Simple_tenant_usage(extensions.ExtensionDescriptor):
-    """Simple tenant usage extension"""
+    """Simple tenant usage extension."""
 
     name = "SimpleTenantUsage"
     alias = "os-simple-tenant-usage"

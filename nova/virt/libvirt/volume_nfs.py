@@ -15,82 +15,26 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Volume driver for using NFS as volumes storage. Nova compute part."""
+"""Deprecated file, kept for back-compat only. To be removed in Hxxxx."""
 
-import ctypes
-import os
-
-from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
-from nova import paths
-from nova import utils
 from nova.virt.libvirt import volume
 
 LOG = logging.getLogger(__name__)
 
-volume_opts = [
-    cfg.StrOpt('nfs_mount_point_base',
-               default=paths.state_path_def('mnt'),
-               help='Base dir where nfs expected to be mounted on compute'),
-]
-CONF = cfg.CONF
-CONF.register_opts(volume_opts)
 
-
-class NfsVolumeDriver(volume.LibvirtVolumeDriver):
-    """Class implements libvirt part of volume driver for NFS."""
+class NfsVolumeDriver(volume.LibvirtNFSVolumeDriver):
+    """Deprecated driver for NFS, renamed to LibvirtNFSVolumeDriver
+       and moved into the main volume.py module. Kept for backwards
+       compatibility in the Grizzly cycle to give users opportunity
+       to configure before its removal in the Hxxxx cycle."""
 
     def __init__(self, *args, **kwargs):
-        """Create back-end to nfs and check connection"""
-        super(NfsVolumeDriver, self).__init__(*args, **kwargs)
-
-    def connect_volume(self, connection_info, mount_device):
-        """Connect the volume. Returns xml for libvirt."""
-        path = self._ensure_mounted(connection_info['data']['export'])
-        path = os.path.join(path, connection_info['data']['name'])
-        connection_info['data']['device_path'] = path
-        conf = super(NfsVolumeDriver, self).connect_volume(connection_info,
-                                                           mount_device)
-        conf.source_type = 'file'
-        return conf
-
-    def disconnect_volume(self, connection_info, mount_device):
-        """Disconnect the volume"""
-        pass
-
-    def _ensure_mounted(self, nfs_export):
-        """
-        @type nfs_export: string
-        """
-        mount_path = os.path.join(CONF.nfs_mount_point_base,
-                                  self.get_hash_str(nfs_export))
-        self._mount_nfs(mount_path, nfs_export, ensure=True)
-        return mount_path
-
-    def _mount_nfs(self, mount_path, nfs_share, ensure=False):
-        """Mount nfs export to mount path"""
-        if not self._path_exists(mount_path):
-            utils.execute('mkdir', '-p', mount_path)
-
-        try:
-            utils.execute('mount', '-t', 'nfs', nfs_share, mount_path,
-                          run_as_root=True)
-        except exception.ProcessExecutionError as exc:
-            if ensure and 'already mounted' in exc.message:
-                LOG.warn(_("%s is already mounted"), nfs_share)
-            else:
-                raise
-
-    @staticmethod
-    def get_hash_str(base_str):
-        """returns string that represents hash of base_str (in a hex format)"""
-        return str(ctypes.c_uint64(hash(base_str)).value)
-
-    @staticmethod
-    def _path_exists(path):
-        """Check path """
-        try:
-            return utils.execute('stat', path, run_as_root=True)
-        except exception.ProcessExecutionError:
-            return False
+        super(NfsVolumeDriver,
+              self).__init__(*args, **kwargs)
+        LOG.deprecated(
+            _("The nova.virt.libvirt.volume_nfs.NfsVolumeDriver "
+              "class is deprecated and will be removed in the "
+              "Hxxxx release. Please update nova.conf so that "
+              "the 'libvirt_volume_drivers' parameter refers to "
+              "nova.virt.libvirt.volume.LibvirtNFSVolumeDriver."))

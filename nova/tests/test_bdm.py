@@ -26,7 +26,7 @@ from nova.tests import matchers
 
 
 class BlockDeviceMappingEc2CloudTestCase(test.TestCase):
-    """Test Case for Block Device Mapping"""
+    """Test Case for Block Device Mapping."""
 
     def fake_ec2_vol_id_to_uuid(obj, ec2_id):
         if ec2_id == 'vol-87654321':
@@ -246,6 +246,5 @@ class BlockDeviceMappingEc2CloudTestCase(test.TestCase):
 
         result = {}
         cloud._format_mappings(properties, result)
-        print result
         self.assertEqual(result['blockDeviceMapping'].sort(),
                          expected_result['blockDeviceMapping'].sort())

@@ -14,11 +14,12 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-"""Tests for compute service with multiple compute nodes"""
+"""Tests for compute service with multiple compute nodes."""
+
+from oslo.config import cfg
 
 from nova import context
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova import test
 from nova.virt import fake
@@ -80,6 +81,9 @@ class MultiNodeComputeTestCase(BaseTestCase):
         super(MultiNodeComputeTestCase, self).setUp()
         self.flags(compute_driver='nova.virt.fake.FakeDriver')
         self.compute = importutils.import_object(CONF.compute_manager)
+        self.flags(use_local=True, group='conductor')
+        self.conductor = self.start_service('conductor',
+                                            manager=CONF.conductor.manager)
 
     def test_update_available_resource_add_remove_node(self):
         ctx = context.get_admin_context()

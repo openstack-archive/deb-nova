@@ -17,7 +17,10 @@
 
 import re
 
+from nova.openstack.common import log as logging
 from nova.virt import driver
+
+LOG = logging.getLogger(__name__)
 
 DEFAULT_ROOT_DEV_NAME = '/dev/sda1'
 _DEFAULT_MAPPINGS = {'ami': 'sda1',
@@ -62,7 +65,7 @@ def is_swap_or_ephemeral(device_name):
 
 
 def mappings_prepend_dev(mappings):
-    """Prepend '/dev/' to 'device' entry of swap/ephemeral virtual type"""
+    """Prepend '/dev/' to 'device' entry of swap/ephemeral virtual type."""
     for m in mappings:
         virtual = m['virtual']
         if (is_swap_or_ephemeral(virtual) and
@@ -75,7 +78,7 @@ _dev = re.compile('^/dev/')
 
 
 def strip_dev(device_name):
-    """remove leading '/dev/'"""
+    """remove leading '/dev/'."""
     return _dev.sub('', device_name) if device_name else device_name
 
 
@@ -83,7 +86,7 @@ _pref = re.compile('^((x?v|s)d)')
 
 
 def strip_prefix(device_name):
-    """remove both leading /dev/ and xvd or sd or vd """
+    """remove both leading /dev/ and xvd or sd or vd."""
     device_name = strip_dev(device_name)
     return _pref.sub('', device_name)
 
@@ -139,8 +142,27 @@ def instance_block_mapping(instance, bdms):
 
 
 def match_device(device):
-    """Matches device name and returns prefix, suffix"""
+    """Matches device name and returns prefix, suffix."""
     match = re.match("(^/dev/x{0,1}[a-z]{0,1}d{0,1})([a-z]+)[0-9]*$", device)
     if not match:
         return None
     return match.groups()
+
+
+def volume_in_mapping(mount_device, block_device_info):
+    block_device_list = [strip_dev(vol['mount_device'])
+                         for vol in
+                         driver.block_device_info_get_mapping(
+                         block_device_info)]
+
+    swap = driver.block_device_info_get_swap(block_device_info)
+    if driver.swap_is_usable(swap):
+        block_device_list.append(strip_dev(swap['device_name']))
+
+    block_device_list += [strip_dev(ephemeral['device_name'])
+                          for ephemeral in
+                          driver.block_device_info_get_ephemerals(
+                          block_device_info)]
+
+    LOG.debug(_("block_device_list %s"), block_device_list)
+    return strip_dev(mount_device) in block_device_list

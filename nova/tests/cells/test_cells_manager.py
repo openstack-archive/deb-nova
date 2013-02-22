@@ -15,18 +15,35 @@
 """
 Tests For CellsManager
 """
+import copy
 import datetime
+
+from oslo.config import cfg
 
 from nova.cells import messaging
 from nova.cells import utils as cells_utils
 from nova import context
+from nova.openstack.common import rpc
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.cells import fakes
 
+CONF = cfg.CONF
+CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
+
+
+FAKE_COMPUTE_NODES = [dict(id=1), dict(id=2)]
+FAKE_SERVICES = [dict(id=1, host='host1',
+                      compute_node=[FAKE_COMPUTE_NODES[0]]),
+                 dict(id=2, host='host2',
+                      compute_node=[FAKE_COMPUTE_NODES[1]]),
+                 dict(id=3, host='host3', compute_node=[])]
+FAKE_TASK_LOGS = [dict(id=1, host='host1'),
+                  dict(id=2, host='host2')]
+
 
 class CellsManagerClassTestCase(test.TestCase):
-    """Test case for CellsManager class"""
+    """Test case for CellsManager class."""
 
     def setUp(self):
         super(CellsManagerClassTestCase, self).setUp()
@@ -37,6 +54,21 @@ class CellsManagerClassTestCase(test.TestCase):
         self.msg_runner = self.cells_manager.msg_runner
         self.driver = self.cells_manager.driver
         self.ctxt = 'fake_context'
+
+    def _get_fake_response(self, raw_response=None, exc=False):
+        if exc:
+            return messaging.Response('fake', test.TestingException(),
+                                      True)
+        if raw_response is None:
+            raw_response = 'fake-response'
+        return messaging.Response('fake', raw_response, False)
+
+    def test_get_cell_info_for_neighbors(self):
+        self.mox.StubOutWithMock(self.cells_manager.state_manager,
+                'get_cell_info_for_neighbors')
+        self.cells_manager.state_manager.get_cell_info_for_neighbors()
+        self.mox.ReplayAll()
+        self.cells_manager.get_cell_info_for_neighbors(self.ctxt)
 
     def test_post_start_hook_child_cell(self):
         self.mox.StubOutWithMock(self.driver, 'start_consumers')
@@ -94,17 +126,13 @@ class CellsManagerClassTestCase(test.TestCase):
         cell_name = 'fake-cell-name'
         method_info = 'fake-method-info'
 
-        fake_response = messaging.Response('fake', 'fake', False)
-
         self.mox.StubOutWithMock(self.msg_runner,
                                  'run_compute_api_method')
-        self.mox.StubOutWithMock(fake_response,
-                                 'value_or_raise')
+        fake_response = self._get_fake_response()
         self.msg_runner.run_compute_api_method(self.ctxt,
                                                cell_name,
                                                method_info,
                                                True).AndReturn(fake_response)
-        fake_response.value_or_raise().AndReturn('fake-response')
         self.mox.ReplayAll()
         response = self.cells_manager.run_compute_api_method(
                 self.ctxt, cell_name=cell_name, method_info=method_info,
@@ -211,3 +239,193 @@ class CellsManagerClassTestCase(test.TestCase):
         # Now the last 1 and the first 1
         self.assertEqual(call_info['sync_instances'],
                 [instances[-1], instances[0]])
+
+    def test_sync_instances(self):
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'sync_instances')
+        self.msg_runner.sync_instances(self.ctxt, 'fake-project',
+                                       'fake-time', 'fake-deleted')
+        self.mox.ReplayAll()
+        self.cells_manager.sync_instances(self.ctxt,
+                                          project_id='fake-project',
+                                          updated_since='fake-time',
+                                          deleted='fake-deleted')
+
+    def test_service_get_all(self):
+        responses = []
+        expected_response = []
+        # 3 cells... so 3 responses.  Each response is a list of services.
+        # Manager should turn these into a single list of responses.
+        for i in xrange(3):
+            cell_name = 'path!to!cell%i' % i
+            services = []
+            for service in FAKE_SERVICES:
+                services.append(copy.deepcopy(service))
+                expected_service = copy.deepcopy(service)
+                cells_utils.add_cell_to_service(expected_service, cell_name)
+                expected_response.append(expected_service)
+            response = messaging.Response(cell_name, services, False)
+            responses.append(response)
+
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'service_get_all')
+        self.msg_runner.service_get_all(self.ctxt,
+                                        'fake-filters').AndReturn(responses)
+        self.mox.ReplayAll()
+        response = self.cells_manager.service_get_all(self.ctxt,
+                                                      filters='fake-filters')
+        self.assertEqual(expected_response, response)
+
+    def test_service_get_by_compute_host(self):
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'service_get_by_compute_host')
+        fake_cell = 'fake-cell'
+        fake_response = messaging.Response(fake_cell, FAKE_SERVICES[0],
+                                           False)
+        expected_response = copy.deepcopy(FAKE_SERVICES[0])
+        cells_utils.add_cell_to_service(expected_response, fake_cell)
+
+        cell_and_host = cells_utils.cell_with_item('fake-cell', 'fake-host')
+        self.msg_runner.service_get_by_compute_host(self.ctxt,
+                fake_cell, 'fake-host').AndReturn(fake_response)
+        self.mox.ReplayAll()
+        response = self.cells_manager.service_get_by_compute_host(self.ctxt,
+                host_name=cell_and_host)
+        self.assertEqual(expected_response, response)
+
+    def test_proxy_rpc_to_manager(self):
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'proxy_rpc_to_manager')
+        fake_response = self._get_fake_response()
+        cell_and_host = cells_utils.cell_with_item('fake-cell', 'fake-host')
+        topic = rpc.queue_get_for(self.ctxt, CONF.compute_topic,
+                                  cell_and_host)
+        self.msg_runner.proxy_rpc_to_manager(self.ctxt, 'fake-cell',
+                'fake-host', topic, 'fake-rpc-msg',
+                True, -1).AndReturn(fake_response)
+        self.mox.ReplayAll()
+        response = self.cells_manager.proxy_rpc_to_manager(self.ctxt,
+                topic=topic, rpc_message='fake-rpc-msg', call=True,
+                timeout=-1)
+        self.assertEqual('fake-response', response)
+
+    def _build_task_log_responses(self, num):
+        responses = []
+        expected_response = []
+        # 3 cells... so 3 responses.  Each response is a list of task log
+        # entries. Manager should turn these into a single list of
+        # task log entries.
+        for i in xrange(num):
+            cell_name = 'path!to!cell%i' % i
+            task_logs = []
+            for task_log in FAKE_TASK_LOGS:
+                task_logs.append(copy.deepcopy(task_log))
+                expected_task_log = copy.deepcopy(task_log)
+                cells_utils.add_cell_to_task_log(expected_task_log,
+                                                 cell_name)
+                expected_response.append(expected_task_log)
+            response = messaging.Response(cell_name, task_logs, False)
+            responses.append(response)
+        return expected_response, responses
+
+    def test_task_log_get_all(self):
+        expected_response, responses = self._build_task_log_responses(3)
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'task_log_get_all')
+        self.msg_runner.task_log_get_all(self.ctxt, None,
+                'fake-name', 'fake-begin',
+                'fake-end', host=None, state=None).AndReturn(responses)
+        self.mox.ReplayAll()
+        response = self.cells_manager.task_log_get_all(self.ctxt,
+                task_name='fake-name',
+                period_beginning='fake-begin', period_ending='fake-end')
+        self.assertEqual(expected_response, response)
+
+    def test_task_log_get_all_with_filters(self):
+        expected_response, responses = self._build_task_log_responses(1)
+        cell_and_host = cells_utils.cell_with_item('fake-cell', 'fake-host')
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'task_log_get_all')
+        self.msg_runner.task_log_get_all(self.ctxt, 'fake-cell',
+                'fake-name', 'fake-begin', 'fake-end', host='fake-host',
+                state='fake-state').AndReturn(responses)
+        self.mox.ReplayAll()
+        response = self.cells_manager.task_log_get_all(self.ctxt,
+                task_name='fake-name',
+                period_beginning='fake-begin', period_ending='fake-end',
+                host=cell_and_host, state='fake-state')
+        self.assertEqual(expected_response, response)
+
+    def test_task_log_get_all_with_cell_but_no_host_filters(self):
+        expected_response, responses = self._build_task_log_responses(1)
+        # Host filter only has cell name.
+        cell_and_host = 'fake-cell'
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'task_log_get_all')
+        self.msg_runner.task_log_get_all(self.ctxt, 'fake-cell',
+                'fake-name', 'fake-begin', 'fake-end', host=None,
+                state='fake-state').AndReturn(responses)
+        self.mox.ReplayAll()
+        response = self.cells_manager.task_log_get_all(self.ctxt,
+                task_name='fake-name',
+                period_beginning='fake-begin', period_ending='fake-end',
+                host=cell_and_host, state='fake-state')
+        self.assertEqual(expected_response, response)
+
+    def test_compute_node_get_all(self):
+        responses = []
+        expected_response = []
+        # 3 cells... so 3 responses.  Each response is a list of computes.
+        # Manager should turn these into a single list of responses.
+        for i in xrange(3):
+            cell_name = 'path!to!cell%i' % i
+            compute_nodes = []
+            for compute_node in FAKE_COMPUTE_NODES:
+                compute_nodes.append(copy.deepcopy(compute_node))
+                expected_compute_node = copy.deepcopy(compute_node)
+                cells_utils.add_cell_to_compute_node(expected_compute_node,
+                                                     cell_name)
+                expected_response.append(expected_compute_node)
+            response = messaging.Response(cell_name, compute_nodes, False)
+            responses.append(response)
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'compute_node_get_all')
+        self.msg_runner.compute_node_get_all(self.ctxt,
+                hypervisor_match='fake-match').AndReturn(responses)
+        self.mox.ReplayAll()
+        response = self.cells_manager.compute_node_get_all(self.ctxt,
+                hypervisor_match='fake-match')
+        self.assertEqual(expected_response, response)
+
+    def test_compute_node_stats(self):
+        raw_resp1 = {'key1': 1, 'key2': 2}
+        raw_resp2 = {'key2': 1, 'key3': 2}
+        raw_resp3 = {'key3': 1, 'key4': 2}
+        responses = [messaging.Response('cell1', raw_resp1, False),
+                     messaging.Response('cell2', raw_resp2, False),
+                     messaging.Response('cell2', raw_resp3, False)]
+        expected_resp = {'key1': 1, 'key2': 3, 'key3': 3, 'key4': 2}
+
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'compute_node_stats')
+        self.msg_runner.compute_node_stats(self.ctxt).AndReturn(responses)
+        self.mox.ReplayAll()
+        response = self.cells_manager.compute_node_stats(self.ctxt)
+        self.assertEqual(expected_resp, response)
+
+    def test_compute_node_get(self):
+        fake_cell = 'fake-cell'
+        fake_response = messaging.Response(fake_cell,
+                                           FAKE_COMPUTE_NODES[0],
+                                           False)
+        expected_response = copy.deepcopy(FAKE_COMPUTE_NODES[0])
+        cells_utils.add_cell_to_compute_node(expected_response, fake_cell)
+        cell_and_id = cells_utils.cell_with_item(fake_cell, 'fake-id')
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'compute_node_get')
+        self.msg_runner.compute_node_get(self.ctxt,
+                'fake-cell', 'fake-id').AndReturn(fake_response)
+        self.mox.ReplayAll()
+        response = self.cells_manager.compute_node_get(self.ctxt,
+                compute_id=cell_and_id)
+        self.assertEqual(expected_response, response)

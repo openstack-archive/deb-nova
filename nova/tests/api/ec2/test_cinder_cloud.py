@@ -18,8 +18,10 @@
 #    under the License.
 
 import copy
-import tempfile
 import uuid
+
+import fixtures
+from oslo.config import cfg
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
@@ -28,7 +30,6 @@ from nova.compute import utils as compute_utils
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 from nova import test
@@ -40,7 +41,7 @@ from nova import volume
 CONF = cfg.CONF
 CONF.import_opt('compute_driver', 'nova.virt.driver')
 CONF.import_opt('default_instance_type', 'nova.compute.instance_types')
-CONF.import_opt('use_ipv6', 'nova.config')
+CONF.import_opt('use_ipv6', 'nova.netconf')
 LOG = logging.getLogger(__name__)
 
 
@@ -86,7 +87,7 @@ def get_instances_with_cached_ips(orig_func, *args, **kwargs):
 class CinderCloudTestCase(test.TestCase):
     def setUp(self):
         super(CinderCloudTestCase, self).setUp()
-        vol_tmpdir = tempfile.mkdtemp()
+        vol_tmpdir = self.useFixture(fixtures.TempDir()).path
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    volume_api_class='nova.tests.fake_volume.API')
 
@@ -167,7 +168,7 @@ class CinderCloudTestCase(test.TestCase):
                                            name)
 
     def test_describe_volumes(self):
-        """Makes sure describe_volumes works and filters results."""
+        # Makes sure describe_volumes works and filters results.
 
         vol1 = self.cloud.create_volume(self.context,
                                         size=1,
@@ -208,7 +209,7 @@ class CinderCloudTestCase(test.TestCase):
         self.cloud.delete_volume(self.context, volume_id)
 
     def test_create_volume_from_snapshot(self):
-        """Makes sure create_volume works when we specify a snapshot."""
+        # Makes sure create_volume works when we specify a snapshot.
         availability_zone = 'zone1:host1'
         vol1 = self.cloud.create_volume(self.context,
                                           size=1,
@@ -233,7 +234,7 @@ class CinderCloudTestCase(test.TestCase):
         self.cloud.delete_volume(self.context, volume1_id)
 
     def test_describe_snapshots(self):
-        """Makes sure describe_snapshots works and filters results."""
+        # Makes sure describe_snapshots works and filters results.
         availability_zone = 'zone1:host1'
         vol1 = self.cloud.create_volume(self.context,
                                           size=1,
@@ -309,7 +310,7 @@ class CinderCloudTestCase(test.TestCase):
                          'banana')
 
     def test_create_snapshot(self):
-        """Makes sure create_snapshot works."""
+        # Makes sure create_snapshot works.
         availability_zone = 'zone1:host1'
         result = self.cloud.describe_snapshots(self.context)
         vol1 = self.cloud.create_volume(self.context,
@@ -330,7 +331,7 @@ class CinderCloudTestCase(test.TestCase):
         self.cloud.delete_volume(self.context, vol1['volumeId'])
 
     def test_delete_snapshot(self):
-        """Makes sure delete_snapshot works."""
+        # Makes sure delete_snapshot works.
         availability_zone = 'zone1:host1'
         vol1 = self.cloud.create_volume(self.context,
                                           size=1,
@@ -707,7 +708,7 @@ class CinderCloudTestCase(test.TestCase):
         self.assertEqual(vol['attach_status'], "detached")
 
     def test_stop_start_with_volume(self):
-        """Make sure run instance with block device mapping works"""
+        # Make sure run instance with block device mapping works.
         availability_zone = 'zone1:host1'
         vol1 = self.cloud.create_volume(self.context,
                                           size=1,
@@ -788,7 +789,7 @@ class CinderCloudTestCase(test.TestCase):
         self._restart_compute_service()
 
     def test_stop_with_attached_volume(self):
-        """Make sure attach info is reflected to block device mapping"""
+        # Make sure attach info is reflected to block device mapping.
 
         availability_zone = 'zone1:host1'
         vol1 = self.cloud.create_volume(self.context,
@@ -863,7 +864,7 @@ class CinderCloudTestCase(test.TestCase):
         return result['snapshotId']
 
     def test_run_with_snapshot(self):
-        """Makes sure run/stop/start instance with snapshot works."""
+        # Makes sure run/stop/start instance with snapshot works.
         availability_zone = 'zone1:host1'
         vol1 = self.cloud.create_volume(self.context,
                                           size=1,
@@ -936,7 +937,7 @@ class CinderCloudTestCase(test.TestCase):
         #    self.cloud.delete_snapshot(self.context, snapshot_id)
 
     def test_create_image(self):
-        """Make sure that CreateImage works"""
+        # Make sure that CreateImage works.
         # enforce periodic tasks run in short time to avoid wait for 60s.
         self._restart_compute_service(periodic_interval_max=0.3)
 

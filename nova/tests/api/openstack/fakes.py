@@ -151,7 +151,7 @@ def stub_out_instance_quota(stubs, allowed, quota, resource='instances'):
 def stub_out_networking(stubs):
     def get_my_ip():
         return '127.0.0.1'
-    stubs.Set(nova.config, '_get_my_ip', get_my_ip)
+    stubs.Set(nova.netconf, '_get_my_ip', get_my_ip)
 
 
 def stub_out_compute_api_snapshot(stubs):
@@ -227,7 +227,7 @@ def _make_image_fixtures():
     # Public image
     add_fixture(id=image_id, name='public image', is_public=True,
                 status='active', properties={'key1': 'value1'},
-                min_ram="128", min_disk="10")
+                min_ram="128", min_disk="10", size='25165824')
     image_id += 1
 
     # Snapshot for User 1
@@ -238,7 +238,7 @@ def _make_image_fixtures():
                    'deleted', 'pending_delete'):
         add_fixture(id=image_id, name='%s snapshot' % status,
                     is_public=False, status=status,
-                    properties=snapshot_properties)
+                    properties=snapshot_properties, size='25165824')
         image_id += 1
 
     # Image without a name
@@ -372,7 +372,7 @@ def create_info_cache(nw_cache):
 
 
 def get_fake_uuid(token=0):
-    if not token in FAKE_UUIDS:
+    if token not in FAKE_UUIDS:
         FAKE_UUIDS[token] = str(uuid.uuid4())
     return FAKE_UUIDS[token]
 
@@ -399,12 +399,12 @@ def fake_instance_get_all_by_filters(num_servers=5, **kwargs):
             server = stub_instance(id=i + 1, uuid=uuid,
                     **kwargs)
             servers_list.append(server)
-            if not marker is None and uuid == marker:
+            if marker is not None and uuid == marker:
                 found_marker = True
                 servers_list = []
-        if not marker is None and not found_marker:
+        if marker is not None and not found_marker:
             raise exc.MarkerNotFound(marker=marker)
-        if not limit is None:
+        if limit is not None:
             servers_list = servers_list[:limit]
         return servers_list
     return _return_servers
@@ -427,7 +427,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         project_id = 'fake_project'
 
     if metadata:
-        metadata = [{'key':k, 'value':v} for k, v in metadata.items()]
+        metadata = [{'key': k, 'value': v} for k, v in metadata.items()]
     elif include_fake_metadata:
         metadata = [models.InstanceMetadata(key='seq', value=str(id))]
     else:

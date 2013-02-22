@@ -13,12 +13,15 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Compute API that proxies via Cells Service"""
+"""Compute API that proxies via Cells Service."""
 
+from nova import availability_zones
 from nova import block_device
 from nova.cells import rpcapi as cells_rpcapi
+from nova.cells import utils as cells_utils
 from nova.compute import api as compute_api
-from nova.compute import task_states
+from nova.compute import instance_types
+from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import vm_states
 from nova import exception
 from nova.openstack.common import excutils
@@ -59,6 +62,27 @@ class SchedulerRPCAPIRedirect(object):
 
     def run_instance(self, context, **kwargs):
         self.cells_rpcapi.schedule_run_instance(context, **kwargs)
+
+
+class ComputeRPCProxyAPI(compute_rpcapi.ComputeAPI):
+    """Class used to substitute Compute RPC API that will proxy
+    via the cells manager to a compute manager in a child cell.
+    """
+    def __init__(self, *args, **kwargs):
+        super(ComputeRPCProxyAPI, self).__init__(*args, **kwargs)
+        self.cells_rpcapi = cells_rpcapi.CellsAPI()
+
+    def cast(self, ctxt, msg, topic=None, version=None):
+        self._set_version(msg, version)
+        topic = self._get_topic(topic)
+        self.cells_rpcapi.proxy_rpc_to_manager(ctxt, msg, topic)
+
+    def call(self, ctxt, msg, topic=None, version=None, timeout=None):
+        self._set_version(msg, version)
+        topic = self._get_topic(topic)
+        return self.cells_rpcapi.proxy_rpc_to_manager(ctxt, msg, topic,
+                                                      call=True,
+                                                      timeout=timeout)
 
 
 class ComputeCellsAPI(compute_api.API):
@@ -115,15 +139,28 @@ class ComputeCellsAPI(compute_api.API):
         """
         return
 
-    def _create_image(self, context, instance, name, image_type,
-            backup_type=None, rotation=None, extra_properties=None):
-        if backup_type:
-            return self._call_to_cells(context, instance, 'backup',
-                    name, backup_type, rotation,
-                    extra_properties=extra_properties)
-        else:
-            return self._call_to_cells(context, instance, 'snapshot',
-                    name, extra_properties=extra_properties)
+    def backup(self, context, instance, name, backup_type, rotation,
+               extra_properties=None, image_id=None):
+        """Backup the given instance."""
+        image_meta = super(ComputeCellsAPI, self).backup(context,
+                instance, name, backup_type, rotation,
+                extra_properties=extra_properties, image_id=image_id)
+        image_id = image_meta['id']
+        self._cast_to_cells(context, instance, 'backup', name,
+                backup_type=backup_type, rotation=rotation,
+                extra_properties=extra_properties, image_id=image_id)
+        return image_meta
+
+    def snapshot(self, context, instance, name, extra_properties=None,
+                 image_id=None):
+        """Snapshot the given instance."""
+        image_meta = super(ComputeCellsAPI, self).snapshot(context,
+                instance, name, extra_properties=extra_properties,
+                image_id=image_id)
+        image_id = image_meta['id']
+        self._cast_to_cells(context, instance, 'snapshot',
+                name, extra_properties=extra_properties, image_id=image_id)
+        return image_meta
 
     def create(self, *args, **kwargs):
         """We can use the base functionality, but I left this here just
@@ -131,17 +168,45 @@ class ComputeCellsAPI(compute_api.API):
         """
         return super(ComputeCellsAPI, self).create(*args, **kwargs)
 
-    @validate_cell
-    def update(self, context, instance, **kwargs):
-        """Update an instance."""
+    def update_state(self, context, instance, new_state):
+        """Updates the state of a compute instance.
+        For example to 'active' or 'error'.
+        Also sets 'task_state' to None.
+        Used by admin_actions api
+
+        :param context: The security context
+        :param instance: The instance to update
+        :param new_state: A member of vm_state to change
+                          the instance's state to,
+                          eg. 'active'
+        """
+        self.update(context, instance,
+                    pass_on_state_change=True,
+                    vm_state=new_state,
+                    task_state=None)
+
+    def update(self, context, instance, pass_on_state_change=False, **kwargs):
+        """
+        Update an instance.
+        :param pass_on_state_change: if true, the state change will be passed
+                                     on to child cells
+        """
+        cell_name = instance['cell_name']
+        if cell_name and self._cell_read_only(cell_name):
+            raise exception.InstanceInvalidState(
+                    attr="vm_state",
+                    instance_uuid=instance['uuid'],
+                    state="temporary_readonly",
+                    method='update')
         rv = super(ComputeCellsAPI, self).update(context,
                 instance, **kwargs)
-        # We need to skip vm_state/task_state updates... those will
-        # happen when via a a _cast_to_cells for running a different
-        # compute api method
         kwargs_copy = kwargs.copy()
-        kwargs_copy.pop('vm_state', None)
-        kwargs_copy.pop('task_state', None)
+        if not pass_on_state_change:
+            # We need to skip vm_state/task_state updates... those will
+            # happen via a _cast_to_cells when running a different
+            # compute api method
+            kwargs_copy.pop('vm_state', None)
+            kwargs_copy.pop('task_state', None)
         if kwargs_copy:
             try:
                 self._cast_to_cells(context, instance, 'update',
@@ -237,26 +302,25 @@ class ComputeCellsAPI(compute_api.API):
                 **kwargs)
         self._cast_to_cells(context, instance, 'rebuild', *args, **kwargs)
 
+    @validate_cell
+    def evacuate(self, context, instance, *args, **kwargs):
+        """Evacuate the given instance with the provided attributes."""
+        super(ComputeCellsAPI, self).evacuate(context, instance, *args,
+                **kwargs)
+        self._cast_to_cells(context, instance, 'evacuate', *args, **kwargs)
+
     @check_instance_state(vm_state=[vm_states.RESIZED])
     @validate_cell
     def revert_resize(self, context, instance):
         """Reverts a resize, deleting the 'new' instance in the process."""
-        # NOTE(markwash): regular api manipulates the migration here, but we
-        # don't have access to it. So to preserve the interface just update the
-        # vm and task state.
-        self.update(context, instance,
-                    task_state=task_states.RESIZE_REVERTING)
+        super(ComputeCellsAPI, self).revert_resize(context, instance)
         self._cast_to_cells(context, instance, 'revert_resize')
 
     @check_instance_state(vm_state=[vm_states.RESIZED])
     @validate_cell
     def confirm_resize(self, context, instance):
         """Confirms a migration/resize and deletes the 'old' instance."""
-        # NOTE(markwash): regular api manipulates migration here, but we don't
-        # have the migration in the api database. So to preserve the interface
-        # just update the vm and task state without calling super()
-        self.update(context, instance, task_state=None,
-                    vm_state=vm_states.ACTIVE)
+        super(ComputeCellsAPI, self).confirm_resize(context, instance)
         self._cast_to_cells(context, instance, 'confirm_resize')
 
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED],
@@ -269,8 +333,34 @@ class ComputeCellsAPI(compute_api.API):
         the original flavor_id. If flavor_id is not None, the instance should
         be migrated to a new host and resized to the new flavor_id.
         """
-        super(ComputeCellsAPI, self).resize(context, instance, *args,
-                **kwargs)
+        super(ComputeCellsAPI, self).resize(context, instance, *args, **kwargs)
+
+        # NOTE(johannes): If we get to this point, then we know the
+        # specified flavor_id is valid and exists. We'll need to load
+        # it again, but that should be safe.
+
+        old_instance_type = instance_types.extract_instance_type(instance)
+
+        flavor_id = kwargs.get('flavor_id')
+
+        if not flavor_id:
+            new_instance_type = old_instance_type
+        else:
+            new_instance_type = instance_types.extract_instance_type(instance,
+                                                                     'new_')
+
+        # NOTE(johannes): Later, when the resize is confirmed or reverted,
+        # the superclass implementations of those methods will need access
+        # to a local migration record for quota reasons. We don't need
+        # source and/or destination information, just the old and new
+        # instance_types. Status is set to 'finished' since nothing else
+        # will update the status along the way.
+        self.db.migration_create(context.elevated(),
+                    {'instance_uuid': instance['uuid'],
+                     'old_instance_type_id': old_instance_type['id'],
+                     'new_instance_type_id': new_instance_type['id'],
+                     'status': 'finished'})
+
         # FIXME(comstud): pass new instance_type object down to a method
         # that'll unfold it
         self._cast_to_cells(context, instance, 'resize', *args, **kwargs)
@@ -375,7 +465,24 @@ class ComputeCellsAPI(compute_api.API):
 
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type, connect_info['host'],
-                connect_info['port'], connect_info['internal_access_path'])
+                connect_info['port'], connect_info['internal_access_path'],
+                instance_uuid=instance['uuid'])
+        return {'url': connect_info['access_url']}
+
+    @wrap_check_policy
+    @validate_cell
+    def get_spice_console(self, context, instance, console_type):
+        """Get a url to a SPICE Console."""
+        if not instance['host']:
+            raise exception.InstanceNotReady(instance_id=instance['uuid'])
+
+        connect_info = self._call_to_cells(context, instance,
+                'get_spice_connect_info', console_type)
+
+        self.consoleauth_rpcapi.authorize_console(context,
+                connect_info['token'], console_type, connect_info['host'],
+                connect_info['port'], connect_info['internal_access_path'],
+                instance_uuid=instance['uuid'])
         return {'url': connect_info['access_url']}
 
     @validate_cell
@@ -419,7 +526,7 @@ class ComputeCellsAPI(compute_api.API):
             context, device=device, instance=instance, volume_id=volume_id)
         try:
             volume = self.volume_api.get(context, volume_id)
-            self.volume_api.check_attach(context, volume)
+            self.volume_api.check_attach(context, volume, instance=instance)
         except Exception:
             with excutils.save_and_reraise_exception():
                 self.db.block_device_mapping_destroy_by_instance_and_device(
@@ -469,3 +576,94 @@ class ComputeCellsAPI(compute_api.API):
         except exception.InstanceUnknownCell:
             pass
         return rv
+
+
+class HostAPI(compute_api.HostAPI):
+    """HostAPI() class for cells.
+
+    Implements host management related operations.  Works by setting the
+    RPC API used by the base class to proxy via the cells manager to the
+    compute manager in the correct cell.  Hosts specified with cells will
+    need to be of the format 'path!to!cell@host'.
+
+    DB methods in the base class are also overridden to proxy via the
+    cells manager.
+    """
+    def __init__(self):
+        super(HostAPI, self).__init__(rpcapi=ComputeRPCProxyAPI())
+        self.cells_rpcapi = cells_rpcapi.CellsAPI()
+
+    def _assert_host_exists(self, context, host_name):
+        """Cannot check this in API cell.  This will be checked in the
+        target child cell.
+        """
+        pass
+
+    def service_get_all(self, context, filters=None, set_zones=False):
+        if filters is None:
+            filters = {}
+        if 'availability_zone' in filters:
+            zone_filter = filters.pop('availability_zone')
+            set_zones = True
+        else:
+            zone_filter = None
+        services = self.cells_rpcapi.service_get_all(context,
+                                                     filters=filters)
+        if set_zones:
+            services = availability_zones.set_availability_zones(context,
+                                                                 services)
+            if zone_filter is not None:
+                services = [s for s in services
+                            if s['availability_zone'] == zone_filter]
+        return services
+
+    def service_get_by_compute_host(self, context, host_name):
+        return self.cells_rpcapi.service_get_by_compute_host(context,
+                                                             host_name)
+
+    def instance_get_all_by_host(self, context, host_name):
+        """Get all instances by host.  Host might have a cell prepended
+        to it, so we'll need to strip it out.  We don't need to proxy
+        this call to cells, as we have instance information here in
+        the API cell.
+        """
+        try:
+            cell_name, host_name = cells_utils.split_cell_and_item(host_name)
+        except ValueError:
+            cell_name = None
+        instances = super(HostAPI, self).instance_get_all_by_host(context,
+                                                                  host_name)
+        if cell_name:
+            instances = [i for i in instances
+                         if i['cell_name'] == cell_name]
+        return instances
+
+    def task_log_get_all(self, context, task_name, beginning, ending,
+                         host=None, state=None):
+        """Return the task logs within a given range from cells,
+        optionally filtering by the host and/or state.  For cells, the
+        host should be a path like 'path!to!cell@host'.  If no @host
+        is given, only task logs from a particular cell will be returned.
+        """
+        return self.cells_rpcapi.task_log_get_all(context,
+                                                  task_name,
+                                                  beginning,
+                                                  ending,
+                                                  host=host,
+                                                  state=state)
+
+    def compute_node_get(self, context, compute_id):
+        """Get a compute node from a particular cell by its integer ID.
+        compute_id should be in the format of 'path!to!cell@ID'.
+        """
+        return self.cells_rpcapi.compute_node_get(context, compute_id)
+
+    def compute_node_get_all(self, context):
+        return self.cells_rpcapi.compute_node_get_all(context)
+
+    def compute_node_search_by_hypervisor(self, context, hypervisor_match):
+        return self.cells_rpcapi.compute_node_get_all(context,
+                hypervisor_match=hypervisor_match)
+
+    def compute_node_statistics(self, context):
+        return self.cells_rpcapi.compute_node_stats(context)

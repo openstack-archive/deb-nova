@@ -15,9 +15,10 @@
 import ldap
 import time
 
+from oslo.config import cfg
+
 from nova import exception
 from nova.network import dns_driver
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova import utils
 
@@ -33,7 +34,8 @@ ldap_dns_opts = [
                help='user for ldap DNS'),
     cfg.StrOpt('ldap_dns_password',
                default='password',
-               help='password for ldap DNS'),
+               help='password for ldap DNS',
+               secret=True),
     cfg.StrOpt('ldap_dns_soa_hostmaster',
                default='hostmaster@example.org',
                help='Hostmaster for ldap dns driver Statement of Authority'),

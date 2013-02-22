@@ -36,6 +36,10 @@ import struct
 import sys
 import tempfile
 import time
+from xml.dom import minidom
+from xml.parsers import expat
+from xml import sax
+from xml.sax import expatreader
 from xml.sax import saxutils
 
 from eventlet import event
@@ -43,12 +47,16 @@ from eventlet.green import subprocess
 from eventlet import greenthread
 import netaddr
 
+from oslo.config import cfg
+
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
+from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
+
+notify_decorator = 'nova.openstack.common.notifier.api.notify_decorator'
 
 monkey_patch_opts = [
     cfg.BoolOpt('monkey_patch',
@@ -56,8 +64,8 @@ monkey_patch_opts = [
                 help='Whether to log monkey patching'),
     cfg.ListOpt('monkey_patch_modules',
                 default=[
-                  'nova.api.ec2.cloud:nova.notifier.api.notify_decorator',
-                  'nova.compute.api:nova.notifier.api.notify_decorator'
+                  'nova.api.ec2.cloud:%s' % (notify_decorator),
+                  'nova.compute.api:%s' % (notify_decorator)
                   ],
                 help='List of modules/decorators to monkey patch'),
 ]
@@ -76,11 +84,13 @@ utils_opts = [
                default="/etc/nova/rootwrap.conf",
                help='Path to the rootwrap configuration file to use for '
                     'running commands as root'),
+    cfg.StrOpt('tempdir',
+               default=None,
+               help='Explicitly specify the temporary working directory'),
 ]
 CONF = cfg.CONF
 CONF.register_opts(monkey_patch_opts)
 CONF.register_opts(utils_opts)
-CONF.import_opt('service_down_time', 'nova.config')
 
 LOG = logging.getLogger(__name__)
 
@@ -508,14 +518,18 @@ def str_dict_replace(s, mapping):
 class LazyPluggable(object):
     """A pluggable backend loaded lazily based on some value."""
 
-    def __init__(self, pivot, **backends):
+    def __init__(self, pivot, config_group=None, **backends):
         self.__backends = backends
         self.__pivot = pivot
         self.__backend = None
+        self.__config_group = config_group
 
     def __get_backend(self):
         if not self.__backend:
-            backend_name = CONF[self.__pivot]
+            if self.__config_group is None:
+                backend_name = CONF[self.__pivot]
+            else:
+                backend_name = CONF[self.__config_group][self.__pivot]
             if backend_name not in self.__backends:
                 msg = _('Invalid backend: %s') % backend_name
                 raise exception.NovaException(msg)
@@ -622,7 +636,7 @@ class DynamicLoopingCall(LoopingCallBase):
                     if not self._running:
                         break
 
-                    if not periodic_interval_max is None:
+                    if periodic_interval_max is not None:
                         idle = min(idle, periodic_interval_max)
                     LOG.debug(_('Periodic task processor sleeping for %.02f '
                                 'seconds'), idle)
@@ -641,6 +655,46 @@ class DynamicLoopingCall(LoopingCallBase):
 
         greenthread.spawn(_inner)
         return self.done
+
+
+class ProtectedExpatParser(expatreader.ExpatParser):
+    """An expat parser which disables DTD's and entities by default."""
+
+    def __init__(self, forbid_dtd=True, forbid_entities=True,
+                 *args, **kwargs):
+        # Python 2.x old style class
+        expatreader.ExpatParser.__init__(self, *args, **kwargs)
+        self.forbid_dtd = forbid_dtd
+        self.forbid_entities = forbid_entities
+
+    def start_doctype_decl(self, name, sysid, pubid, has_internal_subset):
+        raise ValueError("Inline DTD forbidden")
+
+    def entity_decl(self, entityName, is_parameter_entity, value, base,
+                    systemId, publicId, notationName):
+        raise ValueError("<!ENTITY> forbidden")
+
+    def unparsed_entity_decl(self, name, base, sysid, pubid, notation_name):
+        # expat 1.2
+        raise ValueError("<!ENTITY> forbidden")
+
+    def reset(self):
+        expatreader.ExpatParser.reset(self)
+        if self.forbid_dtd:
+            self._parser.StartDoctypeDeclHandler = self.start_doctype_decl
+        if self.forbid_entities:
+            self._parser.EntityDeclHandler = self.entity_decl
+            self._parser.UnparsedEntityDeclHandler = self.unparsed_entity_decl
+
+
+def safe_minidom_parse_string(xml_string):
+    """Parse an XML string using minidom safely.
+
+    """
+    try:
+        return minidom.parseString(xml_string, parser=ProtectedExpatParser())
+    except sax.SAXParseException as se:
+        raise expat.ExpatError()
 
 
 def xhtml_escape(value):
@@ -692,7 +746,7 @@ def to_bytes(text, default=0):
 
 
 def delete_if_exists(pathname):
-    """delete a file, but ignore file not found error"""
+    """delete a file, but ignore file not found error."""
 
     try:
         os.unlink(pathname)
@@ -848,7 +902,7 @@ def parse_server_string(server_str):
 
 
 def bool_from_str(val):
-    """Convert a string representation of a bool into a bool value"""
+    """Convert a string representation of a bool into a bool value."""
 
     if not val:
         return False
@@ -860,29 +914,49 @@ def bool_from_str(val):
                val.lower() == 'y'
 
 
+def is_int_like(val):
+    """Check if a value looks like an int."""
+    try:
+        return str(int(val)) == str(val)
+    except Exception:
+        return False
+
+
 def is_valid_boolstr(val):
-    """Check if the provided string is a valid bool string or not. """
-    val = str(val).lower()
-    return val == 'true' or val == 'false' or \
-           val == 'yes' or val == 'no' or \
-           val == 'y' or val == 'n' or \
-           val == '1' or val == '0'
+    """Check if the provided string is a valid bool string or not."""
+    boolstrs = ('true', 'false', 'yes', 'no', 'y', 'n', '1', '0')
+    return str(val).lower() in boolstrs
 
 
 def is_valid_ipv4(address):
-    """valid the address strictly as per format xxx.xxx.xxx.xxx.
-    where xxx is a value between 0 and 255.
-    """
-    parts = address.split(".")
-    if len(parts) != 4:
+    """Verify that address represents a valid IPv4 address."""
+    try:
+        addr = netaddr.IPAddress(address)
+        return addr.version == 4
+    except Exception:
         return False
-    for item in parts:
-        try:
-            if not 0 <= int(item) <= 255:
-                return False
-        except ValueError:
-            return False
-    return True
+
+
+def is_valid_ipv6(address):
+    return netaddr.valid_ipv6(address)
+
+
+def is_valid_ipv6_cidr(address):
+    try:
+        str(netaddr.IPNetwork(address, version=6).cidr)
+        return True
+    except Exception:
+        return False
+
+
+def get_shortened_ipv6(address):
+    addr = netaddr.IPAddress(address, version=6)
+    return str(addr.ipv6())
+
+
+def get_shortened_ipv6_cidr(address):
+    net = netaddr.IPNetwork(address, version=6)
+    return str(net.cidr)
 
 
 def is_valid_cidr(address):
@@ -909,6 +983,15 @@ def is_valid_cidr(address):
     return True
 
 
+def get_ip_version(network):
+    """Returns the IP version of a network (IPv4 or IPv6). Raises
+    AddrFormatError if invalid network."""
+    if netaddr.IPNetwork(network).version == 6:
+        return "IPv6"
+    elif netaddr.IPNetwork(network).version == 4:
+        return "IPv4"
+
+
 def monkey_patch():
     """If the Flags.monkey_patch set as True,
     this function patches a decorator
@@ -916,10 +999,11 @@ def monkey_patch():
     You can set decorators for each modules
     using CONF.monkey_patch_modules.
     The format is "Module path:Decorator function".
-    Example: 'nova.api.ec2.cloud:nova.notifier.api.notify_decorator'
+    Example:
+      'nova.api.ec2.cloud:nova.openstack.common.notifier.api.notify_decorator'
 
     Parameters of the decorator is as follows.
-    (See nova.notifier.api.notify_decorator)
+    (See nova.openstack.common.notifier.api.notify_decorator)
 
     name - name of the function
     function - object of the function
@@ -950,7 +1034,7 @@ def monkey_patch():
 
 
 def convert_to_list_dict(lst, label):
-    """Convert a value or list into a list of dicts"""
+    """Convert a value or list into a list of dicts."""
     if not lst:
         return None
     if not isinstance(lst, list):
@@ -959,7 +1043,7 @@ def convert_to_list_dict(lst, label):
 
 
 def timefunc(func):
-    """Decorator that logs how long a particular function took to execute"""
+    """Decorator that logs how long a particular function took to execute."""
     @functools.wraps(func)
     def inner(*args, **kwargs):
         start_time = time.time()
@@ -1000,7 +1084,7 @@ def make_dev_path(dev, partition=None, base='/dev'):
 
 
 def total_seconds(td):
-    """Local total_seconds implementation for compatibility with python 2.6"""
+    """Local total_seconds implementation for compatibility with python 2.6."""
     if hasattr(td, 'total_seconds'):
         return td.total_seconds()
     else:
@@ -1073,21 +1157,42 @@ def temporary_mutation(obj, **kwargs):
         with temporary_mutation(context, read_deleted="yes"):
             do_something_that_needed_deleted_objects()
     """
+    def is_dict_like(thing):
+        return hasattr(thing, 'has_key')
+
+    def get(thing, attr, default):
+        if is_dict_like(thing):
+            return thing.get(attr, default)
+        else:
+            return getattr(thing, attr, default)
+
+    def set_value(thing, attr, val):
+        if is_dict_like(thing):
+            thing[attr] = val
+        else:
+            setattr(thing, attr, val)
+
+    def delete(thing, attr):
+        if is_dict_like(thing):
+            del thing[attr]
+        else:
+            delattr(thing, attr)
+
     NOT_PRESENT = object()
 
     old_values = {}
     for attr, new_value in kwargs.items():
-        old_values[attr] = getattr(obj, attr, NOT_PRESENT)
-        setattr(obj, attr, new_value)
+        old_values[attr] = get(obj, attr, NOT_PRESENT)
+        set_value(obj, attr, new_value)
 
     try:
         yield
     finally:
         for attr, old_value in old_values.items():
             if old_value is NOT_PRESENT:
-                del obj[attr]
+                delete(obj, attr)
             else:
-                setattr(obj, attr, old_value)
+                set_value(obj, attr, old_value)
 
 
 def generate_mac_address():
@@ -1136,6 +1241,7 @@ def temporary_chown(path, owner_uid=None):
 
 @contextlib.contextmanager
 def tempdir(**kwargs):
+    tempfile.tempdir = CONF.tempdir
     tmpdir = tempfile.mkdtemp(**kwargs)
     try:
         yield tmpdir
@@ -1146,28 +1252,8 @@ def tempdir(**kwargs):
             LOG.error(_('Could not remove tmpdir: %s'), str(e))
 
 
-def strcmp_const_time(s1, s2):
-    """Constant-time string comparison.
-
-    :params s1: the first string
-    :params s2: the second string
-
-    :return: True if the strings are equal.
-
-    This function takes two strings and compares them.  It is intended to be
-    used when doing a comparison for authentication purposes to help guard
-    against timing attacks.
-    """
-    if len(s1) != len(s2):
-        return False
-    result = 0
-    for (a, b) in zip(s1, s2):
-        result |= ord(a) ^ ord(b)
-    return result == 0
-
-
 def walk_class_hierarchy(clazz, encountered=None):
-    """Walk class hierarchy, yielding most derived classes first"""
+    """Walk class hierarchy, yielding most derived classes first."""
     if not encountered:
         encountered = []
     for subclass in clazz.__subclasses__():
@@ -1250,3 +1336,106 @@ def last_bytes(file_like_object, num):
 
     remaining = file_like_object.tell()
     return (file_like_object.read(), remaining)
+
+
+def metadata_to_dict(metadata):
+    result = {}
+    for item in metadata:
+        if not item.get('deleted'):
+            result[item['key']] = item['value']
+    return result
+
+
+def get_wrapped_function(function):
+    """Get the method at the bottom of a stack of decorators."""
+    if not hasattr(function, 'func_closure') or not function.func_closure:
+        return function
+
+    def _get_wrapped_function(function):
+        if not hasattr(function, 'func_closure') or not function.func_closure:
+            return None
+
+        for closure in function.func_closure:
+            func = closure.cell_contents
+
+            deeper_func = _get_wrapped_function(func)
+            if deeper_func:
+                return deeper_func
+            elif hasattr(closure.cell_contents, '__call__'):
+                return closure.cell_contents
+
+    return _get_wrapped_function(function)
+
+
+def getcallargs(function, *args, **kwargs):
+    """This is a simplified inspect.getcallargs (2.7+).
+
+    It should be replaced when python >= 2.7 is standard.
+    """
+    keyed_args = {}
+    argnames, varargs, keywords, defaults = inspect.getargspec(function)
+
+    keyed_args.update(kwargs)
+
+    #NOTE(alaski) the implicit 'self' or 'cls' argument shows up in
+    # argnames but not in args or kwargs.  Uses 'in' rather than '==' because
+    # some tests use 'self2'.
+    if 'self' in argnames[0] or 'cls' == argnames[0]:
+        # The function may not actually be a method or have im_self.
+        # Typically seen when it's stubbed with mox.
+        if inspect.ismethod(function) and hasattr(function, 'im_self'):
+            keyed_args[argnames[0]] = function.im_self
+        else:
+            keyed_args[argnames[0]] = None
+
+    remaining_argnames = filter(lambda x: x not in keyed_args, argnames)
+    keyed_args.update(dict(zip(remaining_argnames, args)))
+
+    if defaults:
+        num_defaults = len(defaults)
+        for argname, value in zip(argnames[-num_defaults:], defaults):
+            if argname not in keyed_args:
+                keyed_args[argname] = value
+
+    return keyed_args
+
+
+class ExceptionHelper(object):
+    """Class to wrap another and translate the ClientExceptions raised by its
+    function calls to the actual ones"""
+
+    def __init__(self, target):
+        self._target = target
+
+    def __getattr__(self, name):
+        func = getattr(self._target, name)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except rpc_common.ClientException, e:
+                raise (e._exc_info[1], None, e._exc_info[2])
+        return wrapper
+
+
+def check_string_length(value, name, min_length=0, max_length=None):
+    """Check the length of specified string
+    :param value: the value of the string
+    :param name: the name of the string
+    :param min_length: the min_length of the string
+    :param max_length: the max_length of the string
+    """
+    if not isinstance(value, basestring):
+        msg = _("%s is not a string or unicode") % name
+        raise exception.InvalidInput(message=msg)
+
+    if len(value) < min_length:
+        msg = _("%(name)s has less than %(min_length)s "
+                    "characters.") % locals()
+        raise exception.InvalidInput(message=msg)
+
+    if max_length and len(value) > max_length:
+        msg = _("%(name)s has more than %(max_length)s "
+                    "characters.") % locals()
+        raise exception.InvalidInput(message=msg)

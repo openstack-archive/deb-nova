@@ -20,13 +20,15 @@ import webob
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+import nova.context
 from nova import db
-from nova.db.sqlalchemy import api as sqlalchemy_api
 from nova import exception
+from nova.openstack.common import log as logging
 from nova import quota
 
 
 QUOTAS = quota.QUOTAS
+LOG = logging.getLogger(__name__)
 
 
 authorize_update = extensions.extension_authorizer('compute', 'quotas:update')
@@ -48,7 +50,7 @@ class QuotaTemplate(xmlutil.TemplateBuilder):
 class QuotaSetsController(object):
 
     def _format_quota_set(self, project_id, quota_set):
-        """Convert the quota object to a result dict"""
+        """Convert the quota object to a result dict."""
 
         result = dict(id=str(project_id))
 
@@ -76,7 +78,7 @@ class QuotaSetsController(object):
         context = req.environ['nova.context']
         authorize_show(context)
         try:
-            sqlalchemy_api.authorize_project_context(context, id)
+            nova.context.authorize_project_context(context, id)
             return self._format_quota_set(id, self._get_quotas(context, id))
         except exception.NotAuthorized:
             raise webob.exc.HTTPForbidden()
@@ -88,7 +90,14 @@ class QuotaSetsController(object):
         project_id = id
         for key in body['quota_set'].keys():
             if key in QUOTAS:
-                value = int(body['quota_set'][key])
+                try:
+                    value = int(body['quota_set'][key])
+                except (ValueError, TypeError):
+                    LOG.warn(_("Quota for %s should be integer.") % key)
+                    # NOTE(hzzhoushaoyu): Do not prevent valid value to be
+                    # updated. If raise BadRequest, some may be updated and
+                    # others may be not.
+                    continue
                 self._validate_quota_limit(value)
                 try:
                     db.quota_update(context, project_id, key, value)
@@ -106,7 +115,7 @@ class QuotaSetsController(object):
 
 
 class Quotas(extensions.ExtensionDescriptor):
-    """Quotas management support"""
+    """Quotas management support."""
 
     name = "Quotas"
     alias = "os-quota-sets"

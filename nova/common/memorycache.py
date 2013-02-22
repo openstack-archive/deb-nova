@@ -18,7 +18,28 @@
 
 """Super simple fake memcache client."""
 
+from oslo.config import cfg
+
 from nova.openstack.common import timeutils
+
+memcache_opts = [
+    cfg.ListOpt('memcached_servers',
+                default=None,
+                help='Memcached servers or None for in process cache.'),
+]
+
+CONF = cfg.CONF
+CONF.register_opts(memcache_opts)
+
+
+def get_client():
+    client_cls = Client
+
+    if CONF.memcached_servers:
+        import memcache
+        client_cls = memcache.Client
+
+    return client_cls(CONF.memcached_servers, debug=0)
 
 
 class Client(object):
@@ -50,7 +71,7 @@ class Client(object):
 
     def add(self, key, value, time=0, min_compress_len=0):
         """Sets the value for a key if it doesn't exist."""
-        if not self.get(key) is None:
+        if self.get(key) is not None:
             return False
         return self.set(key, value, time, min_compress_len)
 
@@ -62,3 +83,8 @@ class Client(object):
         new_value = int(value) + delta
         self.cache[key] = (self.cache[key][0], str(new_value))
         return new_value
+
+    def delete(self, key, time=0):
+        """Deletes the value associated with a key."""
+        if key in self.cache:
+            del self.cache[key]

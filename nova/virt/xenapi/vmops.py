@@ -25,7 +25,9 @@ import time
 
 from eventlet import greenthread
 import netaddr
+from oslo.config import cfg
 
+from nova import block_device
 from nova.compute import api as compute
 from nova.compute import power_state
 from nova.compute import task_states
@@ -33,13 +35,13 @@ from nova.compute import vm_mode
 from nova.compute import vm_states
 from nova import context as nova_context
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import utils
+from nova.virt import configdrive
 from nova.virt import driver as virt_driver
 from nova.virt import firewall
 from nova.virt.xenapi import agent as xapi_agent
@@ -58,12 +60,15 @@ xenapi_vmops_opts = [
                     'to go to running state'),
     cfg.StrOpt('xenapi_vif_driver',
                default='nova.virt.xenapi.vif.XenAPIBridgeDriver',
-               help='The XenAPI VIF driver using XenServer Network APIs.')
+               help='The XenAPI VIF driver using XenServer Network APIs.'),
+    cfg.StrOpt('xenapi_image_upload_handler',
+                default='nova.virt.xenapi.imageupload.glance.GlanceStore',
+                help='Object Store Driver used to handle image uploads.'),
     ]
 
 CONF = cfg.CONF
 CONF.register_opts(xenapi_vmops_opts)
-CONF.import_opt('host', 'nova.config')
+CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('vncserver_proxyclient_address', 'nova.vnc')
 
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
@@ -77,10 +82,11 @@ DEVICE_RESCUE = '1'
 DEVICE_SWAP = '2'
 DEVICE_EPHEMERAL = '3'
 DEVICE_CD = '4'
+DEVICE_CONFIGDRIVE = '5'
 
 
 def cmp_version(a, b):
-    """Compare two version strings (eg 0.0.1.10 > 0.0.1.9)"""
+    """Compare two version strings (eg 0.0.1.10 > 0.0.1.9)."""
     a = a.split('.')
     b = b.split('.')
 
@@ -159,13 +165,19 @@ class VMOps(object):
         self.vif_driver = vif_impl(xenapi_session=self._session)
         self.default_root_dev = '/dev/sda'
 
+        msg = _("Importing image upload handler: %s")
+        LOG.debug(msg % CONF.xenapi_image_upload_handler)
+        self.image_upload_handler = importutils.import_object(
+                                CONF.xenapi_image_upload_handler)
+
     @property
     def agent_enabled(self):
         return not CONF.xenapi_disable_agent
 
     def _get_agent(self, instance, vm_ref):
         if self.agent_enabled:
-            return xapi_agent.XenAPIBasedAgent(self._session, instance, vm_ref)
+            return xapi_agent.XenAPIBasedAgent(self._session, self._virtapi,
+                                               instance, vm_ref)
         raise exception.NovaException(_("Error: Agent is disabled"))
 
     def list_instances(self):
@@ -181,7 +193,7 @@ class VMOps(object):
     def confirm_migration(self, migration, instance, network_info):
         name_label = self._get_orig_vm_name_label(instance)
         vm_ref = vm_utils.lookup(self._session, name_label)
-        return self._destroy(instance, vm_ref, network_info)
+        return self._destroy(instance, vm_ref, network_info=network_info)
 
     def _attach_mapped_block_devices(self, instance, block_device_info):
         # We are attaching these volumes before start (no hotplugging)
@@ -250,7 +262,7 @@ class VMOps(object):
                                        total_steps=RESIZE_TOTAL_STEPS)
 
     def _start(self, instance, vm_ref=None):
-        """Power on a VM instance"""
+        """Power on a VM instance."""
         vm_ref = vm_ref or self._get_vm_opaque_ref(instance)
         LOG.debug(_("Starting instance"), instance=instance)
         self._session.call_xenapi('VM.start_on', vm_ref,
@@ -292,7 +304,7 @@ class VMOps(object):
         def create_disks_step(undo_mgr, disk_image_type, image_meta):
             vdis = self._create_disks(context, instance, name_label,
                                       disk_image_type, image_meta,
-                                      block_device_info)
+                                      block_device_info=block_device_info)
 
             def undo_create_disks():
                 vdi_refs = [vdi['ref'] for vdi in vdis.values()
@@ -336,7 +348,7 @@ class VMOps(object):
                     vdis, disk_image_type, kernel_file, ramdisk_file)
 
             def undo_create_vm():
-                self._destroy(instance, vm_ref, network_info)
+                self._destroy(instance, vm_ref, network_info=network_info)
 
             undo_mgr.undo_with(undo_create_vm)
             return vm_ref
@@ -344,7 +356,8 @@ class VMOps(object):
         @step
         def attach_disks_step(undo_mgr, vm_ref, vdis, disk_image_type):
             self._attach_disks(instance, vm_ref, name_label, vdis,
-                    disk_image_type)
+                               disk_image_type, admin_password,
+                               injected_files)
 
         if rescue:
             # NOTE(johannes): Attach root disk to rescue VM now, before
@@ -437,7 +450,12 @@ class VMOps(object):
                 disk_image_type)
         self._setup_vm_networking(instance, vm_ref, vdis, network_info,
                 rescue)
-        self.inject_instance_metadata(instance, vm_ref)
+
+        # NOTE(mikal): file injection only happens if we are _not_ using a
+        # configdrive.
+        if not configdrive.required_by(instance):
+            self.inject_instance_metadata(instance, vm_ref)
+
         return vm_ref
 
     def _setup_vm_networking(self, instance, vm_ref, vdis, network_info,
@@ -491,12 +509,13 @@ class VMOps(object):
         return vm_ref
 
     def _attach_disks(self, instance, vm_ref, name_label, vdis,
-                      disk_image_type):
+                      disk_image_type, admin_password=None, files=None):
         ctx = nova_context.get_admin_context()
         instance_type = instance['instance_type']
 
-        # DISK_ISO needs two VBDs: the ISO disk and a blank RW disk
+        # Attach (required) root disk
         if disk_image_type == vm_utils.ImageType.DISK_ISO:
+            # DISK_ISO needs two VBDs: the ISO disk and a blank RW disk
             LOG.debug(_("Detected ISO image type, creating blank VM "
                         "for install"), instance=instance)
 
@@ -524,6 +543,19 @@ class VMOps(object):
                                 DEVICE_ROOT, bootable=True,
                                 osvol=root_vdi.get('osvol'))
 
+        # Attach (optional) additional block-devices
+        for type_, vdi_info in vdis.items():
+            # Additional block-devices for boot use their device-name as the
+            # type.
+            if not type_.startswith('/dev'):
+                continue
+
+            # Convert device name to userdevice number, e.g. /dev/xvdb -> 1
+            userdevice = ord(block_device.strip_prefix(type_)) - ord('a')
+            vm_utils.create_vbd(self._session, vm_ref, vdi_info['ref'],
+                                userdevice, bootable=False,
+                                osvol=vdi_info.get('osvol'))
+
         # Attach (optional) swap disk
         swap_mb = instance_type['swap']
         if swap_mb:
@@ -536,6 +568,13 @@ class VMOps(object):
             vm_utils.generate_ephemeral(self._session, instance, vm_ref,
                                         DEVICE_EPHEMERAL, name_label,
                                         ephemeral_gb)
+
+        # Attach (optional) configdrive v2 disk
+        if configdrive.required_by(instance):
+            vm_utils.generate_configdrive(self._session, instance, vm_ref,
+                                          DEVICE_CONFIGDRIVE,
+                                          admin_password=admin_password,
+                                          files=files)
 
     def _boot_new_instance(self, instance, vm_ref, injected_files,
                            admin_password):
@@ -646,9 +685,11 @@ class VMOps(object):
            coalesce together, so, we must wait for this coalescing to occur to
            get a stable representation of the data on disk.
 
-        3. Push-to-glance: Once coalesced, we call a plugin on the XenServer
-           that will bundle the VHDs together and then push the bundle into
-           Glance.
+        3. Push-to-data-store: Once coalesced, we call a plugin on the
+           XenServer that will bundle the VHDs together and then push the
+           bundle. Depending on the configured value of
+           'xenapi_image_upload_handler', image data may be pushed to
+           Glance or the specified data store.
 
         """
         vm_ref = self._get_vm_opaque_ref(instance)
@@ -659,8 +700,11 @@ class VMOps(object):
                 update_task_state) as vdi_uuids:
             update_task_state(task_state=task_states.IMAGE_UPLOADING,
                               expected_state=task_states.IMAGE_PENDING_UPLOAD)
-            vm_utils.upload_image(
-                    context, self._session, instance, vdi_uuids, image_id)
+            self.image_upload_handler.upload_image(context,
+                                                   self._session,
+                                                   instance,
+                                                   vdi_uuids,
+                                                   image_id)
 
         LOG.debug(_("Finished snapshot and upload for VM"),
                   instance=instance)
@@ -983,29 +1027,7 @@ class VMOps(object):
 
         raise exception.NotFound(_("Unable to find root VBD/VDI for VM"))
 
-    def _detach_vm_vols(self, instance, vm_ref, block_device_info=None):
-        """Detach any external nova/cinder volumes and purge the SRs.
-           This differs from a normal detach in that the VM has been
-           shutdown, so there is no need for unplugging VBDs. They do
-           need to be destroyed, so that the SR can be forgotten.
-        """
-        vbd_refs = self._session.call_xenapi("VM.get_VBDs", vm_ref)
-        for vbd_ref in vbd_refs:
-            other_config = self._session.call_xenapi("VBD.get_other_config",
-                                                   vbd_ref)
-            if other_config.get('osvol'):
-                # this is a nova/cinder volume
-                try:
-                    sr_ref = volume_utils.find_sr_from_vbd(self._session,
-                                                           vbd_ref)
-                    vm_utils.destroy_vbd(self._session, vbd_ref)
-                    # Forget SR only if not in use
-                    volume_utils.purge_sr(self._session, sr_ref)
-                except Exception as exc:
-                    LOG.exception(exc)
-                    raise
-
-    def _destroy_vdis(self, instance, vm_ref, block_device_info=None):
+    def _destroy_vdis(self, instance, vm_ref):
         """Destroys all VDIs associated with a VM."""
         LOG.debug(_("Destroying VDIs"), instance=instance)
 
@@ -1087,12 +1109,14 @@ class VMOps(object):
         if rescue_vm_ref:
             self._destroy_rescue_instance(rescue_vm_ref, vm_ref)
 
-        return self._destroy(instance, vm_ref, network_info,
-                             block_device_info=block_device_info,
+        # NOTE(sirp): `block_device_info` is not used, information about which
+        # volumes should be detached is determined by the
+        # VBD.other_config['osvol'] attribute
+        return self._destroy(instance, vm_ref, network_info=network_info,
                              destroy_disks=destroy_disks)
 
     def _destroy(self, instance, vm_ref, network_info=None,
-                 block_device_info=None, destroy_disks=True):
+                 destroy_disks=True):
         """Destroys VM instance by performing:
 
             1. A shutdown
@@ -1108,10 +1132,9 @@ class VMOps(object):
 
         vm_utils.hard_shutdown_vm(self._session, instance, vm_ref)
 
-        # Destroy VDIs (if necessary)
         if destroy_disks:
-            self._detach_vm_vols(instance, vm_ref, block_device_info)
-            self._destroy_vdis(instance, vm_ref, block_device_info)
+            self._volumeops.detach_all(vm_ref)
+            self._destroy_vdis(instance, vm_ref)
             self._destroy_kernel_ramdisk(instance, vm_ref)
 
         vm_utils.destroy_vm(self._session, instance, vm_ref)
@@ -1313,7 +1336,7 @@ class VMOps(object):
                 'internal_access_path': path}
 
     def _vif_xenstore_data(self, vif):
-        """convert a network info vif to injectable instance data"""
+        """convert a network info vif to injectable instance data."""
 
         def get_ip(ip):
             if not ip:
@@ -1512,15 +1535,15 @@ class VMOps(object):
         self._session.call_xenapi('VM.remove_from_xenstore_data', vm_ref, key)
 
     def refresh_security_group_rules(self, security_group_id):
-        """recreates security group rules for every instance """
+        """recreates security group rules for every instance."""
         self.firewall_driver.refresh_security_group_rules(security_group_id)
 
     def refresh_security_group_members(self, security_group_id):
-        """recreates security group rules for every instance """
+        """recreates security group rules for every instance."""
         self.firewall_driver.refresh_security_group_members(security_group_id)
 
     def refresh_instance_security_rules(self, instance):
-        """recreates security group rules for specified instance """
+        """recreates security group rules for specified instance."""
         self.firewall_driver.refresh_instance_security_rules(instance)
 
     def refresh_provider_fw_rules(self):
@@ -1617,20 +1640,21 @@ class VMOps(object):
             try:
                 self._call_live_migrate_command(
                     "VM.assert_can_migrate", vm_ref, migrate_data)
+                return dest_check_data
             except self._session.XenAPI.Failure as exc:
                 LOG.exception(exc)
                 raise exception.MigrationError(_('VM.assert_can_migrate'
                                                  'failed'))
 
     def _generate_vdi_map(self, destination_sr_ref, vm_ref):
-        """generate a vdi_map for _call_live_migrate_command """
+        """generate a vdi_map for _call_live_migrate_command."""
         sr_ref = vm_utils.safe_find_sr(self._session)
         vm_vdis = vm_utils.get_instance_vdis_for_sr(self._session,
                                                     vm_ref, sr_ref)
         return dict((vdi, destination_sr_ref) for vdi in vm_vdis)
 
     def _call_live_migrate_command(self, command_name, vm_ref, migrate_data):
-        """unpack xapi specific parameters, and call a live migrate command"""
+        """unpack xapi specific parameters, and call a live migrate command."""
         destination_sr_ref = migrate_data['destination_sr_ref']
         migrate_send_data = migrate_data['migrate_send_data']
 

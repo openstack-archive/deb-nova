@@ -23,6 +23,7 @@ Starting point for routing EC2 requests.
 import urlparse
 
 from eventlet.green import httplib
+from oslo.config import cfg
 import webob
 import webob.dec
 import webob.exc
@@ -31,9 +32,9 @@ from nova.api.ec2 import apirequest
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import faults
 from nova.api import validator
+from nova.common import memorycache
 from nova import context
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -72,12 +73,11 @@ ec2_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(ec2_opts)
-CONF.import_opt('memcached_servers', 'nova.config')
 CONF.import_opt('use_forwarded_for', 'nova.api.auth')
 
 
 def ec2_error(req, request_id, code, message):
-    """Helper to send an ec2_compatible error"""
+    """Helper to send an ec2_compatible error."""
     LOG.error(_('%(code)s: %(message)s') % locals())
     resp = webob.Response()
     resp.status = 400
@@ -162,12 +162,7 @@ class Lockout(wsgi.Middleware):
 
     def __init__(self, application):
         """middleware can use fake for testing."""
-        if CONF.memcached_servers:
-            import memcache
-        else:
-            from nova.common import memorycache as memcache
-        self.mc = memcache.Client(CONF.memcached_servers,
-                                  debug=0)
+        self.mc = memorycache.get_client()
         super(Lockout, self).__init__(application)
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
@@ -516,7 +511,13 @@ class Executor(wsgi.Application):
         except exception.KeyPairExists as ex:
             LOG.debug(_('KeyPairExists raised: %s'), unicode(ex),
                      context=context)
-            return ec2_error(req, request_id, type(ex).__name__, unicode(ex))
+            code = 'InvalidKeyPair.Duplicate'
+            return ec2_error(req, request_id, code, unicode(ex))
+        except exception.InvalidKeypair as ex:
+            LOG.debug(_('InvalidKeypair raised: %s'), unicode(ex),
+                        context)
+            code = 'InvalidKeyPair.Format'
+            return ec2_error(req, request_id, code, unicode(ex))
         except exception.InvalidParameterValue as ex:
             LOG.debug(_('InvalidParameterValue raised: %s'), unicode(ex),
                      context=context)

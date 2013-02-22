@@ -17,10 +17,11 @@
 
 """VMRC Console Manager."""
 
+from oslo.config import cfg
+
 from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
 from nova import manager
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import driver as vmwareapi_conn
@@ -49,7 +50,7 @@ class ConsoleVMRCManager(manager.Manager):
         """Get VIM session for the pool specified."""
         vim_session = None
         if pool['id'] not in self.sessions.keys():
-            vim_session = vmwareapi_conn.VMWareAPISession(
+            vim_session = vmwareapi_conn.VMwareAPISession(
                     pool['address'],
                     pool['username'],
                     pool['password'],
@@ -75,7 +76,6 @@ class ConsoleVMRCManager(manager.Manager):
         self.driver.setup_console(context, console)
         return console
 
-    @exception.wrap_exception()
     def add_console(self, context, instance_id, password=None,
                     port=None, **kwargs):
         """Adds a console for the instance.
@@ -105,7 +105,6 @@ class ConsoleVMRCManager(manager.Manager):
                                              instance)
         return console['id']
 
-    @exception.wrap_exception()
     def remove_console(self, context, console_id, **_kwargs):
         """Removes a console entry."""
         try:

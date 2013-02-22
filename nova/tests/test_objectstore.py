@@ -27,9 +27,9 @@ import tempfile
 
 from boto import exception as boto_exception
 from boto.s3 import connection as s3
+from oslo.config import cfg
 
 from nova.objectstore import s3server
-from nova.openstack.common import cfg
 from nova import test
 from nova import wsgi
 
@@ -94,11 +94,11 @@ class S3APITestCase(test.TestCase):
         return True
 
     def test_list_buckets(self):
-        """Make sure we are starting with no buckets."""
+        # Make sure we are starting with no buckets.
         self._ensure_no_buckets(self.conn.get_all_buckets())
 
     def test_create_and_delete_bucket(self):
-        """Test bucket creation and deletion."""
+        # Test bucket creation and deletion.
         bucket_name = 'testbucket'
 
         self.conn.create_bucket(bucket_name)
@@ -107,7 +107,7 @@ class S3APITestCase(test.TestCase):
         self._ensure_no_buckets(self.conn.get_all_buckets())
 
     def test_create_bucket_and_key_and_delete_key_again(self):
-        """Test key operations on buckets."""
+        # Test key operations on buckets.
         bucket_name = 'testbucket'
         key_name = 'somekey'
         key_contents = 'somekey'

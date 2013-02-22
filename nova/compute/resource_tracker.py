@@ -19,15 +19,15 @@ scheduler with useful information about availability through the ComputeNode
 model.
 """
 
+from oslo.config import cfg
+
 from nova.compute import claims
 from nova.compute import instance_types
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import conductor
 from nova import context
-from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import lockutils
@@ -145,7 +145,8 @@ class ResourceTracker(object):
 
             # Mark the resources in-use for the resize landing on this
             # compute host:
-            self._update_usage_from_migration(self.compute_node, migration_ref)
+            self._update_usage_from_migration(instance_ref, self.compute_node,
+                                              migration_ref)
             elevated = context.elevated()
             self._update(elevated, self.compute_node)
 
@@ -159,18 +160,10 @@ class ResourceTracker(object):
         be done while the COMPUTE_RESOURCES_SEMAPHORE is held so the resource
         claim will not be lost if the audit process starts.
         """
-        # TODO(russellb): no-db-compute: Send the old instance type
-        # info that is needed via rpc so db access isn't required
-        # here.
-        old_instance_type_id = instance['instance_type_id']
-        old_instance_type = instance_types.get_instance_type(
-                old_instance_type_id)
+        old_instance_type = instance_types.extract_instance_type(instance)
 
-        return db.migration_create(context.elevated(),
-                {'instance_uuid': instance['uuid'],
-                 'source_compute': instance['host'],
-                 'source_node': instance['node'],
-                 'dest_compute': self.host,
+        return self.conductor_api.migration_create(context, instance,
+                {'dest_compute': self.host,
                  'dest_node': self.nodename,
                  'dest_host': self.driver.get_host_ip_addr(),
                  'old_instance_type_id': old_instance_type['id'],
@@ -191,7 +184,7 @@ class ResourceTracker(object):
         instance_ref['node'] = self.nodename
 
     def abort_instance_claim(self, instance):
-        """Remove usage from the given instance"""
+        """Remove usage from the given instance."""
         # flag the instance as deleted to revert the resource usage
         # and associated stats:
         instance['vm_state'] = vm_states.DELETED
@@ -201,7 +194,7 @@ class ResourceTracker(object):
         self._update(ctxt, self.compute_node)
 
     def abort_resize_claim(self, instance_uuid, instance_type):
-        """Remove usage for an incoming migration"""
+        """Remove usage for an incoming migration."""
         if instance_uuid in self.tracked_migrations:
             migration, itype = self.tracked_migrations.pop(instance_uuid)
 
@@ -255,14 +248,15 @@ class ResourceTracker(object):
         self._report_hypervisor_resource_view(resources)
 
         # Grab all instances assigned to this node:
-        instances = db.instance_get_all_by_host_and_node(context, self.host,
-                                                         self.nodename)
+        instances = self.conductor_api.instance_get_all_by_host_and_node(
+            context, self.host, self.nodename)
 
         # Now calculate usage based on instance utilization:
         self._update_usage_from_instances(resources, instances)
 
         # Grab all in-progress migrations:
-        migrations = db.migration_get_in_progress_by_host_and_node(context,
+        capi = self.conductor_api
+        migrations = capi.migration_get_in_progress_by_host_and_node(context,
                 self.host, self.nodename)
 
         self._update_usage_from_migrations(resources, migrations)
@@ -277,7 +271,7 @@ class ResourceTracker(object):
         self._sync_compute_node(context, resources)
 
     def _sync_compute_node(self, context, resources):
-        """Create or update the compute node DB record"""
+        """Create or update the compute node DB record."""
         if not self.compute_node:
             # we need a copy of the ComputeNode record:
             service = self._get_service(context)
@@ -296,23 +290,25 @@ class ResourceTracker(object):
             # Need to create the ComputeNode record:
             resources['service_id'] = service['id']
             self._create(context, resources)
-            LOG.info(_('Compute_service record created for %s ') % self.host)
+            LOG.info(_('Compute_service record created for %(host)s:%(node)s')
+                    % {'host': self.host, 'node': self.nodename})
 
         else:
             # just update the record:
             self._update(context, resources, prune_stats=True)
-            LOG.info(_('Compute_service record updated for %s ') % self.host)
+            LOG.info(_('Compute_service record updated for %(host)s:%(node)s')
+                    % {'host': self.host, 'node': self.nodename})
 
     def _create(self, context, values):
-        """Create the compute node in the DB"""
+        """Create the compute node in the DB."""
         # initialize load stats from existing instances:
-        compute_node = db.compute_node_create(context, values)
-        self.compute_node = dict(compute_node)
+        self.compute_node = self.conductor_api.compute_node_create(context,
+                                                                   values)
 
     def _get_service(self, context):
         try:
-            return db.service_get_all_compute_by_host(context,
-                    self.host)[0]
+            return self.conductor_api.service_get_by_compute_host(context,
+                                                                  self.host)
         except exception.NotFound:
             LOG.warn(_("No service record for host %s"), self.host)
 
@@ -350,20 +346,20 @@ class ResourceTracker(object):
             LOG.audit(_("Free VCPU information unavailable"))
 
     def _update(self, context, values, prune_stats=False):
-        """Persist the compute node updates to the DB"""
-        compute_node = db.compute_node_update(context,
-                self.compute_node['id'], values, prune_stats)
-        self.compute_node = dict(compute_node)
+        """Persist the compute node updates to the DB."""
+        if "service" in self.compute_node:
+            del self.compute_node['service']
+        self.compute_node = self.conductor_api.compute_node_update(
+            context, self.compute_node, values, prune_stats)
 
     def confirm_resize(self, context, migration, status='confirmed'):
-        """Cleanup usage for a confirmed resize"""
+        """Cleanup usage for a confirmed resize."""
         elevated = context.elevated()
-        db.migration_update(elevated, migration['id'],
-                            {'status': status})
+        self.conductor_api.migration_update(elevated, migration, status)
         self.update_available_resource(elevated)
 
     def revert_resize(self, context, migration, status='reverted'):
-        """Cleanup usage for a reverted resize"""
+        """Cleanup usage for a reverted resize."""
         self.confirm_resize(context, migration, status)
 
     def _update_usage(self, resources, usage, sign=1):
@@ -380,7 +376,7 @@ class ResourceTracker(object):
         resources['running_vms'] = self.stats.num_instances
         resources['vcpus_used'] = self.stats.num_vcpus_used
 
-    def _update_usage_from_migration(self, resources, migration):
+    def _update_usage_from_migration(self, instance, resources, migration):
         """Update usage for a single migration.  The record may
         represent an incoming or outbound migration.
         """
@@ -393,7 +389,7 @@ class ResourceTracker(object):
                     migration['source_node'] == self.nodename)
         same_node = (incoming and outbound)
 
-        instance = self.tracked_instances.get(uuid, None)
+        record = self.tracked_instances.get(uuid, None)
         itype = None
 
         if same_node:
@@ -401,27 +397,25 @@ class ResourceTracker(object):
             # instance is *not* in:
             if (instance['instance_type_id'] ==
                 migration['old_instance_type_id']):
-
-                itype = migration['new_instance_type_id']
+                itype = instance_types.extract_instance_type(instance)
             else:
                 # instance record already has new flavor, hold space for a
                 # possible revert to the old instance type:
-                itype = migration['old_instance_type_id']
+                itype = instance_types.extract_instance_type(instance, 'old_')
 
-        elif incoming and not instance:
+        elif incoming and not record:
             # instance has not yet migrated here:
-            itype = migration['new_instance_type_id']
+            itype = instance_types.extract_instance_type(instance, 'new_')
 
-        elif outbound and not instance:
+        elif outbound and not record:
             # instance migrated, but record usage for a possible revert:
-            itype = migration['old_instance_type_id']
+            itype = instance_types.extract_instance_type(instance, 'old_')
 
         if itype:
-            instance_type = instance_types.get_instance_type(itype)
-            self.stats.update_stats_for_migration(instance_type)
-            self._update_usage(resources, instance_type)
+            self.stats.update_stats_for_migration(itype)
+            self._update_usage(resources, itype)
             resources['stats'] = self.stats
-            self.tracked_migrations[uuid] = (migration, instance_type)
+            self.tracked_migrations[uuid] = (migration, itype)
 
     def _update_usage_from_migrations(self, resources, migrations):
 
@@ -454,7 +448,8 @@ class ResourceTracker(object):
 
         for migration in filtered.values():
             try:
-                self._update_usage_from_migration(resources, migration)
+                self._update_usage_from_migration(instance, resources,
+                                                  migration)
             except exception.InstanceTypeNotFound:
                 LOG.warn(_("InstanceType could not be found, skipping "
                            "migration."), instance_uuid=uuid)

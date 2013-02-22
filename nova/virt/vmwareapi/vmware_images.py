@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack LLC.
 #
@@ -17,7 +18,6 @@
 """
 Utility functions for Image transfer.
 """
-import StringIO
 
 from nova import exception
 from nova.image import glance
@@ -50,13 +50,13 @@ def start_transfer(context, read_file_handle, data_size,
     # to read.
     read_thread = io_util.IOThread(read_file_handle, thread_safe_pipe)
 
-    # In case of Glance - VMWare transfer, we just need a handle to the
-    # HTTP Connection that is to send transfer data to the VMWare datastore.
+    # In case of Glance - VMware transfer, we just need a handle to the
+    # HTTP Connection that is to send transfer data to the VMware datastore.
     if write_file_handle:
         write_thread = io_util.IOThread(thread_safe_pipe, write_file_handle)
-    # In case of VMWare - Glance transfer, we relinquish VMWare HTTP file read
+    # In case of VMware - Glance transfer, we relinquish VMware HTTP file read
     # handle to Glance Client instance, but to be sure of the transfer we need
-    # to be sure of the status of the image on glnace changing to active.
+    # to be sure of the status of the image on glance changing to active.
     # The GlanceWriteThread handles the same for us.
     elif image_service and image_id:
         write_thread = io_util.GlanceWriteThread(context, thread_safe_pipe,
@@ -93,10 +93,9 @@ def fetch_image(context, image, instance, **kwargs):
     (image_service, image_id) = glance.get_remote_image_service(context, image)
     metadata = image_service.show(context, image_id)
     file_size = int(metadata['size'])
-    f = StringIO.StringIO()
-    image_service.download(context, image_id, f)
-    read_file_handle = read_write_util.GlanceFileRead(f)
-    write_file_handle = read_write_util.VMWareHTTPWriteFile(
+    read_iter = image_service.download(context, image_id)
+    read_file_handle = read_write_util.GlanceFileRead(read_iter)
+    write_file_handle = read_write_util.VMwareHTTPWriteFile(
                                 kwargs.get("host"),
                                 kwargs.get("data_center_name"),
                                 kwargs.get("datastore_name"),
@@ -113,7 +112,7 @@ def upload_image(context, image, instance, **kwargs):
     """Upload the snapshotted vm disk file to Glance image server."""
     LOG.debug(_("Uploading image %s to the Glance image server") % image,
               instance=instance)
-    read_file_handle = read_write_util.VmWareHTTPReadFile(
+    read_file_handle = read_write_util.VMwareHTTPReadFile(
                                 kwargs.get("host"),
                                 kwargs.get("data_center_name"),
                                 kwargs.get("datastore_name"),
@@ -122,10 +121,9 @@ def upload_image(context, image, instance, **kwargs):
     file_size = read_file_handle.get_size()
     (image_service, image_id) = glance.get_remote_image_service(context, image)
     # The properties and other fields that we need to set for the image.
-    image_metadata = {"is_public": True,
-                      "disk_format": "vmdk",
+    image_metadata = {"disk_format": "vmdk",
                       "container_format": "bare",
-                      "type": "vmdk",
+                      "size": file_size,
                       "properties": {"vmware_adaptertype":
                                             kwargs.get("adapter_type"),
                                      "vmware_ostype": kwargs.get("os_type"),

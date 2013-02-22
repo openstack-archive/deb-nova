@@ -23,6 +23,7 @@ import uuid
 
 import iso8601
 from lxml import etree
+from oslo.config import cfg
 import webob
 
 from nova.api.openstack import compute
@@ -41,7 +42,6 @@ from nova.db.sqlalchemy import models
 from nova import exception
 from nova.network import manager
 from nova.network.quantumv2 import api as quantum_api
-from nova.openstack.common import cfg
 from nova.openstack.common import jsonutils
 from nova.openstack.common import policy as common_policy
 from nova.openstack.common import rpc
@@ -51,7 +51,6 @@ from nova.tests.api.openstack import fakes
 from nova.tests import fake_network
 from nova.tests.image import fake
 from nova.tests import matchers
-
 
 CONF = cfg.CONF
 CONF.import_opt('password_length', 'nova.utils')
@@ -165,8 +164,6 @@ class ServersControllerTest(test.TestCase):
                 return_servers)
         self.stubs.Set(db, 'instance_get_by_uuid',
                        return_server)
-        self.stubs.Set(db, 'instance_get_all_by_project',
-                       return_servers)
         self.stubs.Set(db, 'instance_add_security_group',
                        return_security_group)
         self.stubs.Set(db, 'instance_update_and_get_original',
@@ -835,6 +832,12 @@ class ServersControllerTest(test.TestCase):
         self.assertEqual(len(servers), 1)
         self.assertEqual(servers[0]['id'], server_uuid)
 
+    def test_get_servers_with_bad_flavor(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/servers?flavor=abcde')
+        servers = self.controller.index(req)['servers']
+
+        self.assertEqual(len(servers), 0)
+
     def test_get_servers_allows_status(self):
         server_uuid = str(uuid.uuid4())
 
@@ -855,7 +858,7 @@ class ServersControllerTest(test.TestCase):
         self.assertEqual(servers[0]['id'], server_uuid)
 
     def test_get_servers_invalid_status(self):
-        """Test getting servers by invalid status"""
+        # Test getting servers by invalid status.
         req = fakes.HTTPRequest.blank('/v2/fake/servers?status=baloney',
                                       use_admin_context=False)
         servers = self.controller.index(req)['servers']
@@ -1686,7 +1689,7 @@ class ServerStatusTest(test.TestCase):
 class ServersControllerCreateTest(test.TestCase):
 
     def setUp(self):
-        """Shared implementation for tests below that create instance"""
+        """Shared implementation for tests below that create instance."""
         super(ServersControllerCreateTest, self).setUp()
 
         self.flags(verbose=True,
@@ -1734,8 +1737,13 @@ class ServersControllerCreateTest(test.TestCase):
             """
             return self.instance_cache_by_id[instance_id]
 
+        def instance_update(context, uuid, values):
+            instance = self.instance_cache_by_uuid[uuid]
+            instance.update(values)
+            return instance
+
         def rpc_call_wrapper(context, topic, msg, timeout=None):
-            """Stub out the scheduler creating the instance entry"""
+            """Stub out the scheduler creating the instance entry."""
             if (topic == CONF.scheduler_topic and
                 msg['method'] == 'run_instance'):
                 request_spec = msg['args']['request_spec']
@@ -1773,6 +1781,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(db, 'instance_system_metadata_update',
                 fake_method)
         self.stubs.Set(db, 'instance_get', instance_get)
+        self.stubs.Set(db, 'instance_update', instance_update)
         self.stubs.Set(rpc, 'cast', fake_method)
         self.stubs.Set(rpc, 'call', rpc_call_wrapper)
         self.stubs.Set(db, 'instance_update_and_get_original',
@@ -2002,6 +2011,55 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertNotEqual(reservation_id, None)
         self.assertTrue(len(reservation_id) > 1)
 
+    def test_create_multiple_instances_with_multiple_volume_bdm(self):
+        """
+        Test that a BadRequest is raised if multiple instances
+        are requested with a list of block device mappings for volumes.
+        """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        min_count = 2
+        bdm = [{'device_name': 'foo1', 'volume_id': 'vol-xxxx'},
+               {'device_name': 'foo2', 'volume_id': 'vol-yyyy'}
+        ]
+        params = {
+                  'block_device_mapping': bdm,
+                  'min_count': min_count
+        }
+        old_create = compute_api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['min_count'], 2)
+            self.assertEqual(len(kwargs['block_device_mapping']), 2)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(compute_api.API, 'create', create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params, no_image=True)
+
+    def test_create_multiple_instances_with_single_volume_bdm(self):
+        """
+        Test that a BadRequest is raised if multiple instances
+        are requested to boot from a single volume.
+        """
+        self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
+        min_count = 2
+        bdm = [{'device_name': 'foo1', 'volume_id': 'vol-xxxx'}]
+        params = {
+                 'block_device_mapping': bdm,
+                 'min_count': min_count
+        }
+        old_create = compute_api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['min_count'], 2)
+            self.assertEqual(kwargs['block_device_mapping']['volume_id'],
+                            'vol-xxxx')
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(compute_api.API, 'create', create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params, no_image=True)
+
     def test_create_instance_image_ref_is_bookmark(self):
         image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         image_href = 'http://localhost/fake/images/%s' % image_uuid
@@ -2196,6 +2254,74 @@ class ServersControllerCreateTest(test.TestCase):
 
         self.stubs.Set(compute_api.API, 'create', create)
         self._test_create_extra(params)
+
+    def test_create_instance_with_device_name_not_string(self):
+        self.ext_mgr.extensions = {'os-volumes': 'fake'}
+        bdm = [{'delete_on_termination': 1,
+                'device_name': 123,
+                'volume_size': 1,
+                'volume_id': '11111111-1111-1111-1111-111111111111'}]
+        params = {'block_device_mapping': bdm}
+        old_create = compute_api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], bdm)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(compute_api.API, 'create', create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
+
+    def test_create_instance_with_device_name_empty(self):
+        self.ext_mgr.extensions = {'os-volumes': 'fake'}
+        bdm = [{'delete_on_termination': 1,
+                'device_name': '',
+                'volume_size': 1,
+                'volume_id': '11111111-1111-1111-1111-111111111111'}]
+        params = {'block_device_mapping': bdm}
+        old_create = compute_api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], bdm)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(compute_api.API, 'create', create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
+
+    def test_create_instance_with_device_name_too_long(self):
+        self.ext_mgr.extensions = {'os-volumes': 'fake'}
+        bdm = [{'delete_on_termination': 1,
+                'device_name': 'a' * 256,
+                'volume_size': 1,
+                'volume_id': '11111111-1111-1111-1111-111111111111'}]
+        params = {'block_device_mapping': bdm}
+        old_create = compute_api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], bdm)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(compute_api.API, 'create', create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
+
+    def test_create_instance_with_space_in_device_name(self):
+        self.ext_mgr.extensions = {'os-volumes': 'fake'}
+        bdm = [{'delete_on_termination': 1,
+                'device_name': 'vd a',
+                'volume_size': 1,
+                'volume_id': '11111111-1111-1111-1111-111111111111'}]
+        params = {'block_device_mapping': bdm}
+        old_create = compute_api.API.create
+
+        def create(*args, **kwargs):
+            self.assertEqual(kwargs['block_device_mapping'], bdm)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(compute_api.API, 'create', create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
 
     def test_create_instance_with_bdm_delete_on_termination(self):
         self.ext_mgr.extensions = {'os-volumes': 'fake'}
@@ -4008,7 +4134,7 @@ class ServersViewBuilderTest(test.TestCase):
                           "message": "Error",
                           'details': 'Stock details for test'}
 
-        self.request.context = context.get_admin_context()
+        self.request.environ['nova.context'].is_admin = True
         output = self.view_builder.show(self.request, self.instance)
         self.assertThat(output['server']['fault'],
                         matchers.DictMatches(expected_fault))
@@ -4027,7 +4153,7 @@ class ServersViewBuilderTest(test.TestCase):
                           "created": "2010-10-10T12:00:00Z",
                           "message": "Error"}
 
-        self.request.context = context.get_admin_context()
+        self.request.environ['nova.context'].is_admin = True
         output = self.view_builder.show(self.request, self.instance)
         self.assertThat(output['server']['fault'],
                         matchers.DictMatches(expected_fault))
@@ -4385,7 +4511,6 @@ class ServerXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         has_dec = output.startswith("<?xml version='1.0' encoding='UTF-8'?>")
         self.assertTrue(has_dec)
 
@@ -4463,7 +4588,6 @@ class ServerXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'server')
 
@@ -4594,7 +4718,6 @@ class ServerXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'server')
 
@@ -4691,7 +4814,6 @@ class ServerXMLSerializationTest(test.TestCase):
         ]}
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'servers_index')
         server_elems = root.findall('{0}server'.format(NS))
@@ -4755,7 +4877,6 @@ class ServerXMLSerializationTest(test.TestCase):
         ]}
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'servers_index')
         server_elems = root.findall('{0}server'.format(NS))
@@ -5042,7 +5163,6 @@ class ServerXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'server')
 
@@ -5264,7 +5384,7 @@ class ServersAllExtensionsTestCase(test.TestCase):
         self.app = compute.APIRouter()
 
     def test_create_missing_server(self):
-        """Test create with malformed body"""
+        # Test create with malformed body.
 
         def fake_create(*args, **kwargs):
             raise test.TestingException("Should not reach the compute API.")
@@ -5281,7 +5401,7 @@ class ServersAllExtensionsTestCase(test.TestCase):
         self.assertEqual(422, res.status_int)
 
     def test_update_missing_server(self):
-        """Test create with malformed body"""
+        # Test create with malformed body.
 
         def fake_update(*args, **kwargs):
             raise test.TestingException("Should not reach the compute API.")

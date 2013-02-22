@@ -25,8 +25,9 @@ import os
 import stat
 import tempfile
 
-from nova.exception import InvalidParameterValue
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
+from nova import exception
 from nova.openstack.common import log as logging
 from nova import paths
 from nova import utils
@@ -104,13 +105,17 @@ class IPMI(base.PowerManager):
         self.port = node['terminal_port']
 
         if self.node_id == None:
-            raise InvalidParameterValue(_("Node id not supplied to IPMI"))
+            raise exception.InvalidParameterValue(_("Node id not supplied "
+                "to IPMI"))
         if self.address == None:
-            raise InvalidParameterValue(_("Address not supplied to IPMI"))
+            raise exception.InvalidParameterValue(_("Address not supplied "
+                "to IPMI"))
         if self.user == None:
-            raise InvalidParameterValue(_("User not supplied to IPMI"))
+            raise exception.InvalidParameterValue(_("User not supplied "
+                "to IPMI"))
         if self.password == None:
-            raise InvalidParameterValue(_("Password not supplied to IPMI"))
+            raise exception.InvalidParameterValue(_("Password not supplied "
+                "to IPMI"))
 
     def _exec_ipmitool(self, command):
         args = ['ipmitool',
@@ -126,7 +131,7 @@ class IPMI(base.PowerManager):
             args.append(pwfile)
             args.extend(command.split(" "))
             out, err = utils.execute(*args, attempts=3)
-            LOG.debug(_("ipmitool stdout: '%(out)s', stderr: '%(err)%s'"),
+            LOG.debug(_("ipmitool stdout: '%(out)s', stderr: '%(err)s'"),
                       locals())
             return out, err
         finally:
@@ -137,10 +142,10 @@ class IPMI(base.PowerManager):
         return out_err[0] == ("Chassis Power is %s\n" % state)
 
     def _power_on(self):
-        """Turn the power to this node ON"""
+        """Turn the power to this node ON."""
 
         def _wait_for_power_on():
-            """Called at an interval until the node's power is on"""
+            """Called at an interval until the node's power is on."""
 
             if self._is_power("on"):
                 self.state = baremetal_states.ACTIVE
@@ -159,10 +164,10 @@ class IPMI(base.PowerManager):
         timer.start(interval=0.5).wait()
 
     def _power_off(self):
-        """Turn the power to this node OFF"""
+        """Turn the power to this node OFF."""
 
         def _wait_for_power_off():
-            """Called at an interval until the node's power is off"""
+            """Called at an interval until the node's power is off."""
 
             if self._is_power("off"):
                 self.state = baremetal_states.DELETED
@@ -187,7 +192,7 @@ class IPMI(base.PowerManager):
             LOG.exception(_("IPMI set next bootdev failed"))
 
     def activate_node(self):
-        """Turns the power to node ON"""
+        """Turns the power to node ON."""
         if self._is_power("on") and self.state == baremetal_states.ACTIVE:
             LOG.warning(_("Activate node called, but node %s "
                           "is already active") % self.address)
@@ -196,14 +201,14 @@ class IPMI(base.PowerManager):
         return self.state
 
     def reboot_node(self):
-        """Cycles the power to a node"""
+        """Cycles the power to a node."""
         self._power_off()
         self._set_pxe_for_next_boot()
         self._power_on()
         return self.state
 
     def deactivate_node(self):
-        """Turns the power to node OFF, regardless of current state"""
+        """Turns the power to node OFF, regardless of current state."""
         self._power_off()
         return self.state
 

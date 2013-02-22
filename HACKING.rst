@@ -9,6 +9,7 @@ Nova Style Commandments
 General
 -------
 - Put two newlines between top-level code (funcs, classes, etc)
+- Use only UNIX style newlines ("\n"), not Windows style ("\r\n")
 - Put one newline between methods in classes and anywhere else
 - Long lines should be wrapped in parentheses
   in preference to using a backslash for line continuation.
@@ -27,11 +28,31 @@ General
 
     mylist = Foo().list() # OKAY, does not shadow built-in
 
+- Use the "is not" operator when testing for unequal identities. Example::
+
+    if not X is Y:  # BAD, intended behavior is ambiguous
+        pass
+
+    if X is not Y:  # OKAY, intuitive
+        pass
+
+- Use the "not in" operator for evaluating membership in a collection. Example::
+
+    if not X in Y:  # BAD, intended behavior is ambiguous
+        pass
+
+    if X not in Y:  # OKAY, intuitive
+        pass
+
+    if not (X in Y or X in Z):  # OKAY, still better than all those 'not's
+        pass
+
 
 Imports
 -------
 - Do not import objects, only modules (*)
 - Do not import more than one module per line (*)
+- Do not use wildcard ``*`` import (*)
 - Do not make relative imports
 - Do not make new nova.db imports in nova/virt/*
 - Order your imports by the full module path
@@ -42,6 +63,7 @@ Imports
 - imports from ``migrate`` package
 - imports from ``sqlalchemy`` package
 - imports from ``nova.db.sqlalchemy.session`` module
+- imports from ``nova.db.sqlalchemy.migration.versioning_api`` package
 
 Example::
 
@@ -198,7 +220,27 @@ submitted bug fix does have a unit test, be sure to add a new one that fails
 without the patch and passes with the patch.
 
 For more information on creating unit tests and utilizing the testing
-infrastructure in OpenStack Nova, please read nova/testing/README.rst.
+infrastructure in OpenStack Nova, please read nova/tests/README.rst.
+
+
+Running Tests
+-------------
+The testing system is based on a combination of tox and testr. The canonical
+approach to running tests is to simply run the command `tox`. This will
+create virtual environments, populate them with depenedencies and run all of
+the tests that OpenStack CI systems run. Behind the scenes, tox is running
+`testr run --parallel`, but is set up such that you can supply any additional
+testr arguments that are needed to tox. For example, you can run:
+`tox -- --analyze-isolation` to cause tox to tell testr to add
+--analyze-isolation to its argument list.
+
+It is also possible to run the tests inside of a virtual environment
+you have created, or it is possible that you have all of the dependencies
+installed locally already. In this case, you can interact with the testr
+command directly. Running `testr run` will run the entire test suite. `testr
+run --parallel` will run it in parallel (this is the default incantation tox
+uses.) More information about testr can be found at:
+http://wiki.openstack.org/testr
 
 
 openstack-common

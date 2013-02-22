@@ -17,67 +17,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import os
-import socket
+from oslo.config import cfg
 
-from nova.openstack.common import cfg
+from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common import rpc
+from nova import paths
 
-
-def _get_my_ip():
-    """
-    Returns the actual ip of the local machine.
-
-    This code figures out what source address would be used if some traffic
-    were to be sent out to some well known address on the Internet. In this
-    case, a Google DNS server is used, but the specific address does not
-    matter much.  No traffic is actually sent.
-    """
-    try:
-        csock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        csock.connect(('8.8.8.8', 80))
-        (addr, port) = csock.getsockname()
-        csock.close()
-        return addr
-    except socket.error:
-        return "127.0.0.1"
-
-
-global_opts = [
-    cfg.StrOpt('my_ip',
-               default=_get_my_ip(),
-               help='ip address of this host'),
-    cfg.ListOpt('enabled_apis',
-                default=['ec2', 'osapi_compute', 'metadata'],
-                help='a list of APIs to enable by default'),
-    cfg.StrOpt('vpn_image_id',
-               default='0',
-               help='image id used when starting up a cloudpipe vpn server'),
-    cfg.StrOpt('vpn_key_suffix',
-               default='-vpn',
-               help='Suffix to add to project name for vpn key and secgroups'),
-    cfg.StrOpt('host',
-               default=socket.getfqdn(),
-               help='Name of this node.  This can be an opaque identifier.  '
-                    'It is not necessarily a hostname, FQDN, or IP address. '
-                    'However, the node name must be valid within '
-                    'an AMQP key, and if using ZeroMQ, a valid '
-                    'hostname, FQDN, or IP address'),
-    cfg.ListOpt('memcached_servers',
-                default=None,
-                help='Memcached servers or None for in process cache.'),
-    cfg.BoolOpt('use_ipv6',
-                default=False,
-                help='use ipv6'),
-    cfg.IntOpt('service_down_time',
-               default=60,
-               help='maximum time since last check-in for up service'),
-]
-
-cfg.CONF.register_opts(global_opts)
+_DEFAULT_SQL_CONNECTION = 'sqlite:///' + paths.state_path_def('$sqlite_db')
 
 
 def parse_args(argv, default_config_files=None):
+    db_session.set_defaults(sql_connection=_DEFAULT_SQL_CONNECTION,
+                            sqlite_db='nova.sqlite')
     rpc.set_defaults(control_exchange='nova')
     cfg.CONF(argv[1:],
              project='nova',

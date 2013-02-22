@@ -26,12 +26,13 @@ import os
 import string
 import zipfile
 
+from oslo.config import cfg
+
 from nova import compute
 from nova.compute import instance_types
 from nova import crypto
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
 from nova import paths
@@ -39,6 +40,9 @@ from nova import utils
 
 
 cloudpipe_opts = [
+    cfg.StrOpt('vpn_image_id',
+               default='0',
+               help='image id used when starting up a cloudpipe vpn server'),
     cfg.StrOpt('vpn_instance_type',
                default='m1.tiny',
                help=_('Instance type for vpn instances')),
@@ -51,17 +55,37 @@ cloudpipe_opts = [
     cfg.StrOpt('dmz_mask',
                default='255.255.255.0',
                help=_('Netmask to push into openvpn config')),
+    cfg.StrOpt('vpn_key_suffix',
+               default='-vpn',
+               help='Suffix to add to project name for vpn key and secgroups'),
     ]
 
 CONF = cfg.CONF
 CONF.register_opts(cloudpipe_opts)
-CONF.import_opt('ec2_dmz_host', 'nova.api.ec2.cloud')
-CONF.import_opt('ec2_port', 'nova.api.ec2.cloud')
-CONF.import_opt('vpn_image_id', 'nova.config')
-CONF.import_opt('vpn_key_suffix', 'nova.config')
-CONF.import_opt('cnt_vpn_clients', 'nova.network.manager')
 
 LOG = logging.getLogger(__name__)
+
+
+def is_vpn_image(image_id):
+    return image_id == CONF.vpn_image_id
+
+
+def _load_boot_script():
+    shellfile = open(CONF.boot_script_template, "r")
+    try:
+        s = string.Template(shellfile.read())
+    finally:
+        shellfile.close()
+
+    CONF.import_opt('ec2_dmz_host', 'nova.api.ec2.cloud')
+    CONF.import_opt('ec2_port', 'nova.api.ec2.cloud')
+    CONF.import_opt('cnt_vpn_clients', 'nova.network.manager')
+
+    return s.substitute(cc_dmz=CONF.ec2_dmz_host,
+                        cc_port=CONF.ec2_port,
+                        dmz_net=CONF.dmz_net,
+                        dmz_mask=CONF.dmz_mask,
+                        num_vpn=CONF.cnt_vpn_clients)
 
 
 class CloudPipe(object):
@@ -74,14 +98,7 @@ class CloudPipe(object):
             filename = "payload.zip"
             zippath = os.path.join(tmpdir, filename)
             z = zipfile.ZipFile(zippath, "w", zipfile.ZIP_DEFLATED)
-            shellfile = open(CONF.boot_script_template, "r")
-            s = string.Template(shellfile.read())
-            shellfile.close()
-            boot_script = s.substitute(cc_dmz=CONF.ec2_dmz_host,
-                                       cc_port=CONF.ec2_port,
-                                       dmz_net=CONF.dmz_net,
-                                       dmz_mask=CONF.dmz_mask,
-                                       num_vpn=CONF.cnt_vpn_clients)
+            boot_script = _load_boot_script()
             # genvpn, sign csr
             crypto.generate_vpn_files(project_id)
             z.writestr('autorun.sh', boot_script)

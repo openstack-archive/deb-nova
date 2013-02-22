@@ -40,28 +40,91 @@ import stat
 import sys
 import traceback
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import local
 from nova.openstack.common import notifier
 
 
+_DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)8s [%(name)s] %(message)s"
+_DEFAULT_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+common_cli_opts = [
+    cfg.BoolOpt('debug',
+                short='d',
+                default=False,
+                help='Print debugging output (set logging level to '
+                     'DEBUG instead of default WARNING level).'),
+    cfg.BoolOpt('verbose',
+                short='v',
+                default=False,
+                help='Print more verbose output (set logging level to '
+                     'INFO instead of default WARNING level).'),
+]
+
+logging_cli_opts = [
+    cfg.StrOpt('log-config',
+               metavar='PATH',
+               help='If this option is specified, the logging configuration '
+                    'file specified is used and overrides any other logging '
+                    'options specified. Please see the Python logging module '
+                    'documentation for details on logging configuration '
+                    'files.'),
+    cfg.StrOpt('log-format',
+               default=_DEFAULT_LOG_FORMAT,
+               metavar='FORMAT',
+               help='A logging.Formatter log message format string which may '
+                    'use any of the available logging.LogRecord attributes. '
+                    'Default: %(default)s'),
+    cfg.StrOpt('log-date-format',
+               default=_DEFAULT_LOG_DATE_FORMAT,
+               metavar='DATE_FORMAT',
+               help='Format string for %%(asctime)s in log records. '
+                    'Default: %(default)s'),
+    cfg.StrOpt('log-file',
+               metavar='PATH',
+               deprecated_name='logfile',
+               help='(Optional) Name of log file to output to. '
+                    'If not set, logging will go to stdout.'),
+    cfg.StrOpt('log-dir',
+               deprecated_name='logdir',
+               help='(Optional) The directory to keep log files in '
+                    '(will be prepended to --log-file)'),
+    cfg.BoolOpt('use-syslog',
+                default=False,
+                help='Use syslog for logging.'),
+    cfg.StrOpt('syslog-log-facility',
+               default='LOG_USER',
+               help='syslog facility to receive log lines')
+]
+
+generic_log_opts = [
+    cfg.BoolOpt('use_stderr',
+                default=True,
+                help='Log output to standard error'),
+    cfg.StrOpt('logfile_mode',
+               default='0644',
+               help='Default file mode used when creating log files'),
+]
+
 log_opts = [
     cfg.StrOpt('logging_context_format_string',
-               default='%(asctime)s %(levelname)s %(name)s [%(request_id)s '
-                       '%(user_id)s %(project_id)s] %(instance)s'
+               default='%(asctime)s.%(msecs)03d %(levelname)s %(name)s '
+                       '[%(request_id)s %(user)s %(tenant)s] %(instance)s'
                        '%(message)s',
                help='format string to use for log messages with context'),
     cfg.StrOpt('logging_default_format_string',
-               default='%(asctime)s %(process)d %(levelname)s %(name)s [-]'
-                       ' %(instance)s%(message)s',
+               default='%(asctime)s.%(msecs)03d %(process)d %(levelname)s '
+                       '%(name)s [-] %(instance)s%(message)s',
                help='format string to use for log messages without context'),
     cfg.StrOpt('logging_debug_format_suffix',
                default='%(funcName)s %(pathname)s:%(lineno)d',
                help='data to append to log format when level is DEBUG'),
     cfg.StrOpt('logging_exception_prefix',
-               default='%(asctime)s %(process)d TRACE %(name)s %(instance)s',
+               default='%(asctime)s.%(msecs)03d %(process)d TRACE %(name)s '
+               '%(instance)s',
                help='prefix each line of exception output with this format'),
     cfg.ListOpt('default_log_levels',
                 default=[
@@ -93,18 +156,9 @@ log_opts = [
                     'format it like this'),
 ]
 
-
-generic_log_opts = [
-    cfg.BoolOpt('use_stderr',
-                default=True,
-                help='Log output to standard error'),
-    cfg.StrOpt('logfile_mode',
-               default='0644',
-               help='Default file mode used when creating log files'),
-]
-
-
 CONF = cfg.CONF
+CONF.register_cli_opts(common_cli_opts)
+CONF.register_cli_opts(logging_cli_opts)
 CONF.register_opts(generic_log_opts)
 CONF.register_opts(log_opts)
 
@@ -142,15 +196,18 @@ def _get_binary_name():
 
 
 def _get_log_file_path(binary=None):
-    if CONF.log_file and not CONF.log_dir:
-        return CONF.log_file
+    logfile = CONF.log_file
+    logdir = CONF.log_dir
 
-    if CONF.log_file and CONF.log_dir:
-        return os.path.join(CONF.log_dir, CONF.log_file)
+    if logfile and not logdir:
+        return logfile
 
-    if CONF.log_dir:
+    if logfile and logdir:
+        return os.path.join(logdir, logfile)
+
+    if logdir:
         binary = binary or _get_binary_name()
-        return '%s.log' % (os.path.join(CONF.log_dir, binary),)
+        return '%s.log' % (os.path.join(logdir, binary),)
 
 
 class ContextAdapter(logging.LoggerAdapter):
@@ -165,7 +222,7 @@ class ContextAdapter(logging.LoggerAdapter):
         self.log(logging.AUDIT, msg, *args, **kwargs)
 
     def deprecated(self, msg, *args, **kwargs):
-        stdmsg = _("Deprecated Config: %s") % msg
+        stdmsg = _("Deprecated: %s") % msg
         if CONF.fatal_deprecations:
             self.critical(stdmsg, *args, **kwargs)
             raise DeprecatedConfig(msg=stdmsg)
@@ -249,7 +306,7 @@ class JSONFormatter(logging.Formatter):
 class PublishErrorsHandler(logging.Handler):
     def emit(self, record):
         if ('nova.openstack.common.notifier.log_notifier' in
-            CONF.notification_driver):
+                CONF.notification_driver):
             return
         notifier.api.notify(None, 'error.publisher',
                             'error_notification',
@@ -278,6 +335,12 @@ def setup(product_name):
             raise
     else:
         _setup_logging_from_conf(product_name)
+
+
+def set_defaults(logging_context_format_string):
+    cfg.set_defaults(log_opts,
+                     logging_context_format_string=
+                     logging_context_format_string)
 
 
 def _find_facility_from_conf():
@@ -345,10 +408,12 @@ def _setup_logging_from_conf(product_name):
                                                    datefmt=datefmt))
         handler.setFormatter(LegacyFormatter(datefmt=datefmt))
 
-    if CONF.verbose or CONF.debug:
+    if CONF.debug:
         log_root.setLevel(logging.DEBUG)
-    else:
+    elif CONF.verbose:
         log_root.setLevel(logging.INFO)
+    else:
+        log_root.setLevel(logging.WARNING)
 
     level = logging.NOTSET
     for pair in CONF.default_log_levels:
@@ -409,7 +474,7 @@ class LegacyFormatter(logging.Formatter):
             self._fmt = CONF.logging_default_format_string
 
         if (record.levelno == logging.DEBUG and
-            CONF.logging_debug_format_suffix):
+                CONF.logging_debug_format_suffix):
             self._fmt += " " + CONF.logging_debug_format_suffix
 
         # Cache this on the record, Logger will respect our formated copy

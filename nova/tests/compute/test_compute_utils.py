@@ -19,6 +19,8 @@
 
 import string
 
+from oslo.config import cfg
+
 from nova.compute import instance_types
 from nova.compute import utils as compute_utils
 from nova import context
@@ -26,12 +28,12 @@ from nova import db
 from nova import exception
 from nova.image import glance
 from nova.network import api as network_api
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common.notifier import test_notifier
 from nova import test
+from nova.tests import fake_instance_actions
 from nova.tests import fake_network
 import nova.tests.image.fake
 
@@ -68,10 +70,30 @@ class ComputeValidateDeviceTestCase(test.TestCase):
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        lambda context, instance: self.data)
 
+    def _update_instance_type(self, instance_type_info):
+        self.instance_type = {
+            'id': 1,
+            'name': 'foo',
+            'memory_mb': 128,
+            'vcpus': 1,
+            'root_gb': 10,
+            'ephemeral_gb': 10,
+            'flavorid': 1,
+            'swap': 0,
+            'rxtx_factor': 1.0,
+            'vcpu_weight': 1,
+            }
+        self.instance_type.update(instance_type_info)
+        self.instance['system_metadata'] = [{'key': 'instance_type_%s' % key,
+                                             'value': value}
+                                            for key, value in
+                                            self.instance_type.items()]
+
     def _validate_device(self, device=None):
-        return compute_utils.get_device_name_for_instance(self.context,
-                                                          self.instance,
-                                                          device)
+        bdms = db.block_device_mapping_get_all_by_instance(
+            self.context, self.instance['uuid'])
+        return compute_utils.get_device_name_for_instance(
+                self.context, self.instance, bdms, device)
 
     @staticmethod
     def _fake_bdm(device):
@@ -145,8 +167,9 @@ class ComputeValidateDeviceTestCase(test.TestCase):
                           self._validate_device, '/baddata/vdc')
 
     def test_device_in_use(self):
-        self.assertRaises(exception.DevicePathInUse,
-                          self._validate_device, '/dev/vdb')
+        exc = self.assertRaises(exception.DevicePathInUse,
+                          self._validate_device, '/dev/vda')
+        self.assertIn('/dev/vda', str(exc))
 
     def test_swap(self):
         self.instance['default_swap_device'] = "/dev/vdc"
@@ -160,40 +183,40 @@ class ComputeValidateDeviceTestCase(test.TestCase):
         self.assertEqual(device, '/dev/vdc')
 
     def test_ephemeral_xenapi(self):
-        self.instance_type = {
-            'ephemeral_gb': 10,
-            'swap': 0,
-        }
+        self._update_instance_type({
+                'ephemeral_gb': 10,
+                'swap': 0,
+                })
         self.stubs.Set(instance_types, 'get_instance_type',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdc')
 
     def test_swap_xenapi(self):
-        self.instance_type = {
-            'ephemeral_gb': 0,
-            'swap': 10,
-        }
+        self._update_instance_type({
+                'ephemeral_gb': 0,
+                'swap': 10,
+                })
         self.stubs.Set(instance_types, 'get_instance_type',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdb')
 
     def test_swap_and_ephemeral_xenapi(self):
-        self.instance_type = {
-            'ephemeral_gb': 10,
-            'swap': 10,
-        }
+        self._update_instance_type({
+                'ephemeral_gb': 10,
+                'swap': 10,
+                })
         self.stubs.Set(instance_types, 'get_instance_type',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdd')
 
     def test_swap_and_one_attachment_xenapi(self):
-        self.instance_type = {
-            'ephemeral_gb': 0,
-            'swap': 10,
-        }
+        self._update_instance_type({
+                'ephemeral_gb': 0,
+                'swap': 10,
+                })
         self.stubs.Set(instance_types, 'get_instance_type',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
@@ -233,9 +256,10 @@ class UsageInfoTestCase(test.TestCase):
         self.stubs.Set(nova.tests.image.fake._FakeImageService,
                        'show', fake_show)
         fake_network.set_stub_network_methods(self.stubs)
+        fake_instance_actions.stub_out_action_events(self.stubs)
 
     def _create_instance(self, params={}):
-        """Create a test instance"""
+        """Create a test instance."""
         inst = {}
         inst['image_ref'] = 1
         inst['reservation_id'] = 'r-fakeres'
@@ -251,7 +275,7 @@ class UsageInfoTestCase(test.TestCase):
         return db.instance_create(self.context, inst)['id']
 
     def test_notify_usage_exists(self):
-        """Ensure 'exists' notification generates appropriate usage data."""
+        # Ensure 'exists' notification generates appropriate usage data.
         instance_id = self._create_instance()
         instance = db.instance_get(self.context, instance_id)
         # Set some system metadata
@@ -286,7 +310,7 @@ class UsageInfoTestCase(test.TestCase):
         self.compute.terminate_instance(self.context, instance)
 
     def test_notify_usage_exists_deleted_instance(self):
-        """Ensure 'exists' notification generates appropriate usage data."""
+        # Ensure 'exists' notification generates appropriate usage data.
         instance_id = self._create_instance()
         instance = db.instance_get(self.context, instance_id)
         # Set some system metadata
@@ -321,7 +345,7 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEquals(payload['image_ref_url'], image_ref_url)
 
     def test_notify_usage_exists_instance_not_found(self):
-        """Ensure 'exists' notification generates appropriate usage data."""
+        # Ensure 'exists' notification generates appropriate usage data.
         instance_id = self._create_instance()
         instance = db.instance_get(self.context, instance_id)
         self.compute.terminate_instance(self.context, instance)
@@ -356,6 +380,9 @@ class UsageInfoTestCase(test.TestCase):
         extra_usage_info = {'image_name': 'fake_name'}
         db.instance_system_metadata_update(self.context, instance['uuid'],
                 sys_metadata, False)
+        # NOTE(russellb) Make sure our instance has the latest system_metadata
+        # in it.
+        instance = db.instance_get(self.context, instance_id)
         compute_utils.notify_about_instance_usage(self.context, instance,
         'create.start', extra_usage_info=extra_usage_info)
         self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
@@ -379,14 +406,3 @@ class UsageInfoTestCase(test.TestCase):
         image_ref_url = "%s/images/1" % glance.generate_glance_url()
         self.assertEquals(payload['image_ref_url'], image_ref_url)
         self.compute.terminate_instance(self.context, instance)
-
-
-class MetadataToDictTestCase(test.TestCase):
-    def test_metadata_to_dict(self):
-        self.assertEqual(compute_utils.metadata_to_dict(
-                [{'key': 'foo1', 'value': 'bar'},
-                 {'key': 'foo2', 'value': 'baz'}]),
-                         {'foo1': 'bar', 'foo2': 'baz'})
-
-    def test_metadata_to_dict_empty(self):
-        self.assertEqual(compute_utils.metadata_to_dict([]), {})

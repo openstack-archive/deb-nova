@@ -25,6 +25,7 @@ import mox
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+from nova.conductor import api as conductor_api
 from nova import context
 from nova import db
 from nova import exception
@@ -130,11 +131,12 @@ class ChanceSchedulerTestCase(test_scheduler.SchedulerTestCase):
         # instance 1
         ctxt.elevated().AndReturn(ctxt_elevated)
         self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn([])
-        compute_utils.add_instance_fault_from_exc(ctxt,
-                uuid, mox.IsA(exception.NoValidHost), mox.IgnoreArg())
-        db.instance_update_and_get_original(ctxt, uuid,
+        old_ref, new_ref = db.instance_update_and_get_original(ctxt, uuid,
                 {'vm_state': vm_states.ERROR,
                  'task_state': None}).AndReturn(({}, {}))
+        compute_utils.add_instance_fault_from_exc(ctxt,
+                mox.IsA(conductor_api.LocalAPI), new_ref,
+                mox.IsA(exception.NoValidHost), mox.IgnoreArg())
 
         self.mox.ReplayAll()
         self.driver.schedule_run_instance(
@@ -163,3 +165,33 @@ class ChanceSchedulerTestCase(test_scheduler.SchedulerTestCase):
         self.driver.schedule_prep_resize(fake_context, {}, {}, {},
                 instance, {}, None)
         self.assertEqual(info['called'], 0)
+
+    def test_select_hosts(self):
+        ctxt = context.RequestContext('fake', 'fake', False)
+        ctxt_elevated = 'fake-context-elevated'
+        fake_args = (1, 2, 3)
+        instance_opts = {'fake_opt1': 'meow', 'launch_index': -1}
+        instance1 = {'uuid': 'fake-uuid1'}
+        instance2 = {'uuid': 'fake-uuid2'}
+        request_spec = {'instance_uuids': ['fake-uuid1', 'fake-uuid2'],
+                        'instance_properties': instance_opts}
+
+        self.mox.StubOutWithMock(ctxt, 'elevated')
+        self.mox.StubOutWithMock(self.driver, 'hosts_up')
+        self.mox.StubOutWithMock(random, 'random')
+
+        ctxt.elevated().AndReturn(ctxt_elevated)
+        # instance 1
+        self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn(
+            ['host1', 'host2', 'host3', 'host4'])
+        random.random().AndReturn(.5)
+
+        # instance 2
+        ctxt.elevated().AndReturn(ctxt_elevated)
+        self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn(
+            ['host1', 'host2', 'host3', 'host4'])
+        random.random().AndReturn(.2)
+
+        self.mox.ReplayAll()
+        hosts = self.driver.select_hosts(ctxt, request_spec, {})
+        self.assertEquals(['host3', 'host1'], hosts)

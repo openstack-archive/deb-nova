@@ -17,13 +17,13 @@
 
 """Config Drive v2 helper."""
 
-import contextlib
 import os
 import shutil
 import tempfile
 
+from oslo.config import cfg
+
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
 from nova import utils
@@ -54,18 +54,12 @@ configdrive_opts = [
 CONF = cfg.CONF
 CONF.register_opts(configdrive_opts)
 
-
-@contextlib.contextmanager
-def config_drive_helper(instance_md=None):
-    cdb = _ConfigDriveBuilder(instance_md=instance_md)
-    try:
-        yield cdb
-    finally:
-        cdb.cleanup()
+# Config drives are 64mb, if we can't size to the exact size of the data
+CONFIGDRIVESIZE_BYTES = 64 * 1024 * 1024
 
 
-class _ConfigDriveBuilder(object):
-    """Don't use this directly, use the fancy pants contextlib helper above!"""
+class ConfigDriveBuilder(object):
+    """Build config drives, optionally as a context manager."""
 
     def __init__(self, instance_md=None):
         self.imagefile = None
@@ -78,6 +72,17 @@ class _ConfigDriveBuilder(object):
 
         if instance_md is not None:
             self.add_instance_metadata(instance_md)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exctype, excval, exctb):
+        if exctype is not None:
+            # NOTE(mikal): this means we're being cleaned up because an
+            # exception was thrown. All bets are off now, and we should not
+            # swallow the exception
+            return False
+        self.cleanup()
 
     def _add_file(self, path, data):
         filepath = os.path.join(self.tempdir, path)
@@ -116,10 +121,9 @@ class _ConfigDriveBuilder(object):
 
     def _make_vfat(self, path):
         # NOTE(mikal): This is a little horrible, but I couldn't find an
-        # equivalent to genisoimage for vfat filesystems. vfat images are
-        # always 64mb.
+        # equivalent to genisoimage for vfat filesystems.
         with open(path, 'w') as f:
-            f.truncate(64 * 1024 * 1024)
+            f.truncate(CONFIGDRIVESIZE_BYTES)
 
         utils.mkfs('vfat', path, label='config-2')
 
@@ -127,19 +131,15 @@ class _ConfigDriveBuilder(object):
         try:
             mountdir = tempfile.mkdtemp(dir=CONF.config_drive_tempdir,
                                         prefix='cd_mnt_')
-            _out, err = utils.trycmd('mount', '-o', 'loop', path, mountdir,
+            _out, err = utils.trycmd('mount', '-o',
+                                     'loop,uid=%d,gid=%d' % (os.getuid(),
+                                                             os.getgid()),
+                                     path, mountdir,
                                      run_as_root=True)
             if err:
                 raise exception.ConfigDriveMountFailed(operation='mount',
                                                        error=err)
             mounted = True
-
-            _out, err = utils.trycmd('chown',
-                                     '%s.%s' % (os.getuid(), os.getgid()),
-                                     mountdir, run_as_root=True)
-            if err:
-                raise exception.ConfigDriveMountFailed(operation='chown',
-                                                       error=err)
 
             # NOTE(mikal): I can't just use shutils.copytree here, because the
             # destination directory already exists. This is annoying.

@@ -13,7 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -27,10 +28,10 @@ CONF.register_opt(disk_allocation_ratio_opt)
 
 
 class DiskFilter(filters.BaseHostFilter):
-    """Disk Filter with over subscription flag"""
+    """Disk Filter with over subscription flag."""
 
     def host_passes(self, host_state, filter_properties):
-        """Filter based on disk usage"""
+        """Filter based on disk usage."""
         instance_type = filter_properties.get('instance_type')
         requested_disk = 1024 * (instance_type['root_gb'] +
                                  instance_type['ephemeral_gb'])

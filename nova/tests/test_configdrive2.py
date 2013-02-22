@@ -45,7 +45,7 @@ class ConfigDriveTestCase(test.TestCase):
 
             self.mox.ReplayAll()
 
-            with configdrive.config_drive_helper() as c:
+            with configdrive.ConfigDriveBuilder() as c:
                 c._add_file('this/is/a/path/hello', 'This is some content')
                 (fd, imagefile) = tempfile.mkstemp(prefix='cd_iso_')
                 os.close(fd)
@@ -67,17 +67,15 @@ class ConfigDriveTestCase(test.TestCase):
 
             utils.mkfs('vfat', mox.IgnoreArg(),
                        label='config-2').AndReturn(None)
-            utils.trycmd('mount', '-o', 'loop', mox.IgnoreArg(),
+            utils.trycmd('mount', '-o', mox.IgnoreArg(), mox.IgnoreArg(),
                          mox.IgnoreArg(),
-                         run_as_root=True).AndReturn((None, None))
-            utils.trycmd('chown', mox.IgnoreArg(), mox.IgnoreArg(),
                          run_as_root=True).AndReturn((None, None))
             utils.execute('umount', mox.IgnoreArg(),
                           run_as_root=True).AndReturn(None)
 
             self.mox.ReplayAll()
 
-            with configdrive.config_drive_helper() as c:
+            with configdrive.ConfigDriveBuilder() as c:
                 c._add_file('this/is/a/path/hello', 'This is some content')
                 (fd, imagefile) = tempfile.mkstemp(prefix='cd_vfat_')
                 os.close(fd)

@@ -16,8 +16,9 @@
 Tests For Cells RPCAPI
 """
 
+from oslo.config import cfg
+
 from nova.cells import rpcapi as cells_rpcapi
-from nova.openstack.common import cfg
 from nova.openstack.common import rpc
 from nova import test
 
@@ -204,3 +205,103 @@ class CellsAPITestCase(test.TestCase):
         expected_args = {'bw_update_info': bw_update_info}
         self._check_result(call_info, 'bw_usage_update_at_top',
                 expected_args)
+
+    def test_get_cell_info_for_neighbors(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        result = self.cells_rpcapi.get_cell_info_for_neighbors(
+                self.fake_context)
+        self._check_result(call_info, 'get_cell_info_for_neighbors', {},
+                           version='1.1')
+        self.assertEqual(result, 'fake_response')
+
+    def test_sync_instances(self):
+        call_info = self._stub_rpc_method('cast', None)
+        self.cells_rpcapi.sync_instances(self.fake_context,
+                project_id='fake_project', updated_since='fake_time',
+                deleted=True)
+
+        expected_args = {'project_id': 'fake_project',
+                         'updated_since': 'fake_time',
+                         'deleted': True}
+        self._check_result(call_info, 'sync_instances', expected_args,
+                           version='1.1')
+
+    def test_service_get_all(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        fake_filters = {'key1': 'val1', 'key2': 'val2'}
+        result = self.cells_rpcapi.service_get_all(self.fake_context,
+                filters=fake_filters)
+
+        expected_args = {'filters': fake_filters}
+        self._check_result(call_info, 'service_get_all', expected_args,
+                           version='1.2')
+        self.assertEqual(result, 'fake_response')
+
+    def test_service_get_by_compute_host(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        result = self.cells_rpcapi.service_get_by_compute_host(
+                self.fake_context, host_name='fake-host-name')
+        expected_args = {'host_name': 'fake-host-name'}
+        self._check_result(call_info, 'service_get_by_compute_host',
+                           expected_args,
+                           version='1.2')
+        self.assertEqual(result, 'fake_response')
+
+    def test_proxy_rpc_to_manager(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        result = self.cells_rpcapi.proxy_rpc_to_manager(
+                self.fake_context, rpc_message='fake-msg',
+                topic='fake-topic', call=True, timeout=-1)
+        expected_args = {'rpc_message': 'fake-msg',
+                         'topic': 'fake-topic',
+                         'call': True,
+                         'timeout': -1}
+        self._check_result(call_info, 'proxy_rpc_to_manager',
+                           expected_args,
+                           version='1.2')
+        self.assertEqual(result, 'fake_response')
+
+    def test_task_log_get_all(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        result = self.cells_rpcapi.task_log_get_all(self.fake_context,
+                task_name='fake_name',
+                period_beginning='fake_begin',
+                period_ending='fake_end',
+                host='fake_host',
+                state='fake_state')
+
+        expected_args = {'task_name': 'fake_name',
+                         'period_beginning': 'fake_begin',
+                         'period_ending': 'fake_end',
+                         'host': 'fake_host',
+                         'state': 'fake_state'}
+        self._check_result(call_info, 'task_log_get_all', expected_args,
+                           version='1.3')
+        self.assertEqual(result, 'fake_response')
+
+    def test_compute_node_get_all(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        result = self.cells_rpcapi.compute_node_get_all(self.fake_context,
+                hypervisor_match='fake-match')
+
+        expected_args = {'hypervisor_match': 'fake-match'}
+        self._check_result(call_info, 'compute_node_get_all', expected_args,
+                           version='1.4')
+        self.assertEqual(result, 'fake_response')
+
+    def test_compute_node_stats(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        result = self.cells_rpcapi.compute_node_stats(self.fake_context)
+        expected_args = {}
+        self._check_result(call_info, 'compute_node_stats',
+                           expected_args, version='1.4')
+        self.assertEqual(result, 'fake_response')
+
+    def test_compute_node_get(self):
+        call_info = self._stub_rpc_method('call', 'fake_response')
+        result = self.cells_rpcapi.compute_node_get(self.fake_context,
+                'fake_compute_id')
+        expected_args = {'compute_id': 'fake_compute_id'}
+        self._check_result(call_info, 'compute_node_get',
+                           expected_args, version='1.4')
+        self.assertEqual(result, 'fake_response')

@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack LLC.
 #
@@ -16,7 +17,7 @@
 #    under the License.
 
 """
-A fake VMWare VI API implementation.
+A fake VMware VI API implementation.
 """
 
 import pprint
@@ -140,21 +141,43 @@ class DataObject(object):
 
 class VirtualDisk(DataObject):
     """
-    Virtual Disk class. Does nothing special except setting
-    __class__.__name__ to 'VirtualDisk'. Refer place where __class__.__name__
-    is used in the code.
+    Virtual Disk class.
     """
-    pass
+
+    def __init__(self):
+        super(VirtualDisk, self).__init__()
+        self.key = 0
+        self.unitNumber = 0
 
 
 class VirtualDiskFlatVer2BackingInfo(DataObject):
     """VirtualDiskFlatVer2BackingInfo class."""
-    pass
+
+    def __init__(self):
+        super(VirtualDiskFlatVer2BackingInfo, self).__init__()
+        self.thinProvisioned = False
+        self.eagerlyScrub = False
+
+
+class VirtualDiskRawDiskMappingVer1BackingInfo(DataObject):
+    """VirtualDiskRawDiskMappingVer1BackingInfo class."""
+
+    def __init__(self):
+        super(VirtualDiskRawDiskMappingVer1BackingInfo, self).__init__()
+        self.lunUuid = ""
 
 
 class VirtualLsiLogicController(DataObject):
     """VirtualLsiLogicController class."""
     pass
+
+
+class VirtualPCNet32(DataObject):
+    """VirtualPCNet32 class."""
+
+    def __init__(self):
+        super(VirtualPCNet32, self).__init__()
+        self.key = 4000
 
 
 class VirtualMachine(ManagedObject):
@@ -177,7 +200,7 @@ class VirtualMachine(ManagedObject):
         self.set("config.files.vmPathName", kwargs.get("vmPathName"))
         self.set("summary.config.numCpu", kwargs.get("numCpu", 1))
         self.set("summary.config.memorySizeMB", kwargs.get("mem", 1))
-        self.set("config.hardware.device", kwargs.get("virtual_disk", None))
+        self.set("config.hardware.device", kwargs.get("virtual_device", None))
         self.set("config.extraConfig", kwargs.get("extra_config", None))
 
     def reconfig(self, factory, val):
@@ -201,7 +224,9 @@ class VirtualMachine(ManagedObject):
             controller = VirtualLsiLogicController()
             controller.key = controller_key
 
-            self.set("config.hardware.device", [disk, controller])
+            nic = VirtualPCNet32()
+
+            self.set("config.hardware.device", [disk, controller, nic])
         except AttributeError:
             # Case of Reconfig of VM to set extra params
             self.set("config.extraConfig", val.extraConfig)
@@ -230,6 +255,8 @@ class Datastore(ManagedObject):
         super(Datastore, self).__init__("Datastore")
         self.set("summary.type", "VMFS")
         self.set("summary.name", "fake-ds")
+        self.set("summary.capacity", 1024 * 1024 * 1024)
+        self.set("summary.freeSpace", 500 * 1024 * 1024)
 
 
 class HostNetworkSystem(ManagedObject):
@@ -259,6 +286,29 @@ class HostSystem(ManagedObject):
         host_net_key = _db_content["HostNetworkSystem"].keys()[0]
         host_net_sys = _db_content["HostNetworkSystem"][host_net_key].obj
         self.set("configManager.networkSystem", host_net_sys)
+
+        summary = DataObject()
+        hardware = DataObject()
+        hardware.numCpuCores = 8
+        hardware.numCpuPkgs = 2
+        hardware.numCpuThreads = 16
+        hardware.vendor = "Intel"
+        hardware.cpuModel = "Intel(R) Xeon(R)"
+        hardware.memorySize = 1024 * 1024 * 1024
+        summary.hardware = hardware
+
+        quickstats = DataObject()
+        quickstats.overallMemoryUsage = 500
+        summary.quickStats = quickstats
+
+        product = DataObject()
+        product.name = "VMware ESXi"
+        product.version = "5.0.0"
+        config = DataObject()
+        config.product = product
+        summary.config = config
+
+        self.set("summary", summary)
 
         if _db_content.get("Network", None) is None:
             create_network()
@@ -574,6 +624,11 @@ class FakeVim(object):
         """Fakes a return."""
         return
 
+    def _just_return_task(self, method):
+        """Fakes a task return."""
+        task_mdo = create_task(method, "success")
+        return task_mdo.obj
+
     def _unregister_vm(self, method, *args, **kwargs):
         """Unregisters a VM from the Host System."""
         vm_ref = args[0]
@@ -602,7 +657,7 @@ class FakeVim(object):
     def _set_power_state(self, method, vm_ref, pwr_state="poweredOn"):
         """Sets power state for the VM."""
         if _db_content.get("VirtualMachine", None) is None:
-            raise exception.NotFound(_(" No Virtual Machine has been "
+            raise exception.NotFound(_("No Virtual Machine has been "
                                        "registered yet"))
         if vm_ref not in _db_content.get("VirtualMachine"):
             raise exception.NotFound(_("Virtual Machine with ref %s is not "
@@ -697,6 +752,9 @@ class FakeVim(object):
         elif attr_name == "DeleteVirtualDisk_Task":
             return lambda *args, **kwargs: self._delete_disk(attr_name,
                                                 *args, **kwargs)
+        elif attr_name == "Destroy_Task":
+            return lambda *args, **kwargs: self._unregister_vm(attr_name,
+                                                               *args, **kwargs)
         elif attr_name == "UnregisterVM":
             return lambda *args, **kwargs: self._unregister_vm(attr_name,
                                                 *args, **kwargs)
@@ -714,3 +772,15 @@ class FakeVim(object):
         elif attr_name == "AddPortGroup":
             return lambda *args, **kwargs: self._add_port_group(attr_name,
                                                 *args, **kwargs)
+        elif attr_name == "RebootHost_Task":
+            return lambda *args, **kwargs: self._just_return_task(attr_name)
+        elif attr_name == "ShutdownHost_Task":
+            return lambda *args, **kwargs: self._just_return_task(attr_name)
+        elif attr_name == "PowerDownHostToStandBy_Task":
+            return lambda *args, **kwargs: self._just_return_task(attr_name)
+        elif attr_name == "PowerUpHostFromStandBy_Task":
+            return lambda *args, **kwargs: self._just_return_task(attr_name)
+        elif attr_name == "EnterMaintenanceMode_Task":
+            return lambda *args, **kwargs: self._just_return_task(attr_name)
+        elif attr_name == "ExitMaintenanceMode_Task":
+            return lambda *args, **kwargs: self._just_return_task(attr_name)

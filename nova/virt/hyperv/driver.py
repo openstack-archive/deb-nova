@@ -16,55 +16,14 @@
 #    under the License.
 
 """
-A connection to Hyper-V .
-Uses Windows Management Instrumentation (WMI) calls to interact with Hyper-V
-Hyper-V WMI usage:
-    http://msdn.microsoft.com/en-us/library/cc723875%28v=VS.85%29.aspx
-The Hyper-V object model briefly:
-    The physical computer and its hosted virtual machines are each represented
-    by the Msvm_ComputerSystem class.
-
-    Each virtual machine is associated with a
-    Msvm_VirtualSystemGlobalSettingData (vs_gs_data) instance and one or more
-    Msvm_VirtualSystemSettingData (vmsetting) instances. For each vmsetting
-    there is a series of Msvm_ResourceAllocationSettingData (rasd) objects.
-    The rasd objects describe the settings for each device in a VM.
-    Together, the vs_gs_data, vmsettings and rasds describe the configuration
-    of the virtual machine.
-
-    Creating new resources such as disks and nics involves cloning a default
-    rasd object and appropriately modifying the clone and calling the
-    AddVirtualSystemResources WMI method
-    Changing resources such as memory uses the ModifyVirtualSystemResources
-    WMI method
-
-Using the Python WMI library:
-    Tutorial:
-        http://timgolden.me.uk/python/wmi/tutorial.html
-    Hyper-V WMI objects can be retrieved simply by using the class name
-    of the WMI object and optionally specifying a column to filter the
-    result set. More complex filters can be formed using WQL (sql-like)
-    queries.
-    The parameters and return tuples of WMI method calls can gleaned by
-    examining the doc string. For example:
-    >>> vs_man_svc.ModifyVirtualSystemResources.__doc__
-    ModifyVirtualSystemResources (ComputerSystem, ResourceSettingData[])
-                 => (Job, ReturnValue)'
-    When passing setting data (ResourceSettingData) to the WMI method,
-    an XML representation of the data is passed in using GetText_(1).
-    Available methods on a service can be determined using method.keys():
-    >>> vs_man_svc.methods.keys()
-    vmsettings and rasds for a vm can be retrieved using the 'associators'
-    method with the appropriate return class.
-    Long running WMI commands generally return a Job (an instance of
-    Msvm_ConcreteJob) whose state can be polled to determine when it finishes
-
+A Hyper-V Nova Compute driver.
 """
 
 from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt.hyperv import hostops
 from nova.virt.hyperv import livemigrationops
+from nova.virt.hyperv import migrationops
 from nova.virt.hyperv import snapshotops
 from nova.virt.hyperv import vmops
 from nova.virt.hyperv import volumeops
@@ -78,13 +37,13 @@ class HyperVDriver(driver.ComputeDriver):
 
         self._hostops = hostops.HostOps()
         self._volumeops = volumeops.VolumeOps()
-        self._vmops = vmops.VMOps(self._volumeops)
+        self._vmops = vmops.VMOps()
         self._snapshotops = snapshotops.SnapshotOps()
-        self._livemigrationops = livemigrationops.LiveMigrationOps(
-            self._volumeops)
+        self._livemigrationops = livemigrationops.LiveMigrationOps()
+        self._migrationops = migrationops.MigrationOps()
 
     def init_host(self, host):
-        self._host = host
+        pass
 
     def list_instances(self):
         return self._vmops.list_instances()
@@ -92,9 +51,9 @@ class HyperVDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         self._vmops.spawn(context, instance, image_meta, injected_files,
-              admin_password, network_info, block_device_info)
+                          admin_password, network_info, block_device_info)
 
-    def reboot(self, instance, network_info, reboot_type,
+    def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None):
         self._vmops.reboot(instance, network_info, reboot_type)
 
@@ -106,16 +65,12 @@ class HyperVDriver(driver.ComputeDriver):
         return self._vmops.get_info(instance)
 
     def attach_volume(self, connection_info, instance, mountpoint):
-        """Attach volume storage to VM instance"""
         return self._volumeops.attach_volume(connection_info,
-                                             instance['name'],
-                                             mountpoint)
+                                             instance['name'])
 
     def detach_volume(self, connection_info, instance, mountpoint):
-        """Detach volume storage to VM instance"""
         return self._volumeops.detach_volume(connection_info,
-                                             instance['name'],
-                                             mountpoint)
+                                             instance['name'])
 
     def get_volume_connector(self, instance):
         return self._volumeops.get_volume_connector(instance)
@@ -151,30 +106,38 @@ class HyperVDriver(driver.ComputeDriver):
         self._vmops.power_on(instance)
 
     def live_migration(self, context, instance_ref, dest, post_method,
-        recover_method, block_migration=False, migrate_data=None):
+                       recover_method, block_migration=False,
+                       migrate_data=None):
         self._livemigrationops.live_migration(context, instance_ref, dest,
-            post_method, recover_method, block_migration, migrate_data)
+                                              post_method, recover_method,
+                                              block_migration, migrate_data)
 
     def compare_cpu(self, cpu_info):
         return self._livemigrationops.compare_cpu(cpu_info)
 
     def pre_live_migration(self, context, instance, block_device_info,
-        network_info, migrate_data=None):
+                           network_info, migrate_data=None):
         self._livemigrationops.pre_live_migration(context, instance,
-            block_device_info, network_info)
+                                                  block_device_info,
+                                                  network_info)
 
     def post_live_migration_at_destination(self, ctxt, instance_ref,
-        network_info, block_migration):
+                                           network_info,
+                                           block_migr=False,
+                                           block_device_info=None):
         self._livemigrationops.post_live_migration_at_destination(ctxt,
-            instance_ref, network_info, block_migration)
+                                                                  instance_ref,
+                                                                  network_info,
+                                                                  block_migr)
 
-    def check_can_live_migrate_destination(self, ctxt, instance,
-        src_compute_info, dst_compute_info,
-        block_migration, disk_over_commit):
+    def check_can_live_migrate_destination(self, ctxt, instance_ref,
+                                           src_compute_info, dst_compute_info,
+                                           block_migration=False,
+                                           disk_over_commit=False):
         pass
 
     def check_can_live_migrate_destination_cleanup(self, ctxt,
-        dest_check_data):
+                                                   dest_check_data):
         pass
 
     def check_can_live_migrate_source(self, ctxt, instance, dest_check_data):
@@ -184,30 +147,42 @@ class HyperVDriver(driver.ComputeDriver):
         LOG.debug(_("plug_vifs called"), instance=instance)
 
     def unplug_vifs(self, instance, network_info):
-        LOG.debug(_("plug_vifs called"), instance=instance)
+        LOG.debug(_("unplug_vifs called"), instance=instance)
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         LOG.debug(_("ensure_filtering_rules_for_instance called"),
-            instance=instance_ref)
+                  instance=instance_ref)
 
     def unfilter_instance(self, instance, network_info):
-        """Stop filtering instance"""
         LOG.debug(_("unfilter_instance called"), instance=instance)
 
+    def migrate_disk_and_power_off(self, context, instance, dest,
+                                   instance_type, network_info,
+                                   block_device_info=None):
+        return self._migrationops.migrate_disk_and_power_off(context,
+                                                             instance, dest,
+                                                             instance_type,
+                                                             network_info,
+                                                             block_device_info)
+
     def confirm_migration(self, migration, instance, network_info):
-        """Confirms a resize, destroying the source VM"""
-        LOG.debug(_("confirm_migration called"), instance=instance)
+        self._migrationops.confirm_migration(migration, instance, network_info)
 
     def finish_revert_migration(self, instance, network_info,
                                 block_device_info=None):
-        """Finish reverting a resize, powering back on the instance"""
-        LOG.debug(_("finish_revert_migration called"), instance=instance)
+        self._migrationops.finish_revert_migration(instance, network_info,
+                                                   block_device_info)
 
     def finish_migration(self, context, migration, instance, disk_info,
-        network_info, image_meta, resize_instance=False,
-        block_device_info=None):
-        """Completes a resize, turning on the migrated instance"""
-        LOG.debug(_("finish_migration called"), instance=instance)
+                         network_info, image_meta, resize_instance=False,
+                         block_device_info=None):
+        self._migrationops.finish_migration(context, migration, instance,
+                                            disk_info, network_info,
+                                            image_meta, resize_instance,
+                                            block_device_info)
+
+    def get_host_ip_addr(self):
+        return self._hostops.get_host_ip_addr()
 
     def get_console_output(self, instance):
         LOG.debug(_("get_console_output called"), instance=instance)

@@ -20,10 +20,11 @@ import copy
 import datetime
 import functools
 
+from oslo.config import cfg
+
 from nova.cells import rpc_driver
 from nova import context
 from nova.db import base
-from nova.openstack.common import cfg
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -38,7 +39,6 @@ cell_state_manager_opts = [
 LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
-CONF.import_opt('host', 'nova.config')
 CONF.import_opt('name', 'nova.cells.opts', group='cells')
 #CONF.import_opt('capabilities', 'nova.cells.opts', group='cells')
 CONF.register_opts(cell_state_manager_opts, group='cells')
@@ -59,7 +59,7 @@ class CellState(object):
         self.driver = rpc_driver.CellsRPCDriver()
 
     def update_db_info(self, cell_db_info):
-        """Update cell credentials from db"""
+        """Update cell credentials from db."""
         self.db_info = dict(
                 [(k, v) for k, v in cell_db_info.iteritems()
                         if k != 'name'])
@@ -76,8 +76,8 @@ class CellState(object):
 
     def get_cell_info(self):
         """Return subset of cell information for OS API use."""
-        db_fields_to_return = ['id', 'is_parent', 'weight_scale',
-                'weight_offset', 'username', 'rpc_host', 'rpc_port']
+        db_fields_to_return = ['is_parent', 'weight_scale', 'weight_offset',
+                               'username', 'rpc_host', 'rpc_port']
         cell_info = dict(name=self.name, capabilities=self.capabilities)
         if self.db_info:
             for field in db_fields_to_return:
@@ -266,6 +266,15 @@ class CellStateManager(base.Base):
             ctxt = context.get_admin_context()
             self._refresh_cells_from_db(ctxt)
             self._update_our_capacity(ctxt)
+
+    @sync_from_db
+    def get_cell_info_for_neighbors(self):
+        """Return cell information for all neighbor cells."""
+        cell_list = [cell.get_cell_info()
+                for cell in self.child_cells.itervalues()]
+        cell_list.extend([cell.get_cell_info()
+                for cell in self.parent_cells.itervalues()])
+        return cell_list
 
     @sync_from_db
     def get_my_state(self):

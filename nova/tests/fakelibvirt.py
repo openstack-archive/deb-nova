@@ -70,6 +70,17 @@ VIR_DOMAIN_CRASHED = 6
 
 VIR_DOMAIN_XML_SECURE = 1
 
+VIR_DOMAIN_EVENT_ID_LIFECYCLE = 0
+
+VIR_DOMAIN_EVENT_DEFINED = 0
+VIR_DOMAIN_EVENT_UNDEFINED = 1
+VIR_DOMAIN_EVENT_STARTED = 2
+VIR_DOMAIN_EVENT_SUSPENDED = 3
+VIR_DOMAIN_EVENT_RESUMED = 4
+VIR_DOMAIN_EVENT_STOPPED = 5
+VIR_DOMAIN_EVENT_SHUTDOWN = 6
+VIR_DOMAIN_EVENT_PMSUSPENDED = 7
+
 VIR_DOMAIN_UNDEFINE_MANAGED_SAVE = 1
 
 VIR_DOMAIN_AFFECT_CURRENT = 0
@@ -179,6 +190,7 @@ class Domain(object):
         self._def = self._parse_definition(xml)
         self._has_saved_state = False
         self._snapshots = {}
+        self._id = self._connection._id_counter
 
     def _parse_definition(self, xml):
         try:
@@ -299,6 +311,9 @@ class Domain(object):
         self._state = VIR_DOMAIN_SHUTOFF
         self._connection._mark_not_running(self)
 
+    def ID(self):
+        return self._id
+
     def name(self):
         return self._def['name']
 
@@ -414,6 +429,7 @@ class Domain(object):
     <input type='tablet' bus='usb'/>
     <input type='mouse' bus='ps2'/>
     <graphics type='vnc' port='-1' autoport='yes'/>
+    <graphics type='spice' port='-1' autoport='yes'/>
     <video>
       <model type='cirrus' vram='9216' heads='1'/>
       <address type='pci' domain='0x0000' bus='0x00' slot='0x02'
@@ -476,7 +492,7 @@ class DomainSnapshot(object):
 
 
 class Connection(object):
-    def __init__(self, uri, readonly):
+    def __init__(self, uri, readonly, version=9007):
         if not uri or uri == '':
             if allow_default_uri_connection:
                 uri = 'qemu:///session'
@@ -501,6 +517,9 @@ class Connection(object):
         self._running_vms = {}
         self._id_counter = 1  # libvirt reserves 0 for the hypervisor.
         self._nwfilters = {}
+        self._event_callbacks = {}
+        self.fakeLibVersion = version
+        self.fakeVersion = version
 
     def _add_filter(self, nwfilter):
         self._nwfilters[nwfilter._name] = nwfilter
@@ -510,19 +529,25 @@ class Connection(object):
 
     def _mark_running(self, dom):
         self._running_vms[self._id_counter] = dom
+        self._emit_lifecycle(dom, VIR_DOMAIN_EVENT_STARTED, 0)
         self._id_counter += 1
 
     def _mark_not_running(self, dom):
         if dom._transient:
             self._undefine(dom)
 
+        dom._id = -1
+
         for (k, v) in self._running_vms.iteritems():
             if v == dom:
                 del self._running_vms[k]
+                self._emit_lifecycle(dom, VIR_DOMAIN_EVENT_STOPPED, 0)
                 return
 
     def _undefine(self, dom):
         del self._vms[dom.name()]
+        if not dom._transient:
+            self._emit_lifecycle(dom, VIR_DOMAIN_EVENT_UNDEFINED, 0)
 
     def getInfo(self):
         return [node_arch,
@@ -554,14 +579,25 @@ class Connection(object):
                            'name "%s"' % name,
                            VIR_ERR_NO_DOMAIN, VIR_FROM_QEMU)
 
+    def _emit_lifecycle(self, dom, event, detail):
+        if VIR_DOMAIN_EVENT_ID_LIFECYCLE not in self._event_callbacks:
+            return
+
+        cbinfo = self._event_callbacks[VIR_DOMAIN_EVENT_ID_LIFECYCLE]
+        callback = cbinfo[0]
+        opaque = cbinfo[1]
+        callback(self, dom, event, detail, opaque)
+
     def defineXML(self, xml):
         dom = Domain(connection=self, running=False, transient=False, xml=xml)
         self._vms[dom.name()] = dom
+        self._emit_lifecycle(dom, VIR_DOMAIN_EVENT_DEFINED, 0)
         return dom
 
     def createXML(self, xml, flags):
         dom = Domain(connection=self, running=True, transient=True, xml=xml)
         self._vms[dom.name()] = dom
+        self._emit_lifecycle(dom, VIR_DOMAIN_EVENT_STARTED, 0)
         return dom
 
     def getType(self):
@@ -569,13 +605,16 @@ class Connection(object):
             return 'QEMU'
 
     def getLibVersion(self):
-        return 9007
+        return self.fakeLibVersion
 
     def getVersion(self):
-        return 14000
+        return self.fakeVersion
 
     def getHostname(self):
         return 'compute1'
+
+    def domainEventRegisterAny(self, dom, eventid, callback, opaque):
+        self._event_callbacks[eventid] = [callback, opaque]
 
     def getCapabilities(self):
         return '''<capabilities>
@@ -864,6 +903,14 @@ def openAuth(uri, auth, flags):
             _("Expected a function in 'auth[1]' parameter"))
 
     return Connection(uri, readonly=False)
+
+
+def virEventRunDefaultImpl():
+    time.sleep(1)
+
+
+def virEventRegisterDefaultImpl():
+    pass
 
 
 virDomain = Domain

@@ -20,18 +20,20 @@
 """Utility methods for working with WSGI servers."""
 
 import os.path
+import socket
 import sys
 
 import eventlet
 import eventlet.wsgi
 import greenlet
+from oslo.config import cfg
 from paste import deploy
 import routes.middleware
+import ssl
 import webob.dec
 import webob.exc
 
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 
 wsgi_opts = [
@@ -44,7 +46,21 @@ wsgi_opts = [
             help='A python format string that is used as the template to '
                  'generate log lines. The following values can be formatted '
                  'into it: client_ip, date_time, request_line, status_code, '
-                 'body_length, wall_seconds.')
+                 'body_length, wall_seconds.'),
+    cfg.StrOpt('ssl_ca_file',
+               default=None,
+               help="CA certificate file to use to verify "
+                    "connecting clients"),
+    cfg.StrOpt('ssl_cert_file',
+                    default=None,
+                    help="SSL certificate of API server"),
+    cfg.StrOpt('ssl_key_file',
+                    default=None,
+                    help="SSL private key of API server"),
+    cfg.IntOpt('tcp_keepidle',
+               default=600,
+               help="Sets the value of TCP_KEEPIDLE in seconds for each "
+                    "server socket. Not supported on OS X.")
     ]
 CONF = cfg.CONF
 CONF.register_opts(wsgi_opts)
@@ -58,7 +74,8 @@ class Server(object):
     default_pool_size = 1000
 
     def __init__(self, name, app, host='0.0.0.0', port=0, pool_size=None,
-                       protocol=eventlet.wsgi.HttpProtocol, backlog=128):
+                       protocol=eventlet.wsgi.HttpProtocol, backlog=128,
+                       use_ssl=False, max_url_len=None):
         """Initialize, but do not start, a WSGI server.
 
         :param name: Pretty name for logging.
@@ -67,6 +84,7 @@ class Server(object):
         :param port: Port number to server the application.
         :param pool_size: Maximum number of eventlets to spawn concurrently.
         :param backlog: Maximum number of queued connections.
+        :param max_url_len: Maximum length of permitted URLs.
         :returns: None
         :raises: nova.exception.InvalidInput
         """
@@ -77,13 +95,29 @@ class Server(object):
         self._pool = eventlet.GreenPool(pool_size or self.default_pool_size)
         self._logger = logging.getLogger("nova.%s.wsgi.server" % self.name)
         self._wsgi_logger = logging.WritableLogger(self._logger)
+        self._use_ssl = use_ssl
+        self._max_url_len = max_url_len
 
         if backlog < 1:
             raise exception.InvalidInput(
                     reason='The backlog must be more than 1')
 
-        self._socket = eventlet.listen((host, port), backlog=backlog)
-        (self.host, self.port) = self._socket.getsockname()
+        bind_addr = (host, port)
+        # TODO(dims): eventlet's green dns/socket module does not actually
+        # support IPv6 in getaddrinfo(). We need to get around this in the
+        # future or monitor upstream for a fix
+        try:
+            info = socket.getaddrinfo(bind_addr[0],
+                                      bind_addr[1],
+                                      socket.AF_UNSPEC,
+                                      socket.SOCK_STREAM)[0]
+            family = info[0]
+            bind_addr = info[-1]
+        except Exception:
+            family = socket.AF_INET
+
+        self._socket = eventlet.listen(bind_addr, family, backlog=backlog)
+        (self.host, self.port) = self._socket.getsockname()[0:2]
         LOG.info(_("%(name)s listening on %(host)s:%(port)s") % self.__dict__)
 
     def start(self):
@@ -91,13 +125,74 @@ class Server(object):
 
         :returns: None
         """
-        self._server = eventlet.spawn(eventlet.wsgi.server,
-                                      self._socket,
-                                      self.app,
-                                      protocol=self._protocol,
-                                      custom_pool=self._pool,
-                                      log=self._wsgi_logger,
-                                      log_format=CONF.wsgi_log_format)
+        if self._use_ssl:
+            try:
+                ca_file = CONF.ssl_ca_file
+                cert_file = CONF.ssl_cert_file
+                key_file = CONF.ssl_key_file
+
+                if cert_file and not os.path.exists(cert_file):
+                    raise RuntimeError(
+                          _("Unable to find cert_file : %s") % cert_file)
+
+                if ca_file and not os.path.exists(ca_file):
+                    raise RuntimeError(
+                          _("Unable to find ca_file : %s") % ca_file)
+
+                if key_file and not os.path.exists(key_file):
+                    raise RuntimeError(
+                          _("Unable to find key_file : %s") % key_file)
+
+                if self._use_ssl and (not cert_file or not key_file):
+                    raise RuntimeError(
+                          _("When running server in SSL mode, you must "
+                            "specify both a cert_file and key_file "
+                            "option value in your configuration file"))
+                ssl_kwargs = {
+                    'server_side': True,
+                    'certfile': cert_file,
+                    'keyfile': key_file,
+                    'cert_reqs': ssl.CERT_NONE,
+                }
+
+                if CONF.ssl_ca_file:
+                    ssl_kwargs['ca_certs'] = ca_file
+                    ssl_kwargs['cert_reqs'] = ssl.CERT_REQUIRED
+
+                self._socket = eventlet.wrap_ssl(self._socket,
+                                                 **ssl_kwargs)
+
+                self._socket.setsockopt(socket.SOL_SOCKET,
+                                        socket.SO_REUSEADDR, 1)
+                # sockets can hang around forever without keepalive
+                self._socket.setsockopt(socket.SOL_SOCKET,
+                                        socket.SO_KEEPALIVE, 1)
+
+                # This option isn't available in the OS X version of eventlet
+                if hasattr(socket, 'TCP_KEEPIDLE'):
+                    self._socket.setsockopt(socket.IPPROTO_TCP,
+                                    socket.TCP_KEEPIDLE,
+                                    CONF.tcp_keepidle)
+
+            except Exception:
+                LOG.error(_("Failed to start %(name)s on %(host)s"
+                            ":%(port)s with SSL support") % self.__dict__)
+                raise
+
+        wsgi_kwargs = {
+            'func': eventlet.wsgi.server,
+            'sock': self._socket,
+            'site': self.app,
+            'protocol': self._protocol,
+            'custom_pool': self._pool,
+            'log': self._wsgi_logger,
+            'log_format': CONF.wsgi_log_format
+            }
+
+        if self._max_url_len:
+            wsgi_kwargs['url_length_limit'] = self._max_url_len
+
+        self._server = eventlet.spawn(**wsgi_kwargs)
 
     def stop(self):
         """Stop this server.

@@ -18,9 +18,10 @@
 
 import re
 
+from oslo.config import cfg
+
 from nova import context as nova_context
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova import utils
@@ -31,7 +32,7 @@ opts = [
     cfg.BoolOpt('use_unsafe_iscsi',
                  default=False,
                  help='Do not set this out of dev/test environments. '
-                      'If a node does not have an fixed PXE IP address, '
+                      'If a node does not have a fixed PXE IP address, '
                       'volumes are exported with globally opened ACL'),
     cfg.StrOpt('iscsi_iqn_prefix',
                default='iqn.2010-10.org.openstack.baremetal',
@@ -45,6 +46,8 @@ CONF = cfg.CONF
 CONF.register_group(baremetal_group)
 CONF.register_opts(opts, baremetal_group)
 
+CONF.import_opt('host', 'nova.netconf')
+CONF.import_opt('use_ipv6', 'nova.netconf')
 CONF.import_opt('libvirt_volume_drivers', 'nova.virt.libvirt.driver')
 
 LOG = logging.getLogger(__name__)
@@ -208,7 +211,7 @@ class LibvirtVolumeDriver(VolumeDriver):
     def _volume_driver_method(self, method_name, connection_info,
                              *args, **kwargs):
         driver_type = connection_info.get('driver_volume_type')
-        if not driver_type in self.volume_drivers:
+        if driver_type not in self.volume_drivers:
             raise exception.VolumeDriverNotFound(driver_type=driver_type)
         driver = self.volume_drivers[driver_type]
         method = getattr(driver, method_name)
@@ -244,7 +247,6 @@ class LibvirtVolumeDriver(VolumeDriver):
             # TODO(NTTdocomo): support CHAP
             _allow_iscsi_tgtadm(tid, 'ALL')
 
-    @exception.wrap_exception()
     def detach_volume(self, connection_info, instance, mountpoint):
         mount_device = mountpoint.rpartition("/")[2]
         try:

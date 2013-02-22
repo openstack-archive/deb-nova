@@ -22,7 +22,8 @@ services.  That communication is handled by the cells driver via the
 messging module.
 """
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import proxy as rpc_proxy
@@ -40,6 +41,12 @@ class CellsAPI(rpc_proxy.RpcProxy):
     API version history:
 
         1.0 - Initial version.
+        1.1 - Adds get_cell_info_for_neighbors() and sync_instances()
+        1.2 - Adds service_get_all(), service_get_by_compute_host(),
+              and proxy_rpc_to_compute_manager()
+        1.3 - Adds task_log_get_all()
+        1.4 - Adds compute_node_get(), compute_node_get_all(), and
+              compute_node_stats()
     '''
     BASE_RPC_API_VERSION = '1.0'
 
@@ -136,3 +143,79 @@ class CellsAPI(rpc_proxy.RpcProxy):
                     'info_cache': iicache}
         self.cast(ctxt, self.make_msg('instance_update_at_top',
                                       instance=instance))
+
+    def get_cell_info_for_neighbors(self, ctxt):
+        """Get information about our neighbor cells from the manager."""
+        if not CONF.cells.enable:
+            return []
+        return self.call(ctxt, self.make_msg('get_cell_info_for_neighbors'),
+                         version='1.1')
+
+    def sync_instances(self, ctxt, project_id=None, updated_since=None,
+            deleted=False):
+        """Ask all cells to sync instance data."""
+        if not CONF.cells.enable:
+            return
+        return self.cast(ctxt, self.make_msg('sync_instances',
+                                             project_id=project_id,
+                                             updated_since=updated_since,
+                                             deleted=deleted),
+                         version='1.1')
+
+    def service_get_all(self, ctxt, filters=None):
+        """Ask all cells for their list of services."""
+        return self.call(ctxt,
+                         self.make_msg('service_get_all',
+                                       filters=filters),
+                         version='1.2')
+
+    def service_get_by_compute_host(self, ctxt, host_name):
+        """Get the service entry for a host in a particular cell.  The
+        cell name should be encoded within the host_name.
+        """
+        return self.call(ctxt, self.make_msg('service_get_by_compute_host',
+                                             host_name=host_name),
+                         version='1.2')
+
+    def proxy_rpc_to_manager(self, ctxt, rpc_message, topic, call=False,
+                             timeout=None):
+        """Proxy RPC to a compute manager.  The host in the topic
+        should be encoded with the target cell name.
+        """
+        return self.call(ctxt, self.make_msg('proxy_rpc_to_manager',
+                                             topic=topic,
+                                             rpc_message=rpc_message,
+                                             call=call,
+                                             timeout=timeout),
+                         timeout=timeout,
+                         version='1.2')
+
+    def task_log_get_all(self, ctxt, task_name, period_beginning,
+                         period_ending, host=None, state=None):
+        """Get the task logs from the DB in child cells."""
+        return self.call(ctxt, self.make_msg('task_log_get_all',
+                                   task_name=task_name,
+                                   period_beginning=period_beginning,
+                                   period_ending=period_ending,
+                                   host=host, state=state),
+                         version='1.3')
+
+    def compute_node_get(self, ctxt, compute_id):
+        """Get a compute node by ID in a specific cell."""
+        return self.call(ctxt, self.make_msg('compute_node_get',
+                                             compute_id=compute_id),
+                         version='1.4')
+
+    def compute_node_get_all(self, ctxt, hypervisor_match=None):
+        """Return list of compute nodes in all cells, optionally
+        filtering by hypervisor host.
+        """
+        return self.call(ctxt,
+                         self.make_msg('compute_node_get_all',
+                                       hypervisor_match=hypervisor_match),
+                         version='1.4')
+
+    def compute_node_stats(self, ctxt):
+        """Return compute node stats from all cells."""
+        return self.call(ctxt, self.make_msg('compute_node_stats'),
+                         version='1.4')

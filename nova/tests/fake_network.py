@@ -15,6 +15,8 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from oslo.config import cfg
+
 from nova.compute import api as compute_api
 from nova.compute import manager as compute_manager
 import nova.context
@@ -25,13 +27,12 @@ from nova.network import manager as network_manager
 from nova.network import model as network_model
 from nova.network import nova_ipam_lib
 from nova.network import rpcapi as network_rpcapi
-from nova.openstack.common import cfg
 from nova.virt.libvirt import config as libvirt_config
 
 
 HOST = "testhost"
 CONF = cfg.CONF
-CONF.import_opt('use_ipv6', 'nova.config')
+CONF.import_opt('use_ipv6', 'nova.netconf')
 
 
 class FakeIptablesFirewallDriver(object):
@@ -47,13 +48,13 @@ class FakeIptablesFirewallDriver(object):
 
 class FakeVIFDriver(object):
 
-    def __init__(self, **kwargs):
+    def __init__(self, *args, **kwargs):
         pass
 
     def setattr(self, key, val):
         self.__setattr__(key, val)
 
-    def get_config(self, instance, network, mapping):
+    def get_config(self, instance, network, mapping, image_meta):
         conf = libvirt_config.LibvirtConfigGuestInterface()
 
         for attr, val in conf.__dict__.iteritems():
@@ -65,9 +66,12 @@ class FakeVIFDriver(object):
     def plug(self, instance, vif):
         pass
 
+    def unplug(self, instance, vif):
+        pass
+
 
 class FakeModel(dict):
-    """Represent a model from the db"""
+    """Represent a model from the db."""
     def __init__(self, *args, **kwargs):
         self.update(kwargs)
 
@@ -145,6 +149,9 @@ class FakeNetworkManager(network_manager.NetworkManager):
             return [ip for ip in self.fixed_ips
                     if ip['virtual_interface_id'] == vif_id]
 
+        def fixed_ip_disassociate(self, context, address):
+            return True
+
     def __init__(self):
         self.db = self.FakeDB()
         self.deallocate_called = None
@@ -158,6 +165,10 @@ class FakeNetworkManager(network_manager.NetworkManager):
         self.deallocate_called = address
 
     def _create_fixed_ips(self, context, network_id, fixed_cidr=None):
+        pass
+
+    def get_instance_nw_info(context, instance_id, rxtx_factor,
+                             host, instance_uuid=None, **kwargs):
         pass
 
 
@@ -357,7 +368,7 @@ def fake_get_instance_nw_info(stubs, num_networks=1, ips_per_vif=2,
 
     nw_model = network.get_instance_nw_info(
                 FakeContext('fakeuser', 'fake_project'),
-                0, 0, 3, None)
+                0, 3, None)
     if spectacular:
         return nw_model
     return nw_model.legacy()
@@ -369,7 +380,7 @@ def stub_out_nw_api_get_instance_nw_info(stubs, func=None,
                                          floating_ips_per_fixed_ip=0,
                                          spectacular=False):
 
-    def get_instance_nw_info(self, context, instance):
+    def get_instance_nw_info(self, context, instance, conductor_api=None):
         return fake_get_instance_nw_info(stubs, num_networks=num_networks,
                         ips_per_vif=ips_per_vif,
                         floating_ips_per_fixed_ip=floating_ips_per_fixed_ip,

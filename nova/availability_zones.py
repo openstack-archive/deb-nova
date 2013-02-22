@@ -13,11 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-""" utilities for multiple APIs"""
+"""Availability zone helper functions."""
+
+from oslo.config import cfg
 
 from nova import db
-from nova.openstack.common import cfg
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 
 availability_zone_opts = [
@@ -46,17 +46,43 @@ def set_availability_zones(context, services):
         az = CONF.internal_service_availability_zone
         if service['topic'] == "compute":
             if metadata.get(service['host']):
-                az = str(metadata[service['host']])[5:-2]
+                az = u','.join(list(metadata[service['host']]))
             else:
                 az = CONF.default_availability_zone
         service['availability_zone'] = az
     return services
 
 
-def get_host_availability_zone(context, host):
-    metadata = db.aggregate_metadata_get_by_host(
-                 context.get_admin_context(), host, key='availability_zone')
+def get_host_availability_zone(context, host, conductor_api=None):
+    if conductor_api:
+        metadata = conductor_api.aggregate_metadata_get_by_host(
+            context, host, key='availability_zone')
+    else:
+        metadata = db.aggregate_metadata_get_by_host(
+            context, host, key='availability_zone')
     if 'availability_zone' in metadata:
         return list(metadata['availability_zone'])[0]
     else:
         return CONF.default_availability_zone
+
+
+def get_availability_zones(context):
+    """Return available and unavailable zones."""
+    enabled_services = db.service_get_all(context, False)
+    disabled_services = db.service_get_all(context, True)
+    enabled_services = set_availability_zones(context, enabled_services)
+    disabled_services = set_availability_zones(context, disabled_services)
+
+    available_zones = []
+    for zone in [service['availability_zone'] for service
+                 in enabled_services]:
+        if zone not in available_zones:
+            available_zones.append(zone)
+
+    not_available_zones = []
+    zones = [service['available_zones'] for service in disabled_services
+            if service['available_zones'] not in available_zones]
+    for zone in zones:
+        if zone not in not_available_zones:
+            not_available_zones.append(zone)
+    return (available_zones, not_available_zones)

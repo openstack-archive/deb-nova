@@ -19,7 +19,7 @@ from lxml import etree
 
 from nova.api.openstack import common
 from nova.api.openstack import xmlutil
-from nova.openstack.common.log import logging
+from nova.openstack.common import log as logging
 from nova.tests.integrated import integrated_helpers
 
 
@@ -40,7 +40,7 @@ class XmlTests(integrated_helpers._IntegratedTestBase):
         self.assertEqual(root.nsmap.get(None), xmlutil.XMLNS_COMMON_V10)
 
     def test_namespace_servers(self):
-        """/servers should have v1.1 namespace (has changed in 1.1)."""
+        # /servers should have v1.1 namespace (has changed in 1.1).
         headers = {}
         headers['Accept'] = 'application/xml'
 

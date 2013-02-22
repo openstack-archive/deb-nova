@@ -15,24 +15,23 @@
 #    under the License.
 
 import decimal
+import random
 import re
 import time
 
-from nova import exception as nova_exception
-from nova import utils
+from oslo.config import cfg
 
 from nova.compute import power_state
-from nova.openstack.common import cfg
+from nova import exception as nova_exception
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
-
+from nova import utils
 from nova.virt.powervm import blockdev
 from nova.virt.powervm import command
 from nova.virt.powervm import common
 from nova.virt.powervm import constants
 from nova.virt.powervm import exception
 from nova.virt.powervm import lpar as LPAR
-
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
@@ -55,7 +54,7 @@ def get_powervm_disk_adapter():
 class PowerVMOperator(object):
     """PowerVM main operator.
 
-    The PowerVMOperator is intented to wrapper all operations
+    The PowerVMOperator is intended to wrap all operations
     from the driver and handle either IVM or HMC managed systems.
     """
 
@@ -137,7 +136,7 @@ class PowerVMOperator(object):
         return dic
 
     def get_host_stats(self, refresh=False):
-        """Return currently known host stats"""
+        """Return currently known host stats."""
         if refresh:
             self._update_host_stats()
         return self._host_stats
@@ -170,58 +169,7 @@ class PowerVMOperator(object):
 
         self._host_stats = data
 
-    def spawn(self, context, instance, image_id):
-        def _create_lpar_instance(instance):
-            host_stats = self.get_host_stats(refresh=True)
-            inst_name = instance['name']
-
-            # CPU/Memory min and max can be configurable. Lets assume
-            # some default values for now.
-
-            # Memory
-            mem = instance['memory_mb']
-            if mem > host_stats['host_memory_free']:
-                LOG.error(_('Not enough free memory in the host'))
-                raise exception.PowerVMInsufficientFreeMemory(
-                                               instance_name=instance['name'])
-            mem_min = min(mem, constants.POWERVM_MIN_MEM)
-            mem_max = mem + constants.POWERVM_MAX_MEM
-
-            # CPU
-            cpus = instance['vcpus']
-            avail_cpus = host_stats['vcpus'] - host_stats['vcpus_used']
-            if cpus > avail_cpus:
-                LOG.error(_('Insufficient available CPU on PowerVM'))
-                raise exception.PowerVMInsufficientCPU(
-                                               instance_name=instance['name'])
-            cpus_min = min(cpus, constants.POWERVM_MIN_CPUS)
-            cpus_max = cpus + constants.POWERVM_MAX_CPUS
-            cpus_units_min = decimal.Decimal(cpus_min) / decimal.Decimal(10)
-            cpus_units = decimal.Decimal(cpus) / decimal.Decimal(10)
-
-            try:
-                # Network
-                eth_id = self._operator.get_virtual_eth_adapter_id()
-
-                # LPAR configuration data
-                lpar_inst = LPAR.LPAR(
-                                name=inst_name, lpar_env='aixlinux',
-                                min_mem=mem_min, desired_mem=mem,
-                                max_mem=mem_max, proc_mode='shared',
-                                sharing_mode='uncap', min_procs=cpus_min,
-                                desired_procs=cpus, max_procs=cpus_max,
-                                min_proc_units=cpus_units_min,
-                                desired_proc_units=cpus_units,
-                                max_proc_units=cpus_max,
-                                virtual_eth_adapters='4/0/%s//0/0' % eth_id)
-
-                LOG.debug(_("Creating LPAR instance '%s'") % instance['name'])
-                self._operator.create_lpar(lpar_inst)
-            except nova_exception.ProcessExecutionError:
-                LOG.exception(_("LPAR instance '%s' creation failed") %
-                            instance['name'])
-                raise exception.PowerVMLPARCreationFailed()
-
+    def spawn(self, context, instance, image_id, network_info):
         def _create_image(context, instance, image_id):
             """Fetch image from glance and copy it to the remote system."""
             try:
@@ -241,12 +189,28 @@ class PowerVMOperator(object):
         spawn_start = time.time()
 
         try:
-            _create_lpar_instance(instance)
+            try:
+                host_stats = self.get_host_stats(refresh=True)
+                lpar_inst = self._create_lpar_instance(instance,
+                            network_info, host_stats)
+                #TODO(mjfork) capture the error and handle the error when the
+                #             MAC prefix already exists on the
+                #             system (1 in 2^28)
+                self._operator.create_lpar(lpar_inst)
+                LOG.debug(_("Creating LPAR instance '%s'") % instance['name'])
+            except nova_exception.ProcessExecutionError:
+                LOG.exception(_("LPAR instance '%s' creation failed") %
+                        instance['name'])
+                raise exception.PowerVMLPARCreationFailed()
+
             _create_image(context, instance, image_id)
             LOG.debug(_("Activating the LPAR instance '%s'")
                       % instance['name'])
             self._operator.start_lpar(instance['name'])
 
+            # TODO(mrodden): probably do this a better way
+            #                that actually relies on the time module
+            #                and nonblocking threading
             # Wait for boot
             timeout_count = range(10)
             while timeout_count:
@@ -326,14 +290,19 @@ class PowerVMOperator(object):
             LOG.debug(_("Shutting down the instance '%s'") % instance_name)
             self._operator.stop_lpar(instance_name)
 
+            #dperaza: LPAR should be deleted first so that vhost is
+            #cleanly removed and detached from disk device.
+            LOG.debug(_("Deleting the LPAR instance '%s'") % instance_name)
+            self._operator.remove_lpar(instance_name)
+
             if disk_name and destroy_disks:
                 # TODO(mrodden): we should also detach from the instance
                 # before we start deleting things...
-                self._disk_adapter.detach_volume_from_host(disk_name)
-                self._disk_adapter.delete_volume(disk_name)
-
-            LOG.debug(_("Deleting the LPAR instance '%s'") % instance_name)
-            self._operator.remove_lpar(instance_name)
+                volume_info = {'device_name': disk_name}
+                #Volume info dictionary might need more info that is lost when
+                #volume is detached from host so that it can be deleted
+                self._disk_adapter.detach_volume_from_host(volume_info)
+                self._disk_adapter.delete_volume(volume_info)
         except Exception:
             LOG.exception(_("PowerVM instance cleanup failed"))
             raise exception.PowerVMLPARInstanceCleanupFailed(
@@ -344,6 +313,135 @@ class PowerVMOperator(object):
 
     def power_on(self, instance_name):
         self._operator.start_lpar(instance_name)
+
+    def macs_for_instance(self, instance):
+        return self._operator.macs_for_instance(instance)
+
+    def _create_lpar_instance(self, instance, network_info, host_stats=None):
+        inst_name = instance['name']
+
+        # CPU/Memory min and max can be configurable. Lets assume
+        # some default values for now.
+
+        # Memory
+        mem = instance['memory_mb']
+        if host_stats and mem > host_stats['host_memory_free']:
+            LOG.error(_('Not enough free memory in the host'))
+            raise exception.PowerVMInsufficientFreeMemory(
+                                           instance_name=instance['name'])
+        mem_min = min(mem, constants.POWERVM_MIN_MEM)
+        mem_max = mem + constants.POWERVM_MAX_MEM
+
+        # CPU
+        cpus = instance['vcpus']
+        if host_stats:
+            avail_cpus = host_stats['vcpus'] - host_stats['vcpus_used']
+            if cpus > avail_cpus:
+                LOG.error(_('Insufficient available CPU on PowerVM'))
+                raise exception.PowerVMInsufficientCPU(
+                                           instance_name=instance['name'])
+        cpus_min = min(cpus, constants.POWERVM_MIN_CPUS)
+        cpus_max = cpus + constants.POWERVM_MAX_CPUS
+        cpus_units_min = decimal.Decimal(cpus_min) / decimal.Decimal(10)
+        cpus_units = decimal.Decimal(cpus) / decimal.Decimal(10)
+
+        # Network
+        # To ensure the MAC address on the guest matches the
+        # generated value, pull the first 10 characters off the
+        # MAC address for the mac_base_value parameter and then
+        # get the integer value of the final 2 characters as the
+        # slot_id parameter
+        mac = network_info[0]['address']
+        mac_base_value = (mac[:-2]).replace(':', '')
+        eth_id = self._operator.get_virtual_eth_adapter_id()
+        slot_id = int(mac[-2:], 16)
+        virtual_eth_adapters = ('%(slot_id)s/0/%(eth_id)s//0/0' %
+                                locals())
+
+        # LPAR configuration data
+        # max_virtual_slots is hardcoded to 64 since we generate a MAC
+        # address that must be placed in slots 32 - 64
+        lpar_inst = LPAR.LPAR(
+                        name=inst_name, lpar_env='aixlinux',
+                        min_mem=mem_min, desired_mem=mem,
+                        max_mem=mem_max, proc_mode='shared',
+                        sharing_mode='uncap', min_procs=cpus_min,
+                        desired_procs=cpus, max_procs=cpus_max,
+                        min_proc_units=cpus_units_min,
+                        desired_proc_units=cpus_units,
+                        max_proc_units=cpus_max,
+                        virtual_eth_mac_base_value=mac_base_value,
+                        max_virtual_slots=64,
+                        virtual_eth_adapters=virtual_eth_adapters)
+        return lpar_inst
+
+    def _check_host_resources(self, instance, vcpus, mem, host_stats):
+        """Checks resources on host for resize, migrate, and spawn
+        :param vcpus: CPUs to be used
+        :param mem: memory requested by instance
+        :param disk: size of disk to be expanded or created
+        """
+        if mem > host_stats['host_memory_free']:
+            LOG.exception(_('Not enough free memory in the host'))
+            raise exception.PowerVMInsufficientFreeMemory(
+                                           instance_name=instance['name'])
+
+        avail_cpus = host_stats['vcpus'] - host_stats['vcpus_used']
+        if vcpus > avail_cpus:
+            LOG.exception(_('Insufficient available CPU on PowerVM'))
+            raise exception.PowerVMInsufficientCPU(
+                                           instance_name=instance['name'])
+
+    def migrate_disk(self, device_name, src_host, dest, image_path,
+            instance_name=None):
+        """Migrates SVC or Logical Volume based disks
+
+        :param device_name: disk device name in /dev/
+        :param dest: IP or DNS name of destination host/VIOS
+        :param image_path: path on source and destination to directory
+                           for storing image files
+        :param instance_name: name of instance being migrated
+        :returns: disk_info dictionary object describing root volume
+                  information used for locating/mounting the volume
+        """
+        dest_file_path = self._disk_adapter.migrate_volume(
+                device_name, src_host, dest, image_path, instance_name)
+        disk_info = {}
+        disk_info['root_disk_file'] = dest_file_path
+        return disk_info
+
+    def deploy_from_migrated_file(self, lpar, file_path, size):
+        # decompress file
+        gzip_ending = '.gz'
+        if file_path.endswith(gzip_ending):
+            raw_file_path = file_path[:-len(gzip_ending)]
+        else:
+            raw_file_path = file_path
+
+        self._operator._decompress_image_file(file_path, raw_file_path)
+
+        try:
+            # deploy lpar from file
+            self._deploy_from_vios_file(lpar, raw_file_path, size)
+        finally:
+            # cleanup migrated file
+            self._operator._remove_file(raw_file_path)
+
+    def _deploy_from_vios_file(self, lpar, file_path, size):
+        self._operator.create_lpar(lpar)
+        lpar = self._operator.get_lpar(lpar['name'])
+        instance_id = lpar['lpar_id']
+        vhost = self._operator.get_vhost_by_instance_id(instance_id)
+
+        # Create logical volume on IVM
+        diskName = self._disk_adapter._create_logical_volume(size)
+        # Attach the disk to LPAR
+        self._operator.attach_disk_to_vhost(diskName, vhost)
+
+        # Copy file to device
+        self._disk_adapter._copy_file_to_device(file_path, diskName)
+
+        self._operator.start_lpar(lpar['name'])
 
 
 class BaseOperator(object):
@@ -372,7 +470,7 @@ class BaseOperator(object):
         """
         cmd = self.command.lssyscfg('-r %s --filter "lpar_names=%s"'
                                     % (resource_type, instance_name))
-        output = self.run_command(cmd)
+        output = self.run_vios_command(cmd)
         if not output:
             return None
         lpar = LPAR.load_from_conf_data(output[0])
@@ -383,7 +481,8 @@ class BaseOperator(object):
 
         :returns: list -- list with instances names.
         """
-        lpar_names = self.run_command(self.command.lssyscfg('-r lpar -F name'))
+        lpar_names = self.run_vios_command(self.command.lssyscfg(
+                    '-r lpar -F name'))
         if not lpar_names:
             return []
         return lpar_names
@@ -394,14 +493,15 @@ class BaseOperator(object):
         :param lpar: LPAR object
         """
         conf_data = lpar.to_string()
-        self.run_command(self.command.mksyscfg('-r lpar -i "%s"' % conf_data))
+        self.run_vios_command(self.command.mksyscfg('-r lpar -i "%s"' %
+                                                    conf_data))
 
     def start_lpar(self, instance_name):
         """Start a LPAR instance.
 
         :param instance_name: LPAR instance name
         """
-        self.run_command(self.command.chsysstate('-r lpar -o on -n %s'
+        self.run_vios_command(self.command.chsysstate('-r lpar -o on -n %s'
                                                  % instance_name))
 
     def stop_lpar(self, instance_name, timeout=30):
@@ -413,7 +513,7 @@ class BaseOperator(object):
         """
         cmd = self.command.chsysstate('-r lpar -o shutdown --immed -n %s' %
                                       instance_name)
-        self.run_command(cmd)
+        self.run_vios_command(cmd)
 
         # poll instance until stopped or raise exception
         lpar_obj = self.get_lpar(instance_name)
@@ -435,7 +535,7 @@ class BaseOperator(object):
 
         :param instance_name: LPAR instance name
         """
-        self.run_command(self.command.rmsyscfg('-r lpar -n %s'
+        self.run_vios_command(self.command.rmsyscfg('-r lpar -n %s'
                                                % instance_name))
 
     def get_vhost_by_instance_id(self, instance_id):
@@ -446,7 +546,7 @@ class BaseOperator(object):
         """
         instance_hex_id = '%#010x' % int(instance_id)
         cmd = self.command.lsmap('-all -field clientid svsa -fmt :')
-        output = self.run_command(cmd)
+        output = self.run_vios_command(cmd)
         vhosts = dict(item.split(':') for item in list(output))
 
         if instance_hex_id in vhosts:
@@ -463,10 +563,10 @@ class BaseOperator(object):
         :returns: id of the virtual ethernet adapter.
         """
         cmd = self.command.lsmap('-all -net -field sea -fmt :')
-        output = self.run_command(cmd)
+        output = self.run_vios_command(cmd)
         sea = output[0]
         cmd = self.command.lsdev('-dev %s -attr pvid' % sea)
-        output = self.run_command(cmd)
+        output = self.run_vios_command(cmd)
         # Returned output looks like this: ['value', '', '1']
         if output:
             return output[2]
@@ -478,7 +578,7 @@ class BaseOperator(object):
 
         :returns: string -- hostname
         """
-        output = self.run_command(self.command.hostname())
+        output = self.run_vios_command(self.command.hostname())
         return output[0]
 
     def get_disk_name_by_vhost(self, vhost):
@@ -488,7 +588,7 @@ class BaseOperator(object):
         :returns: string -- disk name
         """
         cmd = self.command.lsmap('-vadapter %s -field backing -fmt :' % vhost)
-        output = self.run_command(cmd)
+        output = self.run_vios_command(cmd)
         if output:
             return output[0]
 
@@ -501,7 +601,7 @@ class BaseOperator(object):
         :param vhost: the vhost name
         """
         cmd = self.command.mkvdev('-vdev %s -vadapter %s') % (disk, vhost)
-        self.run_command(cmd)
+        self.run_vios_command(cmd)
 
     def get_memory_info(self):
         """Get memory info.
@@ -510,7 +610,7 @@ class BaseOperator(object):
         """
         cmd = self.command.lshwres(
             '-r mem --level sys -F configurable_sys_mem,curr_avail_sys_mem')
-        output = self.run_command(cmd)
+        output = self.run_vios_command(cmd)
         total_mem, avail_mem = output[0].split(',')
         return {'total_mem': int(total_mem),
                 'avail_mem': int(avail_mem)}
@@ -523,7 +623,7 @@ class BaseOperator(object):
         cmd = self.command.lshwres(
             '-r proc --level sys -F '
             'configurable_sys_proc_units,curr_avail_sys_proc_units')
-        output = self.run_command(cmd)
+        output = self.run_vios_command(cmd)
         total_procs, avail_procs = output[0].split(',')
         return {'total_procs': float(total_procs),
                 'avail_procs': float(avail_procs)}
@@ -533,12 +633,12 @@ class BaseOperator(object):
 
         :returns: tuple - disk info (disk_total, disk_used, disk_avail)
         """
-        vgs = self.run_command(self.command.lsvg())
+        vgs = self.run_vios_command(self.command.lsvg())
         (disk_total, disk_used, disk_avail) = [0, 0, 0]
         for vg in vgs:
             cmd = self.command.lsvg('%s -field totalpps usedpps freepps -fmt :'
                                     % vg)
-            output = self.run_command(cmd)
+            output = self.run_vios_command(cmd)
             # Output example:
             # 1271 (10168 megabytes):0 (0 megabytes):1271 (10168 megabytes)
             (d_total, d_used, d_avail) = re.findall(r'(\d+) megabytes',
@@ -551,7 +651,7 @@ class BaseOperator(object):
                 'disk_used': disk_used,
                 'disk_avail': disk_avail}
 
-    def run_command(self, cmd, check_exit_code=True):
+    def run_vios_command(self, cmd, check_exit_code=True):
         """Run a remote command using an active ssh connection.
 
         :param command: String with the command to run.
@@ -561,7 +661,7 @@ class BaseOperator(object):
                                            check_exit_code=check_exit_code)
         return stdout.strip().splitlines()
 
-    def run_command_as_root(self, command, check_exit_code=True):
+    def run_vios_command_as_root(self, command, check_exit_code=True):
         """Run a remote command as root using an active ssh connection.
 
         :param command: List of commands.
@@ -570,6 +670,92 @@ class BaseOperator(object):
         stdout, stderr = common.ssh_command_as_root(
             self._connection, command, check_exit_code=check_exit_code)
         return stdout.read().splitlines()
+
+    def macs_for_instance(self, instance):
+        pass
+
+    def update_lpar(self, lpar_info):
+        """Resizing an LPAR
+
+        :param lpar_info: dictionary of LPAR information
+        """
+        configuration_data = ('name=%s,min_mem=%s,desired_mem=%s,'
+                              'max_mem=%s,min_procs=%s,desired_procs=%s,'
+                              'max_procs=%s,min_proc_units=%s,'
+                              'desired_proc_units=%s,max_proc_units=%s' %
+                              (lpar_info['name'], lpar_info['min_mem'],
+                               lpar_info['desired_mem'],
+                               lpar_info['max_mem'],
+                               lpar_info['min_procs'],
+                               lpar_info['desired_procs'],
+                               lpar_info['max_procs'],
+                               lpar_info['min_proc_units'],
+                               lpar_info['desired_proc_units'],
+                               lpar_info['max_proc_units']))
+
+        self.run_vios_command(self.command.chsyscfg('-r prof -i "%s"' %
+                                               configuration_data))
+
+    def get_logical_vol_size(self, diskname):
+        """Finds and calculates the logical volume size in GB
+
+        :param diskname: name of the logical volume
+        :returns: size of logical volume in GB
+        """
+        configuration_data = ("ioscli lslv %s -fmt : -field pps ppsize" %
+                                diskname)
+        output = self.run_vios_command(configuration_data)
+        pps, ppsize = output[0].split(':')
+        ppsize = re.findall(r'\d+', ppsize)
+        ppsize = int(ppsize[0])
+        pps = int(pps)
+        lv_size = ((pps * ppsize) / 1024)
+
+        return lv_size
+
+    def rename_lpar(self, instance_name, new_name):
+        """Rename LPAR given by instance_name to new_name
+
+        Note: For IVM based deployments, the name is
+              limited to 31 characters and will be trimmed
+              to meet this requirement
+
+        :param instance_name: name of LPAR to be renamed
+        :param new_name: desired new name of LPAR
+        :returns: new name of renamed LPAR trimmed to 31 characters
+                  if necessary
+        """
+
+        # grab first 31 characters of new name
+        new_name_trimmed = new_name[:31]
+
+        cmd = ''.join(['chsyscfg -r lpar -i ',
+                       '"',
+                       'name=%s,' % instance_name,
+                       'new_name=%s' % new_name_trimmed,
+                       '"'])
+
+        self.run_vios_command(cmd)
+
+        return new_name_trimmed
+
+    def _decompress_image_file(self, file_path, outfile_path):
+        command = "/usr/bin/gunzip -c %s > %s" % (file_path, outfile_path)
+        output = self.run_vios_command_as_root(command)
+
+        # Remove compressed image file
+        command = "/usr/bin/rm %s" % file_path
+        output = self.run_vios_command_as_root(command)
+
+        return outfile_path
+
+    def _remove_file(self, file_path):
+        """Removes a file on the VIOS partition
+
+        :param file_path: absolute path to file to be removed
+        """
+        command = 'rm %s' % file_path
+        self.run_vios_command_as_root(command)
 
 
 class IVMOperator(BaseOperator):
@@ -581,3 +767,35 @@ class IVMOperator(BaseOperator):
     def __init__(self, ivm_connection):
         self.command = command.IVMCommand()
         BaseOperator.__init__(self, ivm_connection)
+
+    def macs_for_instance(self, instance):
+        """Generates set of valid MAC addresses for an IVM instance."""
+        # NOTE(vish): We would prefer to use 0xfe here to ensure that linux
+        #             bridge mac addresses don't change, but it appears to
+        #             conflict with libvirt, so we use the next highest octet
+        #             that has the unicast and locally administered bits set
+        #             properly: 0xfa.
+        #             Discussion: https://bugs.launchpad.net/nova/+bug/921838
+        # NOTE(mjfork): For IVM-based PowerVM, we cannot directly set a MAC
+        #               address on an LPAR, but rather need to construct one
+        #               that can be used.  Retain the 0xfa as noted above,
+        #               but ensure the final 2 hex values represent a value
+        #               between 32 and 64 so we can assign as the slot id on
+        #               the system. For future reference, the last octect
+        #               should not exceed FF (255) since it would spill over
+        #               into the higher-order octect.
+        #
+        #               FA:xx:xx:xx:xx:[32-64]
+
+        macs = set()
+        mac_base = [0xfa,
+               random.randint(0x00, 0xff),
+               random.randint(0x00, 0xff),
+               random.randint(0x00, 0xff),
+               random.randint(0x00, 0xff),
+               random.randint(0x00, 0x00)]
+        for n in range(32, 64):
+            mac_base[5] = n
+            macs.add(':'.join(map(lambda x: "%02x" % x, mac_base)))
+
+        return macs

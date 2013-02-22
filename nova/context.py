@@ -22,6 +22,7 @@
 import copy
 import uuid
 
+from nova import exception
 from nova.openstack.common import local
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -46,7 +47,7 @@ class RequestContext(object):
                  roles=None, remote_address=None, timestamp=None,
                  request_id=None, auth_token=None, overwrite=True,
                  quota_class=None, user_name=None, project_name=None,
-                 service_catalog=None, instance_lock_checked=False, **kwargs):
+                 service_catalog=[], instance_lock_checked=False, **kwargs):
         """
         :param read_deleted: 'no' indicates deleted records are hidden, 'yes'
             indicates deleted records are visible, 'only' indicates that
@@ -65,9 +66,6 @@ class RequestContext(object):
         self.user_id = user_id
         self.project_id = project_id
         self.roles = roles or []
-        self.is_admin = is_admin
-        if self.is_admin is None:
-            self.is_admin = policy.check_is_admin(self.roles)
         self.read_deleted = read_deleted
         self.remote_address = remote_address
         if not timestamp:
@@ -79,7 +77,9 @@ class RequestContext(object):
             request_id = generate_request_id()
         self.request_id = request_id
         self.auth_token = auth_token
-        self.service_catalog = service_catalog
+        # Only include required parts of service_catalog
+        self.service_catalog = [s for s in service_catalog
+                if s.get('type') in ('volume')]
         self.instance_lock_checked = instance_lock_checked
 
         # NOTE(markmc): this attribute is currently only used by the
@@ -88,7 +88,9 @@ class RequestContext(object):
         self.quota_class = quota_class
         self.user_name = user_name
         self.project_name = project_name
-
+        self.is_admin = is_admin
+        if self.is_admin is None:
+            self.is_admin = policy.check_is_admin(self)
         if overwrite or not hasattr(local.store, 'context'):
             self.update_store()
 
@@ -165,3 +167,55 @@ def get_admin_context(read_deleted="no"):
                           is_admin=True,
                           read_deleted=read_deleted,
                           overwrite=False)
+
+
+def is_user_context(context):
+    """Indicates if the request context is a normal user."""
+    if not context:
+        return False
+    if context.is_admin:
+        return False
+    if not context.user_id or not context.project_id:
+        return False
+    return True
+
+
+def require_admin_context(ctxt):
+    """Raise exception.AdminRequired() if context is an admin context."""
+    if not ctxt.is_admin:
+        raise exception.AdminRequired()
+
+
+def require_context(ctxt):
+    """Raise exception.NotAuthorized() if context is not a user or an
+    admin context.
+    """
+    if not ctxt.is_admin and not is_user_context(ctxt):
+        raise exception.NotAuthorized()
+
+
+def authorize_project_context(context, project_id):
+    """Ensures a request has permission to access the given project."""
+    if is_user_context(context):
+        if not context.project_id:
+            raise exception.NotAuthorized()
+        elif context.project_id != project_id:
+            raise exception.NotAuthorized()
+
+
+def authorize_user_context(context, user_id):
+    """Ensures a request has permission to access the given user."""
+    if is_user_context(context):
+        if not context.user_id:
+            raise exception.NotAuthorized()
+        elif context.user_id != user_id:
+            raise exception.NotAuthorized()
+
+
+def authorize_quota_class_context(context, class_name):
+    """Ensures a request has permission to access the given quota class."""
+    if is_user_context(context):
+        if not context.quota_class:
+            raise exception.NotAuthorized()
+        elif context.quota_class != class_name:
+            raise exception.NotAuthorized()

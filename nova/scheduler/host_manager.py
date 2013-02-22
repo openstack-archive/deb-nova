@@ -19,11 +19,12 @@ Manage hosts in the current zone.
 
 import UserDict
 
+from oslo.config import cfg
+
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova.scheduler import filters
@@ -196,7 +197,7 @@ class HostState(object):
         self.num_io_ops = int(statmap.get('io_workload', 0))
 
     def consume_from_instance(self, instance):
-        """Incrementally update host state from an instance"""
+        """Incrementally update host state from an instance."""
         disk_mb = (instance['root_gb'] + instance['ephemeral_gb']) * 1024
         ram_mb = instance['memory_mb']
         vcpus = instance['vcpus']
@@ -294,7 +295,7 @@ class HostManager(object):
 
     def get_filtered_hosts(self, hosts, filter_properties,
             filter_class_names=None):
-        """Filter hosts and return only ones passing all filters"""
+        """Filter hosts and return only ones passing all filters."""
 
         def _strip_ignore_hosts(host_map, hosts_to_ignore):
             ignored_hosts = []
@@ -328,17 +329,20 @@ class HostManager(object):
             name_to_cls_map = dict([(x.host, x) for x in hosts])
             if ignore_hosts:
                 _strip_ignore_hosts(name_to_cls_map, ignore_hosts)
+                if not name_to_cls_map:
+                    return []
             if force_hosts:
                 _match_forced_hosts(name_to_cls_map, force_hosts)
-            if not name_to_cls_map:
-                return []
+                # NOTE(vish): Skip filters on forced hosts.
+                if name_to_cls_map:
+                    return name_to_cls_map.values()
             hosts = name_to_cls_map.itervalues()
 
         return self.filter_handler.get_filtered_objects(filter_classes,
                 hosts, filter_properties)
 
     def get_weighed_hosts(self, hosts, weight_properties):
-        """Weigh the hosts"""
+        """Weigh the hosts."""
         return self.weight_handler.get_weighed_objects(self.weight_classes,
                 hosts, weight_properties)
 
@@ -366,6 +370,7 @@ class HostManager(object):
 
         # Get resource usage across the available compute nodes:
         compute_nodes = db.compute_node_get_all(context)
+        seen_nodes = set()
         for compute in compute_nodes:
             service = compute['service']
             if not service:
@@ -385,5 +390,14 @@ class HostManager(object):
                         service=dict(service.iteritems()))
                 self.host_state_map[state_key] = host_state
             host_state.update_from_compute_node(compute)
+            seen_nodes.add(state_key)
+
+        # remove compute nodes from host_state_map if they are not active
+        dead_nodes = set(self.host_state_map.keys()) - seen_nodes
+        for state_key in dead_nodes:
+            host, node = state_key
+            LOG.info(_("Removing dead compute node %(host)s:%(node)s "
+                       "from scheduler") % locals())
+            del self.host_state_map[state_key]
 
         return self.host_state_map.itervalues()

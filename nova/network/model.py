@@ -25,9 +25,21 @@ def ensure_string_keys(d):
     # http://bugs.python.org/issue4978
     return dict([(str(k), v) for k, v in d.iteritems()])
 
+# Constants for the 'vif_type' field in VIF class
+VIF_TYPE_OVS = 'ovs'
+VIF_TYPE_BRIDGE = 'bridge'
+VIF_TYPE_802_QBG = '802.1qbg'
+VIF_TYPE_802_QBH = '802.1qbh'
+VIF_TYPE_OTHER = 'other'
+
+# Constant for max length of network interface names
+# eg 'bridge' in the Network class or 'devname' in
+# the VIF class
+NIC_NAME_LEN = 14
+
 
 class Model(dict):
-    """Defines some necessary structures for most of the network models"""
+    """Defines some necessary structures for most of the network models."""
     def __repr__(self):
         return self.__class__.__name__ + '(' + dict.__repr__(self) + ')'
 
@@ -38,12 +50,12 @@ class Model(dict):
         self['meta'].update(kwargs)
 
     def get_meta(self, key, default=None):
-        """calls get(key, default) on self['meta']"""
+        """calls get(key, default) on self['meta']."""
         return self['meta'].get(key, default)
 
 
 class IP(Model):
-    """Represents an IP address in Nova"""
+    """Represents an IP address in Nova."""
     def __init__(self, address=None, type=None, **kwargs):
         super(IP, self).__init__()
 
@@ -78,7 +90,7 @@ class IP(Model):
 
 
 class FixedIP(IP):
-    """Represents a Fixed IP address in Nova"""
+    """Represents a Fixed IP address in Nova."""
     def __init__(self, floating_ips=None, **kwargs):
         super(FixedIP, self).__init__(**kwargs)
         self['floating_ips'] = floating_ips or []
@@ -102,7 +114,7 @@ class FixedIP(IP):
 
 
 class Route(Model):
-    """Represents an IP Route in Nova"""
+    """Represents an IP Route in Nova."""
     def __init__(self, cidr=None, gateway=None, interface=None, **kwargs):
         super(Route, self).__init__()
 
@@ -120,7 +132,7 @@ class Route(Model):
 
 
 class Subnet(Model):
-    """Represents a Subnet in Nova"""
+    """Represents a Subnet in Nova."""
     def __init__(self, cidr=None, dns=None, gateway=None, ips=None,
                  routes=None, **kwargs):
         super(Subnet, self).__init__()
@@ -153,7 +165,7 @@ class Subnet(Model):
             self['ips'].append(ip)
 
     def as_netaddr(self):
-        """Convience function to get cidr as a netaddr object"""
+        """Convience function to get cidr as a netaddr object."""
         return netaddr.IPNetwork(self['cidr'])
 
     @classmethod
@@ -167,7 +179,7 @@ class Subnet(Model):
 
 
 class Network(Model):
-    """Represents a Network in Nova"""
+    """Represents a Network in Nova."""
     def __init__(self, id=None, bridge=None, label=None,
                  subnets=None, **kwargs):
         super(Network, self).__init__()
@@ -192,9 +204,28 @@ class Network(Model):
         return network
 
 
+class VIF8021QbgParams(Model):
+    """Represents the parameters for a 802.1qbg VIF."""
+
+    def __init__(self, managerid, typeid, typeidversion, instanceid):
+        self['managerid'] = managerid
+        self['typeid'] = typeid
+        self['typeidversion'] = typeidversion
+        self['instanceid'] = instanceid
+
+
+class VIF8021QbhParams(Model):
+    """Represents the parameters for a 802.1qbh VIF."""
+
+    def __init__(self, profileid):
+        self['profileid'] = profileid
+
+
 class VIF(Model):
-    """Represents a Virtual Interface in Nova"""
+    """Represents a Virtual Interface in Nova."""
     def __init__(self, id=None, address=None, network=None, type=None,
+                 devname=None, ovs_interfaceid=None,
+                 qbh_params=None, qbg_params=None,
                  **kwargs):
         super(VIF, self).__init__()
 
@@ -202,6 +233,11 @@ class VIF(Model):
         self['address'] = address
         self['network'] = network or None
         self['type'] = type
+        self['devname'] = devname
+
+        self['ovs_interfaceid'] = ovs_interfaceid
+        self['qbh_params'] = qbh_params
+        self['qbg_params'] = qbg_params
 
         self._set_meta(kwargs)
 
@@ -237,7 +273,7 @@ class VIF(Model):
                       'meta': {...}}]
         """
         if self['network']:
-            # remove unecessary fields on fixed_ips
+            # remove unnecessary fields on fixed_ips
             ips = [IP(**ensure_string_keys(ip)) for ip in self.fixed_ips()]
             for ip in ips:
                 # remove floating ips from IP, since this is a flat structure
@@ -258,16 +294,16 @@ class VIF(Model):
 
 
 class NetworkInfo(list):
-    """Stores and manipulates network information for a Nova instance"""
+    """Stores and manipulates network information for a Nova instance."""
 
     # NetworkInfo is a list of VIFs
 
     def fixed_ips(self):
-        """Returns all fixed_ips without floating_ips attached"""
+        """Returns all fixed_ips without floating_ips attached."""
         return [ip for vif in self for ip in vif.fixed_ips()]
 
     def floating_ips(self):
-        """Returns all floating_ips"""
+        """Returns all floating_ips."""
         return [ip for vif in self for ip in vif.floating_ips()]
 
     @classmethod
@@ -366,7 +402,11 @@ class NetworkInfo(list):
                          'broadcast': str(subnet_v4.as_netaddr().broadcast),
                          'mac': vif['address'],
                          'vif_type': vif['type'],
+                         'vif_devname': vif.get('devname'),
                          'vif_uuid': vif['id'],
+                         'ovs_interfaceid': vif.get('ovs_interfaceid'),
+                         'qbh_params': vif.get('qbh_params'),
+                         'qbg_params': vif.get('qbg_params'),
                          'rxtx_cap': vif.get_meta('rxtx_cap', 0),
                          'dns': [get_ip(ip) for ip in subnet_v4['dns']],
                          'ips': [fixed_ip_dict(ip, subnet)

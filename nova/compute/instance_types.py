@@ -23,10 +23,12 @@
 import re
 import uuid
 
+from oslo.config import cfg
+
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
+from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common import log as logging
 from nova import utils
 
@@ -42,6 +44,25 @@ CONF.register_opts(instance_type_opts)
 LOG = logging.getLogger(__name__)
 
 INVALID_NAME_REGEX = re.compile("[^\w\.\- ]")
+
+
+def _int_or_none(val):
+    if val is not None:
+        return int(val)
+
+
+system_metadata_instance_type_props = {
+    'id': int,
+    'name': str,
+    'memory_mb': int,
+    'vcpus': int,
+    'root_gb': int,
+    'ephemeral_gb': int,
+    'flavorid': str,
+    'swap': int,
+    'rxtx_factor': float,
+    'vcpu_weight': _int_or_none,
+    }
 
 
 def create(name, memory, vcpus, root_gb, ephemeral_gb=None, flavorid=None,
@@ -65,6 +86,9 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb=None, flavorid=None,
         'swap': swap,
         'rxtx_factor': rxtx_factor,
     }
+
+    # ensure name do not exceed 255 characters
+    utils.check_string_length(name, 'name', min_length=1, max_length=255)
 
     # ensure name does not contain any special characters
     invalid_name = INVALID_NAME_REGEX.search(name)
@@ -110,7 +134,7 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb=None, flavorid=None,
 
     try:
         return db.instance_type_create(context.get_admin_context(), kwargs)
-    except exception.DBError, e:
+    except db_session.DBError, e:
         LOG.exception(_('DB error: %s') % e)
         raise exception.InstanceTypeCreateFailed()
 
@@ -189,7 +213,7 @@ def get_instance_type_by_flavor_id(flavorid, ctxt=None, read_deleted="yes"):
 
 
 def get_instance_type_access_by_flavor_id(flavorid, ctxt=None):
-    """Retrieve instance type access list by flavor id"""
+    """Retrieve instance type access list by flavor id."""
     if ctxt is None:
         ctxt = context.get_admin_context()
 
@@ -197,7 +221,7 @@ def get_instance_type_access_by_flavor_id(flavorid, ctxt=None):
 
 
 def add_instance_type_access(flavorid, projectid, ctxt=None):
-    """Add instance type access for project"""
+    """Add instance type access for project."""
     if ctxt is None:
         ctxt = context.get_admin_context()
 
@@ -205,8 +229,47 @@ def add_instance_type_access(flavorid, projectid, ctxt=None):
 
 
 def remove_instance_type_access(flavorid, projectid, ctxt=None):
-    """Remove instance type access for project"""
+    """Remove instance type access for project."""
     if ctxt is None:
         ctxt = context.get_admin_context()
 
     return db.instance_type_access_remove(ctxt, flavorid, projectid)
+
+
+def extract_instance_type(instance, prefix=''):
+    """Create an InstanceType-like object from instance's system_metadata
+    information."""
+
+    instance_type = {}
+    sys_meta = utils.metadata_to_dict(instance['system_metadata'])
+    for key, type_fn in system_metadata_instance_type_props.items():
+        type_key = '%sinstance_type_%s' % (prefix, key)
+        instance_type[key] = type_fn(sys_meta[type_key])
+    return instance_type
+
+
+def save_instance_type_info(metadata, instance_type, prefix=''):
+    """Save properties from instance_type into instance's system_metadata,
+    in the format of:
+
+      [prefix]instance_type_[key]
+
+    This can be used to update system_metadata in place from a type, as well
+    as stash information about another instance_type for later use (such as
+    during resize)."""
+
+    for key in system_metadata_instance_type_props.keys():
+        to_key = '%sinstance_type_%s' % (prefix, key)
+        metadata[to_key] = instance_type[key]
+    return metadata
+
+
+def delete_instance_type_info(metadata, *prefixes):
+    """Delete instance_type information from instance's system_metadata
+    by prefix."""
+
+    for key in system_metadata_instance_type_props.keys():
+        for prefix in prefixes:
+            to_key = '%sinstance_type_%s' % (prefix, key)
+            del metadata[to_key]
+    return metadata

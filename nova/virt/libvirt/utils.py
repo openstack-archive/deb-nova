@@ -6,6 +6,7 @@
 #    Copyright (c) 2010 Citrix Systems, Inc.
 #    Copyright (c) 2011 Piston Cloud Computing, Inc
 #    Copyright (c) 2011 OpenStack LLC
+#    (c) Copyright 2013 Hewlett-Packard Development Company, L.P.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -22,14 +23,23 @@
 import os
 
 from lxml import etree
+from oslo.config import cfg
 
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import images
 
+libvirt_opts = [
+    cfg.BoolOpt('libvirt_snapshot_compression',
+                default=False,
+                help='Compress snapshot images when possible. This '
+                     'currently applies exclusively to qcow2 images'),
+    ]
+
 CONF = cfg.CONF
+CONF.register_opts(libvirt_opts)
+CONF.import_opt('instances_path', 'nova.compute.manager')
 LOG = logging.getLogger(__name__)
 
 
@@ -38,13 +48,100 @@ def execute(*args, **kwargs):
 
 
 def get_iscsi_initiator():
-    """Get iscsi initiator name for this machine"""
+    """Get iscsi initiator name for this machine."""
     # NOTE(vish) openiscsi stores initiator name in a file that
     #            needs root permission to read.
     contents = utils.read_file_as_root('/etc/iscsi/initiatorname.iscsi')
     for l in contents.split('\n'):
         if l.startswith('InitiatorName='):
             return l[l.index('=') + 1:].strip()
+
+
+def get_fc_hbas():
+    """Get the Fibre Channel HBA information."""
+    try:
+        out, err = execute('systool', '-c', 'fc_host', '-v',
+                           run_as_root=True)
+    except exception.ProcessExecutionError as exc:
+        if exc.exit_code == 96:
+            LOG.warn(_("systool is not installed"))
+        return []
+
+    if out is None:
+        raise RuntimeError(_("Cannot find any Fibre Channel HBAs"))
+
+    lines = out.split('\n')
+    # ignore the first 2 lines
+    lines = lines[2:]
+    hbas = []
+    hba = {}
+    lastline = None
+    for line in lines:
+        line = line.strip()
+        # 2 newlines denotes a new hba port
+        if line == '' and lastline == '':
+            if len(hba) > 0:
+                hbas.append(hba)
+                hba = {}
+        else:
+            val = line.split('=')
+            if len(val) == 2:
+                key = val[0].strip().replace(" ", "")
+                value = val[1].strip()
+                hba[key] = value.replace('"', '')
+        lastline = line
+
+    return hbas
+
+
+def get_fc_hbas_info():
+    """Get Fibre Channel WWNs and device paths from the system, if any."""
+    # Note modern linux kernels contain the FC HBA's in /sys
+    # and are obtainable via the systool app
+    hbas = get_fc_hbas()
+    hbas_info = []
+    for hba in hbas:
+        wwpn = hba['port_name'].replace('0x', '')
+        wwnn = hba['node_name'].replace('0x', '')
+        device_path = hba['ClassDevicepath']
+        device = hba['ClassDevice']
+        hbas_info.append({'port_name': wwpn,
+                          'node_name': wwnn,
+                          'host_device': device,
+                          'device_path': device_path})
+    return hbas_info
+
+
+def get_fc_wwpns():
+    """Get Fibre Channel WWPNs from the system, if any."""
+    # Note modern linux kernels contain the FC HBA's in /sys
+    # and are obtainable via the systool app
+    hbas = get_fc_hbas()
+
+    wwpns = []
+    if hbas:
+        for hba in hbas:
+            if hba['port_state'] == 'Online':
+                wwpn = hba['port_name'].replace('0x', '')
+                wwpns.append(wwpn)
+
+    return wwpns
+
+
+def get_fc_wwnns():
+    """Get Fibre Channel WWNNs from the system, if any."""
+    # Note modern linux kernels contain the FC HBA's in /sys
+    # and are obtainable via the systool app
+    hbas = get_fc_hbas()
+
+    wwnns = []
+    if hbas:
+        for hba in hbas:
+            if hba['port_state'] == 'Online':
+                wwnn = hba['node_name'].replace('0x', '')
+                wwnns.append(wwnn)
+
+    return wwnns
 
 
 def create_image(disk_format, path, size):
@@ -62,7 +159,7 @@ def create_image(disk_format, path, size):
     execute('qemu-img', 'create', '-f', disk_format, path, size)
 
 
-def create_cow_image(backing_file, path):
+def create_cow_image(backing_file, path, size=None):
     """Create COW image
 
     Creates a COW image with the given backing file
@@ -88,6 +185,8 @@ def create_cow_image(backing_file, path):
     #     cow_opts += ['preallocation=%s' % base_details['preallocation']]
     if base_details and base_details.encryption:
         cow_opts += ['encryption=%s' % base_details.encryption]
+    if size is not None:
+        cow_opts += ['size=%s' % size]
     if cow_opts:
         # Format as a comma separated list
         csv_opts = ",".join(cow_opts)
@@ -106,7 +205,8 @@ def create_lvm_image(vg, lv, size, sparse=False):
     :size: size of image in bytes
     :sparse: create sparse logical volume
     """
-    free_space = volume_group_free_space(vg)
+    vg_info = get_volume_group_info(vg)
+    free_space = vg_info['free']
 
     def check_size(vg, lv, size):
         if size > free_space:
@@ -133,15 +233,28 @@ def create_lvm_image(vg, lv, size, sparse=False):
     execute(*cmd, run_as_root=True, attempts=3)
 
 
-def volume_group_free_space(vg):
-    """Return available space on volume group in bytes.
+def get_volume_group_info(vg):
+    """Return free/used/total space info for a volume group in bytes
 
     :param vg: volume group name
+    :returns: A dict containing:
+             :total: How big the filesystem is (in bytes)
+             :free: How much space is free (in bytes)
+             :used: How much space is used (in bytes)
     """
+
     out, err = execute('vgs', '--noheadings', '--nosuffix',
-                       '--units', 'b', '-o', 'vg_free', vg,
+                       '--separator', '|',
+                       '--units', 'b', '-o', 'vg_size,vg_free', vg,
                        run_as_root=True)
-    return int(out.strip())
+
+    info = out.split('|')
+    if len(info) != 2:
+        raise RuntimeError(_("vg %s must be LVM volume group") % vg)
+
+    return {'total': int(info[0]),
+            'free': int(info[1]),
+            'used': int(info[0]) - int(info[1])}
 
 
 def list_logical_volumes(vg):
@@ -196,6 +309,7 @@ def clear_logical_volume(path):
     vol_size = logical_volume_size(path)
     bs = 1024 * 1024
     direct_flags = ('oflag=direct',)
+    sync_flags = ()
     remaining_bytes = vol_size
 
     # The loop caters for versions of dd that
@@ -207,11 +321,14 @@ def clear_logical_volume(path):
                     'if=/dev/zero', 'of=%s' % path,
                     'seek=%s' % seek_blocks, 'count=%s' % zero_blocks)
         zero_cmd += direct_flags
+        zero_cmd += sync_flags
         if zero_blocks:
             utils.execute(*zero_cmd, run_as_root=True)
         remaining_bytes %= bs
         bs /= 1024  # Limit to 3 iterations
-        direct_flags = ()  # Only use O_DIRECT with initial block size
+        # Use O_DIRECT with initial block size and fdatasync otherwise
+        direct_flags = ()
+        sync_flags = ('conv=fdatasync',)
 
 
 def remove_logical_volumes(*paths):
@@ -242,7 +359,7 @@ def pick_disk_driver_name(is_block_dev=False):
         if is_block_dev:
             return "phy"
         else:
-            return "file"
+            return "tap"
     elif CONF.libvirt_type in ('kvm', 'qemu'):
         return "qemu"
     else:
@@ -261,14 +378,14 @@ def get_disk_size(path):
     return int(size)
 
 
-def get_disk_backing_file(path):
+def get_disk_backing_file(path, basename=True):
     """Get the backing file of a disk image
 
     :param path: Path to the disk image
     :returns: a path to the image's backing store
     """
     backing_file = images.qemu_img_info(path).backing_file
-    if backing_file:
+    if backing_file and basename:
         backing_file = os.path.basename(backing_file)
 
     return backing_file
@@ -372,16 +489,19 @@ def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
     # NOTE(markmc): ISO is just raw to qemu-img
     if dest_fmt == 'iso':
         dest_fmt = 'raw'
-    qemu_img_cmd = ('qemu-img',
-                    'convert',
-                    '-f',
-                    source_fmt,
-                    '-O',
-                    dest_fmt,
-                    '-s',
-                    snapshot_name,
-                    disk_path,
-                    out_path)
+
+    qemu_img_cmd = ('qemu-img', 'convert', '-f', source_fmt, '-O', dest_fmt)
+
+    # Conditionally enable compression of snapshots.
+    if CONF.libvirt_snapshot_compression and dest_fmt == "qcow2":
+        qemu_img_cmd += ('-c',)
+
+    # When snapshot name is omitted we do a basic convert, which
+    # is used by live snapshots.
+    if snapshot_name is not None:
+        qemu_img_cmd += ('-s', snapshot_name)
+
+    qemu_img_cmd += (disk_path, out_path)
     execute(*qemu_img_cmd)
 
 
@@ -439,7 +559,7 @@ def find_disk(virt_dom):
 
 
 def get_disk_type(path):
-    """Retrieve disk type (raw, qcow2, lvm) for given file"""
+    """Retrieve disk type (raw, qcow2, lvm) for given file."""
     if path.startswith('/dev'):
         return 'lvm'
 
@@ -466,5 +586,23 @@ def get_fs_info(path):
 
 
 def fetch_image(context, target, image_id, user_id, project_id):
-    """Grab image"""
+    """Grab image."""
     images.fetch_to_raw(context, image_id, target, user_id, project_id)
+
+
+def get_instance_path(instance, forceold=False):
+    """Determine the correct path for instance storage.
+
+    This method determines the directory name for instance storage, while
+    handling the fact that we changed the naming style to something more
+    unique in the grizzly release.
+
+    :param instance: the instance we want a path for
+    :param forceold: force the use of the pre-grizzly format
+
+    :returns: a path to store information about that instance
+    """
+    pre_grizzly_name = os.path.join(CONF.instances_path, instance['name'])
+    if forceold or os.path.exists(pre_grizzly_name):
+        return pre_grizzly_name
+    return os.path.join(CONF.instances_path, instance['uuid'])

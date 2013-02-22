@@ -16,17 +16,21 @@
 #
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-from nova.compute import api as compute_api
+import time
+
+from oslo.config import cfg
+
+from nova import conductor
+from nova import context
 from nova.db import base
 from nova import exception
-from nova.network.api import refresh_cache
+from nova.network import api as network_api
 from nova.network import model as network_model
 from nova.network import quantumv2
-from nova.openstack.common import cfg
+from nova.network.security_group import openstack_driver
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import uuidutils
-
 
 quantum_opts = [
     cfg.StrOpt('quantum_url',
@@ -38,30 +42,54 @@ quantum_opts = [
     cfg.StrOpt('quantum_admin_username',
                help='username for connecting to quantum in admin context'),
     cfg.StrOpt('quantum_admin_password',
-               help='password for connecting to quantum in admin context'),
+               help='password for connecting to quantum in admin context',
+               secret=True),
     cfg.StrOpt('quantum_admin_tenant_name',
                help='tenant name for connecting to quantum in admin context'),
+    cfg.StrOpt('quantum_region_name',
+               help='region name for connecting to quantum in admin context'),
     cfg.StrOpt('quantum_admin_auth_url',
                default='http://localhost:5000/v2.0',
                help='auth url for connecting to quantum in admin context'),
+    cfg.BoolOpt('quantum_api_insecure',
+                default=False,
+                help='if set, ignore any SSL validation issues'),
     cfg.StrOpt('quantum_auth_strategy',
                default='keystone',
                help='auth strategy for connecting to '
                     'quantum in admin context'),
+    # TODO(berrange) temporary hack until Quantum can pass over the
+    # name of the OVS bridge it is configured with
+    cfg.StrOpt('quantum_ovs_bridge',
+               default='br-int',
+               help='Name of Integration Bridge used by Open vSwitch'),
+    cfg.IntOpt('quantum_extension_sync_interval',
+                default=600,
+                help='Number of seconds before querying quantum for'
+                     ' extensions'),
     ]
 
 CONF = cfg.CONF
 CONF.register_opts(quantum_opts)
-CONF.import_opt('default_floating_pool', 'nova.network.manager')
+CONF.import_opt('default_floating_pool', 'nova.network.floating_ips')
 LOG = logging.getLogger(__name__)
 
 NET_EXTERNAL = 'router:external'
+
+refresh_cache = network_api.refresh_cache
+update_instance_info_cache = network_api.update_instance_cache_with_nw_info
 
 
 class API(base.Base):
     """API for interacting with the quantum 2.x API."""
 
-    security_group_api = compute_api.SecurityGroupAPI()
+    conductor_api = conductor.API()
+    security_group_api = openstack_driver.get_openstack_security_group_driver()
+
+    def __init__(self):
+        super(API, self).__init__()
+        self.last_quantum_extension_sync = None
+        self.extensions = {}
 
     def setup_networks_on_host(self, context, instance, host=None,
                                teardown=False):
@@ -96,7 +124,26 @@ class API(base.Base):
         return nets
 
     def allocate_for_instance(self, context, instance, **kwargs):
-        """Allocate all network resources for the instance."""
+        """Allocate network resources for the instance.
+
+        TODO(someone): document the rest of these parameters.
+
+        :param macs: None or a set of MAC addresses that the instance
+            should use. macs is supplied by the hypervisor driver (contrast
+            with requested_networks which is user supplied).
+            NB: QuantumV2 currently assigns hypervisor supplied MAC addresses
+            to arbitrary networks, which requires openflow switches to
+            function correctly if more than one network is being used with
+            the bare metal hypervisor (which is the only one known to limit
+            MAC addresses).
+        """
+        hypervisor_macs = kwargs.get('macs', None)
+        available_macs = None
+        if hypervisor_macs is not None:
+            # Make a copy we can mutate: records macs that have not been used
+            # to create a port on a network. If we find a mac with a
+            # pre-allocated port we also remove it from this set.
+            available_macs = set(hypervisor_macs)
         quantum = quantumv2.get_client(context)
         LOG.debug(_('allocate_for_instance() for %s'),
                   instance['display_name'])
@@ -111,7 +158,17 @@ class API(base.Base):
         if requested_networks:
             for network_id, fixed_ip, port_id in requested_networks:
                 if port_id:
-                    port = quantum.show_port(port_id).get('port')
+                    port = quantum.show_port(port_id)['port']
+                    if hypervisor_macs is not None:
+                        if port['mac_address'] not in hypervisor_macs:
+                            raise exception.PortNotUsable(port_id=port_id,
+                                instance=instance['display_name'])
+                        else:
+                            # Don't try to use this MAC if we need to create a
+                            # port on the fly later. Identical MACs may be
+                            # configured by users into multiple ports so we
+                            # discard rather than popping.
+                            available_macs.discard(port['mac_address'])
                     network_id = port['network_id']
                     ports[network_id] = port
                 elif fixed_ip:
@@ -120,10 +177,55 @@ class API(base.Base):
 
         nets = self._get_available_networks(context, instance['project_id'],
                                             net_ids)
+        security_groups = kwargs.get('security_groups', [])
+        security_group_ids = []
+
+        # TODO(arosen) Should optimize more to do direct query for security
+        # group if len(security_groups) == 1
+        if len(security_groups):
+            search_opts = {'tenant_id': instance['project_id']}
+            user_security_groups = quantum.list_security_groups(
+                **search_opts).get('security_groups')
+
+        for security_group in security_groups:
+            name_match = None
+            uuid_match = None
+            for user_security_group in user_security_groups:
+                if user_security_group['name'] == security_group:
+                    if name_match:
+                        msg = (_("Multiple security groups found matching"
+                                 " '%s'. Use an ID to be more specific."),
+                                 security_group)
+                        raise exception.NoUniqueMatch(msg)
+                    name_match = user_security_group['id']
+                if user_security_group['id'] == security_group:
+                    uuid_match = user_security_group['id']
+
+            # If a user names the security group the same as
+            # another's security groups uuid, the name takes priority.
+            if not name_match and not uuid_match:
+                raise exception.SecurityGroupNotFound(
+                    security_group_id=security_group)
+                security_group_ids.append(name_match)
+            elif name_match:
+                security_group_ids.append(name_match)
+            elif uuid_match:
+                security_group_ids.append(uuid_match)
 
         touched_port_ids = []
         created_port_ids = []
         for network in nets:
+            # If security groups are requested on an instance then the
+            # network must has a subnet associated with it. Some plugins
+            # implement the port-security extension which requires
+            # 'port_security_enabled' to be True for security groups.
+            # That is why True is returned if 'port_security_enabled'
+            # is not found.
+            if (security_groups and not (
+                    network['subnets']
+                    and network.get('port_security_enabled', True))):
+
+                raise exception.SecurityGroupCannotBeApplied()
             network_id = network['id']
             zone = 'compute:%s' % instance['availability_zone']
             port_req_body = {'port': {'device_id': instance['uuid'],
@@ -140,6 +242,18 @@ class API(base.Base):
                     port_req_body['port']['network_id'] = network_id
                     port_req_body['port']['admin_state_up'] = True
                     port_req_body['port']['tenant_id'] = instance['project_id']
+                    if security_group_ids:
+                        port_req_body['port']['security_groups'] = (
+                            security_group_ids)
+                    if available_macs is not None:
+                        if not available_macs:
+                            raise exception.PortNotFree(
+                                instance=instance['display_name'])
+                        mac_address = available_macs.pop()
+                        port_req_body['port']['mac_address'] = mac_address
+
+                    self._populate_quantum_extension_values(instance,
+                                                            port_req_body)
                     created_port_ids.append(
                         quantum.create_port(port_req_body)['port']['id'])
             except Exception:
@@ -163,7 +277,25 @@ class API(base.Base):
         self.trigger_security_group_members_refresh(context, instance)
         self.trigger_instance_add_security_group_refresh(context, instance)
 
-        return self.get_instance_nw_info(context, instance, networks=nets)
+        return self.get_instance_nw_info(context, instance, networks=nets,
+                conductor_api=kwargs.get('conductor_api'))
+
+    def _refresh_quantum_extensions_cache(self):
+        if (not self.last_quantum_extension_sync or
+            ((time.time() - self.last_quantum_extension_sync)
+             >= CONF.quantum_extension_sync_interval)):
+            quantum = quantumv2.get_client(context.get_admin_context())
+            extensions_list = quantum.list_extensions()['extensions']
+            self.last_quantum_extension_sync = time.time()
+            self.extensions.clear()
+            self.extensions = dict((ext['name'], ext)
+                                   for ext in extensions_list)
+
+    def _populate_quantum_extension_values(self, instance, port_req_body):
+        self._refresh_quantum_extensions_cache()
+        if 'nvp-qos' in self.extensions:
+            rxtx_factor = instance['instance_type'].get('rxtx_factor')
+            port_req_body['port']['rxtx_factor'] = rxtx_factor
 
     def deallocate_for_instance(self, context, instance, **kwargs):
         """Deallocate all network resources related to the instance."""
@@ -181,9 +313,39 @@ class API(base.Base):
         self.trigger_security_group_members_refresh(context, instance)
         self.trigger_instance_remove_security_group_refresh(context, instance)
 
-    @refresh_cache
-    def get_instance_nw_info(self, context, instance, networks=None):
-        return self._get_instance_nw_info(context, instance, networks)
+    def allocate_port_for_instance(self, context, instance, port_id,
+                                   network_id=None, requested_ip=None,
+                                   conductor_api=None):
+        return self.allocate_for_instance(context, instance,
+                requested_networks=[(network_id, requested_ip, port_id)],
+                conductor_api=conductor_api)
+
+    def deallocate_port_for_instance(self, context, instance, port_id,
+                                     conductor_api=None):
+        try:
+            quantumv2.get_client(context).delete_port(port_id)
+        except Exception as ex:
+            LOG.exception(_("Failed to delete quantum port %(port_id)s ") %
+                          locals())
+
+        self.trigger_security_group_members_refresh(context, instance)
+        self.trigger_instance_remove_security_group_refresh(context, instance)
+
+        return self.get_instance_nw_info(context, instance,
+                                         conductor_api=conductor_api)
+
+    def list_ports(self, context, **search_opts):
+        return quantumv2.get_client(context).list_ports(**search_opts)
+
+    def show_port(self, context, port_id):
+        return quantumv2.get_client(context).show_port(port_id)
+
+    def get_instance_nw_info(self, context, instance, networks=None,
+            conductor_api=None):
+        result = self._get_instance_nw_info(context, instance, networks)
+        update_instance_info_cache(self, context, instance, result,
+                                   conductor_api)
+        return result
 
     def _get_instance_nw_info(self, context, instance, networks=None):
         LOG.debug(_('get_instance_nw_info() for %s'),
@@ -191,13 +353,67 @@ class API(base.Base):
         nw_info = self._build_network_info_model(context, instance, networks)
         return network_model.NetworkInfo.hydrate(nw_info)
 
-    def add_fixed_ip_to_instance(self, context, instance, network_id):
+    def add_fixed_ip_to_instance(self, context, instance, network_id,
+                                 conductor_api=None):
         """Add a fixed ip to the instance from specified network."""
-        raise NotImplementedError()
+        search_opts = {'network_id': network_id}
+        data = quantumv2.get_client(context).list_subnets(**search_opts)
+        ipam_subnets = data.get('subnets', [])
+        if not ipam_subnets:
+            raise exception.NetworkNotFoundForInstance(
+                instance_id=instance['uuid'])
 
-    def remove_fixed_ip_from_instance(self, context, instance, address):
+        zone = 'compute:%s' % instance['availability_zone']
+        search_opts = {'device_id': instance['uuid'],
+                       'device_owner': zone,
+                       'network_id': network_id}
+        data = quantumv2.get_client(context).list_ports(**search_opts)
+        ports = data['ports']
+        for p in ports:
+            for subnet in ipam_subnets:
+                fixed_ips = [{'subnet_id': subnet['id']}]
+                port_req_body = {'port': {'fixed_ips': fixed_ips}}
+                try:
+                    quantumv2.get_client(context).update_port(p['id'],
+                                                              port_req_body)
+                    return
+                except Exception as ex:
+                    msg = _("Unable to update port %(portid)s on subnet "
+                            "%(subnet_id)s with failure: %(exception)s")
+                    LOG.debug(msg, {'portid': p['id'],
+                                    'subnet_id': subnet['id'],
+                                    'exception': ex})
+
+        raise exception.NetworkNotFoundForInstance(
+                instance_id=instance['uuid'])
+
+    def remove_fixed_ip_from_instance(self, context, instance, address,
+                                      conductor_api=None):
         """Remove a fixed ip from the instance."""
-        raise NotImplementedError()
+        zone = 'compute:%s' % instance['availability_zone']
+        search_opts = {'device_id': instance['uuid'],
+                       'device_owner': zone,
+                       'fixed_ips': 'ip_address=%s' % address}
+        data = quantumv2.get_client(context).list_ports(**search_opts)
+        ports = data['ports']
+        for p in ports:
+            fixed_ips = p['fixed_ips']
+            new_fixed_ips = []
+            for fixed_ip in fixed_ips:
+                if fixed_ip['ip_address'] != address:
+                    new_fixed_ips.append(fixed_ip)
+            port_req_body = {'port': {'fixed_ips': new_fixed_ips}}
+            try:
+                quantumv2.get_client(context).update_port(p['id'],
+                                                          port_req_body)
+            except Exception as ex:
+                msg = _("Unable to update port %(portid)s with"
+                        " failure: %(exception)s")
+                LOG.debug(msg, {'portid': p['id'], 'exception': ex})
+            return
+
+        raise exception.FixedIpNotFoundForSpecificInstance(
+                instance_uuid=instance['uuid'], ip=address)
 
     def validate_networks(self, context, requested_networks):
         """Validate that the tenant can use the requested networks."""
@@ -262,27 +478,25 @@ class API(base.Base):
                                                     instance_ref):
         admin_context = context.elevated()
         for group in instance_ref['security_groups']:
-            self.security_group_api.trigger_handler(
-                'instance_add_security_group', context, instance_ref,
-                 group['name'])
+            self.conductor_api.security_groups_trigger_handler(context,
+                'instance_add_security_group', instance_ref, group['name'])
 
     def trigger_instance_remove_security_group_refresh(self, context,
                                                        instance_ref):
         admin_context = context.elevated()
         for group in instance_ref['security_groups']:
-            self.security_group_api.trigger_handler(
-                'instance_remove_security_group', context, instance_ref,
-                 group['name'])
+            self.conductor_api.security_groups_trigger_handler(context,
+                'instance_remove_security_group', instance_ref, group['name'])
 
     def trigger_security_group_members_refresh(self, context, instance_ref):
 
         admin_context = context.elevated()
         group_ids = [group['id'] for group in instance_ref['security_groups']]
 
-        self.security_group_api.trigger_members_refresh(admin_context,
-                                                        group_ids)
-        self.security_group_api.trigger_handler('security_group_members',
-                                                admin_context, group_ids)
+        self.conductor_api.security_groups_trigger_members_refresh(
+            admin_context, group_ids)
+        self.conductor_api.security_groups_trigger_handler(admin_context,
+            'security_group_members', group_ids)
 
     def _get_port_id_by_fixed_address(self, client,
                                       instance, address):
@@ -321,11 +535,16 @@ class API(base.Base):
 
     def get_all(self, context):
         client = quantumv2.get_client(context)
-        return client.list_networks()
+        networks = client.list_networks().get('networks') or {}
+        for network in networks:
+            network['label'] = network['name']
+        return networks
 
     def get(self, context, network_uuid):
         client = quantumv2.get_client(context)
-        return client.show_network(network_uuid)
+        network = client.show_network(network_uuid).get('network') or {}
+        network['label'] = network['name']
+        return network
 
     def delete(self, context, network_uuid):
         raise NotImplementedError()
@@ -427,7 +646,7 @@ class API(base.Base):
         return []
 
     def get_instance_id_by_floating_address(self, context, address):
-        """Returns the instance id a floating ip's fixed ip is allocated to"""
+        """Returns the instance id a floating ip's fixed ip is allocated to."""
         client = quantumv2.get_client(context)
         fip = self._get_floating_ip_by_address(client, address)
         if not fip['port_id']:
@@ -473,7 +692,7 @@ class API(base.Base):
         return fip['floatingip']['floating_ip_address']
 
     def _get_floating_ip_by_address(self, client, address):
-        """Get floatingip from floating ip address"""
+        """Get floatingip from floating ip address."""
         data = client.list_floatingips(floating_ip_address=address)
         fips = data['floatingips']
         if len(fips) == 0:
@@ -515,13 +734,13 @@ class API(base.Base):
         client.update_floatingip(fip['id'], {'floatingip': {'port_id': None}})
 
     def migrate_instance_start(self, context, instance, migration):
-        """Start to migrate the network of an instance"""
+        """Start to migrate the network of an instance."""
         # NOTE(wenjianhn): just pass to make migrate instance doesn't
         # raise for now.
         pass
 
     def migrate_instance_finish(self, context, instance, migration):
-        """Finish migrating the network of an instance"""
+        """Finish migrating the network of an instance."""
         # NOTE(wenjianhn): just pass to make migrate instance doesn't
         # raise for now.
         pass
@@ -536,7 +755,7 @@ class API(base.Base):
         data = quantumv2.get_client(context,
                                     admin=True).list_ports(**search_opts)
         ports = data.get('ports', [])
-        if not networks:
+        if networks is None:
             networks = self._get_available_networks(context,
                                                     instance['project_id'])
         else:
@@ -564,19 +783,43 @@ class API(base.Base):
                 subnet['ips'] = [fixed_ip for fixed_ip in network_IPs
                                  if fixed_ip.is_in_subnet(subnet)]
 
+            bridge = None
+            ovs_interfaceid = None
+            # Network model metadata
+            should_create_bridge = None
+            vif_type = port.get('binding:vif_type')
+            # TODO(berrange) Quantum should pass the bridge name
+            # in another binding metadata field
+            if vif_type == network_model.VIF_TYPE_OVS:
+                bridge = CONF.quantum_ovs_bridge
+                ovs_interfaceid = port['id']
+            elif vif_type == network_model.VIF_TYPE_BRIDGE:
+                bridge = "brq" + port['network_id']
+                should_create_bridge = True
+
+            if bridge is not None:
+                bridge = bridge[:network_model.NIC_NAME_LEN]
+
+            devname = "tap" + port['id']
+            devname = devname[:network_model.NIC_NAME_LEN]
+
             network = network_model.Network(
                 id=port['network_id'],
-                bridge='',  # Quantum ignores this field
+                bridge=bridge,
                 injected=CONF.flat_injected,
                 label=network_name,
                 tenant_id=net['tenant_id']
             )
             network['subnets'] = subnets
+            if should_create_bridge is not None:
+                network['should_create_bridge'] = should_create_bridge
             nw_info.append(network_model.VIF(
                 id=port['id'],
                 address=port['mac_address'],
                 network=network,
-                type=port.get('binding:vif_type')))
+                type=port.get('binding:vif_type'),
+                ovs_interfaceid=ovs_interfaceid,
+                devname=devname))
         return nw_info
 
     def _get_subnets_from_port(self, context, port):

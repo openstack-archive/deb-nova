@@ -18,13 +18,14 @@
 
 import datetime
 
+from oslo.config import cfg
+
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
 from nova.compute import utils as compute_utils
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import cfg
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 from nova.openstack.common import timeutils
@@ -176,7 +177,7 @@ class EC2ValidateTestCase(test.TestCase):
 
 
 class EC2TimestampValidationTestCase(test.TestCase):
-    """Test case for EC2 request timestamp validation"""
+    """Test case for EC2 request timestamp validation."""
 
     def test_validate_ec2_timestamp_valid(self):
         params = {'Timestamp': '2011-04-22T11:29:49Z'}

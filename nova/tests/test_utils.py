@@ -16,19 +16,25 @@
 
 import __builtin__
 import datetime
+import functools
 import hashlib
+import importlib
 import os
 import os.path
 import StringIO
 import tempfile
 
 import mox
+import netaddr
+from oslo.config import cfg
 
 import nova
 from nova import exception
 from nova.openstack.common import timeutils
 from nova import test
 from nova import utils
+
+CONF = cfg.CONF
 
 
 class ByteConversionTest(test.TestCase):
@@ -432,11 +438,6 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertRaises(exception.FileNotFound,
                           utils.read_file_as_root, 'bad')
 
-    def test_strcmp_const_time(self):
-        self.assertTrue(utils.strcmp_const_time('abc123', 'abc123'))
-        self.assertFalse(utils.strcmp_const_time('a', 'aaaaa'))
-        self.assertFalse(utils.strcmp_const_time('ABC123', 'abc123'))
-
     def test_temporary_chown(self):
         def fake_execute(*args, **kwargs):
             if args[0] == 'chown':
@@ -447,6 +448,39 @@ class GenericUtilsTestCase(test.TestCase):
             with utils.temporary_chown(f.name, owner_uid=2):
                 self.assertEqual(fake_execute.uid, 2)
             self.assertEqual(fake_execute.uid, os.getuid())
+
+    def test_safe_parse_xml(self):
+
+        normal_body = ("""
+                 <?xml version="1.0" ?><foo>
+                    <bar>
+                        <v1>hey</v1>
+                        <v2>there</v2>
+                    </bar>
+                </foo>""").strip()
+
+        def killer_body():
+            return (("""<!DOCTYPE x [
+                    <!ENTITY a "%(a)s">
+                    <!ENTITY b "%(b)s">
+                    <!ENTITY c "%(c)s">]>
+                <foo>
+                    <bar>
+                        <v1>%(d)s</v1>
+                    </bar>
+                </foo>""") % {
+                'a': 'A' * 10,
+                'b': '&a;' * 10,
+                'c': '&b;' * 10,
+                'd': '&c;' * 9999,
+            }).strip()
+
+        dom = utils.safe_minidom_parse_string(normal_body)
+        self.assertEqual(normal_body, str(dom.toxml()))
+
+        self.assertRaises(ValueError,
+                          utils.safe_minidom_parse_string,
+                          killer_body())
 
     def test_xhtml_escape(self):
         self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
@@ -462,6 +496,70 @@ class GenericUtilsTestCase(test.TestCase):
         h1 = utils.hash_file(flo)
         h2 = hashlib.sha1(data).hexdigest()
         self.assertEquals(h1, h2)
+
+    def test_is_valid_boolstr(self):
+        self.assertTrue(utils.is_valid_boolstr('true'))
+        self.assertTrue(utils.is_valid_boolstr('false'))
+        self.assertTrue(utils.is_valid_boolstr('yes'))
+        self.assertTrue(utils.is_valid_boolstr('no'))
+        self.assertTrue(utils.is_valid_boolstr('y'))
+        self.assertTrue(utils.is_valid_boolstr('n'))
+        self.assertTrue(utils.is_valid_boolstr('1'))
+        self.assertTrue(utils.is_valid_boolstr('0'))
+
+        self.assertFalse(utils.is_valid_boolstr('maybe'))
+        self.assertFalse(utils.is_valid_boolstr('only on tuesdays'))
+
+    def test_is_valid_ipv4(self):
+        self.assertTrue(utils.is_valid_ipv4('127.0.0.1'))
+        self.assertFalse(utils.is_valid_ipv4('::1'))
+        self.assertFalse(utils.is_valid_ipv4('bacon'))
+
+    def test_is_valid_ipv6(self):
+        self.assertTrue(utils.is_valid_ipv6("::1"))
+        self.assertTrue(utils.is_valid_ipv6(
+                            "abcd:ef01:2345:6789:abcd:ef01:192.168.254.254"))
+        self.assertTrue(utils.is_valid_ipv6(
+                                    "0000:0000:0000:0000:0000:0000:0000:0001"))
+        self.assertFalse(utils.is_valid_ipv6("foo"))
+        self.assertFalse(utils.is_valid_ipv6("127.0.0.1"))
+
+    def test_is_valid_ipv6_cidr(self):
+        self.assertTrue(utils.is_valid_ipv6_cidr("2600::/64"))
+        self.assertTrue(utils.is_valid_ipv6_cidr(
+                "abcd:ef01:2345:6789:abcd:ef01:192.168.254.254/48"))
+        self.assertTrue(utils.is_valid_ipv6_cidr(
+                "0000:0000:0000:0000:0000:0000:0000:0001/32"))
+        self.assertTrue(utils.is_valid_ipv6_cidr(
+                "0000:0000:0000:0000:0000:0000:0000:0001"))
+        self.assertFalse(utils.is_valid_ipv6_cidr("foo"))
+        self.assertFalse(utils.is_valid_ipv6_cidr("127.0.0.1"))
+
+    def test_get_shortened_ipv6(self):
+        self.assertEquals("abcd:ef01:2345:6789:abcd:ef01:c0a8:fefe",
+                          utils.get_shortened_ipv6(
+                            "abcd:ef01:2345:6789:abcd:ef01:192.168.254.254"))
+        self.assertEquals("::1", utils.get_shortened_ipv6(
+                                    "0000:0000:0000:0000:0000:0000:0000:0001"))
+        self.assertEquals("caca::caca:0:babe:201:102",
+                          utils.get_shortened_ipv6(
+                                    "caca:0000:0000:caca:0000:babe:0201:0102"))
+        self.assertRaises(netaddr.AddrFormatError, utils.get_shortened_ipv6,
+                          "127.0.0.1")
+        self.assertRaises(netaddr.AddrFormatError, utils.get_shortened_ipv6,
+                          "failure")
+
+    def test_get_shortened_ipv6_cidr(self):
+        self.assertEquals("2600::/64", utils.get_shortened_ipv6_cidr(
+                "2600:0000:0000:0000:0000:0000:0000:0000/64"))
+        self.assertEquals("2600::/64", utils.get_shortened_ipv6_cidr(
+                "2600::1/64"))
+        self.assertRaises(netaddr.AddrFormatError,
+                          utils.get_shortened_ipv6_cidr,
+                          "127.0.0.1")
+        self.assertRaises(netaddr.AddrFormatError,
+                          utils.get_shortened_ipv6_cidr,
+                          "failure")
 
 
 class MonkeyPatchTestCase(test.TestCase):
@@ -507,6 +605,29 @@ class MonkeyPatchTestCase(test.TestCase):
             in nova.tests.monkey_patch_example.CALLED_FUNCTION)
         self.assertFalse(package_b + 'ExampleClassB.example_method_add'
             in nova.tests.monkey_patch_example.CALLED_FUNCTION)
+
+
+class MonkeyPatchDefaultTestCase(test.TestCase):
+    """Unit test for default monkey_patch_modules value."""
+
+    def setUp(self):
+        super(MonkeyPatchDefaultTestCase, self).setUp()
+        self.flags(
+            monkey_patch=True)
+
+    def test_monkey_patch_default_mod(self):
+        # monkey_patch_modules is defined to be
+        #    <module_to_patch>:<decorator_to_patch_with>
+        #  Here we check that both parts of the default values are
+        # valid
+        for module in CONF.monkey_patch_modules:
+            m = module.split(':', 1)
+            # Check we can import the module to be patched
+            importlib.import_module(m[0])
+            # check the decorator is valid
+            decorator_name = m[1].rsplit('.', 1)
+            decorator_module = importlib.import_module(decorator_name[0])
+            getattr(decorator_module, decorator_name[1])
 
 
 class AuditPeriodTest(test.TestCase):
@@ -674,7 +795,7 @@ class AuditPeriodTest(test.TestCase):
 
 
 class DiffDict(test.TestCase):
-    """Unit tests for diff_dict()"""
+    """Unit tests for diff_dict()."""
 
     def test_no_change(self):
         old = dict(a=1, b=2, c=3)
@@ -757,3 +878,184 @@ class LastBytesTestCase(test.TestCase):
         content = '1234567890'
         flo.write(content)
         self.assertEqual((content, 0), utils.last_bytes(flo, 1000))
+
+
+class IntLikeTestCase(test.TestCase):
+
+    def test_is_int_like(self):
+        self.assertTrue(utils.is_int_like(1))
+        self.assertTrue(utils.is_int_like("1"))
+        self.assertTrue(utils.is_int_like("514"))
+        self.assertTrue(utils.is_int_like("0"))
+
+        self.assertFalse(utils.is_int_like(1.1))
+        self.assertFalse(utils.is_int_like("1.1"))
+        self.assertFalse(utils.is_int_like("1.1.1"))
+        self.assertFalse(utils.is_int_like(None))
+        self.assertFalse(utils.is_int_like("0."))
+        self.assertFalse(utils.is_int_like("aaaaaa"))
+        self.assertFalse(utils.is_int_like("...."))
+        self.assertFalse(utils.is_int_like("1g"))
+        self.assertFalse(
+            utils.is_int_like("0cc3346e-9fef-4445-abe6-5d2b2690ec64"))
+        self.assertFalse(utils.is_int_like("a1"))
+
+
+class MetadataToDictTestCase(test.TestCase):
+    def test_metadata_to_dict(self):
+        self.assertEqual(utils.metadata_to_dict(
+                [{'key': 'foo1', 'value': 'bar'},
+                 {'key': 'foo2', 'value': 'baz'}]),
+                         {'foo1': 'bar', 'foo2': 'baz'})
+
+    def test_metadata_to_dict_empty(self):
+        self.assertEqual(utils.metadata_to_dict([]), {})
+
+
+class WrappedCodeTestCase(test.TestCase):
+    """Test the get_wrapped_function utility method."""
+
+    def _wrapper(self, function):
+        @functools.wraps(function)
+        def decorated_function(self, *args, **kwargs):
+            function(self, *args, **kwargs)
+        return decorated_function
+
+    def test_single_wrapped(self):
+        @self._wrapper
+        def wrapped(self, instance, red=None, blue=None):
+            pass
+
+        func = utils.get_wrapped_function(wrapped)
+        func_code = func.func_code
+        self.assertEqual(4, len(func_code.co_varnames))
+        self.assertTrue('self' in func_code.co_varnames)
+        self.assertTrue('instance' in func_code.co_varnames)
+        self.assertTrue('red' in func_code.co_varnames)
+        self.assertTrue('blue' in func_code.co_varnames)
+
+    def test_double_wrapped(self):
+        @self._wrapper
+        @self._wrapper
+        def wrapped(self, instance, red=None, blue=None):
+            pass
+
+        func = utils.get_wrapped_function(wrapped)
+        func_code = func.func_code
+        self.assertEqual(4, len(func_code.co_varnames))
+        self.assertTrue('self' in func_code.co_varnames)
+        self.assertTrue('instance' in func_code.co_varnames)
+        self.assertTrue('red' in func_code.co_varnames)
+        self.assertTrue('blue' in func_code.co_varnames)
+
+    def test_triple_wrapped(self):
+        @self._wrapper
+        @self._wrapper
+        @self._wrapper
+        def wrapped(self, instance, red=None, blue=None):
+            pass
+
+        func = utils.get_wrapped_function(wrapped)
+        func_code = func.func_code
+        self.assertEqual(4, len(func_code.co_varnames))
+        self.assertTrue('self' in func_code.co_varnames)
+        self.assertTrue('instance' in func_code.co_varnames)
+        self.assertTrue('red' in func_code.co_varnames)
+        self.assertTrue('blue' in func_code.co_varnames)
+
+
+class GetCallArgsTestCase(test.TestCase):
+    def _test_func(self, instance, red=None, blue=None):
+        pass
+
+    def test_all_kwargs(self):
+        args = ()
+        kwargs = {'instance': {'uuid': 1}, 'red': 3, 'blue': 4}
+        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
+        #implicit self counts as an arg
+        self.assertEqual(4, len(callargs))
+        self.assertTrue('instance' in callargs)
+        self.assertEqual({'uuid': 1}, callargs['instance'])
+        self.assertTrue('red' in callargs)
+        self.assertEqual(3, callargs['red'])
+        self.assertTrue('blue' in callargs)
+        self.assertEqual(4, callargs['blue'])
+
+    def test_all_args(self):
+        args = ({'uuid': 1}, 3, 4)
+        kwargs = {}
+        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
+        #implicit self counts as an arg
+        self.assertEqual(4, len(callargs))
+        self.assertTrue('instance' in callargs)
+        self.assertEqual({'uuid': 1}, callargs['instance'])
+        self.assertTrue('red' in callargs)
+        self.assertEqual(3, callargs['red'])
+        self.assertTrue('blue' in callargs)
+        self.assertEqual(4, callargs['blue'])
+
+    def test_mixed_args(self):
+        args = ({'uuid': 1}, 3)
+        kwargs = {'blue': 4}
+        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
+        #implicit self counts as an arg
+        self.assertEqual(4, len(callargs))
+        self.assertTrue('instance' in callargs)
+        self.assertEqual({'uuid': 1}, callargs['instance'])
+        self.assertTrue('red' in callargs)
+        self.assertEqual(3, callargs['red'])
+        self.assertTrue('blue' in callargs)
+        self.assertEqual(4, callargs['blue'])
+
+    def test_partial_kwargs(self):
+        args = ()
+        kwargs = {'instance': {'uuid': 1}, 'red': 3}
+        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
+        #implicit self counts as an arg
+        self.assertEqual(4, len(callargs))
+        self.assertTrue('instance' in callargs)
+        self.assertEqual({'uuid': 1}, callargs['instance'])
+        self.assertTrue('red' in callargs)
+        self.assertEqual(3, callargs['red'])
+        self.assertTrue('blue' in callargs)
+        self.assertEqual(None, callargs['blue'])
+
+    def test_partial_args(self):
+        args = ({'uuid': 1}, 3)
+        kwargs = {}
+        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
+        #implicit self counts as an arg
+        self.assertEqual(4, len(callargs))
+        self.assertTrue('instance' in callargs)
+        self.assertEqual({'uuid': 1}, callargs['instance'])
+        self.assertTrue('red' in callargs)
+        self.assertEqual(3, callargs['red'])
+        self.assertTrue('blue' in callargs)
+        self.assertEqual(None, callargs['blue'])
+
+    def test_partial_mixed_args(self):
+        args = (3,)
+        kwargs = {'instance': {'uuid': 1}}
+        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
+        self.assertEqual(4, len(callargs))
+        self.assertTrue('instance' in callargs)
+        self.assertEqual({'uuid': 1}, callargs['instance'])
+        self.assertTrue('red' in callargs)
+        self.assertEqual(3, callargs['red'])
+        self.assertTrue('blue' in callargs)
+        self.assertEqual(None, callargs['blue'])
+
+
+class StringLengthTestCase(test.TestCase):
+    def test_check_string_length(self):
+        self.assertIsNone(utils.check_string_length(
+                          'test', 'name', max_length=255))
+        self.assertRaises(exception.InvalidInput,
+                          utils.check_string_length,
+                          11, 'name', max_length=255)
+        self.assertRaises(exception.InvalidInput,
+                          utils.check_string_length,
+                          '', 'name', min_length=1)
+        self.assertRaises(exception.InvalidInput,
+                          utils.check_string_length,
+                          'a' * 256, 'name', max_length=255)

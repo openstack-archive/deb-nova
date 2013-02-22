@@ -19,13 +19,14 @@ Cells Service Manager
 import datetime
 import time
 
+from oslo.config import cfg
+
 from nova.cells import messaging
 from nova.cells import state as cells_state
 from nova.cells import utils as cells_utils
 from nova import context
 from nova import exception
 from nova import manager
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -65,7 +66,7 @@ class CellsManager(manager.Manager):
 
     Scheduling requests get passed to the scheduler class.
     """
-    RPC_API_VERSION = '1.0'
+    RPC_API_VERSION = '1.4'
 
     def __init__(self, *args, **kwargs):
         # Mostly for tests.
@@ -186,6 +187,10 @@ class CellsManager(manager.Manager):
         self.msg_runner.schedule_run_instance(ctxt, our_cell,
                                               host_sched_kwargs)
 
+    def get_cell_info_for_neighbors(self, _ctxt):
+        """Return cell information for our neighbor cells."""
+        return self.state_manager.get_cell_info_for_neighbors()
+
     def run_compute_api_method(self, ctxt, cell_name, method_info, call):
         """Call a compute API method in a specific cell."""
         response = self.msg_runner.run_compute_api_method(ctxt,
@@ -218,3 +223,112 @@ class CellsManager(manager.Manager):
     def bw_usage_update_at_top(self, ctxt, bw_update_info):
         """Update bandwidth usage at top level cell."""
         self.msg_runner.bw_usage_update_at_top(ctxt, bw_update_info)
+
+    def sync_instances(self, ctxt, project_id, updated_since, deleted):
+        """Force a sync of all instances, potentially by project_id,
+        and potentially since a certain date/time.
+        """
+        self.msg_runner.sync_instances(ctxt, project_id, updated_since,
+                                       deleted)
+
+    def service_get_all(self, ctxt, filters):
+        """Return services in this cell and in all child cells."""
+        responses = self.msg_runner.service_get_all(ctxt, filters)
+        ret_services = []
+        # 1 response per cell.  Each response is a list of services.
+        for response in responses:
+            services = response.value_or_raise()
+            for service in services:
+                cells_utils.add_cell_to_service(service, response.cell_name)
+                ret_services.append(service)
+        return ret_services
+
+    def service_get_by_compute_host(self, ctxt, host_name):
+        """Return a service entry for a compute host in a certain cell."""
+        cell_name, host_name = cells_utils.split_cell_and_item(host_name)
+        response = self.msg_runner.service_get_by_compute_host(ctxt,
+                                                               cell_name,
+                                                               host_name)
+        service = response.value_or_raise()
+        cells_utils.add_cell_to_service(service, response.cell_name)
+        return service
+
+    def proxy_rpc_to_manager(self, ctxt, topic, rpc_message, call, timeout):
+        """Proxy an RPC message as-is to a manager."""
+        compute_topic = CONF.compute_topic
+        cell_and_host = topic[len(compute_topic) + 1:]
+        cell_name, host_name = cells_utils.split_cell_and_item(cell_and_host)
+        response = self.msg_runner.proxy_rpc_to_manager(ctxt, cell_name,
+                host_name, topic, rpc_message, call, timeout)
+        return response.value_or_raise()
+
+    def task_log_get_all(self, ctxt, task_name, period_beginning,
+                         period_ending, host=None, state=None):
+        """Get task logs from the DB from all cells or a particular
+        cell.
+
+        If 'host' is not None, host will be of the format 'cell!name@host',
+        with '@host' being optional.  The query will be directed to the
+        appropriate cell and return all task logs, or task logs matching
+        the host if specified.
+
+        'state' also may be None.  If it's not, filter by the state as well.
+        """
+        if host is None:
+            cell_name = None
+        else:
+            result = cells_utils.split_cell_and_item(host)
+            cell_name = result[0]
+            if len(result) > 1:
+                host = result[1]
+            else:
+                host = None
+        responses = self.msg_runner.task_log_get_all(ctxt, cell_name,
+                task_name, period_beginning, period_ending,
+                host=host, state=state)
+        # 1 response per cell.  Each response is a list of task log
+        # entries.
+        ret_task_logs = []
+        for response in responses:
+            task_logs = response.value_or_raise()
+            for task_log in task_logs:
+                cells_utils.add_cell_to_task_log(task_log,
+                                                 response.cell_name)
+                ret_task_logs.append(task_log)
+        return ret_task_logs
+
+    def compute_node_get(self, ctxt, compute_id):
+        """Get a compute node by ID in a specific cell."""
+        cell_name, compute_id = cells_utils.split_cell_and_item(
+                compute_id)
+        response = self.msg_runner.compute_node_get(ctxt, cell_name,
+                                                    compute_id)
+        node = response.value_or_raise()
+        cells_utils.add_cell_to_compute_node(node, cell_name)
+        return node
+
+    def compute_node_get_all(self, ctxt, hypervisor_match=None):
+        """Return list of compute nodes in all cells."""
+        responses = self.msg_runner.compute_node_get_all(ctxt,
+                hypervisor_match=hypervisor_match)
+        # 1 response per cell.  Each response is a list of compute_node
+        # entries.
+        ret_nodes = []
+        for response in responses:
+            nodes = response.value_or_raise()
+            for node in nodes:
+                cells_utils.add_cell_to_compute_node(node,
+                                                     response.cell_name)
+                ret_nodes.append(node)
+        return ret_nodes
+
+    def compute_node_stats(self, ctxt):
+        """Return compute node stats totals from all cells."""
+        responses = self.msg_runner.compute_node_stats(ctxt)
+        totals = {}
+        for response in responses:
+            data = response.value_or_raise()
+            for key, val in data.iteritems():
+                totals.setdefault(key, 0)
+                totals[key] += val
+        return totals

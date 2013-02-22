@@ -12,9 +12,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Implementation of a fake volume API"""
+"""Implementation of a fake volume API."""
 
 import uuid
+
+from oslo.config import cfg
 
 from nova import exception
 from nova.openstack.common import log as logging
@@ -22,6 +24,10 @@ from nova.openstack.common import timeutils
 
 
 LOG = logging.getLogger(__name__)
+
+CONF = cfg.CONF
+CONF.import_opt('cinder_cross_az_attach',
+                'nova.volume.cinder')
 
 
 class fake_volume():
@@ -136,7 +142,6 @@ class API(object):
 
     def create_with_kwargs(self, context, **kwargs):
         volume_id = kwargs.get('volume_id', None)
-        print volume_id
         v = fake_volume(kwargs['size'],
                         kwargs['name'],
                         kwargs['description'],
@@ -145,7 +150,6 @@ class API(object):
                         None,
                         None,
                         None)
-        print v.vol['id']
         if kwargs.get('status', None) is not None:
             v.vol['status'] = kwargs['status']
         if kwargs['host'] is not None:
@@ -177,7 +181,7 @@ class API(object):
         LOG.info('deleting volume %s', volume['id'])
         self.volume_list = [v for v in self.volume_list if v != volume]
 
-    def check_attach(self, context, volume):
+    def check_attach(self, context, volume, instance=None):
         if volume['status'] != 'available':
             msg = _("status must be available")
             msg = "%s" % volume
@@ -185,6 +189,10 @@ class API(object):
         if volume['attach_status'] == 'attached':
             msg = _("already attached")
             raise exception.InvalidVolume(reason=msg)
+        if instance and not CONF.cinder_cross_az_attach:
+            if instance['availability_zone'] != volume['availability_zone']:
+                msg = _("Instance and volume not in same availability_zone")
+                raise exception.InvalidVolume(reason=msg)
 
     def check_detach(self, context, volume):
         if volume['status'] == "available":

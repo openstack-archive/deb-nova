@@ -27,6 +27,7 @@ import webob
 from nova import exception
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova import utils
 from nova import wsgi
 
 
@@ -150,7 +151,7 @@ class Request(webob.Request):
         Does not do any body introspection, only checks header
 
         """
-        if not "Content-Type" in self.headers:
+        if "Content-Type" not in self.headers:
             return None
 
         content_type = self.content_type
@@ -181,7 +182,7 @@ class ActionDispatcher(object):
 
 
 class TextDeserializer(ActionDispatcher):
-    """Default request body deserialization"""
+    """Default request body deserialization."""
 
     def deserialize(self, datastring, action='default'):
         return self.dispatch(datastring, action=action)
@@ -217,7 +218,7 @@ class XMLDeserializer(TextDeserializer):
         plurals = set(self.metadata.get('plurals', {}))
 
         try:
-            node = minidom.parseString(datastring).childNodes[0]
+            node = utils.safe_minidom_parse_string(datastring).childNodes[0]
             return {node.nodeName: self._from_xml_node(node, plurals)}
         except expat.ExpatError:
             msg = _("cannot understand XML")
@@ -245,7 +246,7 @@ class XMLDeserializer(TextDeserializer):
             return result
 
     def find_first_child_named_in_namespace(self, parent, namespace, name):
-        """Search a nodes children for the first child with a given name"""
+        """Search a nodes children for the first child with a given name."""
         for node in parent.childNodes:
             if (node.localName == name and
                 node.namespaceURI and
@@ -254,28 +255,28 @@ class XMLDeserializer(TextDeserializer):
         return None
 
     def find_first_child_named(self, parent, name):
-        """Search a nodes children for the first child with a given name"""
+        """Search a nodes children for the first child with a given name."""
         for node in parent.childNodes:
             if node.localName == name:
                 return node
         return None
 
     def find_children_named(self, parent, name):
-        """Return all of a nodes children who have the given name"""
+        """Return all of a nodes children who have the given name."""
         for node in parent.childNodes:
             if node.localName == name:
                 yield node
 
     def extract_text(self, node):
-        """Get the text field contained by the given node"""
-        if len(node.childNodes) == 1:
-            child = node.childNodes[0]
+        """Get the text field contained by the given node."""
+        ret_val = ""
+        for child in node.childNodes:
             if child.nodeType == child.TEXT_NODE:
-                return child.nodeValue
-        return ""
+                ret_val += child.nodeValue
+        return ret_val
 
     def extract_elements(self, node):
-        """Get only Element type childs from node"""
+        """Get only Element type childs from node."""
         elements = []
         for child in node.childNodes:
             if child.nodeType == child.ELEMENT_NODE:
@@ -283,7 +284,7 @@ class XMLDeserializer(TextDeserializer):
         return elements
 
     def find_attribute_or_element(self, parent, name):
-        """Get an attribute value; fallback to an element if not found"""
+        """Get an attribute value; fallback to an element if not found."""
         if parent.hasAttribute(name):
             return parent.getAttribute(name)
 
@@ -300,7 +301,7 @@ class XMLDeserializer(TextDeserializer):
 class MetadataXMLDeserializer(XMLDeserializer):
 
     def extract_metadata(self, metadata_node):
-        """Marshal the metadata attribute of a parsed request"""
+        """Marshal the metadata attribute of a parsed request."""
         metadata = {}
         if metadata_node is not None:
             for meta_node in self.find_children_named(metadata_node, "meta"):
@@ -310,7 +311,7 @@ class MetadataXMLDeserializer(XMLDeserializer):
 
 
 class DictSerializer(ActionDispatcher):
-    """Default request body serialization"""
+    """Default request body serialization."""
 
     def serialize(self, data, action='default'):
         return self.dispatch(data, action=action)
@@ -320,7 +321,7 @@ class DictSerializer(ActionDispatcher):
 
 
 class JSONDictSerializer(DictSerializer):
-    """Default JSON request body serialization"""
+    """Default JSON request body serialization."""
 
     def default(self, data):
         return jsonutils.dumps(data)
@@ -406,6 +407,8 @@ class XMLDictSerializer(DictSerializer):
                 if k in attrs:
                     result.setAttribute(k, str(v))
                 else:
+                    if k == "deleted":
+                        v = str(bool(v))
                     node = self._to_xml_node(doc, metadata, k, v)
                     result.appendChild(node)
         else:
@@ -631,7 +634,7 @@ def action_peek_json(body):
 def action_peek_xml(body):
     """Determine action to invoke."""
 
-    dom = minidom.parseString(body)
+    dom = utils.safe_minidom_parse_string(body)
     action_node = dom.childNodes[0]
 
     return action_node.tagName
@@ -919,6 +922,10 @@ class Resource(wsgi.Application):
             msg = _("Malformed request body")
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
+        if body:
+            LOG.info(_("Action: '%(action)s', body: %(body)s") % locals())
+        LOG.debug(_("Calling method %s") % meth)
+
         # Now, deserialize the request body...
         try:
             if content_type:
@@ -1176,10 +1183,18 @@ class Fault(webob.exc.HTTPException):
         # Replace the body with fault details.
         code = self.wrapped_exc.status_int
         fault_name = self._fault_names.get(code, "computeFault")
+        explanation = self.wrapped_exc.explanation
+        offset = explanation.find("Traceback")
+        if offset is not -1:
+            LOG.debug(_("API request failed, fault raised to the top of"
+                      " the stack. Detailed stacktrace %s") %
+                      explanation)
+            explanation = explanation[0:offset - 1]
+
         fault_data = {
             fault_name: {
                 'code': code,
-                'message': self.wrapped_exc.explanation}}
+                'message': explanation}}
         if code == 413:
             retry = self.wrapped_exc.headers.get('Retry-After', None)
             if retry:

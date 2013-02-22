@@ -20,31 +20,26 @@ import re
 import string
 import traceback
 
+from oslo.config import cfg
+
 from nova import block_device
 from nova.compute import instance_types
-from nova import db
 from nova import exception
 from nova.network import model as network_model
 from nova import notifications
-from nova.openstack.common import cfg
 from nova.openstack.common import log
 from nova.openstack.common.notifier import api as notifier_api
+from nova.openstack.common import timeutils
 from nova import utils
 from nova.virt import driver
 
 CONF = cfg.CONF
-CONF.import_opt('host', 'nova.config')
+CONF.import_opt('host', 'nova.netconf')
 LOG = log.getLogger(__name__)
 
 
-def metadata_to_dict(metadata):
-    result = {}
-    for item in metadata:
-        result[item['key']] = item['value']
-    return result
-
-
-def add_instance_fault_from_exc(context, instance_uuid, fault, exc_info=None):
+def add_instance_fault_from_exc(context, conductor,
+                                instance, fault, exc_info=None):
     """Adds the specified fault to the database."""
 
     code = 500
@@ -62,15 +57,56 @@ def add_instance_fault_from_exc(context, instance_uuid, fault, exc_info=None):
         details += '\n' + ''.join(traceback.format_tb(tb))
 
     values = {
-        'instance_uuid': instance_uuid,
+        'instance_uuid': instance['uuid'],
         'code': code,
         'message': unicode(message),
         'details': unicode(details),
+        'host': CONF.host
     }
-    db.instance_fault_create(context, values)
+    conductor.instance_fault_create(context, values)
 
 
-def get_device_name_for_instance(context, instance, device):
+def pack_action_start(context, instance_uuid, action_name):
+    values = {'action': action_name,
+              'instance_uuid': instance_uuid,
+              'request_id': context.request_id,
+              'user_id': context.user_id,
+              'start_time': context.timestamp}
+    return values
+
+
+def pack_action_finish(context, instance_uuid):
+    values = {'instance_uuid': instance_uuid,
+              'request_id': context.request_id,
+              'finish_time': timeutils.utcnow()}
+    return values
+
+
+def pack_action_event_start(context, instance_uuid, event_name):
+    values = {'event': event_name,
+              'instance_uuid': instance_uuid,
+              'request_id': context.request_id,
+              'start_time': timeutils.utcnow()}
+    return values
+
+
+def pack_action_event_finish(context, instance_uuid, event_name, exc_val=None,
+                             exc_tb=None):
+    values = {'event': event_name,
+              'instance_uuid': instance_uuid,
+              'request_id': context.request_id,
+              'finish_time': timeutils.utcnow()}
+    if exc_tb is None:
+        values['result'] = 'Success'
+    else:
+        values['result'] = 'Error'
+        values['message'] = str(exc_val)
+        values['traceback'] = ''.join(traceback.format_tb(exc_tb))
+
+    return values
+
+
+def get_device_name_for_instance(context, instance, bdms, device):
     """Validates (or generates) a device name for instance.
 
     If device is not set, it will generate a unique device appropriate
@@ -81,51 +117,57 @@ def get_device_name_for_instance(context, instance, device):
     appropriate format.
     """
     req_prefix = None
-    req_letters = None
+    req_letter = None
+
     if device:
         try:
-            req_prefix, req_letters = block_device.match_device(device)
+            req_prefix, req_letter = block_device.match_device(device)
         except (TypeError, AttributeError, ValueError):
             raise exception.InvalidDevicePath(path=device)
-    bdms = db.block_device_mapping_get_all_by_instance(context,
-                instance['uuid'])
+
     mappings = block_device.instance_block_mapping(instance, bdms)
+
     try:
         prefix = block_device.match_device(mappings['root'])[0]
     except (TypeError, AttributeError, ValueError):
         raise exception.InvalidDevicePath(path=mappings['root'])
+
     # NOTE(vish): remove this when xenapi is setting default_root_device
     if driver.compute_driver_matches('xenapi.XenAPIDriver'):
         prefix = '/dev/xvd'
+
     if req_prefix != prefix:
         LOG.debug(_("Using %(prefix)s instead of %(req_prefix)s") % locals())
-    letters_list = []
-    for _name, device in mappings.iteritems():
-        letter = block_device.strip_prefix(device)
+
+    used_letters = set()
+    for device_path in mappings.itervalues():
+        letter = block_device.strip_prefix(device_path)
         # NOTE(vish): delete numbers in case we have something like
         #             /dev/sda1
         letter = re.sub("\d+", "", letter)
-        letters_list.append(letter)
-    used_letters = set(letters_list)
+        used_letters.add(letter)
 
     # NOTE(vish): remove this when xenapi is properly setting
     #             default_ephemeral_device and default_swap_device
     if driver.compute_driver_matches('xenapi.XenAPIDriver'):
-        instance_type_id = instance['instance_type_id']
-        instance_type = instance_types.get_instance_type(instance_type_id)
+        instance_type = instance_types.extract_instance_type(instance)
         if instance_type['ephemeral_gb']:
-            used_letters.update('b')
+            used_letters.add('b')
+
         if instance_type['swap']:
-            used_letters.update('c')
+            used_letters.add('c')
 
-    if not req_letters:
-        req_letters = _get_unused_letters(used_letters)
-    if req_letters in used_letters:
+    if not req_letter:
+        req_letter = _get_unused_letter(used_letters)
+
+    if req_letter in used_letters:
         raise exception.DevicePathInUse(path=device)
-    return prefix + req_letters
+
+    device_name = prefix + req_letter
+    return device_name
 
 
-def _get_unused_letters(used_letters):
+def _get_unused_letter(used_letters):
     doubles = [first + second for second in string.ascii_lowercase
                for first in string.ascii_lowercase]
     all_letters = set(list(string.ascii_lowercase) + doubles)
@@ -160,7 +202,8 @@ def notify_usage_exists(context, instance_ref, current_period=False,
             ignore_missing_network_data)
 
     if system_metadata is None:
-        system_metadata = metadata_to_dict(instance_ref['system_metadata'])
+        system_metadata = utils.metadata_to_dict(
+                instance_ref['system_metadata'])
 
     # add image metadata to the notification:
     image_meta = notifications.image_meta(system_metadata)
@@ -212,24 +255,27 @@ def get_nw_info_for_instance(instance):
     return network_model.NetworkInfo.hydrate(cached_nwinfo)
 
 
-def has_audit_been_run(context, host, timestamp=None):
+def has_audit_been_run(context, conductor, host, timestamp=None):
     begin, end = utils.last_completed_audit_period(before=timestamp)
-    task_log = db.task_log_get(context, "instance_usage_audit",
-                               begin, end, host)
+    task_log = conductor.task_log_get(context, "instance_usage_audit",
+                                      begin, end, host)
     if task_log:
         return True
     else:
         return False
 
 
-def start_instance_usage_audit(context, begin, end, host, num_instances):
-    db.task_log_begin_task(context, "instance_usage_audit", begin, end, host,
-                           num_instances, "Instance usage audit started...")
+def start_instance_usage_audit(context, conductor, begin, end, host,
+                               num_instances):
+    conductor.task_log_begin_task(context, "instance_usage_audit", begin,
+                                  end, host, num_instances,
+                                  "Instance usage audit started...")
 
 
-def finish_instance_usage_audit(context, begin, end, host, errors, message):
-    db.task_log_end_task(context, "instance_usage_audit", begin, end, host,
-                         errors, message)
+def finish_instance_usage_audit(context, conductor, begin, end, host, errors,
+                                message):
+    conductor.task_log_end_task(context, "instance_usage_audit", begin, end,
+                                host, errors, message)
 
 
 def usage_volume_info(vol_usage):
@@ -253,3 +299,28 @@ def usage_volume_info(vol_usage):
                 vol_usage['curr_write_bytes'])
 
     return usage_info
+
+
+class EventReporter(object):
+    """Context manager to report instance action events."""
+
+    def __init__(self, context, conductor, event_name, *instance_uuids):
+        self.context = context
+        self.conductor = conductor
+        self.event_name = event_name
+        self.instance_uuids = instance_uuids
+
+    def __enter__(self):
+        for uuid in self.instance_uuids:
+            event = pack_action_event_start(self.context, uuid,
+                                            self.event_name)
+            self.conductor.action_event_start(self.context, event)
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for uuid in self.instance_uuids:
+            event = pack_action_event_finish(self.context, uuid,
+                                             self.event_name, exc_val, exc_tb)
+            self.conductor.action_event_finish(self.context, event)
+        return False

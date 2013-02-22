@@ -17,7 +17,6 @@
 
 import webob
 from webob import exc
-from xml.dom import minidom
 
 from nova.api.openstack import common
 from nova.api.openstack import extensions
@@ -32,6 +31,9 @@ from nova import volume
 
 LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'volumes')
+
+authorize_attach = extensions.extension_authorizer('compute',
+                                                   'volume_attachments')
 
 
 def _translate_volume_detail_view(context, vol):
@@ -152,7 +154,7 @@ class CreateDeserializer(CommonDeserializer):
 
     def default(self, string):
         """Deserialize an xml-formatted volume create request."""
-        dom = minidom.parseString(string)
+        dom = utils.safe_minidom_parse_string(string)
         vol = self._extract_volume(dom)
         return {'body': {'volume': vol}}
 
@@ -329,6 +331,8 @@ class VolumeAttachmentController(wsgi.Controller):
     @wsgi.serializers(xml=VolumeAttachmentsTemplate)
     def index(self, req, server_id):
         """Returns the list of volume attachments for a given instance."""
+        context = req.environ['nova.context']
+        authorize_attach(context, action='index')
         return self._items(req, server_id,
                            entity_maker=_translate_attachment_summary_view)
 
@@ -337,6 +341,7 @@ class VolumeAttachmentController(wsgi.Controller):
         """Return data about the given volume attachment."""
         context = req.environ['nova.context']
         authorize(context)
+        authorize_attach(context, action='show')
 
         volume_id = id
         try:
@@ -377,6 +382,7 @@ class VolumeAttachmentController(wsgi.Controller):
         """Attach a volume to an instance."""
         context = req.environ['nova.context']
         authorize(context)
+        authorize_attach(context, action='create')
 
         if not self.is_valid_body(body, 'volumeAttachment'):
             raise exc.HTTPUnprocessableEntity()
@@ -423,6 +429,7 @@ class VolumeAttachmentController(wsgi.Controller):
         """Detach a volume from an instance."""
         context = req.environ['nova.context']
         authorize(context)
+        authorize_attach(context, action='delete')
 
         volume_id = id
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
@@ -616,7 +623,7 @@ class SnapshotController(wsgi.Controller):
 
 
 class Volumes(extensions.ExtensionDescriptor):
-    """Volumes support"""
+    """Volumes support."""
 
     name = "Volumes"
     alias = "os-volumes"

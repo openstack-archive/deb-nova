@@ -13,7 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -28,7 +29,7 @@ CONF.register_opt(max_io_ops_per_host_opt)
 
 
 class IoOpsFilter(filters.BaseHostFilter):
-    """Filter out hosts with too many concurrent I/O operations"""
+    """Filter out hosts with too many concurrent I/O operations."""
 
     def host_passes(self, host_state, filter_properties):
         """Use information about current vm and task states collected from

@@ -20,28 +20,24 @@
 Class for PXE bare-metal nodes.
 """
 
+import datetime
 import os
-import shutil
+
+from oslo.config import cfg
 
 from nova.compute import instance_types
 from nova import exception
-from nova.openstack.common import cfg
+from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova import utils
+from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import base
 from nova.virt.baremetal import db
 from nova.virt.baremetal import utils as bm_utils
-from nova.virt.disk import api as disk
-
 
 pxe_opts = [
-    cfg.StrOpt('dnsmasq_pid_dir',
-               default='$state_path/baremetal/dnsmasq',
-               help='path to directory stores pidfiles of dnsmasq'),
-    cfg.StrOpt('dnsmasq_lease_dir',
-               default='$state_path/baremetal/dnsmasq',
-               help='path to directory stores leasefiles of dnsmasq'),
     cfg.StrOpt('deploy_kernel',
                help='Default kernel image ID used in deployment phase'),
     cfg.StrOpt('deploy_ramdisk',
@@ -55,11 +51,9 @@ pxe_opts = [
     cfg.StrOpt('pxe_config_template',
                default='$pybasedir/nova/virt/baremetal/pxe_config.template',
                help='Template file for PXE configuration'),
-    cfg.StrOpt('pxe_interface',
-               default='eth0'),
-    cfg.StrOpt('pxe_path',
-               default='/usr/lib/syslinux/pxelinux.0',
-               help='path to pxelinux.0'),
+    cfg.IntOpt('pxe_deploy_timeout',
+                help='Timeout for PXE deployments. Default: 0 (unlimited)',
+                default=0),
     ]
 
 LOG = logging.getLogger(__name__)
@@ -70,7 +64,7 @@ baremetal_group = cfg.OptGroup(name='baremetal',
 CONF = cfg.CONF
 CONF.register_group(baremetal_group)
 CONF.register_opts(pxe_opts, baremetal_group)
-
+CONF.import_opt('use_ipv6', 'nova.netconf')
 
 CHEETAH = None
 
@@ -78,7 +72,8 @@ CHEETAH = None
 def _get_cheetah():
     global CHEETAH
     if CHEETAH is None:
-        from Cheetah.Template import Template as CHEETAH
+        from Cheetah import Template
+        CHEETAH = Template.Template
     return CHEETAH
 
 
@@ -132,7 +127,6 @@ def build_network_config(network_info):
             gateway_v6 = mapping['gateway_v6']
         interface = {
                 'name': 'eth%d' % id,
-                'hwaddress': mapping['mac'],
                 'address': mapping['ips'][0]['ip'],
                 'gateway': mapping['gateway'],
                 'netmask': mapping['ips'][0]['netmask'],
@@ -165,26 +159,24 @@ def get_deploy_ari_id(instance):
 
 
 def get_image_dir_path(instance):
-    """Generate the dir for an instances disk"""
+    """Generate the dir for an instances disk."""
     return os.path.join(CONF.instances_path, instance['name'])
 
 
 def get_image_file_path(instance):
-    """Generate the full path for an instances disk"""
+    """Generate the full path for an instances disk."""
     return os.path.join(CONF.instances_path, instance['name'], 'disk')
 
 
 def get_pxe_config_file_path(instance):
-    """Generate the path for an instances PXE config file"""
+    """Generate the path for an instances PXE config file."""
     return os.path.join(CONF.baremetal.tftp_root, instance['uuid'], 'config')
 
 
 def get_partition_sizes(instance):
-    type_id = instance['instance_type_id']
-    root_mb = instance['root_gb'] * 1024
-
-    # NOTE(deva): is there a way to get swap_mb directly from instance?
-    swap_mb = instance_types.get_instance_type(type_id)['swap']
+    instance_type = instance_types.extract_instance_type(instance)
+    root_mb = instance_type['root_gb'] * 1024
+    swap_mb = instance_type['swap']
 
     # NOTE(deva): For simpler code paths on the deployment side,
     #             we always create a swap partition. If the flavor
@@ -196,7 +188,7 @@ def get_partition_sizes(instance):
 
 
 def get_pxe_mac_path(mac):
-    """Convert a MAC address into a PXE config file name"""
+    """Convert a MAC address into a PXE config file name."""
     return os.path.join(
             CONF.baremetal.tftp_root,
             'pxelinux.cfg',
@@ -230,7 +222,7 @@ def get_tftp_image_info(instance):
     missing_labels = []
     for label in image_info.keys():
         (uuid, path) = image_info[label]
-        if uuid is None:
+        if not uuid:
             missing_labels.append(label)
         else:
             image_info[label][1] = os.path.join(CONF.baremetal.tftp_root,
@@ -243,33 +235,18 @@ def get_tftp_image_info(instance):
 
 
 class PXE(base.NodeDriver):
-    """PXE bare metal driver"""
+    """PXE bare metal driver."""
 
     def __init__(self):
         super(PXE, self).__init__()
 
     def _collect_mac_addresses(self, context, node):
-        macs = []
-        macs.append(db.bm_node_get(context, node['id'])['prov_mac_address'])
+        macs = set()
+        macs.add(db.bm_node_get(context, node['id'])['prov_mac_address'])
         for nic in db.bm_interface_get_all_by_bm_node_id(context, node['id']):
             if nic['address']:
-                macs.append(nic['address'])
-        macs.sort()
-        return macs
-
-    def _generate_udev_rules(self, context, node):
-        # TODO(deva): fix assumption that device names begin with "eth"
-        #             and fix assumption of ordering
-        macs = self._collect_mac_addresses(context, node)
-        rules = ''
-        for (i, mac) in enumerate(macs):
-            rules += 'SUBSYSTEM=="net", ACTION=="add", DRIVERS=="?*", ' \
-                     'ATTR{address}=="%(mac)s", ATTR{dev_id}=="0x0", ' \
-                     'ATTR{type}=="1", KERNEL=="eth*", NAME="%(name)s"\n' \
-                     % {'mac': mac.lower(),
-                        'name': 'eth%d' % i,
-                        }
-        return rules
+                macs.add(nic['address'])
+        return sorted(macs)
 
     def _cache_tftp_images(self, context, instance, image_info):
         """Fetch the necessary kernels and ramdisks for the instance."""
@@ -339,11 +316,11 @@ class PXE(base.NodeDriver):
 
         if injected_files is None:
             injected_files = []
+        else:
+            # NOTE(deva): copy so we dont modify the original
+            injected_files = list(injected_files)
 
         net_config = build_network_config(network_info)
-        udev_rules = self._generate_udev_rules(context, node)
-        injected_files.append(
-                ('/etc/udev/rules.d/70-persistent-net.rules', udev_rules))
 
         if instance['hostname']:
             injected_files.append(('/etc/hostname', instance['hostname']))
@@ -363,7 +340,7 @@ class PXE(base.NodeDriver):
 
     def cache_images(self, context, node, instance,
             admin_password, image_meta, injected_files, network_info):
-        """Prepare all the images for this instance"""
+        """Prepare all the images for this instance."""
         tftp_image_info = get_tftp_image_info(instance)
         self._cache_tftp_images(context, instance, tftp_image_info)
 
@@ -372,9 +349,9 @@ class PXE(base.NodeDriver):
                 injected_files, admin_password)
 
     def destroy_images(self, context, node, instance):
-        """Delete instance's image file"""
+        """Delete instance's image file."""
         bm_utils.unlink_without_raise(get_image_file_path(instance))
-        bm_utils.unlink_without_raise(get_image_dir_path(instance))
+        bm_utils.rmtree_without_raise(get_image_dir_path(instance))
 
     def activate_bootloader(self, context, node, instance):
         """Configure PXE boot loader for an instance
@@ -396,7 +373,6 @@ class PXE(base.NodeDriver):
                  config
             ./pxelinux.cfg/
                  {mac} -> ../{uuid}/config
-
         """
         image_info = get_tftp_image_info(instance)
         (root_mb, swap_mb) = get_partition_sizes(instance)
@@ -405,16 +381,14 @@ class PXE(base.NodeDriver):
 
         deployment_key = bm_utils.random_alnum(32)
         deployment_iscsi_iqn = "iqn-%s" % instance['uuid']
-        deployment_id = db.bm_deployment_create(
-                            context,
-                            deployment_key,
-                            image_file_path,
-                            pxe_config_file_path,
-                            root_mb,
-                            swap_mb
-                        )
+        db.bm_node_update(context, node['id'],
+                {'deploy_key': deployment_key,
+                 'image_path': image_file_path,
+                 'pxe_config_path': pxe_config_file_path,
+                 'root_mb': root_mb,
+                 'swap_mb': swap_mb})
         pxe_config = build_pxe_config(
-                    deployment_id,
+                    node['id'],
                     deployment_key,
                     deployment_iscsi_iqn,
                     image_info['deploy_kernel'][1],
@@ -431,7 +405,17 @@ class PXE(base.NodeDriver):
             bm_utils.create_link_without_raise(pxe_config_file_path, mac_path)
 
     def deactivate_bootloader(self, context, node, instance):
-        """Delete PXE bootloader images and config"""
+        """Delete PXE bootloader images and config."""
+        try:
+            db.bm_node_update(context, node['id'],
+                    {'deploy_key': None,
+                     'image_path': None,
+                     'pxe_config_path': None,
+                     'root_mb': 0,
+                     'swap_mb': 0})
+        except exception.NodeNotFound:
+            pass
+
         try:
             image_info = get_tftp_image_info(instance)
         except exception.NovaException:
@@ -444,17 +428,61 @@ class PXE(base.NodeDriver):
         bm_utils.unlink_without_raise(get_pxe_config_file_path(instance))
         try:
             macs = self._collect_mac_addresses(context, node)
-        except exception.DBError:
+        except db_session.DBError:
             pass
         else:
             for mac in macs:
                 bm_utils.unlink_without_raise(get_pxe_mac_path(mac))
 
-        bm_utils.unlink_without_raise(
+        bm_utils.rmtree_without_raise(
                 os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
 
     def activate_node(self, context, node, instance):
-        pass
+        """Wait for PXE deployment to complete."""
+
+        locals = {'error': '', 'started': False}
+
+        def _wait_for_deploy():
+            """Called at an interval until the deployment completes."""
+            try:
+                row = db.bm_node_get(context, node['id'])
+                if instance['uuid'] != row.get('instance_uuid'):
+                    locals['error'] = _("Node associated with another instance"
+                                        " while waiting for deploy of %s")
+                    raise utils.LoopingCallDone()
+
+                status = row.get('task_state')
+                if (status == baremetal_states.DEPLOYING
+                        and locals['started'] == False):
+                    LOG.info(_("PXE deploy started for instance %s")
+                                % instance['uuid'])
+                    locals['started'] = True
+                elif status in (baremetal_states.DEPLOYDONE,
+                                baremetal_states.ACTIVE):
+                    LOG.info(_("PXE deploy completed for instance %s")
+                                % instance['uuid'])
+                    raise utils.LoopingCallDone()
+                elif status == baremetal_states.DEPLOYFAIL:
+                    locals['error'] = _("PXE deploy failed for instance %s")
+            except exception.NodeNotFound:
+                locals['error'] = _("Baremetal node deleted while waiting "
+                                    "for deployment of instance %s")
+
+            if (CONF.baremetal.pxe_deploy_timeout and
+                    timeutils.utcnow() > expiration):
+                locals['error'] = _("Timeout reached while waiting for "
+                                     "PXE deploy of instance %s")
+            if locals['error']:
+                raise utils.LoopingCallDone()
+
+        expiration = timeutils.utcnow() + datetime.timedelta(
+                            seconds=CONF.baremetal.pxe_deploy_timeout)
+        timer = utils.FixedIntervalLoopingCall(_wait_for_deploy)
+        timer.start(interval=1).wait()
+
+        if locals['error']:
+            raise exception.InstanceDeployFailure(
+                    locals['error'] % instance['uuid'])
 
     def deactivate_node(self, context, node, instance):
         pass

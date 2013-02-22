@@ -14,12 +14,12 @@
 #    under the License.
 
 from lxml import etree
+from oslo.config import cfg
 
 from nova.api.openstack.compute.contrib import cloudpipe
 from nova.api.openstack import wsgi
 from nova.compute import utils as compute_utils
 from nova import db
-from nova.openstack.common import cfg
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.api.openstack import fakes
@@ -28,7 +28,7 @@ from nova.tests import matchers
 from nova import utils
 
 CONF = cfg.CONF
-CONF.import_opt('vpn_image_id', 'nova.config')
+CONF.import_opt('vpn_image_id', 'nova.cloudpipe.pipelib')
 
 
 def fake_vpn_instance():

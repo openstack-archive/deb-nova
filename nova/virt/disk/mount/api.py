@@ -13,7 +13,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-"""Support for mounting virtual image files"""
+"""Support for mounting virtual image files."""
 
 import os
 import time
@@ -211,11 +211,16 @@ class Mount(object):
         finally:
             if not status:
                 LOG.debug(_("Fail to mount, tearing back down"))
-                self.do_umount()
+                self.do_teardown()
         return status
 
     def do_umount(self):
-        """Call the unmnt, unmap and unget operations."""
+        """Call the unmnt operation."""
+        if self.mounted:
+            self.unmnt_dev()
+
+    def do_teardown(self):
+        """Call the umnt, unmap, and unget operations."""
         if self.mounted:
             self.unmnt_dev()
         if self.mapped:

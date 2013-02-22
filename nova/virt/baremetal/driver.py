@@ -21,10 +21,12 @@
 A driver for Bare-metal platform.
 """
 
+from oslo.config import cfg
+
 from nova.compute import power_state
 from nova import context as nova_context
 from nova import exception
-from nova.openstack.common import cfg
+from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova import paths
@@ -74,15 +76,11 @@ baremetal_group = cfg.OptGroup(name='baremetal',
 CONF = cfg.CONF
 CONF.register_group(baremetal_group)
 CONF.register_opts(opts, baremetal_group)
+CONF.import_opt('host', 'nova.netconf')
 
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     firewall.__name__,
     firewall.NoopFirewallDriver.__name__)
-
-
-def _get_baremetal_nodes(context):
-    nodes = db.bm_node_get_all(context, service_host=CONF.host)
-    return nodes
 
 
 def _get_baremetal_node_by_instance_uuid(instance_uuid):
@@ -104,6 +102,7 @@ def _update_state(context, node, instance, state):
     values = {'task_state': state}
     if not instance:
         values['instance_uuid'] = None
+        values['instance_name'] = None
     db.bm_node_update(context, node['id'], values)
 
 
@@ -139,7 +138,7 @@ class BareMetalDriver(driver.ComputeDriver):
             keyval[0] = keyval[0].strip()
             keyval[1] = keyval[1].strip()
             extra_specs[keyval[0]] = keyval[1]
-        if not 'cpu_arch' in extra_specs:
+        if 'cpu_arch' not in extra_specs:
             LOG.warning(
                     _('cpu_arch is not found in instance_type_extra_specs'))
             extra_specs['cpu_arch'] = ''
@@ -165,145 +164,183 @@ class BareMetalDriver(driver.ComputeDriver):
         # TODO(deva): define the version properly elsewhere
         return 1
 
+    def legacy_nwinfo(self):
+        return True
+
     def list_instances(self):
         l = []
-        ctx = nova_context.get_admin_context()
-        for node in _get_baremetal_nodes(ctx):
-            if node['instance_uuid']:
-                inst = self.virtapi.instance_get_by_uuid(ctx,
-                                                         node['instance_uuid'])
-                if inst:
-                    l.append(inst['name'])
+        context = nova_context.get_admin_context()
+        for node in db.bm_node_get_associated(context, service_host=CONF.host):
+            l.append(node['instance_name'])
         return l
+
+    def _require_node(self, instance):
+        """Get a node's uuid out of a manager instance dict.
+
+        The compute manager is meant to know the node uuid, so missing uuid
+        a significant issue - it may mean we've been passed someone elses data.
+        """
+        node_uuid = instance.get('node')
+        if not node_uuid:
+            raise exception.NovaException(_(
+                    "Baremetal node id not supplied to driver for %r")
+                    % instance['uuid'])
+        return node_uuid
+
+    def _attach_block_devices(self, instance, block_device_info):
+        block_device_mapping = driver.\
+                block_device_info_get_mapping(block_device_info)
+        for vol in block_device_mapping:
+            connection_info = vol['connection_info']
+            mountpoint = vol['mount_device']
+            self.attach_volume(
+                    connection_info, instance['name'], mountpoint)
+
+    def _detach_block_devices(self, instance, block_device_info):
+        block_device_mapping = driver.\
+                block_device_info_get_mapping(block_device_info)
+        for vol in block_device_mapping:
+            connection_info = vol['connection_info']
+            mountpoint = vol['mount_device']
+            self.detach_volume(
+                    connection_info, instance['name'], mountpoint)
+
+    def _start_firewall(self, instance, network_info):
+        self.firewall_driver.setup_basic_filtering(
+                instance, network_info)
+        self.firewall_driver.prepare_instance_filter(
+                instance, network_info)
+        self.firewall_driver.apply_instance_filter(
+                instance, network_info)
+
+    def _stop_firewall(self, instance, network_info):
+        self.firewall_driver.unfilter_instance(
+                instance, network_info)
+
+    def macs_for_instance(self, instance):
+        context = nova_context.get_admin_context()
+        node_uuid = self._require_node(instance)
+        node = db.bm_node_get_by_node_uuid(context, node_uuid)
+        ifaces = db.bm_interface_get_all_by_bm_node_id(context, node['id'])
+        return set(iface['address'] for iface in ifaces)
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
-
-        node_id = instance.get('node')
-        if not node_id:
-            raise exception.NovaException(_(
-                    "Baremetal node id not supplied to driver"))
+        node_uuid = self._require_node(instance)
 
         # NOTE(deva): this db method will raise an exception if the node is
         #             already in use. We call it here to ensure no one else
         #             allocates this node before we begin provisioning it.
-        node = db.bm_node_set_uuid_safe(context, node_id,
+        node = db.bm_node_associate_and_update(context, node_uuid,
                     {'instance_uuid': instance['uuid'],
+                     'instance_name': instance['hostname'],
                      'task_state': baremetal_states.BUILDING})
-        pm = get_power_manager(node=node, instance=instance)
 
         try:
             self._plug_vifs(instance, network_info, context=context)
+            self._attach_block_devices(instance, block_device_info)
+            self._start_firewall(instance, network_info)
 
-            self.firewall_driver.setup_basic_filtering(
-                    instance, network_info)
-            self.firewall_driver.prepare_instance_filter(
-                    instance, network_info)
-            self.firewall_driver.apply_instance_filter(
-                    instance, network_info)
+            self.driver.cache_images(
+                            context, node, instance,
+                            admin_password=admin_password,
+                            image_meta=image_meta,
+                            injected_files=injected_files,
+                            network_info=network_info,
+                        )
+            self.driver.activate_bootloader(context, node, instance)
+            self.power_on(instance, node)
+            self.driver.activate_node(context, node, instance)
+            _update_state(context, node, instance, baremetal_states.ACTIVE)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_("Error deploying instance %(instance)s "
+                            "on baremetal node %(node)s.") %
+                            {'instance': instance['uuid'],
+                             'node': node['uuid']})
 
-            block_device_mapping = driver.\
-                    block_device_info_get_mapping(block_device_info)
-            for vol in block_device_mapping:
-                connection_info = vol['connection_info']
-                mountpoint = vol['mount_device']
-                self.attach_volume(
-                        connection_info, instance['name'], mountpoint)
+                # Do not set instance=None yet. This prevents another
+                # spawn() while we are cleaning up.
+                _update_state(context, node, instance, baremetal_states.ERROR)
 
-            try:
-                image_info = self.driver.cache_images(
-                                context, node, instance,
-                                admin_password=admin_password,
-                                image_meta=image_meta,
-                                injected_files=injected_files,
-                                network_info=network_info,
-                            )
-                try:
-                    self.driver.activate_bootloader(context, node, instance)
-                except Exception, e:
-                    self.driver.deactivate_bootloader(context, node, instance)
-                    raise e
-            except Exception, e:
+                self.driver.deactivate_node(context, node, instance)
+                self.power_off(instance, node)
+                self.driver.deactivate_bootloader(context, node, instance)
                 self.driver.destroy_images(context, node, instance)
-                raise e
-        except Exception, e:
-            # TODO(deva): do network and volume cleanup here
-            raise e
-        else:
-            # NOTE(deva): pm.activate_node should not raise exceptions.
-            #             We check its success in "finally" block
-            pm.activate_node()
-            pm.start_console()
-        finally:
-            if pm.state != baremetal_states.ACTIVE:
-                pm.state = baremetal_states.ERROR
-            try:
-                _update_state(context, node, instance, pm.state)
-            except exception.DBError, e:
-                LOG.warning(_("Failed to update state record for "
-                              "baremetal node %s") % instance['uuid'])
 
-    def reboot(self, instance, network_info, reboot_type,
+                self._detach_block_devices(instance, block_device_info)
+                self._stop_firewall(instance, network_info)
+                self._unplug_vifs(instance, network_info)
+
+                _update_state(context, node, None, baremetal_states.DELETED)
+
+    def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None):
         node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         ctx = nova_context.get_admin_context()
         pm = get_power_manager(node=node, instance=instance)
         state = pm.reboot_node()
+        if pm.state != baremetal_states.ACTIVE:
+            raise exception.InstanceRebootFailure(_(
+                "Baremetal power manager failed to restart node "
+                "for instance %r") % instance['uuid'])
         _update_state(ctx, node, instance, state)
 
     def destroy(self, instance, network_info, block_device_info=None):
-        ctx = nova_context.get_admin_context()
+        context = nova_context.get_admin_context()
 
         try:
             node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         except exception.InstanceNotFound:
-            # TODO(deva): refactor so that dangling files can be cleaned
-            #             up even after a failed boot or delete
-            LOG.warning(_("Delete called on non-existing instance %s")
+            LOG.warning(_("Destroy called on non-existing instance %s")
                     % instance['uuid'])
             return
 
-        self.driver.deactivate_node(ctx, node, instance)
+        try:
+            self.driver.deactivate_node(context, node, instance)
+            self.power_off(instance, node)
+            self.driver.deactivate_bootloader(context, node, instance)
+            self.driver.destroy_images(context, node, instance)
 
-        pm = get_power_manager(node=node, instance=instance)
+            self._detach_block_devices(instance, block_device_info)
+            self._stop_firewall(instance, network_info)
+            self._unplug_vifs(instance, network_info)
 
-        pm.stop_console()
+            _update_state(context, node, None, baremetal_states.DELETED)
+        except Exception, e:
+            with excutils.save_and_reraise_exception():
+                try:
+                    LOG.error(_("Error from baremetal driver "
+                                "during destroy: %s") % e)
+                    _update_state(context, node, instance,
+                                  baremetal_states.ERROR)
+                except Exception:
+                    LOG.error(_("Error while recording destroy failure in "
+                                "baremetal database: %s") % e)
 
-        ## power off the node
-        state = pm.deactivate_node()
-
-        ## cleanup volumes
-        # NOTE(vish): we disconnect from volumes regardless
-        block_device_mapping = driver.block_device_info_get_mapping(
-            block_device_info)
-        for vol in block_device_mapping:
-            connection_info = vol['connection_info']
-            mountpoint = vol['mount_device']
-            self.detach_volume(connection_info, instance['name'], mountpoint)
-
-        self.driver.deactivate_bootloader(ctx, node, instance)
-
-        self.driver.destroy_images(ctx, node, instance)
-
-        # stop firewall
-        self.firewall_driver.unfilter_instance(instance,
-                                                network_info=network_info)
-
-        self._unplug_vifs(instance, network_info)
-
-        _update_state(ctx, node, None, state)
-
-    def power_off(self, instance):
+    def power_off(self, instance, node=None):
         """Power off the specified instance."""
-        node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
+        if not node:
+            node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         pm = get_power_manager(node=node, instance=instance)
         pm.deactivate_node()
+        if pm.state != baremetal_states.DELETED:
+            raise exception.InstancePowerOffFailure(_(
+                "Baremetal power manager failed to stop node "
+                "for instance %r") % instance['uuid'])
+        pm.stop_console()
 
-    def power_on(self, instance):
-        """Power on the specified instance"""
-        node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
+    def power_on(self, instance, node=None):
+        """Power on the specified instance."""
+        if not node:
+            node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         pm = get_power_manager(node=node, instance=instance)
         pm.activate_node()
+        if pm.state != baremetal_states.ACTIVE:
+            raise exception.InstancePowerOnFailure(_(
+                "Baremetal power manager failed to start node "
+                "for instance %r") % instance['uuid'])
+        pm.start_console()
 
     def get_volume_connector(self, instance):
         return self.volume_driver.get_volume_connector(instance)
@@ -312,10 +349,9 @@ class BareMetalDriver(driver.ComputeDriver):
         return self.volume_driver.attach_volume(connection_info,
                                                 instance, mountpoint)
 
-    @exception.wrap_exception()
-    def detach_volume(self, connection_info, instance, mountpoint):
+    def detach_volume(self, connection_info, instance_name, mountpoint):
         return self.volume_driver.detach_volume(connection_info,
-                                                instance, mountpoint)
+                                                instance_name, mountpoint)
 
     def get_info(self, instance):
         # NOTE(deva): compute/manager.py expects to get NotFound exception
@@ -364,7 +400,7 @@ class BareMetalDriver(driver.ComputeDriver):
                'local_gb_used': local_gb_used,
                'hypervisor_type': self.get_hypervisor_type(),
                'hypervisor_version': self.get_hypervisor_version(),
-               'hypervisor_hostname': str(node['id']),
+               'hypervisor_hostname': str(node['uuid']),
                'cpu_info': 'baremetal cpu',
                }
         return dic
@@ -374,7 +410,7 @@ class BareMetalDriver(driver.ComputeDriver):
 
     def get_available_resource(self, nodename):
         context = nova_context.get_admin_context()
-        node = db.bm_node_get(context, nodename)
+        node = db.bm_node_get_by_node_uuid(context, nodename)
         dic = self._node_resource(node)
         return dic
 
@@ -394,7 +430,7 @@ class BareMetalDriver(driver.ComputeDriver):
                                      service_host=CONF.host)
         for node in nodes:
             res = self._node_resource(node)
-            nodename = str(node['id'])
+            nodename = str(node['uuid'])
             data = {}
             data['vcpus'] = res['vcpus']
             data['vcpus_used'] = res['vcpus_used']
@@ -445,4 +481,5 @@ class BareMetalDriver(driver.ComputeDriver):
 
     def get_available_nodes(self):
         context = nova_context.get_admin_context()
-        return [str(n['id']) for n in _get_baremetal_nodes(context)]
+        return [str(n['uuid']) for n in
+                db.bm_node_get_unassociated(context, service_host=CONF.host)]

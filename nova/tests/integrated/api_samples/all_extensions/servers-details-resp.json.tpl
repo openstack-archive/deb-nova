@@ -2,6 +2,7 @@
     "servers": [
         {
             "OS-DCF:diskConfig": "AUTO",
+            "OS-EXT-AZ:availability_zone": "nova",
             "OS-EXT-SRV-ATTR:host": "%(compute_host)s",
             "OS-EXT-SRV-ATTR:hypervisor_hostname": "%(hypervisor_hostname)s",
             "OS-EXT-SRV-ATTR:instance_name": "instance-00000001",
@@ -13,6 +14,7 @@
             "addresses": {
                 "private": [
                     {
+                        "OS-EXT-IPS:type": "fixed",
                         "addr": "%(ip)s",
                         "version": 4
                     }

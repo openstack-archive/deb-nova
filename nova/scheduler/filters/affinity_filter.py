@@ -18,18 +18,15 @@
 import netaddr
 
 from nova.compute import api as compute
+from nova.openstack.common import log as logging
 from nova.scheduler import filters
+
+LOG = logging.getLogger(__name__)
 
 
 class AffinityFilter(filters.BaseHostFilter):
     def __init__(self):
         self.compute_api = compute.API()
-
-    def _all_hosts(self, context):
-        all_hosts = {}
-        for instance in self.compute_api.get_all(context):
-            all_hosts[instance['uuid']] = instance['host']
-        return all_hosts
 
 
 class DifferentHostFilter(AffinityFilter):
@@ -38,15 +35,15 @@ class DifferentHostFilter(AffinityFilter):
     def host_passes(self, host_state, filter_properties):
         context = filter_properties['context']
         scheduler_hints = filter_properties.get('scheduler_hints') or {}
-        me = host_state.host
 
         affinity_uuids = scheduler_hints.get('different_host', [])
         if isinstance(affinity_uuids, basestring):
             affinity_uuids = [affinity_uuids]
         if affinity_uuids:
-            all_hosts = self._all_hosts(context)
-            return not any([i for i in affinity_uuids
-                              if all_hosts.get(i) == me])
+            return not self.compute_api.get_all(context,
+                                                {'host': host_state.host,
+                                                 'uuid': affinity_uuids,
+                                                 'deleted': False})
         # With no different_host key
         return True
 
@@ -59,16 +56,14 @@ class SameHostFilter(AffinityFilter):
     def host_passes(self, host_state, filter_properties):
         context = filter_properties['context']
         scheduler_hints = filter_properties.get('scheduler_hints') or {}
-        me = host_state.host
 
         affinity_uuids = scheduler_hints.get('same_host', [])
         if isinstance(affinity_uuids, basestring):
             affinity_uuids = [affinity_uuids]
         if affinity_uuids:
-            all_hosts = self._all_hosts(context)
-            return any([i for i
-                          in affinity_uuids
-                          if all_hosts.get(i) == me])
+            return self.compute_api.get_all(context, {'host': host_state.host,
+                                                      'uuid': affinity_uuids,
+                                                      'deleted': False})
         # With no same_host key
         return True
 
@@ -87,4 +82,21 @@ class SimpleCIDRAffinityFilter(AffinityFilter):
             return netaddr.IPAddress(host_ip) in affinity_net
 
         # We don't have an affinity host address.
+        return True
+
+
+class GroupAntiAffinityFilter(AffinityFilter):
+    """Schedule the instance on a different host from a set of group
+    instances.
+    """
+
+    def host_passes(self, host_state, filter_properties):
+        group_hosts = filter_properties.get('group_hosts') or []
+        LOG.debug(_("Group affinity: %(host)s in %(configured)s"),
+                    {'host': host_state.host,
+                     'configured': group_hosts})
+        if group_hosts:
+            return not host_state.host in group_hosts
+
+        # No groups configured
         return True

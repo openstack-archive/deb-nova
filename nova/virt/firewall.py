@@ -17,15 +17,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.config import cfg
+
+from nova import conductor
 from nova import context
 from nova import network
 from nova.network import linux_net
-from nova.openstack.common import cfg
 from nova.openstack.common import importutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.virt import netutils
-
 
 LOG = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ firewall_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(firewall_opts)
-CONF.import_opt('use_ipv6', 'nova.config')
+CONF.import_opt('use_ipv6', 'nova.netconf')
 
 
 def load_driver(default, *args, **kwargs):
@@ -64,15 +65,15 @@ class FirewallDriver(object):
         raise NotImplementedError()
 
     def filter_defer_apply_on(self):
-        """Defer application of IPTables rules"""
+        """Defer application of IPTables rules."""
         pass
 
     def filter_defer_apply_off(self):
-        """Turn off deferral of IPTables rules and apply the rules now"""
+        """Turn off deferral of IPTables rules and apply the rules now."""
         pass
 
     def unfilter_instance(self, instance, network_info):
-        """Stop filtering instance"""
+        """Stop filtering instance."""
         raise NotImplementedError()
 
     def apply_instance_filter(self, instance, network_info):
@@ -126,7 +127,7 @@ class FirewallDriver(object):
         raise NotImplementedError()
 
     def instance_filter_exists(self, instance, network_info):
-        """Check nova-instance-instance-xxx exists"""
+        """Check nova-instance-instance-xxx exists."""
         raise NotImplementedError()
 
     def _handle_network_info_model(self, network_info):
@@ -146,7 +147,7 @@ class IptablesFirewallDriver(FirewallDriver):
         self.iptables = linux_net.iptables_manager
         self.instances = {}
         self.network_infos = {}
-        self.basicly_filtered = False
+        self.basically_filtered = False
 
         self.iptables.ipv4['filter'].add_chain('sg-fallback')
         self.iptables.ipv4['filter'].add_rule('sg-fallback', '-j DROP')
@@ -398,9 +399,11 @@ class IptablesFirewallDriver(FirewallDriver):
                         #                 and should be the only one making
                         #                 making rpc calls.
                         nw_api = network.API()
+                        capi = conductor.API()
                         for instance in rule['grantee_group']['instances']:
                             nw_info = nw_api.get_instance_nw_info(ctxt,
-                                                                  instance)
+                                                                  instance,
+                                                                  capi)
 
                             ips = [ip['address']
                                 for ip in nw_info.fixed_ips()

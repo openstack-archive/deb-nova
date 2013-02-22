@@ -15,16 +15,18 @@
 Tests For Cells Messaging module
 """
 
+from oslo.config import cfg
+
 from nova.cells import messaging
+from nova.cells import utils as cells_utils
 from nova import context
 from nova import exception
-from nova.openstack.common import cfg
+from nova.openstack.common import rpc
+from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.cells import fakes
 
-
 CONF = cfg.CONF
-CONF.import_opt('host', 'nova.config')
 CONF.import_opt('name', 'nova.cells.opts', group='cells')
 CONF.import_opt('allowed_rpc_exception_modules',
                 'nova.openstack.common.rpc')
@@ -602,7 +604,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
                                                   self.tgt_cell_name,
                                                   host_sched_kwargs)
 
-    def test_call_compute_api_method(self):
+    def test_run_compute_api_method(self):
 
         instance_uuid = 'fake_instance_uuid'
         method_info = {'method': 'reboot',
@@ -612,8 +614,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         self.mox.StubOutWithMock(self.tgt_db_inst, 'instance_get_by_uuid')
 
         self.tgt_db_inst.instance_get_by_uuid(self.ctxt,
-                                              instance_uuid).AndReturn(
-                                                    'fake_instance')
+                instance_uuid).AndReturn('fake_instance')
         self.tgt_compute_api.reboot(self.ctxt, 'fake_instance', 2, 3,
                 arg1='val1', arg2='val2').AndReturn('fake_result')
         self.mox.ReplayAll()
@@ -626,7 +627,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         result = response.value_or_raise()
         self.assertEqual('fake_result', result)
 
-    def test_call_compute_api_method_unknown_instance(self):
+    def test_run_compute_api_method_unknown_instance(self):
         # Unknown instance should send a broadcast up that instance
         # is gone.
         instance_uuid = 'fake_instance_uuid'
@@ -725,6 +726,105 @@ class CellsTargetedMethodsTestCase(test.TestCase):
 
         self.src_msg_runner.ask_children_for_capacities(self.ctxt)
 
+    def test_service_get_by_compute_host(self):
+        fake_host_name = 'fake-host-name'
+
+        self.mox.StubOutWithMock(self.tgt_db_inst,
+                                 'service_get_by_compute_host')
+
+        self.tgt_db_inst.service_get_by_compute_host(self.ctxt,
+                fake_host_name).AndReturn('fake-service')
+        self.mox.ReplayAll()
+
+        response = self.src_msg_runner.service_get_by_compute_host(
+                self.ctxt,
+                self.tgt_cell_name,
+                fake_host_name)
+        result = response.value_or_raise()
+        self.assertEqual('fake-service', result)
+
+    def test_proxy_rpc_to_manager_call(self):
+        fake_topic = 'fake-topic'
+        fake_rpc_message = 'fake-rpc-message'
+        fake_host_name = 'fake-host-name'
+
+        self.mox.StubOutWithMock(self.tgt_db_inst,
+                                 'service_get_by_compute_host')
+        self.mox.StubOutWithMock(rpc, 'call')
+
+        self.tgt_db_inst.service_get_by_compute_host(self.ctxt,
+                                                     fake_host_name)
+        rpc.call(self.ctxt, fake_topic,
+                 fake_rpc_message, timeout=5).AndReturn('fake_result')
+
+        self.mox.ReplayAll()
+
+        response = self.src_msg_runner.proxy_rpc_to_manager(
+                self.ctxt,
+                self.tgt_cell_name,
+                fake_host_name,
+                fake_topic,
+                fake_rpc_message, True, timeout=5)
+        result = response.value_or_raise()
+        self.assertEqual('fake_result', result)
+
+    def test_proxy_rpc_to_manager_cast(self):
+        fake_topic = 'fake-topic'
+        fake_rpc_message = 'fake-rpc-message'
+        fake_host_name = 'fake-host-name'
+
+        self.mox.StubOutWithMock(self.tgt_db_inst,
+                                 'service_get_by_compute_host')
+        self.mox.StubOutWithMock(rpc, 'cast')
+
+        self.tgt_db_inst.service_get_by_compute_host(self.ctxt,
+                                                     fake_host_name)
+        rpc.cast(self.ctxt, fake_topic, fake_rpc_message)
+
+        self.mox.ReplayAll()
+
+        self.src_msg_runner.proxy_rpc_to_manager(
+                self.ctxt,
+                self.tgt_cell_name,
+                fake_host_name,
+                fake_topic,
+                fake_rpc_message, False, timeout=None)
+
+    def test_task_log_get_all_targetted(self):
+        task_name = 'fake_task_name'
+        begin = 'fake_begin'
+        end = 'fake_end'
+        host = 'fake_host'
+        state = 'fake_state'
+
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'task_log_get_all')
+        self.tgt_db_inst.task_log_get_all(self.ctxt, task_name,
+                begin, end, host=host,
+                state=state).AndReturn(['fake_result'])
+
+        self.mox.ReplayAll()
+
+        response = self.src_msg_runner.task_log_get_all(self.ctxt,
+                self.tgt_cell_name, task_name, begin, end, host=host,
+                state=state)
+        self.assertTrue(isinstance(response, list))
+        self.assertEqual(1, len(response))
+        result = response[0].value_or_raise()
+        self.assertEqual(['fake_result'], result)
+
+    def test_compute_node_get(self):
+        compute_id = 'fake-id'
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'compute_node_get')
+        self.tgt_db_inst.compute_node_get(self.ctxt,
+                compute_id).AndReturn('fake_result')
+
+        self.mox.ReplayAll()
+
+        response = self.src_msg_runner.compute_node_get(self.ctxt,
+                self.tgt_cell_name, compute_id)
+        result = response.value_or_raise()
+        self.assertEqual('fake_result', result)
+
 
 class CellsBroadcastMethodsTestCase(test.TestCase):
     """Test case for _BroadcastMessageMethods class.  Most of these
@@ -753,6 +853,13 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
         self.src_methods_cls = methods_cls
         self.src_db_inst = methods_cls.db
         self.src_compute_api = methods_cls.compute_api
+
+        if not up:
+            # fudge things so we only have 1 child to broadcast to
+            state_manager = self.src_msg_runner.state_manager
+            for cell in state_manager.get_child_cells():
+                if cell.name != 'child-cell2':
+                    del state_manager.child_cells[cell.name]
 
         self.mid_msg_runner = fakes.get_message_runner(mid_cell)
         methods_cls = self.mid_msg_runner.methods_by_type['broadcast']
@@ -913,3 +1020,220 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
 
         self.src_msg_runner.bw_usage_update_at_top(self.ctxt,
                                                    fake_bw_update_info)
+
+    def test_sync_instances(self):
+        # Reset this, as this is a broadcast down.
+        self._setup_attrs(up=False)
+        project_id = 'fake_project_id'
+        updated_since_raw = 'fake_updated_since_raw'
+        updated_since_parsed = 'fake_updated_since_parsed'
+        deleted = 'fake_deleted'
+
+        instance1 = dict(uuid='fake_uuid1', deleted=False)
+        instance2 = dict(uuid='fake_uuid2', deleted=True)
+        fake_instances = [instance1, instance2]
+
+        self.mox.StubOutWithMock(self.tgt_msg_runner,
+                                 'instance_update_at_top')
+        self.mox.StubOutWithMock(self.tgt_msg_runner,
+                                 'instance_destroy_at_top')
+
+        self.mox.StubOutWithMock(timeutils, 'parse_isotime')
+        self.mox.StubOutWithMock(cells_utils, 'get_instances_to_sync')
+
+        # Middle cell.
+        timeutils.parse_isotime(updated_since_raw).AndReturn(
+                updated_since_parsed)
+        cells_utils.get_instances_to_sync(self.ctxt,
+                updated_since=updated_since_parsed,
+                project_id=project_id,
+                deleted=deleted).AndReturn([])
+
+        # Bottom/Target cell
+        timeutils.parse_isotime(updated_since_raw).AndReturn(
+                updated_since_parsed)
+        cells_utils.get_instances_to_sync(self.ctxt,
+                updated_since=updated_since_parsed,
+                project_id=project_id,
+                deleted=deleted).AndReturn(fake_instances)
+        self.tgt_msg_runner.instance_update_at_top(self.ctxt, instance1)
+        self.tgt_msg_runner.instance_destroy_at_top(self.ctxt, instance2)
+
+        self.mox.ReplayAll()
+
+        self.src_msg_runner.sync_instances(self.ctxt,
+                project_id, updated_since_raw, deleted)
+
+    def test_service_get_all_with_disabled(self):
+        # Reset this, as this is a broadcast down.
+        self._setup_attrs(up=False)
+
+        ctxt = self.ctxt.elevated()
+
+        self.mox.StubOutWithMock(self.src_db_inst, 'service_get_all')
+        self.mox.StubOutWithMock(self.mid_db_inst, 'service_get_all')
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'service_get_all')
+
+        self.src_db_inst.service_get_all(ctxt,
+                disabled=None).AndReturn([1, 2])
+        self.mid_db_inst.service_get_all(ctxt,
+                disabled=None).AndReturn([3])
+        self.tgt_db_inst.service_get_all(ctxt,
+                disabled=None).AndReturn([4, 5])
+
+        self.mox.ReplayAll()
+
+        responses = self.src_msg_runner.service_get_all(ctxt,
+                                                        filters={})
+        response_values = [(resp.cell_name, resp.value_or_raise())
+                           for resp in responses]
+        expected = [('api-cell!child-cell2!grandchild-cell1', [4, 5]),
+                    ('api-cell!child-cell2', [3]),
+                    ('api-cell', [1, 2])]
+        self.assertEqual(expected, response_values)
+
+    def test_service_get_all_without_disabled(self):
+        # Reset this, as this is a broadcast down.
+        self._setup_attrs(up=False)
+        disabled = False
+        filters = {'disabled': disabled}
+
+        ctxt = self.ctxt.elevated()
+
+        self.mox.StubOutWithMock(self.src_db_inst, 'service_get_all')
+        self.mox.StubOutWithMock(self.mid_db_inst, 'service_get_all')
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'service_get_all')
+
+        self.src_db_inst.service_get_all(ctxt,
+                disabled=disabled).AndReturn([1, 2])
+        self.mid_db_inst.service_get_all(ctxt,
+                disabled=disabled).AndReturn([3])
+        self.tgt_db_inst.service_get_all(ctxt,
+                disabled=disabled).AndReturn([4, 5])
+
+        self.mox.ReplayAll()
+
+        responses = self.src_msg_runner.service_get_all(ctxt,
+                                                        filters=filters)
+        response_values = [(resp.cell_name, resp.value_or_raise())
+                           for resp in responses]
+        expected = [('api-cell!child-cell2!grandchild-cell1', [4, 5]),
+                    ('api-cell!child-cell2', [3]),
+                    ('api-cell', [1, 2])]
+        self.assertEqual(expected, response_values)
+
+    def test_task_log_get_all_broadcast(self):
+        # Reset this, as this is a broadcast down.
+        self._setup_attrs(up=False)
+        task_name = 'fake_task_name'
+        begin = 'fake_begin'
+        end = 'fake_end'
+        host = 'fake_host'
+        state = 'fake_state'
+
+        ctxt = self.ctxt.elevated()
+
+        self.mox.StubOutWithMock(self.src_db_inst, 'task_log_get_all')
+        self.mox.StubOutWithMock(self.mid_db_inst, 'task_log_get_all')
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'task_log_get_all')
+
+        self.src_db_inst.task_log_get_all(ctxt, task_name,
+                begin, end, host=host, state=state).AndReturn([1, 2])
+        self.mid_db_inst.task_log_get_all(ctxt, task_name,
+                begin, end, host=host, state=state).AndReturn([3])
+        self.tgt_db_inst.task_log_get_all(ctxt, task_name,
+                begin, end, host=host, state=state).AndReturn([4, 5])
+
+        self.mox.ReplayAll()
+
+        responses = self.src_msg_runner.task_log_get_all(ctxt, None,
+                task_name, begin, end, host=host, state=state)
+        response_values = [(resp.cell_name, resp.value_or_raise())
+                           for resp in responses]
+        expected = [('api-cell!child-cell2!grandchild-cell1', [4, 5]),
+                    ('api-cell!child-cell2', [3]),
+                    ('api-cell', [1, 2])]
+        self.assertEqual(expected, response_values)
+
+    def test_compute_node_get_all(self):
+        # Reset this, as this is a broadcast down.
+        self._setup_attrs(up=False)
+
+        ctxt = self.ctxt.elevated()
+
+        self.mox.StubOutWithMock(self.src_db_inst, 'compute_node_get_all')
+        self.mox.StubOutWithMock(self.mid_db_inst, 'compute_node_get_all')
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'compute_node_get_all')
+
+        self.src_db_inst.compute_node_get_all(ctxt).AndReturn([1, 2])
+        self.mid_db_inst.compute_node_get_all(ctxt).AndReturn([3])
+        self.tgt_db_inst.compute_node_get_all(ctxt).AndReturn([4, 5])
+
+        self.mox.ReplayAll()
+
+        responses = self.src_msg_runner.compute_node_get_all(ctxt)
+        response_values = [(resp.cell_name, resp.value_or_raise())
+                           for resp in responses]
+        expected = [('api-cell!child-cell2!grandchild-cell1', [4, 5]),
+                    ('api-cell!child-cell2', [3]),
+                    ('api-cell', [1, 2])]
+        self.assertEqual(expected, response_values)
+
+    def test_compute_node_get_all_with_hyp_match(self):
+        # Reset this, as this is a broadcast down.
+        self._setup_attrs(up=False)
+        hypervisor_match = 'meow'
+
+        ctxt = self.ctxt.elevated()
+
+        self.mox.StubOutWithMock(self.src_db_inst,
+                                 'compute_node_search_by_hypervisor')
+        self.mox.StubOutWithMock(self.mid_db_inst,
+                                 'compute_node_search_by_hypervisor')
+        self.mox.StubOutWithMock(self.tgt_db_inst,
+                                 'compute_node_search_by_hypervisor')
+
+        self.src_db_inst.compute_node_search_by_hypervisor(ctxt,
+                hypervisor_match).AndReturn([1, 2])
+        self.mid_db_inst.compute_node_search_by_hypervisor(ctxt,
+                hypervisor_match).AndReturn([3])
+        self.tgt_db_inst.compute_node_search_by_hypervisor(ctxt,
+                hypervisor_match).AndReturn([4, 5])
+
+        self.mox.ReplayAll()
+
+        responses = self.src_msg_runner.compute_node_get_all(ctxt,
+                hypervisor_match=hypervisor_match)
+        response_values = [(resp.cell_name, resp.value_or_raise())
+                           for resp in responses]
+        expected = [('api-cell!child-cell2!grandchild-cell1', [4, 5]),
+                    ('api-cell!child-cell2', [3]),
+                    ('api-cell', [1, 2])]
+        self.assertEqual(expected, response_values)
+
+    def test_compute_node_stats(self):
+        # Reset this, as this is a broadcast down.
+        self._setup_attrs(up=False)
+
+        ctxt = self.ctxt.elevated()
+
+        self.mox.StubOutWithMock(self.src_db_inst,
+                                 'compute_node_statistics')
+        self.mox.StubOutWithMock(self.mid_db_inst,
+                                 'compute_node_statistics')
+        self.mox.StubOutWithMock(self.tgt_db_inst,
+                                 'compute_node_statistics')
+
+        self.src_db_inst.compute_node_statistics(ctxt).AndReturn([1, 2])
+        self.mid_db_inst.compute_node_statistics(ctxt).AndReturn([3])
+        self.tgt_db_inst.compute_node_statistics(ctxt).AndReturn([4, 5])
+
+        self.mox.ReplayAll()
+
+        responses = self.src_msg_runner.compute_node_stats(ctxt)
+        response_values = [(resp.cell_name, resp.value_or_raise())
+                           for resp in responses]
+        expected = [('api-cell!child-cell2!grandchild-cell1', [4, 5]),
+                    ('api-cell!child-cell2', [3]),
+                    ('api-cell', [1, 2])]
+        self.assertEqual(expected, response_values)

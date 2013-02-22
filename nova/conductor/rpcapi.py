@@ -12,9 +12,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Client side of the conductor RPC API"""
+"""Client side of the conductor RPC API."""
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common import jsonutils
 import nova.openstack.common.rpc.proxy
 
@@ -57,6 +58,29 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
     1.23 - Added instance_get_all
            Un-Deprecate instance_get_all_by_host
     1.24 - Added instance_get
+    1.25 - Added action_event_start and action_event_finish
+    1.26 - Added instance_info_cache_update
+    1.27 - Added service_create
+    1.28 - Added binary arg to service_get_all_by
+    1.29 - Added service_destroy
+    1.30 - Added migration_create
+    1.31 - Added migration_get_in_progress_by_host_and_node
+    1.32 - Added optional node to instance_get_all_by_host
+    1.33 - Added compute_node_create and compute_node_update
+    1.34 - Added service_update
+    1.35 - Added instance_get_active_by_window_joined
+    1.36 - Added instance_fault_create
+    1.37 - Added task_log_get, task_log_begin_task, task_log_end_task
+    1.38 - Added service name to instance_update
+    1.39 - Added notify_usage_exists
+    1.40 - Added security_groups_trigger_handler and
+                 security_groups_trigger_members_refresh
+           Remove instance_get_active_by_window
+    1.41 - Added fixed_ip_get_by_instance, network_get,
+                 instance_floating_address_get_all, quota_commit,
+                 quota_rollback
+    1.42 - Added get_ec2_ids, aggregate_metadata_get_by_host
+    1.43 - Added compute_stop
     """
 
     BASE_RPC_API_VERSION = '1.0'
@@ -71,12 +95,15 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         msg = self.make_msg('ping', arg=arg_p)
         return self.call(context, msg, version='1.22', timeout=timeout)
 
-    def instance_update(self, context, instance_uuid, updates):
+    def instance_update(self, context, instance_uuid, updates,
+                        service=None):
         updates_p = jsonutils.to_primitive(updates)
         return self.call(context,
                          self.make_msg('instance_update',
                                        instance_uuid=instance_uuid,
-                                       updates=updates_p))
+                                       updates=updates_p,
+                                       service=service),
+                         version='1.38')
 
     def instance_get(self, context, instance_id):
         msg = self.make_msg('instance_get',
@@ -99,6 +126,18 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                             confirm_window=confirm_window,
                             dest_compute=dest_compute)
         return self.call(context, msg, version='1.20')
+
+    def migration_get_in_progress_by_host_and_node(self, context,
+                                                   host, node):
+        msg = self.make_msg('migration_get_in_progress_by_host_and_node',
+                            host=host, node=node)
+        return self.call(context, msg, version='1.31')
+
+    def migration_create(self, context, instance, values):
+        instance_p = jsonutils.to_primitive(instance)
+        msg = self.make_msg('migration_create', instance=instance_p,
+                            values=values)
+        return self.call(context, msg, version='1.30')
 
     def migration_update(self, context, migration, status):
         migration_p = jsonutils.to_primitive(migration)
@@ -139,6 +178,11 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         msg = self.make_msg('aggregate_metadata_delete', aggregate=aggregate_p,
                             key=key)
         return self.call(context, msg, version='1.7')
+
+    def aggregate_metadata_get_by_host(self, context, host, key):
+        msg = self.make_msg('aggregate_metadata_get_by_host', host=host,
+                            key=key)
+        return self.call(context, msg, version='1.42')
 
     def bw_usage_update(self, context, uuid, mac, start_period,
                         bw_in=None, bw_out=None,
@@ -212,12 +256,12 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                             timeout=timeout)
         return self.call(context, msg, version='1.15')
 
-    def instance_get_active_by_window(self, context, begin, end=None,
-                                      project_id=None, host=None):
-        msg = self.make_msg('instance_get_active_by_window',
+    def instance_get_active_by_window_joined(self, context, begin, end=None,
+                                             project_id=None, host=None):
+        msg = self.make_msg('instance_get_active_by_window_joined',
                             begin=begin, end=end, project_id=project_id,
                             host=host)
-        return self.call(context, msg, version='1.15')
+        return self.call(context, msg, version='1.35')
 
     def instance_destroy(self, context, instance):
         instance_p = jsonutils.to_primitive(instance)
@@ -250,14 +294,137 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                             update_totals=update_totals)
         return self.call(context, msg, version='1.19')
 
-    def service_get_all_by(self, context, topic=None, host=None):
-        msg = self.make_msg('service_get_all_by', topic=topic, host=host)
-        return self.call(context, msg, version='1.21')
+    def service_get_all_by(self, context, topic=None, host=None, binary=None):
+        msg = self.make_msg('service_get_all_by', topic=topic, host=host,
+                            binary=binary)
+        return self.call(context, msg, version='1.28')
 
     def instance_get_all(self, context):
         msg = self.make_msg('instance_get_all')
         return self.call(context, msg, version='1.23')
 
-    def instance_get_all_by_host(self, context, host):
-        msg = self.make_msg('instance_get_all_by_host', host=host)
-        return self.call(context, msg, version='1.23')
+    def instance_get_all_by_host(self, context, host, node=None):
+        msg = self.make_msg('instance_get_all_by_host', host=host, node=node)
+        return self.call(context, msg, version='1.32')
+
+    def instance_fault_create(self, context, values):
+        msg = self.make_msg('instance_fault_create', values=values)
+        return self.call(context, msg, version='1.36')
+
+    def action_event_start(self, context, values):
+        values_p = jsonutils.to_primitive(values)
+        msg = self.make_msg('action_event_start', values=values_p)
+        return self.call(context, msg, version='1.25')
+
+    def action_event_finish(self, context, values):
+        values_p = jsonutils.to_primitive(values)
+        msg = self.make_msg('action_event_finish', values=values_p)
+        return self.call(context, msg, version='1.25')
+
+    def instance_info_cache_update(self, context, instance, values):
+        instance_p = jsonutils.to_primitive(instance)
+        msg = self.make_msg('instance_info_cache_update',
+                            instance=instance_p,
+                            values=values)
+        return self.call(context, msg, version='1.26')
+
+    def service_create(self, context, values):
+        msg = self.make_msg('service_create', values=values)
+        return self.call(context, msg, version='1.27')
+
+    def service_destroy(self, context, service_id):
+        msg = self.make_msg('service_destroy', service_id=service_id)
+        return self.call(context, msg, version='1.29')
+
+    def compute_node_create(self, context, values):
+        msg = self.make_msg('compute_node_create', values=values)
+        return self.call(context, msg, version='1.33')
+
+    def compute_node_update(self, context, node, values, prune_stats=False):
+        node_p = jsonutils.to_primitive(node)
+        msg = self.make_msg('compute_node_update', node=node_p, values=values,
+                            prune_stats=prune_stats)
+        return self.call(context, msg, version='1.33')
+
+    def service_update(self, context, service, values):
+        service_p = jsonutils.to_primitive(service)
+        msg = self.make_msg('service_update', service=service_p, values=values)
+        return self.call(context, msg, version='1.34')
+
+    def task_log_get(self, context, task_name, begin, end, host, state=None):
+        msg = self.make_msg('task_log_get', task_name=task_name,
+                            begin=begin, end=end, host=host, state=state)
+        return self.call(context, msg, version='1.37')
+
+    def task_log_begin_task(self, context, task_name, begin, end, host,
+                            task_items=None, message=None):
+        msg = self.make_msg('task_log_begin_task', task_name=task_name,
+                            begin=begin, end=end, host=host,
+                            task_items=task_items, message=message)
+        return self.call(context, msg, version='1.37')
+
+    def task_log_end_task(self, context, task_name, begin, end, host, errors,
+                          message=None):
+        msg = self.make_msg('task_log_end_task', task_name=task_name,
+                            begin=begin, end=end, host=host, errors=errors,
+                            message=message)
+        return self.call(context, msg, version='1.37')
+
+    def notify_usage_exists(self, context, instance, current_period=False,
+                            ignore_missing_network_data=True,
+                            system_metadata=None, extra_usage_info=None):
+        instance_p = jsonutils.to_primitive(instance)
+        system_metadata_p = jsonutils.to_primitive(system_metadata)
+        extra_usage_info_p = jsonutils.to_primitive(extra_usage_info)
+        msg = self.make_msg('notify_usage_exists', instance=instance_p,
+                  current_period=current_period,
+                  ignore_missing_network_data=ignore_missing_network_data,
+                  system_metadata=system_metadata_p,
+                  extra_usage_info=extra_usage_info_p)
+        return self.call(context, msg, version='1.39')
+
+    def security_groups_trigger_handler(self, context, event, args):
+        args_p = jsonutils.to_primitive(args)
+        msg = self.make_msg('security_groups_trigger_handler', event=event,
+                            args=args_p)
+        return self.call(context, msg, version='1.40')
+
+    def security_groups_trigger_members_refresh(self, context, group_ids):
+        msg = self.make_msg('security_groups_trigger_members_refresh',
+                            group_ids=group_ids)
+        return self.call(context, msg, version='1.40')
+
+    def network_migrate_instance_start(self, context, instance, migration):
+        instance_p = jsonutils.to_primitive(instance)
+        migration_p = jsonutils.to_primitive(migration)
+        msg = self.make_msg('network_migrate_instance_start',
+                            instance=instance_p, migration=migration_p)
+        return self.call(context, msg, version='1.41')
+
+    def network_migrate_instance_finish(self, context, instance, migration):
+        instance_p = jsonutils.to_primitive(instance)
+        migration_p = jsonutils.to_primitive(migration)
+        msg = self.make_msg('network_migrate_instance_finish',
+                            instance=instance_p, migration=migration_p)
+        return self.call(context, msg, version='1.41')
+
+    def quota_commit(self, context, reservations):
+        reservations_p = jsonutils.to_primitive(reservations)
+        msg = self.make_msg('quota_commit', reservations=reservations_p)
+        return self.call(context, msg, version='1.41')
+
+    def quota_rollback(self, context, reservations):
+        reservations_p = jsonutils.to_primitive(reservations)
+        msg = self.make_msg('quota_rollback', reservations=reservations_p)
+        return self.call(context, msg, version='1.41')
+
+    def get_ec2_ids(self, context, instance):
+        instance_p = jsonutils.to_primitive(instance)
+        msg = self.make_msg('get_ec2_ids', instance=instance_p)
+        return self.call(context, msg, version='1.42')
+
+    def compute_stop(self, context, instance, do_cast=True):
+        instance_p = jsonutils.to_primitive(instance)
+        msg = self.make_msg('compute_stop', instance=instance_p,
+                            do_cast=do_cast)
+        return self.call(context, msg, version='1.43')

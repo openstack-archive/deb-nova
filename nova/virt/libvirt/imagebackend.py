@@ -19,14 +19,16 @@ import abc
 import contextlib
 import os
 
-from nova.openstack.common import cfg
+from oslo.config import cfg
+
 from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
 from nova.openstack.common import lockutils
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk import api as disk
+from nova.virt import images
 from nova.virt.libvirt import config as vconfig
-from nova.virt.libvirt import snapshots
 from nova.virt.libvirt import utils as libvirt_utils
 
 __imagebackend_opts = [
@@ -43,11 +45,18 @@ __imagebackend_opts = [
             default=False,
             help='Create sparse logical volumes (with virtualsize)'
                  ' if this flag is set to True.'),
+    cfg.IntOpt('libvirt_lvm_snapshot_size',
+               default=1000,
+               help='The amount of storage (in megabytes) to allocate for LVM'
+                    ' snapshot copy-on-write blocks.'),
         ]
 
 CONF = cfg.CONF
 CONF.register_opts(__imagebackend_opts)
 CONF.import_opt('base_dir_name', 'nova.virt.libvirt.imagecache')
+CONF.import_opt('preallocate_images', 'nova.virt.driver')
+
+LOG = logging.getLogger(__name__)
 
 
 class Image(object):
@@ -63,6 +72,7 @@ class Image(object):
         self.source_type = source_type
         self.driver_format = driver_format
         self.is_block_dev = is_block_dev
+        self.preallocate = False
 
         # NOTE(mikal): We need a lock directory which is shared along with
         # instance files, to cover the scenario where multiple compute nodes
@@ -82,13 +92,15 @@ class Image(object):
         """
         pass
 
-    def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode):
+    def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
+            extra_specs):
         """Get `LibvirtConfigGuestDisk` filled for this image.
 
         :disk_dev: Disk bus device name
         :disk_bus: Disk bus type
         :device_type: Device type for this image.
         :cache_mode: Caching mode for this image
+        :extra_specs: Instance type extra specs dict.
         """
         info = vconfig.LibvirtConfigGuestDisk()
         info.source_type = self.source_type
@@ -100,6 +112,16 @@ class Image(object):
         driver_name = libvirt_utils.pick_disk_driver_name(self.is_block_dev)
         info.driver_name = driver_name
         info.source_path = self.path
+
+        tune_items = ['disk_read_bytes_sec', 'disk_read_iops_sec',
+            'disk_write_bytes_sec', 'disk_write_iops_sec',
+            'disk_total_bytes_sec', 'disk_total_iops_sec']
+        # Note(yaguang): Currently, the only tuning available is Block I/O
+        # throttling for qemu.
+        if self.source_type in ['file', 'block']:
+            for key, value in extra_specs.iteritems():
+                if key in tune_items:
+                    setattr(info, key, value)
         return info
 
     def cache(self, fetch_func, filename, size=None, *args, **kwargs):
@@ -120,30 +142,54 @@ class Image(object):
             if not os.path.exists(target):
                 fetch_func(target=target, *args, **kwargs)
 
-        if not os.path.exists(self.path):
-            base_dir = os.path.join(CONF.instances_path, CONF.base_dir_name)
-            if not os.path.exists(base_dir):
-                fileutils.ensure_tree(base_dir)
-            base = os.path.join(base_dir, filename)
+        base_dir = os.path.join(CONF.instances_path, CONF.base_dir_name)
+        if not os.path.exists(base_dir):
+            fileutils.ensure_tree(base_dir)
+        base = os.path.join(base_dir, filename)
 
+        if not os.path.exists(self.path) or not os.path.exists(base):
             self.create_image(call_if_not_exists, base, size,
                               *args, **kwargs)
 
-    @abc.abstractmethod
-    def snapshot(self, name):
-        """Create snapshot object for this image
+        if size and self.preallocate and self._can_fallocate():
+            utils.execute('fallocate', '-n', '-l', size, self.path)
 
-        :name: snapshot name
+    def _can_fallocate(self):
+        """Check once per class, whether fallocate(1) is available,
+           and that the instances directory supports fallocate(2).
         """
-        pass
+        can_fallocate = getattr(self.__class__, 'can_fallocate', None)
+        if can_fallocate is None:
+            _out, err = utils.trycmd('fallocate', '-n', '-l', '1',
+                                     self.path + '.fallocate_test')
+            utils.delete_if_exists(self.path + '.fallocate_test')
+            can_fallocate = not err
+            self.__class__.can_fallocate = can_fallocate
+            if not can_fallocate:
+                LOG.error('Unable to preallocate_images=%s at path: %s' %
+                          (CONF.preallocate_images, self.path))
+        return can_fallocate
+
+    def snapshot_create(self):
+        raise NotImplementedError
+
+    def snapshot_extract(self, target, out_format):
+        raise NotImplementedError
+
+    def snapshot_delete(self):
+        raise NotImplementedError
 
 
 class Raw(Image):
-    def __init__(self, instance=None, name=None, path=None):
+    def __init__(self, instance=None, disk_name=None, path=None,
+                 snapshot_name=None):
         super(Raw, self).__init__("file", "raw", is_block_dev=False)
 
-        self.path = path or os.path.join(CONF.instances_path,
-                                         instance, name)
+        self.path = (path or
+                     os.path.join(libvirt_utils.get_instance_path(instance),
+                                  disk_name))
+        self.snapshot_name = snapshot_name
+        self.preallocate = CONF.preallocate_images != 'none'
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         @lockutils.synchronized(base, 'nova-', external=True,
@@ -159,34 +205,58 @@ class Raw(Image):
             prepare_template(target=self.path, *args, **kwargs)
         else:
             prepare_template(target=base, *args, **kwargs)
-            with utils.remove_path_on_error(self.path):
-                copy_raw_image(base, self.path, size)
+            if not os.path.exists(self.path):
+                with utils.remove_path_on_error(self.path):
+                    copy_raw_image(base, self.path, size)
 
-    def snapshot(self, name):
-        return snapshots.RawSnapshot(self.path, name)
+    def snapshot_create(self):
+        pass
+
+    def snapshot_extract(self, target, out_format):
+        images.convert_image(self.path, target, out_format)
+
+    def snapshot_delete(self):
+        pass
 
 
 class Qcow2(Image):
-    def __init__(self, instance=None, name=None, path=None):
+    def __init__(self, instance=None, disk_name=None, path=None,
+                 snapshot_name=None):
         super(Qcow2, self).__init__("file", "qcow2", is_block_dev=False)
 
-        self.path = path or os.path.join(CONF.instances_path,
-                                         instance, name)
+        self.path = (path or
+                     os.path.join(libvirt_utils.get_instance_path(instance),
+                                  disk_name))
+        self.snapshot_name = snapshot_name
+        self.preallocate = CONF.preallocate_images != 'none'
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         @lockutils.synchronized(base, 'nova-', external=True,
                                 lock_path=self.lock_path)
         def copy_qcow2_image(base, target, size):
+            # TODO(pbrady): Consider copying the cow image here
+            # with preallocation=metadata set for performance reasons.
+            # This would be keyed on a 'preallocate_images' setting.
             libvirt_utils.create_cow_image(base, target)
             if size:
                 disk.extend(target, size)
 
-        prepare_template(target=base, *args, **kwargs)
-        with utils.remove_path_on_error(self.path):
-            copy_qcow2_image(base, self.path, size)
+        if not os.path.exists(base):
+            prepare_template(target=base, *args, **kwargs)
+        if not os.path.exists(self.path):
+            with utils.remove_path_on_error(self.path):
+                copy_qcow2_image(base, self.path, size)
 
-    def snapshot(self, name):
-        return snapshots.Qcow2Snapshot(self.path, name)
+    def snapshot_create(self):
+        libvirt_utils.create_snapshot(self.path, self.snapshot_name)
+
+    def snapshot_extract(self, target, out_format):
+        libvirt_utils.extract_snapshot(self.path, 'qcow2',
+                                       self.snapshot_name, target,
+                                       out_format)
+
+    def snapshot_delete(self):
+        libvirt_utils.delete_snapshot(self.path, self.snapshot_name)
 
 
 class Lvm(Image):
@@ -194,7 +264,8 @@ class Lvm(Image):
     def escape(filename):
         return filename.replace('_', '__')
 
-    def __init__(self, instance=None, name=None, path=None):
+    def __init__(self, instance=None, disk_name=None, path=None,
+                 snapshot_name=None):
         super(Lvm, self).__init__("block", "raw", is_block_dev=True)
 
         if path:
@@ -208,11 +279,22 @@ class Lvm(Image):
                                      ' libvirt_images_volume_group'
                                      ' flag to use LVM images.'))
             self.vg = CONF.libvirt_images_volume_group
-            self.lv = '%s_%s' % (self.escape(instance),
-                                 self.escape(name))
+            self.lv = '%s_%s' % (self.escape(instance['name']),
+                                 self.escape(disk_name))
             self.path = os.path.join('/dev', self.vg, self.lv)
 
+        # TODO(pbrady): possibly deprecate libvirt_sparse_logical_volumes
+        # for the more general preallocate_images
         self.sparse = CONF.libvirt_sparse_logical_volumes
+        self.preallocate = not self.sparse
+
+        if snapshot_name:
+            self.snapshot_name = snapshot_name
+            self.snapshot_path = os.path.join('/dev', self.vg,
+                                              self.snapshot_name)
+
+    def _can_fallocate(self):
+        return False
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         @lockutils.synchronized(base, 'nova-', external=True,
@@ -223,10 +305,9 @@ class Lvm(Image):
             size = size if resize else base_size
             libvirt_utils.create_lvm_image(self.vg, self.lv,
                                            size, sparse=self.sparse)
-            cmd = ('dd', 'if=%s' % base, 'of=%s' % self.path, 'bs=4M')
-            utils.execute(*cmd, run_as_root=True)
+            images.convert_image(base, self.path, 'raw', run_as_root=True)
             if resize:
-                disk.resize2fs(self.path)
+                disk.resize2fs(self.path, run_as_root=True)
 
         generated = 'ephemeral_size' in kwargs
 
@@ -249,8 +330,20 @@ class Lvm(Image):
             with excutils.save_and_reraise_exception():
                 libvirt_utils.remove_logical_volumes(path)
 
-    def snapshot(self, name):
-        return snapshots.LvmSnapshot(self.path, name)
+    def snapshot_create(self):
+        size = CONF.libvirt_lvm_snapshot_size
+        cmd = ('lvcreate', '-L', size, '-s', '--name', self.snapshot_name,
+               self.path)
+        libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
+
+    def snapshot_extract(self, target, out_format):
+        images.convert_image(self.snapshot_path, target, out_format,
+                             run_as_root=True)
+
+    def snapshot_delete(self):
+        # NOTE (rmk): Snapshot volumes are automatically zeroed by LVM
+        cmd = ('lvremove', '-f', self.snapshot_path)
+        libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
 
 
 class Backend(object):
@@ -270,7 +363,7 @@ class Backend(object):
             raise RuntimeError(_('Unknown image_type=%s') % image_type)
         return image
 
-    def image(self, instance, name, image_type=None):
+    def image(self, instance, disk_name, image_type=None):
         """Constructs image for selected backend
 
         :instance: Instance name.
@@ -279,9 +372,9 @@ class Backend(object):
         Optional, is CONF.libvirt_images_type by default.
         """
         backend = self.backend(image_type)
-        return backend(instance=instance, name=name)
+        return backend(instance=instance, disk_name=disk_name)
 
-    def snapshot(self, path, snapshot_name, image_type=None):
+    def snapshot(self, disk_path, snapshot_name, image_type=None):
         """Returns snapshot for given image
 
         :path: path to image
@@ -289,4 +382,4 @@ class Backend(object):
         :image_type: type of image
         """
         backend = self.backend(image_type)
-        return backend(path=path).snapshot(snapshot_name)
+        return backend(path=disk_path, snapshot_name=snapshot_name)

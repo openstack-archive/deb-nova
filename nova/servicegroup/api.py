@@ -17,20 +17,21 @@
 
 """Define APIs for the servicegroup access."""
 
-from nova.openstack.common import cfg
+import random
+
+from oslo.config import cfg
+
 from nova.openstack.common import importutils
-from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova import utils
-
-from random import choice
-
 
 LOG = logging.getLogger(__name__)
 _default_driver = 'db'
 servicegroup_driver_opt = cfg.StrOpt('servicegroup_driver',
-                                   default=_default_driver,
-                                   help='The driver for servicegroup service.')
+                                     default=_default_driver,
+                                     help='The driver for servicegroup '
+                                          'service (valid options are: '
+                                          'db, zk, mc)')
 
 CONF = cfg.CONF
 CONF.register_opt(servicegroup_driver_opt)
@@ -39,10 +40,22 @@ CONF.register_opt(servicegroup_driver_opt)
 class API(object):
 
     _driver = None
-    _driver_name_class_mapping = {"db": "nova.servicegroup.db_driver.DbDriver"}
+    _driver_name_class_mapping = {
+        'db': 'nova.servicegroup.drivers.db.DbDriver',
+        'zk': 'nova.servicegroup.drivers.zk.ZooKeeperDriver',
+        'mc': 'nova.servicegroup.drivers.mc.MemcachedDriver'
+    }
 
-    @lockutils.synchronized('nova.servicegroup.api.new', 'nova-')
     def __new__(cls, *args, **kwargs):
+        '''Create an instance of the servicegroup API.
+
+        args and kwargs are passed down to the servicegroup driver when it gets
+        created.  No args currently exist, though.  Valid kwargs are:
+
+        db_allowed - Boolean. False if direct db access is not allowed and
+                     alternative data access (conductor) should be used
+                     instead.
+        '''
 
         if not cls._driver:
             LOG.debug(_('ServiceGroup driver defined as an instance of %s'),
@@ -53,7 +66,8 @@ class API(object):
             except KeyError:
                 raise TypeError(_("unknown ServiceGroup driver name: %s")
                                 % driver_name)
-            cls._driver = importutils.import_object(driver_class)
+            cls._driver = importutils.import_object(driver_class,
+                                                    *args, **kwargs)
             utils.check_isinstance(cls._driver, ServiceGroupDriver)
             # we don't have to check that cls._driver is not NONE,
             # check_isinstance does it
@@ -73,7 +87,7 @@ class API(object):
         return self._driver.join(member_id, group_id, service)
 
     def service_is_up(self, member):
-        """Check if the given member is up"""
+        """Check if the given member is up."""
         msg = _('Check if the given member [%s] is part of the '
                 'ServiceGroup, is up')
         LOG.debug(msg, member)
@@ -106,19 +120,19 @@ class ServiceGroupDriver(object):
     """Base class for ServiceGroup drivers."""
 
     def join(self, member_id, group_id, service=None):
-        """Join the given service with it's group"""
+        """Join the given service with it's group."""
         raise NotImplementedError()
 
     def is_up(self, member):
-        """Check whether the given member is up. """
+        """Check whether the given member is up."""
         raise NotImplementedError()
 
     def leave(self, member_id, group_id):
-        """Remove the given member from the ServiceGroup monitoring"""
+        """Remove the given member from the ServiceGroup monitoring."""
         raise NotImplementedError()
 
     def get_all(self, group_id):
-        """Returns ALL members of the given group"""
+        """Returns ALL members of the given group."""
         raise NotImplementedError()
 
     def get_one(self, group_id):
@@ -132,4 +146,4 @@ class ServiceGroupDriver(object):
         length = len(members)
         if length == 0:
             return None
-        return choice(members)
+        return random.choice(members)
