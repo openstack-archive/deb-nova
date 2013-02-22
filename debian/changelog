@@ -1,6 +1,7 @@
 nova (2013.1~g3-1) unstable; urgency=low
 
   * New upstream version.
+  * Removes fix-ini-syntax patch.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 20 Jan 2013 13:16:10 +0000
 
