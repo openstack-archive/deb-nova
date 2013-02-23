@@ -17,7 +17,7 @@ Build-Depends-Indep:
  ipython,
  libvirt-bin,
  openssh-client,
- pep8,
+ pep8 (>= 1.3.3),
  procps,
  python-amqplib,
  python-anyjson,
@@ -57,7 +57,7 @@ Build-Depends-Indep:
  python-simplejson,
  python-stevedore (>= 0.7.2),
  python-sphinx (>> 1.0),
- python-sqlalchemy-ext (>= 0.7.8-1),
+ python-sqlalchemy-ext (>= 0.7.8),
  python-suds (>= 0.4.0),
  python-tempita,
  python-testtools (>= 0.9.22),
@@ -68,7 +68,6 @@ Build-Depends-Indep:
  python-memcache,
  python-xenapi,
  python-zmq,
- pep8,
  testrepository,
  subunit (>= 0.0.10),
  websockify
@@ -126,7 +125,7 @@ Depends: ${python:Depends},
  python-webob (>= 1.2.3),
  python-xattr,
  sudo,
- websockify
+ websockify,
  ${misc:Depends}
 Suggests: python-suds (>= 0.4.0),
 Conflicts: python-cjson
@@ -395,7 +394,6 @@ Description: OpenStack Compute - virtual machine scheduler
 
 Package: nova-volume
 Section: oldlibs
-Priority: extra
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: cinder-volume, cinder-api, cinder-scheduler, ${misc:Depends}

@@ -1,4 +1,4 @@
-nova (2013.1~g3-1) unstable; urgency=low
+nova (2013.1~g3-1) experimental; urgency=low
 
   * New upstream version.
   * Removes fix-ini-syntax patch.
