@@ -70,7 +70,7 @@ Build-Depends-Indep:
  python-zmq,
  pep8,
  testrepository,
- subunit,
+ subunit (>= 0.0.10),
  websockify
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.4
