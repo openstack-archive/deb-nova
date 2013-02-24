@@ -589,6 +589,7 @@ Description: OpenStack Compute - documentation
 
 Package: nova-cells
 Architecture: all   
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
  ${misc:Depends},
  ${ostack-lsb-base},
@@ -609,6 +610,7 @@ Description: Openstack Compute - cells
 
 Package: nova-baremetal
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
  ${misc:Depends},  
  ${ostack-lsb-base},
@@ -623,6 +625,27 @@ Description: Openstack Compute - baremetal virt
  designed to be modular and easy to extend and adapt. In addition to its   
  "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
  many different database backends (including SQLite, MySQL, and PostgreSQL), 
+ hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
+ .
+ This is the baremetal virt component.
+
+Package: nova-spicehtml5proxy
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: nova-common (= ${binary:Version}),
+ ${misc:Depends},
+ ${ostack-lsb-base},
+ ${python:Depends}
+Description: Openstack Compute - Spice HTML5 Proxy
+ OpenStack is a reliable cloud infrastructure. Its mission is to produce
+ the ubiquitous cloud computing platform that will meet the needs of public
+ and private cloud providers regardless of size, by being simple to implement
+ and massively scalable.
+ .
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
+ designed to be modular and easy to extend and adapt. In addition to its
+ "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+ many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
  This is the baremetal virt component.
