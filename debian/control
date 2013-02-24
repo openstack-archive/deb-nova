@@ -21,6 +21,7 @@ Build-Depends-Indep:
  procps,
  python-amqplib,
  python-anyjson,
+ python-pyasn1,
  python-babel,
  python-boto,
  python-carrot,
