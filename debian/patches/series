@@ -10,3 +10,4 @@ CVE-2013-0208_disallow-boot-from-volume-from-specifying-arbitrary-volumes.patch
 CVE-2013-1664_CVE-2013-1665_Information-leak-and-Denial-of-Service-using-XML-entities.patch
 CVE-2013-0335_VNC-proxy-can-connect-to-the-wrong-VM.patch
 CVE-2013-0335_VNC-unit-tests-fixes.patch
+disable-arsert-of-vnc-test.patch
