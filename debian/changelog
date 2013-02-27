@@ -1,3 +1,9 @@
+nova (2012.1.1-14) unstable; urgency=high
+
+  * CVE-2013-0335: VNC proxy can connect to the wrong VM (Closes: #701773).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 27 Feb 2013 12:32:52 +0000
+
 nova (2012.1.1-13) unstable; urgency=high
 
   * CVE-2013-1664 & CVE-2013-1665: Information leak and Denial of Service using
