@@ -25,6 +25,7 @@ override_dh_auto_clean:
 	rm -f debian/nova-common.config debian/nova-common.postinst debian/nova-compute-xen.postinst \
 		debian/nova-api.config debian/nova-api.postinst
 	rm -f debian/*.upstart
+	rm -rf setuptools_git-*-py*.egg/
 
 override_dh_auto_build:
 	dh_auto_build
