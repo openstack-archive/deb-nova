@@ -37,6 +37,7 @@ Build-Depends-Indep:
  python-greenlet,
  python-iso8601,
  python-keystoneclient (>= 1:0.2.0),
+ python-ldap,
  python-libvirt,
  python-lockfile,
  python-lxml,
