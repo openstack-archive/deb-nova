@@ -1,7 +1,11 @@
 nova (2013.1~g3-1) experimental; urgency=low
 
+  [ Thomas Goirand ]
   * New upstream version.
   * Removes fix-ini-syntax patch.
+
+  [ Mehdi Abaakouk ]
+  * Sync fix-ubuntu-tests.patch with ubuntu
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 20 Jan 2013 13:16:10 +0000
 
