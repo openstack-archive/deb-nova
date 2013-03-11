@@ -13,34 +13,34 @@ manage_nova_api_field () {
 		# We get an answer from a multiselect debconf, so we trim spaces out
 		# before putting it in the config file
 		NOVA_APIS=`echo ${RET} | sed "s/ //g"`
-		pkgos_edit_config enabled_apis ${NOVA_APIS} /etc/nova/nova.conf
+		pkgos_inifile set ${NOVA_CONF} DEFAULT enabled_apis ${NOVA_APIS}
 	fi
 }
 
 manage_nova_my_ip_field () {
 	db_get nova/my-ip
 	if [ -n "${RET}" ] ; then
-		pkgos_edit_config my_ip ${RET} ${NOVA_CONF}
+		pkgos_inifile set ${NOVA_CONF} DEFAULT my_ip ${RET}
 	fi
 }
 
 manage_nova_rabbitmq_host () {
 	db_get nova/rabbit-host
 	if [ -n "${RET}" ] ; then
-		pkgos_edit_config rabbit_host ${RET} ${NOVA_CONF}
+		pkgos_inifile set ${NOVA_CONF} DEFAULT rabbit_host ${RET}
 	fi
 }
 
 manage_keystone_auth_fields () {
 	db_get nova/auth-host
-	pkgos_edit_config auth_host ${RET} ${NOVA_API_CONF} filter:authtoken
+	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken auth_host ${RET}
 	db_get nova/admin-tenant-name
-	pkgos_edit_config admin_tenant_name ${RET} ${NOVA_API_CONF} filter:authtoken
+	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_tenant_name ${RET}
 	db_get nova/admin-user
-	pkgos_edit_config admin_user ${RET} ${NOVA_API_CONF} filter:authtoken
+	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_user ${RET}
 	db_get nova/admin-password
 	if [ -n "${RET}" ] ; then
-		pkgos_edit_config admin_password ${RET} ${NOVA_API_CONF} filter:authtoken
+		pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_password ${RET}
 	fi
 }
 
@@ -72,7 +72,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	pkgos_write_new_conf nova logging.conf
 
 	# Tweak config files depending on debconf answers
-	pkgos_dbc_postinst -sh /etc/nova/nova.conf nova sql_connection $@
+	pkgos_dbc_postinst /etc/nova/nova.conf DEFAULT sql_connection nova $@
 	manage_nova_api_field
 	manage_nova_my_ip_field
 	manage_keystone_auth_fields

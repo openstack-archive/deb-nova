@@ -11,7 +11,7 @@ NOVA_API_CONF=/etc/nova/api-paste.ini
 
 set_enabled_apis_multiselect () {
 	local NOVA_APIS NOVA_API MULTISEL_VAL
-	pkgos_get_config -sh ${NOVA_CONF} enabled_apis DEFAULT
+	pkgos_inifile get ${NOVA_CONF} DEFAULT enabled_apis
 	if [ -n "${RET}" ] ; then
 		NOVA_APIS=`echo $RET | sed "s/,/ /g"`
 		for NOVA_API in ${NOVA_APIS} ; do
@@ -29,8 +29,7 @@ set_enabled_apis_multiselect () {
 }
 
 manage_nova_enable () {
-	# pkgos_read_config -r /etc/keystone/keystone.conf auth_token keystone/auth-token DEFAULT
-	pkgos_read_config -sh ${NOVA_COM_DEF} NOVA_ENABLE nova/start_services
+	pkgos_read_config -shinc ${NOVA_COM_DEF} NO_SECTION NOVA_ENABLE nova/start_services
 	NOVA_ENABLE=${RET}
 	if [ "${RET}" = "false" ] ; then
 		NOVA_ENABLE=false
@@ -46,7 +45,7 @@ NOVA_ENABLE=${NOVA_ENABLE}" >${NOVA_COM_DEF}
 }
 
 manage_nova_my_ip () {
-	pkgos_get_config -sh ${NOVA_CONF} my_ip DEFAULT
+	pkgos_inifile get ${NOVA_CONF} DEFAULT my_ip
 	if [ -n "${RET}" ] ; then
 		db_set nova/my-ip "${RET}"
 	else
@@ -61,9 +60,9 @@ manage_nova_my_ip () {
 }
 
 pkgos_var_user_group nova
-pkgos_dbc_read_conf -pkg nova-common -sh ${NOVA_CONF} nova sql_connection $@
-pkgos_read_admin_creds ${NOVA_API_CONF} nova filter:authtoken
-pkgos_read_config -p high -sh ${NOVA_CONF} rabbit_host nova/rabbit-host DEFAULT
+pkgos_dbc_read_conf -pkg nova-common ${NOVA_CONF} DEFAULT sql_connection nova $@
+pkgos_read_admin_creds ${NOVA_API_CONF} filter:authtoken nova
+pkgos_read_config -p high ${NOVA_CONF} DEFAULT rabbit_host nova/rabbit-host
 
 manage_nova_enable
 set_enabled_apis_multiselect
