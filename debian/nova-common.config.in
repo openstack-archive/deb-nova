@@ -29,7 +29,7 @@ set_enabled_apis_multiselect () {
 }
 
 manage_nova_enable () {
-	pkgos_read_config -shinc ${NOVA_COM_DEF} NO_SECTION NOVA_ENABLE nova/start_services
+	pkgos_read_config ${NOVA_COM_DEF} NO_SECTION NOVA_ENABLE nova/start_services
 	NOVA_ENABLE=${RET}
 	if [ "${RET}" = "false" ] ; then
 		NOVA_ENABLE=false
