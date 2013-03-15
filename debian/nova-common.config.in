@@ -46,7 +46,7 @@ NOVA_ENABLE=${NOVA_ENABLE}" >${NOVA_COM_DEF}
 
 manage_nova_my_ip () {
 	pkgos_inifile get ${NOVA_CONF} DEFAULT my_ip
-	if [ -n "${RET}" ] ; then
+	if [ -n "${RET}" ] && [ ! "${RET}" = "NOT_FOUND" ] ; then
 		db_set nova/my-ip "${RET}"
 	else
 		DEFROUTE_IF=`LC_ALL=C /sbin/route | grep default |awk -- '{ print $8 }'`
