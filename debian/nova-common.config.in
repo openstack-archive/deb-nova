@@ -12,7 +12,7 @@ NOVA_API_CONF=/etc/nova/api-paste.ini
 set_enabled_apis_multiselect () {
 	local NOVA_APIS NOVA_API MULTISEL_VAL
 	pkgos_inifile get ${NOVA_CONF} DEFAULT enabled_apis
-	if [ -n "${RET}" ] ; then
+	if [ -n "${RET}" ] && [ ! "${RET}" = "NOT_FOUND" ] ; then
 		NOVA_APIS=`echo $RET | sed "s/,/ /g"`
 		for NOVA_API in ${NOVA_APIS} ; do
 			if [ -n "${MULTISEL_VAL}" ] ; then
