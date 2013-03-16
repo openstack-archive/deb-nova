@@ -342,6 +342,7 @@ Description: OpenStack Compute network plugin for the Xen Cloud Platform
 
 Package: nova-conductor
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
  ${misc:Depends},
  ${ostack-lsb-base},
@@ -438,6 +439,7 @@ Description: OpenStack Compute - XVP VNC proxy
 
 Package: nova-novncproxy
 Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
  ${misc:Depends},   
  ${ostack-lsb-base},
