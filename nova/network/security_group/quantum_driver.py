@@ -27,6 +27,7 @@ from nova import context
 from nova import exception
 from nova.network import quantumv2
 from nova.network.security_group import security_group_base
+from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import uuidutils
 
@@ -90,13 +91,16 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
             nova_rule['to_port'] = -1
         else:
             nova_rule['to_port'] = rule['port_range_max']
-        nova_rule['group_id'] = rule['source_group_id']
-        nova_rule['cidr'] = rule['source_ip_prefix']
+        nova_rule['group_id'] = rule['remote_group_id']
+        nova_rule['cidr'] = rule['remote_ip_prefix']
         return nova_rule
 
     def get(self, context, name=None, id=None, map_exception=False):
         quantum = quantumv2.get_client(context)
         try:
+            if not id and name:
+                id = quantumv20.find_resourceid_by_name_or_id(
+                    quantum, 'security_group', name)
             group = quantum.show_security_group(id).get('security_group')
         except q_exc.QuantumClientException as e:
             if e.status_code == 404:
@@ -113,8 +117,13 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
              search_opts=None):
         """Returns list of security group rules owned by tenant."""
         quantum = quantumv2.get_client(context)
+        search_opts = {}
+        if names:
+            search_opts['name'] = names
+        if ids:
+            search_opts['id'] = ids
         try:
-            security_groups = quantum.list_security_groups().get(
+            security_groups = quantum.list_security_groups(**search_opts).get(
                 'security_groups')
         except q_exc.QuantumClientException as e:
             LOG.exception(_("Quantum Error getting security groups"))
@@ -197,19 +206,15 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 new_rule['ethertype'] = 'IPv4'
             else:
                 new_rule['ethertype'] = utils.get_ip_version(rule.get('cidr'))
-            new_rule['source_ip_prefix'] = rule.get('cidr')
+            new_rule['remote_ip_prefix'] = rule.get('cidr')
             new_rule['security_group_id'] = rule.get('parent_group_id')
-            new_rule['source_group_id'] = rule.get('group_id')
+            new_rule['remote_group_id'] = rule.get('group_id')
             if rule['from_port'] != -1:
                 new_rule['port_range_min'] = rule['from_port']
             if rule['to_port'] != -1:
                 new_rule['port_range_max'] = rule['to_port']
             new_rules.append(new_rule)
         return {'security_group_rules': new_rules}
-
-    def create_security_group_rule(self, context, security_group, new_rule):
-        return self.add_rules(context, new_rule['parent_group_id'],
-                              security_group['name'], [new_rule])[0]
 
     def remove_rules(self, context, security_group, rule_ids):
         quantum = quantumv2.get_client(context)
@@ -328,8 +333,8 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                           'port_id': port['id']})
                 quantum.update_port(port['id'], {'port': updated_port})
             except Exception:
-                LOG.exception(_("Quantum Error:"))
-                raise
+                with excutils.save_and_reraise_exception():
+                    LOG.exception(_("Quantum Error:"))
 
     @wrap_check_security_groups_policy
     def remove_from_instance(self, context, instance, security_group_name):
@@ -387,10 +392,6 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                    {'security_group_name': security_group_name,
                     'instance': instance['uuid']})
             self.raise_not_found(msg)
-
-    def rule_exists(self, security_group, new_rule):
-        # Handled by quantum
-        pass
 
     def populate_security_groups(self, instance, security_groups):
         # Setting to emply list since we do not want to populate this field

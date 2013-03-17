@@ -1,4 +1,4 @@
-# Copyright (c) 2011 OpenStack, LLC.
+# Copyright (c) 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,7 +16,6 @@
 """The hosts admin extension."""
 
 import webob.exc
-from xml.parsers import expat
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
@@ -24,7 +23,6 @@ from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
 from nova.openstack.common import log as logging
-from nova import utils
 
 LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'hosts')
@@ -71,11 +69,7 @@ class HostShowTemplate(xmlutil.TemplateBuilder):
 
 class HostUpdateDeserializer(wsgi.XMLDeserializer):
     def default(self, string):
-        try:
-            node = utils.safe_minidom_parse_string(string)
-        except expat.ExpatError:
-            msg = _("cannot understand XML")
-            raise exception.MalformedRequestBody(reason=msg)
+        node = xmlutil.safe_minidom_parse_string(string)
 
         updates = {}
         updates_node = self.find_first_child_named(node, 'updates')
@@ -200,7 +194,7 @@ class HostController(object):
             msg = _("Virt driver does not implement host maintenance mode.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
         except exception.NotFound as e:
-            raise webob.exc.HTTPNotFound(explanation=e.message)
+            raise webob.exc.HTTPNotFound(explanation=unicode(e))
         if result not in ("on_maintenance", "off_maintenance"):
             raise webob.exc.HTTPBadRequest(explanation=result)
         return result
@@ -220,7 +214,7 @@ class HostController(object):
             msg = _("Virt driver does not implement host disabled status.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
         except exception.NotFound as e:
-            raise webob.exc.HTTPNotFound(explanation=e.message)
+            raise webob.exc.HTTPNotFound(explanation=unicode(e))
         if result not in ("enabled", "disabled"):
             raise webob.exc.HTTPBadRequest(explanation=result)
         return result
@@ -236,7 +230,7 @@ class HostController(object):
             msg = _("Virt driver does not implement host power management.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
         except exception.NotFound as e:
-            raise webob.exc.HTTPNotFound(explanation=e.message)
+            raise webob.exc.HTTPNotFound(explanation=unicode(e))
         return {"host": host_name, "power_action": result}
 
     @wsgi.serializers(xml=HostActionTemplate)
@@ -317,7 +311,7 @@ class HostController(object):
         try:
             service = self.api.service_get_by_compute_host(context, host_name)
         except exception.NotFound as e:
-            raise webob.exc.HTTPNotFound(explanation=e.message)
+            raise webob.exc.HTTPNotFound(explanation=unicode(e))
         except exception.AdminRequired:
             msg = _("Describe-resource is admin only functionality")
             raise webob.exc.HTTPForbidden(explanation=msg)

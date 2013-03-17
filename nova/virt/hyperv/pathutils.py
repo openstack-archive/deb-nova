@@ -18,9 +18,9 @@
 import os
 import shutil
 
-from oslo.config import cfg
-
+from eventlet.green import subprocess
 from nova.openstack.common import log as logging
+from oslo.config import cfg
 
 LOG = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ hyperv_opts = [
 ]
 
 CONF = cfg.CONF
-CONF.register_opts(hyperv_opts, 'HYPERV')
+CONF.register_opts(hyperv_opts, 'hyperv')
 CONF.import_opt('instances_path', 'nova.compute.manager')
 
 
@@ -58,10 +58,17 @@ class PathUtils(object):
         os.rename(src, dest)
 
     def copyfile(self, src, dest):
-        shutil.copyfile(src, dest)
+        self.copy(src, dest)
 
     def copy(self, src, dest):
-        shutil.copy(src, dest)
+        # With large files this is 2x-3x faster than shutil.copy(src, dest),
+        # especially when copying to a UNC target.
+        # shutil.copyfileobj(...) with a proper buffer is better than
+        # shutil.copy(...) but still 20% slower than a shell copy.
+        # It can be replaced with Win32 API calls to avoid the process
+        # spawning overhead.
+        if subprocess.call(['cmd.exe', '/C', 'copy', '/Y', src, dest]):
+            raise IOError(_('The file copy from %(src)s to %(dest)s failed'))
 
     def rmtree(self, path):
         shutil.rmtree(path)
@@ -70,8 +77,8 @@ class PathUtils(object):
         local_instance_path = os.path.normpath(CONF.instances_path)
 
         if remote_server:
-            if CONF.HYPERV.instances_path_share:
-                path = CONF.HYPERV.instances_path_share
+            if CONF.hyperv.instances_path_share:
+                path = CONF.hyperv.instances_path_share
             else:
                 # Use an administrative share
                 path = local_instance_path.replace(':', '$')

@@ -1,4 +1,4 @@
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # Copyright 2012 Justin Santa Barbara
 # All Rights Reserved.
 #
@@ -32,7 +32,6 @@ from nova import exception
 from nova.network.security_group import openstack_driver
 from nova.network.security_group import quantum_driver
 from nova.openstack.common import log as logging
-from nova import utils
 from nova.virt import netutils
 
 
@@ -113,7 +112,7 @@ class SecurityGroupXMLDeserializer(wsgi.MetadataXMLDeserializer):
     """
     def default(self, string):
         """Deserialize an xml-formatted security group create request."""
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xmlutil.safe_minidom_parse_string(string)
         security_group = {}
         sg_node = self.find_first_child_named(dom,
                                                'security_group')
@@ -134,7 +133,7 @@ class SecurityGroupRulesXMLDeserializer(wsgi.MetadataXMLDeserializer):
 
     def default(self, string):
         """Deserialize an xml-formatted security group create request."""
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xmlutil.safe_minidom_parse_string(string)
         security_group_rule = self._extract_security_group_rule(dom)
         return {'body': {'security_group_rule': security_group_rule}}
 
@@ -622,11 +621,11 @@ class NativeSecurityGroupExceptions(object):
         raise exc.HTTPNotFound(explanation=msg)
 
 
-class NativeNovaSecurityGroupAPI(compute_api.SecurityGroupAPI,
-                                 NativeSecurityGroupExceptions):
+class NativeNovaSecurityGroupAPI(NativeSecurityGroupExceptions,
+                                 compute_api.SecurityGroupAPI):
     pass
 
 
-class NativeQuantumSecurityGroupAPI(quantum_driver.SecurityGroupAPI,
-                                    NativeSecurityGroupExceptions):
+class NativeQuantumSecurityGroupAPI(NativeSecurityGroupExceptions,
+                                    quantum_driver.SecurityGroupAPI):
     pass

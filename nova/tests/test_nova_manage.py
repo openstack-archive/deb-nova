@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-#    Copyright 2011 OpenStack LLC
+#    Copyright 2011 OpenStack Foundation
 #    Copyright 2011 Ilya Alekseyev
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -372,3 +372,27 @@ class ProjectCommandsTestCase(test.TestCase):
         self.assertRaises(SystemExit,
                           self.commands.quota, 'admin', 'volumes1', '10'
                           )
+
+
+class DBCommandsTestCase(test.TestCase):
+    def setUp(self):
+        super(DBCommandsTestCase, self).setUp()
+        self.commands = nova_manage.DbCommands()
+
+    def test_archive_deleted_rows_negative(self):
+        self.assertRaises(SystemExit,
+                          self.commands.archive_deleted_rows, -1)
+
+
+class ServiceCommandsTestCase(test.TestCase):
+    def setUp(self):
+        super(ServiceCommandsTestCase, self).setUp()
+        self.commands = nova_manage.ServiceCommands()
+
+    def test_service_enable_invalid_params(self):
+        self.assertRaises(SystemExit,
+                          self.commands.enable, 'nohost', 'noservice')
+
+    def test_service_disable_invalid_params(self):
+        self.assertRaises(SystemExit,
+                          self.commands.disable, 'nohost', 'noservice')

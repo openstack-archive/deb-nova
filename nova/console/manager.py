@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 OpenStack, LLC.
+# Copyright (c) 2010 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -37,7 +37,7 @@ console_manager_opts = [
                 default=False,
                 help='Stub calls to compute worker for tests'),
     cfg.StrOpt('console_public_hostname',
-               default=socket.getfqdn(),
+               default=socket.gethostname(),
                help='Publicly visible name for this console host'),
     ]
 

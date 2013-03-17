@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2013 OpenStack LLC.
+# Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -27,6 +27,7 @@ they are used.
 
 CREATE = 'create'
 DELETE = 'delete'
+EVACUATE = 'evacuate'
 RESTORE = 'restore'
 STOP = 'stop'
 START = 'start'

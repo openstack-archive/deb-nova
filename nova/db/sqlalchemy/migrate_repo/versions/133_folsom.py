@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 OpenStack LLC.
+# Copyright 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -1222,4 +1222,4 @@ def upgrade(migrate_engine):
 
 
 def downgrade(migrate_engine):
-    LOG.exception(_('Downgrade from Folsom is unsupported.'))
+    raise NotImplementedError('Downgrade from Folsom is unsupported.')

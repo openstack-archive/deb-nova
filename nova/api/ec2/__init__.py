@@ -32,12 +32,12 @@ from nova.api.ec2 import apirequest
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import faults
 from nova.api import validator
-from nova.common import memorycache
 from nova import context
 from nova import exception
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import memorycache
 from nova.openstack.common import timeutils
 from nova import utils
 from nova import wsgi
@@ -442,7 +442,7 @@ class Validator(wsgi.Middleware):
         'image_id': validator.validate_ec2_id,
         'attribute': validator.validate_str(),
         'image_location': validator.validate_image_path,
-        'public_ip': validator.validate_ipv4,
+        'public_ip': utils.is_valid_ipv4,
         'region_name': validator.validate_str(),
         'group_name': validator.validate_str(max_length=255),
         'group_description': validator.validate_str(max_length=255),

@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 OpenStack LLC.
+# Copyright 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -49,7 +49,8 @@ class ConsolesController(wsgi.Controller):
         except exception.InstanceNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=unicode(e))
         except exception.InstanceNotReady as e:
-            raise webob.exc.HTTPConflict(explanation=unicode(e))
+            raise webob.exc.HTTPConflict(
+                    explanation=_('Instance not yet ready'))
 
         return {'console': {'type': console_type, 'url': output['url']}}
 

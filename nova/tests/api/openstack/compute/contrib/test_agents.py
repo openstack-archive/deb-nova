@@ -1,5 +1,4 @@
-# Copyright 2012 IBM
-# All Rights Reserved.
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -98,9 +97,6 @@ class AgentsTest(test.TestCase):
                        fake_agent_build_create)
         self.context = context.get_admin_context()
         self.controller = agents.AgentController()
-
-    def tearDown(self):
-        super(AgentsTest, self).tearDown()
 
     def test_agents_create(self):
         req = FakeRequest()

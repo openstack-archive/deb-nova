@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 IBM
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -20,6 +20,8 @@ import re
 
 from oslo.config import cfg
 
+from nova.compute import instance_types
+from nova.compute import task_states
 from nova.image import glance
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
@@ -69,13 +71,15 @@ class PowerVMDiskAdapter(object):
         pass
 
     def create_image_from_volume(self, device_name, context,
-                                 image_id, image_meta):
+                                 image_id, image_meta, update_task_state):
         """Capture the contents of a volume and upload to glance
 
         :param device_name: device in /dev/ to capture
         :param context: nova context for operation
         :param image_id: image reference to pre-created image in glance
         :param image_meta: metadata for new image
+        :param update_task_state: Function reference that allows for updates
+                                  to the instance task state
         """
         pass
 
@@ -159,9 +163,9 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
 
         if not os.path.isfile(file_path):
             LOG.debug(_("Fetching image '%s' from glance") % image_id)
-            images.fetch_to_raw(context, image_id, file_path,
-                                instance['user_id'],
-                                project_id=instance['project_id'])
+            images.fetch(context, image_id, file_path,
+                        instance['user_id'],
+                        instance['project_id'])
         else:
             LOG.debug((_("Using image found at '%s'") % file_path))
 
@@ -171,8 +175,8 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
 
         # calculate root device size in bytes
         # we respect the minimum root device size in constants
-        size_gb = max(instance['instance_type']['root_gb'],
-                      constants.POWERVM_MIN_ROOT_GB)
+        instance_type = instance_types.extract_instance_type(instance)
+        size_gb = max(instance_type['root_gb'], constants.POWERVM_MIN_ROOT_GB)
         size = size_gb * 1024 * 1024 * 1024
 
         try:
@@ -196,14 +200,18 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
         return {'device_name': disk_name}
 
     def create_image_from_volume(self, device_name, context,
-                                 image_id, image_meta):
+                                 image_id, image_meta, update_task_state):
         """Capture the contents of a volume and upload to glance
 
         :param device_name: device in /dev/ to capture
         :param context: nova context for operation
         :param image_id: image reference to pre-created image in glance
         :param image_meta: metadata for new image
+        :param update_task_state: Function reference that allows for updates
+                                  to the instance task state.
         """
+        # Updating instance task state before capturing instance as a file
+        update_task_state(task_state=task_states.IMAGE_PENDING_UPLOAD)
 
         # do the disk copy
         dest_file_path = common.aix_path_join(CONF.powervm_img_remote_path,
@@ -218,6 +226,12 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
         # get glance service
         glance_service, image_id = glance.get_remote_image_service(
                 context, image_id)
+
+        # Updating instance task state before uploading image
+        # Snapshot will complete but instance state will not change
+        # to none in compute manager if expected state is not correct
+        update_task_state(task_state=task_states.IMAGE_UPLOADING,
+                     expected_state=task_states.IMAGE_PENDING_UPLOAD)
 
         # upload snapshot file to glance
         with open(snapshot_file_path, 'r') as img_file:
@@ -259,7 +273,7 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
             with common.vios_to_vios_auth(self.connection_data.host,
                                           dest,
                                           self.connection_data) as key_name:
-                cmd = ''.join(['scp -o "StrictHostKeyChecking no"',
+                cmd = ' '.join(['scp -o "StrictHostKeyChecking no"',
                                 ('-i %s' % key_name),
                                 file_path,
                                 '%s@%s:%s' % (self.connection_data.username,
@@ -385,7 +399,10 @@ class PowerVMLocalVolumeAdapter(PowerVMDiskAdapter):
         source_cksum = hasher.hexdigest()
 
         comp_path = os.path.join(remote_path, os.path.basename(source_path))
-        uncomp_path = comp_path.rstrip(".gz")
+        if comp_path.endswith(".gz"):
+            uncomp_path = os.path.splitext(comp_path)[0]
+        else:
+            uncomp_path = comp_path
         if not decompress:
             final_path = comp_path
         else:

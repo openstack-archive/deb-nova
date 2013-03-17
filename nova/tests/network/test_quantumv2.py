@@ -1,4 +1,4 @@
-# Copyright 2012 OpenStack LLC.
+# Copyright 2012 OpenStack Foundation
 # All Rights Reserved
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -21,12 +21,14 @@ import mox
 from oslo.config import cfg
 from quantumclient.v2_0 import client
 
+from nova.compute import instance_types
 from nova import context
 from nova import exception
 from nova.network import model
 from nova.network import quantumv2
 from nova.network.quantumv2 import api as quantumapi
 from nova import test
+from nova import utils
 
 CONF = cfg.CONF
 
@@ -227,6 +229,7 @@ class TestQuantumv2(test.TestCase):
                                'port_id': self.port_data2[1]['id'],
                                'fixed_ip_address': fixed_ip_address,
                                'router_id': 'router_id1'}
+        self._returned_nw_info = []
 
     def tearDown(self):
         self.addCleanup(CONF.reset)
@@ -365,7 +368,11 @@ class TestQuantumv2(test.TestCase):
         self.moxed_client.list_extensions().AndReturn(
             {'extensions': [{'name': 'nvp-qos'}]})
         self.mox.ReplayAll()
-        instance = {'instance_type': {'rxtx_factor': 1}}
+        instance_type = instance_types.get_default_instance_type()
+        instance_type['rxtx_factor'] = 1
+        sys_meta = utils.dict_to_metadata(
+            instance_types.save_instance_type_info({}, instance_type))
+        instance = {'system_metadata': sys_meta}
         port_req_body = {'port': {}}
         api._populate_quantum_extension_values(instance, port_req_body)
         self.assertEquals(port_req_body['port']['rxtx_factor'], 1)
@@ -457,13 +464,14 @@ class TestQuantumv2(test.TestCase):
         api.get_instance_nw_info(mox.IgnoreArg(),
                                  self.instance,
                                  networks=nets,
-                                 conductor_api=mox.IgnoreArg()).AndReturn(None)
+                                 conductor_api=mox.IgnoreArg()).AndReturn(
+                                         self._returned_nw_info)
         self.mox.ReplayAll()
         return api
 
     def _allocate_for_instance(self, net_idx=1, **kwargs):
         api = self._stub_allocate_for_instance(net_idx, **kwargs)
-        api.allocate_for_instance(self.context, self.instance, **kwargs)
+        return api.allocate_for_instance(self.context, self.instance, **kwargs)
 
     def test_allocate_for_instance_1(self):
         # Allocate one port in one network env.
@@ -630,6 +638,29 @@ class TestQuantumv2(test.TestCase):
         self.mox.ReplayAll()
         self.assertRaises(QUANTUM_CLIENT_EXCEPTION, api.allocate_for_instance,
                           self.context, self.instance)
+
+    def test_allocate_for_instance_no_port_or_network(self):
+        class BailOutEarly(Exception):
+            pass
+        api = quantumapi.API()
+        self.mox.StubOutWithMock(api, '_get_available_networks')
+        # Make sure we get an empty list and then bail out of the rest
+        # of the function
+        api._get_available_networks(self.context, self.instance['project_id'],
+                                    []).AndRaise(BailOutEarly)
+        self.mox.ReplayAll()
+        self.assertRaises(BailOutEarly,
+                          api.allocate_for_instance,
+                              self.context, self.instance,
+                              requested_networks=[(None, None, None)])
+
+    def test_allocate_for_instance_second_time(self):
+        # Make sure that allocate_for_instance only returns ports that it
+        # allocated during _that_ run.
+        new_port = {'id': 'fake'}
+        self._returned_nw_info = self.port_data1 + [new_port]
+        nw_info = self._allocate_for_instance()
+        self.assertEqual(nw_info, [new_port])
 
     def _deallocate_for_instance(self, number):
         port_data = number == 1 and self.port_data1 or self.port_data2
@@ -1141,7 +1172,7 @@ class TestQuantumv2(test.TestCase):
 
 
 class TestQuantumv2ModuleMethods(test.TestCase):
-    def test_ensure_requested_network_ordering_no_preference(self):
+    def test_ensure_requested_network_ordering_no_preference_ids(self):
         l = [1, 2, 3]
 
         quantumapi._ensure_requested_network_ordering(
@@ -1149,7 +1180,7 @@ class TestQuantumv2ModuleMethods(test.TestCase):
             l,
             None)
 
-    def test_ensure_requested_network_ordering_no_preference(self):
+    def test_ensure_requested_network_ordering_no_preference_hashes(self):
         l = [{'id': 3}, {'id': 1}, {'id': 2}]
 
         quantumapi._ensure_requested_network_ordering(

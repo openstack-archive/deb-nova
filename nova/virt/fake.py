@@ -131,7 +131,7 @@ class FakeDriver(driver.ComputeDriver):
         update_task_state(task_state=task_states.IMAGE_UPLOADING)
 
     def reboot(self, context, instance, network_info, reboot_type,
-               block_device_info=None):
+               block_device_info=None, bad_volumes_callback=None):
         pass
 
     @staticmethod
@@ -321,7 +321,7 @@ class FakeDriver(driver.ComputeDriver):
            disk and ram.
         """
         if nodename not in _FAKE_NODES:
-            raise exception.NovaException("node %s is not found" % nodename)
+            return {}
 
         dic = {'vcpus': 1,
                'memory_mb': 8192,
@@ -470,3 +470,6 @@ class FakeVirtAPI(virtapi.VirtAPI):
     def agent_build_get_by_triple(self, context, hypervisor, os, architecture):
         return db.agent_build_get_by_triple(context,
                                             hypervisor, os, architecture)
+
+    def instance_type_get(self, context, instance_type_id):
+        return db.instance_type_get(context, instance_type_id)

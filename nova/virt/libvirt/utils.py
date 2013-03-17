@@ -5,7 +5,7 @@
 #    All Rights Reserved.
 #    Copyright (c) 2010 Citrix Systems, Inc.
 #    Copyright (c) 2011 Piston Cloud Computing, Inc
-#    Copyright (c) 2011 OpenStack LLC
+#    Copyright (c) 2011 OpenStack Foundation
 #    (c) Copyright 2013 Hewlett-Packard Development Company, L.P.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -455,11 +455,7 @@ def create_snapshot(disk_path, snapshot_name):
     :param disk_path: Path to disk image
     :param snapshot_name: Name of snapshot in disk image
     """
-    qemu_img_cmd = ('qemu-img',
-                    'snapshot',
-                    '-c',
-                    snapshot_name,
-                    disk_path)
+    qemu_img_cmd = ('qemu-img', 'snapshot', '-c', snapshot_name, disk_path)
     # NOTE(vish): libvirt changes ownership of images
     execute(*qemu_img_cmd, run_as_root=True)
 
@@ -470,11 +466,7 @@ def delete_snapshot(disk_path, snapshot_name):
     :param disk_path: Path to disk image
     :param snapshot_name: Name of snapshot in disk image
     """
-    qemu_img_cmd = ('qemu-img',
-                    'snapshot',
-                    '-d',
-                    snapshot_name,
-                    disk_path)
+    qemu_img_cmd = ('qemu-img', 'snapshot', '-d', snapshot_name, disk_path)
     # NOTE(vish): libvirt changes ownership of images
     execute(*qemu_img_cmd, run_as_root=True)
 

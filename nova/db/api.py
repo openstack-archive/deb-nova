@@ -195,13 +195,17 @@ def compute_node_create(context, values):
 def compute_node_update(context, compute_id, values, prune_stats=False):
     """Set the given properties on a computeNode and update it.
 
-    Raises NotFound if computeNode does not exist.
+    Raises ComputeHostNotFound if computeNode does not exist.
     """
     return IMPL.compute_node_update(context, compute_id, values, prune_stats)
 
 
-def compute_node_get_by_host(context, host):
-    return IMPL.compute_node_get_by_host(context, host)
+def compute_node_delete(context, compute_id):
+    """Delete a computeNode from the database.
+
+    Raises ComputeHostNotFound if computeNode does not exist.
+    """
+    return IMPL.compute_node_delete(context, compute_id)
 
 
 def compute_node_statistics(context):
@@ -506,6 +510,12 @@ def fixed_ip_update(context, address, values):
     """Create a fixed ip from the values dictionary."""
     return IMPL.fixed_ip_update(context, address, values)
 
+
+def fixed_ip_count_by_project(context, project_id, session=None):
+    """Count fixed ips used by project."""
+    return IMPL.fixed_ip_count_by_project(context, project_id,
+                                          session=session)
+
 ####################
 
 
@@ -625,11 +635,6 @@ def instance_get_all_by_host_and_node(context, host, node):
 def instance_get_all_by_host_and_not_type(context, host, type_id=None):
     """Get all instances belonging to a host with a different type_id."""
     return IMPL.instance_get_all_by_host_and_not_type(context, host, type_id)
-
-
-def instance_get_all_by_reservation(context, reservation_id):
-    """Get all instances belonging to a reservation."""
-    return IMPL.instance_get_all_by_reservation(context, reservation_id)
 
 
 def instance_get_floating_address(context, instance_id):
@@ -872,25 +877,6 @@ def network_update(context, network_id, values):
     return IMPL.network_update(context, network_id, values)
 
 
-###################
-
-
-def iscsi_target_count_by_host(context, host):
-    """Return count of export devices."""
-    return IMPL.iscsi_target_count_by_host(context, host)
-
-
-def iscsi_target_create_safe(context, values):
-    """Create an iscsi_target from the values dictionary.
-
-    The device is not returned. If the create violates the unique
-    constraints because the iscsi_target and host already exist,
-    no exception is raised.
-
-    """
-    return IMPL.iscsi_target_create_safe(context, values)
-
-
 ###############
 
 
@@ -970,11 +956,6 @@ def reservation_get(context, uuid):
     return IMPL.reservation_get(context, uuid)
 
 
-def reservation_destroy(context, uuid):
-    """Destroy the reservation or raise if it does not exist."""
-    return IMPL.reservation_destroy(context, uuid)
-
-
 ###################
 
 
@@ -1008,11 +989,6 @@ def reservation_expire(context):
 
 
 ###################
-
-
-def volume_get_iscsi_target_num(context, volume_id):
-    """Get the target num (tid) allocated to the volume."""
-    return IMPL.volume_get_iscsi_target_num(context, volume_id)
 
 
 def get_ec2_volume_id_by_uuid(context, volume_id):

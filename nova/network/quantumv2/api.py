@@ -1,4 +1,4 @@
-# Copyright 2012 OpenStack LLC.
+# Copyright 2012 OpenStack Foundation
 # All Rights Reserved
 # Copyright (c) 2012 NEC Corporation
 #
@@ -20,6 +20,7 @@ import time
 
 from oslo.config import cfg
 
+from nova.compute import instance_types
 from nova import conductor
 from nova import context
 from nova.db import base
@@ -72,6 +73,7 @@ quantum_opts = [
 CONF = cfg.CONF
 CONF.register_opts(quantum_opts)
 CONF.import_opt('default_floating_pool', 'nova.network.floating_ips')
+CONF.import_opt('flat_injected', 'nova.network.manager')
 LOG = logging.getLogger(__name__)
 
 NET_EXTERNAL = 'router:external'
@@ -171,9 +173,10 @@ class API(base.Base):
                             available_macs.discard(port['mac_address'])
                     network_id = port['network_id']
                     ports[network_id] = port
-                elif fixed_ip:
+                elif fixed_ip and network_id:
                     fixed_ips[network_id] = fixed_ip
-                net_ids.append(network_id)
+                if network_id:
+                    net_ids.append(network_id)
 
         nets = self._get_available_networks(context, instance['project_id'],
                                             net_ids)
@@ -277,8 +280,15 @@ class API(base.Base):
         self.trigger_security_group_members_refresh(context, instance)
         self.trigger_instance_add_security_group_refresh(context, instance)
 
-        return self.get_instance_nw_info(context, instance, networks=nets,
-                conductor_api=kwargs.get('conductor_api'))
+        nw_info = self.get_instance_nw_info(context, instance, networks=nets,
+                      conductor_api=kwargs.get('conductor_api'))
+        # NOTE(danms): Only return info about ports we created in this run.
+        # In the initial allocation case, this will be everything we created,
+        # and in later runs will only be what was created that time. Thus,
+        # this only affects the attach case, not the original use for this
+        # method.
+        return network_model.NetworkInfo([port for port in nw_info
+                                          if port['id'] in created_port_ids])
 
     def _refresh_quantum_extensions_cache(self):
         if (not self.last_quantum_extension_sync or
@@ -294,7 +304,8 @@ class API(base.Base):
     def _populate_quantum_extension_values(self, instance, port_req_body):
         self._refresh_quantum_extensions_cache()
         if 'nvp-qos' in self.extensions:
-            rxtx_factor = instance['instance_type'].get('rxtx_factor')
+            instance_type = instance_types.extract_instance_type(instance)
+            rxtx_factor = instance_type.get('rxtx_factor')
             port_req_body['port']['rxtx_factor'] = rxtx_factor
 
     def deallocate_for_instance(self, context, instance, **kwargs):
@@ -772,6 +783,12 @@ class API(base.Base):
                 if port['network_id'] == net['id']:
                     network_name = net['name']
                     break
+
+            if network_name is None:
+                raise exception.NotFound(_('Network %(net)s for '
+                                           'port %(port_id)s not found!') %
+                                         {'net': port['network_id'],
+                                          'port': port['id']})
 
             network_IPs = [network_model.FixedIP(address=ip_address)
                            for ip_address in [ip['ip_address']

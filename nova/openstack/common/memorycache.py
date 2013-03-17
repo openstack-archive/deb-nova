@@ -32,14 +32,19 @@ CONF = cfg.CONF
 CONF.register_opts(memcache_opts)
 
 
-def get_client():
+def get_client(memcached_servers=None):
     client_cls = Client
 
-    if CONF.memcached_servers:
-        import memcache
-        client_cls = memcache.Client
+    if not memcached_servers:
+        memcached_servers = CONF.memcached_servers
+    if memcached_servers:
+        try:
+            import memcache
+            client_cls = memcache.Client
+        except ImportError:
+            pass
 
-    return client_cls(CONF.memcached_servers, debug=0)
+    return client_cls(memcached_servers, debug=0)
 
 
 class Client(object):
@@ -54,9 +59,10 @@ class Client(object):
 
         this expunges expired keys during each get"""
 
+        now = timeutils.utcnow_ts()
         for k in self.cache.keys():
             (timeout, _value) = self.cache[k]
-            if timeout and timeutils.utcnow_ts() >= timeout:
+            if timeout and now >= timeout:
                 del self.cache[k]
 
         return self.cache.get(key, (0, None))[1]

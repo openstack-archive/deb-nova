@@ -1,4 +1,4 @@
-# Copyright 2012 OpenStack LLC.
+# Copyright 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -50,6 +50,5 @@ def downgrade(migrate_engine):
     meta.bind = migrate_engine
 
     instances = Table('instances', meta, autoload=True)
-    node = Column('node', String(length=255))
 
-    instances.drop_column(node)
+    instances.drop_column('node')

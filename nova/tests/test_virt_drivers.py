@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
-#    Copyright 2010 OpenStack LLC
+#    Copyright 2010 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -191,9 +191,6 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                                                     fake.FakeVirtAPI())
         self.ctxt = test_utils.get_test_admin_context()
         self.image_service = fake_image.FakeImageService()
-
-    def tearDown(self):
-        super(_VirtDriverTestCase, self).tearDown()
 
     def _get_running_instance(self):
         instance_ref = test_utils.get_test_instance()

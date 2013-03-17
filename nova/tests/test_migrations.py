@@ -1,6 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010-2011 OpenStack, LLC
+# Copyright 2010-2011 OpenStack Foundation
+# Copyright 2012-2013 IBM Corp.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -44,16 +45,19 @@ import collections
 import commands
 import ConfigParser
 import datetime
-import netaddr
 import os
-import sqlalchemy
-import sqlalchemy.exc
 import urlparse
 import uuid
 
 from migrate.versioning import repository
+import netaddr
+import sqlalchemy
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects import sqlite
+import sqlalchemy.exc
 
 import nova.db.sqlalchemy.migrate_repo
+from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import test
@@ -244,11 +248,36 @@ class BaseMigrationTestCase(test.TestCase):
         self._reset_databases()
         super(BaseMigrationTestCase, self).tearDown()
 
+    def execute_cmd(self, cmd=None):
+        status, output = commands.getstatusoutput(cmd)
+        LOG.debug(output)
+        self.assertEqual(0, status,
+                         "Failed to run: %s\n%s" % (cmd, output))
+
+    @lockutils.synchronized('pgadmin', 'nova-', external=True)
+    def _reset_pg(self, conn_pieces):
+        (user, password, database, host) = \
+            get_pgsql_connection_info(conn_pieces)
+        os.environ['PGPASSWORD'] = password
+        os.environ['PGUSER'] = user
+        # note(boris-42): We must create and drop database, we can't
+        # drop database which we have connected to, so for such
+        # operations there is a special database template1.
+        sqlcmd = ("psql -w -U %(user)s -h %(host)s -c"
+                  " '%(sql)s' -d template1")
+
+        sql = ("drop database if exists %(database)s;") % locals()
+        droptable = sqlcmd % locals()
+        self.execute_cmd(droptable)
+
+        sql = ("create database %(database)s;") % locals()
+        createtable = sqlcmd % locals()
+        self.execute_cmd(createtable)
+
+        os.unsetenv('PGPASSWORD')
+        os.unsetenv('PGUSER')
+
     def _reset_databases(self):
-        def execute_cmd(cmd=None):
-            status, output = commands.getstatusoutput(cmd)
-            LOG.debug(output)
-            self.assertEqual(0, status)
         for key, engine in self.engines.items():
             conn_string = self.test_databases[key]
             conn_pieces = urlparse.urlparse(conn_string)
@@ -271,29 +300,9 @@ class BaseMigrationTestCase(test.TestCase):
                         "create database %(database)s;") % locals()
                 cmd = ("mysql -u \"%(user)s\" %(password)s -h %(host)s "
                        "-e \"%(sql)s\"") % locals()
-                execute_cmd(cmd)
+                self.execute_cmd(cmd)
             elif conn_string.startswith('postgresql'):
-                # note(krtaylor): File creation problems with tests in
-                # venv using .pgpass authentication, changed to
-                # PGPASSWORD environment variable which is no longer
-                # planned to be deprecated
-                (user, password, database, host) = \
-                        get_pgsql_connection_info(conn_pieces)
-                os.environ['PGPASSWORD'] = password
-                os.environ['PGUSER'] = user
-                # note(boris-42): We must create and drop database, we can't
-                # drop database which we have connected to, so for such
-                # operations there is a special database template1.
-                sqlcmd = ("psql -w -U %(user)s -h %(host)s -c"
-                                     " '%(sql)s' -d template1")
-                sql = ("drop database if exists %(database)s;") % locals()
-                droptable = sqlcmd % locals()
-                execute_cmd(droptable)
-                sql = ("create database %(database)s;") % locals()
-                createtable = sqlcmd % locals()
-                execute_cmd(createtable)
-                os.unsetenv('PGPASSWORD')
-                os.unsetenv('PGUSER')
+                self._reset_pg(conn_pieces)
 
     def _test_mysql_opportunistically(self):
         # Test that table creation on mysql only builds InnoDB tables
@@ -363,45 +372,57 @@ class BaseMigrationTestCase(test.TestCase):
                 self.migration_api.db_version(engine,
                                          self.REPOSITORY))
 
-        self.migration_api.upgrade(engine,
-                self.REPOSITORY,
-                self.INIT_VERSION + 1)
-
         LOG.debug('latest version is %s' % self.REPOSITORY.latest)
+        versions = range(self.INIT_VERSION + 1, self.REPOSITORY.latest + 1)
 
-        for version in xrange(self.INIT_VERSION + 2,
-                              self.REPOSITORY.latest + 1):
+        for version in versions:
             # upgrade -> downgrade -> upgrade
             self._migrate_up(engine, version, with_data=True)
             if snake_walk:
-                self._migrate_down(engine, version)
-                self._migrate_up(engine, version)
+                downgraded = self._migrate_down(
+                        engine, version - 1, with_data=True)
+                if downgraded:
+                    self._migrate_up(engine, version)
 
         if downgrade:
             # Now walk it back down to 0 from the latest, testing
             # the downgrade paths.
-            for version in reversed(
-                xrange(self.INIT_VERSION + 2,
-                       self.REPOSITORY.latest + 1)):
+            for version in reversed(versions):
                 # downgrade -> upgrade -> downgrade
-                self._migrate_down(engine, version)
-                if snake_walk:
-                    self._migrate_up(engine, version)
-                    self._migrate_down(engine, version)
+                downgraded = self._migrate_down(engine, version - 1)
 
-    def _migrate_down(self, engine, version):
-        self.migration_api.downgrade(engine,
-                                self.REPOSITORY,
-                                version)
+                if snake_walk and downgraded:
+                    self._migrate_up(engine, version)
+                    self._migrate_down(engine, version - 1)
+
+    def _migrate_down(self, engine, version, with_data=False):
+        try:
+            self.migration_api.downgrade(engine, self.REPOSITORY, version)
+        except NotImplementedError:
+            # NOTE(sirp): some migrations, namely release-level
+            # migrations, don't support a downgrade.
+            return False
+
         self.assertEqual(version,
                          self.migration_api.db_version(engine,
                                                   self.REPOSITORY))
+
+        # NOTE(sirp): `version` is what we're downgrading to (i.e. the 'target'
+        # version). So if we have any downgrade checks, they need to be run for
+        # the previous (higher numbered) migration.
+        if with_data:
+            post_downgrade = getattr(
+                    self, "_post_downgrade_%03d" % (version + 1), None)
+            if post_downgrade:
+                post_downgrade(engine)
+
+        return True
 
     def _migrate_up(self, engine, version, with_data=False):
         """migrate up to a new version of the db.
 
         We allow for data insertion and post checks at every
-        migration version with special _prerun_### and
+        migration version with special _pre_upgrade_### and
         _check_### functions in the main test.
         """
         # NOTE(sdague): try block is here because it's impossible to debug
@@ -409,20 +430,17 @@ class BaseMigrationTestCase(test.TestCase):
         try:
             if with_data:
                 data = None
-                prerun = getattr(self, "_prerun_%d" % version, None)
-                if prerun:
-                    data = prerun(engine)
+                pre_upgrade = getattr(
+                        self, "_pre_upgrade_%03d" % version, None)
+                if pre_upgrade:
+                    data = pre_upgrade(engine)
 
-                self.migration_api.upgrade(engine,
-                                      self.REPOSITORY,
-                                      version)
-                self.assertEqual(
-                    version,
-                    self.migration_api.db_version(engine,
-                                             self.REPOSITORY))
-
+            self.migration_api.upgrade(engine, self.REPOSITORY, version)
+            self.assertEqual(version,
+                             self.migration_api.db_version(engine,
+                                                           self.REPOSITORY))
             if with_data:
-                check = getattr(self, "_check_%d" % version, None)
+                check = getattr(self, "_check_%03d" % version, None)
                 if check:
                     check(engine, data)
         except Exception:
@@ -462,7 +480,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                     globals(), locals(), ['versioning_api'], -1)
             self.migration_api = temp.versioning_api
 
-    def _prerun_134(self, engine):
+    def _pre_upgrade_134(self, engine):
         now = timeutils.utcnow()
         data = [{
             'id': 1,
@@ -516,7 +534,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertEqual(data[0]['mac'], bw['mac'])
 
     # migration 141, update migrations instance uuid
-    def _prerun_141(self, engine):
+    def _pre_upgrade_141(self, engine):
         data = {
             'instance_uuid': str(uuid.uuid4())
             }
@@ -534,7 +552,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertEqual(data['instance_uuid'], row['instance_uuid'])
 
     # migration 146, availability zone transition
-    def _prerun_146(self, engine):
+    def _pre_upgrade_146(self, engine):
         data = {
             'availability_zone': 'custom_az',
             'name': 'name',
@@ -553,8 +571,15 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             aggregate_md.c.aggregate_id == data['id']).execute().first()
         self.assertEqual(data['availability_zone'], md['value'])
 
+    def _post_downgrade_146(self, engine):
+        # Downgrade should delete availability_zone aggregate_metadata entries
+        aggregate_md = get_table(engine, 'aggregate_metadata')
+        num_azs = aggregate_md.count().where(
+                aggregate_md.c.key == 'availability_zone').execute().scalar()
+        self.assertEqual(0, num_azs)
+
     # migration 147, availability zone transition for services
-    def _prerun_147(self, engine):
+    def _pre_upgrade_147(self, engine):
         az = 'test_zone'
         host1 = 'compute-host1'
         host2 = 'compute-host2'
@@ -573,7 +598,23 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
 
         services = get_table(engine, 'services')
         engine.execute(services.insert(), data)
+        self._pre_upgrade_147_no_duplicate_aggregate_hosts(engine)
         return data
+
+    def _pre_upgrade_147_no_duplicate_aggregate_hosts(self, engine):
+        engine.execute(get_table(engine, 'aggregate_metadata').insert(), [
+            {'aggregate_id': 1,
+             'key': 'availability_zone',
+             'value': 'custom_az'}])
+
+        engine.execute(get_table(engine, 'aggregate_hosts').insert(), [
+            {'aggregate_id': 1,
+             'host': 'compute-host3'}])
+
+        engine.execute(get_table(engine, 'services').insert(), [
+            {'id': 99, 'host': 'compute-host3',
+             'binary': 'nova-compute', 'topic': 'compute',
+             'report_count': 0, 'availability_zone': 'custom_az'}])
 
     def _check_147(self, engine, data):
         aggregate_md = get_table(engine, 'aggregate_metadata')
@@ -597,8 +638,17 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             ).execute().first()
         self.assertEqual(host, None)
 
+        self._check_147_no_duplicate_aggregate_hosts(engine, data)
+
+    def _check_147_no_duplicate_aggregate_hosts(self, engine, data):
+        aggregate_hosts = get_table(engine, 'aggregate_hosts')
+        agg1_hosts = [h['host'] for h in aggregate_hosts.select(
+            aggregate_hosts.c.aggregate_id == 1
+            ).execute().fetchall()]
+        self.assertEqual(['compute-host3'], agg1_hosts)
+
     # migration 149, changes IPAddr storage format
-    def _prerun_149(self, engine):
+    def _pre_upgrade_149(self, engine):
         provider_fw_rules = get_table(engine, 'provider_fw_rules')
         console_pools = get_table(engine, 'console_pools')
         data = {
@@ -656,7 +706,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             self.assertIn(str(netaddr.IPAddress(row['address'])), iplist)
 
     # migration 151 - changes period_beginning and period_ending to DateTime
-    def _prerun_151(self, engine):
+    def _pre_upgrade_151(self, engine):
         task_log = get_table(engine, 'task_log')
         data = {
             'task_name': 'The name of the task',
@@ -682,7 +732,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertEqual(data['period_ending'], str(row['period_ending']))
 
     # migration 152 - convert deleted from boolean to int
-    def _prerun_152(self, engine):
+    def _pre_upgrade_152(self, engine):
         host1 = 'compute-host1'
         host2 = 'compute-host2'
         # NOTE(sdague): start at #4 because services data already in table
@@ -719,7 +769,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertEqual(volume.id, volume.deleted)
 
     # migration 153, copy flavor information into system_metadata
-    def _prerun_153(self, engine):
+    def _pre_upgrade_153(self, engine):
         fake_types = [
             dict(id=10, name='type1', memory_mb=128, vcpus=1,
                  root_gb=10, ephemeral_gb=0, flavorid="1", swap=0,
@@ -735,7 +785,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                  is_public=False),
             dict(id=13, name='type4', memory_mb=128, vcpus=1,
                  root_gb=10, ephemeral_gb=0, flavorid="4", swap=0,
-                 rxtx_factor=1.0, vcpu_weight=1, disabled=True,
+                 rxtx_factor=1.0, vcpu_weight=None, disabled=True,
                  is_public=True),
             dict(id=14, name='type5', memory_mb=128, vcpus=1,
                  root_gb=10, ephemeral_gb=0, flavorid="5", swap=0,
@@ -744,10 +794,10 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             ]
 
         fake_instances = [
-            dict(uuid='m153-uuid1', instance_type_id=10),
-            dict(uuid='m153-uuid2', instance_type_id=11),
-            dict(uuid='m153-uuid3', instance_type_id=12),
-            dict(uuid='m153-uuid4', instance_type_id=13),
+            dict(uuid='m153-uuid1', instance_type_id=10, deleted=0),
+            dict(uuid='m153-uuid2', instance_type_id=11, deleted=0),
+            dict(uuid='m153-uuid3', instance_type_id=12, deleted=0),
+            dict(uuid='m153-uuid4', instance_type_id=13, deleted=0),
             # NOTE(danms): no use of type5
             ]
 
@@ -781,13 +831,19 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             for prop in instance_type_props:
                 prop_name = 'instance_type_%s' % prop
                 self.assertIn(prop_name, inst_sys_meta)
-                self.assertEqual(str(inst_sys_meta[prop_name]),
-                                 str(inst_type[prop]))
+                if prop == "vcpu_weight":
+                    # NOTE(danms) vcpu_weight can be NULL
+                    self.assertEqual(inst_sys_meta[prop_name],
+                                     inst_type[prop] and str(inst_type[prop])
+                                     or None)
+                else:
+                    self.assertEqual(str(inst_sys_meta[prop_name]),
+                                     str(inst_type[prop]))
 
     # migration 154, add shadow tables for deleted data
     # There are 53 shadow tables but we only test one
     # There are additional tests in test_db_api.py
-    def _prerun_154(self, engine):
+    def _pre_upgrade_154(self, engine):
         meta = sqlalchemy.schema.MetaData()
         meta.reflect(engine)
         table_names = meta.tables.keys()
@@ -799,7 +855,6 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         meta.reflect(engine)
         table_names = set(meta.tables.keys())
         for table_name in table_names:
-            print table_name
             if table_name.startswith("shadow_"):
                 shadow_name = table_name
                 base_name = table_name.replace("shadow_", "")
@@ -831,7 +886,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                                  str(shadow_column.type))
 
     # migration 156 - introduce CIDR type
-    def _prerun_156(self, engine):
+    def _pre_upgrade_156(self, engine):
         # assume the same data as from 149
         data = {
             'provider_fw_rules':
@@ -866,7 +921,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         # recheck the 149 data
         self._check_149(engine, data)
 
-    def _prerun_158(self, engine):
+    def _pre_upgrade_158(self, engine):
         networks = get_table(engine, 'networks')
         data = [
             {'vlan': 1, 'deleted': 0},
@@ -886,11 +941,176 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                     fetchall()
         self.assertEqual(len(rows), 1)
 
+    def _pre_upgrade_159(self, engine):
+        data = {
+            'provider_fw_rules':
+                [
+                {'protocol': 'tcp', 'from_port': 1234,
+                 'to_port': 1234, 'cidr': "127.0.0.1/30"},
+                {'protocol': 'tcp', 'from_port': 1234,
+                 'to_port': 1234, 'cidr': "128.128.128.128/16"},
+                {'protocol': 'tcp', 'from_port': 1234,
+                 'to_port': 1234, 'cidr': "128.128.128.128/32"},
+                {'protocol': 'tcp', 'from_port': 1234,
+                 'to_port': 1234, 'cidr': "2001:db8::1:2/48"},
+                {'protocol': 'tcp', 'from_port': 1234,
+                 'to_port': 1234, 'cidr': "::1/64"},
+                {'protocol': 'tcp', 'from_port': 1234, 'to_port': 1234,
+                 'cidr': "0000:0000:0000:2013:0000:6535:abcd:ef11/64"},
+                {'protocol': 'tcp', 'from_port': 1234, 'to_port': 1234,
+                 'cidr': "0000:1020:0000:2013:0000:6535:abcd:ef11/128"},
+                ],
+            'console_pools':
+                [
+                {'address': '10.10.10.10'},
+                {'address': '128.100.100.100'},
+                {'address': '2002:2002:2002:2002:2002:2002:2002:2002'},
+                {'address': '::1'},
+                {'address': '0000:0000:0000:2013:0000:6535:abcd:ef11'}
+                ]
+            }
+        return data
+
+    # migration 159 - revert ip column size
+    def _check_159(self, engine, data):
+        dialect = engine.url.get_dialect()
+        # NOTE(maurosr): check if column length is 39 again (it currently makes
+        # sense only for mysql)
+        if dialect not in [postgresql.dialect, sqlite.dialect]:
+            console_pools = get_table(engine, 'console_pools')
+            self.assertEqual(console_pools.columns['address'].type.length, 39)
+        # recheck the 149 data
+        self._check_149(engine, data)
+
+    def _post_downgrade_159(self, engine):
+        dialect = engine.url.get_dialect()
+        # NOTE(maurosr): check if column length is 43 again (it currently makes
+        # sense only for mysql)
+        if dialect not in [postgresql.dialect, sqlite.dialect]:
+            console_pools = get_table(engine, 'console_pools')
+            self.assertEqual(console_pools.columns['address'].type.length, 43)
+
+    # migration 160, fix system_metadata NULL deleted entries to be 0
+    def _pre_upgrade_160(self, engine):
+        fake_instances = [
+            dict(uuid='m160-uuid1'),
+            dict(uuid='m160-uuid2'),
+            dict(uuid='m160-uuid3'),
+            ]
+        fake_sys_meta = [
+            dict(instance_uuid='m160-uuid1', key='foo', value='bar'),
+            dict(instance_uuid='m160-uuid2', key='foo2', value='bar2'),
+            dict(instance_uuid='m160-uuid3', key='foo3', value='bar3')]
+
+        instances = get_table(engine, 'instances')
+        sys_meta = get_table(engine, 'instance_system_metadata')
+        engine.execute(instances.insert(), fake_instances)
+
+        # Create the metadata entries
+        data = {}
+        for sm in fake_sys_meta:
+            result = sys_meta.insert().values(sm).execute()
+            sm['id'] = result.inserted_primary_key[0]
+            data[sm['id']] = sm
+
+        # Make sure the entries in the DB for 'deleted' are None.
+        our_ids = data.keys()
+        results = sys_meta.select().where(sys_meta.c.id.in_(our_ids)).\
+                                          execute()
+        results = list(results)
+        self.assertEqual(len(our_ids), len(results))
+        for result in results:
+            self.assertEqual(result['deleted'], None)
+        return data
+
+    def _check_160(self, engine, data):
+        our_ids = data.keys()
+        sys_meta = get_table(engine, 'instance_system_metadata')
+        results = sys_meta.select().where(sys_meta.c.id.in_(our_ids)).\
+                                    execute()
+        results = list(results)
+        self.assertEqual(len(our_ids), len(results))
+        for result in results:
+            the_id = result['id']
+            # Make sure this is now 0.
+            self.assertEqual(result['deleted'], 0)
+            # Make sure nothing else changed.
+            for key, value in data[the_id].items():
+                self.assertEqual(value, result[key])
+
+    # migration 161, fix system_metadata "None" values should be NULL
+    def _pre_upgrade_161(self, engine):
+        fake_instances = [dict(uuid='m161-uuid1')]
+        sm_base = dict(instance_uuid='m161-uuid1', value=None)
+        now = timeutils.utcnow().replace(microsecond=0)
+        fake_sys_meta = [
+            # Should be fixed
+            dict(sm_base, key='instance_type_foo', value='None'),
+            dict(sm_base, key='instance_type_bar', value='88 mph'),
+
+            # Should be unaffected
+            dict(sm_base, key='instance_type_name', value='None'),
+            dict(sm_base, key='instance_type_flavorid', value='None'),
+            dict(sm_base, key='foo', value='None'),
+            dict(sm_base, key='instance_type_bat'),
+            dict(sm_base, key='instance_type_baz', created_at=now),
+            ]
+
+        instances = get_table(engine, 'instances')
+        sys_meta = get_table(engine, 'instance_system_metadata')
+        engine.execute(instances.insert(), fake_instances)
+
+        data = {}
+        for sm in fake_sys_meta:
+            result = sys_meta.insert().values(sm).execute()
+            sm['id'] = result.inserted_primary_key[0]
+            data[sm['id']] = sm
+
+        return data
+
+    def _check_161(self, engine, data):
+        our_ids = data.keys()
+        sys_meta = get_table(engine, 'instance_system_metadata')
+        results = sys_meta.select().where(sys_meta.c.id.in_(our_ids)).\
+                                    execute()
+        results = list(results)
+        self.assertEqual(len(our_ids), len(results))
+        for result in results:
+            the_id = result['id']
+            key = result['key']
+            value = result['value']
+            original = data[the_id]
+
+            if key == 'instance_type_baz':
+                # Neither value nor created_at should have been altered
+                self.assertEqual(result['value'], original['value'])
+                self.assertEqual(result['created_at'], original['created_at'])
+            elif key in ['instance_type_name', 'instance_type_flavorid']:
+                # These should not have their values changed, but should
+                # have corrected created_at stamps
+                self.assertEqual(result['value'], original['value'])
+                self.assertTrue(isinstance(result['created_at'],
+                                           datetime.datetime))
+            elif key.startswith('instance_type'):
+                # Values like instance_type_% should be stamped and values
+                # converted from 'None' to None where appropriate
+                self.assertEqual(result['value'],
+                                 None if original['value'] == 'None'
+                                 else original['value'])
+                self.assertTrue(isinstance(result['created_at'],
+                                           datetime.datetime))
+            else:
+                # None of the non-instance_type values should have
+                # been touched. Since we didn't set created_at on any
+                # of them, they should all still be None.
+                self.assertEqual(result['value'], original['value'])
+                self.assertEqual(result['created_at'], None)
+
 
 class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):
     """Test sqlalchemy-migrate migrations."""
-    USER = "openstack_baremetal_citest"
-    PASSWD = "openstack_baremetal_citest"
+    USER = "openstack_citest"
+    PASSWD = "openstack_citest"
     DATABASE = "openstack_baremetal_citest"
 
     def __init__(self, *args, **kwargs):
@@ -920,7 +1140,7 @@ class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                     globals(), locals(), ['versioning_api'], -1)
             self.migration_api = temp.versioning_api
 
-    def _prerun_002(self, engine):
+    def _pre_upgrade_002(self, engine):
         data = [{'id': 1, 'key': 'fake-key', 'image_path': '/dev/null',
                  'pxe_config_path': '/dev/null/', 'root_mb': 0, 'swap_mb': 0}]
         table = get_table(engine, 'bm_deployments')
@@ -930,3 +1150,7 @@ class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):
     def _check_002(self, engine, data):
         self.assertRaises(sqlalchemy.exc.NoSuchTableError,
                           get_table, engine, 'bm_deployments')
+
+    def _post_downgrade_004(self, engine):
+        bm_nodes = get_table(engine, 'bm_nodes')
+        self.assertNotIn(u'instance_name', [c.name for c in bm_nodes.columns])

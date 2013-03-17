@@ -14,11 +14,14 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from eventlet import tpool
 import guestfs
 
 from nova import exception
 from nova.openstack.common import log as logging
 from nova.virt.disk.vfs import api as vfs
+from nova.virt.libvirt import driver as libvirt_driver
+
 
 LOG = logging.getLogger(__name__)
 
@@ -62,13 +65,13 @@ class VFSGuestFS(vfs.VFS):
         roots = self.handle.inspect_os()
 
         if len(roots) == 0:
-            raise exception.NovaException(_("No operating system found in %s"),
-                                          self.imgfile)
+            raise exception.NovaException(_("No operating system found in %s")
+                                          % self.imgfile)
 
         if len(roots) != 1:
             LOG.debug(_("Multi-boot OS %(roots)s") % {'roots': str(roots)})
             raise exception.NovaException(
-                _("Multi-boot operating system found in %s"),
+                _("Multi-boot operating system found in %s") %
                 self.imgfile)
 
         self.setup_os_root(roots[0])
@@ -91,10 +94,13 @@ class VFSGuestFS(vfs.VFS):
     def setup(self):
         LOG.debug(_("Setting up appliance for %(imgfile)s %(imgfmt)s") %
                   {'imgfile': self.imgfile, 'imgfmt': self.imgfmt})
-        self.handle = guestfs.GuestFS()
+        self.handle = tpool.Proxy(guestfs.GuestFS())
 
         try:
             self.handle.add_drive_opts(self.imgfile, format=self.imgfmt)
+            if self.handle.get_attach_method() == 'libvirt':
+                libvirt_url = 'libvirt:' + libvirt_driver.LibvirtDriver.uri()
+                self.handle.set_attach_method(libvirt_url)
             self.handle.launch()
 
             self.setup_os()

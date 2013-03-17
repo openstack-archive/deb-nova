@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2011 OpenStack, LLC.
+# Copyright (c) 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -28,6 +28,7 @@ import os
 
 from oslo.config import cfg
 
+from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 
@@ -66,9 +67,9 @@ class SchedulerOptions(object):
         try:
             return os.path.getmtime(filename)
         except os.error, e:
-            LOG.exception(_("Could not stat scheduler options file "
-                            "%(filename)s: '%(e)s'"), locals())
-            raise
+            with excutils.save_and_reraise_exception():
+                LOG.exception(_("Could not stat scheduler options file "
+                                "%(filename)s: '%(e)s'"), locals())
 
     def _load_file(self, handle):
         """Decode the JSON file. Broken out for testing."""

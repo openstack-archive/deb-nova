@@ -1,5 +1,4 @@
-# Copyright 2012 IBM
-# All Rights Reserved.
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -17,6 +16,7 @@
 import datetime
 
 from nova.api.openstack.compute.contrib import services
+from nova import availability_zones
 from nova import context
 from nova import db
 from nova import exception
@@ -64,7 +64,7 @@ class FakeRequest(object):
 
 class FakeRequestWithService(object):
         environ = {"nova.context": context.get_admin_context()}
-        GET = {"service": "nova-compute"}
+        GET = {"binary": "nova-compute"}
 
 
 class FakeRequestWithHost(object):
@@ -74,10 +74,16 @@ class FakeRequestWithHost(object):
 
 class FakeRequestWithHostService(object):
         environ = {"nova.context": context.get_admin_context()}
-        GET = {"host": "host1", "service": "nova-compute"}
+        GET = {"host": "host1", "binary": "nova-compute"}
 
 
-def fake_service_get_all(context):
+def fake_host_api_service_get_all(context, filters=None, set_zones=False):
+    if set_zones or 'availability_zone' in filters:
+        return availability_zones.set_availability_zones(context,
+                                                         fake_services_list)
+
+
+def fake_db_api_service_get_all(context, disabled=None):
     return fake_services_list
 
 
@@ -113,17 +119,15 @@ class ServicesTest(test.TestCase):
     def setUp(self):
         super(ServicesTest, self).setUp()
 
-        self.stubs.Set(db, "service_get_all", fake_service_get_all)
+        self.context = context.get_admin_context()
+        self.controller = services.ServiceController()
+
+        self.stubs.Set(self.controller.host_api, "service_get_all",
+                       fake_host_api_service_get_all)
         self.stubs.Set(timeutils, "utcnow", fake_utcnow)
         self.stubs.Set(db, "service_get_by_args",
                        fake_service_get_by_host_binary)
         self.stubs.Set(db, "service_update", fake_service_update)
-
-        self.context = context.get_admin_context()
-        self.controller = services.ServiceController()
-
-    def tearDown(self):
-        super(ServicesTest, self).tearDown()
 
     def test_services_list(self):
         req = FakeRequest()
@@ -186,15 +190,15 @@ class ServicesTest(test.TestCase):
         self.assertEqual(res_dict, response)
 
     def test_services_enable(self):
-        body = {'host': 'host1', 'service': 'nova-compute'}
+        body = {'host': 'host1', 'binary': 'nova-compute'}
         req = fakes.HTTPRequest.blank('/v2/fake/os-services/enable')
         res_dict = self.controller.update(req, "enable", body)
 
-        self.assertEqual(res_dict['disabled'], False)
+        self.assertEqual(res_dict['service']['status'], 'enabled')
 
     def test_services_disable(self):
         req = fakes.HTTPRequest.blank('/v2/fake/os-services/disable')
-        body = {'host': 'host1', 'service': 'nova-compute'}
+        body = {'host': 'host1', 'binary': 'nova-compute'}
         res_dict = self.controller.update(req, "disable", body)
 
-        self.assertEqual(res_dict['disabled'], True)
+        self.assertEqual(res_dict['service']['status'], 'disabled')

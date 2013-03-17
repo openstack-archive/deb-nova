@@ -717,6 +717,19 @@ class _TargetedMessageMethods(_BaseMessageMethods):
                                                 compute_id)
         return jsonutils.to_primitive(compute_node)
 
+    def actions_get(self, message, instance_uuid):
+        actions = self.db.actions_get(message.ctxt, instance_uuid)
+        return jsonutils.to_primitive(actions)
+
+    def action_get_by_request_id(self, message, instance_uuid, request_id):
+        action = self.db.action_get_by_request_id(message.ctxt, instance_uuid,
+                                                  request_id)
+        return jsonutils.to_primitive(action)
+
+    def action_events_get(self, message, action_id):
+        action_events = self.db.action_events_get(message.ctxt, action_id)
+        return jsonutils.to_primitive(action_events)
+
 
 class _BroadcastMessageMethods(_BaseMessageMethods):
     """These are the methods that can be called as a part of a broadcast
@@ -736,8 +749,8 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         # 'metadata' is only updated in the API cell, so don't overwrite
         # it based on what child cells say.  Make sure to update
         # 'cell_name' based on the routing path.
-        items_to_remove = ['id', 'security_groups', 'instance_type',
-                'volumes', 'cell_name', 'name', 'metadata']
+        items_to_remove = ['id', 'security_groups', 'volumes', 'cell_name',
+                           'name', 'metadata']
         for key in items_to_remove:
             instance.pop(key, None)
         instance['cell_name'] = _reverse_path(message.routing_path)
@@ -771,8 +784,13 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
                 # if we actually want this code to remain..
                 self.db.instance_create(message.ctxt, instance)
         if info_cache:
-            self.db.instance_info_cache_update(message.ctxt, instance_uuid,
-                    info_cache, update_cells=False)
+            try:
+                self.db.instance_info_cache_update(message.ctxt,
+                        instance_uuid, info_cache, update_cells=False)
+            except exception.InstanceInfoCacheNotFound:
+                # Can happen if we try to update a deleted instance's
+                # network information.
+                pass
 
     def instance_destroy_at_top(self, message, instance, **kwargs):
         """Destroy an instance from the DB if we're a top level cell."""
@@ -1181,6 +1199,29 @@ class MessageRunner(object):
         message = _TargetedMessage(self, ctxt, 'compute_node_get',
                                     method_kwargs, 'down',
                                     cell_name, need_response=True)
+        return message.process()
+
+    def actions_get(self, ctxt, cell_name, instance_uuid):
+        method_kwargs = dict(instance_uuid=instance_uuid)
+        message = _TargetedMessage(self, ctxt, 'actions_get',
+                                method_kwargs, 'down',
+                                cell_name, need_response=True)
+        return message.process()
+
+    def action_get_by_request_id(self, ctxt, cell_name, instance_uuid,
+                                 request_id):
+        method_kwargs = dict(instance_uuid=instance_uuid,
+                             request_id=request_id)
+        message = _TargetedMessage(self, ctxt, 'action_get_by_request_id',
+                                method_kwargs, 'down',
+                                cell_name, need_response=True)
+        return message.process()
+
+    def action_events_get(self, ctxt, cell_name, action_id):
+        method_kwargs = dict(action_id=action_id)
+        message = _TargetedMessage(self, ctxt, 'action_events_get',
+                                method_kwargs, 'down',
+                                cell_name, need_response=True)
         return message.process()
 
     @staticmethod

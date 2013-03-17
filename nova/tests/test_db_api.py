@@ -23,6 +23,7 @@ import datetime
 import uuid as stdlib_uuid
 
 from oslo.config import cfg
+from sqlalchemy.dialects import sqlite
 from sqlalchemy import MetaData
 from sqlalchemy.schema import Table
 from sqlalchemy.sql.expression import select
@@ -45,9 +46,9 @@ get_engine = db_session.get_engine
 get_session = db_session.get_session
 
 
-class DbApiTestCase(test.TestCase):
+class DbTestCase(test.TestCase):
     def setUp(self):
-        super(DbApiTestCase, self).setUp()
+        super(DbTestCase, self).setUp()
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
@@ -63,6 +64,8 @@ class DbApiTestCase(test.TestCase):
         args.update(kwargs)
         return db.instance_create(ctxt, args)
 
+
+class DbApiTestCase(DbTestCase):
     def test_create_instance_unique_hostname(self):
         otherprojectcontext = context.RequestContext(self.user_id,
                                           "%s2" % self.project_id)
@@ -122,19 +125,6 @@ class DbApiTestCase(test.TestCase):
                                                 {'display_name': 't.*st.'})
         self.assertEqual(2, len(result))
 
-    def test_instance_get_all_by_filters_regex_unsupported_db(self):
-        # Ensure that the 'LIKE' operator is used for unsupported dbs.
-        self.flags(sql_connection="notdb://")
-        self.create_instances_with_args(display_name='test1')
-        self.create_instances_with_args(display_name='test.*')
-        self.create_instances_with_args(display_name='diff')
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': 'test.*'})
-        self.assertEqual(1, len(result))
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': '%test%'})
-        self.assertEqual(2, len(result))
-
     def test_instance_get_all_by_filters_metadata(self):
         self.create_instances_with_args(metadata={'foo': 'bar'})
         self.create_instances_with_args()
@@ -160,37 +150,6 @@ class DbApiTestCase(test.TestCase):
             self.assertTrue(result[0]['deleted'])
         else:
             self.assertTrue(result[1]['deleted'])
-
-    def test_instance_get_all_by_filters_paginate(self):
-        self.flags(sql_connection="notdb://")
-        test1 = self.create_instances_with_args(display_name='test1')
-        test2 = self.create_instances_with_args(display_name='test2')
-        test3 = self.create_instances_with_args(display_name='test3')
-
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': '%test%'},
-                                                marker=None)
-        self.assertEqual(3, len(result))
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': '%test%'},
-                                                sort_dir="asc",
-                                                marker=test1['uuid'])
-        self.assertEqual(2, len(result))
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': '%test%'},
-                                                sort_dir="asc",
-                                                marker=test2['uuid'])
-        self.assertEqual(1, len(result))
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': '%test%'},
-                                                sort_dir="asc",
-                                                marker=test3['uuid'])
-        self.assertEqual(0, len(result))
-
-        self.assertRaises(exception.MarkerNotFound,
-                          db.instance_get_all_by_filters,
-                          self.context, {'display_name': '%test%'},
-                          marker=str(stdlib_uuid.uuid4()))
 
     def test_migration_get_unconfirmed_by_dest_compute(self):
         ctxt = context.get_admin_context()
@@ -369,25 +328,20 @@ class DbApiTestCase(test.TestCase):
         system_meta = db.instance_system_metadata_get(ctxt, instance['uuid'])
         self.assertEqual('baz', system_meta['original_image_ref'])
 
-    def test_instance_update_of_instance_type_id(self):
+    def test_delete_instance_metadata_on_instance_destroy(self):
         ctxt = context.get_admin_context()
 
-        inst_type1 = db.instance_type_get_by_name(ctxt, 'm1.tiny')
-        inst_type2 = db.instance_type_get_by_name(ctxt, 'm1.small')
-
-        values = {'instance_type_id': inst_type1['id']}
+        # Create an instance with some metadata
+        values = {'metadata': {'host': 'foo', 'key1': 'meow'},
+                  'system_metadata': {'original_image_ref': 'blah'}}
         instance = db.instance_create(ctxt, values)
-
-        self.assertEqual(instance['instance_type']['id'], inst_type1['id'])
-        self.assertEqual(instance['instance_type']['name'],
-                inst_type1['name'])
-
-        values = {'instance_type_id': inst_type2['id']}
-        instance = db.instance_update(ctxt, instance['uuid'], values)
-
-        self.assertEqual(instance['instance_type']['id'], inst_type2['id'])
-        self.assertEqual(instance['instance_type']['name'],
-                inst_type2['name'])
+        instance_meta = db.instance_metadata_get(ctxt, instance['uuid'])
+        self.assertEqual('foo', instance_meta['host'])
+        self.assertEqual('meow', instance_meta['key1'])
+        db.instance_destroy(ctxt, instance['uuid'])
+        instance_meta = db.instance_metadata_get(ctxt, instance['uuid'])
+        # Make sure instance metadata is deleted as well
+        self.assertEqual({}, instance_meta)
 
     def test_instance_update_unique_name(self):
         otherprojectcontext = context.RequestContext(self.user_id,
@@ -450,41 +404,6 @@ class DbApiTestCase(test.TestCase):
                 instance['uuid'], {'vm_state': 'needscoffee'})
         self.assertEquals("building", old_ref["vm_state"])
         self.assertEquals("needscoffee", new_ref["vm_state"])
-
-    def test_instance_update_with_extra_specs(self):
-        # Ensure _extra_specs are returned from _instance_update.
-        ctxt = context.get_admin_context()
-
-        # create a flavor
-        inst_type_dict = dict(
-                    name="test_flavor",
-                    memory_mb=1,
-                    vcpus=1,
-                    root_gb=1,
-                    ephemeral_gb=1,
-                    flavorid=105)
-        inst_type_ref = db.instance_type_create(ctxt, inst_type_dict)
-
-        # add some extra spec to our flavor
-        spec = {'test_spec': 'foo'}
-        db.instance_type_extra_specs_update_or_create(
-                    ctxt,
-                    inst_type_ref['flavorid'],
-                    spec)
-
-        # create instance, just populates db, doesn't pull extra_spec
-        instance = db.instance_create(
-                    ctxt,
-                    {'instance_type_id': inst_type_ref['id']})
-        self.assertNotIn('extra_specs', instance)
-
-        # update instance, used when starting instance to set state, etc
-        (old_ref, new_ref) = db.instance_update_and_get_original(
-                    ctxt,
-                    instance['uuid'],
-                    {})
-        self.assertEquals(spec, old_ref['extra_specs'])
-        self.assertEquals(spec, new_ref['extra_specs'])
 
     def _test_instance_update_updates_metadata(self, metadata_type):
         ctxt = context.get_admin_context()
@@ -734,7 +653,7 @@ class DbApiTestCase(test.TestCase):
         self.assertEqual('schedule', events[0]['event'])
         self.assertEqual(start_time, events[0]['start_time'])
 
-    def test_instance_action_event_finish(self):
+    def test_instance_action_event_finish_success(self):
         """Finish an instance action event."""
         ctxt = context.get_admin_context()
         uuid = str(stdlib_uuid.uuid4())
@@ -758,15 +677,55 @@ class DbApiTestCase(test.TestCase):
         event_finish_values = {'event': 'schedule',
                                 'request_id': ctxt.request_id,
                                 'instance_uuid': uuid,
-                                'finish_time': finish_time}
+                                'finish_time': finish_time,
+                                'result': 'Success'}
         db.action_event_finish(ctxt, event_finish_values)
 
         # Retrieve the event to ensure it was successfully added
         events = db.action_events_get(ctxt, action['id'])
+        action = db.action_get_by_request_id(ctxt, uuid, ctxt.request_id)
         self.assertEqual(1, len(events))
         self.assertEqual('schedule', events[0]['event'])
         self.assertEqual(start_time, events[0]['start_time'])
         self.assertEqual(finish_time, events[0]['finish_time'])
+        self.assertNotEqual(action['message'], 'Error')
+
+    def test_instance_action_event_finish_error(self):
+        """Finish an instance action event with an error."""
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+
+        start_time = timeutils.utcnow()
+        action_values = {'action': 'run_instance',
+                         'instance_uuid': uuid,
+                         'request_id': ctxt.request_id,
+                         'user_id': ctxt.user_id,
+                         'project_id': ctxt.project_id,
+                         'start_time': start_time}
+        action = db.action_start(ctxt, action_values)
+
+        event_values = {'event': 'schedule',
+                        'request_id': ctxt.request_id,
+                        'instance_uuid': uuid,
+                        'start_time': start_time}
+        db.action_event_start(ctxt, event_values)
+
+        finish_time = timeutils.utcnow() + datetime.timedelta(seconds=5)
+        event_finish_values = {'event': 'schedule',
+                                'request_id': ctxt.request_id,
+                                'instance_uuid': uuid,
+                                'finish_time': finish_time,
+                                'result': 'Error'}
+        db.action_event_finish(ctxt, event_finish_values)
+
+        # Retrieve the event to ensure it was successfully added
+        events = db.action_events_get(ctxt, action['id'])
+        action = db.action_get_by_request_id(ctxt, uuid, ctxt.request_id)
+        self.assertEqual(1, len(events))
+        self.assertEqual('schedule', events[0]['event'])
+        self.assertEqual(start_time, events[0]['start_time'])
+        self.assertEqual(finish_time, events[0]['finish_time'])
+        self.assertEqual(action['message'], 'Error')
 
     def test_instance_action_and_event_start_string_time(self):
         """Create an instance action and event with a string start_time."""
@@ -1092,6 +1051,54 @@ def _create_aggregate_with_hosts(context=context.get_admin_context(),
     for host in hosts:
         db.aggregate_host_add(context, result['id'], host)
     return result
+
+
+class NotDbApiTestCase(DbTestCase):
+    def setUp(self):
+        super(NotDbApiTestCase, self).setUp()
+        self.flags(sql_connection="notdb://")
+
+    def test_instance_get_all_by_filters_regex_unsupported_db(self):
+        # Ensure that the 'LIKE' operator is used for unsupported dbs.
+        self.create_instances_with_args(display_name='test1')
+        self.create_instances_with_args(display_name='test.*')
+        self.create_instances_with_args(display_name='diff')
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': 'test.*'})
+        self.assertEqual(1, len(result))
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': '%test%'})
+        self.assertEqual(2, len(result))
+
+    def test_instance_get_all_by_filters_paginate(self):
+        test1 = self.create_instances_with_args(display_name='test1')
+        test2 = self.create_instances_with_args(display_name='test2')
+        test3 = self.create_instances_with_args(display_name='test3')
+
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': '%test%'},
+                                                marker=None)
+        self.assertEqual(3, len(result))
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': '%test%'},
+                                                sort_dir="asc",
+                                                marker=test1['uuid'])
+        self.assertEqual(2, len(result))
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': '%test%'},
+                                                sort_dir="asc",
+                                                marker=test2['uuid'])
+        self.assertEqual(1, len(result))
+        result = db.instance_get_all_by_filters(self.context,
+                                                {'display_name': '%test%'},
+                                                sort_dir="asc",
+                                                marker=test3['uuid'])
+        self.assertEqual(0, len(result))
+
+        self.assertRaises(exception.MarkerNotFound,
+                          db.instance_get_all_by_filters,
+                          self.context, {'display_name': '%test%'},
+                          marker=str(stdlib_uuid.uuid4()))
 
 
 class AggregateDBApiTestCase(test.TestCase):
@@ -1506,6 +1513,12 @@ class CapacityTestCase(test.TestCase):
         self.assertEqual(2, int(stats['num_proj_12345']))
         self.assertEqual(1, int(stats['num_tribbles']))
 
+    def test_compute_node_update_always_updates_updated_at(self):
+        item = self._create_helper('host1')
+        item_updated = db.compute_node_update(self.ctxt,
+                item['id'], {})
+        self.assertNotEqual(item['updated_at'], item_updated['updated_at'])
+
     def test_compute_node_stat_prune(self):
         item = self._create_helper('host1')
         for stat in item['stats']:
@@ -1542,10 +1555,14 @@ class MigrationTestCase(test.TestCase):
         self._create(source_compute='host3', dest_compute='host4')
 
     def _create(self, status='migrating', source_compute='host1',
-                source_node='a', dest_compute='host2', dest_node='b'):
+                source_node='a', dest_compute='host2', dest_node='b',
+                system_metadata=None):
 
         values = {'host': source_compute}
         instance = db.instance_create(self.ctxt, values)
+        if system_metadata:
+            db.instance_system_metadata_update(self.ctxt, instance['uuid'],
+                                               system_metadata, False)
 
         values = {'status': status, 'source_compute': source_compute,
                   'source_node': source_node, 'dest_compute': dest_compute,
@@ -1556,6 +1573,14 @@ class MigrationTestCase(test.TestCase):
         for migration in migrations:
             self.assertNotEqual('confirmed', migration['status'])
             self.assertNotEqual('reverted', migration['status'])
+
+    def test_migration_get_in_progress_joins(self):
+        self._create(source_compute='foo', system_metadata={'foo': 'bar'})
+        migrations = db.migration_get_in_progress_by_host_and_node(self.ctxt,
+                'foo', 'a')
+        system_metadata = migrations[0]['instance']['system_metadata'][0]
+        self.assertEqual(system_metadata['key'], 'foo')
+        self.assertEqual(system_metadata['value'], 'bar')
 
     def test_in_progress_host1_nodea(self):
         migrations = db.migration_get_in_progress_by_host_and_node(self.ctxt,
@@ -1818,15 +1843,162 @@ class TaskLogTestCase(test.TestCase):
         self.assertEqual(result['errors'], 1)
 
 
+class BlockDeviceMappingTestCase(test.TestCase):
+    def setUp(self):
+        super(BlockDeviceMappingTestCase, self).setUp()
+        self.ctxt = context.get_admin_context()
+        self.instance = db.instance_create(self.ctxt, {})
+
+    def _create_bdm(self, values):
+        values.setdefault('instance_uuid', self.instance['uuid'])
+        values.setdefault('device_name', 'fake_device')
+        db.block_device_mapping_create(self.ctxt, values)
+        uuid = values['instance_uuid']
+
+        bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+
+        for bdm in bdms:
+            if bdm['device_name'] == values['device_name']:
+                return bdm
+
+    def test_block_device_mapping_create(self):
+        bdm = self._create_bdm({})
+        self.assertFalse(bdm is None)
+
+    def test_block_device_mapping_update(self):
+        bdm = self._create_bdm({})
+        db.block_device_mapping_update(self.ctxt, bdm['id'],
+                                       {'virtual_name': 'some_virt_name'})
+        uuid = bdm['instance_uuid']
+        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(bdm_real[0]['virtual_name'], 'some_virt_name')
+
+    def test_block_device_mapping_update_or_create(self):
+        values = {
+            'instance_uuid': self.instance['uuid'],
+            'device_name': 'fake_name',
+            'virtual_name': 'some_virt_name'
+        }
+        # check create
+        db.block_device_mapping_update_or_create(self.ctxt, values)
+        uuid = values['instance_uuid']
+        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(len(bdm_real), 1)
+        self.assertEqual(bdm_real[0]['device_name'], 'fake_name')
+
+        # check update
+        values['virtual_name'] = 'virtual_name'
+        db.block_device_mapping_update_or_create(self.ctxt, values)
+        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(len(bdm_real), 1)
+        bdm_real = bdm_real[0]
+        self.assertEqual(bdm_real['device_name'], 'fake_name')
+        self.assertEqual(bdm_real['virtual_name'], 'virtual_name')
+
+    def test_block_device_mapping_update_or_create_check_remove_virt(self):
+        uuid = self.instance['uuid']
+        values = {
+            'instance_uuid': uuid,
+            'virtual_name': 'ephemeral12'
+        }
+
+        # check that old bdm with same virtual_names are deleted on create
+        val1 = dict(values)
+        val1['device_name'] = 'device1'
+        db.block_device_mapping_create(self.ctxt, val1)
+        val2 = dict(values)
+        val2['device_name'] = 'device2'
+        db.block_device_mapping_update_or_create(self.ctxt, val2)
+        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(len(bdm_real), 1)
+        bdm_real = bdm_real[0]
+        self.assertEqual(bdm_real['device_name'], 'device2')
+        self.assertEqual(bdm_real['virtual_name'], 'ephemeral12')
+
+        # check that old bdm with same virtual_names are deleted on update
+        val3 = dict(values)
+        val3['device_name'] = 'device3'
+        val3['virtual_name'] = 'some_name'
+        db.block_device_mapping_create(self.ctxt, val3)
+        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(len(bdm_real), 2)
+
+        val3['virtual_name'] = 'ephemeral12'
+        db.block_device_mapping_update_or_create(self.ctxt, val3)
+        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(len(bdm_real), 1)
+        bdm_real = bdm_real[0]
+        self.assertEqual(bdm_real['device_name'], 'device3')
+        self.assertEqual(bdm_real['virtual_name'], 'ephemeral12')
+
+    def test_block_device_mapping_get_all_by_instance(self):
+        uuid1 = self.instance['uuid']
+        uuid2 = db.instance_create(self.ctxt, {})['uuid']
+
+        bmds_values = [{'instance_uuid': uuid1,
+                        'virtual_name': 'virtual_name',
+                        'device_name': 'first'},
+                       {'instance_uuid': uuid2,
+                        'virtual_name': 'virtual_name1',
+                        'device_name': 'second'},
+                       {'instance_uuid': uuid2,
+                        'virtual_name': 'virtual_name2',
+                        'device_name': 'third'}]
+
+        for bdm in bmds_values:
+            self._create_bdm(bdm)
+
+        bmd = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid1)
+        self.assertEqual(len(bmd), 1)
+        self.assertEqual(bmd[0]['virtual_name'], 'virtual_name')
+        self.assertEqual(bmd[0]['device_name'], 'first')
+
+        bmd = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid2)
+        self.assertEqual(len(bmd), 2)
+
+    def test_block_device_mapping_destroy(self):
+        bdm = self._create_bdm({})
+        db.block_device_mapping_destroy(self.ctxt, bdm['id'])
+        bdm = db.block_device_mapping_get_all_by_instance(self.ctxt,
+                                                          bdm['instance_uuid'])
+        self.assertEqual(len(bdm), 0)
+
+    def test_block_device_mapping_destory_by_instance_and_volumne(self):
+        vol_id1 = '69f5c254-1a5b-4fff-acf7-cb369904f58f'
+        vol_id2 = '69f5c254-1a5b-4fff-acf7-cb369904f59f'
+
+        self._create_bdm({'device_name': 'fake1', 'volume_id': vol_id1})
+        self._create_bdm({'device_name': 'fake2', 'volume_id': vol_id2})
+
+        uuid = self.instance['uuid']
+        db.block_device_mapping_destroy_by_instance_and_volume(self.ctxt, uuid,
+                                                               vol_id1)
+        bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(len(bdms), 1)
+        self.assertEqual(bdms[0]['device_name'], 'fake2')
+
+    def test_block_device_mapping_destroy_by_instance_and_device(self):
+        self._create_bdm({'device_name': 'fake1'})
+        self._create_bdm({'device_name': 'fake2'})
+
+        uuid = self.instance['uuid']
+        params = (self.ctxt, uuid, 'fake1')
+        db.block_device_mapping_destroy_by_instance_and_device(*params)
+
+        bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        self.assertEqual(len(bdms), 1)
+        self.assertEqual(bdms[0]['device_name'], 'fake2')
+
+
 class ArchiveTestCase(test.TestCase):
 
     def setUp(self):
         super(ArchiveTestCase, self).setUp()
         self.context = context.get_admin_context()
-        engine = get_engine()
-        self.conn = engine.connect()
+        self.engine = get_engine()
+        self.conn = self.engine.connect()
         self.metadata = MetaData()
-        self.metadata.bind = engine
+        self.metadata.bind = self.engine
         self.table1 = Table("instance_id_mappings",
                            self.metadata,
                            autoload=True)
@@ -1839,9 +2011,22 @@ class ArchiveTestCase(test.TestCase):
         self.shadow_table2 = Table("shadow_dns_domains",
                                   self.metadata,
                                   autoload=True)
+        self.consoles = Table("consoles",
+                              self.metadata,
+                              autoload=True)
+        self.console_pools = Table("console_pools",
+                                   self.metadata,
+                                   autoload=True)
+        self.shadow_consoles = Table("shadow_consoles",
+                                     self.metadata,
+                                     autoload=True)
+        self.shadow_console_pools = Table("shadow_console_pools",
+                                          self.metadata,
+                                          autoload=True)
         self.uuidstrs = []
         for unused in xrange(6):
             self.uuidstrs.append(stdlib_uuid.uuid4().hex)
+        self.ids = []
 
     def tearDown(self):
         super(ArchiveTestCase, self).tearDown()
@@ -1857,6 +2042,10 @@ class ArchiveTestCase(test.TestCase):
         delete_statement4 = self.shadow_table2.delete(
                                 self.shadow_table2.c.domain.in_(self.uuidstrs))
         self.conn.execute(delete_statement4)
+        for table in [self.console_pools, self.consoles, self.shadow_consoles,
+                      self.shadow_console_pools]:
+            delete_statement5 = table.delete(table.c.id.in_(self.ids))
+            self.conn.execute(delete_statement5)
 
     def test_archive_deleted_rows(self):
         # Add 6 rows to table
@@ -1866,7 +2055,7 @@ class ArchiveTestCase(test.TestCase):
         # Set 4 to deleted
         update_statement = self.table1.update().\
                 where(self.table1.c.uuid.in_(self.uuidstrs[:4]))\
-                .values(deleted=True)
+                .values(deleted=1)
         self.conn.execute(update_statement)
         query1 = select([self.table1]).where(self.table1.c.uuid.in_(
                                              self.uuidstrs))
@@ -1912,7 +2101,7 @@ class ArchiveTestCase(test.TestCase):
         # Set 4 to deleted
         update_statement = self.table1.update().\
                 where(self.table1.c.uuid.in_(self.uuidstrs[:4]))\
-                .values(deleted=True)
+                .values(deleted=1)
         self.conn.execute(update_statement)
         query1 = select([self.table1]).where(self.table1.c.uuid.in_(
                                              self.uuidstrs))
@@ -1955,7 +2144,7 @@ class ArchiveTestCase(test.TestCase):
         self.conn.execute(insert_statement)
         update_statement = self.table2.update().\
                            where(self.table2.c.domain == uuidstr0).\
-                           values(deleted=True)
+                           values(deleted=1)
         self.conn.execute(update_statement)
         query1 = select([self.table2], self.table2.c.domain == uuidstr0)
         rows1 = self.conn.execute(query1).fetchall()
@@ -1969,3 +2158,28 @@ class ArchiveTestCase(test.TestCase):
         self.assertEqual(len(rows3), 0)
         rows4 = self.conn.execute(query2).fetchall()
         self.assertEqual(len(rows4), 1)
+
+    def test_archive_deleted_rows_fk_constraint(self):
+        # consoles.pool_id depends on console_pools.id
+        # SQLite doesn't enforce foreign key constraints without a pragma.
+        dialect = self.engine.url.get_dialect()
+        if dialect == sqlite.dialect:
+            self.conn.execute("PRAGMA foreign_keys = ON")
+        insert_statement = self.console_pools.insert().values(deleted=1)
+        result = self.conn.execute(insert_statement)
+        id1 = result.inserted_primary_key[0]
+        self.ids.append(id1)
+        insert_statement = self.consoles.insert().values(deleted=1,
+                                                         pool_id=id1)
+        result = self.conn.execute(insert_statement)
+        id2 = result.inserted_primary_key[0]
+        self.ids.append(id2)
+        # The first try to archive console_pools should fail, due to FK.
+        num = db.archive_deleted_rows_for_table(self.context, "console_pools")
+        self.assertEqual(num, 0)
+        # Then archiving consoles should work.
+        num = db.archive_deleted_rows_for_table(self.context, "consoles")
+        self.assertEqual(num, 1)
+        # Then archiving console_pools should work.
+        num = db.archive_deleted_rows_for_table(self.context, "console_pools")
+        self.assertEqual(num, 1)

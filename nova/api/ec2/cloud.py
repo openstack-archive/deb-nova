@@ -42,6 +42,7 @@ from nova import db
 from nova import exception
 from nova.image import s3
 from nova import network
+from nova.network.security_group import quantum_driver
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import quota
@@ -502,9 +503,17 @@ class CloudController(object):
             r['groups'] = []
             r['ipRanges'] = []
             if rule['group_id']:
-                source_group = rule['grantee_group']
-                r['groups'] += [{'groupName': source_group['name'],
-                                 'userId': source_group['project_id']}]
+                if rule.get('grantee_group'):
+                    source_group = rule['grantee_group']
+                    r['groups'] += [{'groupName': source_group['name'],
+                                     'userId': source_group['project_id']}]
+                else:
+                    # rule is not always joined with grantee_group
+                    # for example when using quantum driver.
+                    source_group = self.security_group_api.get(
+                        context, id=rule['group_id'])
+                    r['groups'] += [{'groupName': source_group.get('name'),
+                                     'userId': source_group.get('project_id')}]
                 if rule['protocol']:
                     r['ipProtocol'] = rule['protocol'].lower()
                     r['fromPort'] = rule['from_port']
@@ -1075,10 +1084,8 @@ class CloudController(object):
 
     @staticmethod
     def _format_instance_type(instance, result):
-        if instance['instance_type']:
-            result['instanceType'] = instance['instance_type'].get('name')
-        else:
-            result['instanceType'] = None
+        instance_type = instance_types.extract_instance_type(instance)
+        result['instanceType'] = instance_type['name']
 
     @staticmethod
     def _format_group_set(instance, result):
@@ -1691,11 +1698,20 @@ class EC2SecurityGroupExceptions(object):
         pass
 
 
-class CloudSecurityGroupNovaAPI(compute_api.SecurityGroupAPI,
-                                EC2SecurityGroupExceptions):
+class CloudSecurityGroupNovaAPI(EC2SecurityGroupExceptions,
+                                compute_api.SecurityGroupAPI):
+    pass
+
+
+class CloudSecurityGroupQuantumAPI(EC2SecurityGroupExceptions,
+                                   quantum_driver.SecurityGroupAPI):
     pass
 
 
 def get_cloud_security_group_api():
     if cfg.CONF.security_group_api.lower() == 'nova':
         return CloudSecurityGroupNovaAPI()
+    elif cfg.CONF.security_group_api.lower() == 'quantum':
+        return CloudSecurityGroupQuantumAPI()
+    else:
+        raise NotImplementedError()

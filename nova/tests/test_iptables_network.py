@@ -68,19 +68,19 @@ class IptablesManagerTestCase(test.TestCase):
                   ':OUTPUT ACCEPT [63491:4191863]',
                   ':POSTROUTING ACCEPT [63112:4108641]',
                   ':%s-OUTPUT - [0:0]' % (binary_name),
-                  ':%s-float-snat - [0:0]' % (binary_name),
                   ':%s-snat - [0:0]' % (binary_name),
                   ':%s-PREROUTING - [0:0]' % (binary_name),
+                  ':%s-float-snat - [0:0]' % (binary_name),
                   ':%s-POSTROUTING - [0:0]' % (binary_name),
                   ':nova-postrouting-bottom - [0:0]',
                   '[0:0] -A PREROUTING -j %s-PREROUTING' % (binary_name),
                   '[0:0] -A OUTPUT -j %s-OUTPUT' % (binary_name),
                   '[0:0] -A POSTROUTING -j %s-POSTROUTING' % (binary_name),
-                  '[0:0] -A POSTROUTING -j nova-postrouting-bottom',
                   '[0:0] -A nova-postrouting-bottom '
-                  '-j %s-SNATTING' % (binary_name),
-                  '[0:0] -A %s-SNATTING '
-                  '-j %s-floating-ip-snat' % (binary_name, binary_name),
+                  '-j %s-snat' % (binary_name),
+                  '[0:0] -A %s-snat '
+                  '-j %s-float-snat' % (binary_name, binary_name),
+                  '[0:0] -A POSTROUTING -j nova-postrouting-bottom',
                   'COMMIT',
                   '# Completed on Fri Feb 18 15:17:05 2011']
 
@@ -93,20 +93,48 @@ class IptablesManagerTestCase(test.TestCase):
 
         table = self.manager.ipv4['filter']
         table.add_rule('FORWARD', '-s 1.2.3.4/5 -j DROP')
-        new_lines = self.manager._modify_rules(current_lines, table)
+        new_lines = self.manager._modify_rules(current_lines, table, 'filter')
         self.assertTrue('[0:0] -A %s-FORWARD '
                         '-s 1.2.3.4/5 -j DROP' % self.binary_name in new_lines)
 
         table.remove_rule('FORWARD', '-s 1.2.3.4/5 -j DROP')
-        new_lines = self.manager._modify_rules(current_lines, table)
+        new_lines = self.manager._modify_rules(current_lines, table, 'filter')
         self.assertTrue('[0:0] -A %s-FORWARD '
                         '-s 1.2.3.4/5 -j DROP' % self.binary_name
                         not in new_lines)
 
+    def test_remove_rules_regex(self):
+        current_lines = self.sample_nat
+        table = self.manager.ipv4['nat']
+        table.add_rule('float-snat', '-s 10.0.0.1 -j SNAT --to 10.10.10.10'
+                       ' -d 10.0.0.1')
+        table.add_rule('float-snat', '-s 10.0.0.1 -j SNAT --to 10.10.10.10'
+                       ' -o eth0')
+        table.add_rule('PREROUTING', '-d 10.10.10.10 -j DNAT --to 10.0.0.1')
+        table.add_rule('OUTPUT', '-d 10.10.10.10 -j DNAT --to 10.0.0.1')
+        table.add_rule('float-snat', '-s 10.0.0.10 -j SNAT --to 10.10.10.11'
+                       ' -d 10.0.0.10')
+        table.add_rule('float-snat', '-s 10.0.0.10 -j SNAT --to 10.10.10.11'
+                       ' -o eth0')
+        table.add_rule('PREROUTING', '-d 10.10.10.11 -j DNAT --to 10.0.0.10')
+        table.add_rule('OUTPUT', '-d 10.10.10.11 -j DNAT --to 10.0.0.10')
+        new_lines = self.manager._modify_rules(current_lines, table, 'nat')
+        self.assertEqual(len(new_lines) - len(current_lines), 8)
+        regex = '.*\s+%s(/32|\s+|$)'
+        num_removed = table.remove_rules_regex(regex % '10.10.10.10')
+        self.assertEqual(num_removed, 4)
+        new_lines = self.manager._modify_rules(current_lines, table, 'nat')
+        self.assertEqual(len(new_lines) - len(current_lines), 4)
+        num_removed = table.remove_rules_regex(regex % '10.10.10.11')
+        self.assertEqual(num_removed, 4)
+        new_lines = self.manager._modify_rules(current_lines, table, 'nat')
+        self.assertEqual(new_lines, current_lines)
+
     def test_nat_rules(self):
         current_lines = self.sample_nat
         new_lines = self.manager._modify_rules(current_lines,
-                                               self.manager.ipv4['nat'])
+                                               self.manager.ipv4['nat'],
+                                               'nat')
 
         for line in [':%s-OUTPUT - [0:0]' % (self.binary_name),
                      ':%s-float-snat - [0:0]' % (self.binary_name),
@@ -141,7 +169,8 @@ class IptablesManagerTestCase(test.TestCase):
     def test_filter_rules(self):
         current_lines = self.sample_filter
         new_lines = self.manager._modify_rules(current_lines,
-                                               self.manager.ipv4['filter'])
+                                               self.manager.ipv4['filter'],
+                                               'nat')
 
         for line in [':%s-FORWARD - [0:0]' % (self.binary_name),
                      ':%s-INPUT - [0:0]' % (self.binary_name),
@@ -178,7 +207,7 @@ class IptablesManagerTestCase(test.TestCase):
         current_lines = []
         new_lines = self.manager._modify_rules(current_lines,
                                                self.manager.ipv4['filter'],
-                                               table_name='filter')
+                                               'filter')
 
         for line in ['*filter',
                      'COMMIT']:
@@ -199,7 +228,8 @@ class IptablesManagerTestCase(test.TestCase):
         current_lines[12:12] = ['[0:0] -A FORWARD -j iptables-top-rule']
         self.flags(iptables_top_regex='-j iptables-top-rule')
         new_lines = self.manager._modify_rules(current_lines,
-                                               self.manager.ipv4['filter'])
+                                               self.manager.ipv4['filter'],
+                                               'filter')
         self.assertEqual(current_lines, new_lines)
 
     def test_iptables_bottom_order(self):
@@ -208,7 +238,8 @@ class IptablesManagerTestCase(test.TestCase):
         current_lines[26:26] = ['[0:0] -A FORWARD -j iptables-bottom-rule']
         self.flags(iptables_bottom_regex='-j iptables-bottom-rule')
         new_lines = self.manager._modify_rules(current_lines,
-                                               self.manager.ipv4['filter'])
+                                               self.manager.ipv4['filter'],
+                                               'filter')
         self.assertEqual(current_lines, new_lines)
 
     def test_iptables_preserve_order(self):
@@ -219,5 +250,6 @@ class IptablesManagerTestCase(test.TestCase):
         self.flags(iptables_top_regex='-j iptables-top-rule')
         self.flags(iptables_bottom_regex='-j iptables-bottom-rule')
         new_lines = self.manager._modify_rules(current_lines,
-                                               self.manager.ipv4['filter'])
+                                               self.manager.ipv4['filter'],
+                                               'filter')
         self.assertEqual(current_lines, new_lines)

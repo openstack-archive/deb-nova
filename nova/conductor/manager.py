@@ -39,21 +39,20 @@ allowed_updates = ['task_state', 'vm_state', 'expected_task_state',
                    'instance_type_id', 'root_device_name', 'launched_on',
                    'progress', 'vm_mode', 'default_ephemeral_device',
                    'default_swap_device', 'root_device_name',
-                   'system_metadata',
+                   'system_metadata', 'updated_at'
                    ]
 
 # Fields that we want to convert back into a datetime object.
-datetime_fields = ['launched_at', 'terminated_at']
+datetime_fields = ['launched_at', 'terminated_at', 'updated_at']
 
 
-class ConductorManager(manager.SchedulerDependentManager):
+class ConductorManager(manager.Manager):
     """Mission: TBD."""
 
-    RPC_API_VERSION = '1.43'
+    RPC_API_VERSION = '1.45'
 
     def __init__(self, *args, **kwargs):
-        super(ConductorManager, self).__init__(service_name='conductor',
-                                               *args, **kwargs)
+        super(ConductorManager, self).__init__(*args, **kwargs)
         self.security_group_api = (
             openstack_driver.get_openstack_security_group_driver())
         self._network_api = None
@@ -306,7 +305,8 @@ class ConductorManager(manager.SchedulerDependentManager):
                                  wr_bytes, instance['uuid'], last_refreshed,
                                  update_totals)
 
-    @rpc_common.client_exceptions(exception.HostBinaryNotFound)
+    @rpc_common.client_exceptions(exception.ComputeHostNotFound,
+                                  exception.HostBinaryNotFound)
     def service_get_all_by(self, context, topic=None, host=None, binary=None):
         if not any((topic, host, binary)):
             result = self.db.service_get_all(context)
@@ -352,6 +352,10 @@ class ConductorManager(manager.SchedulerDependentManager):
                                              prune_stats)
         return jsonutils.to_primitive(result)
 
+    def compute_node_delete(self, context, node):
+        result = self.db.compute_node_delete(context, node['id'])
+        return jsonutils.to_primitive(result)
+
     @rpc_common.client_exceptions(exception.ServiceNotFound)
     def service_update(self, context, service, values):
         svc = self.db.service_update(context, service['id'], values)
@@ -394,11 +398,11 @@ class ConductorManager(manager.SchedulerDependentManager):
     def network_migrate_instance_finish(self, context, instance, migration):
         self.network_api.migrate_instance_finish(context, instance, migration)
 
-    def quota_commit(self, context, reservations):
-        quota.QUOTAS.commit(context, reservations)
+    def quota_commit(self, context, reservations, project_id=None):
+        quota.QUOTAS.commit(context, reservations, project_id=project_id)
 
-    def quota_rollback(self, context, reservations):
-        quota.QUOTAS.rollback(context, reservations)
+    def quota_rollback(self, context, reservations, project_id=None):
+        quota.QUOTAS.rollback(context, reservations, project_id=project_id)
 
     def get_ec2_ids(self, context, instance):
         ec2_ids = {}

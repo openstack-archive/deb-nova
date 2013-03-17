@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2011 Grid Dynamics
 # Copyright 2011 Eldar Nugaev, Kirill Shileev, Ilya Alekseyev
@@ -294,7 +294,9 @@ class FloatingIPActionController(wsgi.Controller):
             disassociate_floating_ip(self, context, instance, address)
             return webob.Response(status_int=202)
         else:
-            return webob.Response(status_int=404)
+            msg = _("Floating ip %(address)s is not associated with instance "
+                    "%(id)s.") % locals()
+            raise webob.exc.HTTPUnprocessableEntity(explanation=msg)
 
 
 class Floating_ips(extensions.ExtensionDescriptor):

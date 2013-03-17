@@ -154,7 +154,7 @@ class Instance(BASE, NovaBase):
         return base_name
 
     def _extra_keys(self):
-        return ['name', 'system_metadata']
+        return ['name']
 
     user_id = Column(String(255))
     project_id = Column(String(255))
@@ -163,12 +163,6 @@ class Instance(BASE, NovaBase):
     kernel_id = Column(String(255))
     ramdisk_id = Column(String(255))
     hostname = Column(String(255))
-
-#    image_ref = Column(Integer, ForeignKey('images.id'), nullable=True)
-#    kernel_id = Column(Integer, ForeignKey('images.id'), nullable=True)
-#    ramdisk_id = Column(Integer, ForeignKey('images.id'), nullable=True)
-#    ramdisk = relationship(Ramdisk, backref=backref('instances', order_by=id))
-#    kernel = relationship(Kernel, backref=backref('instances', order_by=id))
 
     launch_index = Column(Integer)
     key_name = Column(String(255))
@@ -278,13 +272,6 @@ class InstanceTypes(BASE, NovaBase):
     vcpu_weight = Column(Integer, nullable=True)
     disabled = Column(Boolean, default=False)
     is_public = Column(Boolean, default=True)
-
-    instances = relationship(Instance,
-                           backref=backref('instance_type', uselist=False),
-                           foreign_keys=id,
-                           primaryjoin='and_('
-                               'Instance.instance_type_id == '
-                               'InstanceTypes.id)')
 
 
 class Volume(BASE, NovaBase):
@@ -841,29 +828,16 @@ class Aggregate(BASE, NovaBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255))
     _hosts = relationship(AggregateHost,
-                          lazy="joined",
-                          secondary="aggregate_hosts",
                           primaryjoin='and_('
-                                 'Aggregate.id == AggregateHost.aggregate_id,'
-                                 'AggregateHost.deleted == 0,'
-                                 'Aggregate.deleted == 0)',
-                         secondaryjoin='and_('
-                                'AggregateHost.aggregate_id == Aggregate.id, '
-                                'AggregateHost.deleted == 0,'
-                                'Aggregate.deleted == 0)',
-                         backref='aggregates')
+                          'Aggregate.id == AggregateHost.aggregate_id,'
+                          'AggregateHost.deleted == 0,'
+                          'Aggregate.deleted == 0)')
 
     _metadata = relationship(AggregateMetadata,
-                         secondary="aggregate_metadata",
-                         primaryjoin='and_('
+                             primaryjoin='and_('
                              'Aggregate.id == AggregateMetadata.aggregate_id,'
                              'AggregateMetadata.deleted == 0,'
-                             'Aggregate.deleted == 0)',
-                         secondaryjoin='and_('
-                             'AggregateMetadata.aggregate_id == Aggregate.id, '
-                             'AggregateMetadata.deleted == 0,'
-                             'Aggregate.deleted == 0)',
-                         backref='aggregates')
+                             'Aggregate.deleted == 0)')
 
     def _extra_keys(self):
         return ['hosts', 'metadetails', 'availability_zone']

@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -119,7 +119,10 @@ class KeypairController(object):
         context = req.environ['nova.context']
         authorize(context)
 
-        keypair = self.api.get_key_pair(context, context.user_id, id)
+        try:
+            keypair = self.api.get_key_pair(context, context.user_id, id)
+        except exception.KeypairNotFound:
+            raise webob.exc.HTTPNotFound()
         return {'keypair': keypair}
 
     @wsgi.serializers(xml=KeypairsTemplate)

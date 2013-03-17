@@ -29,8 +29,10 @@ from oslo.config import cfg
 
 from nova import db
 from nova import exception
+from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -41,9 +43,9 @@ LOG = logging.getLogger(__name__)
 
 
 linux_net_opts = [
-    cfg.StrOpt('dhcpbridge_flagfile',
-               default='/etc/nova/nova-dhcpbridge.conf',
-               help='location of flagfile for dhcpbridge'),
+    cfg.MultiStrOpt('dhcpbridge_flagfile',
+                    default=['/etc/nova/nova-dhcpbridge.conf'],
+                    help='location of flagfiles for dhcpbridge'),
     cfg.StrOpt('networks_path',
                default=paths.state_path_def('networks'),
                help='Location to keep network config files'),
@@ -275,6 +277,14 @@ class IptablesTable(object):
                      {'chain': chain, 'rule': rule,
                       'top': top, 'wrap': wrap})
 
+    def remove_rules_regex(self, regex):
+        """Remove all rules matching regex."""
+        if isinstance(regex, basestring):
+            regex = re.compile(regex)
+        num_rules = len(self.rules)
+        self.rules = filter(lambda r: not regex.match(str(r)), self.rules)
+        return num_rules - len(self.rules)
+
     def empty_chain(self, chain, wrap=True):
         """Remove all rules from a chain."""
         chained_rules = [rule for rule in self.rules
@@ -400,10 +410,10 @@ class IptablesManager(object):
                                                 run_as_root=True,
                                                 attempts=5)
             all_lines = all_tables.split('\n')
-            for table in tables:
-                start, end = self._find_table(all_lines, table)
+            for table_name, table in tables.iteritems():
+                start, end = self._find_table(all_lines, table_name)
                 all_lines[start:end] = self._modify_rules(
-                        all_lines[start:end], tables[table], table_name=table)
+                        all_lines[start:end], table, table_name)
             self.execute('%s-restore' % (cmd,), '-c', run_as_root=True,
                          process_input='\n'.join(all_lines),
                          attempts=5)
@@ -421,8 +431,7 @@ class IptablesManager(object):
         end = lines[start:].index('COMMIT') + start + 2
         return (start, end)
 
-    def _modify_rules(self, current_lines, table, binary=None,
-                      table_name=None):
+    def _modify_rules(self, current_lines, table, table_name):
         unwrapped_chains = table.unwrapped_chains
         chains = table.chains
         remove_chains = table.remove_chains
@@ -710,6 +719,12 @@ def ensure_vpn_forward(public_ip, port, private_ip):
 
 def ensure_floating_forward(floating_ip, fixed_ip, device, network):
     """Ensure floating ip forwarding rule."""
+    # NOTE(vish): Make sure we never have duplicate rules for the same ip
+    regex = '.*\s+%s(/32|\s+|$)' % floating_ip
+    num_rules = iptables_manager.ipv4['nat'].remove_rules_regex(regex)
+    if num_rules:
+        msg = _('Removed %(num)d duplicate rules for floating ip %(float)s')
+        LOG.warn(msg % {'num': num_rules, 'float': floating_ip})
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].add_rule(chain, rule)
     iptables_manager.apply()
@@ -994,7 +1009,7 @@ def restart_dhcp(context, dev, network_ref):
             LOG.debug(_('Pid %d is stale, relaunching dnsmasq'), pid)
 
     cmd = ['env',
-           'CONFIG_FILE=%s' % CONF.dhcpbridge_flagfile,
+           'CONFIG_FILE=%s' % jsonutils.dumps(CONF.dhcpbridge_flagfile),
            'NETWORK_ID=%s' % str(network_ref['id']),
            'dnsmasq',
            '--strict-order',
@@ -1004,7 +1019,7 @@ def restart_dhcp(context, dev, network_ref):
            '--pid-file=%s' % _dhcp_file(dev, 'pid'),
            '--listen-address=%s' % network_ref['dhcp_server'],
            '--except-interface=lo',
-           '--dhcp-range=set:\'%s\',%s,static,%ss' %
+           '--dhcp-range=set:%s,%s,static,%ss' %
                          (network_ref['label'],
                           network_ref['dhcp_start'],
                           CONF.dhcp_lease_time),
@@ -1390,9 +1405,9 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                 utils.execute('ip', 'link', 'delete', vlan_interface,
                               run_as_root=True, check_exit_code=[0, 2, 254])
             except exception.ProcessExecutionError:
-                LOG.error(_("Failed unplugging VLAN interface '%s'"),
-                          vlan_interface)
-                raise
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_("Failed unplugging VLAN interface '%s'"),
+                              vlan_interface)
             LOG.debug(_("Unplugged VLAN interface '%s'"), vlan_interface)
 
     @classmethod
@@ -1449,7 +1464,10 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             for line in out.split('\n'):
                 fields = line.split()
                 if fields and fields[0] == 'inet':
-                    params = fields[1:-1]
+                    if fields[-2] == 'secondary':
+                        params = fields[1:-2]
+                    else:
+                        params = fields[1:-1]
                     _execute(*_ip_bridge_cmd('del', params, fields[-1]),
                              run_as_root=True, check_exit_code=[0, 2, 254])
                     _execute(*_ip_bridge_cmd('add', params, bridge),
@@ -1496,8 +1514,9 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                 utils.execute('ip', 'link', 'delete', bridge, run_as_root=True,
                               check_exit_code=[0, 2, 254])
             except exception.ProcessExecutionError:
-                LOG.error(_("Failed unplugging bridge interface '%s'"), bridge)
-                raise
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_("Failed unplugging bridge interface '%s'"),
+                              bridge)
 
         LOG.debug(_("Unplugged bridge interface '%s'"), bridge)
 
@@ -1695,8 +1714,9 @@ class QuantumLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                 utils.execute('ip', 'link', 'delete', dev, run_as_root=True,
                               check_exit_code=[0, 2, 254])
             except exception.ProcessExecutionError:
-                LOG.error(_("Failed unplugging gateway interface '%s'"), dev)
-                raise
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_("Failed unplugging gateway interface '%s'"),
+                              dev)
             LOG.debug(_("Unplugged gateway interface '%s'"), dev)
             return dev
 

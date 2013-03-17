@@ -33,6 +33,7 @@ from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
 from nova.api.metadata import password
 from nova.compute import api as compute_api
+from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
@@ -41,9 +42,12 @@ from nova import db
 from nova import exception
 from nova.image import s3
 from nova.network import api as network_api
+from nova.network import quantumv2
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 from nova import test
+from nova.tests.api.openstack.compute.contrib import (
+    test_quantum_security_groups as test_quantum)
 from nova.tests import fake_network
 from nova.tests.image import fake
 from nova.tests import matchers
@@ -756,18 +760,22 @@ class CloudTestCase(test.TestCase):
         self._stub_instance_get_with_fixed_ips('get')
 
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
+        sys_meta = instance_types.save_instance_type_info(
+            {}, instance_types.get_instance_type(1))
         inst1 = db.instance_create(self.context, {'reservation_id': 'a',
                                                   'image_ref': image_uuid,
                                                   'instance_type_id': 1,
                                                   'host': 'host1',
                                                   'hostname': 'server-1234',
-                                                  'vm_state': 'active'})
+                                                  'vm_state': 'active',
+                                                  'system_metadata': sys_meta})
         inst2 = db.instance_create(self.context, {'reservation_id': 'a',
                                                   'image_ref': image_uuid,
                                                   'instance_type_id': 1,
                                                   'host': 'host2',
                                                   'hostname': 'server-4321',
-                                                  'vm_state': 'active'})
+                                                  'vm_state': 'active',
+                                                  'system_metadata': sys_meta})
         comp1 = db.service_create(self.context, {'host': 'host1',
                                                  'topic': "compute"})
         agg = db.aggregate_create(self.context,
@@ -846,11 +854,14 @@ class CloudTestCase(test.TestCase):
         self._stub_instance_get_with_fixed_ips('get')
 
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
+        sys_meta = instance_types.save_instance_type_info(
+            {}, instance_types.get_instance_type(1))
         inst_base = {
                 'reservation_id': 'a',
                 'image_ref': image_uuid,
                 'instance_type_id': 1,
-                'vm_state': 'active'
+                'vm_state': 'active',
+                'system_metadata': sys_meta,
         }
 
         inst1_kwargs = {}
@@ -898,9 +909,12 @@ class CloudTestCase(test.TestCase):
         def test_instance_state(expected_code, expected_name,
                                 power_state_, vm_state_, values=None):
             image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
+            sys_meta = instance_types.save_instance_type_info(
+                {}, instance_types.get_instance_type(1))
             values = values or {}
             values.update({'image_ref': image_uuid, 'instance_type_id': 1,
-                           'power_state': power_state_, 'vm_state': vm_state_})
+                           'power_state': power_state_, 'vm_state': vm_state_,
+                           'system_metadata': sys_meta})
             inst = db.instance_create(self.context, values)
 
             instance_id = ec2utils.id_to_ec2_inst_id(inst['uuid'])
@@ -930,11 +944,14 @@ class CloudTestCase(test.TestCase):
         self._stub_instance_get_with_fixed_ips('get')
 
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
+        sys_meta = instance_types.save_instance_type_info(
+            {}, instance_types.get_instance_type(1))
         inst1 = db.instance_create(self.context, {'reservation_id': 'a',
                                                   'image_ref': image_uuid,
                                                   'instance_type_id': 1,
                                                   'hostname': 'server-1234',
-                                                  'vm_state': 'active'})
+                                                  'vm_state': 'active',
+                                                  'system_metadata': sys_meta})
         comp1 = db.service_create(self.context, {'host': 'host1',
                                                  'topic': "compute"})
         result = self.cloud.describe_instances(self.context)
@@ -954,17 +971,21 @@ class CloudTestCase(test.TestCase):
 
     def test_describe_instances_deleted(self):
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
+        sys_meta = instance_types.save_instance_type_info(
+            {}, instance_types.get_instance_type(1))
         args1 = {'reservation_id': 'a',
                  'image_ref': image_uuid,
                  'instance_type_id': 1,
                  'host': 'host1',
-                 'vm_state': 'active'}
+                 'vm_state': 'active',
+                 'system_metadata': sys_meta}
         inst1 = db.instance_create(self.context, args1)
         args2 = {'reservation_id': 'b',
                  'image_ref': image_uuid,
                  'instance_type_id': 1,
                  'host': 'host1',
-                 'vm_state': 'active'}
+                 'vm_state': 'active',
+                 'system_metadata': sys_meta}
         inst2 = db.instance_create(self.context, args2)
         db.instance_destroy(self.context, inst1['uuid'])
         result = self.cloud.describe_instances(self.context)
@@ -975,17 +996,21 @@ class CloudTestCase(test.TestCase):
 
     def test_describe_instances_with_image_deleted(self):
         image_uuid = 'aebef54a-ed67-4d10-912f-14455edce176'
+        sys_meta = instance_types.save_instance_type_info(
+            {}, instance_types.get_instance_type(1))
         args1 = {'reservation_id': 'a',
                  'image_ref': image_uuid,
                  'instance_type_id': 1,
                  'host': 'host1',
-                 'vm_state': 'active'}
+                 'vm_state': 'active',
+                 'system_metadata': sys_meta}
         inst1 = db.instance_create(self.context, args1)
         args2 = {'reservation_id': 'b',
                  'image_ref': image_uuid,
                  'instance_type_id': 1,
                  'host': 'host1',
-                 'vm_state': 'active'}
+                 'vm_state': 'active',
+                 'system_metadata': sys_meta}
         inst2 = db.instance_create(self.context, args2)
         result = self.cloud.describe_instances(self.context)
         self.assertEqual(len(result['reservationSet']), 2)
@@ -1904,34 +1929,15 @@ class CloudTestCase(test.TestCase):
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
 
         def fake_block_device_mapping_get_all_by_instance(context, inst_id):
-            class BDM(object):
-                def __init__(self):
-                    self.no_device = None
-                    self.values = dict(id=1,
-                                       snapshot_id=snapshots[0],
-                                       volume_id=volumes[0],
-                                       virtual_name=None,
-                                       volume_size=1,
-                                       device_name='sda1',
-                                       delete_on_termination=False,
-                                       connection_info='{"foo":"bar"}')
-
-                def __getattr__(self, name):
-                    """Properly delegate dotted lookups."""
-                    if name in self.__dict__['values']:
-                        return self.values.get(name)
-                    try:
-                        return self.__dict__[name]
-                    except KeyError:
-                        raise AttributeError
-
-                def __getitem__(self, key):
-                    return self.values.get(key)
-
-                def iteritems(self):
-                    return self.values.iteritems()
-
-            return [BDM()]
+            return [dict(id=1,
+                         snapshot_id=snapshots[0],
+                         volume_id=volumes[0],
+                         virtual_name=None,
+                         volume_size=1,
+                         device_name='sda1',
+                         delete_on_termination=False,
+                         no_device=None,
+                         connection_info='{"foo":"bar"}')]
 
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        fake_block_device_mapping_get_all_by_instance)
@@ -1995,32 +2001,13 @@ class CloudTestCase(test.TestCase):
         ec2_instance_id = self._run_instance(**kwargs)
 
         def fake_block_device_mapping_get_all_by_instance(context, inst_id):
-            class BDM(object):
-                def __init__(self):
-                    self.no_device = None
-                    self.values = dict(snapshot_id=snapshots[0],
-                                       volume_id=volumes[0],
-                                       virtual_name=None,
-                                       volume_size=1,
-                                       device_name='vda',
-                                       delete_on_termination=False)
-
-                def __getattr__(self, name):
-                    """Properly delegate dotted lookups."""
-                    if name in self.__dict__['values']:
-                        return self.values.get(name)
-                    try:
-                        return self.__dict__[name]
-                    except KeyError:
-                        raise AttributeError
-
-                def __getitem__(self, key):
-                    return self.values.get(key)
-
-                def iteritems(self):
-                    return self.values.iteritems()
-
-            return [BDM()]
+            return [dict(snapshot_id=snapshots[0],
+                         volume_id=volumes[0],
+                         virtual_name=None,
+                         volume_size=1,
+                         device_name='vda',
+                         delete_on_termination=False,
+                         no_device=None)]
 
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        fake_block_device_mapping_get_all_by_instance)
@@ -2083,18 +2070,22 @@ class CloudTestCase(test.TestCase):
                        self._fake_bdm_get)
 
         def fake_get(ctxt, instance_id):
+            inst_type = instance_types.get_default_instance_type()
+            inst_type['name'] = 'fake_type'
+            sys_meta = instance_types.save_instance_type_info({}, inst_type)
+            sys_meta = utils.dict_to_metadata(sys_meta)
             return {
                 'id': 0,
                 'uuid': 'e5fe5518-0288-4fa3-b0c4-c79764101b85',
                 'root_device_name': '/dev/sdh',
                 'security_groups': [{'name': 'fake0'}, {'name': 'fake1'}],
                 'vm_state': vm_states.STOPPED,
-                'instance_type': {'name': 'fake_type'},
                 'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
                 'ramdisk_id': '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
                 'user_data': 'fake-user data',
                 'shutdown_terminate': False,
                 'disable_terminate': False,
+                'system_metadata': sys_meta,
                 }
         self.stubs.Set(self.cloud.compute_api, 'get', fake_get)
 
@@ -2226,3 +2217,66 @@ class CloudTestCase(test.TestCase):
         test_dia_iisb('stop', image_id='ami-4')
         test_dia_iisb('stop', image_id='ami-5')
         test_dia_iisb('stop', image_id='ami-6')
+
+
+class CloudTestCaseQuantumProxy(test.TestCase):
+    def setUp(self):
+        cfg.CONF.set_override('security_group_api', 'quantum')
+        self.cloud = cloud.CloudController()
+        self.original_client = quantumv2.get_client
+        quantumv2.get_client = test_quantum.get_client
+        self.user_id = 'fake'
+        self.project_id = 'fake'
+        self.context = context.RequestContext(self.user_id,
+                                              self.project_id,
+                                              is_admin=True)
+        super(CloudTestCaseQuantumProxy, self).setUp()
+
+    def tearDown(self):
+        quantumv2.get_client = self.original_client
+        test_quantum.get_client()._reset()
+        super(CloudTestCaseQuantumProxy, self).tearDown()
+
+    def test_describe_security_groups(self):
+        # Makes sure describe_security_groups works and filters results.
+        group_name = 'test'
+        description = 'test'
+        self.cloud.create_security_group(self.context, group_name,
+                                         description)
+        result = self.cloud.describe_security_groups(self.context)
+        # NOTE(vish): should have the default group as well
+        self.assertEqual(len(result['securityGroupInfo']), 2)
+        result = self.cloud.describe_security_groups(self.context,
+                      group_name=[group_name])
+        self.assertEqual(len(result['securityGroupInfo']), 1)
+        self.assertEqual(result['securityGroupInfo'][0]['groupName'],
+                         group_name)
+        self.cloud.delete_security_group(self.context, group_name)
+
+    def test_describe_security_groups_by_id(self):
+        group_name = 'test'
+        description = 'test'
+        self.cloud.create_security_group(self.context, group_name,
+                                         description)
+        quantum = test_quantum.get_client()
+        # Get id from quantum since cloud.create_security_group
+        # does not expose it.
+        search_opts = {'name': group_name}
+        groups = quantum.list_security_groups(
+            **search_opts)['security_groups']
+        result = self.cloud.describe_security_groups(self.context,
+                      group_id=[groups[0]['id']])
+        self.assertEqual(len(result['securityGroupInfo']), 1)
+        self.assertEqual(
+                result['securityGroupInfo'][0]['groupName'],
+                group_name)
+        self.cloud.delete_security_group(self.context, group_name)
+
+    def test_create_delete_security_group(self):
+        descript = 'test description'
+        create = self.cloud.create_security_group
+        result = create(self.context, 'testgrp', descript)
+        group_descript = result['securityGroupSet'][0]['groupDescription']
+        self.assertEqual(descript, group_descript)
+        delete = self.cloud.delete_security_group
+        self.assertTrue(delete(self.context, 'testgrp'))

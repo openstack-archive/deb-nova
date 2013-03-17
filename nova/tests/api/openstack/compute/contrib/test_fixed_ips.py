@@ -1,5 +1,4 @@
-# Copyright 2012 IBM
-# All Rights Reserved.
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -31,7 +30,8 @@ fake_fixed_ips = [{'id': 1,
                    'allocated': False,
                    'leased': False,
                    'reserved': False,
-                   'host': None},
+                   'host': None,
+                   'deleted': False},
                   {'id': 2,
                    'address': '192.168.1.2',
                    'network_id': 1,
@@ -40,13 +40,24 @@ fake_fixed_ips = [{'id': 1,
                    'allocated': False,
                    'leased': False,
                    'reserved': False,
-                   'host': None},
+                   'host': None,
+                   'deleted': False},
+                  {'id': 3,
+                   'address': '10.0.0.2',
+                   'network_id': 1,
+                   'virtual_interface_id': 3,
+                   'instance_uuid': '3',
+                   'allocated': False,
+                   'leased': False,
+                   'reserved': False,
+                   'host': None,
+                   'deleted': True},
                   ]
 
 
 def fake_fixed_ip_get_by_address(context, address):
     for fixed_ip in fake_fixed_ips:
-        if fixed_ip['address'] == address:
+        if fixed_ip['address'] == address and not fixed_ip['deleted']:
             return fixed_ip
     raise exception.FixedIpNotFoundForAddress(address=address)
 
@@ -55,7 +66,7 @@ def fake_fixed_ip_get_by_address_detailed(context, address):
     network = {'id': 1,
                'cidr': "192.168.1.0/24"}
     for fixed_ip in fake_fixed_ips:
-        if fixed_ip['address'] == address:
+        if fixed_ip['address'] == address and not fixed_ip['deleted']:
             return (fixed_ip, FakeModel(network), None)
     raise exception.FixedIpNotFoundForAddress(address=address)
 
@@ -107,9 +118,6 @@ class FixedIpTest(test.TestCase):
         self.context = context.get_admin_context()
         self.controller = fixed_ips.FixedIPController()
 
-    def tearDown(self):
-        super(FixedIpTest, self).tearDown()
-
     def test_fixed_ips_get(self):
         req = fakes.HTTPRequest.blank('/v2/fake/os-fixed-ips/192.168.1.1')
         res_dict = self.controller.show(req, '192.168.1.1')
@@ -119,14 +127,18 @@ class FixedIpTest(test.TestCase):
                                  'address': '192.168.1.1'}}
         self.assertEqual(response, res_dict)
 
-    def test_fixed_ips_get_fail(self):
+    def test_fixed_ips_get_bad_ip_fail(self):
         req = fakes.HTTPRequest.blank('/v2/fake/os-fixed-ips/10.0.0.1')
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.show, req,
                           '10.0.0.1')
 
+    def test_fixed_ips_get_deleted_ip_fail(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/os-fixed-ips/10.0.0.2')
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.show, req,
+                          '10.0.0.2')
+
     def test_fixed_ip_reserve(self):
         fake_fixed_ips[0]['reserved'] = False
-        ip_addr = '192.168.1.1'
         body = {'reserve': None}
         req = fakes.HTTPRequest.blank(
             '/v2/fake/os-fixed-ips/192.168.1.1/action')
@@ -136,16 +148,21 @@ class FixedIpTest(test.TestCase):
         self.assertEqual(fake_fixed_ips[0]['reserved'], True)
 
     def test_fixed_ip_reserve_bad_ip(self):
-        ip_addr = '10.0.0.1'
         body = {'reserve': None}
         req = fakes.HTTPRequest.blank(
             '/v2/fake/os-fixed-ips/10.0.0.1/action')
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.action, req,
                           '10.0.0.1', body)
 
+    def test_fixed_ip_reserve_deleted_ip(self):
+        body = {'reserve': None}
+        req = fakes.HTTPRequest.blank(
+            '/v2/fake/os-fixed-ips/10.0.0.2/action')
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.action, req,
+                          '10.0.0.2', body)
+
     def test_fixed_ip_unreserve(self):
         fake_fixed_ips[0]['reserved'] = True
-        ip_addr = '192.168.1.1'
         body = {'unreserve': None}
         req = fakes.HTTPRequest.blank(
             '/v2/fake/os-fixed-ips/192.168.1.1/action')
@@ -155,9 +172,15 @@ class FixedIpTest(test.TestCase):
         self.assertEqual(fake_fixed_ips[0]['reserved'], False)
 
     def test_fixed_ip_unreserve_bad_ip(self):
-        ip_addr = '10.0.0.1'
         body = {'unreserve': None}
         req = fakes.HTTPRequest.blank(
             '/v2/fake/os-fixed-ips/10.0.0.1/action')
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.action, req,
                           '10.0.0.1', body)
+
+    def test_fixed_ip_unreserve_deleted_ip(self):
+        body = {'unreserve': None}
+        req = fakes.HTTPRequest.blank(
+            '/v2/fake/os-fixed-ips/10.0.0.2/action')
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.action, req,
+                          '10.0.0.2', body)

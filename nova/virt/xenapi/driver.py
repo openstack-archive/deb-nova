@@ -1,7 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2010 Citrix Systems, Inc.
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -194,9 +194,10 @@ class XenAPIDriver(driver.ComputeDriver):
         self._vmops.snapshot(context, instance, image_id, update_task_state)
 
     def reboot(self, context, instance, network_info, reboot_type,
-               block_device_info=None):
+               block_device_info=None, bad_volumes_callback=None):
         """Reboot VM instance."""
-        self._vmops.reboot(instance, reboot_type)
+        self._vmops.reboot(instance, reboot_type,
+                           bad_volumes_callback=bad_volumes_callback)
 
     def set_admin_password(self, instance, new_pass):
         """Set the root/admin password on the VM instance."""

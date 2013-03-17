@@ -26,6 +26,7 @@ from nova import db
 from nova.network import driver
 from nova.network import linux_net
 from nova.openstack.common import fileutils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import test
@@ -496,7 +497,7 @@ class LinuxNetworkTestCase(test.TestCase):
         dev = 'br100'
         linux_net.restart_dhcp(self.context, dev, network_ref)
         expected = ['env',
-          'CONFIG_FILE=%s' % CONF.dhcpbridge_flagfile,
+          'CONFIG_FILE=%s' % jsonutils.dumps(CONF.dhcpbridge_flagfile),
           'NETWORK_ID=fake',
           'dnsmasq',
           '--strict-order',
@@ -506,7 +507,7 @@ class LinuxNetworkTestCase(test.TestCase):
           '--pid-file=%s' % linux_net._dhcp_file(dev, 'pid'),
           '--listen-address=%s' % network_ref['dhcp_server'],
           '--except-interface=lo',
-          "--dhcp-range=set:'%s',%s,static,%ss" % (network_ref['label'],
+          "--dhcp-range=set:%s,%s,static,%ss" % (network_ref['label'],
                                                    network_ref['dhcp_start'],
                                                    CONF.dhcp_lease_time),
           '--dhcp-lease-max=256',
@@ -728,6 +729,19 @@ class LinuxNetworkTestCase(test.TestCase):
              '2001:db8::/64', 'dev', 'eth0'),
         ]
         self._test_initialize_gateway(existing, expected)
+
+    def test_ensure_floating_no_duplicate_forwards(self):
+        ln = linux_net
+        self.stubs.Set(ln.iptables_manager, 'apply', lambda: None)
+        self.stubs.Set(ln, 'ensure_ebtables_rules', lambda *a, **kw: None)
+        net = {'bridge': 'br100', 'cidr': '10.0.0.0/24'}
+        ln.ensure_floating_forward('10.10.10.10', '10.0.0.1', 'eth0', net)
+        one_forward_rules = len(linux_net.iptables_manager.ipv4['nat'].rules)
+        ln.ensure_floating_forward('10.10.10.11', '10.0.0.10', 'eth0', net)
+        two_forward_rules = len(linux_net.iptables_manager.ipv4['nat'].rules)
+        ln.ensure_floating_forward('10.10.10.10', '10.0.0.3', 'eth0', net)
+        dup_forward_rules = len(linux_net.iptables_manager.ipv4['nat'].rules)
+        self.assertEqual(two_forward_rules, dup_forward_rules)
 
     def test_apply_ran(self):
         manager = linux_net.IptablesManager()

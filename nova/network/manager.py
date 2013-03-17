@@ -69,10 +69,13 @@ from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
+from nova import quota
 from nova import servicegroup
 from nova import utils
 
 LOG = logging.getLogger(__name__)
+
+QUOTAS = quota.QUOTAS
 
 
 network_opts = [
@@ -106,9 +109,12 @@ network_opts = [
     cfg.IntOpt('network_size',
                default=256,
                help='Number of addresses in each private subnet'),
+    # TODO(mathrock): Deprecate in Grizzly, remove in Havana
     cfg.StrOpt('fixed_range',
                default='10.0.0.0/8',
-               help='Fixed IP address block'),
+               help='DEPRECATED - Fixed IP address block.'
+                    'If set to an empty string, the subnet range(s) will be '
+                    'automatically determined and configured.'),
     cfg.StrOpt('fixed_range_v6',
                default='fd00::/48',
                help='Fixed IPv6 address block'),
@@ -249,7 +255,7 @@ class RPCAllocateFixedIP(object):
         self.network_rpcapi.deallocate_fixed_ip(context, address, host)
 
 
-class NetworkManager(manager.SchedulerDependentManager):
+class NetworkManager(manager.Manager):
     """Implements common network manager functionality.
 
     This class must be subclassed to support specific topologies.
@@ -298,8 +304,7 @@ class NetworkManager(manager.SchedulerDependentManager):
         l3_lib = kwargs.get("l3_lib", CONF.l3_lib)
         self.l3driver = importutils.import_object(l3_lib)
 
-        super(NetworkManager, self).__init__(service_name='network',
-                                                *args, **kwargs)
+        super(NetworkManager, self).__init__(*args, **kwargs)
 
     def _import_ipam_lib(self, ipam_lib):
         self.ipam = importutils.import_module(ipam_lib).get_ipam_lib(self)
@@ -821,47 +826,69 @@ class NetworkManager(manager.SchedulerDependentManager):
         #             network_get_by_compute_host
         address = None
 
-        if network['cidr']:
-            address = kwargs.get('address', None)
-            if address:
-                address = self.db.fixed_ip_associate(context,
-                                                     address,
-                                                     instance_id,
-                                                     network['id'])
-            else:
-                address = self.db.fixed_ip_associate_pool(context.elevated(),
-                                                          network['id'],
-                                                          instance_id)
-            self._do_trigger_security_group_members_refresh_for_instance(
-                                                                   instance_id)
-            self._do_trigger_security_group_handler(
-                'instance_add_security_group', instance_id)
-            get_vif = self.db.virtual_interface_get_by_instance_and_network
-            vif = get_vif(context, instance_id, network['id'])
-            values = {'allocated': True,
-                      'virtual_interface_id': vif['id']}
-            self.db.fixed_ip_update(context, address, values)
+        # Check the quota; can't put this in the API because we get
+        # called into from other places
+        try:
+            reservations = QUOTAS.reserve(context, fixed_ips=1)
+        except exception.OverQuota:
+            pid = context.project_id
+            LOG.warn(_("Quota exceeded for %(pid)s, tried to allocate "
+                       "fixed IP") % locals())
+            raise exception.FixedIpLimitExceeded()
 
-        # NOTE(vish) This db query could be removed if we pass az and name
-        #            (or the whole instance object).
-        instance = self.db.instance_get_by_uuid(context, instance_id)
-        name = instance['display_name']
+        try:
+            if network['cidr']:
+                address = kwargs.get('address', None)
+                if address:
+                    address = self.db.fixed_ip_associate(context,
+                                                         address,
+                                                         instance_id,
+                                                         network['id'])
+                else:
+                    address = self.db.fixed_ip_associate_pool(
+                        context.elevated(), network['id'], instance_id)
+                self._do_trigger_security_group_members_refresh_for_instance(
+                    instance_id)
+                self._do_trigger_security_group_handler(
+                    'instance_add_security_group', instance_id)
+                get_vif = self.db.virtual_interface_get_by_instance_and_network
+                vif = get_vif(context, instance_id, network['id'])
+                values = {'allocated': True,
+                          'virtual_interface_id': vif['id']}
+                self.db.fixed_ip_update(context, address, values)
 
-        if self._validate_instance_zone_for_dns_domain(context, instance):
-            self.instance_dns_manager.create_entry(name, address,
-                                                   "A",
-                                                   self.instance_dns_domain)
-            self.instance_dns_manager.create_entry(instance_id, address,
-                                                   "A",
-                                                   self.instance_dns_domain)
-        self._setup_network_on_host(context, network)
-        return address
+            # NOTE(vish) This db query could be removed if we pass az and name
+            #            (or the whole instance object).
+            instance = self.db.instance_get_by_uuid(context, instance_id)
+            name = instance['display_name']
+
+            if self._validate_instance_zone_for_dns_domain(context, instance):
+                self.instance_dns_manager.create_entry(
+                    name, address, "A", self.instance_dns_domain)
+                self.instance_dns_manager.create_entry(
+                    instance_id, address, "A", self.instance_dns_domain)
+            self._setup_network_on_host(context, network)
+
+            QUOTAS.commit(context, reservations)
+            return address
+
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                QUOTAS.rollback(context, reservations)
 
     def deallocate_fixed_ip(self, context, address, host=None, teardown=True):
         """Returns a fixed ip to the pool."""
         fixed_ip_ref = self.db.fixed_ip_get_by_address(context, address)
         instance_uuid = fixed_ip_ref['instance_uuid']
         vif_id = fixed_ip_ref['virtual_interface_id']
+
+        try:
+            reservations = QUOTAS.reserve(context, fixed_ips=-1)
+        except Exception:
+            reservations = None
+            LOG.exception(_("Failed to update usages deallocating "
+                            "fixed IP"))
+
         self._do_trigger_security_group_members_refresh_for_instance(
             instance_uuid)
         self._do_trigger_security_group_handler(
@@ -909,6 +936,10 @@ class NetworkManager(manager.SchedulerDependentManager):
                 self.driver.release_dhcp(dev, address, vif['address'])
 
             self._teardown_network_on_host(context, network)
+
+        # Commit the reservations
+        if reservations:
+            QUOTAS.commit(context, reservations)
 
     def lease_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is leased."""
@@ -1159,7 +1190,7 @@ class NetworkManager(manager.SchedulerDependentManager):
 
             if network and cidr and subnet_v4:
                 self._create_fixed_ips(context, network['id'], fixed_cidr)
-        return networks
+        return jsonutils.to_primitive(networks)
 
     def delete_network(self, context, fixed_range, uuid,
             require_disassociated=True):
@@ -1387,6 +1418,9 @@ class NetworkManager(manager.SchedulerDependentManager):
                     dev = self.driver.get_dev(network)
                     self.driver.update_dns(context, dev, network)
 
+    def add_network_to_project(self, ctxt, project_id, network_uuid):
+        raise NotImplementedError()
+
 
 class FlatManager(NetworkManager):
     """Basic network where no vlans are used.
@@ -1559,7 +1593,12 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
         """Do any initialization that needs to be run if this is a
         standalone service.
         """
-        self.l3driver.initialize()
+        if not CONF.fixed_range:
+            ctxt = context.get_admin_context()
+            networks = self.db.network_get_all_by_host(ctxt, self.host)
+            self.l3driver.initialize(fixed_range=False, networks=networks)
+        else:
+            self.l3driver.initialize(fixed_range=CONF.fixed_range)
         super(FlatDHCPManager, self).init_host()
         self.init_host_floating_ips()
 
@@ -1567,6 +1606,8 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
         """Sets up network on this host."""
         network['dhcp_server'] = self._get_dhcp_ip(context, network)
 
+        if not CONF.fixed_range:
+            self.l3driver.initialize_network(network.get('cidr'))
         self.l3driver.initialize_gateway(network)
 
         if not CONF.fake_network:
@@ -1630,7 +1671,12 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
         standalone service.
         """
 
-        self.l3driver.initialize()
+        if not CONF.fixed_range:
+            ctxt = context.get_admin_context()
+            networks = self.db.network_get_all_by_host(ctxt, self.host)
+            self.l3driver.initialize(fixed_range=False, networks=networks)
+        else:
+            self.l3driver.initialize(fixed_range=CONF.fixed_range)
         NetworkManager.init_host(self)
         self.init_host_floating_ips()
 
@@ -1773,6 +1819,8 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             address = network['vpn_public_address']
         network['dhcp_server'] = self._get_dhcp_ip(context, network)
 
+        if not CONF.fixed_range:
+            self.l3driver.initialize_network(network.get('cidr'))
         self.l3driver.initialize_gateway(network)
 
         # NOTE(vish): only ensure this forward if the address hasn't been set

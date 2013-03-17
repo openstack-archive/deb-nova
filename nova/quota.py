@@ -43,6 +43,10 @@ quota_opts = [
     cfg.IntOpt('quota_floating_ips',
                default=10,
                help='number of floating ips allowed per project'),
+    cfg.IntOpt('quota_fixed_ips',
+               default=10,
+               help=('number of fixed ips allowed per project (this should be '
+                     'at least the number of instances allowed)')),
     cfg.IntOpt('quota_metadata_items',
                default=128,
                help='number of metadata items allowed per instance'),
@@ -508,7 +512,7 @@ class NoopQuotaDriver(object):
             quotas[resource.name] = -1
         return quotas
 
-    def limit_check(self, context, resources, values):
+    def limit_check(self, context, resources, values, project_id=None):
         """Check simple quota limits.
 
         For limits--those quotas for which there is no usage
@@ -528,10 +532,14 @@ class NoopQuotaDriver(object):
         :param resources: A dictionary of the registered resources.
         :param values: A dictionary of the values to check against the
                        quota.
+        :param project_id: Specify the project_id if current context
+                           is admin and admin wants to impact on
+                           common user's tenant.
         """
         pass
 
-    def reserve(self, context, resources, deltas, expire=None):
+    def reserve(self, context, resources, deltas, expire=None,
+                project_id=None):
         """Check quotas and reserve resources.
 
         For counting quotas--those quotas for which there is a usage
@@ -561,24 +569,33 @@ class NoopQuotaDriver(object):
                        default expiration time set by
                        --default-reservation-expire will be used (this
                        value will be treated as a number of seconds).
+        :param project_id: Specify the project_id if current context
+                           is admin and admin wants to impact on
+                           common user's tenant.
         """
         return []
 
-    def commit(self, context, reservations):
+    def commit(self, context, reservations, project_id=None):
         """Commit reservations.
 
         :param context: The request context, for access checks.
         :param reservations: A list of the reservation UUIDs, as
                              returned by the reserve() method.
+        :param project_id: Specify the project_id if current context
+                           is admin and admin wants to impact on
+                           common user's tenant.
         """
         pass
 
-    def rollback(self, context, reservations):
+    def rollback(self, context, reservations, project_id=None):
         """Roll back reservations.
 
         :param context: The request context, for access checks.
         :param reservations: A list of the reservation UUIDs, as
                              returned by the reserve() method.
+        :param project_id: Specify the project_id if current context
+                           is admin and admin wants to impact on
+                           common user's tenant.
         """
         pass
 
@@ -776,15 +793,20 @@ class QuotaEngine(object):
 
     def __init__(self, quota_driver_class=None):
         """Initialize a Quota object."""
-
-        if not quota_driver_class:
-            quota_driver_class = CONF.quota_driver
-
-        if isinstance(quota_driver_class, basestring):
-            quota_driver_class = importutils.import_object(quota_driver_class)
-
         self._resources = {}
-        self._driver = quota_driver_class
+        self._driver_cls = quota_driver_class
+        self.__driver = None
+
+    @property
+    def _driver(self):
+        if self.__driver:
+            return self.__driver
+        if not self._driver_cls:
+            self._driver_cls = CONF.quota_driver
+        if isinstance(self._driver_cls, basestring):
+            self._driver_cls = importutils.import_object(self._driver_cls)
+        self.__driver = self._driver_cls
+        return self.__driver
 
     def __contains__(self, resource):
         return resource in self._resources
@@ -1044,6 +1066,11 @@ def _sync_floating_ips(context, project_id, session):
             context, project_id, session=session))
 
 
+def _sync_fixed_ips(context, project_id, session):
+    return dict(fixed_ips=db.fixed_ip_count_by_project(
+            context, project_id, session=session))
+
+
 def _sync_security_groups(context, project_id, session):
     return dict(security_groups=db.security_group_count_by_project(
             context, project_id, session=session))
@@ -1058,6 +1085,7 @@ resources = [
     ReservableResource('ram', _sync_instances, 'quota_ram'),
     ReservableResource('floating_ips', _sync_floating_ips,
                        'quota_floating_ips'),
+    ReservableResource('fixed_ips', _sync_fixed_ips, 'quota_fixed_ips'),
     AbsoluteResource('metadata_items', 'quota_metadata_items'),
     AbsoluteResource('injected_files', 'quota_injected_files'),
     AbsoluteResource('injected_file_content_bytes',

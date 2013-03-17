@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 OpenStack, LLC.
+# Copyright (c) 2010 OpenStack Foundation
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -31,7 +31,6 @@ from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.conductor import api as conductor_api
 import nova.context
-from nova import db
 from nova import exception
 from nova import manager
 from nova import notifications
@@ -95,7 +94,10 @@ class SchedulerManager(manager.Manager):
             return self.driver.schedule_live_migration(
                 context, instance, dest,
                 block_migration, disk_over_commit)
-        except exception.ComputeServiceUnavailable as ex:
+        except (exception.ComputeServiceUnavailable,
+                exception.InvalidHypervisorType,
+                exception.UnableToMigrateToSelf,
+                exception.DestinationHypervisorTooOld) as ex:
             request_spec = {'instance_properties': {
                 'uuid': instance['uuid'], },
             }
@@ -206,7 +208,7 @@ class SchedulerManager(manager.Manager):
                             locals(), instance_uuid=instance_uuid)
 
                 # update instance state and notify on the transition
-                (old_ref, new_ref) = db.instance_update_and_get_original(
+                (old_ref, new_ref) = self.db.instance_update_and_get_original(
                         context, instance_uuid, updates)
                 notifications.send_update(context, old_ref, new_ref,
                         service="scheduler")
@@ -242,9 +244,9 @@ class SchedulerManager(manager.Manager):
 
         """
         # Getting compute node info and related instances info
-        service_ref = db.service_get_by_compute_host(context, host)
-        instance_refs = db.instance_get_all_by_host(context,
-                                                    service_ref['host'])
+        service_ref = self.db.service_get_by_compute_host(context, host)
+        instance_refs = self.db.instance_get_all_by_host(context,
+                                                         service_ref['host'])
 
         # Getting total available/used resource
         compute_ref = service_ref['compute_node'][0]

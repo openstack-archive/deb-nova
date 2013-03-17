@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -45,6 +45,7 @@ from nova.openstack.common import timeutils
 from nova import quota
 from nova.tests import fake_network
 from nova.tests.glance import stubs as glance_stubs
+from nova import utils
 from nova import wsgi
 
 
@@ -216,12 +217,10 @@ def _make_image_fixtures():
     NOW_GLANCE_FORMAT = "2010-10-11T10:30:22"
 
     image_id = 123
-    base_attrs = {'deleted': False}
 
     fixtures = []
 
     def add_fixture(**kwargs):
-        kwargs.update(base_attrs)
         fixtures.append(kwargs)
 
     # Public image
@@ -236,9 +235,11 @@ def _make_image_fixtures():
     snapshot_properties = {'instance_uuid': uuid, 'user_id': 'fake'}
     for status in ('queued', 'saving', 'active', 'killed',
                    'deleted', 'pending_delete'):
+        deleted = False if status != 'deleted' else True
         add_fixture(id=image_id, name='%s snapshot' % status,
                     is_public=False, status=status,
-                    properties=snapshot_properties, size='25165824')
+                    properties=snapshot_properties, size='25165824',
+                    deleted=deleted)
         image_id += 1
 
     # Image without a name
@@ -411,7 +412,7 @@ def fake_instance_get_all_by_filters(num_servers=5, **kwargs):
 
 
 def stub_instance(id, user_id=None, project_id=None, host=None,
-                  vm_state=None, task_state=None,
+                  node=None, vm_state=None, task_state=None,
                   reservation_id="", uuid=FAKE_UUID, image_ref="10",
                   flavor_id="1", name=None, key_name='',
                   access_ipv4=None, access_ipv6=None, progress=0,
@@ -434,6 +435,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         metadata = []
 
     inst_type = instance_types.get_instance_type_by_flavor_id(int(flavor_id))
+    sys_meta = instance_types.save_instance_type_info({}, inst_type)
 
     if host is not None:
         host = str(host)
@@ -475,6 +477,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "ephemeral_gb": 0,
         "hostname": display_name or server_name,
         "host": host,
+        "node": node,
         "instance_type_id": 1,
         "instance_type": dict(inst_type),
         "user_data": "",
@@ -497,7 +500,8 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "shutdown_terminate": True,
         "disable_terminate": False,
         "security_groups": security_groups,
-        "root_device_name": root_device_name}
+        "root_device_name": root_device_name,
+        "system_metadata": utils.dict_to_metadata(sys_meta)}
 
     instance.update(info_cache)
 
@@ -587,7 +591,7 @@ def stub_snapshot(id, **kwargs):
         'volume_id': 12,
         'status': 'available',
         'volume_size': 100,
-        'created_at': None,
+        'created_at': timeutils.utcnow(),
         'display_name': 'Default name',
         'display_description': 'Default description',
         'project_id': 'fake'
@@ -597,11 +601,23 @@ def stub_snapshot(id, **kwargs):
     return snapshot
 
 
-def stub_snapshot_get_all(self):
+def stub_snapshot_create(self, context, volume_id, name, description):
+    return stub_snapshot(100, volume_id=volume_id, display_name=name,
+                         display_description=description)
+
+
+def stub_snapshot_delete(self, context, snapshot):
+    if snapshot['id'] == '-1':
+        raise exc.NotFound
+
+
+def stub_snapshot_get(self, context, snapshot_id):
+    if snapshot_id == '-1':
+        raise exc.NotFound
+    return stub_snapshot(snapshot_id)
+
+
+def stub_snapshot_get_all(self, context):
     return [stub_snapshot(100, project_id='fake'),
             stub_snapshot(101, project_id='superfake'),
             stub_snapshot(102, project_id='superduperfake')]
-
-
-def stub_snapshot_get_all_by_project(self, context):
-    return [stub_snapshot(1)]

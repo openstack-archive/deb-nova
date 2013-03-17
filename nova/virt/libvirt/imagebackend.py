@@ -120,8 +120,10 @@ class Image(object):
         # throttling for qemu.
         if self.source_type in ['file', 'block']:
             for key, value in extra_specs.iteritems():
-                if key in tune_items:
-                    setattr(info, key, value)
+                scope = key.split(':')
+                if len(scope) > 1 and scope[0] == 'quota':
+                    if scope[1] in tune_items:
+                        setattr(info, scope[1], value)
         return info
 
     def cache(self, fetch_func, filename, size=None, *args, **kwargs):
@@ -140,6 +142,9 @@ class Image(object):
                                 lock_path=self.lock_path)
         def call_if_not_exists(target, *args, **kwargs):
             if not os.path.exists(target):
+                fetch_func(target=target, *args, **kwargs)
+            elif CONF.libvirt_images_type == "lvm" and \
+                    'ephemeral_size' in kwargs:
                 fetch_func(target=target, *args, **kwargs)
 
         base_dir = os.path.join(CONF.instances_path, CONF.base_dir_name)

@@ -1,5 +1,5 @@
 # Copyright (c) AT&T 2012-2013 Yun Mao <yunmao@gmail.com>
-# Copyright (c) IBM 2012 Alexey Roytman <roytman at il dot ibm dot com>.
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -38,7 +38,7 @@ class ZKServiceGroupTestCase(test.TestCase):
         servicegroup.API._driver = None
         try:
             from nova.servicegroup.drivers import zk
-            _unused = zk
+            _unused = zk.ZooKeeperDriver()
         except ImportError:
             self.skipTest("Unable to test due to lack of ZooKeeper")
         self.flags(servicegroup_driver='zk')

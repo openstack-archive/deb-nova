@@ -29,6 +29,7 @@ if sys.platform == 'win32':
 from oslo.config import cfg
 
 from nova.openstack.common import log as logging
+from nova import utils
 from nova.virt.hyperv import basevolumeutils
 
 LOG = logging.getLogger(__name__)
@@ -36,18 +37,18 @@ CONF = cfg.CONF
 
 
 class VolumeUtilsV2(basevolumeutils.BaseVolumeUtils):
-    def __init__(self):
-        super(VolumeUtilsV2, self).__init__()
+    def __init__(self, host='.'):
+        super(VolumeUtilsV2, self).__init__(host)
 
-        storage_namespace = '//./root/microsoft/windows/storage'
+        storage_namespace = '//%s/root/microsoft/windows/storage' % host
         if sys.platform == 'win32':
             self._conn_storage = wmi.WMI(moniker=storage_namespace)
 
     def login_storage_target(self, target_lun, target_iqn, target_portal):
         """Add target portal, list targets and logins to the target."""
-        separator = target_portal.find(':')
-        target_address = target_portal[:separator]
-        target_port = target_portal[separator + 1:]
+        (target_address,
+         target_port) = utils.parse_server_string(target_portal)
+
         #Adding target portal to iscsi initiator. Sending targets
         portal = self._conn_storage.MSFT_iSCSITargetPortal
         portal.New(TargetPortalAddress=target_address,
@@ -56,21 +57,28 @@ class VolumeUtilsV2(basevolumeutils.BaseVolumeUtils):
         target = self._conn_storage.MSFT_iSCSITarget
         target.Connect(NodeAddress=target_iqn,
                        IsPersistent=True)
-        #Waiting the disk to be mounted. Research this
-        time.sleep(CONF.hyperv_wait_between_attach_retry)
+        #Waiting the disk to be mounted.
+        #TODO(pnavarro): Check for the operation to end instead of
+        #relying on a timeout
+        time.sleep(CONF.hyperv.volume_attach_retry_interval)
 
     def logout_storage_target(self, target_iqn):
         """Logs out storage target through its session id."""
+        targets = self._conn_storage.MSFT_iSCSITarget(NodeAddress=target_iqn)
+        if targets:
+            target = targets[0]
+            if target.IsConnected:
+                sessions = self._conn_storage.MSFT_iSCSISession(
+                    TargetNodeAddress=target_iqn)
 
-        target = self._conn_storage.MSFT_iSCSITarget(NodeAddress=target_iqn)[0]
-        if target.IsConnected:
-            session = self._conn_storage.MSFT_iSCSISession(
-                TargetNodeAddress=target_iqn)[0]
-            if session.IsPersistent:
-                session.Unregister()
-            target.Disconnect()
+                for session in sessions:
+                    if session.IsPersistent:
+                        session.Unregister()
+
+                target.Disconnect()
 
     def execute_log_out(self, session_id):
-        session = self._conn_wmi.MSiSCSIInitiator_SessionClass(
-            SessionId=session_id)[0]
-        self.logout_storage_target(session.TargetName)
+        sessions = self._conn_wmi.MSiSCSIInitiator_SessionClass(
+            SessionId=session_id)
+        if sessions:
+            self.logout_storage_target(sessions[0].TargetName)

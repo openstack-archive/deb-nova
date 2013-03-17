@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2013 OpenStack LLC.
+# Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -29,9 +29,6 @@ class TestGlanceStore(test.TestCase):
         super(TestGlanceStore, self).setUp()
         self.store = glance.GlanceStore()
         self.mox = mox.Mox()
-
-    def tearDown(self):
-        super(TestGlanceStore, self).tearDown()
 
     def test_upload_image(self):
         glance_host = '0.1.2.3'

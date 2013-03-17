@@ -1,7 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright 2011 Grid Dynamics
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -139,6 +139,9 @@ class NetworkController(wsgi.Controller):
         try:
             self.network_api.add_network_to_project(
                 context, project_id, network_id)
+        except NotImplementedError:
+            msg = (_("VLAN support must be enabled"))
+            raise exc.HTTPNotImplemented(explanation=msg)
         except Exception as ex:
             msg = (_("Cannot associate network %(network)s"
                      " with project %(project)s: %(message)s") %

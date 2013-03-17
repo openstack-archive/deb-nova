@@ -2,7 +2,7 @@
 
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -34,6 +34,7 @@ import webob.dec
 import webob.exc
 
 from nova import exception
+from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 
 wsgi_opts = [
@@ -175,9 +176,9 @@ class Server(object):
                                     CONF.tcp_keepidle)
 
             except Exception:
-                LOG.error(_("Failed to start %(name)s on %(host)s"
-                            ":%(port)s with SSL support") % self.__dict__)
-                raise
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_("Failed to start %(name)s on %(host)s"
+                                ":%(port)s with SSL support") % self.__dict__)
 
         wsgi_kwargs = {
             'func': eventlet.wsgi.server,

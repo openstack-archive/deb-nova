@@ -1,7 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2010 Citrix Systems, Inc.
-# Copyright (c) 2013 Openstack, LLC.
+# Copyright (c) 2013 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -151,3 +151,31 @@ class VolumeOps(object):
         vbd_refs = self._get_all_volume_vbd_refs(vm_ref)
         for vbd_ref in vbd_refs:
             self._detach_vbd(vbd_ref, unplug=unplug)
+
+    def find_bad_volumes(self, vm_ref):
+        """Find any volumes with their connection severed.
+
+        Certain VM operations (e.g. `VM.start`, `VM.reboot`, etc.) will not
+        work when a VBD is present that points to a non-working volume. To work
+        around this, we scan for non-working volumes and detach them before
+        retrying a failed operation.
+        """
+        bad_devices = []
+        vbd_refs = self._get_all_volume_vbd_refs(vm_ref)
+        for vbd_ref in vbd_refs:
+            sr_ref = volume_utils.find_sr_from_vbd(self._session, vbd_ref)
+
+            try:
+                # TODO(sirp): bug1152401 This relies on a 120 sec timeout
+                # within XenServer, update this to fail-fast when this is fixed
+                # upstream
+                self._session.call_xenapi("SR.scan", sr_ref)
+            except self._session.XenAPI.Failure, exc:
+                if exc.details[0] == 'SR_BACKEND_FAILURE_40':
+                    vbd_rec = vbd_rec = self._session.call_xenapi(
+                            "VBD.get_record", vbd_ref)
+                    bad_devices.append('/dev/%s' % vbd_rec['device'])
+                else:
+                    raise
+
+        return bad_devices

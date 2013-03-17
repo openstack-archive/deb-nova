@@ -276,6 +276,9 @@ class LocalAPI(object):
         return self._manager.compute_node_update(context, node, values,
                                                  prune_stats)
 
+    def compute_node_delete(self, context, node):
+        return self._manager.compute_node_delete(context, node)
+
     def service_update(self, context, service, values):
         return self._manager.service_update(context, service, values)
 
@@ -320,11 +323,13 @@ class LocalAPI(object):
                                                              instance,
                                                              migration)
 
-    def quota_commit(self, context, reservations):
-        return self._manager.quota_commit(context, reservations)
+    def quota_commit(self, context, reservations, project_id=None):
+        return self._manager.quota_commit(context, reservations,
+                                          project_id=project_id)
 
-    def quota_rollback(self, context, reservations):
-        return self._manager.quota_rollback(context, reservations)
+    def quota_rollback(self, context, reservations, project_id=None):
+        return self._manager.quota_rollback(context, reservations,
+                                            project_id=project_id)
 
     def get_ec2_ids(self, context, instance):
         return self._manager.get_ec2_ids(context, instance)
@@ -364,7 +369,7 @@ class API(object):
                 self.ping(context, '1.21 GigaWatts', timeout=timeout)
                 break
             except rpc_common.Timeout as e:
-                LOG.exception(_('Timed out waiting for nova-conductor. '
+                LOG.warning(_('Timed out waiting for nova-conductor. '
                                 'Is it running? Or did this service start '
                                 'before nova-conductor?'))
 
@@ -605,6 +610,9 @@ class API(object):
         return self.conductor_rpcapi.compute_node_update(context, node,
                                                          values, prune_stats)
 
+    def compute_node_delete(self, context, node):
+        return self.conductor_rpcapi.compute_node_delete(context, node)
+
     def service_update(self, context, service, values):
         return self.conductor_rpcapi.service_update(context, service, values)
 
@@ -650,11 +658,13 @@ class API(object):
                                                                      instance,
                                                                      migration)
 
-    def quota_commit(self, context, reservations):
-        return self.conductor_rpcapi.quota_commit(context, reservations)
+    def quota_commit(self, context, reservations, project_id=None):
+        return self.conductor_rpcapi.quota_commit(context, reservations,
+                                                  project_id=project_id)
 
-    def quota_rollback(self, context, reservations):
-        return self.conductor_rpcapi.quota_rollback(context, reservations)
+    def quota_rollback(self, context, reservations, project_id=None):
+        return self.conductor_rpcapi.quota_rollback(context, reservations,
+                                                    project_id=project_id)
 
     def get_ec2_ids(self, context, instance):
         return self.conductor_rpcapi.get_ec2_ids(context, instance)

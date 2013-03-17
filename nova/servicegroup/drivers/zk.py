@@ -1,7 +1,5 @@
 # Copyright (c) AT&T 2012-2013 Yun Mao <yunmao@gmail.com>
-#
-# Copyright (c) IBM 2012 Pavel Kravchenco <kpavel at il dot ibm dot com>
-#                        Alexey Roytman <roytman at il dot ibm dot com>
+# Copyright 2012 IBM Corp.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,16 +17,17 @@
 import os
 
 import eventlet
-import evzookeeper
-from evzookeeper import membership
 from oslo.config import cfg
-import zookeeper
 
 from nova import exception
+from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.servicegroup import api
 from nova import utils
 
+evzookeeper = importutils.try_import('evzookeeper')
+membership = importutils.try_import('evzookeeper.membersip')
+zookeeper = importutils.try_import('zookeeper')
 
 zk_driver_opts = [
     cfg.StrOpt('address',
@@ -58,16 +57,18 @@ class ZooKeeperDriver(api.ServiceGroupDriver):
 
     def __init__(self, *args, **kwargs):
         """Create the zk session object."""
+        if not all([evzookeeper, membership, zookeeper]):
+            raise ImportError('zookeeper module not found')
         null = open(os.devnull, "w")
-        self._session = evzookeeper.ZKSession(CONF.zk.address,
+        self._session = evzookeeper.ZKSession(CONF.zookeeper.address,
                                               recv_timeout=
-                                                CONF.zk.recv_timeout,
+                                                CONF.zookeeper.recv_timeout,
                                               zklog_fd=null)
         self._memberships = {}
         self._monitors = {}
         # Make sure the prefix exists
         try:
-            self._session.create(CONF.zk.sg_prefix, "",
+            self._session.create(CONF.zookeeper.sg_prefix, "",
                                  acl=[evzookeeper.ZOO_OPEN_ACL_UNSAFE])
         except zookeeper.NodeExistsException:
             pass
@@ -82,7 +83,7 @@ class ZooKeeperDriver(api.ServiceGroupDriver):
         member = self._memberships.get((group, member_id), None)
         if member is None:
             # the first time to join. Generate a new object
-            path = "%s/%s" % (CONF.zk.sg_prefix, group)
+            path = "%s/%s" % (CONF.zookeeper.sg_prefix, group)
             try:
                 member = membership.Membership(self._session, path, member_id)
             except RuntimeError:
@@ -90,7 +91,7 @@ class ZooKeeperDriver(api.ServiceGroupDriver):
                                 "another node exists with the same name, or "
                                 "this node just restarted. We will try "
                                 "again in a short while to make sure."))
-                eventlet.sleep(CONF.zk.sg_retry_interval)
+                eventlet.sleep(CONF.zookeeper.sg_retry_interval)
                 member = membership.Membership(self._session, path, member_id)
             self._memberships[(group, member_id)] = member
         return FakeLoopingCall(self, member_id, group)
@@ -120,7 +121,7 @@ class ZooKeeperDriver(api.ServiceGroupDriver):
         """
         monitor = self._monitors.get(group_id, None)
         if monitor is None:
-            path = "%s/%s" % (CONF.zk.sg_prefix, group_id)
+            path = "%s/%s" % (CONF.zookeeper.sg_prefix, group_id)
             monitor = membership.MembershipMonitor(self._session, path)
             self._monitors[group_id] = monitor
             # Note(maoy): When initialized for the first time, it takes a

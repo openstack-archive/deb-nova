@@ -1,5 +1,4 @@
-# Copyright 2012 IBM
-# All Rights Reserved.
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -32,9 +31,6 @@ class FloatingIPBulk(test.TestCase):
 
         self.context = context.get_admin_context()
         self.controller = floating_ips_bulk.FloatingIPBulkController()
-
-    def tearDown(self):
-        super(FloatingIPBulk, self).tearDown()
 
     def _setup_floating_ips(self, ip_range):
         body = {'floating_ips_bulk_create': {'ip_range': ip_range}}

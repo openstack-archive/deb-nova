@@ -2,7 +2,7 @@
 
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -57,6 +57,7 @@ vmware_group = cfg.OptGroup(name='vmware',
 CONF = cfg.CONF
 CONF.register_group(vmware_group)
 CONF.register_opts(vmware_vif_opts, vmware_group)
+CONF.import_opt('base_dir_name', 'nova.virt.libvirt.imagecache')
 CONF.import_opt('vnc_enabled', 'nova.vnc')
 
 LOG = logging.getLogger(__name__)

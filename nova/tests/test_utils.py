@@ -449,39 +449,6 @@ class GenericUtilsTestCase(test.TestCase):
                 self.assertEqual(fake_execute.uid, 2)
             self.assertEqual(fake_execute.uid, os.getuid())
 
-    def test_safe_parse_xml(self):
-
-        normal_body = ("""
-                 <?xml version="1.0" ?><foo>
-                    <bar>
-                        <v1>hey</v1>
-                        <v2>there</v2>
-                    </bar>
-                </foo>""").strip()
-
-        def killer_body():
-            return (("""<!DOCTYPE x [
-                    <!ENTITY a "%(a)s">
-                    <!ENTITY b "%(b)s">
-                    <!ENTITY c "%(c)s">]>
-                <foo>
-                    <bar>
-                        <v1>%(d)s</v1>
-                    </bar>
-                </foo>""") % {
-                'a': 'A' * 10,
-                'b': '&a;' * 10,
-                'c': '&b;' * 10,
-                'd': '&c;' * 9999,
-            }).strip()
-
-        dom = utils.safe_minidom_parse_string(normal_body)
-        self.assertEqual(normal_body, str(dom.toxml()))
-
-        self.assertRaises(ValueError,
-                          utils.safe_minidom_parse_string,
-                          killer_body())
-
     def test_xhtml_escape(self):
         self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
         self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
@@ -514,6 +481,8 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertTrue(utils.is_valid_ipv4('127.0.0.1'))
         self.assertFalse(utils.is_valid_ipv4('::1'))
         self.assertFalse(utils.is_valid_ipv4('bacon'))
+        self.assertFalse(utils.is_valid_ipv4(""))
+        self.assertFalse(utils.is_valid_ipv4(10))
 
     def test_is_valid_ipv6(self):
         self.assertTrue(utils.is_valid_ipv6("::1"))
@@ -523,6 +492,8 @@ class GenericUtilsTestCase(test.TestCase):
                                     "0000:0000:0000:0000:0000:0000:0000:0001"))
         self.assertFalse(utils.is_valid_ipv6("foo"))
         self.assertFalse(utils.is_valid_ipv6("127.0.0.1"))
+        self.assertFalse(utils.is_valid_ipv6(""))
+        self.assertFalse(utils.is_valid_ipv6(10))
 
     def test_is_valid_ipv6_cidr(self):
         self.assertTrue(utils.is_valid_ipv6_cidr("2600::/64"))
@@ -911,6 +882,16 @@ class MetadataToDictTestCase(test.TestCase):
     def test_metadata_to_dict_empty(self):
         self.assertEqual(utils.metadata_to_dict([]), {})
 
+    def test_dict_to_metadata(self):
+        expected = [{'key': 'foo1', 'value': 'bar1'},
+                    {'key': 'foo2', 'value': 'bar2'}]
+        self.assertEqual(utils.dict_to_metadata(dict(foo1='bar1',
+                                                     foo2='bar2')),
+                         expected)
+
+    def test_dict_to_metadata_empty(self):
+        self.assertEqual(utils.dict_to_metadata({}), [])
+
 
 class WrappedCodeTestCase(test.TestCase):
     """Test the get_wrapped_function utility method."""
@@ -962,88 +943,6 @@ class WrappedCodeTestCase(test.TestCase):
         self.assertTrue('instance' in func_code.co_varnames)
         self.assertTrue('red' in func_code.co_varnames)
         self.assertTrue('blue' in func_code.co_varnames)
-
-
-class GetCallArgsTestCase(test.TestCase):
-    def _test_func(self, instance, red=None, blue=None):
-        pass
-
-    def test_all_kwargs(self):
-        args = ()
-        kwargs = {'instance': {'uuid': 1}, 'red': 3, 'blue': 4}
-        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
-        #implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(4, callargs['blue'])
-
-    def test_all_args(self):
-        args = ({'uuid': 1}, 3, 4)
-        kwargs = {}
-        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
-        #implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(4, callargs['blue'])
-
-    def test_mixed_args(self):
-        args = ({'uuid': 1}, 3)
-        kwargs = {'blue': 4}
-        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
-        #implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(4, callargs['blue'])
-
-    def test_partial_kwargs(self):
-        args = ()
-        kwargs = {'instance': {'uuid': 1}, 'red': 3}
-        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
-        #implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(None, callargs['blue'])
-
-    def test_partial_args(self):
-        args = ({'uuid': 1}, 3)
-        kwargs = {}
-        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
-        #implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(None, callargs['blue'])
-
-    def test_partial_mixed_args(self):
-        args = (3,)
-        kwargs = {'instance': {'uuid': 1}}
-        callargs = utils.getcallargs(self._test_func, *args, **kwargs)
-        self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(None, callargs['blue'])
 
 
 class StringLengthTestCase(test.TestCase):

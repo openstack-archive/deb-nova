@@ -30,7 +30,7 @@ import uuid
 from oslo.config import cfg
 from sqlalchemy import and_
 from sqlalchemy import Boolean
-from sqlalchemy import exc as sqla_exc
+from sqlalchemy.exc import DataError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy import Integer
@@ -52,6 +52,7 @@ import nova.context
 from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception
+from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common.db.sqlalchemy import utils as sqlalchemyutils
 from nova.openstack.common import log as logging
@@ -121,7 +122,7 @@ def require_instance_exists_using_uuid(f):
     """
     @functools.wraps(f)
     def wrapper(context, instance_uuid, *args, **kwargs):
-        db.instance_get_by_uuid(context, instance_uuid)
+        instance_get_by_uuid(context, instance_uuid)
         return f(context, instance_uuid, *args, **kwargs)
 
     return wrapper
@@ -136,37 +137,22 @@ def require_aggregate_exists(f):
 
     @functools.wraps(f)
     def wrapper(context, aggregate_id, *args, **kwargs):
-        db.aggregate_get(context, aggregate_id)
+        aggregate_get(context, aggregate_id)
         return f(context, aggregate_id, *args, **kwargs)
     return wrapper
 
 
 def _retry_on_deadlock(f):
     """Decorator to retry a DB API call if Deadlock was received."""
-    def _is_deadlock_exc(dberr_info):
-        deadlock_str = 'Deadlock found when trying to get lock'
-        try:
-            if not isinstance(dberr_info, sqla_exc.OperationalError):
-                return False
-            if deadlock_str in dberr_info.message:
-                LOG.warn(_("Deadlock detected when running "
-                           "'%(func_name)s': Retrying..."),
-                           dict(func_name=f.__name__))
-                return True
-        except Exception:
-            pass
-        return False
-
     @functools.wraps(f)
     def wrapped(*args, **kwargs):
         while True:
             try:
                 return f(*args, **kwargs)
-            except db_session.DBError as db_err:
-                exc_info = sys.exc_info()
-                dberr_info = db_err.inner_exception
-                if not _is_deadlock_exc(dberr_info):
-                    raise exc_info[0], exc_info[1], exc_info[2]
+            except db_exc.DBDeadlock:
+                LOG.warn(_("Deadlock detected when running "
+                           "'%(func_name)s': Retrying..."),
+                           dict(func_name=f.__name__))
                 # Retry!
                 time.sleep(0.5)
                 continue
@@ -545,18 +531,25 @@ def compute_node_update(context, compute_id, values, prune_stats=False):
     with session.begin():
         _update_stats(context, stats, compute_id, session, prune_stats)
         compute_ref = _compute_node_get(context, compute_id, session=session)
+        # Always update this, even if there's going to be no other
+        # changes in data.  This ensures that we invalidate the
+        # scheduler cache of compute node data in case of races.
+        if 'updated_at' not in values:
+            values['updated_at'] = timeutils.utcnow()
         convert_datetimes(values, 'created_at', 'deleted_at', 'updated_at')
         compute_ref.update(values)
     return compute_ref
 
 
-def compute_node_get_by_host(context, host):
-    """Get all capacity entries for the given host."""
-    result = model_query(context, models.ComputeNode, read_deleted="no").\
-            join('service').\
-            filter(models.Service.host == host).\
-            first()
-    return result
+@require_admin_context
+def compute_node_delete(context, compute_id):
+    """Delete a ComputeNode record."""
+    result = model_query(context, models.ComputeNode).\
+             filter_by(id=compute_id).\
+             soft_delete()
+
+    if not result:
+        raise exception.ComputeHostNotFound(host=compute_id)
 
 
 def compute_node_statistics(context):
@@ -759,6 +752,7 @@ def floating_ip_count_by_project(context, project_id, session=None):
 
 
 @require_context
+@_retry_on_deadlock
 def floating_ip_fixed_ip_associate(context, floating_address,
                                    fixed_address, host):
     session = get_session()
@@ -1176,14 +1170,15 @@ def fixed_ip_get_by_address_detailed(context, address, session=None):
     if not session:
         session = get_session()
 
-    result = session.query(models.FixedIp, models.Network, models.Instance).\
-        filter_by(address=address).\
-        outerjoin((models.Network,
-                   models.Network.id ==
-                   models.FixedIp.network_id)).\
-        outerjoin((models.Instance,
-                   models.Instance.uuid ==
-                   models.FixedIp.instance_uuid)).\
+    result = model_query(context, models.FixedIp, models.Network,
+                         models.Instance, session=session).\
+                         filter_by(address=address).\
+                         outerjoin((models.Network,
+                                    models.Network.id ==
+                                    models.FixedIp.network_id)).\
+                         outerjoin((models.Instance,
+                                    models.Instance.uuid ==
+                                    models.FixedIp.instance_uuid)).\
         first()
 
     if not result:
@@ -1251,6 +1246,18 @@ def fixed_ip_update(context, address, values):
         fixed_ip_ref.save(session=session)
 
 
+@require_context
+def fixed_ip_count_by_project(context, project_id, session=None):
+    nova.context.authorize_project_context(context, project_id)
+    return model_query(context, models.FixedIp.id,
+                       base_model=models.FixedIp, read_deleted="no",
+                       session=session).\
+                join((models.Instance,
+                      models.Instance.uuid == models.FixedIp.instance_uuid)).\
+                filter(models.Instance.uuid == project_id).\
+                count()
+
+
 ###################
 
 
@@ -1264,7 +1271,7 @@ def virtual_interface_create(context, values):
         vif_ref = models.VirtualInterface()
         vif_ref.update(values)
         vif_ref.save()
-    except db_session.DBError:
+    except db_exc.DBError:
         raise exception.VirtualInterfaceCreateException()
 
     return vif_ref
@@ -1373,17 +1380,19 @@ def _validate_unique_server_name(context, session, name):
     if not CONF.osapi_compute_unique_server_name_scope:
         return
 
-    search_opts = {'deleted': False}
+    lowername = name.lower()
+    base_query = model_query(context, models.Instance, session=session,
+                             read_deleted=False).\
+            filter(func.lower(models.Instance.hostname) == lowername)
+
     if CONF.osapi_compute_unique_server_name_scope == 'project':
-        search_opts['project_id'] = context.project_id
-        instance_list = instance_get_all_by_filters(context, search_opts,
-                                                    'created_at', 'desc',
-                                                    session=session)
+        instance_with_same_name = base_query.\
+                        filter_by(project_id=context.project_id).\
+                        count()
+
     elif CONF.osapi_compute_unique_server_name_scope == 'global':
-        instance_list = instance_get_all_by_filters(context.elevated(),
-                                                    search_opts,
-                                                    'created_at', 'desc',
-                                                    session=session)
+        instance_with_same_name = base_query.count()
+
     else:
         msg = _('Unknown osapi_compute_unique_server_name_scope value: %s'
                 ' Flag must be empty, "global" or'
@@ -1391,10 +1400,8 @@ def _validate_unique_server_name(context, session, name):
         LOG.warn(msg)
         return
 
-    lowername = name.lower()
-    for instance in instance_list:
-        if instance['hostname'].lower() == lowername:
-            raise exception.InstanceExists(name=instance['hostname'])
+    if instance_with_same_name > 0:
+        raise exception.InstanceExists(name=lowername)
 
 
 @require_context
@@ -1441,12 +1448,9 @@ def instance_create(context, values):
         instance_ref.security_groups = _get_sec_group_models(session,
                 security_groups)
         instance_ref.save(session=session)
-        # NOTE(comstud): This forces instance_type to be loaded so it
-        # exists in the ref when we return.  Fixes lazy loading issues.
-        instance_ref.instance_type
 
     # create the instance uuid to ec2_id mapping entry for instance
-    db.ec2_instance_create(context, instance_ref['uuid'])
+    ec2_instance_create(context, instance_ref['uuid'])
 
     return instance_ref
 
@@ -1485,8 +1489,10 @@ def instance_destroy(context, instance_uuid, constraint=None):
         session.query(models.SecurityGroupInstanceAssociation).\
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
-
         session.query(models.InstanceInfoCache).\
+                 filter_by(instance_uuid=instance_uuid).\
+                 soft_delete()
+        session.query(models.InstanceMetadata).\
                  filter_by(instance_uuid=instance_uuid).\
                  soft_delete()
     return instance_ref
@@ -1511,14 +1517,19 @@ def _instance_get_by_uuid(context, uuid, session=None):
 
 @require_context
 def instance_get(context, instance_id):
-    result = _build_instance_get(context).\
-                filter_by(id=instance_id).\
-                first()
+    try:
+        result = _build_instance_get(context).filter_by(id=instance_id).first()
 
-    if not result:
-        raise exception.InstanceNotFound(instance_id=instance_id)
+        if not result:
+            raise exception.InstanceNotFound(instance_id=instance_id)
 
-    return result
+        return result
+    except DataError:
+        # NOTE(sdague): catch all in case the db engine chokes on the
+        # id because it's too long of an int to store.
+        msg = _("Invalid instance id %s in request") % instance_id
+        LOG.warn(msg)
+        raise exception.InvalidID(id=instance_id)
 
 
 @require_context
@@ -1528,7 +1539,6 @@ def _build_instance_get(context, session=None):
             options(joinedload_all('security_groups.rules')).\
             options(joinedload('info_cache')).\
             options(joinedload('metadata')).\
-            options(joinedload('instance_type')).\
             options(joinedload('system_metadata'))
 
 
@@ -1536,7 +1546,7 @@ def _build_instance_get(context, session=None):
 def instance_get_all(context, columns_to_join=None):
     if columns_to_join is None:
         columns_to_join = ['info_cache', 'security_groups', 'metadata',
-                           'instance_type', 'system_metadata']
+                           'system_metadata']
     query = model_query(context, models.Instance)
     for column in columns_to_join:
         query = query.options(joinedload(column))
@@ -1566,7 +1576,6 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
             options(joinedload('security_groups')).\
             options(joinedload('system_metadata')).\
             options(joinedload('metadata')).\
-            options(joinedload('instance_type')).\
             order_by(sort_fn[sort_dir](getattr(models.Instance, sort_key)))
 
     # Make a copy of the filters dictionary to use going forward, as we'll
@@ -1665,7 +1674,6 @@ def instance_get_active_by_window_joined(context, begin, end=None,
     query = query.options(joinedload('info_cache')).\
                   options(joinedload('security_groups')).\
                   options(joinedload('metadata')).\
-                  options(joinedload('instance_type')).\
                   options(joinedload('system_metadata')).\
                   filter(or_(models.Instance.terminated_at == None,
                              models.Instance.terminated_at > begin))
@@ -1685,7 +1693,6 @@ def _instance_get_all_query(context, project_only=False):
                    options(joinedload('info_cache')).\
                    options(joinedload('security_groups')).\
                    options(joinedload('metadata')).\
-                   options(joinedload('instance_type')).\
                    options(joinedload('system_metadata'))
 
 
@@ -1704,13 +1711,6 @@ def instance_get_all_by_host_and_node(context, host, node):
 def instance_get_all_by_host_and_not_type(context, host, type_id=None):
     return _instance_get_all_query(context).filter_by(host=host).\
                    filter(models.Instance.instance_type_id != type_id).all()
-
-
-@require_context
-def instance_get_all_by_reservation(context, reservation_id):
-    return _instance_get_all_query(context, project_only=True).\
-                    filter_by(reservation_id=reservation_id).\
-                    all()
 
 
 # NOTE(jkoelker) This is only being left here for compat with floating
@@ -1821,18 +1821,6 @@ def _instance_update(context, instance_uuid, values, copy_old_instance=False):
     with session.begin():
         instance_ref = _instance_get_by_uuid(context, instance_uuid,
                                              session=session)
-        # TODO(deva): remove extra_specs from here after it is included
-        #             in system_metadata. Until then, the baremetal driver
-        #             needs extra_specs added to instance[]
-        inst_type_ref = _instance_type_get_query(context, session=session).\
-                            filter_by(id=instance_ref['instance_type_id']).\
-                            first()
-        if inst_type_ref:
-            instance_ref['extra_specs'] = \
-                _dict_with_extra_specs(inst_type_ref).get('extra_specs', {})
-        else:
-            instance_ref['extra_specs'] = {}
-
         if "expected_task_state" in values:
             # it is not a db column so always pop out
             expected = values.pop("expected_task_state")
@@ -1873,13 +1861,6 @@ def _instance_update(context, instance_uuid, values, copy_old_instance=False):
 
         instance_ref.update(values)
         instance_ref.save(session=session)
-        if 'instance_type_id' in values:
-            # NOTE(comstud): It appears that sqlalchemy doesn't refresh
-            # the instance_type model after you update the ID.  You end
-            # up with an instance_type model that only has 'id' updated,
-            # but the rest of the model has the data from the old
-            # instance_type.
-            session.refresh(instance_ref['instance_type'])
 
     return (old_instance_ref, instance_ref)
 
@@ -1930,15 +1911,15 @@ def instance_info_cache_update(context, instance_uuid, values):
                                  session=session).\
                          filter_by(instance_uuid=instance_uuid).\
                          first()
-
-        if info_cache and not info_cache['deleted']:
-            # NOTE(tr3buchet): let's leave it alone if it's already deleted
-            info_cache.update(values)
-        else:
+        if info_cache and info_cache['deleted']:
+            raise exception.InstanceInfoCacheNotFound(
+                    instance_uuid=instance_uuid)
+        elif not info_cache:
             # NOTE(tr3buchet): just in case someone blows away an instance's
-            #                  cache entry
+            #                  cache entry, re-create it.
             info_cache = models.InstanceInfoCache()
-            info_cache.update({'instance_uuid': instance_uuid})
+            values['instance_uuid'] = instance_uuid
+        info_cache.update(values)
 
     return info_cache
 
@@ -2079,7 +2060,7 @@ def network_create_safe(context, values):
     try:
         network_ref.save()
         return network_ref
-    except db_session.DBDuplicateEntry:
+    except db_exc.DBDuplicateEntry:
         raise exception.DuplicateVlan(vlan=values['vlan'])
 
 
@@ -2321,32 +2302,9 @@ def network_update(context, network_id, values):
         network_ref.update(values)
         try:
             network_ref.save(session=session)
-        except db_session.DBDuplicateEntry:
+        except db_exc.DBDuplicateEntry:
             raise exception.DuplicateVlan(vlan=values['vlan'])
         return network_ref
-
-
-###################
-
-
-@require_admin_context
-def iscsi_target_count_by_host(context, host):
-    return model_query(context, models.IscsiTarget).\
-                   filter_by(host=host).\
-                   count()
-
-
-@require_admin_context
-def iscsi_target_create_safe(context, values):
-    iscsi_target_ref = models.IscsiTarget()
-
-    for (key, value) in values.iteritems():
-        iscsi_target_ref[key] = value
-    try:
-        iscsi_target_ref.save()
-        return iscsi_target_ref
-    except IntegrityError:
-        return None
 
 
 ###################
@@ -2545,16 +2503,6 @@ def reservation_create(context, uuid, usage, project_id, resource, delta,
     reservation_ref.expire = expire
     reservation_ref.save(session=session)
     return reservation_ref
-
-
-@require_admin_context
-def reservation_destroy(context, uuid):
-    result = model_query(context, models.Reservation, read_deleted="no").\
-                     filter_by(uuid=uuid).\
-                     delete()
-
-    if not result:
-        raise exception.ReservationNotFound(uuid=uuid)
 
 
 ###################
@@ -2804,21 +2752,9 @@ def _ec2_snapshot_get_query(context, session=None):
                        session=session, read_deleted='yes')
 
 
-@require_admin_context
-def volume_get_iscsi_target_num(context, volume_id):
-    result = model_query(context, models.IscsiTarget, read_deleted="yes").\
-                     filter_by(volume_id=volume_id).\
-                     first()
-
-    if not result:
-        raise exception.ISCSITargetNotFoundForVolume(volume_id=volume_id)
-
-    return result.target_num
-
-
 @require_context
 def ec2_volume_create(context, volume_uuid, id=None):
-    """Create ec2 compatable volume by provided uuid."""
+    """Create ec2 compatible volume by provided uuid."""
     ec2_volume_ref = models.VolumeIdMapping()
     ec2_volume_ref.update({'uuid': volume_uuid})
     if id is not None:
@@ -2855,7 +2791,7 @@ def get_volume_uuid_by_ec2_id(context, ec2_id, session=None):
 
 @require_context
 def ec2_snapshot_create(context, snapshot_uuid, id=None):
-    """Create ec2 compatable snapshot by provided uuid."""
+    """Create ec2 compatible snapshot by provided uuid."""
     ec2_snapshot_ref = models.SnapshotIdMapping()
     ec2_snapshot_ref.update({'uuid': snapshot_uuid})
     if id is not None:
@@ -2901,19 +2837,14 @@ def _block_device_mapping_get_query(context, session=None):
 def block_device_mapping_create(context, values):
     bdm_ref = models.BlockDeviceMapping()
     bdm_ref.update(values)
-
-    session = get_session()
-    with session.begin():
-        bdm_ref.save(session=session)
+    bdm_ref.save()
 
 
 @require_context
 def block_device_mapping_update(context, bdm_id, values):
-    session = get_session()
-    with session.begin():
-        _block_device_mapping_get_query(context, session=session).\
-                filter_by(id=bdm_id).\
-                update(values)
+    _block_device_mapping_get_query(context).\
+            filter_by(id=bdm_id).\
+            update(values)
 
 
 @require_context
@@ -2936,7 +2867,8 @@ def block_device_mapping_update_or_create(context, values):
         virtual_name = values['virtual_name']
         if (virtual_name is not None and
             block_device.is_swap_or_ephemeral(virtual_name)):
-            session.query(models.BlockDeviceMapping).\
+
+            _block_device_mapping_get_query(context, session=session).\
                 filter_by(instance_uuid=values['instance_uuid']).\
                 filter_by(virtual_name=virtual_name).\
                 filter(models.BlockDeviceMapping.device_name !=
@@ -2953,19 +2885,15 @@ def block_device_mapping_get_all_by_instance(context, instance_uuid):
 
 @require_context
 def block_device_mapping_destroy(context, bdm_id):
-    session = get_session()
-    with session.begin():
-        session.query(models.BlockDeviceMapping).\
-                filter_by(id=bdm_id).\
-                soft_delete()
+    _block_device_mapping_get_query(context).\
+            filter_by(id=bdm_id).\
+            soft_delete()
 
 
 @require_context
 def block_device_mapping_destroy_by_instance_and_volume(context, instance_uuid,
                                                         volume_id):
-    session = get_session()
-    with session.begin():
-        _block_device_mapping_get_query(context, session=session).\
+    _block_device_mapping_get_query(context).\
             filter_by(instance_uuid=instance_uuid).\
             filter_by(volume_id=volume_id).\
             soft_delete()
@@ -2974,9 +2902,7 @@ def block_device_mapping_destroy_by_instance_and_volume(context, instance_uuid,
 @require_context
 def block_device_mapping_destroy_by_instance_and_device(context, instance_uuid,
                                                         device_name):
-    session = get_session()
-    with session.begin():
-        _block_device_mapping_get_query(context, session=session).\
+    _block_device_mapping_get_query(context).\
             filter_by(instance_uuid=instance_uuid).\
             filter_by(device_name=device_name).\
             soft_delete()
@@ -3413,7 +3339,7 @@ def migration_get_in_progress_by_host_and_node(context, host, node,
                        and_(models.Migration.dest_compute == host,
                             models.Migration.dest_node == node))).\
             filter(~models.Migration.status.in_(['confirmed', 'reverted'])).\
-            options(joinedload('instance')).\
+            options(joinedload_all('instance.system_metadata')).\
             all()
 
 
@@ -3547,7 +3473,7 @@ def instance_type_create(context, values):
             instance_type_ref.update(values)
             instance_type_ref.save(session=session)
         except Exception, e:
-            raise db_session.DBError(e)
+            raise db_exc.DBError(e)
         return _dict_with_extra_specs(instance_type_ref)
 
 
@@ -4209,7 +4135,7 @@ def s3_image_create(context, image_uuid):
         s3_image_ref.update({'uuid': image_uuid})
         s3_image_ref.save()
     except Exception, e:
-        raise db_session.DBError(e)
+        raise db_exc.DBError(e)
 
     return s3_image_ref
 
@@ -4242,7 +4168,7 @@ def aggregate_create(context, values, metadata=None):
                                  values['name'],
                                  session=session,
                                  read_deleted='no')
-    aggregate = query.options(joinedload('_metadata')).first()
+    aggregate = query.first()
     if not aggregate:
         aggregate = models.Aggregate()
         aggregate.update(values)
@@ -4264,7 +4190,7 @@ def aggregate_get(context, aggregate_id):
                                  models.Aggregate,
                                  models.Aggregate.id,
                                  aggregate_id)
-    aggregate = query.options(joinedload('_metadata')).first()
+    aggregate = query.first()
 
     if not aggregate:
         raise exception.AggregateNotFound(aggregate_id=aggregate_id)
@@ -4318,8 +4244,7 @@ def aggregate_update(context, aggregate_id, values):
                                      models.Aggregate,
                                      models.Aggregate.id,
                                      aggregate_id,
-                                     session=session).
-                                     options(joinedload('_metadata')).first())
+                                     session=session).first())
 
     if aggregate:
         if "availability_zone" in values:
@@ -4614,6 +4539,10 @@ def action_event_finish(context, values):
             raise exception.InstanceActionEventNotFound(action_id=action['id'],
                                                         event=values['event'])
         event_ref.update(values)
+
+        if values['result'].lower() == 'error':
+            action.update({'message': 'Error'})
+
     return event_ref
 
 
@@ -4640,7 +4569,7 @@ def action_event_get_by_id(context, action_id, event_id):
 
 @require_context
 def ec2_instance_create(context, instance_uuid, id=None):
-    """Create ec2 compatable instance by provided uuid."""
+    """Create ec2 compatible instance by provided uuid."""
     ec2_instance_ref = models.InstanceIdMapping()
     ec2_instance_ref.update({'uuid': instance_uuid})
     if id is not None:
@@ -4729,7 +4658,7 @@ def task_log_begin_task(context, task_name, period_beginning, period_ending,
         task.task_items = task_items
     try:
         task.save()
-    except db_session.DBDuplicateEntry:
+    except db_exc.DBDuplicateEntry:
         raise exception.TaskAlreadyRunning(task_name=task_name, host=host)
 
 
@@ -4767,15 +4696,13 @@ def _get_default_deleted_value(table):
 
 
 @require_admin_context
-def archive_deleted_rows_for_table(context, tablename, max_rows=None):
+def archive_deleted_rows_for_table(context, tablename, max_rows):
     """Move up to max_rows rows from one tables to the corresponding
     shadow table.
 
     :returns: number of rows archived
     """
     # The context argument is only used for the decorator.
-    if max_rows is None:
-        max_rows = 5000
     engine = get_engine()
     conn = engine.connect()
     metadata = MetaData()
@@ -4809,11 +4736,17 @@ def archive_deleted_rows_for_table(context, tablename, max_rows=None):
                        order_by(column).limit(max_rows)
         rows = conn.execute(query).fetchall()
         if rows:
-            insert_statement = shadow_table.insert()
-            conn.execute(insert_statement, rows)
             keys = [getattr(row, column_name) for row in rows]
             delete_statement = table.delete(column.in_(keys))
-            result = conn.execute(delete_statement)
+            try:
+                result = conn.execute(delete_statement)
+            except IntegrityError:
+                # A foreign key constraint keeps us from deleting some of
+                # these rows until we clean up a dependent table.  Just
+                # skip this table for now; we'll come back to it later.
+                return rows_archived
+            insert_statement = shadow_table.insert()
+            conn.execute(insert_statement, rows)
             rows_archived = result.rowcount
     return rows_archived
 
@@ -4826,8 +4759,6 @@ def archive_deleted_rows(context, max_rows=None):
     :returns: Number of rows archived.
     """
     # The context argument is only used for the decorator.
-    if max_rows is None:
-        max_rows = 5000
     tablenames = []
     for model_class in models.__dict__.itervalues():
         if hasattr(model_class, "__tablename__"):

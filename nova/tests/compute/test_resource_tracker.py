@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2012 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -347,6 +347,9 @@ class BaseTrackerTestCase(BaseTestCase):
         # database models and a compatible compute driver:
         super(BaseTrackerTestCase, self).setUp()
 
+        self.updated = False
+        self.deleted = False
+
         self.tracker = self._tracker()
         self._migrations = {}
 
@@ -354,6 +357,8 @@ class BaseTrackerTestCase(BaseTestCase):
                 self._fake_service_get_by_compute_host)
         self.stubs.Set(db, 'compute_node_update',
                 self._fake_compute_node_update)
+        self.stubs.Set(db, 'compute_node_delete',
+                self._fake_compute_node_delete)
         self.stubs.Set(db, 'migration_update',
                 self._fake_migration_update)
         self.stubs.Set(db, 'migration_get_in_progress_by_host_and_node',
@@ -373,6 +378,11 @@ class BaseTrackerTestCase(BaseTestCase):
         values['stats'] = [{"key": "num_instances", "value": "1"}]
 
         self.compute.update(values)
+        return self.compute
+
+    def _fake_compute_node_delete(self, ctx, compute_node_id):
+        self.deleted = True
+        self.compute.update({'deleted': 1})
         return self.compute
 
     def _fake_migration_get_in_progress_by_host_and_node(self, ctxt, host,
@@ -867,10 +877,6 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
 
 
 class OrphanTestCase(BaseTrackerTestCase):
-
-    def setUp(self):
-        super(OrphanTestCase, self).setUp()
-
     def _driver(self):
         class OrphanVirtDriver(FakeVirtDriver):
             def get_per_instance_usage(self):
@@ -892,3 +898,18 @@ class OrphanTestCase(BaseTrackerTestCase):
         orphans = self.tracker._find_orphaned_instances()
 
         self.assertEqual(2, len(orphans))
+
+
+class DeletedNodeTestCase(BaseTrackerTestCase):
+
+    def test_remove_deleted_node(self):
+        self.assertFalse(self.tracker.disabled)
+        self.assertTrue(self.updated)
+
+        def _get_available_resource(nodename):
+            return {}
+        self.tracker.driver.get_available_resource = _get_available_resource
+
+        self.tracker.update_available_resource(self.context, delete=True)
+        self.assertEqual(self.deleted, True)
+        self.assertEqual(self.compute['deleted'], 1)

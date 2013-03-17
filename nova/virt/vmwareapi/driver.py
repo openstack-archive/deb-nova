@@ -2,7 +2,7 @@
 
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -181,7 +181,7 @@ class VMwareESXDriver(driver.ComputeDriver):
         self._vmops.snapshot(context, instance, name, update_task_state)
 
     def reboot(self, context, instance, network_info, reboot_type,
-               block_device_info=None):
+               block_device_info=None, bad_volumes_callback=None):
         """Reboot VM instance."""
         self._vmops.reboot(instance, network_info)
 

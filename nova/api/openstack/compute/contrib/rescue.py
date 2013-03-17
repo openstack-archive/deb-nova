@@ -1,4 +1,4 @@
-#   Copyright 2011 OpenStack, LLC.
+#   Copyright 2011 OpenStack Foundation
 #
 #   Licensed under the Apache License, Version 2.0 (the "License"); you may
 #   not use this file except in compliance with the License. You may obtain
@@ -63,6 +63,9 @@ class RescueController(wsgi.Controller):
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                                                                   'rescue')
+        except exception.InstanceNotRescuable as non_rescuable:
+            raise exc.HTTPBadRequest(explanation=unicode(non_rescuable))
+
         return {'adminPass': password}
 
     @wsgi.action('unrescue')

@@ -1,4 +1,4 @@
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 # Copyright 2011 Piston Cloud Computing, Inc
 # All Rights Reserved.
 #
@@ -17,7 +17,6 @@
 import base64
 import os
 import re
-import socket
 
 from oslo.config import cfg
 import webob
@@ -135,6 +134,13 @@ class ServerAdminPassTemplate(xmlutil.TemplateBuilder):
         return xmlutil.SlaveTemplate(root, 1, nsmap=server_nsmap)
 
 
+class ServerMultipleCreateTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = xmlutil.TemplateElement('server')
+        root.set('reservation_id')
+        return xmlutil.MasterTemplate(root, 1, nsmap=server_nsmap)
+
+
 def FullServerTemplate():
     master = ServerTemplate()
     master.attach(ServerAdminPassTemplate())
@@ -216,11 +222,11 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         #             anyone that might be using it.
         auto_disk_config = server_node.getAttribute('auto_disk_config')
         if auto_disk_config:
-            server['OS-DCF:diskConfig'] = utils.bool_from_str(auto_disk_config)
+            server['OS-DCF:diskConfig'] = auto_disk_config
 
         auto_disk_config = server_node.getAttribute('OS-DCF:diskConfig')
         if auto_disk_config:
-            server['OS-DCF:diskConfig'] = utils.bool_from_str(auto_disk_config)
+            server['OS-DCF:diskConfig'] = auto_disk_config
 
         config_drive = server_node.getAttribute('config_drive')
         if config_drive:
@@ -311,7 +317,7 @@ class ActionDeserializer(CommonDeserializer):
     """
 
     def default(self, string):
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xmlutil.safe_minidom_parse_string(string)
         action_node = dom.childNodes[0]
         action_name = action_node.tagName
 
@@ -418,7 +424,7 @@ class CreateDeserializer(CommonDeserializer):
 
     def default(self, string):
         """Deserialize an xml-formatted server create request."""
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xmlutil.safe_minidom_parse_string(string)
         server = self._extract_server(dom)
         return {'body': {'server': server}}
 
@@ -704,16 +710,12 @@ class Controller(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=expl)
 
     def _validate_access_ipv4(self, address):
-        try:
-            socket.inet_aton(address)
-        except socket.error:
+        if not utils.is_valid_ipv4(address):
             expl = _('accessIPv4 is not proper IPv4 format')
             raise exc.HTTPBadRequest(explanation=expl)
 
     def _validate_access_ipv6(self, address):
-        try:
-            socket.inet_pton(socket.AF_INET6, address)
-        except socket.error:
+        if not utils.is_valid_ipv6(address):
             expl = _('accessIPv6 is not proper IPv6 format')
             raise exc.HTTPBadRequest(explanation=expl)
 
@@ -773,7 +775,8 @@ class Controller(wsgi.Controller):
         sg_names = list(set(sg_names))
 
         requested_networks = None
-        if self.ext_mgr.is_loaded('os-networks'):
+        if (self.ext_mgr.is_loaded('os-networks')
+                or self._is_quantum_v2()):
             requested_networks = server_dict.get('networks')
 
         if requested_networks is not None:
@@ -830,7 +833,7 @@ class Controller(wsgi.Controller):
             max_count = server_dict.get('max_count', min_count)
 
         try:
-            min_count = int(min_count)
+            min_count = int(str(min_count))
         except ValueError:
             msg = _('min_count must be an integer value')
             raise exc.HTTPBadRequest(explanation=msg)
@@ -839,7 +842,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:
-            max_count = int(max_count)
+            max_count = int(str(max_count))
         except ValueError:
             msg = _('max_count must be an integer value')
             raise exc.HTTPBadRequest(explanation=msg)
@@ -922,14 +925,9 @@ class Controller(wsgi.Controller):
         # Let the caller deal with unhandled exceptions.
 
         # If the caller wanted a reservation_id, return it
-
-        # NOTE(treinish): XML serialization will not work without a root
-        # selector of 'server' however JSON return is not expecting a server
-        # field/object
-        if ret_resv_id and (req.get_content_type() == 'application/xml'):
-            return {'server': {'reservation_id': resv_id}}
-        elif ret_resv_id:
-            return {'reservation_id': resv_id}
+        if ret_resv_id:
+            return wsgi.ResponseObject({'reservation_id': resv_id},
+                                       xml=ServerMultipleCreateTemplate)
 
         req.cache_db_instances(instances)
         server = self._view_builder.create(req, instances[0])

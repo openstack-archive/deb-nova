@@ -28,6 +28,7 @@ from sqlalchemy.sql.expression import literal_column
 import nova.context
 from nova.db.sqlalchemy import api as sqlalchemy_api
 from nova import exception
+from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
@@ -222,14 +223,19 @@ def bm_node_associate_and_update(context, node_uuid, values):
 def bm_node_destroy(context, bm_node_id):
     # First, delete all interfaces belonging to the node.
     # Delete physically since these have unique columns.
-    model_query(context, models.BareMetalInterface, read_deleted="no").\
+    session = db_session.get_session()
+    with session.begin():
+        model_query(context, models.BareMetalInterface, read_deleted="no").\
             filter_by(bm_node_id=bm_node_id).\
             delete()
-    model_query(context, models.BareMetalNode).\
+        rows = model_query(context, models.BareMetalNode, read_deleted="no").\
             filter_by(id=bm_node_id).\
             update({'deleted': True,
                     'deleted_at': timeutils.utcnow(),
                     'updated_at': literal_column('updated_at')})
+
+        if not rows:
+            raise exception.NodeNotFound(node_id=bm_node_id)
 
 
 @sqlalchemy_api.require_admin_context
@@ -394,7 +400,7 @@ def bm_interface_set_vif_uuid(context, if_id, vif_uuid):
         try:
             session.add(bm_interface)
             session.flush()
-        except db_session.DBError, e:
+        except db_exc.DBError, e:
             # TODO(deva): clean up when db layer raises DuplicateKeyError
             if str(e).find('IntegrityError') != -1:
                 raise exception.NovaException(_("Baremetal interface %s "

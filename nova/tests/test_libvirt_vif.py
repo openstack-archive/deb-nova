@@ -277,7 +277,7 @@ class LibvirtVifTestCase(test.TestCase):
             return fakelibvirt.Connection("qemu:///session",
                                           False)
         d = vif.LibvirtGenericVIFDriver(get_connection)
-        image_meta = {'properties': {'vif_model': 'e1000'}}
+        image_meta = {'properties': {'hw_vif_model': 'e1000'}}
         xml = self._get_instance_xml(d,
                                      self.net_bridge,
                                      self.mapping_bridge,
@@ -301,7 +301,7 @@ class LibvirtVifTestCase(test.TestCase):
             return fakelibvirt.Connection("qemu:///session",
                                           False)
         d = vif.LibvirtGenericVIFDriver(get_connection)
-        image_meta = {'properties': {'vif_model': 'acme'}}
+        image_meta = {'properties': {'hw_vif_model': 'acme'}}
         self.assertRaises(exception.UnsupportedHardware,
                           self._get_instance_xml,
                           d,
@@ -371,6 +371,8 @@ class LibvirtVifTestCase(test.TestCase):
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
+        ret = node.findall("filterref")
+        self.assertEqual(len(ret), 1)
         self.assertEqual(node.get("type"), "bridge")
         br_name = node.find("source").get("bridge")
         self.assertEqual(br_name, br_want)
@@ -409,7 +411,7 @@ class LibvirtVifTestCase(test.TestCase):
                                   self.mapping_bridge_quantum,
                                   br_want)
 
-    def _check_ovs_ethernet_driver(self, d, net, mapping):
+    def _check_ovs_ethernet_driver(self, d, net, mapping, dev_prefix):
         self.flags(firewall_driver="nova.virt.firewall.NoopFirewallDriver")
         xml = self._get_instance_xml(d, net, mapping)
 
@@ -417,24 +419,26 @@ class LibvirtVifTestCase(test.TestCase):
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
+        ret = node.findall("filterref")
+        self.assertEqual(len(ret), 0)
         self.assertEqual(node.get("type"), "ethernet")
         dev_name = node.find("target").get("dev")
-        self.assertTrue(dev_name.startswith("tap"))
+        self.assertTrue(dev_name.startswith(dev_prefix))
         mac = node.find("mac").get("address")
         self.assertEqual(mac, self.mapping_ovs['mac'])
         script = node.find("script").get("path")
         self.assertEquals(script, "")
 
-    def test_ovs_ethernet_driver(self):
+    def test_ovs_ethernet_driver_legacy(self):
         def get_connection():
             return fakelibvirt.Connection("qemu:///session",
                                           False,
                                           9010)
         d = vif.LibvirtOpenVswitchDriver(get_connection)
-        d = vif.LibvirtOpenVswitchDriver()
         self._check_ovs_ethernet_driver(d,
                                         self.net_ovs,
-                                        self.mapping_ovs_legacy)
+                                        self.mapping_ovs_legacy,
+                                        "nic")
 
     def test_ovs_ethernet_driver(self):
         def get_connection():
@@ -444,7 +448,8 @@ class LibvirtVifTestCase(test.TestCase):
         d = vif.LibvirtGenericVIFDriver(get_connection)
         self._check_ovs_ethernet_driver(d,
                                         self.net_ovs,
-                                        self.mapping_ovs)
+                                        self.mapping_ovs,
+                                        "tap")
 
     def _check_ovs_virtualport_driver(self, d, net, mapping, want_iface_id):
         self.flags(firewall_driver="nova.virt.firewall.NoopFirewallDriver")
@@ -454,6 +459,8 @@ class LibvirtVifTestCase(test.TestCase):
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
+        ret = node.findall("filterref")
+        self.assertEqual(len(ret), 0)
         self.assertEqual(node.get("type"), "bridge")
 
         br_name = node.find("source").get("bridge")
@@ -503,6 +510,8 @@ class LibvirtVifTestCase(test.TestCase):
         ret = doc.findall('./devices/interface')
         self.assertEqual(len(ret), 1)
         node = ret[0]
+        ret = node.findall("filterref")
+        self.assertEqual(len(ret), 1)
         self.assertEqual(node.get("type"), "bridge")
         br_name = node.find("source").get("bridge")
         self.assertEqual(br_name, br_want)

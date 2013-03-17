@@ -22,82 +22,21 @@ This version of the api is deprecated in Grizzly and will be removed.
 It is provided just in case a third party manager is in use.
 """
 
-import functools
-import inspect
-
+from nova.compute import instance_types
 from nova.db import base
 from nova import exception
+from nova.network import api as shiny_api
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
 from nova.openstack.common import log as logging
-from nova import policy
 
 LOG = logging.getLogger(__name__)
 
 
-def refresh_cache(f):
-    """
-    Decorator to update the instance_info_cache
-
-    Requires context and instance as function args
-    """
-    argspec = inspect.getargspec(f)
-
-    @functools.wraps(f)
-    def wrapper(self, context, *args, **kwargs):
-        res = f(self, context, *args, **kwargs)
-
-        try:
-            # get the instance from arguments (or raise ValueError)
-            instance = kwargs.get('instance')
-            if not instance:
-                instance = args[argspec.args.index('instance') - 2]
-        except ValueError:
-            msg = _('instance is a required argument to use @refresh_cache')
-            raise Exception(msg)
-
-        update_instance_cache_with_nw_info(self, context, instance,
-                                           nw_info=res)
-
-        # return the original function's return value
-        return res
-    return wrapper
-
-
-def update_instance_cache_with_nw_info(api, context, instance,
-                                        nw_info=None):
-
-    try:
-        if not isinstance(nw_info, network_model.NetworkInfo):
-            nw_info = None
-        if not nw_info:
-            nw_info = api._get_instance_nw_info(context, instance)
-        # update cache
-        cache = {'network_info': nw_info.json()}
-        api.db.instance_info_cache_update(context, instance['uuid'], cache)
-    except Exception:
-        LOG.exception(_('Failed storing info cache'), instance=instance)
-
-
-def wrap_check_policy(func):
-    """Check policy corresponding to the wrapped methods prior to execution."""
-
-    @functools.wraps(func)
-    def wrapped(self, context, *args, **kwargs):
-        action = func.__name__
-        check_policy(context, action)
-        return func(self, context, *args, **kwargs)
-
-    return wrapped
-
-
-def check_policy(context, action):
-    target = {
-        'project_id': context.project_id,
-        'user_id': context.user_id,
-    }
-    _action = 'network:%s' % action
-    policy.enforce(context, _action, target)
+refresh_cache = shiny_api.refresh_cache
+_update_instance_cache = shiny_api.update_instance_cache_with_nw_info
+update_instance_cache_with_nw_info = _update_instance_cache
+wrap_check_policy = shiny_api.wrap_check_policy
 
 
 class API(base.Base):
@@ -159,8 +98,8 @@ class API(base.Base):
 
     @wrap_check_policy
     def get_floating_ips_by_fixed_address(self, context, fixed_address):
-        return self.network_rpcapi.get_floating_ips_by_fixed_address(context,
-                fixed_address)
+        args = (context, fixed_address)
+        return self.network_rpcapi.get_floating_ips_by_fixed_address(*args)
 
     @wrap_check_policy
     def get_backdoor_port(self, context, host):
@@ -170,12 +109,12 @@ class API(base.Base):
     def get_instance_id_by_floating_address(self, context, address):
         # NOTE(tr3buchet): i hate this
         return self.network_rpcapi.get_instance_id_by_floating_address(context,
-                address)
+                                                                       address)
 
     @wrap_check_policy
     def get_vifs_by_instance(self, context, instance):
         return self.network_rpcapi.get_vifs_by_instance(context,
-                instance['id'])
+                                                        instance['id'])
 
     @wrap_check_policy
     def get_vif_by_mac_address(self, context, mac_address):
@@ -189,14 +128,16 @@ class API(base.Base):
         #             will probably need to move into a network supervisor
         #             at some point.
         return self.network_rpcapi.allocate_floating_ip(context,
-                context.project_id, pool, False)
+                                                        context.project_id,
+                                                        pool,
+                                                        False)
 
     @wrap_check_policy
     def release_floating_ip(self, context, address,
                             affect_auto_assigned=False):
         """Removes (deallocates) a floating ip with address from a project."""
-        return self.network_rpcapi.deallocate_floating_ip(context, address,
-                affect_auto_assigned)
+        args = (context, address, affect_auto_assigned)
+        return self.network_rpcapi.deallocate_floating_ip(*args)
 
     @wrap_check_policy
     @refresh_cache
@@ -207,8 +148,8 @@ class API(base.Base):
 
         ensures floating ip is allocated to the project in context
         """
-        orig_instance_uuid = self.network_rpcapi.associate_floating_ip(context,
-                floating_address, fixed_address, affect_auto_assigned)
+        args = (context, floating_address, fixed_address, affect_auto_assigned)
+        orig_instance_uuid = self.network_rpcapi.associate_floating_ip(*args)
 
         if orig_instance_uuid:
             msg_dict = dict(address=floating_address,
@@ -227,12 +168,14 @@ class API(base.Base):
                                  affect_auto_assigned=False):
         """Disassociates a floating ip from fixed ip it is associated with."""
         self.network_rpcapi.disassociate_floating_ip(context, address,
-                affect_auto_assigned)
+                                                     affect_auto_assigned)
 
     @wrap_check_policy
     @refresh_cache
     def allocate_for_instance(self, context, instance, vpn,
-                              requested_networks, macs=None):
+                              requested_networks, macs=None,
+                              conductor_api=None, security_groups=None,
+                              **kwargs):
         """Allocates all network structures for an instance.
 
         TODO(someone): document the rest of these parameters.
@@ -243,20 +186,20 @@ class API(base.Base):
             NB: macs is ignored by nova-network.
         :returns: network info as from get_instance_nw_info() below
         """
+        instance_type = instance_types.extract_instance_type(instance)
         args = {}
         args['vpn'] = vpn
         args['requested_networks'] = requested_networks
-        args['instance_id'] = instance['id']
-        args['instance_uuid'] = instance['uuid']
+        args['instance_id'] = instance['uuid']
         args['project_id'] = instance['project_id']
         args['host'] = instance['host']
-        args['rxtx_factor'] = instance['instance_type']['rxtx_factor']
+        args['rxtx_factor'] = instance_type['rxtx_factor']
         nw_info = self.network_rpcapi.allocate_for_instance(context, **args)
 
         return network_model.NetworkInfo.hydrate(nw_info)
 
     @wrap_check_policy
-    def deallocate_for_instance(self, context, instance):
+    def deallocate_for_instance(self, context, instance, **kwargs):
         """Deallocates all network structures related to instance."""
 
         args = {}
@@ -267,28 +210,32 @@ class API(base.Base):
 
     @wrap_check_policy
     @refresh_cache
-    def add_fixed_ip_to_instance(self, context, instance, network_id):
+    def add_fixed_ip_to_instance(self, context, instance, network_id,
+                                 conductor_api=None, **kwargs):
         """Adds a fixed ip to instance from specified network."""
         args = {'instance_id': instance['uuid'],
                 'host': instance['host'],
-                'network_id': network_id}
+                'network_id': network_id,
+                'rxtx_factor': None}
         self.network_rpcapi.add_fixed_ip_to_instance(context, **args)
 
     @wrap_check_policy
     @refresh_cache
-    def remove_fixed_ip_from_instance(self, context, instance, address):
+    def remove_fixed_ip_from_instance(self, context, instance, address,
+                                      conductor=None, **kwargs):
         """Removes a fixed ip from instance from specified network."""
 
         args = {'instance_id': instance['uuid'],
                 'host': instance['host'],
-                'address': address}
+                'address': address,
+                'rxtx_factor': None}
         self.network_rpcapi.remove_fixed_ip_from_instance(context, **args)
 
     @wrap_check_policy
     def add_network_to_project(self, context, project_id, network_uuid=None):
         """Force adds another network to a project."""
         self.network_rpcapi.add_network_to_project(context, project_id,
-                network_uuid)
+                                                   network_uuid)
 
     @wrap_check_policy
     def associate(self, context, network_uuid, host=_sentinel,
@@ -302,19 +249,19 @@ class API(base.Base):
         self.network_rpcapi.associate(context, network_uuid, associations)
 
     @wrap_check_policy
-    def get_instance_nw_info(self, context, instance, update_cache=True):
+    def get_instance_nw_info(self, context, instance, conductor_api=None,
+                             **kwargs):
         """Returns all network info related to an instance."""
         result = self._get_instance_nw_info(context, instance)
-        if update_cache:
-            update_instance_cache_with_nw_info(self, context, instance,
-                                                result)
+        update_instance_cache_with_nw_info(self, context, instance,
+                                           result, conductor_api)
         return result
 
     def _get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
-        args = {'instance_id': instance['id'],
-                'instance_uuid': instance['uuid'],
-                'rxtx_factor': instance['instance_type']['rxtx_factor'],
+        instance_type = instance_types.extract_instance_type(instance)
+        args = {'instance_id': instance['uuid'],
+                'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
                 'project_id': instance['project_id']}
         nw_info = self.network_rpcapi.get_instance_nw_info(context, **args)
@@ -398,7 +345,7 @@ class API(base.Base):
 
     @wrap_check_policy
     def setup_networks_on_host(self, context, instance, host=None,
-                                                        teardown=False):
+                               teardown=False):
         """Setup or teardown the network structures on hosts related to
            instance"""
         host = host or instance['host']
@@ -422,16 +369,17 @@ class API(base.Base):
         return network['multi_host']
 
     def _get_floating_ip_addresses(self, context, instance):
-        floating_ips = self.db.instance_floating_address_get_all(context,
-                                                            instance['uuid'])
+        args = (context, instance['uuid'])
+        floating_ips = self.db.instance_floating_address_get_all(*args)
         return [floating_ip['address'] for floating_ip in floating_ips]
 
     @wrap_check_policy
     def migrate_instance_start(self, context, instance, migration):
         """Start to migrate the network of an instance."""
+        instance_type = instance_types.extract_instance_type(instance)
         args = dict(
             instance_uuid=instance['uuid'],
-            rxtx_factor=instance['instance_type']['rxtx_factor'],
+            rxtx_factor=instance_type['rxtx_factor'],
             project_id=instance['project_id'],
             source_compute=migration['source_compute'],
             dest_compute=migration['dest_compute'],
@@ -448,9 +396,10 @@ class API(base.Base):
     @wrap_check_policy
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
+        instance_type = instance_types.extract_instance_type(instance)
         args = dict(
             instance_uuid=instance['uuid'],
-            rxtx_factor=instance['instance_type']['rxtx_factor'],
+            rxtx_factor=instance_type['rxtx_factor'],
             project_id=instance['project_id'],
             source_compute=migration['source_compute'],
             dest_compute=migration['dest_compute'],
@@ -463,3 +412,20 @@ class API(base.Base):
             args['host'] = migration['dest_compute']
 
         self.network_rpcapi.migrate_instance_finish(context, **args)
+
+    # NOTE(jkoelker) These functions where added to the api after
+    #                deprecation. Stubs provided for support documentation
+    def allocate_port_for_instance(self, context, instance, port_id,
+                                   network_id=None, requested_ip=None,
+                                   conductor_api=None):
+        raise NotImplementedError()
+
+    def deallocate_port_for_instance(self, context, instance, port_id,
+                                     conductor_api=None):
+        raise NotImplementedError()
+
+    def list_ports(self, *args, **kwargs):
+        raise NotImplementedError()
+
+    def show_port(self, *args, **kwargs):
+        raise NotImplementedError()

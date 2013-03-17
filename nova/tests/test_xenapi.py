@@ -176,6 +176,15 @@ def stub_vm_utils_with_vdi_attached_here(function, should_return=True):
     return decorated_function
 
 
+def create_instance_with_system_metadata(context, instance_values):
+    instance_type = db.instance_type_get(context,
+                                         instance_values['instance_type_id'])
+    sys_meta = instance_types.save_instance_type_info({},
+                                                      instance_type)
+    instance_values['system_metadata'] = sys_meta
+    return db.instance_create(context, instance_values)
+
+
 class XenAPIVolumeTestCase(stubs.XenAPITestBase):
     """Unit tests for Volume operations."""
     def setUp(self):
@@ -613,7 +622,8 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
                     create_record=True, empty_dns=False,
                     image_meta={'id': IMAGE_VHD,
                                 'disk_format': 'vhd'},
-                    block_device_info=None):
+                    block_device_info=None,
+                    key_data=None):
         if injected_files is None:
             injected_files = []
 
@@ -625,17 +635,19 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
         if create_record:
             instance_values = {'id': instance_id,
-                      'project_id': self.project_id,
-                      'user_id': self.user_id,
-                      'image_ref': image_ref,
-                      'kernel_id': kernel_id,
-                      'ramdisk_id': ramdisk_id,
-                      'root_gb': 20,
-                      'instance_type_id': instance_type_id,
-                      'os_type': os_type,
-                      'hostname': hostname,
-                      'architecture': architecture}
-            instance = db.instance_create(self.context, instance_values)
+                               'project_id': self.project_id,
+                               'user_id': self.user_id,
+                               'image_ref': image_ref,
+                               'kernel_id': kernel_id,
+                               'ramdisk_id': ramdisk_id,
+                               'root_gb': 20,
+                               'instance_type_id': instance_type_id,
+                               'os_type': os_type,
+                               'hostname': hostname,
+                               'key_data': key_data,
+                               'architecture': architecture}
+            instance = create_instance_with_system_metadata(self.context,
+                                                            instance_values)
         else:
             instance = db.instance_get(self.context, instance_id)
 
@@ -875,6 +887,34 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             self.assertEquals(vif_rec['qos_algorithm_params']['kbps'],
                               str(3 * 10 * 1024))
 
+    def test_spawn_ssh_key_injection(self):
+        # Test spawning with key_data on an instance.  Should use
+        # agent file injection.
+        actual_injected_files = []
+
+        def fake_inject_file(self, method, args):
+            path = base64.b64decode(args['b64_path'])
+            contents = base64.b64decode(args['b64_contents'])
+            actual_injected_files.append((path, contents))
+            return jsonutils.dumps({'returncode': '0', 'message': 'success'})
+
+        def noop(*args, **kwargs):
+            pass
+
+        self.stubs.Set(stubs.FakeSessionForVMTests,
+                       '_plugin_agent_inject_file', fake_inject_file)
+        self.stubs.Set(agent.XenAPIBasedAgent,
+                       'set_admin_password', noop)
+
+        expected_data = ('\n# The following ssh key was injected by '
+                         'Nova\nfake_keydata\n')
+
+        injected_files = [('/root/.ssh/authorized_keys', expected_data)]
+        self._test_spawn(IMAGE_VHD, None, None,
+                         os_type="linux", architecture="x86-64",
+                         key_data='fake_keydata')
+        self.assertEquals(actual_injected_files, injected_files)
+
     def test_spawn_injected_files(self):
         # Test spawning with injected_files.
         actual_injected_files = []
@@ -1093,7 +1133,9 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             'os_type': 'linux',
             'vm_mode': 'hvm',
             'architecture': 'x86-64'}
-        instance = db.instance_create(self.context, instance_values)
+
+        instance = create_instance_with_system_metadata(self.context,
+                                                        instance_values)
         network_info = fake_network.fake_get_instance_nw_info(self.stubs,
                                                               spectacular=True)
         image_meta = {'id': IMAGE_VHD,
@@ -1252,7 +1294,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                           '127.0.0.1', instance_type, None)
 
     def test_revert_migrate(self):
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = create_instance_with_system_metadata(self.context,
+                                                        self.instance_values)
         self.called = False
         self.fake_vm_start_called = False
         self.fake_finish_revert_migration_called = False
@@ -1293,7 +1336,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.assertEqual(self.fake_finish_revert_migration_called, True)
 
     def test_finish_migrate(self):
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = create_instance_with_system_metadata(self.context,
+                                                        self.instance_values)
         self.called = False
         self.fake_vm_start_called = False
 
@@ -1325,7 +1369,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         tiny_type_id = tiny_type['id']
         self.instance_values.update({'instance_type_id': tiny_type_id,
                                      'root_gb': 0})
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = create_instance_with_system_metadata(self.context,
+                                                        self.instance_values)
 
         def fake_vdi_resize(*args, **kwargs):
             raise Exception("This shouldn't be called")
@@ -1341,7 +1386,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                               network_info, image_meta, resize_instance=True)
 
     def test_finish_migrate_no_resize_vdi(self):
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = create_instance_with_system_metadata(self.context,
+                                                        self.instance_values)
 
         def fake_vdi_resize(*args, **kwargs):
             raise Exception("This shouldn't be called")
@@ -1616,7 +1662,8 @@ class XenAPIAutoDiskConfigTestCase(stubs.XenAPITestBase):
                                             fake.FakeVirtAPI())
 
         disk_image_type = vm_utils.ImageType.DISK_VHD
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = create_instance_with_system_metadata(self.context,
+                                                        self.instance_values)
         vm_ref = xenapi_fake.create_vm(instance['name'], 'Halted')
         vdi_ref = xenapi_fake.create_vdi(instance['name'], 'fake')
 
@@ -1716,14 +1763,9 @@ class XenAPIGenerateLocal(stubs.XenAPITestBase):
 
     def test_generate_swap(self):
         # Test swap disk generation.
-        instance = db.instance_create(self.context, self.instance_values)
-        instance = db.instance_update(self.context, instance['uuid'],
-                                      {'instance_type_id': 5})
-
-        # NOTE(danms): because we're stubbing out the instance_types from
-        # the database, our instance['instance_type'] doesn't get properly
-        # filled out here, so put what we need into it
-        instance['instance_type']['swap'] = 1024
+        instance_values = dict(self.instance_values, instance_type_id=5)
+        instance = create_instance_with_system_metadata(self.context,
+                                                        instance_values)
 
         def fake_generate_swap(*args, **kwargs):
             self.called = True
@@ -1733,14 +1775,9 @@ class XenAPIGenerateLocal(stubs.XenAPITestBase):
 
     def test_generate_ephemeral(self):
         # Test ephemeral disk generation.
-        instance = db.instance_create(self.context, self.instance_values)
-        instance = db.instance_update(self.context, instance['uuid'],
-                                      {'instance_type_id': 4})
-
-        # NOTE(danms): because we're stubbing out the instance_types from
-        # the database, our instance['instance_type'] doesn't get properly
-        # filled out here, so put what we need into it
-        instance['instance_type']['ephemeral_gb'] = 160
+        instance_values = dict(self.instance_values, instance_type_id=4)
+        instance = create_instance_with_system_metadata(self.context,
+                                                        instance_values)
 
         def fake_generate_ephemeral(*args):
             self.called = True
@@ -2068,8 +2105,10 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         ipv6 = self.fw.iptables.ipv6['filter'].rules
         ipv4_network_rules = len(ipv4) - len(inst_ipv4) - ipv4_len
         ipv6_network_rules = len(ipv6) - len(inst_ipv6) - ipv6_len
-        self.assertEquals(ipv4_network_rules,
-                  ipv4_rules_per_addr * ipv4_addr_per_network * networks_count)
+        # Extra rules are for the DHCP request
+        rules = (ipv4_rules_per_addr * ipv4_addr_per_network *
+                 networks_count) + 2
+        self.assertEquals(ipv4_network_rules, rules)
         self.assertEquals(ipv6_network_rules,
                   ipv6_rules_per_addr * ipv6_addr_per_network * networks_count)
 
@@ -3111,6 +3150,42 @@ class VMOpsTestCase(test.TestCase):
         self.assertEquals(
             'VDI.resize',
             ops.check_resize_func_name())
+
+    def _test_finish_revert_migration_after_crash(self, backup_made, new_made):
+        instance = {'name': 'foo',
+                    'task_state': task_states.RESIZE_MIGRATING}
+        session = self._get_mock_session(None, None)
+        ops = vmops.VMOps(session, fake.FakeVirtAPI())
+
+        self.mox.StubOutWithMock(vm_utils, 'lookup')
+        self.mox.StubOutWithMock(ops, '_destroy')
+        self.mox.StubOutWithMock(vm_utils, 'set_vm_name_label')
+        self.mox.StubOutWithMock(ops, '_attach_mapped_block_devices')
+        self.mox.StubOutWithMock(ops, '_start')
+
+        vm_utils.lookup(session, 'foo-orig').AndReturn(
+            backup_made and 'foo' or None)
+        vm_utils.lookup(session, 'foo').AndReturn(
+            (not backup_made or new_made) and 'foo' or None)
+        if backup_made:
+            if new_made:
+                ops._destroy(instance, 'foo')
+            vm_utils.set_vm_name_label(session, 'foo', 'foo')
+            ops._attach_mapped_block_devices(instance, [])
+        ops._start(instance, 'foo')
+
+        self.mox.ReplayAll()
+
+        ops.finish_revert_migration(instance, [])
+
+    def test_finish_revert_migration_after_crash(self):
+        self._test_finish_revert_migration_after_crash(True, True)
+
+    def test_finish_revert_migration_after_crash_before_new(self):
+        self._test_finish_revert_migration_after_crash(True, False)
+
+    def test_finish_revert_migration_after_crash_before_backup(self):
+        self._test_finish_revert_migration_after_crash(False, False)
 
 
 class XenAPISessionTestCase(test.TestCase):

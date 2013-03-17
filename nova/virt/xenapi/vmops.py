@@ -1,7 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2010 Citrix Systems, Inc.
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -29,10 +29,10 @@ from oslo.config import cfg
 
 from nova import block_device
 from nova.compute import api as compute
+from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import vm_mode
-from nova.compute import vm_states
 from nova import context as nova_context
 from nova import exception
 from nova.openstack.common import excutils
@@ -214,12 +214,22 @@ class VMOps(object):
         name_label = self._get_orig_vm_name_label(instance)
         vm_ref = vm_utils.lookup(self._session, name_label)
 
-        # Remove the '-orig' suffix (which was added in case the resized VM
-        # ends up on the source host, common during testing)
-        name_label = instance['name']
-        vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
-
-        self._attach_mapped_block_devices(instance, block_device_info)
+        # NOTE(danms): if we're reverting migration in the failure case,
+        # make sure we don't have a conflicting vm still running here,
+        # as might be the case in a failed migrate-to-same-host situation
+        new_ref = vm_utils.lookup(self._session, instance['name'])
+        if vm_ref is not None:
+            if new_ref is not None:
+                self._destroy(instance, new_ref)
+            # Remove the '-orig' suffix (which was added in case the
+            # resized VM ends up on the source host, common during
+            # testing)
+            name_label = instance['name']
+            vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
+            self._attach_mapped_block_devices(instance, block_device_info)
+        elif new_ref is not None:
+            # We crashed before the -orig backup was made
+            vm_ref = new_ref
 
         self._start(instance, vm_ref)
 
@@ -261,13 +271,30 @@ class VMOps(object):
                                        step=5,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
-    def _start(self, instance, vm_ref=None):
+    def _start(self, instance, vm_ref=None, bad_volumes_callback=None):
         """Power on a VM instance."""
         vm_ref = vm_ref or self._get_vm_opaque_ref(instance)
         LOG.debug(_("Starting instance"), instance=instance)
+
+        # Attached volumes that have become non-responsive will prevent a VM
+        # from starting, so scan for these before attempting to start
+        #
+        # In order to make sure this detach is consistent (virt, BDM, cinder),
+        # we only detach in the virt-layer if a callback is provided.
+        if bad_volumes_callback:
+            bad_devices = self._volumeops.find_bad_volumes(vm_ref)
+            for device_name in bad_devices:
+                self._volumeops.detach_volume(
+                        None, instance['name'], device_name)
+
         self._session.call_xenapi('VM.start_on', vm_ref,
                                   self._session.get_xenapi_host(),
                                   False, False)
+
+        # Allow higher-layers a chance to detach bad-volumes as well (in order
+        # to cleanup BDM entries and detach in Cinder)
+        if bad_volumes_callback and bad_devices:
+            bad_volumes_callback(bad_devices)
 
     def _create_disks(self, context, instance, name_label, disk_image_type,
                       image_meta, block_device_info=None):
@@ -511,7 +538,7 @@ class VMOps(object):
     def _attach_disks(self, instance, vm_ref, name_label, vdis,
                       disk_image_type, admin_password=None, files=None):
         ctx = nova_context.get_admin_context()
-        instance_type = instance['instance_type']
+        instance_type = instance_types.extract_instance_type(instance)
 
         # Attach (required) root disk
         if disk_image_type == vm_utils.ImageType.DISK_ISO:
@@ -624,6 +651,9 @@ class VMOps(object):
             # instance, but skip the admin password configuration
             no_agent = version is None
 
+            # Inject ssh key.
+            agent.inject_ssh_key()
+
             # Inject files, if necessary
             if injected_files:
                 # Inject any files, if specified
@@ -638,7 +668,8 @@ class VMOps(object):
             agent.resetnetwork()
 
         # Set VCPU weight
-        vcpu_weight = instance['instance_type']['vcpu_weight']
+        instance_type = instance_types.extract_instance_type(instance)
+        vcpu_weight = instance_type['vcpu_weight']
         if vcpu_weight is not None:
             LOG.debug(_("Setting VCPU weight"), instance=instance)
             self._session.call_xenapi('VM.add_to_VCPUs_params', vm_ref,
@@ -918,7 +949,7 @@ class VMOps(object):
 
         return 'VDI.resize'
 
-    def reboot(self, instance, reboot_type):
+    def reboot(self, instance, reboot_type, bad_volumes_callback=None):
         """Reboot VM instance."""
         # Note (salvatore-orlando): security group rules are not re-enforced
         # upon reboot, since this action on the XenAPI drivers does not
@@ -936,9 +967,18 @@ class VMOps(object):
                     details[-1] == 'halted'):
                 LOG.info(_("Starting halted instance found during reboot"),
                     instance=instance)
-                self._session.call_xenapi('VM.start', vm_ref, False, False)
+                self._start(instance, vm_ref=vm_ref,
+                            bad_volumes_callback=bad_volumes_callback)
                 return
-            raise
+            elif details[0] == 'SR_BACKEND_FAILURE_46':
+                LOG.warn(_("Reboot failed due to bad volumes, detaching bad"
+                           " volumes and starting halted instance"),
+                         instance=instance)
+                self._start(instance, vm_ref=vm_ref,
+                            bad_volumes_callback=bad_volumes_callback)
+                return
+            else:
+                raise
 
     def set_admin_password(self, instance, new_pass):
         """Set the root/admin password on the VM instance."""
@@ -1313,20 +1353,11 @@ class VMOps(object):
 
     def get_vnc_console(self, instance):
         """Return connection info for a vnc console."""
-        # NOTE(johannes): This can fail if the VM object hasn't been created
-        # yet on the dom0. Since that step happens fairly late in the build
-        # process, there's a potential for a race condition here. Until the
-        # VM object is created, return back a 409 error instead of a 404
-        # error.
         try:
             vm_ref = self._get_vm_opaque_ref(instance)
         except exception.NotFound:
-            if instance['vm_state'] != vm_states.BUILDING:
-                raise
-
-            LOG.info(_('Fetching VM ref while BUILDING failed'),
-                     instance=instance)
-            raise exception.InstanceNotReady(instance_id=instance['uuid'])
+            # The compute manager expects InstanceNotFound for this case.
+            raise exception.InstanceNotFound(instance_id=instance['uuid'])
 
         session_id = self._session.get_session_id()
         path = "/console?ref=%s&session_id=%s" % (str(vm_ref), session_id)

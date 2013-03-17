@@ -36,10 +36,6 @@ import struct
 import sys
 import tempfile
 import time
-from xml.dom import minidom
-from xml.parsers import expat
-from xml import sax
-from xml.sax import expatreader
 from xml.sax import saxutils
 
 from eventlet import event
@@ -657,46 +653,6 @@ class DynamicLoopingCall(LoopingCallBase):
         return self.done
 
 
-class ProtectedExpatParser(expatreader.ExpatParser):
-    """An expat parser which disables DTD's and entities by default."""
-
-    def __init__(self, forbid_dtd=True, forbid_entities=True,
-                 *args, **kwargs):
-        # Python 2.x old style class
-        expatreader.ExpatParser.__init__(self, *args, **kwargs)
-        self.forbid_dtd = forbid_dtd
-        self.forbid_entities = forbid_entities
-
-    def start_doctype_decl(self, name, sysid, pubid, has_internal_subset):
-        raise ValueError("Inline DTD forbidden")
-
-    def entity_decl(self, entityName, is_parameter_entity, value, base,
-                    systemId, publicId, notationName):
-        raise ValueError("<!ENTITY> forbidden")
-
-    def unparsed_entity_decl(self, name, base, sysid, pubid, notation_name):
-        # expat 1.2
-        raise ValueError("<!ENTITY> forbidden")
-
-    def reset(self):
-        expatreader.ExpatParser.reset(self)
-        if self.forbid_dtd:
-            self._parser.StartDoctypeDeclHandler = self.start_doctype_decl
-        if self.forbid_entities:
-            self._parser.EntityDeclHandler = self.entity_decl
-            self._parser.UnparsedEntityDeclHandler = self.unparsed_entity_decl
-
-
-def safe_minidom_parse_string(xml_string):
-    """Parse an XML string using minidom safely.
-
-    """
-    try:
-        return minidom.parseString(xml_string, parser=ProtectedExpatParser())
-    except sax.SAXParseException as se:
-        raise expat.ExpatError()
-
-
 def xhtml_escape(value):
     """Escapes a string so it is valid within XML or XHTML.
 
@@ -931,14 +887,16 @@ def is_valid_boolstr(val):
 def is_valid_ipv4(address):
     """Verify that address represents a valid IPv4 address."""
     try:
-        addr = netaddr.IPAddress(address)
-        return addr.version == 4
+        return netaddr.valid_ipv4(address)
     except Exception:
         return False
 
 
 def is_valid_ipv6(address):
-    return netaddr.valid_ipv6(address)
+    try:
+        return netaddr.valid_ipv6(address)
+    except Exception:
+        return False
 
 
 def is_valid_ipv6_cidr(address):
@@ -1346,6 +1304,13 @@ def metadata_to_dict(metadata):
     return result
 
 
+def dict_to_metadata(metadata):
+    result = []
+    for key, value in metadata.iteritems():
+        result.append(dict(key=key, value=value))
+    return result
+
+
 def get_wrapped_function(function):
     """Get the method at the bottom of a stack of decorators."""
     if not hasattr(function, 'func_closure') or not function.func_closure:
@@ -1365,39 +1330,6 @@ def get_wrapped_function(function):
                 return closure.cell_contents
 
     return _get_wrapped_function(function)
-
-
-def getcallargs(function, *args, **kwargs):
-    """This is a simplified inspect.getcallargs (2.7+).
-
-    It should be replaced when python >= 2.7 is standard.
-    """
-    keyed_args = {}
-    argnames, varargs, keywords, defaults = inspect.getargspec(function)
-
-    keyed_args.update(kwargs)
-
-    #NOTE(alaski) the implicit 'self' or 'cls' argument shows up in
-    # argnames but not in args or kwargs.  Uses 'in' rather than '==' because
-    # some tests use 'self2'.
-    if 'self' in argnames[0] or 'cls' == argnames[0]:
-        # The function may not actually be a method or have im_self.
-        # Typically seen when it's stubbed with mox.
-        if inspect.ismethod(function) and hasattr(function, 'im_self'):
-            keyed_args[argnames[0]] = function.im_self
-        else:
-            keyed_args[argnames[0]] = None
-
-    remaining_argnames = filter(lambda x: x not in keyed_args, argnames)
-    keyed_args.update(dict(zip(remaining_argnames, args)))
-
-    if defaults:
-        num_defaults = len(defaults)
-        for argname, value in zip(argnames[-num_defaults:], defaults):
-            if argname not in keyed_args:
-                keyed_args[argname] = value
-
-    return keyed_args
 
 
 class ExceptionHelper(object):

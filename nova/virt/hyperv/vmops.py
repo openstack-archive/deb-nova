@@ -44,22 +44,26 @@ hyperv_opts = [
     cfg.BoolOpt('limit_cpu_features',
                 default=False,
                 help='Required for live migration among '
-                     'hosts with different CPU features'),
+                     'hosts with different CPU features',
+                deprecated_group='DEFAULT'),
     cfg.BoolOpt('config_drive_inject_password',
                 default=False,
-                help='Sets the admin password in the config drive image'),
+                help='Sets the admin password in the config drive image',
+                deprecated_group='DEFAULT'),
     cfg.StrOpt('qemu_img_cmd',
                default="qemu-img.exe",
                help='qemu-img is used to convert between '
-                    'different image types'),
+                    'different image types',
+               deprecated_group='DEFAULT'),
     cfg.BoolOpt('config_drive_cdrom',
                 default=False,
                 help='Attaches the Config Drive image as a cdrom drive '
-                     'instead of a disk drive')
+                     'instead of a disk drive',
+                deprecated_group='DEFAULT')
 ]
 
 CONF = cfg.CONF
-CONF.register_opts(hyperv_opts)
+CONF.register_opts(hyperv_opts, 'hyperv')
 CONF.import_opt('use_cow_images', 'nova.virt.driver')
 CONF.import_opt('network_api_class', 'nova.network')
 
@@ -111,19 +115,39 @@ class VMOps(object):
                 'num_cpu': info['NumberOfProcessors'],
                 'cpu_time': info['UpTime']}
 
-    def _create_boot_vhd(self, context, instance):
+    def _create_root_vhd(self, context, instance):
         base_vhd_path = self._imagecache.get_cached_image(context, instance)
-        boot_vhd_path = self._pathutils.get_vhd_path(instance['name'])
+        root_vhd_path = self._pathutils.get_vhd_path(instance['name'])
 
-        if CONF.use_cow_images:
-            LOG.debug(_("Creating differencing VHD. Parent: "
-                        "%(base_vhd_path)s, Target: %(boot_vhd_path)s")
-                      % locals())
-            self._vhdutils.create_differencing_vhd(boot_vhd_path,
-                                                   base_vhd_path)
-        else:
-            self._pathutils.copyfile(base_vhd_path, boot_vhd_path)
-        return boot_vhd_path
+        try:
+            if CONF.use_cow_images:
+                LOG.debug(_("Creating differencing VHD. Parent: "
+                            "%(base_vhd_path)s, Target: %(root_vhd_path)s")
+                          % locals())
+                self._vhdutils.create_differencing_vhd(root_vhd_path,
+                                                       base_vhd_path)
+            else:
+                LOG.debug(_("Copying VHD image %(base_vhd_path)s to target: "
+                            "%(root_vhd_path)s") % locals())
+                self._pathutils.copyfile(base_vhd_path, root_vhd_path)
+
+                base_vhd_info = self._vhdutils.get_vhd_info(base_vhd_path)
+                base_vhd_size = base_vhd_info['MaxInternalSize']
+                root_vhd_size = instance['root_gb'] * 1024 ** 3
+
+                if root_vhd_size < base_vhd_size:
+                    raise vmutils.HyperVException(_("Cannot resize a VHD to a "
+                                                    "smaller size"))
+                elif root_vhd_size > base_vhd_size:
+                    LOG.debug(_("Resizing VHD %(root_vhd_path)s to new "
+                                "size %(root_vhd_size)s") % locals())
+                    self._vhdutils.resize_vhd(root_vhd_path, root_vhd_size)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                if self._pathutils.exists(root_vhd_path):
+                    self._pathutils.remove(root_vhd_path)
+
+        return root_vhd_path
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None):
@@ -135,13 +159,13 @@ class VMOps(object):
             raise exception.InstanceExists(name=instance_name)
 
         if self._volumeops.ebs_root_in_block_devices(block_device_info):
-            boot_vhd_path = None
+            root_vhd_path = None
         else:
-            boot_vhd_path = self._create_boot_vhd(context, instance)
+            root_vhd_path = self._create_root_vhd(context, instance)
 
         try:
             self.create_instance(instance, network_info, block_device_info,
-                                 boot_vhd_path)
+                                 root_vhd_path)
 
             if configdrive.required_by(instance):
                 self._create_config_drive(instance, injected_files,
@@ -154,17 +178,17 @@ class VMOps(object):
             raise vmutils.HyperVException(_('Spawn instance failed'))
 
     def create_instance(self, instance, network_info,
-                        block_device_info, boot_vhd_path):
+                        block_device_info, root_vhd_path):
         instance_name = instance['name']
 
         self._vmutils.create_vm(instance_name,
                                 instance['memory_mb'],
                                 instance['vcpus'],
-                                CONF.limit_cpu_features)
+                                CONF.hyperv.limit_cpu_features)
 
-        if boot_vhd_path:
+        if root_vhd_path:
             self._vmutils.attach_ide_drive(instance_name,
-                                           boot_vhd_path,
+                                           root_vhd_path,
                                            0,
                                            0,
                                            constants.IDE_DISK)
@@ -173,7 +197,7 @@ class VMOps(object):
 
         self._volumeops.attach_volumes(block_device_info,
                                        instance_name,
-                                       boot_vhd_path is None)
+                                       root_vhd_path is None)
 
         for vif in network_info:
             LOG.debug(_('Creating nic for instance: %s'), instance_name)
@@ -190,7 +214,7 @@ class VMOps(object):
         LOG.info(_('Using config drive for instance: %s'), instance=instance)
 
         extra_md = {}
-        if admin_password and CONF.config_drive_inject_password:
+        if admin_password and CONF.hyperv.config_drive_inject_password:
             extra_md['admin_pass'] = admin_password
 
         inst_md = instance_metadata.InstanceMetadata(instance,
@@ -211,11 +235,11 @@ class VMOps(object):
                     LOG.error(_('Creating config drive failed with error: %s'),
                               e, instance=instance)
 
-        if not CONF.config_drive_cdrom:
+        if not CONF.hyperv.config_drive_cdrom:
             drive_type = constants.IDE_DISK
             configdrive_path = os.path.join(instance_path,
                                             'configdrive.vhd')
-            utils.execute(CONF.qemu_img_cmd,
+            utils.execute(CONF.hyperv.qemu_img_cmd,
                           'convert',
                           '-f',
                           'raw',
@@ -238,10 +262,10 @@ class VMOps(object):
 
     def _delete_disk_files(self, instance_name):
         self._pathutils.get_instance_dir(instance_name,
-                                          create_dir=False,
-                                          remove_dir=True)
+                                         create_dir=False,
+                                         remove_dir=True)
 
-    def destroy(self, instance, network_info=None, cleanup=True,
+    def destroy(self, instance, network_info=None, block_device_info=None,
                 destroy_disks=True):
         instance_name = instance['name']
         LOG.info(_("Got request to destroy instance: %s"), instance_name)

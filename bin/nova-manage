@@ -80,7 +80,7 @@ from nova import db
 from nova.db import migration
 from nova import exception
 from nova.openstack.common import cliutils
-from nova.openstack.common.db.sqlalchemy import session as db_session
+from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
@@ -675,11 +675,13 @@ class ServiceCommands(object):
     def enable(self, host, service):
         """Enable scheduling for a service."""
         ctxt = context.get_admin_context()
-        svc = db.service_get_by_args(ctxt, host, service)
-        if not svc:
-            print _("Unable to find service")
-            return
-        db.service_update(ctxt, svc['id'], {'disabled': False})
+        try:
+            svc = db.service_get_by_args(ctxt, host, service)
+            db.service_update(ctxt, svc['id'], {'disabled': False})
+        except exception.NotFound as ex:
+            print _("error: %s") % ex
+            sys.exit(2)
+        print _("Service %(service)s on host %(host)s enabled.") % locals()
 
     @args('--host', dest='host', metavar='<host>', help='Host')
     @args('--service', dest='service', metavar='<service>',
@@ -687,11 +689,13 @@ class ServiceCommands(object):
     def disable(self, host, service):
         """Disable scheduling for a service."""
         ctxt = context.get_admin_context()
-        svc = db.service_get_by_args(ctxt, host, service)
-        if not svc:
-            print _("Unable to find service")
-            return
-        db.service_update(ctxt, svc['id'], {'disabled': True})
+        try:
+            svc = db.service_get_by_args(ctxt, host, service)
+            db.service_update(ctxt, svc['id'], {'disabled': True})
+        except exception.NotFound as ex:
+            print _("error: %s") % ex
+            sys.exit(2)
+        print _("Service %(service)s on host %(host)s disabled.") % locals()
 
     @args('--host', dest='host', metavar='<host>', help='Host')
     def describe_resource(self, host):
@@ -790,12 +794,15 @@ class DbCommands(object):
 
     @args('--max_rows', dest='max_rows', metavar='<number>',
             help='Maximum number of deleted rows to archive')
-    def archive_deleted_rows(self, max_rows=None):
+    def archive_deleted_rows(self, max_rows):
         """Move up to max_rows deleted rows from production tables to shadow
         tables.
         """
         if max_rows is not None:
             max_rows = int(max_rows)
+            if max_rows < 0:
+                print _("Must supply a positive value for max_rows")
+                sys.exit(1)
         admin_context = context.get_admin_context()
         db.archive_deleted_rows(admin_context, max_rows)
 
@@ -861,7 +868,7 @@ class InstanceTypeCommands(object):
         except exception.InstanceTypeNotFound:
             print _("Valid instance type name is required")
             sys.exit(1)
-        except db_session.DBError, e:
+        except db_exc.DBError, e:
             print _("DB Error: %s") % e
             sys.exit(2)
         except Exception:
@@ -878,7 +885,7 @@ class InstanceTypeCommands(object):
                 inst_types = instance_types.get_all_types()
             else:
                 inst_types = instance_types.get_instance_type_by_name(name)
-        except db_session.DBError, e:
+        except db_exc.DBError, e:
             _db_error(e)
         if isinstance(inst_types.values()[0], dict):
             for k, v in inst_types.iteritems():
@@ -909,7 +916,7 @@ class InstanceTypeCommands(object):
                             ext_spec)
             print _("Key %(key)s set to %(value)s on instance"
                     " type %(name)s") % locals()
-        except db_session.DBError, e:
+        except db_exc.DBError, e:
             _db_error(e)
 
     @args('--name', dest='name', metavar='<name>',
@@ -932,7 +939,7 @@ class InstanceTypeCommands(object):
                         key)
 
             print _("Key %(key)s on instance type %(name)s unset") % locals()
-        except db_session.DBError, e:
+        except db_exc.DBError, e:
             _db_error(e)
 
 

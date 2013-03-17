@@ -1,7 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 IBM
-# All Rights Reserved.
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -21,7 +20,7 @@ import webob.exc
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova import availability_zones
+from nova import compute
 from nova import db
 from nova import exception
 from nova.openstack.common import log as logging
@@ -52,13 +51,17 @@ class ServicesUpdateTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('host')
         root.set('host')
-        root.set('service')
-        root.set('disabled')
+        root.set('binary')
+        root.set('status')
 
         return xmlutil.MasterTemplate(root, 1)
 
 
 class ServiceController(object):
+
+    def __init__(self):
+        self.host_api = compute.HostAPI()
+
     @wsgi.serializers(xml=ServicesIndexTemplate)
     def index(self, req):
         """
@@ -67,19 +70,19 @@ class ServiceController(object):
         context = req.environ['nova.context']
         authorize(context)
         now = timeutils.utcnow()
-        services = db.service_get_all(context)
-        services = availability_zones.set_availability_zones(context, services)
+        services = self.host_api.service_get_all(
+            context, set_zones=True)
 
         host = ''
         if 'host' in req.GET:
             host = req.GET['host']
-        service = ''
-        if 'service' in req.GET:
-            service = req.GET['service']
+        binary = ''
+        if 'binary' in req.GET:
+            binary = req.GET['binary']
         if host:
             services = [s for s in services if s['host'] == host]
-        if service:
-            services = [s for s in services if s['binary'] == service]
+        if binary:
+            services = [s for s in services if s['binary'] == binary]
 
         svcs = []
         for svc in services:
@@ -110,12 +113,12 @@ class ServiceController(object):
 
         try:
             host = body['host']
-            service = body['service']
+            binary = body['binary']
         except (TypeError, KeyError):
             raise webob.exc.HTTPUnprocessableEntity()
 
         try:
-            svc = db.service_get_by_args(context, host, service)
+            svc = db.service_get_by_args(context, host, binary)
             if not svc:
                 raise webob.exc.HTTPNotFound('Unknown service')
 
@@ -123,7 +126,8 @@ class ServiceController(object):
         except exception.ServiceNotFound:
             raise webob.exc.HTTPNotFound("service not found")
 
-        return {'host': host, 'service': service, 'disabled': disabled}
+        status = id + 'd'
+        return {'service': {'host': host, 'binary': binary, 'status': status}}
 
 
 class Services(extensions.ExtensionDescriptor):

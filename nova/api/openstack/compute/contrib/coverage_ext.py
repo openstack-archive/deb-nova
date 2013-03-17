@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 IBM
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -19,10 +19,12 @@
 
 import os
 import re
+import socket
 import sys
 import telnetlib
 import tempfile
 
+from oslo.config import cfg
 from webob import exc
 
 from nova.api.openstack import extensions
@@ -39,13 +41,13 @@ from nova.scheduler import rpcapi as scheduler_api
 
 LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'coverage_ext')
+CONF = cfg.CONF
 
 
 class CoverageController(object):
     """The Coverage report API controller for the OpenStack API."""
     def __init__(self):
         self.data_path = tempfile.mkdtemp(prefix='nova-coverage_')
-        data_out = os.path.join(self.data_path, '.nova-coverage')
         self.compute_api = compute_api.API()
         self.network_api = network_api.API()
         self.conductor_api = conductor_api.API()
@@ -55,18 +57,25 @@ class CoverageController(object):
         self.cert_api = cert_api.CertAPI()
         self.services = []
         self.combine = False
-        try:
-            import coverage
-            self.coverInst = coverage.coverage(data_file=data_out)
-            self.has_coverage = True
-        except ImportError:
-            self.has_coverage = False
+        self._cover_inst = None
+        self.host = CONF.host
         super(CoverageController, self).__init__()
+
+    @property
+    def coverInst(self):
+        if not self._cover_inst:
+            try:
+                import coverage
+                data_out = os.path.join(self.data_path, '.nova-coverage')
+                self._cover_inst = coverage.coverage(data_file=data_out)
+            except ImportError:
+                pass
+        return self._cover_inst
 
     def _find_services(self, req):
         """Returns a list of services."""
         context = req.environ['nova.context']
-        services = db.service_get_all(context, False)
+        services = db.service_get_all(context)
         hosts = []
         for serv in services:
             hosts.append({"service": serv["topic"], "host": serv["host"]})
@@ -109,14 +118,13 @@ class CoverageController(object):
         return ports
 
     def _start_coverage_telnet(self, tn, service):
+        data_file = os.path.join(self.data_path,
+                                '.nova-coverage.%s' % str(service))
         tn.write('import sys\n')
         tn.write('from coverage import coverage\n')
-        if self.combine:
-            data_file = os.path.join(self.data_path,
-                                    '.nova-coverage.%s' % str(service))
-            tn.write("coverInst = coverage(data_file='%s')\n)" % data_file)
-        else:
-            tn.write('coverInst = coverage()\n')
+        tn.write("coverInst = coverage(data_file='%s') "
+                 "if 'coverInst' not in locals() "
+                 "else coverInst\n" % data_file)
         tn.write('coverInst.skipModules = sys.modules.keys()\n')
         tn.write("coverInst.start()\n")
         tn.write("print 'finished'\n")
@@ -135,8 +143,21 @@ class CoverageController(object):
         ports = self._find_ports(req, hosts)
         self.services = []
         for service in ports:
-            service['telnet'] = telnetlib.Telnet(service['host'],
-                                                 service['port'])
+            try:
+                service['telnet'] = telnetlib.Telnet(service['host'],
+                                                     service['port'])
+            # NOTE(mtreinish): Fallback to try connecting to lo if
+            # ECONNREFUSED is raised. If using the hostname that is returned
+            # for the service from the service_get_all() DB query raises
+            # ECONNREFUSED it most likely means that the hostname in the DB
+            # doesn't resolve to 127.0.0.1. Currently backdoors only open on
+            # loopback so this is for covering the common single host use case
+            except socket.error as e:
+                if 'ECONNREFUSED' in e and service['host'] == self.host:
+                        service['telnet'] = telnetlib.Telnet('127.0.0.1',
+                                                             service['port'])
+                else:
+                    raise e
             self.services.append(service)
             self._start_coverage_telnet(service['telnet'], service['service'])
 
@@ -242,7 +263,7 @@ class CoverageController(object):
                 'report': self._report_coverage,
         }
         authorize(req.environ['nova.context'])
-        if not self.has_coverage:
+        if not self.coverInst:
             msg = _("Python coverage module is not installed.")
             raise exc.HTTPServiceUnavailable(explanation=msg)
         for action, data in body.iteritems():

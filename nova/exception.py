@@ -31,6 +31,7 @@ import webob.exc
 
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
+from nova import safe_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -71,6 +72,11 @@ class ProcessExecutionError(IOError):
         IOError.__init__(self, message)
 
 
+def _cleanse_dict(original):
+    """Strip all admin_password, new_pass, rescue_pass keys from a dict."""
+    return dict((k, v) for k, v in original.iteritems() if not "_pass" in k)
+
+
 def wrap_exception(notifier=None, publisher_id=None, event_type=None,
                    level=None):
     """This decorator wraps a method to catch any exceptions that may
@@ -89,8 +95,10 @@ def wrap_exception(notifier=None, publisher_id=None, event_type=None,
             except Exception, e:
                 with excutils.save_and_reraise_exception():
                     if notifier:
-                        payload = dict(args=args, exception=e)
-                        payload.update(kw)
+                        payload = dict(exception=e)
+                        call_dict = safe_utils.getcallargs(f, *args, **kw)
+                        cleansed = _cleanse_dict(call_dict)
+                        payload.update({'args': cleansed})
 
                         # Use a temp vars so we don't shadow
                         # our outer definitions.
@@ -307,6 +315,10 @@ class InstanceNotInRescueMode(Invalid):
     message = _("Instance %(instance_id)s is not in rescue mode")
 
 
+class InstanceNotRescuable(Invalid):
+    message = _("Instance %(instance_id)s cannot be rescued: %(reason)s")
+
+
 class InstanceNotReady(Invalid):
     message = _("Instance %(instance_id)s is not ready")
 
@@ -376,6 +388,7 @@ class InvalidDevicePath(Invalid):
 
 class DevicePathInUse(Invalid):
     message = _("The supplied device path (%(path)s) is in use.")
+    code = 409
 
 
 class DeviceIsBusy(Invalid):
@@ -421,6 +434,10 @@ class InvalidEc2Id(Invalid):
 
 class InvalidUUID(Invalid):
     message = _("Expected a uuid but received %(uuid)s.")
+
+
+class InvalidID(Invalid):
+    message = _("Invalid ID received %(id)s.")
 
 
 class InvalidPeriodicTaskArg(Invalid):
@@ -992,6 +1009,10 @@ class FloatingIpLimitExceeded(QuotaError):
     message = _("Maximum number of floating ips exceeded")
 
 
+class FixedIpLimitExceeded(QuotaError):
+    message = _("Maximum number of fixed ips exceeded")
+
+
 class MetadataLimitExceeded(QuotaError):
     message = _("Maximum number of metadata items exceeds %(allowed)d")
 
@@ -1060,6 +1081,11 @@ class InstanceNotFound(NotFound):
     message = _("Instance %(instance_id)s could not be found.")
 
 
+class InstanceInfoCacheNotFound(NotFound):
+    message = _("Info cache for instance %(instance_uuid)s could not be "
+                "found.")
+
+
 class NodeNotFound(NotFound):
     message = _("Node %(node_id)s could not be found.")
 
@@ -1078,6 +1104,10 @@ class InvalidInstanceIDMalformed(Invalid):
 
 class CouldNotFetchImage(NovaException):
     message = _("Could not fetch image %(image_id)s")
+
+
+class CouldNotUploadImage(NovaException):
+    message = _("Could not upload image %(image_id)s")
 
 
 class TaskAlreadyRunning(NovaException):

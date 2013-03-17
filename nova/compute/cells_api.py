@@ -255,9 +255,9 @@ class ComputeCellsAPI(compute_api.API):
             # broadcast a message down to all cells and hope this ends
             # up resolving itself...  Worse case.. the instance will
             # show back up again here.
-            delete_type = method == 'soft_delete' and 'soft' or 'hard'
+            delete_type = method_name == 'soft_delete' and 'soft' or 'hard'
             self.cells_rpcapi.instance_delete_everywhere(context,
-                    instance['uuid'], delete_type)
+                    instance, delete_type)
 
     @validate_cell
     def restore(self, context, instance):
@@ -392,18 +392,6 @@ class ComputeCellsAPI(compute_api.API):
         """Unpause the given instance."""
         super(ComputeCellsAPI, self).unpause(context, instance)
         self._cast_to_cells(context, instance, 'unpause')
-
-    def set_host_enabled(self, context, host, enabled):
-        """Sets the specified host's ability to accept new instances."""
-        # FIXME(comstud): Since there's no instance here, we have no
-        # idea which cell should be the target.
-        pass
-
-    def host_power_action(self, context, host, action):
-        """Reboots, shuts down or powers up the host."""
-        # FIXME(comstud): Since there's no instance here, we have no
-        # idea which cell should be the target.
-        pass
 
     def get_diagnostics(self, context, instance):
         """Retrieve diagnostics for the given instance."""
@@ -627,10 +615,7 @@ class HostAPI(compute_api.HostAPI):
         this call to cells, as we have instance information here in
         the API cell.
         """
-        try:
-            cell_name, host_name = cells_utils.split_cell_and_item(host_name)
-        except ValueError:
-            cell_name = None
+        cell_name, host_name = cells_utils.split_cell_and_item(host_name)
         instances = super(HostAPI, self).instance_get_all_by_host(context,
                                                                   host_name)
         if cell_name:
@@ -667,3 +652,21 @@ class HostAPI(compute_api.HostAPI):
 
     def compute_node_statistics(self, context):
         return self.cells_rpcapi.compute_node_stats(context)
+
+
+class InstanceActionAPI(compute_api.InstanceActionAPI):
+    """InstanceActionAPI() class for cells."""
+    def __init__(self):
+        super(InstanceActionAPI, self).__init__()
+        self.cells_rpcapi = cells_rpcapi.CellsAPI()
+
+    def actions_get(self, context, instance):
+        return self.cells_rpcapi.actions_get(context, instance)
+
+    def action_get_by_request_id(self, context, instance, request_id):
+        return self.cells_rpcapi.action_get_by_request_id(context, instance,
+                                                          request_id)
+
+    def action_events_get(self, context, instance, action_id):
+        return self.cells_rpcapi.action_events_get(context, instance,
+                                                   action_id)

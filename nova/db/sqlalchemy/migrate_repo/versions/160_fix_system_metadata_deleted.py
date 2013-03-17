@@ -1,6 +1,4 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
-# Copyright 2013 Red Hat, Inc.
+# Copyright 2013 Rackspace Hosting
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -14,4 +12,22 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config.cfg import *
+import sqlalchemy
+
+
+def upgrade(migrate_engine):
+    meta = sqlalchemy.MetaData()
+    meta.bind = migrate_engine
+    sys_meta = sqlalchemy.Table('instance_system_metadata', meta,
+                                autoload=True)
+    # is None does not work here.
+    sys_meta.update().\
+            where(sys_meta.c.deleted == None).\
+            values(deleted=0).\
+            execute()
+
+
+def downgrade(migration_engine):
+    # This migration only corrects NULL to be 0.  There's no action to
+    # revert this.
+    pass

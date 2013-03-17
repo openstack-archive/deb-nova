@@ -122,6 +122,20 @@ class InstanceTypeTestCase(test.TestCase):
         self.assertEqual(inst_type['swap'], 0)
         self.assertEqual(inst_type['rxtx_factor'], 1.0)
 
+    def test_instance_type_create_with_empty_flavorid(self):
+        # Ensure that auto-generated uuid is assigned.
+        name = 'Empty String ID Flavor'
+        flavorid = ''
+        inst_type = instance_types.create(name, 256, 1, 120, 100, flavorid)
+        self.assertEqual(len(inst_type['flavorid']), 36)
+        self.assertEqual(inst_type['name'], name)
+        self.assertEqual(inst_type['memory_mb'], 256)
+        self.assertEqual(inst_type['vcpus'], 1)
+        self.assertEqual(inst_type['root_gb'], 120)
+        self.assertEqual(inst_type['ephemeral_gb'], 100)
+        self.assertEqual(inst_type['swap'], 0)
+        self.assertEqual(inst_type['rxtx_factor'], 1.0)
+
     def test_instance_type_create_with_custom_rxtx_factor(self):
         name = 'Custom RXTX Factor'
         inst_type = instance_types.create(name, 256, 1, 120, 100,
@@ -350,24 +364,6 @@ class InstanceTypeTestCase(test.TestCase):
         instance_type = instance_types.get_instance_type_by_flavor_id(
                 "test1", read_deleted="no")
         self.assertEqual("instance_type1_redo", instance_type["name"])
-
-    def test_will_list_deleted_type_for_active_instance(self):
-        # Ensure deleted instance types with active instances can be read.
-        ctxt = context.get_admin_context()
-        inst_type = instance_types.create("test", 256, 1, 120, 100, "test1")
-
-        instance_params = {"instance_type_id": inst_type["id"]}
-        instance = db.instance_create(ctxt, instance_params)
-
-        # NOTE(jk0): Delete the instance type and reload the instance from the
-        # DB. The instance_type object will still be available to the active
-        # instance, otherwise being None.
-        instance_types.destroy(inst_type["name"])
-        instance = db.instance_get_by_uuid(ctxt, instance["uuid"])
-
-        self.assertRaises(exception.InstanceTypeNotFound,
-                instance_types.get_instance_type, inst_type["name"])
-        self.assertTrue(instance["instance_type"])
 
 
 class InstanceTypeToolsTest(test.TestCase):

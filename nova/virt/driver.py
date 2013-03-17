@@ -36,7 +36,7 @@ driver_opts = [
                help='Driver to use for controlling virtualization. Options '
                    'include: libvirt.LibvirtDriver, xenapi.XenAPIDriver, '
                    'fake.FakeDriver, baremetal.BareMetalDriver, '
-                   'vmwareapi.VMWareESXDriver'),
+                   'vmwareapi.VMwareESXDriver, vmwareapi.VMwareVCDriver'),
     cfg.StrOpt('default_ephemeral_format',
                default=None,
                help='The default format an ephemeral_volume will be '
@@ -248,7 +248,7 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def reboot(self, context, instance, network_info, reboot_type,
-               block_device_info=None):
+               block_device_info=None, bad_volumes_callback=None):
         """Reboot the specified instance.
 
         After this is called successfully, the instance's state
@@ -261,6 +261,9 @@ class ComputeDriver(object):
         :param network_info:
            :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
         :param reboot_type: Either a HARD or SOFT reboot
+        :param block_device_info: Info pertaining to attached volumes
+        :param bad_volumes_callback: Function to handle any bad volumes
+            encountered
         """
         raise NotImplementedError()
 

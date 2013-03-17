@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2012 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -21,11 +21,13 @@ the system.
 
 from oslo.config import cfg
 
+from nova.compute import instance_types
 import nova.context
 from nova import db
 from nova.image import glance
 from nova import network
 from nova.network import model as network_model
+from nova.openstack.common import excutils
 from nova.openstack.common import log
 from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common import timeutils
@@ -33,27 +35,25 @@ from nova import utils
 
 LOG = log.getLogger(__name__)
 
-notify_state_opt = cfg.StrOpt('notify_on_state_change', default=None,
-    help='If set, send compute.instance.update notifications on instance '
-         'state changes.  Valid values are None for no notifications, '
-         '"vm_state" for notifications on VM state changes, or '
-         '"vm_and_task_state" for notifications on VM and task state '
-         'changes.')
-
-notify_any_opt = cfg.BoolOpt('notify_on_any_change', default=False,
-    help='If set, send compute.instance.update notifications on instance '
-         'state changes.  Valid values are False for no notifications, '
-         'True for notifications on any instance changes.')
-
-notify_api_faults = cfg.BoolOpt('notify_api_faults', default=False,
-    help='If set, send api.fault notifications on caught exceptions '
-         'in the API service.')
+notify_opts = [
+    cfg.StrOpt('notify_on_state_change', default=None,
+        help='If set, send compute.instance.update notifications on instance '
+             'state changes.  Valid values are None for no notifications, '
+             '"vm_state" for notifications on VM state changes, or '
+             '"vm_and_task_state" for notifications on VM and task state '
+             'changes.'),
+    cfg.BoolOpt('notify_on_any_change', default=False,
+        help='If set, send compute.instance.update notifications on instance '
+             'state changes.  Valid values are False for no notifications, '
+             'True for notifications on any instance changes.'),
+    cfg.BoolOpt('notify_api_faults', default=False,
+        help='If set, send api.fault notifications on caught exceptions '
+             'in the API service.'),
+]
 
 
 CONF = cfg.CONF
-CONF.register_opt(notify_state_opt)
-CONF.register_opt(notify_any_opt)
-CONF.register_opt(notify_api_faults)
+CONF.register_opts(notify_opts)
 
 
 def send_api_fault(url, status, exception):
@@ -227,10 +227,14 @@ def bandwidth_usage(instance_ref, audit_start,
             nw_info = network.API().get_instance_nw_info(admin_context,
                     instance_ref)
         except Exception:
-            LOG.exception(_('Failed to get nw_info'), instance=instance_ref)
-            if ignore_missing_network_data:
-                return
-            raise
+            try:
+                with excutils.save_and_reraise_exception():
+                    LOG.exception(_('Failed to get nw_info'),
+                                  instance=instance_ref)
+            except Exception:
+                if ignore_missing_network_data:
+                    return
+                raise
 
     macs = [vif['address'] for vif in nw_info]
     uuids = [instance_ref["uuid"]]
@@ -280,7 +284,8 @@ def info_from_instance(context, instance_ref, network_info,
 
     image_ref_url = glance.generate_image_url(instance_ref['image_ref'])
 
-    instance_type_name = instance_ref.get('instance_type', {}).get('name', '')
+    instance_type = instance_types.extract_instance_type(instance_ref)
+    instance_type_name = instance_type.get('name', '')
 
     if system_metadata is None:
         system_metadata = utils.metadata_to_dict(

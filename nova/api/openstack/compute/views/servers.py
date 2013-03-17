@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010-2011 OpenStack LLC.
+# Copyright 2010-2011 OpenStack Foundation
 # Copyright 2011 Piston Cloud Computing, Inc.
 # All Rights Reserved.
 #
@@ -22,6 +22,7 @@ from nova.api.openstack import common
 from nova.api.openstack.compute.views import addresses as views_addresses
 from nova.api.openstack.compute.views import flavors as views_flavors
 from nova.api.openstack.compute.views import images as views_images
+from nova.compute import instance_types
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 
@@ -180,7 +181,7 @@ class ViewBuilder(common.ViewBuilder):
             return ""
 
     def _get_flavor(self, request, instance):
-        instance_type = instance["instance_type"]
+        instance_type = instance_types.extract_instance_type(instance)
         if not instance_type:
             LOG.warn(_("Instance has had its instance_type removed "
                     "from the DB"), instance=instance)

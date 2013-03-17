@@ -122,7 +122,7 @@ class BareMetalDriver(driver.ComputeDriver):
         super(BareMetalDriver, self).__init__(virtapi)
 
         self.driver = importutils.import_object(
-                CONF.baremetal.driver)
+                CONF.baremetal.driver, virtapi)
         self.vif_driver = importutils.import_object(
                 CONF.baremetal.vif_driver)
         self.firewall_driver = firewall.load_driver(
@@ -275,7 +275,7 @@ class BareMetalDriver(driver.ComputeDriver):
                 _update_state(context, node, None, baremetal_states.DELETED)
 
     def reboot(self, context, instance, network_info, reboot_type,
-               block_device_info=None):
+               block_device_info=None, bad_volumes_callback=None):
         node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         ctx = nova_context.get_admin_context()
         pm = get_power_manager(node=node, instance=instance)
@@ -410,9 +410,13 @@ class BareMetalDriver(driver.ComputeDriver):
 
     def get_available_resource(self, nodename):
         context = nova_context.get_admin_context()
-        node = db.bm_node_get_by_node_uuid(context, nodename)
-        dic = self._node_resource(node)
-        return dic
+        resource = {}
+        try:
+            node = db.bm_node_get_by_node_uuid(context, nodename)
+            resource = self._node_resource(node)
+        except exception.NodeNotFoundByUUID:
+            pass
+        return resource
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         self.firewall_driver.setup_basic_filtering(instance_ref, network_info)

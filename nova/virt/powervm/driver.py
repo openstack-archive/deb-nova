@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 IBM
+# Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -19,6 +19,7 @@ import time
 
 from oslo.config import cfg
 
+from nova.compute import instance_types
 from nova.image import glance
 from nova.openstack.common import log as logging
 from nova.virt import driver
@@ -41,11 +42,13 @@ powervm_opts = [
                help='PowerVM manager user password',
                secret=True),
     cfg.StrOpt('powervm_img_remote_path',
-               default=None,
-               help='PowerVM image remote path'),
+               default='/home/padmin',
+               help='PowerVM image remote path where images will be moved.'
+               ' Make sure this path can fit your biggest image in glance'),
     cfg.StrOpt('powervm_img_local_path',
-               default=None,
-               help='Local directory to download glance images to')
+               default='/tmp',
+               help='Local directory to download glance images to.'
+               ' Make sure this path can fit your biggest image in glance')
     ]
 
 CONF = cfg.CONF
@@ -103,13 +106,16 @@ class PowerVMDriver(driver.ComputeDriver):
         self._powervm.destroy(instance['name'], destroy_disks)
 
     def reboot(self, context, instance, network_info, reboot_type,
-               block_device_info=None):
+               block_device_info=None, bad_volumes_callback=None):
         """Reboot the specified instance.
 
         :param instance: Instance object as returned by DB layer.
         :param network_info:
            :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
         :param reboot_type: Either a HARD or SOFT reboot
+        :param block_device_info: Info pertaining to attached volumes
+        :param bad_volumes_callback: Function to handle any bad volumes
+            encountered
         """
         pass
 
@@ -124,13 +130,15 @@ class PowerVMDriver(driver.ComputeDriver):
                   {'hostname': hostname, 'ip_addr': ip_addr})
         return ip_addr
 
-    def snapshot(self, context, instance, image_id):
+    def snapshot(self, context, instance, image_id, update_task_state):
         """Snapshots the specified instance.
 
         :param context: security context
         :param instance: Instance object as returned by DB layer.
         :param image_id: Reference to a pre-created image that will
                          hold the snapshot.
+        :param update_task_state: Function reference that allows for updates
+                                  to the instance task state.
         """
         snapshot_start = time.time()
 
@@ -159,7 +167,7 @@ class PowerVMDriver(driver.ComputeDriver):
 
         # disk capture and glance upload
         self._powervm.capture_image(context, instance, image_id,
-                                    new_snapshot_meta)
+                                    new_snapshot_meta, update_task_state)
 
         snapshot_time = time.time() - snapshot_start
         inst_name = instance['name']
@@ -270,9 +278,10 @@ class PowerVMDriver(driver.ComputeDriver):
                            defines the image from which this instance
                            was created
         """
-        lpar_obj = self._powervm._create_lpar_instance(instance)
+        lpar_obj = self._powervm._create_lpar_instance(instance, network_info)
 
-        new_lv_size = instance['instance_type']['root_gb']
+        instance_type = instance_types.extract_instance_type(instance)
+        new_lv_size = instance_type['root_gb']
         old_lv_size = disk_info['old_lv_size']
         if 'root_disk_file' in disk_info:
             disk_size = max(int(new_lv_size), int(old_lv_size))
@@ -296,7 +305,13 @@ class PowerVMDriver(driver.ComputeDriver):
                                 block_device_info=None):
         """Finish reverting a resize, powering back on the instance."""
 
-        # undo instance rename and start
         new_name = self._get_resize_name(instance['name'])
-        self._powervm._operator.rename_lpar(new_name, instance['name'])
+
+        # Make sure we don't have a failed same-host migration still
+        # hanging around
+        if self.instance_exists(new_name):
+            if self.instance_exists(instance['name']):
+                self._powervm.destroy(instance['name'])
+            # undo instance rename and start
+            self._powervm._operator.rename_lpar(new_name, instance['name'])
         self._powervm.power_on(instance['name'])

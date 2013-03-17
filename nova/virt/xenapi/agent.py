@@ -1,7 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2010 Citrix Systems, Inc.
-# Copyright 2010-2012 OpenStack LLC.
+# Copyright 2010-2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -223,6 +223,25 @@ class XenAPIBasedAgent(object):
                                          {'system_metadata': sys_meta})
 
         return resp['message']
+
+    def inject_ssh_key(self):
+        sshkey = self.instance.get('key_data')
+        if not sshkey:
+            return
+        if self.instance['os_type'] == 'windows':
+            LOG.warning(_("Skipping setting of ssh key for Windows."),
+                        instance=self.instance)
+            return
+        sshkey = str(sshkey)
+        keyfile = '/root/.ssh/authorized_keys'
+        key_data = ''.join([
+            '\n',
+            '# The following ssh key was injected by Nova',
+            '\n',
+            sshkey.strip(),
+            '\n',
+        ])
+        return self.inject_file(keyfile, key_data)
 
     def inject_file(self, path, contents):
         LOG.debug(_('Injecting file path: %r'), path, instance=self.instance)

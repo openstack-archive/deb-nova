@@ -66,6 +66,7 @@ variables / types used
 """
 
 from nova import block_device
+from nova.compute import instance_types
 from nova import exception
 from nova.openstack.common import log as logging
 from nova.virt import configdrive
@@ -201,7 +202,7 @@ def get_disk_bus_for_device_type(virt_type,
 
     # Prefer a disk bus set against the image first of all
     if image_meta:
-        key = device_type + "_bus"
+        key = "hw_" + device_type + "_bus"
         disk_bus = image_meta.get('properties', {}).get(key)
         if disk_bus is not None:
             if not is_disk_bus_valid_for_virt(virt_type, disk_bus):
@@ -296,7 +297,7 @@ def get_disk_mapping(virt_type, instance,
 
        Returns the guest disk mapping for the devices."""
 
-    inst_type = instance['instance_type']
+    inst_type = instance_types.extract_instance_type(instance)
 
     mapping = {}
 

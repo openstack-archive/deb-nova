@@ -33,6 +33,7 @@ from nova.api.openstack.compute.contrib import fping
 # Import extensions to pull in osapi_compute_extension CONF option used below.
 from nova.cloudpipe import pipelib
 from nova.compute import api as compute_api
+from nova.compute import manager as compute_manager
 from nova import context
 from nova import db
 from nova.db.sqlalchemy import models
@@ -46,6 +47,7 @@ import nova.quota
 from nova.scheduler import driver
 from nova.servicegroup import api as service_group_api
 from nova import test
+from nova.tests.api.openstack.compute.contrib import test_coverage_ext
 from nova.tests.api.openstack.compute.contrib import test_fping
 from nova.tests.api.openstack.compute.contrib import test_networks
 from nova.tests.api.openstack.compute.contrib import test_services
@@ -57,6 +59,7 @@ from nova.tests.image import fake
 from nova.tests.integrated import integrated_helpers
 from nova.tests import utils as test_utils
 from nova import utils
+from nova.volume import cinder
 
 CONF = cfg.CONF
 CONF.import_opt('allow_resize_to_same_host', 'nova.compute.api')
@@ -152,36 +155,48 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         return cls._get_sample_path(name, dirname, suffix='.tpl')
 
     def _read_template(self, name):
-
         template = self._get_template(name)
-        if self.generate_samples and not os.path.exists(template):
-            with open(template, 'w'):
-                pass
         with open(template) as inf:
             return inf.read().strip()
+
+    def _write_template(self, name, data):
+        with open(self._get_template(name), 'w') as outf:
+            outf.write(data)
 
     def _write_sample(self, name, data):
         with open(self._get_sample(name), 'w') as outf:
             outf.write(data)
 
-    def _compare_result(self, subs, expected, result):
+    def _compare_result(self, subs, expected, result, result_str):
         matched_value = None
         if isinstance(expected, dict):
             if not isinstance(result, dict):
-                raise NoMatch(
-                        _('Result: %(result)s is not a dict.') % locals())
+                raise NoMatch(_('%(result_str)s: %(result)s is not a dict.')
+                              % locals())
             ex_keys = sorted(expected.keys())
             res_keys = sorted(result.keys())
             if ex_keys != res_keys:
-                raise NoMatch(_('Key mismatch:\n'
-                        '%(ex_keys)s\n%(res_keys)s') % locals())
+                ex_delta = []
+                res_delta = []
+                for key in ex_keys:
+                    if key not in res_keys:
+                        ex_delta.append(key)
+                for key in res_keys:
+                    if key not in ex_keys:
+                        res_delta.append(key)
+                raise NoMatch(
+                        _('Dictionary key mismatch:\n'
+                        'Extra key(s) in template:\n%(ex_delta)s\n'
+                        'Extra key(s) in %(result_str)s:\n%(res_delta)s\n')
+                        % locals())
             for key in ex_keys:
-                res = self._compare_result(subs, expected[key], result[key])
+                res = self._compare_result(subs, expected[key], result[key],
+                                           result_str)
                 matched_value = res or matched_value
         elif isinstance(expected, list):
             if not isinstance(result, list):
                 raise NoMatch(
-                        _('Result: %(result)s is not a list.') % locals())
+                     _('%(result_str)s: %(result)s is not a list.') % locals())
 
             expected = expected[:]
             extra = []
@@ -189,7 +204,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                 for i, ex_obj in enumerate(expected):
                     try:
                         matched_value = self._compare_result(subs, ex_obj,
-                                                             res_obj)
+                                                             res_obj,
+                                                             result_str)
                         del expected[i]
                         break
                     except NoMatch:
@@ -199,11 +215,12 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
 
             error = []
             if expected:
-                error.append(_('Extra items in expected:'))
+                error.append(_('Extra list items in template:'))
                 error.extend([repr(o) for o in expected])
 
             if extra:
-                error.append(_('Extra items in result:'))
+                error.append(_('Extra list items in %(result_str)s:')
+                             % locals())
                 error.extend([repr(o) for o in extra])
 
             if error:
@@ -222,8 +239,10 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             expected = '^%s$' % expected
             match = re.match(expected, result)
             if not match:
-                raise NoMatch(_('Values do not match:\n'
-                        '%(expected)s\n%(result)s') % locals())
+                raise NoMatch(
+                    _('Values do not match:\n'
+                    'Template: %(expected)s\n%(result_str)s: %(result)s')
+                    % locals())
             try:
                 matched_value = match.group('id')
             except IndexError:
@@ -235,14 +254,11 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                 expected = expected.strip()
                 result = result.strip()
             if expected != result:
-                raise NoMatch(_('Values do not match:\n'
-                        '%(expected)s\n%(result)s') % locals())
+                raise NoMatch(
+                        _('Values do not match:\n'
+                        'Template: %(expected)s\n%(result_str)s: %(result)s')
+                        % locals())
         return matched_value
-
-    def _verify_something(self, subs, expected, data):
-        result = self._pretty_data(data)
-        result = self._objectify(result)
-        return self._compare_result(subs, expected, result)
 
     def generalize_subs(self, subs, vanilla_regexes):
         """Give the test a chance to modify subs after the server response
@@ -256,20 +272,27 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         return subs
 
     def _verify_response(self, name, subs, response):
-        expected = self._read_template(name)
-        expected = self._objectify(expected)
         response_data = response.read()
-        try:
+        response_data = self._pretty_data(response_data)
+        if not os.path.exists(self._get_template(name)):
+            self._write_template(name, response_data)
+            template_data = response_data
+        else:
+            template_data = self._read_template(name)
+
+        if (self.generate_samples and
+            not os.path.exists(self._get_sample(name))):
+            self._write_sample(name, response_data)
+            sample_data = response_data
+        else:
             with file(self._get_sample(name)) as sample:
                 sample_data = sample.read()
-        except IOError:
-            if self.ctype == 'json':
-                sample_data = "{}"
-            else:
-                sample_data = None
+
         try:
-            response_result = self._verify_something(subs, expected,
-                                                     response_data)
+            template_data = self._objectify(template_data)
+            response_data = self._objectify(response_data)
+            response_result = self._compare_result(subs, template_data,
+                                                   response_data, "Response")
             # NOTE(danms): replace some of the subs with patterns for the
             # doc/api_samples check, which won't have things like the
             # correct compute host name. Also let the test do some of its
@@ -278,11 +301,10 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             subs['compute_host'] = vanilla_regexes['host_name']
             subs['id'] = vanilla_regexes['id']
             subs = self.generalize_subs(subs, vanilla_regexes)
-            self._verify_something(subs, expected, sample_data)
+            sample_data = self._objectify(sample_data)
+            self._compare_result(subs, template_data, sample_data, "Sample")
             return response_result
         except NoMatch:
-            if self.generate_samples:
-                self._write_sample(name, self._pretty_data(response_data))
             raise
 
     def _get_host(self):
@@ -384,7 +406,6 @@ class ApiSamplesTrap(ApiSampleTestBase):
         # removed) soon.
         do_not_approve_additions = []
         do_not_approve_additions.append('os-create-server-ext')
-        do_not_approve_additions.append('os-volumes')
 
         tests = self._get_extensions_tested()
         extensions = self._get_extensions()
@@ -760,7 +781,7 @@ class CoverageExtJsonTests(ApiSampleTestBase):
 
         self.stubs.Set(coverage_ext.CoverageController, '_check_coverage',
                        _fake_check_coverage)
-        self.stubs.Set(coverage.coverage, 'xml_report', _fake_xml_report)
+        self.stubs.Set(coverage, 'coverage', test_coverage_ext.FakeCoverage)
 
     def test_start_coverage(self):
         # Start coverage data collection.
@@ -1591,9 +1612,6 @@ class CloudPipeUpdateJsonTest(ApiSampleTestBase):
             'nova.api.openstack.compute.contrib.cloudpipe.Cloudpipe')
         return f
 
-    def setUp(self):
-        super(CloudPipeUpdateJsonTest, self).setUp()
-
     def test_cloud_pipe_update(self):
         subs = {'vpn_ip': '192.168.1.1',
                 'vpn_port': 2000}
@@ -1868,9 +1886,6 @@ class CertificatesSamplesJsonTest(ApiSampleTestBase):
     extension_name = ("nova.api.openstack.compute.contrib.certificates."
                       "Certificates")
 
-    def setUp(self):
-        super(CertificatesSamplesJsonTest, self).setUp()
-
     def test_create_certificates(self):
         response = self._do_post('os-certificates',
                                  'certificate-create-req', {})
@@ -1948,7 +1963,7 @@ class ServicesJsonTest(ApiSampleTestBase):
     def setUp(self):
         super(ServicesJsonTest, self).setUp()
         self.stubs.Set(db, "service_get_all",
-                       test_services.fake_service_get_all)
+                       test_services.fake_db_api_service_get_all)
         self.stubs.Set(timeutils, "utcnow", test_services.fake_utcnow)
         self.stubs.Set(db, "service_get_by_args",
                        test_services.fake_service_get_by_host_binary)
@@ -1975,24 +1990,24 @@ class ServicesJsonTest(ApiSampleTestBase):
     def test_service_enable(self):
         """Enable an existing agent build."""
         subs = {"host": "host1",
-                'service': 'nova-compute'}
-        response = self._do_put('/os-services/enable',
+                'binary': 'nova-compute'}
+        response = self._do_put('os-services/enable',
                                 'service-enable-put-req', subs)
         self.assertEqual(response.status, 200)
         subs = {"host": "host1",
-                "service": "nova-compute"}
+                "binary": "nova-compute"}
         return self._verify_response('service-enable-put-resp',
                                       subs, response)
 
     def test_service_disable(self):
         """Disable an existing agent build."""
         subs = {"host": "host1",
-                'service': 'nova-compute'}
-        response = self._do_put('/os-services/disable',
+                'binary': 'nova-compute'}
+        response = self._do_put('os-services/disable',
                                 'service-disable-put-req', subs)
         self.assertEqual(response.status, 200)
         subs = {"host": "host1",
-                "service": "nova-compute"}
+                "binary": "nova-compute"}
         return self._verify_response('service-disable-put-resp',
                                      subs, response)
 
@@ -3165,12 +3180,16 @@ class InstanceActionsSampleJsonTest(ApiSampleTestBase):
         def fake_instance_get_by_uuid(context, instance_id):
             return self.instance
 
+        def fake_get(self, context, instance_uuid):
+            return {'uuid': instance_uuid}
+
         self.stubs.Set(db, 'action_get_by_request_id',
                        fake_instance_action_get_by_request_id)
         self.stubs.Set(db, 'actions_get', fake_instance_actions_get)
         self.stubs.Set(db, 'action_events_get',
                        fake_instance_action_events_get)
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get_by_uuid)
+        self.stubs.Set(compute_api.API, 'get', fake_get)
 
     def test_instance_action_get(self):
         fake_uuid = fake_instance_actions.FAKE_UUID
@@ -3430,7 +3449,7 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
         def fake_list_ports(self, *args, **kwargs):
             uuid = kwargs.get('device_id', None)
             if not uuid:
-                raise InstanceNotFound(instance_id=None)
+                raise exception.InstanceNotFound(instance_id=None)
             port_data = {
                 "id": "ce531f90-199f-48c0-816c-13e38010b442",
                 "network_id": "3cb9bc59-5699-4588-a4b1-b87f96708bc6",
@@ -3450,7 +3469,7 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
 
         def fake_show_port(self, context, port_id=None):
             if not port_id:
-                raise PortNotFound(port_id=None)
+                raise exception.PortNotFound(port_id=None)
             port_data = {
                 "id": port_id,
                 "network_id": "3cb9bc59-5699-4588-a4b1-b87f96708bc6",
@@ -3588,4 +3607,278 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
 
 
 class AttachInterfacesSampleXmlTest(AttachInterfacesSampleJsonTest):
+    ctype = 'xml'
+
+
+class SnapshotsSampleJsonTests(ApiSampleTestBase):
+    extension_name = "nova.api.openstack.compute.contrib.volumes.Volumes"
+
+    create_subs = {
+            'snapshot_name': 'snap-001',
+            'description': 'Daily backup',
+            'volume_id': '521752a6-acf6-4b2d-bc7a-119f9148cd8c'
+    }
+
+    def setUp(self):
+        super(SnapshotsSampleJsonTests, self).setUp()
+        self.stubs.Set(cinder.API, "get_all_snapshots",
+                       fakes.stub_snapshot_get_all)
+        self.stubs.Set(cinder.API, "get_snapshot", fakes.stub_snapshot_get)
+
+    def _create_snapshot(self):
+        self.stubs.Set(cinder.API, "create_snapshot",
+                       fakes.stub_snapshot_create)
+        self.stubs.Set(cinder.API, "get", fakes.stub_volume_get)
+
+        response = self._do_post("os-snapshots",
+                                 "snapshot-create-req",
+                                 self.create_subs)
+        return response
+
+    def test_snapshots_create(self):
+        response = self._create_snapshot()
+        self.assertEqual(response.status, 200)
+        self.create_subs.update(self._get_regexes())
+        return self._verify_response("snapshot-create-resp",
+                                     self.create_subs, response)
+
+    def test_snapshots_delete(self):
+        self.stubs.Set(cinder.API, "delete_snapshot",
+                       fakes.stub_snapshot_delete)
+        self._create_snapshot()
+        response = self._do_delete('os-snapshots/100')
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
+
+    def test_snapshots_detail(self):
+        response = self._do_get('os-snapshots/detail')
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        return self._verify_response('snapshots-detail-resp',
+                                     subs, response)
+
+    def test_snapshots_list(self):
+        response = self._do_get('os-snapshots')
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        return self._verify_response('snapshots-list-resp',
+                                     subs, response)
+
+    def test_snapshots_show(self):
+        response = self._do_get('os-snapshots/100')
+        self.assertEqual(response.status, 200)
+        subs = {
+            'snapshot_name': 'Default name',
+            'description': 'Default description'
+        }
+        subs.update(self._get_regexes())
+        return self._verify_response('snapshots-show-resp',
+                                     subs, response)
+
+
+class SnapshotsSampleXmlTests(SnapshotsSampleJsonTests):
+    ctype = "xml"
+
+
+class VolumeAttachmentsSampleJsonTest(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib.volumes.Volumes")
+
+    def test_attach_volume_to_server(self):
+        device_name = '/dev/vdd'
+        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
+        self.stubs.Set(cinder.API, 'check_attach', lambda *a, **k: None)
+        self.stubs.Set(cinder.API, 'reserve_volume', lambda *a, **k: None)
+        self.stubs.Set(compute_manager.ComputeManager,
+                       "reserve_block_device_name",
+                       lambda *a, **k: device_name)
+
+        volume = fakes.stub_volume_get(None, context.get_admin_context(),
+                                       'a26887c6-c47b-4654-abb5-dfadf7d3f803')
+        subs = {
+            'volume_id': volume['id'],
+            'device': device_name
+        }
+        server_id = self._post_server()
+        response = self._do_post('servers/%s/os-volume_attachments'
+                                 % server_id,
+                                 'attach-volume-to-server-req', subs)
+
+        self.assertEqual(response.status, 200)
+        subs.update(self._get_regexes())
+        self._verify_response('attach-volume-to-server-resp',
+                              subs, response)
+
+    def _stub_compute_api_get_instance_bdms(self, server_id):
+
+        def fake_compute_api_get_instance_bdms(self, context, instance):
+            bdms = [
+                {'volume_id': 'a26887c6-c47b-4654-abb5-dfadf7d3f803',
+                'instance_uuid': server_id,
+                'device_name': '/dev/sdd'},
+                {'volume_id': 'a26887c6-c47b-4654-abb5-dfadf7d3f804',
+                'instance_uuid': server_id,
+                'device_name': '/dev/sdc'}
+            ]
+            return bdms
+
+        self.stubs.Set(compute_api.API, "get_instance_bdms",
+                       fake_compute_api_get_instance_bdms)
+
+    def _stub_compute_api_get(self):
+
+        def fake_compute_api_get(self, context, instance_id):
+            return {'uuid': instance_id}
+
+        self.stubs.Set(compute_api.API, 'get', fake_compute_api_get)
+
+    def test_list_volume_attachments(self):
+        server_id = self._post_server()
+
+        self._stub_compute_api_get_instance_bdms(server_id)
+
+        response = self._do_get('servers/%s/os-volume_attachments'
+                                % server_id)
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        self._verify_response('list-volume-attachments-resp',
+                              subs, response)
+
+    def test_volume_attachment_detail(self):
+        server_id = self._post_server()
+        attach_id = "a26887c6-c47b-4654-abb5-dfadf7d3f803"
+        self._stub_compute_api_get_instance_bdms(server_id)
+        self._stub_compute_api_get()
+        response = self._do_get('servers/%s/os-volume_attachments/%s'
+                                % (server_id, attach_id))
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        self._verify_response('volume-attachment-detail-resp',
+                              subs, response)
+
+    def test_volume_attachment_delete(self):
+        server_id = self._post_server()
+        attach_id = "a26887c6-c47b-4654-abb5-dfadf7d3f803"
+        self._stub_compute_api_get_instance_bdms(server_id)
+        self._stub_compute_api_get()
+        self.stubs.Set(compute_api.API, 'detach_volume', lambda *a, **k: None)
+        response = self._do_delete('servers/%s/os-volume_attachments/%s'
+                                   % (server_id, attach_id))
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
+
+
+class VolumeAttachmentsSampleXmlTest(VolumeAttachmentsSampleJsonTest):
+    ctype = 'xml'
+
+
+class VolumesSampleJsonTest(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib.volumes.Volumes")
+
+    def _get_volume_id(self):
+        return 'a26887c6-c47b-4654-abb5-dfadf7d3f803'
+
+    def _stub_volume(self, id, displayname="Volume Name",
+                     displaydesc="Volume Description", size=100):
+        volume = {
+                  'id': id,
+                  'size': size,
+                  'availability_zone': 'zone1:host1',
+                  'instance_uuid': '3912f2b4-c5ba-4aec-9165-872876fe202e',
+                  'mountpoint': '/',
+                  'status': 'in-use',
+                  'attach_status': 'attached',
+                  'name': 'vol name',
+                  'display_name': displayname,
+                  'display_description': displaydesc,
+                  'created_at': "2008-12-01T11:01:55",
+                  'snapshot_id': None,
+                  'volume_type_id': 'fakevoltype',
+                  'volume_metadata': [],
+                  'volume_type': {'name': 'Backup'}
+                  }
+        return volume
+
+    def _stub_volume_get(self, context, volume_id):
+        return self._stub_volume(volume_id)
+
+    def _stub_volume_delete(self, context, *args, **param):
+        pass
+
+    def _stub_volume_get_all(self, context, search_opts=None):
+        id = self._get_volume_id()
+        return [self._stub_volume(id)]
+
+    def _stub_volume_create(self, context, size, name, description, snapshot,
+                       **param):
+        id = self._get_volume_id()
+        return self._stub_volume(id)
+
+    def setUp(self):
+        super(VolumesSampleJsonTest, self).setUp()
+        fakes.stub_out_networking(self.stubs)
+        fakes.stub_out_rate_limiting(self.stubs)
+
+        self.stubs.Set(cinder.API, "delete", self._stub_volume_delete)
+        self.stubs.Set(cinder.API, "get", self._stub_volume_get)
+        self.stubs.Set(cinder.API, "get_all", self._stub_volume_get_all)
+
+    def _post_volume(self):
+        subs_req = {
+                'volume_name': "Volume Name",
+                'volume_desc': "Volume Description",
+        }
+
+        self.stubs.Set(cinder.API, "create", self._stub_volume_create)
+        response = self._do_post('os-volumes', 'os-volumes-post-req',
+                                 subs_req)
+        self.assertEqual(response.status, 200)
+        subs = self._get_regexes()
+        subs.update(subs_req)
+        return self._verify_response('os-volumes-post-resp', subs, response)
+
+    def test_volumes_show(self):
+        subs = {
+                'volume_name': "Volume Name",
+                'volume_desc': "Volume Description",
+        }
+        vol_id = self._get_volume_id()
+        response = self._do_get('os-volumes/%s' % vol_id)
+        self.assertEqual(response.status, 200)
+        subs.update(self._get_regexes())
+        return self._verify_response('os-volumes-get-resp', subs, response)
+
+    def test_volumes_index(self):
+        subs = {
+                'volume_name': "Volume Name",
+                'volume_desc': "Volume Description",
+        }
+        response = self._do_get('os-volumes')
+        self.assertEqual(response.status, 200)
+        subs.update(self._get_regexes())
+        return self._verify_response('os-volumes-index-resp', subs, response)
+
+    def test_volumes_detail(self):
+        # For now, index and detail are the same.
+        # See the volumes api
+        subs = {
+                'volume_name': "Volume Name",
+                'volume_desc': "Volume Description",
+        }
+        response = self._do_get('os-volumes/detail')
+        self.assertEqual(response.status, 200)
+        subs.update(self._get_regexes())
+        return self._verify_response('os-volumes-detail-resp', subs, response)
+
+    def test_volumes_create(self):
+        return self._post_volume()
+
+    def test_volumes_delete(self):
+        self._post_volume()
+        vol_id = self._get_volume_id()
+        response = self._do_delete('os-volumes/%s' % vol_id)
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
+
+
+class VolumesSampleXmlTest(VolumesSampleJsonTest):
     ctype = 'xml'
