@@ -2,5 +2,4 @@ path-to-the-xenhost.conf-fixup.patch
 install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
-fix-mox-unit-tests.patch
 fix-libvirt-unit-tests_Enable-tox-use-of-site-packages-for-libvirt.patch
