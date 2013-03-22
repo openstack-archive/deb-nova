@@ -2247,8 +2247,7 @@ class LibvirtDriver(driver.ComputeDriver):
         for (network, mapping) in network_info:
             cfg = self.vif_driver.get_config(instance,
                                              network, mapping,
-                                             image_meta,
-                                             inst_type)
+                                             image_meta)
             guest.add_device(cfg)
 
         if CONF.libvirt_type == "qemu" or CONF.libvirt_type == "kvm":
@@ -3325,6 +3324,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
             if disk_type != 'file':
                 LOG.debug(_('skipping %(path)s since it looks like volume') %
+                          locals())
+                continue
+
+            if not path:
+                LOG.debug(_('skipping disk for %(instance_name)s as it'
+                            ' does not have a path') %
                           locals())
                 continue
 

@@ -1966,6 +1966,26 @@ class ComputeTestCase(BaseTestCase):
 
         self.assertTrue(self.tokens_deleted)
 
+    def test_delete_instance_deletes_console_auth_tokens_cells(self):
+        instance = self._create_fake_instance()
+        self.flags(vnc_enabled=True)
+        self.flags(enable=True, group='cells')
+
+        self.tokens_deleted = False
+
+        def fake_delete_tokens(*args, **kwargs):
+            self.tokens_deleted = True
+
+        cells_rpcapi = self.compute.cells_rpcapi
+        self.stubs.Set(cells_rpcapi, 'consoleauth_delete_tokens',
+                       fake_delete_tokens)
+
+        self.compute._delete_instance(self.context,
+                instance=jsonutils.to_primitive(instance),
+                bdms={})
+
+        self.assertTrue(self.tokens_deleted)
+
     def test_instance_termination_exception_sets_error(self):
         """Test that we handle InstanceTerminationFailure
         which is propagated up from the underlying driver.
@@ -5437,6 +5457,14 @@ class ComputeAPITestCase(BaseTestCase):
             self.assertEqual(instance_properties['progress'], 0)
             self.assertIn('host2', filter_properties['ignore_hosts'])
 
+        def _noop(*args, **kwargs):
+            pass
+
+        self.stubs.Set(self.compute.cells_rpcapi,
+                       'consoleauth_delete_tokens', _noop)
+        self.stubs.Set(self.compute.consoleauth_rpcapi,
+                       'delete_tokens_for_instance', _noop)
+
         self.stubs.Set(rpc, 'cast', _fake_cast)
 
         instance = self._create_fake_instance(dict(host='host2'))
@@ -5471,6 +5499,14 @@ class ComputeAPITestCase(BaseTestCase):
                     task_states.RESIZE_PREP)
             self.assertEqual(instance_properties['progress'], 0)
             self.assertNotIn('host2', filter_properties['ignore_hosts'])
+
+        def _noop(*args, **kwargs):
+            pass
+
+        self.stubs.Set(self.compute.cells_rpcapi,
+                       'consoleauth_delete_tokens', _noop)
+        self.stubs.Set(self.compute.consoleauth_rpcapi,
+                       'delete_tokens_for_instance', _noop)
 
         self.stubs.Set(rpc, 'cast', _fake_cast)
         self.flags(allow_resize_to_same_host=True)
@@ -6157,9 +6193,55 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertRaises(exception.InvalidDevicePath,
                 self.compute_api.attach_volume,
                 self.context,
-                {'locked': False},
+                {'locked': False, 'vm_state': vm_states.ACTIVE},
                 None,
                 '/invalid')
+
+    def test_no_attach_volume_in_rescue_state(self):
+        def fake(*args, **kwargs):
+            pass
+
+        def fake_volume_get(self, context, volume_id):
+            return {'id': volume_id}
+
+        self.stubs.Set(cinder.API, 'get', fake_volume_get)
+        self.stubs.Set(cinder.API, 'check_attach', fake)
+        self.stubs.Set(cinder.API, 'reserve_volume', fake)
+
+        self.assertRaises(exception.InstanceInvalidState,
+                self.compute_api.attach_volume,
+                self.context,
+                {'uuid': 'fake_uuid', 'locked': False,
+                'vm_state': vm_states.RESCUED},
+                None,
+                '/dev/vdb')
+
+    def test_no_detach_volume_in_rescue_state(self):
+        # Ensure volume can be detached from instance
+
+        params = {'vm_state': vm_states.RESCUED}
+        instance = self._create_fake_instance(params=params)
+
+        def fake(*args, **kwargs):
+            pass
+
+        def fake_volume_get(self, context, volume_id):
+            pass
+            return {'id': volume_id, 'attach_status': 'in-use',
+                    'instance_uuid': instance['uuid']}
+
+        def fake_rpc_detach_volume(self, context, **kwargs):
+            pass
+
+        self.stubs.Set(cinder.API, 'get', fake_volume_get)
+        self.stubs.Set(cinder.API, 'check_detach', fake)
+        self.stubs.Set(cinder.API, 'begin_detaching', fake)
+        self.stubs.Set(compute_rpcapi.ComputeAPI, 'detach_volume',
+                       fake_rpc_detach_volume)
+
+        self.assertRaises(exception.InstanceInvalidState,
+                self.compute_api.detach_volume,
+                self.context, 1)
 
     def test_vnc_console(self):
         # Make sure we can a vnc console for an instance.

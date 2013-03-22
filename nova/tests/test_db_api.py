@@ -797,6 +797,51 @@ class DbApiTestCase(DbTestCase):
         self.assertEqual('schedule', event['event'])
         self.assertEqual(start_time, event['start_time'])
 
+    def test_add_key_pair(self, name=None):
+        """Check if keypair creation work as expected."""
+        keypair = {
+            'user_id': self.user_id,
+            'name': name or 'test-keypair',
+            'fingerprint': '15:b0:f8:b3:f9:48:63:71:cf:7b:5b:38:6d:44:2d:4a',
+            'private_key': 'private_key_value',
+            'public_key': 'public_key_value'
+        }
+        result_key = db.key_pair_create(context.get_admin_context(), keypair)
+        for label in keypair:
+            self.assertEqual(keypair[label], result_key[label])
+
+    def test_key_pair_destroy(self):
+        """Check if key pair deletion works as expected."""
+        keypair_name = 'test-delete-keypair'
+        self.test_add_key_pair(name=keypair_name)
+        db.key_pair_destroy(context.get_admin_context(), self.user_id,
+                            keypair_name)
+        self.assertRaises(exception.KeypairNotFound, db.key_pair_get,
+                          context.get_admin_context(), self.user_id,
+                          keypair_name)
+
+    def test_key_pair_get(self):
+        """Test if a previously created keypair can be found."""
+        keypair_name = 'test-get-keypair'
+        self.test_add_key_pair(name=keypair_name)
+        result = db.key_pair_get(context.get_admin_context(), self.user_id,
+                                 keypair_name)
+        self.assertEqual(result.name, keypair_name)
+
+    def test_key_pair_get_all_by_user(self):
+        self.assertTrue(isinstance(db.key_pair_get_all_by_user(
+                context.get_admin_context(), self.user_id), list))
+
+    def test_delete_non_existent_key_pair(self):
+        self.assertRaises(exception.KeypairNotFound, db.key_pair_destroy,
+                          context.get_admin_context(), self.user_id,
+                          'non-existent-keypair')
+
+    def test_get_non_existent_key_pair(self):
+        self.assertRaises(exception.KeypairNotFound, db.key_pair_get,
+                          context.get_admin_context(), self.user_id,
+                          'invalid-key')
+
     def test_dns_registration(self):
         domain1 = 'test.domain.one'
         domain2 = 'test.domain.two'
@@ -1610,6 +1655,198 @@ class MigrationTestCase(test.TestCase):
             self.assertEqual(migration['instance_uuid'], instance['uuid'])
 
 
+class ModelsObjectComparatorMixin(object):
+    def _dict_from_object(self, obj, ignored_keys):
+        if ignored_keys is None:
+            ignored_keys = []
+        return dict([(k, v) for k, v in obj.iteritems()
+                                if k not in ignored_keys])
+
+    def _assertEqualObjects(self, obj1, obj2, ignored_keys=None):
+        obj1 = self._dict_from_object(obj1, ignored_keys)
+        obj2 = self._dict_from_object(obj2, ignored_keys)
+
+        self.assertEqual(len(obj1), len(obj2))
+        for key, value in obj1.iteritems():
+            self.assertEqual(value, obj2[key])
+
+    def _assertEqualListsOfObjects(self, objs1, objs2, ignored_keys=None):
+        self.assertEqual(len(objs1), len(objs2))
+        objs2 = dict([(o['id'], o) for o in objs2])
+        for o1 in objs1:
+            self._assertEqualObjects(o1, objs2[o1['id']], ignored_keys)
+
+
+class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
+    def setUp(self):
+        super(ServiceTestCase, self).setUp()
+        self.ctxt = context.get_admin_context()
+
+    def _get_base_values(self):
+        return {
+            'host': 'fake_host',
+            'binary': 'fake_binary',
+            'topic': 'fake_topic',
+            'report_count': 3,
+            'disabled': False
+        }
+
+    def _create_service(self, values):
+        v = self._get_base_values()
+        v.update(values)
+        return db.service_create(self.ctxt, v)
+
+    def test_service_create(self):
+        service = self._create_service({})
+        self.assertFalse(service['id'] is None)
+        for key, value in self._get_base_values().iteritems():
+            self.assertEqual(value, service[key])
+
+    def test_service_destroy(self):
+        service1 = self._create_service({})
+        service2 = self._create_service({'host': 'fake_host2'})
+
+        db.service_destroy(self.ctxt, service1['id'])
+        self.assertRaises(exception.ServiceNotFound,
+                          db.service_get, self.ctxt, service1['id'])
+        self._assertEqualObjects(db.service_get(self.ctxt, service2['id']),
+                                 service2, ignored_keys=['compute_node'])
+
+    def test_service_update(self):
+        service = self._create_service({})
+        new_values = {
+            'host': 'fake_host1',
+            'binary': 'fake_binary1',
+            'topic': 'fake_topic1',
+            'report_count': 4,
+            'disabled': True
+        }
+        db.service_update(self.ctxt, service['id'], new_values)
+        updated_service = db.service_get(self.ctxt, service['id'])
+        for key, value in new_values.iteritems():
+            self.assertEqual(value, updated_service[key])
+
+    def test_service_update_not_found_exception(self):
+        self.assertRaises(exception.ServiceNotFound,
+                          db.service_update, self.ctxt, 100500, {})
+
+    def test_service_get(self):
+        service1 = self._create_service({})
+        service2 = self._create_service({'host': 'some_other_fake_host'})
+        real_service1 = db.service_get(self.ctxt, service1['id'])
+        self._assertEqualObjects(service1, real_service1,
+                                 ignored_keys=['compute_node'])
+
+    def test_service_get_with_compute_node(self):
+        service = self._create_service({})
+        compute_values = dict(vcpus=2, memory_mb=1024, local_gb=2048,
+                              vcpus_used=0, memory_mb_used=0,
+                              local_gb_used=0, free_ram_mb=1024,
+                              free_disk_gb=2048, hypervisor_type="xen",
+                              hypervisor_version=1, cpu_info="",
+                              running_vms=0, current_workload=0,
+                              service_id=service['id'])
+        compute = db.compute_node_create(self.ctxt, compute_values)
+        real_service = db.service_get(self.ctxt, service['id'])
+        real_compute = real_service['compute_node'][0]
+        self.assertEqual(compute['id'], real_compute['id'])
+
+    def test_service_get_not_found_exception(self):
+        self.assertRaises(exception.ServiceNotFound,
+                          db.service_get, self.ctxt, 100500)
+
+    def test_service_get_by_host_and_topic(self):
+        service1 = self._create_service({'host': 'host1', 'topic': 'topic1'})
+        service2 = self._create_service({'host': 'host2', 'topic': 'topic2'})
+
+        real_service1 = db.service_get_by_host_and_topic(self.ctxt,
+                                                         host='host1',
+                                                         topic='topic1')
+        self._assertEqualObjects(service1, real_service1)
+
+    def test_service_get_all(self):
+        values = [
+            {'host': 'host1', 'topic': 'topic1'},
+            {'host': 'host2', 'topic': 'topic2'},
+            {'disabled': True}
+        ]
+        services = [self._create_service(vals) for vals in values]
+        disabled_services = [services[-1]]
+        non_disabled_services = services[:-1]
+
+        compares = [
+            (services, db.service_get_all(self.ctxt)),
+            (disabled_services, db.service_get_all(self.ctxt, True)),
+            (non_disabled_services, db.service_get_all(self.ctxt, False))
+        ]
+        for comp in compares:
+            self._assertEqualListsOfObjects(*comp)
+
+    def test_service_get_all_by_topic(self):
+        values = [
+            {'host': 'host1', 'topic': 't1'},
+            {'host': 'host2', 'topic': 't1'},
+            {'disabled': True, 'topic': 't1'},
+            {'host': 'host3', 'topic': 't2'}
+        ]
+        services = [self._create_service(vals) for vals in values]
+        expected = services[:2]
+        real = db.service_get_all_by_topic(self.ctxt, 't1')
+        self._assertEqualListsOfObjects(expected, real)
+
+    def test_service_get_all_by_host(self):
+        values = [
+            {'host': 'host1', 'topic': 't1'},
+            {'host': 'host1', 'topic': 't1'},
+            {'host': 'host2', 'topic': 't1'},
+            {'host': 'host3', 'topic': 't2'}
+        ]
+        services = [self._create_service(vals) for vals in values]
+
+        expected = services[:2]
+        real = db.service_get_all_by_host(self.ctxt, 'host1')
+        self._assertEqualListsOfObjects(expected, real)
+
+    def test_service_get_by_compute_host(self):
+        values = [
+            {'host': 'host1', 'topic': CONF.compute_topic},
+            {'host': 'host2', 'topic': 't1'},
+            {'host': 'host3', 'topic': CONF.compute_topic}
+        ]
+        services = [self._create_service(vals) for vals in values]
+
+        real_service = db.service_get_by_compute_host(self.ctxt, 'host1')
+        self._assertEqualObjects(services[0], real_service,
+                                 ignored_keys=['compute_node'])
+
+        self.assertRaises(exception.ComputeHostNotFound,
+                          db.service_get_by_compute_host,
+                          self.ctxt, 'non-exists-host')
+
+    def test_service_get_by_compute_host_not_found(self):
+        self.assertRaises(exception.ComputeHostNotFound,
+                          db.service_get_by_compute_host,
+                          self.ctxt, 'non-exists-host')
+
+    def test_service_get_by_args(self):
+        values = [
+            {'host': 'host1', 'binary': 'a'},
+            {'host': 'host2', 'binary': 'b'}
+        ]
+        services = [self._create_service(vals) for vals in values]
+
+        service1 = db.service_get_by_args(self.ctxt, 'host1', 'a')
+        self._assertEqualObjects(services[0], service1)
+
+        service2 = db.service_get_by_args(self.ctxt, 'host2', 'b')
+        self._assertEqualObjects(services[1], service2)
+
+    def test_service_get_by_args_not_found_exception(self):
+        self.assertRaises(exception.HostBinaryNotFound,
+                          db.service_get_by_args,
+                          self.ctxt, 'non-exists-host', 'a')
+
+
 class TestFixedIPGetByNetworkHost(test.TestCase):
     def test_not_found_exception(self):
         ctxt = context.get_admin_context()
@@ -1988,6 +2225,121 @@ class BlockDeviceMappingTestCase(test.TestCase):
         bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
         self.assertEqual(len(bdms), 1)
         self.assertEqual(bdms[0]['device_name'], 'fake2')
+
+
+class VirtualInterfaceTestCase(test.TestCase, ModelsObjectComparatorMixin):
+    def setUp(self):
+        super(VirtualInterfaceTestCase, self).setUp()
+        self.ctxt = context.get_admin_context()
+        self.instance_uuid = db.instance_create(self.ctxt, {})['uuid']
+        values = {'host': 'localhost', 'project_id': 'project1'}
+        self.network = db.network_create_safe(self.ctxt, values)
+
+    def _get_base_values(self):
+        return {
+            'instance_uuid': self.instance_uuid,
+            'address': 'fake_address',
+            'network_id': self.network['id'],
+            'uuid': str(stdlib_uuid.uuid4())
+        }
+
+    def _create_virt_interface(self, values):
+        v = self._get_base_values()
+        v.update(values)
+        return db.virtual_interface_create(self.ctxt, v)
+
+    def test_virtual_interface_create(self):
+        vif = self._create_virt_interface({})
+        self.assertFalse(vif['id'] is None)
+        ignored_keys = ['id', 'deleted', 'deleted_at', 'updated_at',
+                        'created_at', 'uuid']
+        self._assertEqualObjects(vif, self._get_base_values(), ignored_keys)
+
+    @test.testtools.skip("bug 1156227")
+    def test_virtual_interface_create_with_duplicate_address(self):
+        vif = self._create_virt_interface({})
+        # NOTE(boris-42): Due to the bug 1156227 this won't work. In havana-1
+        #                 it will be fixed.
+        self.assertRaises(exception.VirtualInterfaceCreateException,
+                          self._create_virt_interface, {uuid: vif['uuid']})
+
+    def test_virtual_interface_get(self):
+        vifs = [self._create_virt_interface({'address':'a'}),
+                self._create_virt_interface({'address':'b'})]
+
+        for vif in vifs:
+            real_vif = db.virtual_interface_get(self.ctxt, vif['id'])
+            self._assertEqualObjects(vif, real_vif)
+
+    def test_virtual_interface_get_by_address(self):
+        vifs = [self._create_virt_interface({'address': 'first'}),
+                self._create_virt_interface({'address': 'second'})]
+        for vif in vifs:
+            real_vif = db.virtual_interface_get_by_address(self.ctxt,
+                                                           vif['address'])
+            self._assertEqualObjects(vif, real_vif)
+
+    def test_virtual_interface_get_by_uuid(self):
+        vifs = [self._create_virt_interface({}),
+                self._create_virt_interface({})]
+        for vif in vifs:
+            real_vif = db.virtual_interface_get_by_uuid(self.ctxt, vif['uuid'])
+            self._assertEqualObjects(vif, real_vif)
+
+    def test_virtual_interface_get_by_instance(self):
+        inst_uuid2 = db.instance_create(self.ctxt, {})['uuid']
+        vifs1 = [self._create_virt_interface({'address': 'fake1'}),
+                 self._create_virt_interface({'address': 'fake2'})]
+        vifs2 = [self._create_virt_interface({'address': 'fake3',
+                                              'instance_uuid': inst_uuid2})]
+        vifs1_real = db.virtual_interface_get_by_instance(self.ctxt,
+                                                          self.instance_uuid)
+        vifs2_real = db.virtual_interface_get_by_instance(self.ctxt,
+                                                          inst_uuid2)
+        self._assertEqualListsOfObjects(vifs1, vifs1_real)
+        self._assertEqualListsOfObjects(vifs2, vifs2_real)
+
+    def test_virtual_interface_get_by_instance_and_network(self):
+        inst_uuid2 = db.instance_create(self.ctxt, {})['uuid']
+        values = {'host': 'localhost', 'project_id': 'project2'}
+        network_id = db.network_create_safe(self.ctxt, values)['id']
+
+        vifs = [self._create_virt_interface({'address': 'fake1'}),
+                self._create_virt_interface({'address': 'fake2',
+                                             'network_id': network_id,
+                                             'instance_uuid': inst_uuid2}),
+                self._create_virt_interface({'address': 'fake3',
+                                             'instance_uuid': inst_uuid2})]
+        for vif in vifs:
+            params = (self.ctxt, vif['instance_uuid'], vif['network_id'])
+            r_vif = db.virtual_interface_get_by_instance_and_network(*params)
+            self._assertEqualObjects(r_vif, vif)
+
+    def test_virtual_interface_delete_by_instance(self):
+        inst_uuid2 = db.instance_create(self.ctxt, {})['uuid']
+
+        values = [dict(address='fake1'), dict(address='fake2'),
+                  dict(address='fake3', instance_uuid=inst_uuid2)]
+        for vals in values:
+            self._create_virt_interface(vals)
+
+        db.virtual_interface_delete_by_instance(self.ctxt, self.instance_uuid)
+
+        real_vifs1 = db.virtual_interface_get_by_instance(self.ctxt,
+                                                          self.instance_uuid)
+        real_vifs2 = db.virtual_interface_get_by_instance(self.ctxt,
+                                                          inst_uuid2)
+        self.assertEqual(len(real_vifs1), 0)
+        self.assertEqual(len(real_vifs2), 1)
+
+    def test_virtual_interface_get_all(self):
+        inst_uuid2 = db.instance_create(self.ctxt, {})['uuid']
+        values = [dict(address='fake1'), dict(address='fake2'),
+                  dict(address='fake3', instance_uuid=inst_uuid2)]
+
+        vifs = [self._create_virt_interface(val) for val in values]
+        real_vifs = db.virtual_interface_get_all(self.ctxt)
+        self._assertEqualListsOfObjects(vifs, real_vifs)
 
 
 class ArchiveTestCase(test.TestCase):
