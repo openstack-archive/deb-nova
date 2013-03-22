@@ -2,6 +2,8 @@ nova (2012.1.1-16) unstable; urgency=low
 
   * Fixes console auth after security fix (Closes: #703242).
   * Fixes a typo in debian/nova-common.postinst when activating NOVA_ENABLE.
+  * Fixes the DNS in the case of PGSQL: now it really is postgresql:// and not
+    qgsql://.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 18 Mar 2013 13:32:52 +0800
 
