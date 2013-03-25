@@ -8,3 +8,4 @@ skip-tests-broken-in-buildd.patch
 CVE-2013-1664_CVE-2013-1665_Information-leak-and-Denial-of-Service-using-XML-entities.patch
 CVE-2013-0335_VNC-proxy-can-connect-to-the-wrong-VM.patch
 CVE-2013-1838-Nova_DoS_by_allocating_all_Fixed_IPs_folsom.patch
+fix-handle-compute-node-records-with-no-timestamp
