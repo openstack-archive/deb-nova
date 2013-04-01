@@ -11,4 +11,4 @@ CVE-2013-1664_CVE-2013-1665_Information-leak-and-Denial-of-Service-using-XML-ent
 CVE-2013-0335_VNC-proxy-can-connect-to-the-wrong-VM.patch
 CVE-2013-0335_VNC-unit-tests-fixes.patch
 CVE-2013-1838-Nova_DoS_by_allocating_all_Fixed_IPs_essex.patch
-CVE-2013-1838-Nova_DoS_by_allocating_all_Fixed_IPs_essex_consoleauth_fix.patch
+Fixed_broken_vncproxy_flush_tokens.patch
