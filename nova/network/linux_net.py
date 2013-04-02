@@ -1015,13 +1015,14 @@ def restart_dhcp(context, dev, network_ref):
            '--strict-order',
            '--bind-interfaces',
            '--conf-file=%s' % CONF.dnsmasq_config_file,
-           '--domain=%s' % CONF.dhcp_domain,
+           '--domain=\'%s\'' % CONF.dhcp_domain,
            '--pid-file=%s' % _dhcp_file(dev, 'pid'),
            '--listen-address=%s' % network_ref['dhcp_server'],
            '--except-interface=lo',
-           '--dhcp-range=set:%s,%s,static,%ss' %
+           '--dhcp-range=set:%s,%s,static,%s,%ss' %
                          (network_ref['label'],
                           network_ref['dhcp_start'],
+                          network_ref['netmask'],
                           CONF.dhcp_lease_time),
            '--dhcp-lease-max=%s' % len(netaddr.IPNetwork(network_ref['cidr'])),
            '--dhcp-hostsfile=%s' % _dhcp_file(dev, 'conf'),

@@ -2806,7 +2806,7 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(instance_types, 'extract_instance_type')
         self.mox.StubOutWithMock(instance_types, 'delete_instance_type_info')
         self.mox.StubOutWithMock(instance_types, 'save_instance_type_info')
-        if revert and old != new:
+        if revert:
             instance_types.extract_instance_type(instance, 'old_').AndReturn(
                 {'instance_type_id': old})
             instance_types.save_instance_type_info(
@@ -2814,9 +2814,8 @@ class ComputeTestCase(BaseTestCase):
         else:
             instance_types.extract_instance_type(instance).AndReturn(
                 {'instance_type_id': new})
-        if old != new:
-            instance_types.delete_instance_type_info(
-                sys_meta, 'old_').AndReturn(sys_meta)
+        instance_types.delete_instance_type_info(
+            sys_meta, 'old_').AndReturn(sys_meta)
         instance_types.delete_instance_type_info(
             sys_meta, 'new_').AndReturn(sys_meta)
 
@@ -3655,7 +3654,7 @@ class ComputeTestCase(BaseTestCase):
                 fake_migration_get_unconfirmed_by_dest_compute)
         self.stubs.Set(self.compute.conductor_api, 'migration_update',
                 fake_migration_update)
-        self.stubs.Set(self.compute.compute_api, 'confirm_resize',
+        self.stubs.Set(self.compute.conductor_api, 'compute_confirm_resize',
                 fake_confirm_resize)
 
         def fetch_instance_migration_status(instance_uuid):
@@ -3959,6 +3958,37 @@ class ComputeTestCase(BaseTestCase):
                                       task_state=None).AndReturn(fixed)
         self.compute.driver.get_info(fixed).AndReturn(
             {'state': power_state.SHUTDOWN})
+
+        self.mox.ReplayAll()
+
+        self.compute._init_instance(self.context, instance)
+
+    def test_init_instance_update_nw_info_cache(self):
+        cached_nw_info = fake_network_cache_model.new_vif()
+        cached_nw_info = network_model.NetworkInfo([cached_nw_info])
+        old_cached_nw_info = copy.deepcopy(cached_nw_info)
+        # Folsom has no 'type' in network cache info.
+        del old_cached_nw_info[0]['type']
+        fake_info_cache = {'network_info': old_cached_nw_info.json()}
+        instance = {
+            'uuid': 'a-foo-uuid',
+            'vm_state': vm_states.ACTIVE,
+            'task_state': None,
+            'power_state': power_state.RUNNING,
+            'info_cache': fake_info_cache,
+            }
+
+        self.mox.StubOutWithMock(self.compute, '_get_power_state')
+        self.mox.StubOutWithMock(self.compute, '_get_instance_nw_info')
+        self.mox.StubOutWithMock(self.compute.driver, 'plug_vifs')
+
+        self.compute._get_power_state(mox.IgnoreArg(),
+                instance).AndReturn(power_state.RUNNING)
+        # Call network API to get instance network info, and force
+        # an update to instance's info_cache.
+        self.compute._get_instance_nw_info(self.context,
+            instance).AndReturn(cached_nw_info)
+        self.compute.driver.plug_vifs(instance, cached_nw_info.legacy())
 
         self.mox.ReplayAll()
 
@@ -5293,6 +5323,17 @@ class ComputeAPITestCase(BaseTestCase):
         instance = db.instance_get_by_uuid(self.context, instance['uuid'])
         self.compute_api.resize(self.context, instance, '4')
 
+        # Do the prep/finish_resize steps (manager does this)
+        old_type = instance_types.extract_instance_type(instance)
+        new_type = instance_types.get_instance_type_by_flavor_id('4')
+        sys_meta = utils.metadata_to_dict(instance['system_metadata'])
+        sys_meta = instance_types.save_instance_type_info(sys_meta,
+                                                          old_type, 'old_')
+        sys_meta = instance_types.save_instance_type_info(sys_meta,
+                                                          new_type, 'new_')
+        sys_meta = instance_types.save_instance_type_info(sys_meta,
+                                                          new_type)
+
         # create a fake migration record (manager does this)
         db.migration_create(self.context.elevated(),
                 {'instance_uuid': instance['uuid'],
@@ -5300,7 +5341,8 @@ class ComputeAPITestCase(BaseTestCase):
         # set the state that the instance gets when resize finishes
         instance = db.instance_update(self.context, instance['uuid'],
                                       {'task_state': None,
-                                       'vm_state': vm_states.RESIZED})
+                                       'vm_state': vm_states.RESIZED,
+                                       'system_metadata': sys_meta})
 
         self.compute_api.confirm_resize(self.context, instance)
         self.compute.terminate_instance(self.context,
@@ -7939,3 +7981,69 @@ class EvacuateHostTestCase(BaseTestCase):
                            lambda x: True)
             self.assertRaises(exception.InstanceRecreateNotSupported,
                               lambda: self._rebuild(on_shared_storage=True))
+
+
+class ComputeInjectedFilesTestCase(BaseTestCase):
+    # Test that running instances with injected_files decodes files correctly
+
+    def setUp(self):
+        super(ComputeInjectedFilesTestCase, self).setUp()
+        self.instance = self._create_fake_instance()
+        self.stubs.Set(self.compute.driver, 'spawn', self._spawn)
+
+    def _spawn(self, context, instance, image_meta, injected_files,
+            admin_password, nw_info, block_device_info):
+        self.assertEqual(self.expected, injected_files)
+
+    def _test(self, injected_files, decoded_files):
+        self.expected = decoded_files
+        self.compute.run_instance(self.context, self.instance,
+                                  injected_files=injected_files)
+
+    def test_injected_none(self):
+        # test an input of None for injected_files
+        self._test(None, [])
+
+    def test_injected_empty(self):
+        # test an input of [] for injected_files
+        self._test([], [])
+
+    def test_injected_success(self):
+        # test with valid b64 encoded content.
+        injected_files = [
+            ('/a/b/c', base64.b64encode('foobarbaz')),
+            ('/d/e/f', base64.b64encode('seespotrun')),
+        ]
+
+        decoded_files = [
+            ('/a/b/c', 'foobarbaz'),
+            ('/d/e/f', 'seespotrun'),
+        ]
+        self._test(injected_files, decoded_files)
+
+    def test_injected_invalid(self):
+        # test with invalid b64 encoded content
+        injected_files = [
+            ('/a/b/c', base64.b64encode('foobarbaz')),
+            ('/d/e/f', 'seespotrun'),
+        ]
+
+        self.assertRaises(exception.Base64Exception, self.compute.run_instance,
+                self.context, self.instance, injected_files=injected_files)
+
+    def test_reschedule(self):
+        # test that rescheduling is done with original encoded files
+        expected = [
+            ('/a/b/c', base64.b64encode('foobarbaz')),
+            ('/d/e/f', base64.b64encode('seespotrun')),
+        ]
+
+        def _ror(context, instance, exc_info, requested_networks,
+                 admin_password, injected_files, is_first_time, request_spec,
+                 filter_properties, bdms=None):
+            self.assertEqual(expected, injected_files)
+
+        self.stubs.Set(self.compute, '_reschedule_or_reraise', _ror)
+
+        self.compute.run_instance(self.context, self.instance,
+                                  injected_files=expected)

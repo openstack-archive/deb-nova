@@ -161,6 +161,12 @@ class NovaException(Exception):
 
         super(NovaException, self).__init__(message)
 
+    def format_message(self):
+        if self.__class__.__name__.endswith('_Remote'):
+            return self.args[0]
+        else:
+            return unicode(self)
+
 
 class EC2APIError(NovaException):
     message = _("Unknown")
@@ -1194,3 +1200,7 @@ class UnsupportedVirtType(Invalid):
 class UnsupportedHardware(Invalid):
     message = _("Requested hardware '%(model)s' is not supported by "
                 "the '%(virt)s' virt driver")
+
+
+class Base64Exception(NovaException):
+    message = _("Invalid Base 64 data for file %(path)s")

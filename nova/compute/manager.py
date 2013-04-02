@@ -329,7 +329,6 @@ class ComputeManager(manager.SchedulerDependentManager):
     def __init__(self, compute_driver=None, *args, **kwargs):
         """Load configuration options and connect to the hypervisor."""
         self.virtapi = ComputeVirtAPI(self)
-        self.driver = driver.load_compute_driver(self.virtapi, compute_driver)
         self.network_api = network.API()
         self.volume_api = volume.API()
         self._last_host_check = 0
@@ -343,11 +342,15 @@ class ComputeManager(manager.SchedulerDependentManager):
             openstack_driver.is_quantum_security_groups())
         self.consoleauth_rpcapi = consoleauth.rpcapi.ConsoleAuthAPI()
         self.cells_rpcapi = cells_rpcapi.CellsAPI()
+        self._resource_tracker_dict = {}
 
         super(ComputeManager, self).__init__(service_name="compute",
                                              *args, **kwargs)
 
-        self._resource_tracker_dict = {}
+        # NOTE(russellb) Load the driver last.  It may call back into the
+        # compute manager via the virtapi, so we want it to be fully
+        # initialized before that happens.
+        self.driver = driver.load_compute_driver(self.virtapi, compute_driver)
 
     def _get_resource_tracker(self, nodename):
         rt = self._resource_tracker_dict.get(nodename)
@@ -460,6 +463,14 @@ class ComputeManager(manager.SchedulerDependentManager):
         # We're calling plug_vifs to ensure bridge and iptables
         # rules exist. This needs to be called for each instance.
         legacy_net_info = self._legacy_nw_info(net_info)
+
+        # Keep compatibility with folsom, update networkinfo and
+        # add vif type to instance_info_cache.
+        if legacy_net_info and legacy_net_info[0][1].get('vif_type') is None:
+            # Call to network API to get instance info, this will
+            # force an update to the instance's info_cache
+            net_info = self._get_instance_nw_info(context, instance)
+            legacy_net_info = self._legacy_nw_info(net_info)
         self.driver.plug_vifs(instance, legacy_net_info)
 
         if instance['task_state'] == task_states.RESIZE_MIGRATING:
@@ -733,6 +744,21 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         return block_device_info
 
+    def _decode_files(self, injected_files):
+        """Base64 decode the list of files to inject."""
+        if not injected_files:
+            return []
+
+        def _decode(f):
+            path, contents = f
+            try:
+                decoded = base64.b64decode(contents)
+                return path, decoded
+            except TypeError:
+                raise exception.Base64Exception(path=path)
+
+        return [_decode(f) for f in injected_files]
+
     def _run_instance(self, context, request_spec,
                       filter_properties, requested_networks, injected_files,
                       admin_password, is_first_time, node, instance):
@@ -776,6 +802,10 @@ class ComputeManager(manager.SchedulerDependentManager):
             network_info = None
             bdms = self.conductor_api.block_device_mapping_get_all_by_instance(
                 context, instance)
+
+            # b64 decode the files to inject:
+            injected_files_orig = injected_files
+            injected_files = self._decode_files(injected_files)
 
             rt = self._get_resource_tracker(node)
             try:
@@ -822,8 +852,9 @@ class ComputeManager(manager.SchedulerDependentManager):
                 exc_info = sys.exc_info()
                 # try to re-schedule instance:
                 self._reschedule_or_reraise(context, instance, exc_info,
-                        requested_networks, admin_password, injected_files,
-                        is_first_time, request_spec, filter_properties, bdms)
+                        requested_networks, admin_password,
+                        injected_files_orig, is_first_time, request_spec,
+                        filter_properties, bdms)
             else:
                 # Spawn success:
                 self._notify_about_instance_usage(context, instance,
@@ -1056,6 +1087,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                               injected_files, admin_password,
                               self._legacy_nw_info(network_info),
                               block_device_info)
+
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.exception(_('Instance failed to spawn'), instance=instance)
@@ -1169,11 +1201,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         if filter_properties is None:
             filter_properties = {}
-        if injected_files is None:
-            injected_files = []
-        else:
-            injected_files = [(path, base64.b64decode(contents))
-                              for path, contents in injected_files]
 
         @lockutils.synchronized(instance['uuid'], 'nova-')
         def do_run_instance():
@@ -1978,11 +2005,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         Returns the updated system_metadata as a dict, as well as the
         post-cleanup current instance type.
         """
-        same_type = (migration['old_instance_type_id'] ==
-                     migration['new_instance_type_id'])
-
         sys_meta = utils.metadata_to_dict(instance['system_metadata'])
-        if restore_old and not same_type:
+        if restore_old:
             instance_type = instance_types.extract_instance_type(instance,
                                                                  'old_')
             sys_meta = instance_types.save_instance_type_info(sys_meta,
@@ -1990,10 +2014,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         else:
             instance_type = instance_types.extract_instance_type(instance)
 
-        if not same_type:
-            instance_types.delete_instance_type_info(sys_meta, 'old_')
-
-        # NOTE(danms): new instance type is always stored in prep_resize
+        instance_types.delete_instance_type_info(sys_meta, 'old_')
         instance_types.delete_instance_type_info(sys_meta, 'new_')
 
         return sys_meta, instance_type
@@ -2369,14 +2390,14 @@ class ComputeManager(manager.SchedulerDependentManager):
         resize_instance = False
         old_instance_type_id = migration['old_instance_type_id']
         new_instance_type_id = migration['new_instance_type_id']
+        old_instance_type = instance_types.extract_instance_type(instance)
+        sys_meta = utils.metadata_to_dict(instance['system_metadata'])
+        instance_types.save_instance_type_info(sys_meta,
+                                               old_instance_type,
+                                               prefix='old_')
         if old_instance_type_id != new_instance_type_id:
             instance_type = instance_types.extract_instance_type(instance,
                                                                  prefix='new_')
-            old_instance_type = instance_types.extract_instance_type(instance)
-            sys_meta = utils.metadata_to_dict(instance['system_metadata'])
-            instance_types.save_instance_type_info(sys_meta,
-                                                    old_instance_type,
-                                                    prefix='old_')
             instance_types.save_instance_type_info(sys_meta, instance_type)
 
             instance = self._instance_update(
@@ -2387,7 +2408,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                     vcpus=instance_type['vcpus'],
                     root_gb=instance_type['root_gb'],
                     ephemeral_gb=instance_type['ephemeral_gb'],
-                    system_metadata=sys_meta)
+                    system_metadata=dict(sys_meta))
 
             resize_instance = True
 
@@ -2403,7 +2424,8 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         instance = self._instance_update(context, instance['uuid'],
                               task_state=task_states.RESIZE_FINISH,
-                              expected_task_state=task_states.RESIZE_MIGRATED)
+                              expected_task_state=task_states.RESIZE_MIGRATED,
+                              system_metadata=sys_meta)
 
         self._notify_about_instance_usage(
             context, instance, "finish_resize.start",
@@ -3432,8 +3454,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                                             instance=instance)
                     continue
                 try:
-                    self.compute_api.confirm_resize(context, instance,
-                                                    migration_ref=migration)
+                    self.conductor_api.compute_confirm_resize(
+                        context, instance, migration_ref=migration)
                 except Exception, e:
                     msg = _("Error auto-confirming resize: %(e)s. "
                             "Will retry later.")

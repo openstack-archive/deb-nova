@@ -40,6 +40,7 @@ from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
+from nova import context
 from nova import crypto
 from nova.db import base
 from nova import exception
@@ -1074,8 +1075,7 @@ class API(base.Base):
                     # 2. down-resize: here -instance['vcpus'/'memory_mb'] are
                     #    shy by delta(old, new) from the quota usages accounted
                     #    for this instance, so we must adjust
-                    deltas = self._downsize_quota_delta(context,
-                                                        migration_ref)
+                    deltas = self._downsize_quota_delta(context, instance)
                     downsize_reservations = self._reserve_quota_delta(context,
                                                                       deltas)
 
@@ -1857,7 +1857,7 @@ class API(base.Base):
                 elevated, instance['uuid'], 'finished')
 
         # reserve quota only for any decrease in resource usage
-        deltas = self._downsize_quota_delta(context, migration_ref)
+        deltas = self._downsize_quota_delta(context, instance)
         reservations = self._reserve_quota_delta(context, deltas)
 
         instance = self.update(context, instance, vm_state=vm_states.ACTIVE,
@@ -1932,15 +1932,14 @@ class API(base.Base):
                                        old_instance_type, -1, -1)
 
     @staticmethod
-    def _downsize_quota_delta(context, migration_ref):
+    def _downsize_quota_delta(context, instance):
         """
         Calculate deltas required to adjust quota for an instance downsize.
         """
-        old_instance_type = instance_types.get_instance_type(
-            migration_ref['old_instance_type_id'])
-        new_instance_type = instance_types.get_instance_type(
-            migration_ref['new_instance_type_id'])
-
+        old_instance_type = instance_types.extract_instance_type(instance,
+                                                                 'old_')
+        new_instance_type = instance_types.extract_instance_type(instance,
+                                                                 'new_')
         return API._resize_quota_delta(context, new_instance_type,
                                        old_instance_type, 1, -1)
 
@@ -2895,7 +2894,7 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
                 return self.db.security_group_get(context, id)
         except exception.NotFound as exp:
             if map_exception:
-                msg = unicode(exp)
+                msg = exp.format_message()
                 self.raise_not_found(msg)
             else:
                 raise
@@ -3179,7 +3178,11 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
                 self.security_group_rpcapi.refresh_instance_security_rules(
                         context, instance['host'], instance)
 
-    def get_instance_security_groups(self, req, instance_id):
+    def get_instance_security_groups(self, req, instance_id,
+                                     instance_uuid=None, detailed=False):
+        if detailed:
+            return self.db.security_group_get_by_instance(
+                context.get_admin_context(), instance_id)
         instance = req.get_db_instance(instance_id)
         groups = instance.get('security_groups')
         if groups:

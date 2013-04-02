@@ -16,6 +16,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
 import re
 
 from nova import availability_zones
@@ -24,10 +25,34 @@ from nova import db
 from nova import exception
 from nova.network import model as network_model
 from nova.openstack.common import log as logging
+from nova.openstack.common import memorycache
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 
 LOG = logging.getLogger(__name__)
+# NOTE(vish): cache mapping for one week
+_CACHE_TIME = 7 * 24 * 60 * 60
+_CACHE = None
+
+
+def memoize(func):
+    @functools.wraps(func)
+    def memoizer(context, reqid):
+        global _CACHE
+        if not _CACHE:
+            _CACHE = memorycache.get_client()
+        key = "%s:%s" % (func.__name__, reqid)
+        value = _CACHE.get(key)
+        if value is None:
+            value = func(context, reqid)
+            _CACHE.set(key, value, time=_CACHE_TIME)
+        return value
+    return memoizer
+
+
+def reset_cache():
+    global _CACHE
+    _CACHE = None
 
 
 def image_type(image_type):
@@ -47,11 +72,13 @@ def image_type(image_type):
     return image_type
 
 
+@memoize
 def id_to_glance_id(context, image_id):
     """Convert an internal (db) id to a glance id."""
     return db.s3_image_get(context, image_id)['uuid']
 
 
+@memoize
 def glance_id_to_id(context, glance_id):
     """Convert a glance id to an internal (db) id."""
     if glance_id is None:
@@ -115,11 +142,9 @@ def get_ip_info_for_instance(context, instance):
     return get_ip_info_for_instance_from_nw_info(nw_info)
 
 
-def get_availability_zone_by_host(services, host, conductor_api=None):
-    if len(services) > 0:
-        return availability_zones.get_host_availability_zone(
-            context.get_admin_context(), host, conductor_api)
-    return 'unknown zone'
+def get_availability_zone_by_host(host, conductor_api=None):
+    return availability_zones.get_host_availability_zone(
+        context.get_admin_context(), host, conductor_api)
 
 
 def id_to_ec2_id(instance_id, template='i-%08x'):
@@ -145,6 +170,7 @@ def ec2_inst_id_to_uuid(context, ec2_id):
     return get_instance_uuid_from_int_id(context, int_id)
 
 
+@memoize
 def get_instance_uuid_from_int_id(context, int_id):
     return db.get_instance_uuid_by_ec2_id(context, int_id)
 
@@ -211,6 +237,7 @@ def is_ec2_timestamp_expired(request, expires=None):
         return True
 
 
+@memoize
 def get_int_id_from_instance_uuid(context, instance_uuid):
     if instance_uuid is None:
         return
@@ -220,6 +247,7 @@ def get_int_id_from_instance_uuid(context, instance_uuid):
         return db.ec2_instance_create(context, instance_uuid)['id']
 
 
+@memoize
 def get_int_id_from_volume_uuid(context, volume_uuid):
     if volume_uuid is None:
         return
@@ -229,6 +257,7 @@ def get_int_id_from_volume_uuid(context, volume_uuid):
         return db.ec2_volume_create(context, volume_uuid)['id']
 
 
+@memoize
 def get_volume_uuid_from_int_id(context, int_id):
     return db.get_volume_uuid_by_ec2_id(context, int_id)
 
@@ -242,6 +271,7 @@ def ec2_snap_id_to_uuid(ec2_id):
     return get_snapshot_uuid_from_int_id(ctxt, int_id)
 
 
+@memoize
 def get_int_id_from_snapshot_uuid(context, snapshot_uuid):
     if snapshot_uuid is None:
         return
@@ -251,6 +281,7 @@ def get_int_id_from_snapshot_uuid(context, snapshot_uuid):
         return db.ec2_snapshot_create(context, snapshot_uuid)['id']
 
 
+@memoize
 def get_snapshot_uuid_from_int_id(context, int_id):
     return db.get_snapshot_uuid_by_ec2_id(context, int_id)
 
