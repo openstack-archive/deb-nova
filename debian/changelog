@@ -1,3 +1,9 @@
+nova (2012.1.1-17) unstable; urgency=low
+
+  * Fixes wrong default file in postinst (Closes: #704544).
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 06 Apr 2013 03:11:21 +0800
+
 nova (2012.1.1-16) unstable; urgency=low
 
   * Fixes console auth after security fix (Closes: #703242).
