@@ -15,7 +15,7 @@
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Spice HTML5 Proxy"
 NAME=nova-spicehtml5proxy
-DAEMON=/usr/bin/nova-console
+DAEMON=/usr/bin/nova-spicehtml5proxy
 DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
