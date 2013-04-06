@@ -639,6 +639,7 @@ Package: nova-spicehtml5proxy
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
+ spice-html5,
  ${misc:Depends},
  ${ostack-lsb-base},
  ${python:Depends}
