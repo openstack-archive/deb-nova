@@ -378,7 +378,7 @@ Description: OpenStack Compute - certificate manager
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
  This package provides the certificate manager. This enables the generation
- and revocation of X.509 certificates used to access the plaform.
+ and revocation of X.509 certificates used to access the platform.
 
 Package: nova-scheduler
 Architecture: all
