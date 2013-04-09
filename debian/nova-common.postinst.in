@@ -77,6 +77,10 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	manage_nova_my_ip_field
 	manage_keystone_auth_fields
 
+	# Needed, because in some cases, it's owned by root:root,
+	# which makes the nova-manage db sync fail.
+	touch /var/log/nova/nova-manage.log
+	chown nova:nova /var/log/nova/nova-manage.log
 
 	db_get nova/configure_db
 	if [ "$RET" = "true" ]; then
