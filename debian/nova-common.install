@@ -1,6 +1,6 @@
 usr/bin/nova-manage
 usr/bin/nova-rootwrap
 debian/nova_sudoers	/etc/sudoers.d
-debian/nova.conf.dist	/usr/share/doc/nova-common
+debian/nova.conf.dist	/usr/share/nova-common
 etc/nova/policy.json	/etc/nova
 etc/nova/api-paste.ini
