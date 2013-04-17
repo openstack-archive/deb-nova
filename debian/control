@@ -59,7 +59,7 @@ Build-Depends-Indep:
  python-simplejson,
  python-stevedore (>= 0.7.2),
  python-sphinx (>> 1.0),
- python-sqlalchemy-ext (>= 0.7.8),
+ python-sqlalchemy-ext ( >= 0.7.8-1~) | python-sqlalchemy (<< 0.6.3-2),
  python-subunit,
  python-suds (>= 0.4.0),
  python-tempita,
