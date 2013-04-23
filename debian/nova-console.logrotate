@@ -1,4 +1,4 @@
-/var/log/nova/nova-console.log {
+/var/log/nova/nova-console.log /var/log/nova/nova-consoleauth.log {
     daily
     copytruncate
     missingok
