@@ -3,7 +3,11 @@
 set -e
 
 if [ "$1" = "configure" ]; then
-    adduser --quiet nova libvirt
+	if dpkg-vendor --derives-from ubuntu ; then
+		adduser --quiet nova libvirtd
+	else
+		adduser --quiet nova libvirt
+	fi
 fi
 
 #DEBHELPER#
