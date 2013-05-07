@@ -199,7 +199,7 @@ Description: OpenStack Compute - compute node
 Package: nova-compute-lxc
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, libvirt-bin, ${misc:Depends}, adduser, nova-common
+Depends: python-libvirt, dpkg-dev, libvirt-bin, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-kvm, nova-compute-qemu, nova-compute-uml, nova-compute-xen
 Description: OpenStack Compute - compute node (LXC)
@@ -219,7 +219,7 @@ Description: OpenStack Compute - compute node (LXC)
 Package: nova-compute-uml
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, libvirt-bin, user-mode-linux, ${misc:Depends}, adduser, nova-common
+Depends: python-libvirt, dpkg-dev, libvirt-bin, user-mode-linux, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-xen, nova-compute-qemu, nova-compute-kvm
 Description: OpenStack Compute - compute node (UserModeLinux)
@@ -260,7 +260,7 @@ Description: OpenStack Compute - compute node (Xen)
 Package: nova-compute-qemu
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, libvirt-bin, qemu, ${misc:Depends}, adduser, nova-common
+Depends: python-libvirt, dpkg-dev, libvirt-bin, qemu, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-kvm
 Description: OpenStack Compute - compute node (QEmu)
@@ -280,7 +280,7 @@ Description: OpenStack Compute - compute node (QEmu)
 Package: nova-compute-kvm
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser, nova-common
+Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser, nova-common, dpkg-dev
 Recommends: guestmount
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-qemu
