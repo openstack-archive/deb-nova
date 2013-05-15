@@ -299,7 +299,6 @@ Description: OpenStack Compute - compute node (KVM)
  .
  This is a dependency package for compute nodes using KVM.
 
-
 Package: nova-xcp-plugins
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
@@ -319,27 +318,6 @@ Description: OpenStack Compute plugin for the Xen Cloud Platform
  This package is to be installed on the server where you have installed your
  master Xen API server (see the xcp-xapi package), so that nova-compute can
  remotely control your XCP nodes and start VM instances.
-
-Package: nova-xcp-network
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: xcp-xapi, ${ostack-lsb-base}, ${python:Depends}, ${misc:Depends}, nova-xcp-plugins (= ${binary:Version}),
- openvswitch-switch, ebtables, arptables, iproute
-Description: OpenStack Compute network plugin for the Xen Cloud Platform
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package is to be installed on the server where you have installed your
- master Xen API server (see the xcp-xapi package), so that nova can remotely
- configure the network of your XCP servers.
 
 Package: nova-conductor
 Architecture: all

@@ -5,3 +5,9 @@ plugins/xenserver/xenapi/etc/xapi.d/plugins/pluginlib_nova.py	/usr/lib/xcp/plugi
 plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost		/usr/lib/xcp/plugins
 plugins/xenserver/xenapi/etc/xapi.d/plugins/xenstore.py		/usr/lib/xcp/plugins
 
+plugins/xenserver/networking/etc/sysconfig/openvswitch-nova			/etc/default
+debian/xen-openvswitch-nova.rules						/lib/udev/rules.d
+plugins/xenserver/networking/etc/xensource/scripts/novalib.py			/usr/lib/xcp/plugins
+plugins/xenserver/networking/etc/xensource/scripts/ovs_configure_base_flows.py	/usr/lib/xcp/plugins
+plugins/xenserver/networking/etc/xensource/scripts/ovs_configure_vif_flows.py	/usr/lib/xcp/plugins
+plugins/xenserver/networking/etc/xensource/scripts/vif_rules.py			/usr/lib/xcp/plugins
