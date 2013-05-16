@@ -3,4 +3,3 @@ install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
 fix-libvirt-unit-tests_Enable-tox-use-of-site-packages-for-libvirt.patch
-CVE-2013-2030-Nova-uses-insecure-keystone-middleware-tmpdir-by-default.patch
