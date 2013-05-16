@@ -3715,22 +3715,6 @@ class LibvirtConnTestCase(test.TestCase):
         conn.set_cache_mode(fake_conf)
         self.assertEqual(fake_conf.driver_cache, 'fake')
 
-    def test_available_least_handles_missing(self):
-        """Ensure destroy calls managedSaveRemove for saved instance"""
-        conn = connection.LibvirtConnection(False)
-
-        def list_instances():
-            return ['fake']
-        self.stubs.Set(conn, 'list_instances', list_instances)
-
-        def get_info(instance_name):
-            raise exception.InstanceNotFound()
-        self.stubs.Set(conn, 'get_instance_disk_info', get_info)
-
-        result = conn.get_disk_available_least()
-        space = fake_libvirt_utils.get_fs_info(FLAGS.instances_path)['free']
-        self.assertEqual(result, space / 1024 ** 3)
-
 
 class HostStateTestCase(test.TestCase):
 

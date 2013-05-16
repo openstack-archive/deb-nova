@@ -1365,7 +1365,7 @@ msgstr "失去与模型服务器的连接"
 msgid "serve() can only be called once"
 msgstr ""
 
-#: nova/utils.py:164
+#: nova/utils.py:160
 #, python-format
 msgid "Got unknown keyword args to utils.execute: %r"
 msgstr "发现未知的 utils.execute 关键字参数：%r"
@@ -1601,11 +1601,6 @@ msgstr "引起意外的错误：%s"
 
 #: nova/api/ec2/__init__.py:540
 #, python-format
-msgid "Unexpected error raised: %s"
-msgstr "引起意外的错误：%s"
-
-#: nova/api/ec2/__init__.py:647
-#, python-format
 msgid "Environment: %s"
 msgstr "Environment: %s"
 
@@ -1618,7 +1613,7 @@ msgstr "发生了一个未知的错误. 请重试你的请求."
 msgid "Unsupported API request: controller = %(controller)s, action = %(action)s"
 msgstr "不支持的API请求：controller = %(controller)s，action = %(action)s"
 
-#: nova/api/ec2/cloud.py:336
+#: nova/api/ec2/cloud.py:337
 #, python-format
 msgid "Create snapshot of volume %s"
 msgstr "创建卷 %s 的快照"

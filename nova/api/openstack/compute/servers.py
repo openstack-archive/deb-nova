@@ -593,10 +593,6 @@ class Controller(wsgi.Controller):
             msg = _("Device name cannot include spaces.")
             raise exc.HTTPBadRequest(explanation=msg)
 
-        if not len(value) < 256:
-            msg = _("Server name must be less than 256 characters.")
-            raise exc.HTTPBadRequest(explanation=msg)
-
     def _get_injected_files(self, personality):
         """Create a list of injected files from the personality attribute.
 

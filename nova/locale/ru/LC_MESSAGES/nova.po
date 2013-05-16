@@ -1200,8 +1200,6 @@ msgstr "Получение образа %(image)s"
 #, python-format
 msgid "Task %(task_name)s is already running on host %(host)s"
 msgstr ""
-"Пропуск %(full_task_name)s, %(ticks_to_skip)s раз осталось, для "
-"произведения следующего запуска"
 
 #: nova/exception.py:1114
 #, python-format
@@ -1623,15 +1621,10 @@ msgstr ""
 
 #: nova/api/ec2/__init__.py:539
 #, python-format
-msgid "Invalid id: bogus (expecting \"i-...\"): %s"
-msgstr ""
-
-#: nova/api/ec2/__init__.py:540
-#, python-format
 msgid "Unexpected error raised: %s"
 msgstr ""
 
-#: nova/api/ec2/__init__.py:647
+#: nova/api/ec2/__init__.py:540
 #, python-format
 msgid "Environment: %s"
 msgstr ""
@@ -1649,7 +1642,7 @@ msgstr ""
 "Неподдерживаемый запрос API: контроллер = %(controller)s, действие = "
 "%(action)s"
 
-#: nova/api/ec2/cloud.py:336
+#: nova/api/ec2/cloud.py:337
 #, python-format
 msgid "Create snapshot of volume %s"
 msgstr "Создать снимок тома %s"
@@ -3104,8 +3097,6 @@ msgstr ""
 #: nova/compute/api.py:1865
 msgid "Unlocking"
 msgstr ""
-"Попытка удаление последнего участника группы. Будет выполнено удаление "
-"группы в %s."
 
 #: nova/compute/api.py:1933
 msgid "Volume must be attached in order to detach."
@@ -3319,8 +3310,6 @@ msgstr ""
 #: nova/compute/manager.py:710
 msgid "Starting instance..."
 msgstr ""
-"Превышена квота копий. Вы не можете запустить дополнительные копии этого "
-"типа."
 
 #: nova/compute/manager.py:731
 msgid "Instance failed network setup"
@@ -3457,8 +3446,6 @@ msgid ""
 "trying to inject a file into a non-running (state: "
 "%(current_power_state)s expected: %(expected_state)s)"
 msgstr ""
-"Устаревший тип копии %(current_instance_type_name)s,  новый тип копии "
-"%(new_instance_type_name)s"
 
 #: nova/compute/manager.py:1376
 #, python-format
@@ -3522,8 +3509,6 @@ msgstr "установка сетевого узла"
 #, python-format
 msgid "network_info to inject: |%s|"
 msgstr ""
-"check_instance_lock: аргументы: |%(self)s| |%(context)s| "
-"|%(instance_uuid)s|"
 
 #: nova/compute/manager.py:1987
 #, fuzzy
@@ -3664,8 +3649,6 @@ msgstr ""
 #, python-format
 msgid "Error auto-confirming resize: %(e)s. Will retry later."
 msgstr ""
-"image_id=%(image_id)s, image_size_bytes=%(size_bytes)d, "
-"allowed_size_bytes=%(allowed_size_bytes)d"
 
 #: nova/compute/manager.py:2631
 #, python-format
@@ -3673,8 +3656,6 @@ msgid ""
 "Running instance usage audit for host %(host)s from %(begin_time)s to "
 "%(end_time)s. %(number_instances)s instances."
 msgstr ""
-"Образ '%(image_id)s' размером %(size_bytes)d, превышает exceeded "
-"instance_type допустимый размер %(allowed_size_bytes)d"
 
 #: nova/compute/manager.py:2649
 #, python-format
@@ -3779,8 +3760,6 @@ msgid ""
 "Total memory: %(total_mem)d MB, used: %(used_mem)d MB, free: %(free_mem)d"
 " MB"
 msgstr ""
-"попытка перезагрузки не выполняемой копии: %(instance_uuid)s (состояние: "
-"%(state)s ожидалось: %(running)s)"
 
 #: nova/compute/resource_tracker.py:219
 msgid "Memory limit not specified, defaulting to unlimited"
@@ -3797,8 +3776,6 @@ msgid ""
 "Unable to claim resources.  Free memory %(free_ram_mb)d MB < requested "
 "memory %(memory_mb)d MB"
 msgstr ""
-"попытка создания снимка не выполняемой копии: %(instance_uuid)s "
-"(состояние: %(state)s ожидалось: %(running)s)"
 
 #: nova/compute/resource_tracker.py:241
 #, python-format
@@ -4010,8 +3987,6 @@ msgstr ""
 #, python-format
 msgid "No backend config with sr uuid %(sr_uuid)s"
 msgstr ""
-"Создание временного файла %s для оповещения других узлов сети compute о "
-"необходимости присоединения того же хранилища."
 
 #: nova/db/sqlalchemy/api.py:4783
 msgid "Flavor exists"
@@ -4103,22 +4078,6 @@ msgstr ""
 
 #: nova/db/sqlalchemy/migrate_repo/versions/097_quota_usages_reservations.py:105
 msgid "reservations table not dropped"
-msgstr ""
-"Найдено %(num_db_instances)s в базе данных и %(num_vm_instances)s в "
-"гипервизоре."
-
-#: nova/compute/manager.py:2331
-#, python-format
-msgid ""
-"During the sync_power process the instance %(uuid)s has moved from host "
-"%(src)s to host %(dst)s"
-msgstr ""
-
-#: nova/compute/manager.py:2344
-#, python-format
-msgid ""
-"Instance %s is in the process of migrating to this host. Wait next "
-"sync_power cycle before setting power state to NOSTATE"
 msgstr ""
 
 #: nova/db/sqlalchemy/migrate_repo/versions/106_add_foreign_keys.py:45
@@ -4727,8 +4686,6 @@ msgstr ""
 #, python-format
 msgid "Specified RPC version, %(version)s, not supported by this endpoint."
 msgstr ""
-"запрошенная cidr (%(cidr)s) конфликтует с существующей супер-сетью "
-"(%(super)s)"
 
 #: nova/openstack/common/rpc/common.py:206
 #, python-format
@@ -4874,8 +4831,6 @@ msgstr "Отсутствуют зарегистрированные ВМ"
 #: nova/openstack/common/rpc/impl_zmq.py:371
 msgid "Out reactor registered"
 msgstr ""
-"Подключение интерфейса %(interface_id)s к сети %(net_id)s для "
-"%(tenant_id)s"
 
 #: nova/openstack/common/rpc/impl_zmq.py:375
 msgid "Consuming socket"
@@ -4972,8 +4927,6 @@ msgid ""
 "Matchmaker could not be loaded.\n"
 "rpc_zmq_matchmaker is not a class."
 msgstr ""
-"Удалённая ошибка: %(exc_type)s %(value)s\n"
-"%(traceback)s."
 
 #: nova/openstack/common/rpc/impl_zmq.py:711
 msgid "Error loading Matchmaker."
@@ -4982,16 +4935,12 @@ msgstr ""
 #: nova/openstack/common/rpc/matchmaker.py:45
 msgid "Match not found by MatchMaker."
 msgstr ""
-"Сервер AMQP на %(fl_host)s:%(fl_port)d недоступен: %(e)s. Очередная "
-"попытка через %(fl_intv)d секунд."
 
 #: nova/openstack/common/rpc/matchmaker.py:177
 #: nova/openstack/common/rpc/matchmaker.py:195
 #, python-format
 msgid "No key defining hosts for topic '%s', see ringfile"
 msgstr ""
-"Невозможно подключиться к серверу AMQP после выполнения %(tries)d "
-"попыток. Завершение работы."
 
 #: nova/scheduler/chance.py:49 nova/scheduler/simple.py:96
 msgid "Is the appropriate service running?"
@@ -5064,14 +5013,10 @@ msgid ""
 "Exceeded max scheduling attempts %(max_attempts)d for instance "
 "%(instance_uuid)s"
 msgstr ""
-"Невозможно подключиться к серверу AMQP на %(hostname)s:%(port)d после "
-"%(max_retries)d попыток: %(err_str)s"
 
 #: nova/scheduler/filter_scheduler.py:224
 msgid "Scheduler only understands Compute nodes (for now)"
 msgstr ""
-"AMQP сервер на %(hostname)s:%(port)d недоступен: %(err_str)s. Повторная "
-"попытка через %(sleep_time)d секунд."
 
 #: nova/scheduler/filter_scheduler.py:276
 #, python-format
@@ -6069,8 +6014,6 @@ msgstr "Невозможно найти том %s"
 #, python-format
 msgid "Calling live migration recover_method for instance: %s"
 msgstr ""
-"Найдены %(migration_count)d неподтверждённых перемещений, старше "
-"%(confirm_window)d секунд"
 
 #: nova/virt/hyperv/livemigrationops.py:133
 #, python-format
@@ -6142,8 +6085,6 @@ msgid ""
 "Failed to merge base disk %(dest_base_disk_path)s and diff disk "
 "%(dest_vhd_path)s"
 msgstr ""
-"Ошибка libvirt во время поиска %(instance_name)s: [Код ошибки "
-"%(error_code)s] %(ex)s"
 
 #: nova/virt/hyperv/snapshotops.py:164
 #, python-format
@@ -6490,8 +6431,6 @@ msgstr ""
 #, python-format
 msgid "device.ScsiTargetId): %s"
 msgstr ""
-"Том ISCSI не найден в: %(mount_device)s. Будет выполнена повторная "
-"проверка и попытка.  Повторение: %(tries)s"
 
 #: nova/virt/hyperv/volumeops.py:229
 #, python-format
@@ -6962,8 +6901,6 @@ msgid ""
 "%(id)s (%(base_file)s): in use: on this node %(local)d local, %(remote)d "
 "on other nodes"
 msgstr ""
-"xenapi.fake не имеет реализации для %s или был вызван с использованием "
-"неправильным числом аргументов"
 
 #: nova/virt/libvirt/imagecache.py:327
 #, python-format
@@ -7190,8 +7127,6 @@ msgstr ""
 #: nova/virt/powervm/operator.py:184
 msgid "Insufficient available CPU on PowerVM"
 msgstr ""
-"xapi 'download_vhd' возвратил VDI типа '%(vdi_type)s' с UUID "
-"'%(vdi_uuid)s'"
 
 #: nova/virt/powervm/operator.py:208
 #, fuzzy, python-format
@@ -7242,8 +7177,6 @@ msgstr ""
 #, python-format
 msgid "During destroy, LPAR instance '%s' was not found on PowerVM system."
 msgstr ""
-"Размер образа %(size_bytes)d превышает допустимый instance_type  размер "
-"%(allowed_size_bytes)d"
 
 #: nova/virt/powervm/operator.py:284
 #, fuzzy, python-format
@@ -9147,8 +9080,6 @@ msgstr "снимок %s: удаление выполнено"
 #, python-format
 msgid "Downloaded image %(image_id)s to %(volume_id)s successfully"
 msgstr ""
-"НЕ РЕАЛИЗОВАНО: Вызов %(method)s не поддерживается агентом. VM "
-"id=%(instance_uuid)s; args=%(args)r"
 
 #: nova/volume/manager.py:342
 #, fuzzy, python-format
@@ -9597,8 +9528,6 @@ msgid ""
 "Illegal value specified for storwize_svc_vol_warning: set to either a "
 "number or a percentage"
 msgstr ""
-"Невозможно подтвердить идентификатора экспортированного "
-"тома:%(volume_id)s."
 
 #: nova/volume/storwize_svc.py:354
 msgid ""
@@ -9932,8 +9861,6 @@ msgstr ""
 #, python-format
 msgid "enter: _delete_host: host %s "
 msgstr ""
-"Неправильный ответ на команду CLIQ %(verb)s %(cliq_args)s. "
-"Результат=%(out)s"
 
 #: nova/volume/storwize_svc.py:1017
 #, python-format
@@ -9944,8 +9871,6 @@ msgstr ""
 #, python-format
 msgid "leave: _delete_host: host %s "
 msgstr ""
-"Непредвиденное количество виртуальных ip для кластера  %(cluster_name)s. "
-"Результат=%(_xml)s"
 
 #: nova/volume/storwize_svc.py:1024
 #, python-format

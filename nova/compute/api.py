@@ -208,19 +208,6 @@ class API(base.Base):
                                               action)
         self.db.action_start(context, act)
 
-
-class API(BaseAPI):
-    """API for interacting with the compute manager."""
-
-    def __init__(self, image_service=None, network_api=None, volume_api=None,
-                 **kwargs):
-        self.image_service = (image_service or
-                              nova.image.get_default_image_service())
-
-        self.network_api = network_api or network.API()
-        self.volume_api = volume_api or volume.API()
-        super(API, self).__init__(**kwargs)
-
     def _check_injected_file_quota(self, context, injected_files):
         """Enforce quota limits on injected files.
 
@@ -2507,7 +2494,7 @@ class API(BaseAPI):
                                         host=host)
 
 
-class HostAPI(BaseAPI):
+class HostAPI(base.Base):
     """Sub-set of the Compute Manager API for managing host operations."""
 
     def __init__(self, rpcapi=None):

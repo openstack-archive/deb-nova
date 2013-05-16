@@ -2769,37 +2769,6 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                             req, body)
 
-    def test_create_instance_name_too_long(self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-        image_href = 'http://localhost/v2/images/%s' % image_uuid
-        flavor_ref = 'http://localhost/123/flavors/3'
-        body = {
-            'server': {
-                'name': 'X' * 256,
-                'imageRef': image_href,
-                'flavorRef': flavor_ref,
-                'metadata': {
-                    'hello': 'world',
-                    'open': 'stack',
-                },
-                'personality': [
-                    {
-                        "path": "/etc/banner.txt",
-                        "contents": "MQ==",
-                    },
-
-                ],
-            },
-        }
-
-        req = fakes.HTTPRequest.blank('/v2/fake/servers')
-        req.method = 'POST'
-        req.body = json.dumps(body)
-        req.headers["content-type"] = "application/json"
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                            req, body)
-
     def test_create_instance(self):
         # proper local hrefs must start with 'http://localhost/v2/'
         image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'

@@ -2441,9 +2441,6 @@ def quota_get_all_by_project(context, project_id):
 
 @require_admin_context
 def quota_create(context, project_id, resource, limit):
-    # NOTE: Treat -1 as unlimited for consistency w/ flags
-    if limit == -1:
-        limit = None
     quota_ref = models.Quota()
     quota_ref.project_id = project_id
     quota_ref.resource = resource
@@ -3206,13 +3203,6 @@ def security_group_count_by_project(context, project_id, session=None):
                    filter_by(project_id=project_id).\
                    count()
 
-@require_context
-def security_group_count_by_project(context, project_id):
-    authorize_project_context(context, project_id)
-    return model_query(context, models.SecurityGroup, read_deleted="no").\
-                   filter_by(project_id=project_id).\
-                   count()
-
 ###################
 
 
@@ -3332,14 +3322,6 @@ def security_group_default_rule_list(context, session=None):
                                     all()
 
 
-@require_context
-def security_group_rule_count_by_group(context, security_group_id):
-    return model_query(context, models.SecurityGroupIngressRule,
-                   read_deleted="no").\
-                   filter_by(parent_group_id=security_group_id).\
-                   count()
-
-#
 ###################
 
 

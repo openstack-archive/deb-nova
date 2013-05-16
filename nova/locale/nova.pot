@@ -466,7 +466,7 @@ msgid ""
 "image ids since adding this image?"
 msgstr ""
 
-#: nova/exception.py:505
+#: nova/exception.py:497
 #, python-format
 msgid "Project %(project_id)s could not be found."
 msgstr ""
@@ -475,17 +475,17 @@ msgstr ""
 msgid "Cannot find SR to read/write VDI."
 msgstr ""
 
-#: nova/exception.py:513
+#: nova/exception.py:505
 #, python-format
 msgid "Network %(network_id)s is duplicated."
 msgstr ""
 
-#: nova/exception.py:517
+#: nova/exception.py:509
 #, python-format
 msgid "Network %(network_id)s is still in use."
 msgstr ""
 
-#: nova/exception.py:521
+#: nova/exception.py:513
 #, python-format
 msgid "%(req)s is required to create a network."
 msgstr ""
@@ -495,12 +495,12 @@ msgstr ""
 msgid "Network %(network_id)s could not be found."
 msgstr ""
 
-#: nova/exception.py:529
+#: nova/exception.py:521
 #, python-format
 msgid "Port id %(port_id)s could not be found."
 msgstr ""
 
-#: nova/exception.py:533
+#: nova/exception.py:525
 #, python-format
 msgid "Network could not be found for bridge %(bridge)s"
 msgstr ""
@@ -540,7 +540,7 @@ msgstr ""
 msgid "Port %(port_id)s is still in use."
 msgstr ""
 
-#: nova/exception.py:566
+#: nova/exception.py:558
 #, python-format
 msgid "Port %(port_id)s not usable for instance %(instance)s."
 msgstr ""
@@ -550,32 +550,32 @@ msgstr ""
 msgid "No free port available for instance %(instance)s."
 msgstr ""
 
-#: nova/exception.py:574
+#: nova/exception.py:566
 #, python-format
 msgid "No fixed IP associated with id %(id)s."
 msgstr ""
 
-#: nova/exception.py:578
+#: nova/exception.py:570
 #, python-format
 msgid "Fixed ip not found for address %(address)s."
 msgstr ""
 
-#: nova/exception.py:582
+#: nova/exception.py:574
 #, python-format
 msgid "Instance %(instance_uuid)s has zero fixed ips."
 msgstr ""
 
-#: nova/exception.py:586
+#: nova/exception.py:578
 #, python-format
 msgid "Network host %(host)s has zero fixed ips in network %(network_id)s."
 msgstr ""
 
-#: nova/exception.py:591
+#: nova/exception.py:583
 #, python-format
 msgid "Instance %(instance_uuid)s doesn't have fixed ip '%(ip)s'."
 msgstr ""
 
-#: nova/exception.py:595
+#: nova/exception.py:587
 #, python-format
 msgid ""
 "Fixed IP address (%(address)s) does not exist in network "
@@ -1748,15 +1748,10 @@ msgstr ""
 
 #: nova/api/ec2/__init__.py:551
 #, python-format
-msgid "Invalid id: bogus (expecting \"i-...\"): %s"
-msgstr ""
-
-#: nova/api/ec2/__init__.py:552
-#, python-format
 msgid "Unexpected error raised: %s"
 msgstr ""
 
-#: nova/api/ec2/__init__.py:647
+#: nova/api/ec2/__init__.py:552
 #, python-format
 msgid "Environment: %s"
 msgstr ""
@@ -1862,7 +1857,7 @@ msgstr ""
 msgid "attribute not supported: %s"
 msgstr ""
 
-#: nova/api/ec2/cloud.py:1107
+#: nova/api/ec2/cloud.py:1066
 #, python-format
 msgid "vol = %s\n"
 msgstr ""
@@ -2708,22 +2703,22 @@ msgstr ""
 msgid "Compute.api::resetState %s"
 msgstr ""
 
-#: nova/api/openstack/compute/contrib/aggregates.py:88
+#: nova/api/openstack/compute/contrib/aggregates.py:89
 #, python-format
 msgid "Cannot show aggregate: %(id)s"
 msgstr ""
 
-#: nova/api/openstack/compute/contrib/aggregates.py:114
+#: nova/api/openstack/compute/contrib/aggregates.py:115
 #, python-format
 msgid "Cannot update aggregate: %(id)s"
 msgstr ""
 
-#: nova/api/openstack/compute/contrib/aggregates.py:126
+#: nova/api/openstack/compute/contrib/aggregates.py:127
 #, python-format
 msgid "Cannot delete aggregate: %(id)s"
 msgstr ""
 
-#: nova/api/openstack/compute/contrib/aggregates.py:139
+#: nova/api/openstack/compute/contrib/aggregates.py:140
 #, python-format
 msgid "Aggregates does not have %s action"
 msgstr ""
@@ -2734,13 +2729,13 @@ msgstr ""
 msgid "Cannot add host %(host)s in aggregate %(id)s"
 msgstr ""
 
-#: nova/api/openstack/compute/contrib/aggregates.py:171
-#: nova/api/openstack/compute/contrib/aggregates.py:175
+#: nova/api/openstack/compute/contrib/aggregates.py:172
+#: nova/api/openstack/compute/contrib/aggregates.py:176
 #, python-format
 msgid "Cannot remove host %(host)s in aggregate %(id)s"
 msgstr ""
 
-#: nova/api/openstack/compute/contrib/aggregates.py:195
+#: nova/api/openstack/compute/contrib/aggregates.py:196
 #, python-format
 msgid "Cannot set metadata %(metadata)s in aggregate %(id)s"
 msgstr ""

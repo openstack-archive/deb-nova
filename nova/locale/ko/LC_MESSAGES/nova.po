@@ -1585,15 +1585,10 @@ msgstr ""
 
 #: nova/api/ec2/__init__.py:539
 #, python-format
-msgid "Invalid id: bogus (expecting \"i-...\"): %s"
-msgstr ""
-
-#: nova/api/ec2/__init__.py:540
-#, python-format
 msgid "Unexpected error raised: %s"
 msgstr ""
 
-#: nova/api/ec2/__init__.py:647
+#: nova/api/ec2/__init__.py:540
 #, python-format
 msgid "Environment: %s"
 msgstr ""
@@ -1607,7 +1602,7 @@ msgstr ""
 msgid "Unsupported API request: controller = %(controller)s, action = %(action)s"
 msgstr ""
 
-#: nova/api/ec2/cloud.py:336
+#: nova/api/ec2/cloud.py:337
 #, python-format
 msgid "Create snapshot of volume %s"
 msgstr ""

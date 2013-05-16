@@ -36,8 +36,6 @@ CONF = cfg.CONF
 FAKE_UUID1 = 'a47ae74e-ab08-447f-8eee-ffd43fc46c16'
 FAKE_UUID2 = 'c6e6430a-6563-4efa-9542-5e93c9e97d18'
 
-FLAGS = flags.FLAGS
-
 
 class AttrDict(dict):
     def __getattr__(self, k):

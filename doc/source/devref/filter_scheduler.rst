@@ -309,8 +309,7 @@ The line with this description looks the following way:
 As for default cost function, it would be: `compute_fill_first_cost_fn_weight`,
 and by default it is -1.0.
 
-In the end Filter Scheduler sorts selected hosts by their weight and provisions
-instances on them.
+::
 
     --compute_fill_first_cost_fn_weight=-1.0
 

@@ -515,10 +515,6 @@ class NetworkInUse(NovaException):
     message = _("Network %(network_id)s is still in use.")
 
 
-class NetworkInUse(NovaException):
-    message = _("Network %(network_id)s is still in use.")
-
-
 class NetworkNotCreated(NovaException):
     message = _("%(req)s is required to create a network.")
 

@@ -25,7 +25,6 @@ import webob
 from nova.api.openstack.compute.contrib import networks_associate
 from nova.api.openstack.compute.contrib import os_networks as networks
 from nova import exception
-from nova.rpc import common
 from nova import test
 from nova.tests.api.openstack import fakes
 

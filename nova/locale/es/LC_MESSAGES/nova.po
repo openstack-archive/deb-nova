@@ -1615,7 +1615,7 @@ msgstr "Ha sucedido un error desconocido. Por favor repite el intento de nuevo."
 msgid "Unsupported API request: controller = %(controller)s, action = %(action)s"
 msgstr ""
 
-#: nova/api/ec2/cloud.py:336
+#: nova/api/ec2/cloud.py:337
 #, python-format
 msgid "Create snapshot of volume %s"
 msgstr ""
@@ -1626,18 +1626,6 @@ msgid "Could not find key pair(s): %s"
 msgstr ""
 
 #: nova/api/ec2/cloud.py:379
-#, python-format
-msgid ""
-"Value (%s) for KeyName is invalid. Content limited to Alphanumeric "
-"character, spaces, dashes, and underscore."
-msgstr ""
-
-#: nova/api/ec2/cloud.py:378
-#, python-format
-msgid "Value (%s) for Keyname is invalid. Length exceeds maximum of 255."
-msgstr ""
-
-#: nova/api/ec2/cloud.py:382
 #, python-format
 msgid "Create key pair %s"
 msgstr "Creando par de claves %s"
@@ -3057,14 +3045,10 @@ msgstr ""
 #: nova/compute/api.py:1857
 msgid "Locking"
 msgstr ""
-"Quota de instancias superada. Sólo puedes ejecutar %s instancias más de "
-"este tipo."
 
 #: nova/compute/api.py:1865
 msgid "Unlocking"
 msgstr ""
-"Quota de instancias superada. Sólo puedes ejecutar %s instancias más de "
-"este tipo."
 
 #: nova/compute/api.py:1933
 msgid "Volume must be attached in order to detach."
