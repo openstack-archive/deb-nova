@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010-2011 OpenStack LLC.
+# Copyright 2010-2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,7 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
+import uuid as stdlib_uuid
 
 import feedparser
 from lxml import etree
@@ -24,10 +24,11 @@ import webob
 from nova.api.openstack.compute import versions
 from nova.api.openstack.compute import views
 from nova.api.openstack import xmlutil
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import common
 from nova.tests.api.openstack import fakes
-from nova import utils
+from nova.tests import matchers
 
 
 NS = {
@@ -36,17 +37,17 @@ NS = {
 }
 
 
-LINKS = {
+EXP_LINKS = {
    'v2.0': {
        'pdf': 'http://docs.openstack.org/'
-               'api/openstack-compute/1.1/os-compute-devguide-1.1.pdf',
+               'api/openstack-compute/2/os-compute-devguide-2.pdf',
        'wadl': 'http://docs.openstack.org/'
-               'api/openstack-compute/1.1/wadl/os-compute-1.1.wadl',
+               'api/openstack-compute/2/wadl/os-compute-2.wadl',
     },
 }
 
 
-VERSIONS = {
+EXP_VERSIONS = {
     "v2.0": {
         "id": "v2.0",
         "status": "CURRENT",
@@ -55,12 +56,12 @@ VERSIONS = {
             {
                 "rel": "describedby",
                 "type": "application/pdf",
-                "href": LINKS['v2.0']['pdf'],
+                "href": EXP_LINKS['v2.0']['pdf'],
             },
             {
                 "rel": "describedby",
                 "type": "application/vnd.sun.wadl+xml",
-                "href": LINKS['v2.0']['wadl'],
+                "href": EXP_LINKS['v2.0']['wadl'],
             },
         ],
         "media-types": [
@@ -78,10 +79,6 @@ VERSIONS = {
 
 
 class VersionsTest(test.TestCase):
-    def setUp(self):
-        super(VersionsTest, self).setUp()
-        fakes.stub_out_auth(self.stubs)
-        self.stubs.Set(versions, 'VERSIONS', VERSIONS)
 
     def test_get_version_list(self):
         req = webob.Request.blank('/')
@@ -89,7 +86,7 @@ class VersionsTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        versions = json.loads(res.body)["versions"]
+        versions = jsonutils.loads(res.body)["versions"]
         expected = [
             {
                 "id": "v2.0",
@@ -118,7 +115,7 @@ class VersionsTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        version = json.loads(res.body)
+        version = jsonutils.loads(res.body)
         expected = {
             "version": {
                 "id": "v2.0",
@@ -132,12 +129,12 @@ class VersionsTest(test.TestCase):
                     {
                         "rel": "describedby",
                         "type": "application/pdf",
-                        "href": LINKS['v2.0']['pdf'],
+                        "href": EXP_LINKS['v2.0']['pdf'],
                     },
                     {
                         "rel": "describedby",
                         "type": "application/vnd.sun.wadl+xml",
-                        "href": LINKS['v2.0']['wadl'],
+                        "href": EXP_LINKS['v2.0']['wadl'],
                     },
                 ],
                 "media-types": [
@@ -162,7 +159,7 @@ class VersionsTest(test.TestCase):
         res = req.get_response(fakes.wsgi_app())
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, "application/json")
-        version = json.loads(res.body)
+        version = jsonutils.loads(res.body)
         expected = {
             "version": {
                 "id": "v2.0",
@@ -176,12 +173,12 @@ class VersionsTest(test.TestCase):
                     {
                         "rel": "describedby",
                         "type": "application/pdf",
-                        "href": LINKS['v2.0']['pdf'],
+                        "href": EXP_LINKS['v2.0']['pdf'],
                     },
                     {
                         "rel": "describedby",
                         "type": "application/vnd.sun.wadl+xml",
-                        "href": LINKS['v2.0']['wadl'],
+                        "href": EXP_LINKS['v2.0']['wadl'],
                     },
                 ],
                 "media-types": [
@@ -210,7 +207,7 @@ class VersionsTest(test.TestCase):
         version = etree.XML(res.body)
         xmlutil.validate_schema(version, 'version')
 
-        expected = VERSIONS['v2.0']
+        expected = EXP_VERSIONS['v2.0']
         self.assertTrue(version.xpath('/ns:version', namespaces=NS))
         media_types = version.xpath('ns:media-types/ns:media-type',
                                     namespaces=NS)
@@ -231,7 +228,6 @@ class VersionsTest(test.TestCase):
         self.assertEqual(res.content_type, "application/xml")
 
         root = etree.XML(res.body)
-        print res.body
         xmlutil.validate_schema(root, 'versions')
 
         self.assertTrue(root.xpath('/ns:versions', namespaces=NS))
@@ -240,7 +236,7 @@ class VersionsTest(test.TestCase):
 
         for i, v in enumerate(['v2.0']):
             version = versions[i]
-            expected = VERSIONS[v]
+            expected = EXP_VERSIONS[v]
             for key in ['id', 'status', 'updated']:
                 self.assertEqual(version.get(key), expected[key])
             (link,) = version.xpath('atom:link', namespaces=NS)
@@ -278,11 +274,11 @@ class VersionsTest(test.TestCase):
         self.assertEqual(entry.links[0]['href'], 'http://localhost/v2/')
         self.assertEqual(entry.links[0]['rel'], 'self')
         self.assertEqual(entry.links[1], {
-            'href': LINKS['v2.0']['pdf'],
+            'href': EXP_LINKS['v2.0']['pdf'],
             'type': 'application/pdf',
             'rel': 'describedby'})
         self.assertEqual(entry.links[2], {
-            'href': LINKS['v2.0']['wadl'],
+            'href': EXP_LINKS['v2.0']['wadl'],
             'type': 'application/vnd.sun.wadl+xml',
             'rel': 'describedby'})
 
@@ -348,7 +344,8 @@ class VersionsTest(test.TestCase):
             },
         ], }
 
-        self.assertDictMatch(expected, json.loads(res.body))
+        self.assertThat(jsonutils.loads(res.body),
+                        matchers.DictMatches(expected))
 
     def test_multi_choice_image_xml(self):
         req = webob.Request.blank('/images/1')
@@ -367,8 +364,11 @@ class VersionsTest(test.TestCase):
         self.assertEqual(version.get('status'), 'CURRENT')
         media_types = version.xpath('ns:media-types/ns:media-type',
                                     namespaces=NS)
-        self.assertTrue(common.compare_media_types(media_types,
-                                             VERSIONS['v2.0']['media-types']))
+        self.assertTrue(common.
+                        compare_media_types(media_types,
+                                            EXP_VERSIONS['v2.0']['media-types']
+                                            ))
+
         links = version.xpath('atom:link', namespaces=NS)
         self.assertTrue(common.compare_links(links,
             [{'rel': 'self', 'href': 'http://localhost/v2/images/1'}]))
@@ -385,7 +385,7 @@ class VersionsTest(test.TestCase):
         self.assertEqual(res.content_type, "application/json")
 
     def test_multi_choice_server(self):
-        uuid = str(utils.gen_uuid())
+        uuid = str(stdlib_uuid.uuid4())
         req = webob.Request.blank('/servers/' + uuid)
         req.accept = "application/json"
         res = req.get_response(fakes.wsgi_app())
@@ -418,7 +418,8 @@ class VersionsTest(test.TestCase):
             },
         ], }
 
-        self.assertDictMatch(expected, json.loads(res.body))
+        self.assertThat(jsonutils.loads(res.body),
+                        matchers.DictMatches(expected))
 
 
 class VersionsViewBuilderTests(test.TestCase):
@@ -510,7 +511,7 @@ class VersionsSerializerTests(test.TestCase):
                     "id": "2.7",
                     "updated": "2011-07-18T11:30:00Z",
                     "status": "DEPRECATED",
-                    "media-types": VERSIONS['v2.0']['media-types'],
+                    "media-types": EXP_VERSIONS['v2.0']['media-types'],
                     "links": [
                         {
                             "rel": "self",
@@ -599,12 +600,12 @@ class VersionsSerializerTests(test.TestCase):
                     {
                         "rel": "describedby",
                         "type": "application/pdf",
-                        "href": LINKS['v2.0']['pdf'],
+                        "href": EXP_LINKS['v2.0']['pdf'],
                     },
                     {
                         "rel": "describedby",
                         "type": "application/vnd.sun.wadl+xml",
-                        "href": LINKS['v2.0']['wadl'],
+                        "href": EXP_LINKS['v2.0']['wadl'],
                     },
                 ],
                 "media-types": [
@@ -649,9 +650,9 @@ class VersionsSerializerTests(test.TestCase):
         self.assertEqual(entry.links[1], {
             'rel': 'describedby',
             'type': 'application/pdf',
-            'href': LINKS['v2.0']['pdf']})
+            'href': EXP_LINKS['v2.0']['pdf']})
         self.assertEqual(entry.links[2], {
             'rel': 'describedby',
             'type': 'application/vnd.sun.wadl+xml',
-            'href': LINKS['v2.0']['wadl'],
+            'href': EXP_LINKS['v2.0']['wadl'],
         })

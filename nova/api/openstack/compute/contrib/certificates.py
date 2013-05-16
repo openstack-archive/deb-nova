@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2012 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -16,17 +16,14 @@
 
 import webob.exc
 
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.api.openstack import extensions
-from nova import flags
-from nova import log as logging
+import nova.cert.rpcapi
 from nova import network
-from nova import rpc
-
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-FLAGS = flags.FLAGS
 authorize = extensions.extension_authorizer('compute', 'certificates')
 
 
@@ -64,6 +61,7 @@ class CertificatesController(object):
 
     def __init__(self):
         self.network_api = network.API()
+        self.cert_rpcapi = nova.cert.rpcapi.CertAPI()
         super(CertificatesController, self).__init__()
 
     @wsgi.serializers(xml=CertificateTemplate)
@@ -74,9 +72,8 @@ class CertificatesController(object):
         if id != 'root':
             msg = _("Only root certificate can be retrieved.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
-        cert = rpc.call(context, FLAGS.cert_topic,
-                        {"method": "fetch_ca",
-                         "args": {"project_id": context.project_id}})
+        cert = self.cert_rpcapi.fetch_ca(context,
+                project_id=context.project_id)
         return {'certificate': _translate_certificate_view(cert)}
 
     @wsgi.serializers(xml=CertificateTemplate)
@@ -84,16 +81,14 @@ class CertificatesController(object):
         """Return a list of certificates."""
         context = req.environ['nova.context']
         authorize(context)
-        pk, cert = rpc.call(context, FLAGS.cert_topic,
-                            {"method": "generate_x509_cert",
-                             "args": {"user_id": context.user_id,
-                                      "project_id": context.project_id}})
+        pk, cert = self.cert_rpcapi.generate_x509_cert(context,
+                user_id=context.user_id, project_id=context.project_id)
         context = req.environ['nova.context']
         return {'certificate': _translate_certificate_view(cert, pk)}
 
 
 class Certificates(extensions.ExtensionDescriptor):
-    """Certificates support"""
+    """Certificates support."""
 
     name = "Certificates"
     alias = "os-certificates"

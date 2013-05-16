@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,17 +16,17 @@
 #    under the License.
 
 import inspect
-from xml.dom import minidom
-from xml.parsers import expat
 import math
 import time
+from xml.dom import minidom
 
 from lxml import etree
 import webob
 
+from nova.api.openstack import xmlutil
 from nova import exception
-from nova import log as logging
-from nova import utils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova import wsgi
 
 
@@ -64,6 +64,65 @@ _MEDIA_TYPE_MAP = {
 class Request(webob.Request):
     """Add some OpenStack API-specific logic to the base webob.Request."""
 
+    def __init__(self, *args, **kwargs):
+        super(Request, self).__init__(*args, **kwargs)
+        self._extension_data = {'db_items': {}}
+
+    def cache_db_items(self, key, items, item_key='id'):
+        """
+        Allow API methods to store objects from a DB query to be
+        used by API extensions within the same API request.
+
+        An instance of this class only lives for the lifetime of a
+        single API request, so there's no need to implement full
+        cache management.
+        """
+        db_items = self._extension_data['db_items'].setdefault(key, {})
+        for item in items:
+            db_items[item[item_key]] = item
+
+    def get_db_items(self, key):
+        """
+        Allow an API extension to get previously stored objects within
+        the same API request.
+
+        Note that the object data will be slightly stale.
+        """
+        return self._extension_data['db_items'][key]
+
+    def get_db_item(self, key, item_key):
+        """
+        Allow an API extension to get a previously stored object
+        within the same API request.
+
+        Note that the object data will be slightly stale.
+        """
+        return self.get_db_items(key).get(item_key)
+
+    def cache_db_instances(self, instances):
+        self.cache_db_items('instances', instances, 'uuid')
+
+    def cache_db_instance(self, instance):
+        self.cache_db_items('instances', [instance], 'uuid')
+
+    def get_db_instances(self):
+        return self.get_db_items('instances')
+
+    def get_db_instance(self, instance_uuid):
+        return self.get_db_item('instances', instance_uuid)
+
+    def cache_db_flavors(self, flavors):
+        self.cache_db_items('flavors', flavors, 'flavorid')
+
+    def cache_db_flavor(self, flavor):
+        self.cache_db_items('flavors', [flavor], 'flavorid')
+
+    def get_db_flavors(self):
+        return self.get_db_items('flavors')
+
+    def get_db_flavor(self, flavorid):
+        return self.get_db_item('flavors', flavorid)
+
     def best_match_content_type(self):
         """Determine the requested response content-type."""
         if 'nova.best_content_type' not in self.environ:
@@ -91,13 +150,18 @@ class Request(webob.Request):
         Does not do any body introspection, only checks header
 
         """
-        if not "Content-Type" in self.headers:
+        if "Content-Type" not in self.headers:
             return None
 
-        allowed_types = SUPPORTED_CONTENT_TYPES
         content_type = self.content_type
 
-        if content_type not in allowed_types:
+        # NOTE(markmc): text/plain is the default for eventlet and
+        # other webservers which use mimetools.Message.gettype()
+        # whereas twisted defaults to ''.
+        if not content_type or content_type == 'text/plain':
+            return None
+
+        if content_type not in SUPPORTED_CONTENT_TYPES:
             raise exception.InvalidContentType(content_type=content_type)
 
         return content_type
@@ -117,7 +181,7 @@ class ActionDispatcher(object):
 
 
 class TextDeserializer(ActionDispatcher):
-    """Default request body deserialization"""
+    """Default request body deserialization."""
 
     def deserialize(self, datastring, action='default'):
         return self.dispatch(datastring, action=action)
@@ -130,7 +194,7 @@ class JSONDeserializer(TextDeserializer):
 
     def _from_json(self, datastring):
         try:
-            return utils.loads(datastring)
+            return jsonutils.loads(datastring)
         except ValueError:
             msg = _("cannot understand JSON")
             raise exception.MalformedRequestBody(reason=msg)
@@ -151,13 +215,8 @@ class XMLDeserializer(TextDeserializer):
 
     def _from_xml(self, datastring):
         plurals = set(self.metadata.get('plurals', {}))
-
-        try:
-            node = minidom.parseString(datastring).childNodes[0]
-            return {node.nodeName: self._from_xml_node(node, plurals)}
-        except expat.ExpatError:
-            msg = _("cannot understand XML")
-            raise exception.MalformedRequestBody(reason=msg)
+        node = xmlutil.safe_minidom_parse_string(datastring).childNodes[0]
+        return {node.nodeName: self._from_xml_node(node, plurals)}
 
     def _from_xml_node(self, node, listnames):
         """Convert a minidom node to a simple Python type.
@@ -173,36 +232,54 @@ class XMLDeserializer(TextDeserializer):
         else:
             result = dict()
             for attr in node.attributes.keys():
-                result[attr] = node.attributes[attr].nodeValue
+                if not attr.startswith("xmlns"):
+                    result[attr] = node.attributes[attr].nodeValue
             for child in node.childNodes:
                 if child.nodeType != node.TEXT_NODE:
                     result[child.nodeName] = self._from_xml_node(child,
                                                                  listnames)
             return result
 
-    def find_first_child_named(self, parent, name):
-        """Search a nodes children for the first child with a given name"""
+    def find_first_child_named_in_namespace(self, parent, namespace, name):
+        """Search a nodes children for the first child with a given name."""
         for node in parent.childNodes:
-            if node.nodeName == name:
+            if (node.localName == name and
+                node.namespaceURI and
+                node.namespaceURI == namespace):
+                return node
+        return None
+
+    def find_first_child_named(self, parent, name):
+        """Search a nodes children for the first child with a given name."""
+        for node in parent.childNodes:
+            if node.localName == name:
                 return node
         return None
 
     def find_children_named(self, parent, name):
-        """Return all of a nodes children who have the given name"""
+        """Return all of a nodes children who have the given name."""
         for node in parent.childNodes:
-            if node.nodeName == name:
+            if node.localName == name:
                 yield node
 
     def extract_text(self, node):
-        """Get the text field contained by the given node"""
-        if len(node.childNodes) == 1:
-            child = node.childNodes[0]
+        """Get the text field contained by the given node."""
+        ret_val = ""
+        for child in node.childNodes:
             if child.nodeType == child.TEXT_NODE:
-                return child.nodeValue
-        return ""
+                ret_val += child.nodeValue
+        return ret_val
+
+    def extract_elements(self, node):
+        """Get only Element type childs from node."""
+        elements = []
+        for child in node.childNodes:
+            if child.nodeType == child.ELEMENT_NODE:
+                elements.append(child)
+        return elements
 
     def find_attribute_or_element(self, parent, name):
-        """Get an attribute value; fallback to an element if not found"""
+        """Get an attribute value; fallback to an element if not found."""
         if parent.hasAttribute(name):
             return parent.getAttribute(name)
 
@@ -219,7 +296,7 @@ class XMLDeserializer(TextDeserializer):
 class MetadataXMLDeserializer(XMLDeserializer):
 
     def extract_metadata(self, metadata_node):
-        """Marshal the metadata attribute of a parsed request"""
+        """Marshal the metadata attribute of a parsed request."""
         metadata = {}
         if metadata_node is not None:
             for meta_node in self.find_children_named(metadata_node, "meta"):
@@ -229,7 +306,7 @@ class MetadataXMLDeserializer(XMLDeserializer):
 
 
 class DictSerializer(ActionDispatcher):
-    """Default request body serialization"""
+    """Default request body serialization."""
 
     def serialize(self, data, action='default'):
         return self.dispatch(data, action=action)
@@ -239,10 +316,10 @@ class DictSerializer(ActionDispatcher):
 
 
 class JSONDictSerializer(DictSerializer):
-    """Default JSON request body serialization"""
+    """Default JSON request body serialization."""
 
     def default(self, data):
-        return utils.dumps(data)
+        return jsonutils.dumps(data)
 
 
 class XMLDictSerializer(DictSerializer):
@@ -325,6 +402,8 @@ class XMLDictSerializer(DictSerializer):
                 if k in attrs:
                     result.setAttribute(k, str(v))
                 else:
+                    if k == "deleted":
+                        v = str(bool(v))
                     node = self._to_xml_node(doc, metadata, k, v)
                     result.appendChild(node)
         else:
@@ -403,7 +482,7 @@ class ResponseObject(object):
     optional.
     """
 
-    def __init__(self, obj, code=None, **serializers):
+    def __init__(self, obj, code=None, headers=None, **serializers):
         """Binds serializers with an object.
 
         Takes keyword arguments akin to the @serializer() decorator
@@ -416,7 +495,7 @@ class ResponseObject(object):
         self.serializers = serializers
         self._default_code = 200
         self._code = code
-        self._headers = {}
+        self._headers = headers or {}
         self.serializer = None
         self.media_type = None
 
@@ -509,7 +588,7 @@ class ResponseObject(object):
         response = webob.Response()
         response.status_int = self.code
         for hdr, value in self._headers.items():
-            response.headers[hdr] = value
+            response.headers[hdr] = str(value)
         response.headers['Content-Type'] = content_type
         if self.obj is not None:
             response.body = serializer.serialize(self.obj)
@@ -533,7 +612,7 @@ def action_peek_json(body):
     """Determine action to invoke."""
 
     try:
-        decoded = utils.loads(body)
+        decoded = jsonutils.loads(body)
     except ValueError:
         msg = _("cannot understand JSON")
         raise exception.MalformedRequestBody(reason=msg)
@@ -550,7 +629,7 @@ def action_peek_json(body):
 def action_peek_xml(body):
     """Determine action to invoke."""
 
-    dom = minidom.parseString(body)
+    dom = xmlutil.safe_minidom_parse_string(body)
     action_node = dom.childNodes[0]
 
     return action_node.tagName
@@ -572,12 +651,17 @@ class ResourceExceptionHandler(object):
             return True
 
         if isinstance(ex_value, exception.NotAuthorized):
-            msg = unicode(ex_value)
+            msg = unicode(ex_value.message % ex_value.kwargs)
             raise Fault(webob.exc.HTTPForbidden(explanation=msg))
         elif isinstance(ex_value, exception.Invalid):
+            msg = unicode(ex_value.message % ex_value.kwargs)
             raise Fault(exception.ConvertedException(
-                code=ex_value.code, explanation=unicode(ex_value)))
-        elif isinstance(ex_value, TypeError):
+                    code=ex_value.code, explanation=msg))
+
+        # Under python 2.6, TypeError's exception value is actually a string,
+        # so test # here via ex_type instead:
+        # http://bugs.python.org/issue7853
+        elif issubclass(ex_type, TypeError):
             exc_info = (ex_type, ex_value, ex_traceback)
             LOG.error(_('Exception handling resource: %s') % ex_value,
                     exc_info=exc_info)
@@ -609,11 +693,16 @@ class Resource(wsgi.Application):
 
     """
 
-    def __init__(self, controller, action_peek=None, **deserializers):
+    def __init__(self, controller, action_peek=None, inherits=None,
+                 **deserializers):
         """
         :param controller: object that implement methods created by routes lib
         :param action_peek: dictionary of routines for peeking into an action
                             request body to determine the desired action
+        :param inherits: another resource object that this resource should
+                         inherit extensions from. Any action extensions that
+                         are applied to the parent resource will also apply
+                         to this resource.
         """
 
         self.controller = controller
@@ -638,6 +727,7 @@ class Resource(wsgi.Application):
         # Save a mapping of extensions
         self.wsgi_extensions = {}
         self.wsgi_action_extensions = {}
+        self.inherits = inherits
 
     def register_actions(self, controller):
         """Registers controller actions with this resource."""
@@ -784,9 +874,6 @@ class Resource(wsgi.Application):
     def __call__(self, request):
         """WSGI method that controls (de)serialization and method dispatch."""
 
-        LOG.info("%(method)s %(url)s" % {"method": request.method,
-                                         "url": request.url})
-
         # Identify the action, its arguments, and the requested
         # content type
         action_args = self.get_action_args(request.environ)
@@ -800,7 +887,7 @@ class Resource(wsgi.Application):
         #            run into troubles due to the @webob.dec.wsgify()
         #            decorator.
         return self._process_stack(request, action, action_args,
-                                   content_type, body, accept)
+                               content_type, body, accept)
 
     def _process_stack(self, request, action, action_args,
                        content_type, body, accept):
@@ -818,6 +905,10 @@ class Resource(wsgi.Application):
         except exception.MalformedRequestBody:
             msg = _("Malformed request body")
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
+
+        if body:
+            LOG.debug(_("Action: '%(action)s', body: %(body)s") % locals())
+        LOG.debug(_("Calling method %s") % meth)
 
         # Now, deserialize the request body...
         try:
@@ -881,18 +972,22 @@ class Resource(wsgi.Application):
                 response = resp_obj.serialize(request, accept,
                                               self.default_serializers)
 
-        try:
-            msg_dict = dict(url=request.url, status=response.status_int)
-            msg = _("%(url)s returned with HTTP %(status)d") % msg_dict
-        except AttributeError, e:
-            msg_dict = dict(url=request.url, e=e)
-            msg = _("%(url)s returned a fault: %(e)s") % msg_dict
-
-        LOG.info(msg)
-
         return response
 
     def get_method(self, request, action, content_type, body):
+        meth, extensions = self._get_method(request,
+                                            action,
+                                            content_type,
+                                            body)
+        if self.inherits:
+            _meth, parent_ext = self.inherits.get_method(request,
+                                                         action,
+                                                         content_type,
+                                                         body)
+            extensions.extend(parent_ext)
+        return meth, extensions
+
+    def _get_method(self, request, action, content_type, body):
         """Look up the action-specific method and its extensions."""
 
         # Look up the method
@@ -903,7 +998,8 @@ class Resource(wsgi.Application):
                 meth = getattr(self.controller, action)
         except AttributeError:
             if (not self.wsgi_actions or
-                action not in ['action', 'create', 'delete']):
+                action not in ['action', 'create', 'delete', 'update',
+                               'show']):
                 # Propagate the error
                 raise
         else:
@@ -983,6 +1079,9 @@ class ControllerMetaclass(type):
         # Find all actions
         actions = {}
         extensions = []
+        # start with wsgi actions from base classes
+        for base in bases:
+            actions.update(getattr(base, 'wsgi_actions', {}))
         for key, value in cls_dict.items():
             if not callable(value):
                 continue
@@ -1015,6 +1114,23 @@ class Controller(object):
         else:
             self._view_builder = None
 
+    @staticmethod
+    def is_valid_body(body, entity_name):
+        if not (body and entity_name in body):
+            return False
+
+        def is_dict(d):
+            try:
+                d.get(None)
+                return True
+            except AttributeError:
+                return False
+
+        if not is_dict(body[entity_name]):
+            return False
+
+        return True
+
 
 class Fault(webob.exc.HTTPException):
     """Wrap webob.exc.HTTPException to provide API friendly response."""
@@ -1034,6 +1150,8 @@ class Fault(webob.exc.HTTPException):
     def __init__(self, exception):
         """Create a Fault for the given webob.exc.exception."""
         self.wrapped_exc = exception
+        for key, value in self.wrapped_exc.headers.items():
+            self.wrapped_exc.headers[key] = str(value)
         self.status_int = exception.status_int
 
     @webob.dec.wsgify(RequestClass=Request)
@@ -1042,13 +1160,18 @@ class Fault(webob.exc.HTTPException):
         # Replace the body with fault details.
         code = self.wrapped_exc.status_int
         fault_name = self._fault_names.get(code, "computeFault")
+        explanation = self.wrapped_exc.explanation
+        LOG.debug(_("Returning %(code)s to user: %(explanation)s"),
+                  {'code': code, 'explanation': explanation})
+
         fault_data = {
             fault_name: {
                 'code': code,
-                'message': self.wrapped_exc.explanation}}
+                'message': explanation}}
         if code == 413:
-            retry = self.wrapped_exc.headers['Retry-After']
-            fault_data[fault_name]['retryAfter'] = retry
+            retry = self.wrapped_exc.headers.get('Retry-After', None)
+            if retry:
+                fault_data[fault_name]['retryAfter'] = retry
 
         # 'code' is an attribute on the fault tag itself
         metadata = {'attributes': {fault_name: 'code'}}
@@ -1083,10 +1206,11 @@ class OverLimitFault(webob.exc.HTTPException):
         hdrs = OverLimitFault._retry_after(retry_time)
         self.wrapped_exc = webob.exc.HTTPRequestEntityTooLarge(headers=hdrs)
         self.content = {
-            "overLimitFault": {
+            "overLimit": {
                 "code": self.wrapped_exc.status_int,
                 "message": message,
                 "details": details,
+                "retryAfter": hdrs['Retry-After'],
             },
         }
 
@@ -1104,7 +1228,7 @@ class OverLimitFault(webob.exc.HTTPException):
         error format.
         """
         content_type = request.best_match_content_type()
-        metadata = {"attributes": {"overLimitFault": "code"}}
+        metadata = {"attributes": {"overLimit": ["code", "retryAfter"]}}
 
         xml_serializer = XMLDictSerializer(metadata, XMLNS_V11)
         serializer = {
@@ -1114,6 +1238,7 @@ class OverLimitFault(webob.exc.HTTPException):
 
         content = serializer.serialize(self.content)
         self.wrapped_exc.body = content
+        self.wrapped_exc.content_type = content_type
 
         return self.wrapped_exc
 

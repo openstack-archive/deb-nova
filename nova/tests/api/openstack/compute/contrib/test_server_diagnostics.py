@@ -13,18 +13,15 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-import unittest
-
 from lxml import etree
 
 from nova.api.openstack import compute
 from nova.api.openstack.compute.contrib import server_diagnostics
 from nova.api.openstack import wsgi
-import nova.compute
+from nova.compute import api as compute_api
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
-import nova.utils
 
 
 UUID = 'abc'
@@ -44,21 +41,24 @@ class ServerDiagnosticsTest(test.TestCase):
 
     def setUp(self):
         super(ServerDiagnosticsTest, self).setUp()
-        self.flags(verbose=True)
-        self.stubs.Set(nova.compute.API, 'get_diagnostics',
+        self.flags(verbose=True,
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Server_diagnostics'])
+        self.stubs.Set(compute_api.API, 'get_diagnostics',
                        fake_get_diagnostics)
-        self.stubs.Set(nova.compute.API, 'get', fake_instance_get)
+        self.stubs.Set(compute_api.API, 'get', fake_instance_get)
 
-        self.router = compute.APIRouter()
+        self.router = compute.APIRouter(init_only=('servers', 'diagnostics'))
 
     def test_get_diagnostics(self):
         req = fakes.HTTPRequest.blank('/fake/servers/%s/diagnostics' % UUID)
         res = req.get_response(self.router)
-        output = json.loads(res.body)
+        output = jsonutils.loads(res.body)
         self.assertEqual(output, {'data': 'Some diagnostic info'})
 
 
-class TestServerDiagnosticsXMLSerializer(unittest.TestCase):
+class TestServerDiagnosticsXMLSerializer(test.TestCase):
     namespace = wsgi.XMLNS_V11
 
     def _tag(self, elem):
@@ -74,7 +74,6 @@ class TestServerDiagnosticsXMLSerializer(unittest.TestCase):
         exemplar = dict(diag1='foo', diag2='bar')
         text = serializer.serialize(exemplar)
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('diagnostics', self._tag(tree))

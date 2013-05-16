@@ -1,0 +1,100 @@
+#!/bin/sh
+
+set -e
+
+NOVA_CONF=/etc/nova/nova.conf
+NOVA_API_CONF=/etc/nova/api-paste.ini
+
+#PKGOS-INCLUDE#
+
+manage_nova_api_field () {
+	db_get nova/active-api
+	if [ -n "${RET}" ] ; then
+		# We get an answer from a multiselect debconf, so we trim spaces out
+		# before putting it in the config file
+		NOVA_APIS=`echo ${RET} | sed "s/ //g"`
+		pkgos_inifile set ${NOVA_CONF} DEFAULT enabled_apis ${NOVA_APIS}
+	fi
+}
+
+manage_nova_my_ip_field () {
+	db_get nova/my-ip
+	if [ -n "${RET}" ] ; then
+		pkgos_inifile set ${NOVA_CONF} DEFAULT my_ip ${RET}
+	fi
+}
+
+manage_nova_rabbitmq_host () {
+	db_get nova/rabbit-host
+	if [ -n "${RET}" ] ; then
+		pkgos_inifile set ${NOVA_CONF} DEFAULT rabbit_host ${RET}
+	fi
+}
+
+manage_keystone_auth_fields () {
+	db_get nova/auth-host
+	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken auth_host ${RET}
+	db_get nova/admin-tenant-name
+	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_tenant_name ${RET}
+	db_get nova/admin-user
+	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_user ${RET}
+	db_get nova/admin-password
+	if [ -n "${RET}" ] ; then
+		pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_password ${RET}
+	fi
+}
+
+maintain_var_lib_nova_perms () {
+	if [ -z "$2" ]; then
+		# New install - blanket permissions
+		chown -R nova:nova /var/lib/nova/
+	elif dpkg --compare-versions "$2" lt "2011.3"; then
+		# Make sure the LXC rootfs mount points are excluded
+		# during upgrades from previous versions
+		find /var/lib/nova/ -name 'rootfs' -prune -o \
+			-group root -a -user nova -exec chown nova:nova {} \;
+		find /var/lib/nova/ -name 'rootfs' -prune -o \
+			-group nogroup -a -user nova -exec chown nova:nova {} \;
+	fi
+	chmod 0755 /var/lib/nova
+}
+
+if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
+	. /usr/share/debconf/confmodule
+	. /usr/share/dbconfig-common/dpkg/postinst
+
+	pkgos_var_user_group nova
+	maintain_var_lib_nova_perms $@
+
+	# Create config files if they don't exist
+	pkgos_write_new_conf nova nova.conf
+	pkgos_write_new_conf nova api-paste.ini
+	pkgos_write_new_conf nova logging.conf
+
+	# Tweak config files depending on debconf answers
+	pkgos_dbc_postinst /etc/nova/nova.conf DEFAULT sql_connection nova $@
+	manage_nova_api_field
+	manage_nova_my_ip_field
+	manage_keystone_auth_fields
+
+	# Needed, because in some cases, it's owned by root:root,
+	# which makes the nova-manage db sync fail.
+	touch /var/log/nova/nova-manage.log
+	chown nova:nova /var/log/nova/nova-manage.log
+
+	db_get nova/configure_db
+	if [ "$RET" = "true" ]; then
+		echo "nova-common: Now running \"nova-manage db sync\", this may take a while..."
+		su nova -c "nova-manage db sync"
+	fi
+
+	db_stop
+
+	# Fixup sudoers rights and clean old config file location
+	chmod 0440 /etc/sudoers.d/nova-common
+	[ -f /etc/sudoers.d/nova_sudoers ] && rm -f /etc/sudoers.d/nova_sudoers # That's the old file that we get rid of
+fi
+
+#DEBHELPER#
+
+exit 0

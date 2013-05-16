@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -24,7 +24,7 @@ from nova import exception
 
 
 class Controller(object):
-    """ The server metadata API controller for the OpenStack API """
+    """The server metadata API controller for the OpenStack API."""
 
     def __init__(self):
         self.compute_api = compute.API()
@@ -45,7 +45,7 @@ class Controller(object):
 
     @wsgi.serializers(xml=common.MetadataTemplate)
     def index(self, req, server_id):
-        """ Returns the list of metadata for a given instance """
+        """Returns the list of metadata for a given instance."""
         context = req.environ['nova.context']
         return {'metadata': self._get_metadata(context, server_id)}
 
@@ -126,12 +126,25 @@ class Controller(object):
             msg = _("Malformed request body")
             raise exc.HTTPBadRequest(explanation=msg)
 
+        except exception.InvalidMetadata as error:
+            raise exc.HTTPBadRequest(explanation=error.format_message())
+
+        except exception.InvalidMetadataSize as error:
+            raise exc.HTTPRequestEntityTooLarge(
+                explanation=error.format_message())
+
         except exception.QuotaError as error:
-            self._handle_quota_error(error)
+            raise exc.HTTPRequestEntityTooLarge(
+                explanation=error.format_message(),
+                headers={'Retry-After': 0})
+
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'update metadata')
 
     @wsgi.serializers(xml=common.MetaItemTemplate)
     def show(self, req, server_id, id):
-        """ Return a single metadata item """
+        """Return a single metadata item."""
         context = req.environ['nova.context']
         data = self._get_metadata(context, server_id)
 
@@ -143,7 +156,7 @@ class Controller(object):
 
     @wsgi.response(204)
     def delete(self, req, server_id, id):
-        """ Deletes an existing metadata """
+        """Deletes an existing metadata."""
         context = req.environ['nova.context']
 
         metadata = self._get_metadata(context, server_id)
@@ -155,16 +168,14 @@ class Controller(object):
         try:
             server = self.compute_api.get(context, server_id)
             self.compute_api.delete_instance_metadata(context, server, id)
+
         except exception.InstanceNotFound:
             msg = _('Server does not exist')
             raise exc.HTTPNotFound(explanation=msg)
 
-    def _handle_quota_error(self, error):
-        """Reraise quota errors as api-specific http exceptions."""
-        if error.kwargs['code'] == "MetadataLimitExceeded":
-            raise exc.HTTPRequestEntityTooLarge(explanation=error.message,
-                                                headers={'Retry-After': 0})
-        raise error
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'delete metadata')
 
 
 def create_resource():

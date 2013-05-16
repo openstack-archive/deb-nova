@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
-#    Copyright 2010 OpenStack LLC
+#    Copyright 2010 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -16,9 +16,9 @@
 
 from nova import test
 
-from xml.etree import ElementTree
+from lxml import etree
 
-import fakelibvirt as libvirt
+import nova.tests.fakelibvirt as libvirt
 
 
 def get_vm_xml(name="testname", uuid=None, source_type='file',
@@ -53,6 +53,7 @@ def get_vm_xml(name="testname", uuid=None, source_type='file',
     </interface>
     <input type='mouse' bus='ps2'/>
     <graphics type='vnc' port='5901' autoport='yes' keymap='en-us'/>
+    <graphics type='spice' port='5901' autoport='yes' keymap='en-us'/>
   </devices>
 </domain>''' % {'name': name,
                 'uuid_tag': uuid_tag,
@@ -69,11 +70,13 @@ class FakeLibvirtTests(test.TestCase):
         return lambda uri: libvirt.openReadOnly(uri)
 
     def get_openAuth_curry_func(self):
+        def fake_cb(credlist):
+            return 0
         return lambda uri: libvirt.openAuth(uri,
                                             [[libvirt.VIR_CRED_AUTHNAME,
                                               libvirt.VIR_CRED_NOECHOPROMPT],
-                                            'root',
-                                            None], 0)
+                                             fake_cb,
+                                             None], 0)
 
     def _test_connect_method_accepts_None_uri_by_default(self, conn_method):
         conn = conn_method(None)
@@ -252,7 +255,7 @@ class FakeLibvirtTests(test.TestCase):
         conn.defineXML(get_vm_xml())
         dom = conn.lookupByName('testname')
         xml = dom.XMLDesc(0)
-        ElementTree.fromstring(xml)
+        etree.fromstring(xml)
 
     def _test_accepts_source_type(self, source_type):
         conn = self.get_openAuth_curry_func()('qemu:///system')
@@ -260,7 +263,7 @@ class FakeLibvirtTests(test.TestCase):
         conn.defineXML(get_vm_xml(source_type=source_type))
         dom = conn.lookupByName('testname')
         xml = dom.XMLDesc(0)
-        tree = ElementTree.fromstring(xml)
+        tree = etree.fromstring(xml)
         elem = tree.find('./devices/disk/source')
         self.assertEquals(elem.get('file'), '/somefile')
 
@@ -282,7 +285,7 @@ class FakeLibvirtTests(test.TestCase):
         conn.defineXML(get_vm_xml(interface_type=network_type))
         dom = conn.lookupByName('testname')
         xml = dom.XMLDesc(0)
-        tree = ElementTree.fromstring(xml)
+        tree = etree.fromstring(xml)
         elem = tree.find('./devices/interface')
         self.assertEquals(elem.get('type'), network_type)
         elem = elem.find('./source')
@@ -298,7 +301,7 @@ class FakeLibvirtTests(test.TestCase):
 
     def test_getCapabilities(self):
         conn = self.get_openAuth_curry_func()('qemu:///system')
-        ElementTree.fromstring(conn.getCapabilities())
+        etree.fromstring(conn.getCapabilities())
 
     def test_nwfilter_define_undefine(self):
         conn = self.get_openAuth_curry_func()('qemu:///system')

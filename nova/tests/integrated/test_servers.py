@@ -16,18 +16,23 @@
 #    under the License.
 
 import time
-import unittest
+import zlib
 
-import nova.virt.fake
-from nova.log import logging
-from nova.tests.integrated import integrated_helpers
+from nova.openstack.common import log as logging
+from nova.tests import fake_network
 from nova.tests.integrated.api import client
+from nova.tests.integrated import integrated_helpers
+import nova.virt.fake
 
 
 LOG = logging.getLogger(__name__)
 
 
 class ServersTest(integrated_helpers._IntegratedTestBase):
+    def setUp(self):
+        super(ServersTest, self).setUp()
+        self.conductor = self.start_service(
+            'conductor', manager='nova.conductor.manager.ConductorManager')
 
     def _wait_for_state_change(self, server, from_status):
         for i in xrange(0, 50):
@@ -38,29 +43,25 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
 
         return server
 
-    def _restart_compute_service(self, periodic_interval=None):
+    def _restart_compute_service(self, *args, **kwargs):
         """restart compute service. NOTE: fake driver forgets all instances."""
         self.compute.kill()
-        if periodic_interval:
-            self.compute = self.start_service(
-                'compute', periodic_interval=periodic_interval)
-        else:
-            self.compute = self.start_service('compute')
+        self.compute = self.start_service('compute', *args, **kwargs)
 
     def test_get_servers(self):
-        """Simple check that listing servers works."""
+        # Simple check that listing servers works.
         servers = self.api.get_servers()
         for server in servers:
             LOG.debug("server: %s" % server)
 
     def test_create_server_with_error(self):
-        """Create a server which will enter error state."""
-        self.flags(stub_network=True)
+        # Create a server which will enter error state.
+        fake_network.set_stub_network_methods(self.stubs)
 
         def throw_error(*_):
             raise Exception()
 
-        self.stubs.Set(nova.virt.fake.FakeConnection, 'spawn', throw_error)
+        self.stubs.Set(nova.virt.fake.FakeDriver, 'spawn', throw_error)
 
         server = self._build_minimal_create_server_request()
         created_server = self.api.post_server({"server": server})
@@ -75,8 +76,8 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self._delete_server(created_server_id)
 
     def test_create_and_delete_server(self):
-        """Creates and deletes a server."""
-        self.flags(stub_network=True)
+        # Creates and deletes a server.
+        fake_network.set_stub_network_methods(self.stubs)
 
         # Create server
         # Build the server data gradually, checking errors along the way
@@ -140,11 +141,13 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self._delete_server(created_server_id)
 
     def test_deferred_delete(self):
-        """Creates, deletes and waits for server to be reclaimed."""
-        self.flags(stub_network=True, reclaim_instance_interval=1)
+        # Creates, deletes and waits for server to be reclaimed.
+        self.flags(reclaim_instance_interval=1)
+        fake_network.set_stub_network_methods(self.stubs)
 
         # enforce periodic tasks run in short time to avoid wait for 60s.
-        self._restart_compute_service(periodic_interval=0.3)
+        self._restart_compute_service(periodic_interval_max=0.3,
+                                      periodic_fuzzy_delay=0)
 
         # Create server
         server = self._build_minimal_create_server_request()
@@ -181,8 +184,9 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self._wait_for_deletion(created_server_id)
 
     def test_deferred_delete_restore(self):
-        """Creates, deletes and restores a server."""
-        self.flags(stub_network=True, reclaim_instance_interval=1)
+        # Creates, deletes and restores a server.
+        self.flags(reclaim_instance_interval=3600)
+        fake_network.set_stub_network_methods(self.stubs)
 
         # Create server
         server = self._build_minimal_create_server_request()
@@ -213,8 +217,9 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self.assertEqual('ACTIVE', found_server['status'])
 
     def test_deferred_delete_force(self):
-        """Creates, deletes and force deletes a server."""
-        self.flags(stub_network=True, reclaim_instance_interval=1)
+        # Creates, deletes and force deletes a server.
+        self.flags(reclaim_instance_interval=3600)
+        fake_network.set_stub_network_methods(self.stubs)
 
         # Create server
         server = self._build_minimal_create_server_request()
@@ -269,8 +274,8 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self._wait_for_deletion(server_id)
 
     def test_create_server_with_metadata(self):
-        """Creates a server with metadata."""
-        self.flags(stub_network=True)
+        # Creates a server with metadata.
+        fake_network.set_stub_network_methods(self.stubs)
 
         # Build the server data gradually, checking errors along the way
         server = self._build_minimal_create_server_request()
@@ -311,8 +316,8 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self._delete_server(created_server_id)
 
     def test_create_and_rebuild_server(self):
-        """Rebuild a server with metadata."""
-        self.flags(stub_network=True)
+        # Rebuild a server with metadata.
+        fake_network.set_stub_network_methods(self.stubs)
 
         # create a server with initially has no metadata
         server = self._build_minimal_create_server_request()
@@ -378,8 +383,8 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self._delete_server(created_server_id)
 
     def test_rename_server(self):
-        """Test building and renaming a server."""
-        self.flags(stub_network=True)
+        # Test building and renaming a server.
+        fake_network.set_stub_network_methods(self.stubs)
 
         # Create a server
         server = self._build_minimal_create_server_request()
@@ -399,7 +404,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self._delete_server(server_id)
 
     def test_create_multiple_servers(self):
-        """Creates multiple servers and checks for reservation_id"""
+        # Creates multiple servers and checks for reservation_id.
 
         # Create 2 servers, setting 'return_reservation_id, which should
         # return a reservation_id
@@ -434,6 +439,42 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         for server_id in server_map.iterkeys():
             self._delete_server(server_id)
 
+    def test_create_server_with_injected_files(self):
+        # Creates a server with injected_files.
+        fake_network.set_stub_network_methods(self.stubs)
+        personality = []
 
-if __name__ == "__main__":
-    unittest.main()
+        # Inject a text file
+        data = 'Hello, World!'
+        personality.append({
+            'path': '/helloworld.txt',
+            'contents': data.encode('base64'),
+        })
+
+        # Inject a binary file
+        data = zlib.compress('Hello, World!')
+        personality.append({
+            'path': '/helloworld.zip',
+            'contents': data.encode('base64'),
+        })
+
+        # Create server
+        server = self._build_minimal_create_server_request()
+        server['personality'] = personality
+
+        post = {'server': server}
+
+        created_server = self.api.post_server(post)
+        LOG.debug("created_server: %s" % created_server)
+        self.assertTrue(created_server['id'])
+        created_server_id = created_server['id']
+
+        # Check it's there
+        found_server = self.api.get_server(created_server_id)
+        self.assertEqual(created_server_id, found_server['id'])
+
+        found_server = self._wait_for_state_change(found_server, 'BUILD')
+        self.assertEqual('ACTIVE', found_server['status'])
+
+        # Cleanup
+        self._delete_server(created_server_id)

@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,8 +18,8 @@
 import webob
 
 from nova.api.openstack.compute.contrib import deferred_delete
-import nova.context
-from nova import compute
+from nova.compute import api as compute_api
+from nova import context
 from nova import exception
 from nova import test
 
@@ -35,18 +35,18 @@ class DeferredDeleteExtensionTest(test.TestCase):
         self.extension = deferred_delete.DeferredDeleteController()
         self.fake_input_dict = {}
         self.fake_uuid = 'fake_uuid'
-        self.fake_context = nova.context.RequestContext('fake', 'fake')
+        self.fake_context = context.RequestContext('fake', 'fake')
         self.fake_req = FakeRequest(self.fake_context)
 
     def test_force_delete(self):
-        self.mox.StubOutWithMock(compute.API, 'get')
-        self.mox.StubOutWithMock(compute.API, 'force_delete')
+        self.mox.StubOutWithMock(compute_api.API, 'get')
+        self.mox.StubOutWithMock(compute_api.API, 'force_delete')
 
         fake_instance = 'fake_instance'
 
-        compute.API.get(self.fake_context, self.fake_uuid).AndReturn(
+        compute_api.API.get(self.fake_context, self.fake_uuid).AndReturn(
                 fake_instance)
-        compute.API.force_delete(self.fake_context, fake_instance)
+        compute_api.API.force_delete(self.fake_context, fake_instance)
 
         self.mox.ReplayAll()
         res = self.extension._force_delete(self.fake_req, self.fake_uuid,
@@ -54,15 +54,20 @@ class DeferredDeleteExtensionTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_force_delete_raises_conflict_on_invalid_state(self):
-        self.mox.StubOutWithMock(compute.API, 'get')
-        self.mox.StubOutWithMock(compute.API, 'force_delete')
+        self.mox.StubOutWithMock(compute_api.API, 'get')
+        self.mox.StubOutWithMock(compute_api.API, 'force_delete')
 
         fake_instance = 'fake_instance'
 
-        compute.API.get(self.fake_context, self.fake_uuid).AndReturn(
+        compute_api.API.get(self.fake_context, self.fake_uuid).AndReturn(
                 fake_instance)
-        compute.API.force_delete(self.fake_context, fake_instance).AndRaise(
-                exception.InstanceInvalidState)
+
+        exc = exception.InstanceInvalidState(attr='fake_attr',
+                state='fake_state', method='fake_method',
+                instance_uuid='fake')
+
+        compute_api.API.force_delete(self.fake_context, fake_instance)\
+            .AndRaise(exc)
 
         self.mox.ReplayAll()
         self.assertRaises(webob.exc.HTTPConflict,
@@ -70,14 +75,14 @@ class DeferredDeleteExtensionTest(test.TestCase):
                 self.fake_input_dict)
 
     def test_restore(self):
-        self.mox.StubOutWithMock(compute.API, 'get')
-        self.mox.StubOutWithMock(compute.API, 'restore')
+        self.mox.StubOutWithMock(compute_api.API, 'get')
+        self.mox.StubOutWithMock(compute_api.API, 'restore')
 
         fake_instance = 'fake_instance'
 
-        compute.API.get(self.fake_context, self.fake_uuid).AndReturn(
+        compute_api.API.get(self.fake_context, self.fake_uuid).AndReturn(
                 fake_instance)
-        compute.API.restore(self.fake_context, fake_instance)
+        compute_api.API.restore(self.fake_context, fake_instance)
 
         self.mox.ReplayAll()
         res = self.extension._restore(self.fake_req, self.fake_uuid,
@@ -85,15 +90,18 @@ class DeferredDeleteExtensionTest(test.TestCase):
         self.assertEqual(res.status_int, 202)
 
     def test_restore_raises_conflict_on_invalid_state(self):
-        self.mox.StubOutWithMock(compute.API, 'get')
-        self.mox.StubOutWithMock(compute.API, 'restore')
+        self.mox.StubOutWithMock(compute_api.API, 'get')
+        self.mox.StubOutWithMock(compute_api.API, 'restore')
 
         fake_instance = 'fake_instance'
+        exc = exception.InstanceInvalidState(attr='fake_attr',
+                state='fake_state', method='fake_method',
+                instance_uuid='fake')
 
-        compute.API.get(self.fake_context, self.fake_uuid).AndReturn(
+        compute_api.API.get(self.fake_context, self.fake_uuid).AndReturn(
                 fake_instance)
-        compute.API.restore(self.fake_context, fake_instance).AndRaise(
-                exception.InstanceInvalidState)
+        compute_api.API.restore(self.fake_context, fake_instance).AndRaise(
+                exc)
 
         self.mox.ReplayAll()
         self.assertRaises(webob.exc.HTTPConflict, self.extension._restore,

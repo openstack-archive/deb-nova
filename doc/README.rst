@@ -1,55 +1,32 @@
-=================
+OpenStack Nova Documentation README
+===================================
+Included documents:
+
+- developer reference guide(devref)
+- man pages
+
+
 Building the docs
-=================
+-----------------
+From the root nova directory::
 
-Dependencies
-============
+  python setup.py build_sphinx
 
-Sphinx_
-  You'll need sphinx (the python one) and if you are
-  using the virtualenv you'll need to install it in the virtualenv
-  specifically so that it can load the nova modules.
+Building just the man pages
+---------------------------
+from the root nova directory::
 
-  ::
-
-    pip install Sphinx
-
-Graphviz_
-  Some of the diagrams are generated using the ``dot`` language
-  from Graphviz.
-
-  ::
-
-    sudo apt-get install graphviz
-
-.. _Sphinx: http://sphinx.pocoo.org
-
-.. _Graphviz: http://www.graphviz.org/
+  python setup.py build_sphinx -b man
 
 
-Use `make`
-==========
+Installing the man pages
+-------------------------
+After building the man pages, they can be found in ``doc/build/man/``.
+You can install the man page onto your system by following the following steps:
 
-Just type make::
+Example for ``nova-scheduler``::
 
-  % make
-
-Look in the Makefile for more targets.
-
-
-Manually
-========
-
-  1. Generate the code.rst file so that Sphinx will pull in our docstrings::
-     
-      % ./generate_autodoc_index.sh > source/code.rst
-
-  2. Run `sphinx_build`::
-
-      % sphinx-build -b html source build/html
-
-
-The docs have been built
-========================
-
-Check out the `build` directory to find them. Yay!
+  mkdir /usr/local/man/man1
+  install -g 0 -o 0 -m 0644 doc/build/man/nova-scheduler.1  /usr/local/man/man1/nova-scheduler.1
+  gzip /usr/local/man/man1/nova-scheduler.1
+  man nova-scheduler

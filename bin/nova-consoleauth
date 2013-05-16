@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2012 Openstack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +24,8 @@ eventlet.monkey_patch()
 import os
 import sys
 
+from oslo.config import cfg
+
 possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
                                    os.pardir,
                                    os.pardir))
@@ -31,18 +33,17 @@ if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
     sys.path.insert(0, possible_topdir)
 
 
-from nova import flags
-from nova import log as logging
-from nova import service
-from nova import utils
+from nova import config
 from nova.consoleauth import manager
+from nova.openstack.common import log as logging
+from nova import service
 
+CONF = cfg.CONF
 
 if __name__ == "__main__":
-    utils.default_flagfile()
-    flags.FLAGS(sys.argv)
-    logging.setup()
-
-    server = service.Service.create(binary='nova-consoleauth')
+    config.parse_args(sys.argv)
+    logging.setup("nova")
+    server = service.Service.create(binary='nova-consoleauth',
+                                    topic=CONF.consoleauth_topic)
     service.serve(server)
     service.wait()

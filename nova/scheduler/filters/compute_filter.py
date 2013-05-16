@@ -1,4 +1,4 @@
-# Copyright (c) 2011 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,43 +13,35 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova import log as logging
-from nova.scheduler import filters
-from nova import utils
+from oslo.config import cfg
 
+from nova.openstack.common import log as logging
+from nova.scheduler import filters
+from nova import servicegroup
+
+CONF = cfg.CONF
 
 LOG = logging.getLogger(__name__)
 
 
 class ComputeFilter(filters.BaseHostFilter):
-    """HostFilter hard-coded to work with InstanceType records."""
+    """Filter on active Compute nodes."""
 
-    def _satisfies_extra_specs(self, capabilities, instance_type):
-        """Check that the capabilities provided by the compute service
-        satisfy the extra specs associated with the instance type"""
-        if 'extra_specs' not in instance_type:
-            return True
-
-        # NOTE(lorinh): For now, we are just checking exact matching on the
-        # values. Later on, we want to handle numerical
-        # values so we can represent things like number of GPU cards
-        for key, value in instance_type['extra_specs'].iteritems():
-            if capabilities.get(key, None) != value:
-                return False
-        return True
+    def __init__(self):
+        self.servicegroup_api = servicegroup.API()
 
     def host_passes(self, host_state, filter_properties):
-        """Return a list of hosts that can create instance_type."""
-        instance_type = filter_properties.get('instance_type')
-        if host_state.topic != 'compute' or not instance_type:
-            return True
+        """Returns True for only active compute nodes."""
         capabilities = host_state.capabilities
         service = host_state.service
 
-        if not utils.service_is_up(service) or service['disabled']:
+        alive = self.servicegroup_api.service_is_up(service)
+        if not alive or service['disabled']:
+            LOG.debug(_("%(host_state)s is disabled or has not been "
+                    "heard from in a while"), locals())
             return False
         if not capabilities.get("enabled", True):
-            return False
-        if not self._satisfies_extra_specs(capabilities, instance_type):
+            LOG.debug(_("%(host_state)s is disabled via capabilities"),
+                    locals())
             return False
         return True

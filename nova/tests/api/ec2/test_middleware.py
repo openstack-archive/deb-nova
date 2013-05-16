@@ -16,6 +16,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from lxml import etree
+from oslo.config import cfg
 import webob
 import webob.dec
 import webob.exc
@@ -23,13 +25,10 @@ import webob.exc
 from nova.api import ec2
 from nova import context
 from nova import exception
-from nova import flags
+from nova.openstack.common import timeutils
 from nova import test
-from nova import utils
 
-from xml.etree import ElementTree
-
-FLAGS = flags.FLAGS
+CONF = cfg.CONF
 
 
 @webob.dec.wsgify
@@ -44,11 +43,11 @@ class LockoutTestCase(test.TestCase):
     """Test case for the Lockout middleware."""
     def setUp(self):  # pylint: disable=C0103
         super(LockoutTestCase, self).setUp()
-        utils.set_time_override()
+        timeutils.set_time_override()
         self.lockout = ec2.Lockout(conditional_forbid)
 
     def tearDown(self):  # pylint: disable=C0103
-        utils.clear_time_override()
+        timeutils.clear_time_override()
         super(LockoutTestCase, self).tearDown()
 
     def _send_bad_attempts(self, access_key, num_attempts=1):
@@ -63,28 +62,28 @@ class LockoutTestCase(test.TestCase):
         return (req.get_response(self.lockout).status_int == 403)
 
     def test_lockout(self):
-        self._send_bad_attempts('test', FLAGS.lockout_attempts)
+        self._send_bad_attempts('test', CONF.lockout_attempts)
         self.assertTrue(self._is_locked_out('test'))
 
     def test_timeout(self):
-        self._send_bad_attempts('test', FLAGS.lockout_attempts)
+        self._send_bad_attempts('test', CONF.lockout_attempts)
         self.assertTrue(self._is_locked_out('test'))
-        utils.advance_time_seconds(FLAGS.lockout_minutes * 60)
+        timeutils.advance_time_seconds(CONF.lockout_minutes * 60)
         self.assertFalse(self._is_locked_out('test'))
 
     def test_multiple_keys(self):
-        self._send_bad_attempts('test1', FLAGS.lockout_attempts)
+        self._send_bad_attempts('test1', CONF.lockout_attempts)
         self.assertTrue(self._is_locked_out('test1'))
         self.assertFalse(self._is_locked_out('test2'))
-        utils.advance_time_seconds(FLAGS.lockout_minutes * 60)
+        timeutils.advance_time_seconds(CONF.lockout_minutes * 60)
         self.assertFalse(self._is_locked_out('test1'))
         self.assertFalse(self._is_locked_out('test2'))
 
     def test_window_timeout(self):
-        self._send_bad_attempts('test', FLAGS.lockout_attempts - 1)
+        self._send_bad_attempts('test', CONF.lockout_attempts - 1)
         self.assertFalse(self._is_locked_out('test'))
-        utils.advance_time_seconds(FLAGS.lockout_window * 60)
-        self._send_bad_attempts('test', FLAGS.lockout_attempts - 1)
+        timeutils.advance_time_seconds(CONF.lockout_window * 60)
+        self._send_bad_attempts('test', CONF.lockout_attempts - 1)
         self.assertFalse(self._is_locked_out('test'))
 
 
@@ -108,7 +107,7 @@ class ExecutorTestCase(test.TestCase):
         return self.executor(fake_wsgi_request)
 
     def _extract_message(self, result):
-        tree = ElementTree.fromstring(result.body)
+        tree = etree.fromstring(result.body)
         return tree.findall('./Errors')[0].find('Error/Message').text
 
     def test_instance_not_found(self):
@@ -116,6 +115,15 @@ class ExecutorTestCase(test.TestCase):
             raise exception.InstanceNotFound(instance_id=5)
         result = self._execute(not_found)
         self.assertIn('i-00000005', self._extract_message(result))
+
+    def test_instance_not_found_none(self):
+        def not_found(context):
+            raise exception.InstanceNotFound(instance_id=None)
+
+        # NOTE(mikal): we want no exception to be raised here, which was what
+        # was happening in bug/1080406
+        result = self._execute(not_found)
+        self.assertIn('None', self._extract_message(result))
 
     def test_snapshot_not_found(self):
         def not_found(context):

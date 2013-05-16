@@ -1,0 +1,7 @@
+/var/log/nova/nova-baremetal.log {
+    daily
+    missingok
+    compress
+    delaycompress
+    notifempty
+}

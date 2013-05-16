@@ -13,19 +13,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Stubouts, mocks and fixtures for the test suite"""
+"""Stubouts, mocks and fixtures for the test suite."""
 
-import json
+import pickle
 import random
 
-from eventlet import tpool
-
-from nova.virt import xenapi_conn
+from nova.openstack.common import jsonutils
+from nova import test
+import nova.tests.image.fake
+from nova.virt.xenapi import driver as xenapi_conn
 from nova.virt.xenapi import fake
-from nova.virt.xenapi import volume_utils
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import vmops
-from nova import utils
 
 
 def stubout_firewall_driver(stubs, conn):
@@ -33,18 +32,18 @@ def stubout_firewall_driver(stubs, conn):
     def fake_none(self, *args):
         return
 
-    vmops = conn._vmops
-    stubs.Set(vmops.firewall_driver, 'prepare_instance_filter', fake_none)
-    stubs.Set(vmops.firewall_driver, 'instance_filter_exists', fake_none)
+    _vmops = conn._vmops
+    stubs.Set(_vmops.firewall_driver, 'prepare_instance_filter', fake_none)
+    stubs.Set(_vmops.firewall_driver, 'instance_filter_exists', fake_none)
 
 
 def stubout_instance_snapshot(stubs):
-    @classmethod
-    def fake_fetch_image(cls, context, session, instance, image, user,
-                         project, type):
-        return [dict(vdi_type='os', vdi_uuid=_make_fake_vdi())]
+    def fake_fetch_image(context, session, instance, name_label, image, type):
+        return {'root': dict(uuid=_make_fake_vdi(), file=None),
+                'kernel': dict(uuid=_make_fake_vdi(), file=None),
+                'ramdisk': dict(uuid=_make_fake_vdi(), file=None)}
 
-    stubs.Set(vm_utils.VMHelper, 'fetch_image', fake_fetch_image)
+    stubs.Set(vm_utils, '_fetch_image', fake_fetch_image)
 
     def fake_wait_for_vhd_coalesce(*args):
         #TODO(sirp): Should we actually fake out the data here
@@ -53,35 +52,13 @@ def stubout_instance_snapshot(stubs):
     stubs.Set(vm_utils, '_wait_for_vhd_coalesce', fake_wait_for_vhd_coalesce)
 
 
-def stubout_session(stubs, cls, product_version=None, **opt_args):
-    """Stubs out three methods from XenAPISession"""
-    def fake_import(self):
-        """Stubs out get_imported_xenapi of XenAPISession"""
-        fake_module = 'nova.virt.xenapi.fake'
-        from_list = ['fake']
-        return __import__(fake_module, globals(), locals(), from_list, -1)
-
+def stubout_session(stubs, cls, product_version=(5, 6, 2),
+                    product_brand='XenServer', **opt_args):
+    """Stubs out methods from XenAPISession."""
     stubs.Set(xenapi_conn.XenAPISession, '_create_session',
               lambda s, url: cls(url, **opt_args))
-    stubs.Set(xenapi_conn.XenAPISession, 'get_imported_xenapi',
-                       fake_import)
-    if product_version is None:
-        product_version = (5, 6, 2)
-    stubs.Set(xenapi_conn.XenAPISession, 'get_product_version',
-            lambda s: product_version)
-    # NOTE(johannes): logging can't be used reliably from a thread
-    # since it can deadlock with eventlet. It's safe for our faked
-    # sessions to be called synchronously in the unit tests. (see
-    # bug 946687)
-    stubs.Set(tpool, 'execute', lambda m, *a, **kw: m(*a, **kw))
-
-
-def stub_out_get_target(stubs):
-    """Stubs out _get_target in volume_utils"""
-    def fake_get_target(volume_id):
-        return (None, None)
-
-    stubs.Set(volume_utils, '_get_target', fake_get_target)
+    stubs.Set(xenapi_conn.XenAPISession, '_get_product_version_and_brand',
+              lambda s: (product_version, product_brand))
 
 
 def stubout_get_this_vm_uuid(stubs):
@@ -93,10 +70,17 @@ def stubout_get_this_vm_uuid(stubs):
     stubs.Set(vm_utils, 'get_this_vm_uuid', f)
 
 
-def stubout_stream_disk(stubs):
-    def f(_1, _2, _3, _4):
+def stubout_image_service_download(stubs):
+    def fake_download(*args, **kwargs):
         pass
-    stubs.Set(vm_utils, '_stream_disk', f)
+    stubs.Set(nova.tests.image.fake._FakeImageService,
+        'download', fake_download)
+
+
+def stubout_stream_disk(stubs):
+    def fake_stream_disk(*args, **kwargs):
+        pass
+    stubs.Set(vm_utils, '_stream_disk', fake_stream_disk)
 
 
 def stubout_is_vdi_pv(stubs):
@@ -106,22 +90,20 @@ def stubout_is_vdi_pv(stubs):
 
 
 def stubout_determine_is_pv_objectstore(stubs):
-    """Assumes VMs stu have PV kernels"""
+    """Assumes VMs stu have PV kernels."""
 
-    @classmethod
-    def f(cls, *args):
+    def f(*args):
         return False
-    stubs.Set(vm_utils.VMHelper, '_determine_is_pv_objectstore', f)
+    stubs.Set(vm_utils, '_determine_is_pv_objectstore', f)
 
 
 def stubout_is_snapshot(stubs):
-    """ Always returns true
+    """Always returns true
         xenapi fake driver does not create vmrefs for snapshots """
 
-    @classmethod
-    def f(cls, *args):
+    def f(*args):
         return True
-    stubs.Set(vm_utils.VMHelper, 'is_snapshot', f)
+    stubs.Set(vm_utils, 'is_snapshot', f)
 
 
 def stubout_lookup_image(stubs):
@@ -131,12 +113,11 @@ def stubout_lookup_image(stubs):
     stubs.Set(vm_utils, 'lookup_image', f)
 
 
-def stubout_fetch_image_glance_disk(stubs, raise_failure=False):
+def stubout_fetch_disk_image(stubs, raise_failure=False):
     """Simulates a failure in fetch image_glance_disk."""
 
-    @classmethod
-    def _fake_fetch_image_glance_disk(cls, context, session, instance, image,
-                                      image_type):
+    def _fake_fetch_disk_image(context, session, instance, name_label, image,
+                               image_type):
         if raise_failure:
             raise fake.Failure("Test Exception raised by "
                                "fake fetch_image_glance_disk")
@@ -147,39 +128,37 @@ def stubout_fetch_image_glance_disk(stubs, raise_failure=False):
         else:
             filename = "unknown"
 
-        return [dict(vdi_type=vm_utils.ImageType.to_string(image_type),
-                     vdi_uuid=None,
-                     file=filename)]
+        vdi_type = vm_utils.ImageType.to_string(image_type)
+        return {vdi_type: dict(uuid=None, file=filename)}
 
-    stubs.Set(vm_utils.VMHelper, '_fetch_image_glance_disk',
-              _fake_fetch_image_glance_disk)
+    stubs.Set(vm_utils, '_fetch_disk_image', _fake_fetch_disk_image)
 
 
 def stubout_create_vm(stubs):
     """Simulates a failure in create_vm."""
 
-    @classmethod
-    def f(cls, *args):
-        raise fake.Failure("Test Exception raised by " +
-                           "fake create_vm")
-    stubs.Set(vm_utils.VMHelper, 'create_vm', f)
+    def f(*args):
+        raise fake.Failure("Test Exception raised by fake create_vm")
+    stubs.Set(vm_utils, 'create_vm', f)
 
 
-def stubout_loopingcall_start(stubs):
-    def fake_start(self, interval, now=True):
-        self.f(*self.args, **self.kw)
-    stubs.Set(utils.LoopingCall, 'start', fake_start)
+def stubout_attach_disks(stubs):
+    """Simulates a failure in _attach_disks."""
+
+    def f(*args):
+        raise fake.Failure("Test Exception raised by fake _attach_disks")
+    stubs.Set(vmops.VMOps, '_attach_disks', f)
 
 
 def _make_fake_vdi():
     sr_ref = fake.get_all('SR')[0]
-    vdi_ref = fake.create_vdi('', False, sr_ref, False)
+    vdi_ref = fake.create_vdi('', sr_ref)
     vdi_rec = fake.get_record('VDI', vdi_ref)
     return vdi_rec['uuid']
 
 
 class FakeSessionForVMTests(fake.SessionBase):
-    """ Stubs out a XenAPISession for VM tests """
+    """Stubs out a XenAPISession for VM tests."""
 
     _fake_iptables_save_output = ("# Generated by iptables-save v1.4.10 on "
                                   "Sun Nov  6 22:49:02 2011\n"
@@ -190,26 +169,13 @@ class FakeSessionForVMTests(fake.SessionBase):
                                   "COMMIT\n"
                                   "# Completed on Sun Nov  6 22:49:02 2011\n")
 
-    def __init__(self, uri):
-        super(FakeSessionForVMTests, self).__init__(uri)
-
     def host_call_plugin(self, _1, _2, plugin, method, _5):
         if (plugin, method) == ('glance', 'download_vhd'):
-            return fake.as_json(dict(vdi_type='os',
-                                     vdi_uuid=_make_fake_vdi()))
+            root_uuid = _make_fake_vdi()
+            return pickle.dumps(dict(root=dict(uuid=root_uuid)))
         elif (plugin, method) == ("xenhost", "iptables_config"):
             return fake.as_json(out=self._fake_iptables_save_output,
                                 err='')
-        else:
-            return (super(FakeSessionForVMTests, self).
-                    host_call_plugin(_1, _2, plugin, method, _5))
-
-    def host_call_plugin_swap(self, _1, _2, plugin, method, _5):
-        if (plugin, method) == ('glance', 'download_vhd'):
-            return fake.as_json(dict(vdi_type='os',
-                                     vdi_uuid=_make_fake_vdi()),
-                                dict(vdi_type='swap',
-                                     vdi_uuid=_make_fake_vdi()))
         else:
             return (super(FakeSessionForVMTests, self).
                     host_call_plugin(_1, _2, plugin, method, _5))
@@ -218,7 +184,7 @@ class FakeSessionForVMTests(fake.SessionBase):
         vm = fake.get_record('VM', ref)
         if vm['power_state'] != 'Halted':
             raise fake.Failure(['VM_BAD_POWER_STATE', ref, 'Halted',
-                                  vm['power_state']])
+                                vm['power_state']])
         vm['power_state'] = 'Running'
         vm['is_a_template'] = False
         vm['is_control_domain'] = False
@@ -229,42 +195,23 @@ class FakeSessionForVMTests(fake.SessionBase):
         vm_rec = self.VM_start(_1, vm_ref, _2, _3)
         vm_rec['resident_on'] = host_ref
 
-    def VM_snapshot(self, session_ref, vm_ref, label):
-        status = "Running"
-        template_vm_ref = fake.create_vm(label, status, is_a_template=True,
-            is_control_domain=False)
-
+    def VDI_snapshot(self, session_ref, vm_ref, _1):
         sr_ref = "fakesr"
-        template_vdi_ref = fake.create_vdi(label, read_only=True,
-            sr_ref=sr_ref, sharable=False)
-
-        template_vbd_ref = fake.create_vbd(template_vm_ref, template_vdi_ref)
-        return template_vm_ref
-
-    def VDI_destroy(self, session_ref, vdi_ref):
-        fake.destroy_vdi(vdi_ref)
-
-    def VM_destroy(self, session_ref, vm_ref):
-        fake.destroy_vm(vm_ref)
+        return fake.create_vdi('fakelabel', sr_ref, read_only=True)
 
     def SR_scan(self, session_ref, sr_ref):
         pass
 
-    def VDI_set_name_label(self, session_ref, vdi_ref, name_label):
-        pass
-
 
 class FakeSessionForFirewallTests(FakeSessionForVMTests):
-    """ Stubs out a XenApi Session for doing IPTable Firewall tests """
+    """Stubs out a XenApi Session for doing IPTable Firewall tests."""
 
     def __init__(self, uri, test_case=None):
         super(FakeSessionForFirewallTests, self).__init__(uri)
-        if hasattr(test_case, '_in_filter_rules'):
-            self._in_filter_rules = test_case._in_filter_rules
+        if hasattr(test_case, '_in_rules'):
+            self._in_rules = test_case._in_rules
         if hasattr(test_case, '_in6_filter_rules'):
             self._in6_filter_rules = test_case._in6_filter_rules
-        if hasattr(test_case, '_in_nat_rules'):
-            self._in_nat_rules = test_case._in_nat_rules
         self._test_case = test_case
 
     def host_call_plugin(self, _1, _2, plugin, method, args):
@@ -275,25 +222,23 @@ class FakeSessionForFirewallTests(FakeSessionForVMTests):
         if plugin == "xenhost" and method == "iptables_config":
             # The command to execute is a json-encoded list
             cmd_args = args.get('cmd_args', None)
-            cmd = json.loads(cmd_args)
+            cmd = jsonutils.loads(cmd_args)
             if not cmd:
                 ret_str = ''
             else:
                 output = ''
                 process_input = args.get('process_input', None)
-                if cmd == ['ip6tables-save', '-t', 'filter']:
+                if cmd == ['ip6tables-save', '-c']:
                     output = '\n'.join(self._in6_filter_rules)
-                if cmd == ['iptables-save', '-t', 'filter']:
-                    output = '\n'.join(self._in_filter_rules)
-                if cmd == ['iptables-save', '-t', 'nat']:
-                    output = '\n'.join(self._in_nat_rules)
-                if cmd == ['iptables-restore', ]:
+                if cmd == ['iptables-save', '-c']:
+                    output = '\n'.join(self._in_rules)
+                if cmd == ['iptables-restore', '-c', ]:
                     lines = process_input.split('\n')
                     if '*filter' in lines:
                         if self._test_case is not None:
                             self._test_case._out_rules = lines
                         output = '\n'.join(lines)
-                if cmd == ['ip6tables-restore', ]:
+                if cmd == ['ip6tables-restore', '-c', ]:
                     lines = process_input.split('\n')
                     if '*filter' in lines:
                         output = '\n'.join(lines)
@@ -302,34 +247,26 @@ class FakeSessionForFirewallTests(FakeSessionForVMTests):
 
 
 def stub_out_vm_methods(stubs):
-    def fake_shutdown(self, inst, vm, method="clean"):
-        pass
-
     def fake_acquire_bootlock(self, vm):
         pass
 
     def fake_release_bootlock(self, vm):
         pass
 
-    def fake_spawn_rescue(self, context, inst, network_info, image_meta):
-        inst._rescue = False
-
-    @classmethod
-    def fake_generate_ephemeral(cls, *args):
+    def fake_generate_ephemeral(*args):
         pass
 
-    stubs.Set(vmops.VMOps, "_shutdown", fake_shutdown)
+    def fake_wait_for_device(dev):
+        pass
+
     stubs.Set(vmops.VMOps, "_acquire_bootlock", fake_acquire_bootlock)
     stubs.Set(vmops.VMOps, "_release_bootlock", fake_release_bootlock)
-    stubs.Set(vmops.VMOps, "spawn_rescue", fake_spawn_rescue)
-    stubs.Set(vm_utils.VMHelper, 'generate_ephemeral', fake_generate_ephemeral)
+    stubs.Set(vm_utils, 'generate_ephemeral', fake_generate_ephemeral)
+    stubs.Set(vm_utils, '_wait_for_device', fake_wait_for_device)
 
 
 class FakeSessionForVolumeTests(fake.SessionBase):
-    """ Stubs out a XenAPISession for Volume tests """
-    def __init__(self, uri):
-        super(FakeSessionForVolumeTests, self).__init__(uri)
-
+    """Stubs out a XenAPISession for Volume tests."""
     def VDI_introduce(self, _1, uuid, _2, _3, _4, _5,
                       _6, _7, _8, _9, _10, _11):
         valid_vdi = False
@@ -343,10 +280,7 @@ class FakeSessionForVolumeTests(fake.SessionBase):
 
 
 class FakeSessionForVolumeFailedTests(FakeSessionForVolumeTests):
-    """ Stubs out a XenAPISession for Volume tests: it injects failures """
-    def __init__(self, uri):
-        super(FakeSessionForVolumeFailedTests, self).__init__(uri)
-
+    """Stubs out a XenAPISession for Volume tests: it injects failures."""
     def VDI_introduce(self, _1, uuid, _2, _3, _4, _5,
                       _6, _7, _8, _9, _10, _11):
         # This is for testing failure
@@ -360,59 +294,60 @@ class FakeSessionForVolumeFailedTests(FakeSessionForVolumeTests):
         pass
 
 
-class FakeSessionForMigrationTests(FakeSessionForVMTests):
-    """Stubs out a XenAPISession for Migration tests"""
-    def __init__(self, uri):
-        super(FakeSessionForMigrationTests, self).__init__(uri)
-
-    def VDI_get_by_uuid(self, *args):
-        return 'hurr'
-
-    def VM_set_name_label(self, *args):
-        pass
-
-    def VDI_set_name_label(self, session_ref, vdi_ref, name_label):
-        pass
-
-
 def stub_out_migration_methods(stubs):
-    def fake_create_snapshot(self, instance):
-        return 'vm_ref', dict(image='foo', snap='bar')
+    fakesr = fake.create_sr()
 
-    @classmethod
-    def fake_get_vdi(cls, session, vm_ref):
-        vdi_ref = fake.create_vdi(name_label='derp', read_only=False,
-                             sr_ref='herp', sharable=False)
+    def fake_move_disks(self, instance, disk_info):
+        vdi_ref = fake.create_vdi(instance['name'], fakesr)
+        vdi_rec = fake.get_record('VDI', vdi_ref)
+        vdi_rec['other_config']['nova_disk_type'] = 'root'
+        return {'uuid': vdi_rec['uuid'], 'ref': vdi_ref}
+
+    def fake_get_vdi(session, vm_ref):
+        vdi_ref_parent = fake.create_vdi('derp-parent', fakesr)
+        vdi_rec_parent = fake.get_record('VDI', vdi_ref_parent)
+        vdi_ref = fake.create_vdi('derp', fakesr,
+                sm_config={'vhd-parent': vdi_rec_parent['uuid']})
         vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
-        return vdi_ref, {'uuid': vdi_rec['uuid'], }
+        return vdi_ref, vdi_rec
 
-    def fake_shutdown(self, inst, vm, hard=True):
-        pass
+    def fake_sr(session, *args):
+        return fakesr
 
-    @classmethod
-    def fake_sr(cls, session, *args):
-        pass
-
-    @classmethod
-    def fake_get_sr_path(cls, *args):
+    def fake_get_sr_path(*args):
         return "fake"
 
     def fake_destroy(*args, **kwargs):
         pass
 
-    def fake_reset_network(*args, **kwargs):
-        pass
-
-    @classmethod
-    def fake_generate_ephemeral(cls, *args):
+    def fake_generate_ephemeral(*args):
         pass
 
     stubs.Set(vmops.VMOps, '_destroy', fake_destroy)
-    stubs.Set(vm_utils.VMHelper, 'scan_default_sr', fake_sr)
-    stubs.Set(vm_utils.VMHelper, 'scan_sr', fake_sr)
-    stubs.Set(vmops.VMOps, '_create_snapshot', fake_create_snapshot)
-    stubs.Set(vm_utils.VMHelper, 'get_vdi_for_vm_safely', fake_get_vdi)
-    stubs.Set(vm_utils.VMHelper, 'get_sr_path', fake_get_sr_path)
-    stubs.Set(vmops.VMOps, 'reset_network', fake_reset_network)
-    stubs.Set(vmops.VMOps, '_shutdown', fake_shutdown)
-    stubs.Set(vm_utils.VMHelper, 'generate_ephemeral', fake_generate_ephemeral)
+    stubs.Set(vm_utils, 'move_disks', fake_move_disks)
+    stubs.Set(vm_utils, 'scan_default_sr', fake_sr)
+    stubs.Set(vm_utils, 'get_vdi_for_vm_safely', fake_get_vdi)
+    stubs.Set(vm_utils, 'get_sr_path', fake_get_sr_path)
+    stubs.Set(vm_utils, 'generate_ephemeral', fake_generate_ephemeral)
+
+
+class FakeSessionForFailedMigrateTests(FakeSessionForVMTests):
+    def VM_assert_can_migrate(self, session, vmref, migrate_data,
+                              live, vdi_map, vif_map, options):
+        raise fake.Failure("XenAPI VM.assert_can_migrate failed")
+
+    def host_migrate_receive(self, session, hostref, networkref, options):
+        raise fake.Failure("XenAPI host.migrate_receive failed")
+
+    def VM_migrate_send(self, session, vmref, migrate_data, islive, vdi_map,
+                        vif_map, options):
+        raise fake.Failure("XenAPI VM.migrate_send failed")
+
+
+class XenAPITestBase(test.TestCase):
+    def setUp(self):
+        super(XenAPITestBase, self).setUp()
+
+        self.useFixture(test.ReplaceModule('XenAPI', fake))
+
+        fake.reset()

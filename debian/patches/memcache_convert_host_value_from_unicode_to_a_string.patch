@@ -1,0 +1,24 @@
+Description: Convert host value from unicode to a string.
+ The memcached API expects string format, not unicode.
+ Convert the host value to a string before creating
+ the cache_key and passing it to memcached.
+Author: Dan Florea <dflorea@cisco.com>
+Date: Tue, 26 Mar 2013 23:00:32 -0700
+Bug-Ubuntu: https://launchpad.net/bugs/1158958
+
+diff --git a/nova/api/openstack/compute/contrib/extended_availability_zone.py b/nova/api/openstack/compute/contrib/extended_availability_zone.py
+index af55721..a1ee85b 100644
+--- a/nova/api/openstack/compute/contrib/extended_availability_zone.py
++++ b/nova/api/openstack/compute/contrib/extended_availability_zone.py
+@@ -37,7 +37,7 @@ class ExtendedAZController(wsgi.Controller):
+         self.mc = memorycache.get_client()
+ 
+     def _get_host_az(self, context, instance):
+-        host = instance.get('host')
++        host = str(instance.get('host'))
+         if not host:
+             return None
+         cache_key = "azcache-%s" % host
+-- 
+1.7.9.5
+

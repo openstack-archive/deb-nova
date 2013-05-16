@@ -1,4 +1,4 @@
-/var/log/nova/nova-vncproxy.log {
+/var/log/nova/nova-xvpvncproxy.log {
     daily
     missingok
 }

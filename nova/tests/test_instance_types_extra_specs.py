@@ -18,6 +18,7 @@ Unit Tests for instance types extra specs code
 
 from nova import context
 from nova import db
+from nova import exception
 from nova import test
 
 
@@ -41,6 +42,7 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
         ref = db.instance_type_create(self.context,
                                           values)
         self.instance_type_id = ref["id"]
+        self.flavorid = ref["flavorid"]
 
     def tearDown(self):
         # Remove the instance type from the database
@@ -55,7 +57,7 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                                  xpu_model="Tesla 2050")
         actual_specs = db.instance_type_extra_specs_get(
                               self.context,
-                              self.instance_type_id)
+                              self.flavorid)
         self.assertEquals(expected_specs, actual_specs)
 
     def test_instance_type_extra_specs_delete(self):
@@ -64,11 +66,11 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                                  xpu_arch="fermi",
                                  xpus="2")
         db.instance_type_extra_specs_delete(self.context,
-                                      self.instance_type_id,
+                                      self.flavorid,
                                       "xpu_model")
         actual_specs = db.instance_type_extra_specs_get(
                               self.context,
-                              self.instance_type_id)
+                              self.flavorid)
         self.assertEquals(expected_specs, actual_specs)
 
     def test_instance_type_extra_specs_update(self):
@@ -79,12 +81,19 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                                  xpu_model="Tesla 2050")
         db.instance_type_extra_specs_update_or_create(
                               self.context,
-                              self.instance_type_id,
+                              self.flavorid,
                               dict(cpu_model="Sandy Bridge"))
         actual_specs = db.instance_type_extra_specs_get(
                               self.context,
-                              self.instance_type_id)
+                              self.flavorid)
         self.assertEquals(expected_specs, actual_specs)
+
+    def test_instance_type_extra_specs_update_with_nonexisting_flavor(self):
+        extra_specs = dict(cpu_arch="x86_64")
+        nonexisting_flavorid = "some_flavor_that_doesnt_exists"
+        self.assertRaises(exception.FlavorNotFound,
+                          db.instance_type_extra_specs_update_or_create,
+                          self.context, nonexisting_flavorid, extra_specs)
 
     def test_instance_type_extra_specs_create(self):
         expected_specs = dict(cpu_arch="x86_64",
@@ -96,12 +105,12 @@ class InstanceTypeExtraSpecsTestCase(test.TestCase):
                                  net_mbps="10000")
         db.instance_type_extra_specs_update_or_create(
                               self.context,
-                              self.instance_type_id,
+                              self.flavorid,
                               dict(net_arch="ethernet",
                                    net_mbps=10000))
         actual_specs = db.instance_type_extra_specs_get(
                               self.context,
-                              self.instance_type_id)
+                              self.flavorid)
         self.assertEquals(expected_specs, actual_specs)
 
     def test_instance_type_get_with_extra_specs(self):

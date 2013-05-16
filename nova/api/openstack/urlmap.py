@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -19,8 +19,8 @@ import paste.urlmap
 import re
 import urllib2
 
-from nova import log as logging
 from nova.api.openstack import wsgi
+from nova.openstack.common import log as logging
 
 
 _quoted_string_re = r'"[^"\\]*(?:\\.[^"\\]*)*"'

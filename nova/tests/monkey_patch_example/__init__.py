@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -21,7 +21,7 @@ CALLED_FUNCTION = []
 
 
 def example_decorator(name, function):
-    """ decorator for notify which is used from utils.monkey_patch()
+    """decorator for notify which is used from utils.monkey_patch()
 
         :param name: name of the function
         :param function: - object of the function

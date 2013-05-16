@@ -1,15 +1,13 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 import inspect
-import json
 import webob
 
+from nova.api.openstack import wsgi
 from nova import exception
 from nova import test
-from nova import utils
-from nova.api.openstack import wsgi
 from nova.tests.api.openstack import fakes
-import nova.context
+from nova.tests import utils
 
 
 class RequestTest(test.TestCase):
@@ -77,6 +75,27 @@ class RequestTest(test.TestCase):
         request.headers["Accept"] = "application/unsupported1"
         result = request.best_match_content_type()
         self.assertEqual(result, "application/json")
+
+    def test_cache_and_retrieve_instances(self):
+        request = wsgi.Request.blank('/foo')
+        instances = []
+        for x in xrange(3):
+            instances.append({'uuid': 'uuid%s' % x})
+        # Store 2
+        request.cache_db_instances(instances[:2])
+        # Store 1
+        request.cache_db_instance(instances[2])
+        self.assertEqual(request.get_db_instance('uuid0'),
+                instances[0])
+        self.assertEqual(request.get_db_instance('uuid1'),
+                instances[1])
+        self.assertEqual(request.get_db_instance('uuid2'),
+                instances[2])
+        self.assertEqual(request.get_db_instance('uuid3'), None)
+        self.assertEqual(request.get_db_instances(),
+                {'uuid0': instances[0],
+                 'uuid1': instances[1],
+                 'uuid2': instances[2]})
 
 
 class ActionDispatcherTest(test.TestCase):
@@ -178,7 +197,7 @@ class XMLDeserializerTest(test.TestCase):
         self.assertEqual(deserializer.deserialize(xml), as_dict)
 
     def test_xml_empty(self):
-        xml = """<a></a>"""
+        xml = '<a></a>'
         as_dict = {"body": {"a": {}}}
         deserializer = wsgi.XMLDeserializer()
         self.assertEqual(deserializer.deserialize(xml), as_dict)
@@ -218,7 +237,7 @@ class ResourceTest(test.TestCase):
         expected = 'off'
         self.assertEqual(actual, expected)
 
-    def test_get_method_unknown_controller_action(self):
+    def test_get_method_unknown_controller_method(self):
         class Controller(object):
             def index(self, req, pants=None):
                 return pants
@@ -253,6 +272,21 @@ class ResourceTest(test.TestCase):
                                                  'application/xml',
                                                  '<fooAction>true</fooAction>')
         self.assertEqual(controller._action_foo, method)
+
+    def test_get_method_action_corrupt_xml(self):
+        class Controller(wsgi.Controller):
+            @wsgi.action('fooAction')
+            def _action_foo(self, req, id, body):
+                return body
+
+        controller = Controller()
+        resource = wsgi.Resource(controller)
+        self.assertRaises(
+                exception.MalformedRequestBody,
+                resource.get_method,
+                None, 'action',
+                'application/xml',
+                utils.killer_xml_body())
 
     def test_get_method_action_bad_body(self):
         class Controller(wsgi.Controller):
@@ -734,6 +768,18 @@ class ResourceTest(test.TestCase):
         self.assertEqual(called, [2])
         self.assertEqual(response, 'foo')
 
+    def test_resource_exception_handler_type_error(self):
+        # A TypeError should be translated to a Fault/HTTP 400.
+        def foo(a,):
+            return a
+
+        try:
+            with wsgi.ResourceExceptionHandler():
+                foo()  # generate a TypeError
+            self.fail("Should have raised a Fault (HTTP 400)")
+        except wsgi.Fault as fault:
+            self.assertEqual(400, fault.status_int)
+
 
 class ResponseObjectTest(test.TestCase):
     def test_default_code(self):
@@ -821,6 +867,7 @@ class ResponseObjectTest(test.TestCase):
                                    atom=AtomSerializer)
         robj['X-header1'] = 'header1'
         robj['X-header2'] = 'header2'
+        robj['X-header3'] = 3
 
         for content_type, mtype in wsgi._MEDIA_TYPE_MAP.items():
             request = wsgi.Request.blank('/tests/123')
@@ -829,5 +876,35 @@ class ResponseObjectTest(test.TestCase):
             self.assertEqual(response.headers['Content-Type'], content_type)
             self.assertEqual(response.headers['X-header1'], 'header1')
             self.assertEqual(response.headers['X-header2'], 'header2')
+            self.assertEqual(response.headers['X-header3'], '3')
             self.assertEqual(response.status_int, 202)
             self.assertEqual(response.body, mtype)
+
+
+class ValidBodyTest(test.TestCase):
+
+    def setUp(self):
+        super(ValidBodyTest, self).setUp()
+        self.controller = wsgi.Controller()
+
+    def test_is_valid_body(self):
+        body = {'foo': {}}
+        self.assertTrue(self.controller.is_valid_body(body, 'foo'))
+
+    def test_is_valid_body_none(self):
+        resource = wsgi.Resource(controller=None)
+        self.assertFalse(self.controller.is_valid_body(None, 'foo'))
+
+    def test_is_valid_body_empty(self):
+        resource = wsgi.Resource(controller=None)
+        self.assertFalse(self.controller.is_valid_body({}, 'foo'))
+
+    def test_is_valid_body_no_entity(self):
+        resource = wsgi.Resource(controller=None)
+        body = {'bar': {}}
+        self.assertFalse(self.controller.is_valid_body(body, 'foo'))
+
+    def test_is_valid_body_malformed_entity(self):
+        resource = wsgi.Resource(controller=None)
+        body = {'foo': 'bar'}
+        self.assertFalse(self.controller.is_valid_body(body, 'foo'))

@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # Copyright 2011 Justin Santa Barbara
 # All Rights Reserved.
 #
@@ -25,14 +25,11 @@ import nova.api.openstack
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import exception
-from nova import flags
-from nova import log as logging
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
 import nova.policy
-from nova import utils
-
 
 LOG = logging.getLogger(__name__)
-FLAGS = flags.FLAGS
 
 
 class ExtensionDescriptor(object):
@@ -63,6 +60,7 @@ class ExtensionDescriptor(object):
         """Register extension with the extension manager."""
 
         ext_mgr.register(self)
+        self.ext_mgr = ext_mgr
 
     def get_resources(self):
         """List of extensions.ResourceExtension extension objects.
@@ -150,7 +148,7 @@ class ExtensionsResource(wsgi.Resource):
     @wsgi.serializers(xml=ExtensionsTemplate)
     def index(self, req):
         extensions = []
-        for _alias, ext in self.extension_manager.extensions.iteritems():
+        for ext in self.extension_manager.sorted_extensions():
             extensions.append(self._translate(ext))
         return dict(extensions=extensions)
 
@@ -174,10 +172,19 @@ class ExtensionsResource(wsgi.Resource):
 class ExtensionManager(object):
     """Load extensions from the configured extension path.
 
-    See nova/tests/api/openstack/extensions/foxinsocks/extension.py for an
+    See nova/tests/api/openstack/volume/extensions/foxinsocks.py or an
     example extension implementation.
 
     """
+    def sorted_extensions(self):
+        if self.sorted_ext_list is None:
+            self.sorted_ext_list = sorted(self.extensions.iteritems())
+
+        for _alias, ext in self.sorted_ext_list:
+            yield ext
+
+    def is_loaded(self, alias):
+        return alias in self.extensions
 
     def register(self, ext):
         # Do nothing if the extension doesn't check out
@@ -188,8 +195,10 @@ class ExtensionManager(object):
         LOG.audit(_('Loaded extension: %s'), alias)
 
         if alias in self.extensions:
-            raise exception.Error("Found duplicate extension: %s" % alias)
+            raise exception.NovaException("Found duplicate extension: %s"
+                                          % alias)
         self.extensions[alias] = ext
+        self.sorted_ext_list = None
 
     def get_resources(self):
         """Returns a list of ResourceExtension objects."""
@@ -197,8 +206,7 @@ class ExtensionManager(object):
         resources = []
         resources.append(ResourceExtension('extensions',
                                            ExtensionsResource(self)))
-
-        for ext in self.extensions.values():
+        for ext in self.sorted_extensions():
             try:
                 resources.extend(ext.get_resources())
             except AttributeError:
@@ -210,13 +218,14 @@ class ExtensionManager(object):
     def get_controller_extensions(self):
         """Returns a list of ControllerExtension objects."""
         controller_exts = []
-        for ext in self.extensions.values():
+        for ext in self.sorted_extensions():
             try:
-                controller_exts.extend(ext.get_controller_extensions())
+                get_ext_method = ext.get_controller_extensions
             except AttributeError:
                 # NOTE(Vek): Extensions aren't required to have
                 # controller extensions
-                pass
+                continue
+            controller_exts.extend(get_ext_method())
         return controller_exts
 
     def _check_extension(self, extension):
@@ -245,8 +254,11 @@ class ExtensionManager(object):
 
         LOG.debug(_("Loading extension %s"), ext_factory)
 
-        # Load the factory
-        factory = utils.import_class(ext_factory)
+        if isinstance(ext_factory, basestring):
+            # Load the factory
+            factory = importutils.import_class(ext_factory)
+        else:
+            factory = ext_factory
 
         # Call it
         LOG.debug(_("Calling extension factory %s"), ext_factory)
@@ -281,9 +293,9 @@ class ControllerExtension(object):
 class ResourceExtension(object):
     """Add top level resources to the OpenStack API in nova."""
 
-    def __init__(self, collection, controller, parent=None,
+    def __init__(self, collection, controller=None, parent=None,
                  collection_actions=None, member_actions=None,
-                 custom_routes_fn=None):
+                 custom_routes_fn=None, inherits=None):
         if not collection_actions:
             collection_actions = {}
         if not member_actions:
@@ -294,6 +306,7 @@ class ResourceExtension(object):
         self.collection_actions = collection_actions
         self.member_actions = member_actions
         self.custom_routes_fn = custom_routes_fn
+        self.inherits = inherits
 
 
 def wrap_errors(fn):
@@ -356,8 +369,8 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
             ext_name = ("%s%s.%s.extension" %
                         (package, relpkg, dname))
             try:
-                ext = utils.import_class(ext_name)
-            except exception.ClassNotFound:
+                ext = importutils.import_class(ext_name)
+            except ImportError:
                 # extension() doesn't exist on it, so we'll explore
                 # the directory for ourselves
                 subdirs.append(dname)
@@ -373,12 +386,15 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
 
 
 def extension_authorizer(api_name, extension_name):
-    def authorize(context, target=None):
+    def authorize(context, target=None, action=None):
         if target is None:
             target = {'project_id': context.project_id,
                       'user_id': context.user_id}
-        action = '%s_extension:%s' % (api_name, extension_name)
-        nova.policy.enforce(context, action, target)
+        if action is None:
+            act = '%s_extension:%s' % (api_name, extension_name)
+        else:
+            act = '%s_extension:%s:%s' % (api_name, extension_name, action)
+        nova.policy.enforce(context, act, target)
     return authorize
 
 

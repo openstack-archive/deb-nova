@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,8 +17,8 @@
 
 import webob
 
-from nova.api.openstack.compute.views import flavors as flavors_view
 from nova.api.openstack import common
+from nova.api.openstack.compute.views import flavors as flavors_view
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import instance_types
@@ -31,9 +31,7 @@ def make_flavor(elem, detailed=False):
     if detailed:
         elem.set('ram')
         elem.set('disk')
-
-        for attr in ("vcpus", "swap", "rxtx_factor"):
-            elem.set(attr, xmlutil.EmptyStringSelector(attr))
+        elem.set('vcpus', xmlutil.EmptyStringSelector('vcpus'))
 
     xmlutil.make_links(elem, 'links')
 
@@ -73,42 +71,78 @@ class Controller(wsgi.Controller):
     def index(self, req):
         """Return all flavors in brief."""
         flavors = self._get_flavors(req)
-        limited_flavors = common.limited_by_marker(flavors.values(), req)
-        return self._view_builder.index(req, limited_flavors)
+        return self._view_builder.index(req, flavors)
 
     @wsgi.serializers(xml=FlavorsTemplate)
     def detail(self, req):
         """Return all flavors in detail."""
         flavors = self._get_flavors(req)
-        limited_flavors = common.limited_by_marker(flavors.values(), req)
-        return self._view_builder.detail(req, limited_flavors)
+        req.cache_db_flavors(flavors)
+        return self._view_builder.detail(req, flavors)
 
     @wsgi.serializers(xml=FlavorTemplate)
     def show(self, req, id):
         """Return data about the given flavor id."""
         try:
             flavor = instance_types.get_instance_type_by_flavor_id(id)
+            req.cache_db_flavor(flavor)
         except exception.NotFound:
             raise webob.exc.HTTPNotFound()
 
         return self._view_builder.show(req, flavor)
 
+    def _get_is_public(self, req):
+        """Parse is_public into something usable."""
+        is_public = req.params.get('is_public', None)
+
+        if is_public is None:
+            # preserve default value of showing only public flavors
+            return True
+        elif is_public is True or \
+            is_public.lower() in ['t', 'true', 'yes', '1']:
+            return True
+        elif is_public is False or \
+            is_public.lower() in ['f', 'false', 'no', '0']:
+            return False
+        elif is_public.lower() == 'none':
+            # value to match all flavors, ignore is_public
+            return None
+        else:
+            msg = _('Invalid is_public filter [%s]') % req.params['is_public']
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+
     def _get_flavors(self, req):
         """Helper function that returns a list of flavor dicts."""
         filters = {}
+
+        context = req.environ['nova.context']
+        if context.is_admin:
+            # Only admin has query access to all flavor types
+            filters['is_public'] = self._get_is_public(req)
+        else:
+            filters['is_public'] = True
+            filters['disabled'] = False
+
         if 'minRam' in req.params:
             try:
                 filters['min_memory_mb'] = int(req.params['minRam'])
             except ValueError:
-                pass  # ignore bogus values per spec
+                msg = _('Invalid minRam filter [%s]') % req.params['minRam']
+                raise webob.exc.HTTPBadRequest(explanation=msg)
 
         if 'minDisk' in req.params:
             try:
                 filters['min_root_gb'] = int(req.params['minDisk'])
             except ValueError:
-                pass  # ignore bogus values per spec
+                msg = _('Invalid minDisk filter [%s]') % req.params['minDisk']
+                raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        return instance_types.get_all_types(filters=filters)
+        flavors = instance_types.get_all_types(context, filters=filters)
+        flavors_list = flavors.values()
+        sorted_flavors = sorted(flavors_list,
+                                key=lambda item: item['flavorid'])
+        limited_flavors = common.limited_by_marker(sorted_flavors, req)
+        return limited_flavors
 
 
 def create_resource():

@@ -1,4 +1,4 @@
-# Copyright (c) 2012 OpenStack, LLC
+# Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,7 +17,7 @@ from lxml import etree
 
 from nova.api.openstack.compute.contrib import certificates
 from nova import context
-from nova import rpc
+from nova.openstack.common import rpc
 from nova import test
 from nova.tests.api.openstack import fakes
 

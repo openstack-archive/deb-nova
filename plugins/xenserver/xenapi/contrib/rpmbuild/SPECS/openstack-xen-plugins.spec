@@ -1,5 +1,5 @@
 Name:           openstack-xen-plugins
-Version:        2011.3
+Version:        2012.1
 Release:        1
 Summary:        Files for XenAPI support.
 License:        ASL 2.0
@@ -28,9 +28,15 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root,-)
+/etc/xapi.d/plugins/_bittorrent_seeder
 /etc/xapi.d/plugins/agent
+/etc/xapi.d/plugins/bandwidth
+/etc/xapi.d/plugins/bittorrent
 /etc/xapi.d/plugins/glance
+/etc/xapi.d/plugins/kernel
 /etc/xapi.d/plugins/migration
 /etc/xapi.d/plugins/pluginlib_nova.py
+/etc/xapi.d/plugins/workarounds
 /etc/xapi.d/plugins/xenhost
 /etc/xapi.d/plugins/xenstore.py
+/etc/xapi.d/plugins/utils.py

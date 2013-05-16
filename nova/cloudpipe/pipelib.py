@@ -24,28 +24,30 @@ an instance with it.
 
 import os
 import string
-import tempfile
 import zipfile
 
-# NOTE(vish): cloud is only for the _gen_key functionality
-from nova.api.ec2 import cloud
+from oslo.config import cfg
+
 from nova import compute
 from nova.compute import instance_types
 from nova import crypto
 from nova import db
 from nova import exception
-from nova import flags
-from nova import log as logging
-from nova.openstack.common import cfg
+from nova.openstack.common import fileutils
+from nova.openstack.common import log as logging
+from nova import paths
 from nova import utils
 
 
 cloudpipe_opts = [
+    cfg.StrOpt('vpn_image_id',
+               default='0',
+               help='image id used when starting up a cloudpipe vpn server'),
     cfg.StrOpt('vpn_instance_type',
                default='m1.tiny',
                help=_('Instance type for vpn instances')),
     cfg.StrOpt('boot_script_template',
-               default='$pybasedir/nova/cloudpipe/bootscript.template',
+               default=paths.basedir_def('nova/cloudpipe/bootscript.template'),
                help=_('Template for cloudpipe instance boot script')),
     cfg.StrOpt('dmz_net',
                default='10.0.0.0',
@@ -53,13 +55,37 @@ cloudpipe_opts = [
     cfg.StrOpt('dmz_mask',
                default='255.255.255.0',
                help=_('Netmask to push into openvpn config')),
+    cfg.StrOpt('vpn_key_suffix',
+               default='-vpn',
+               help='Suffix to add to project name for vpn key and secgroups'),
     ]
 
-FLAGS = flags.FLAGS
-FLAGS.register_opts(cloudpipe_opts)
-
+CONF = cfg.CONF
+CONF.register_opts(cloudpipe_opts)
 
 LOG = logging.getLogger(__name__)
+
+
+def is_vpn_image(image_id):
+    return image_id == CONF.vpn_image_id
+
+
+def _load_boot_script():
+    shellfile = open(CONF.boot_script_template, "r")
+    try:
+        s = string.Template(shellfile.read())
+    finally:
+        shellfile.close()
+
+    CONF.import_opt('ec2_dmz_host', 'nova.api.ec2.cloud')
+    CONF.import_opt('ec2_port', 'nova.api.ec2.cloud')
+    CONF.import_opt('cnt_vpn_clients', 'nova.network.manager')
+
+    return s.substitute(cc_dmz=CONF.ec2_dmz_host,
+                        cc_port=CONF.ec2_port,
+                        dmz_net=CONF.dmz_net,
+                        dmz_mask=CONF.dmz_mask,
+                        num_vpn=CONF.cnt_vpn_clients)
 
 
 class CloudPipe(object):
@@ -72,14 +98,7 @@ class CloudPipe(object):
             filename = "payload.zip"
             zippath = os.path.join(tmpdir, filename)
             z = zipfile.ZipFile(zippath, "w", zipfile.ZIP_DEFLATED)
-            shellfile = open(FLAGS.boot_script_template, "r")
-            s = string.Template(shellfile.read())
-            shellfile.close()
-            boot_script = s.substitute(cc_dmz=FLAGS.ec2_dmz_host,
-                                       cc_port=FLAGS.ec2_port,
-                                       dmz_net=FLAGS.dmz_net,
-                                       dmz_mask=FLAGS.dmz_mask,
-                                       num_vpn=FLAGS.cnt_vpn_clients)
+            boot_script = _load_boot_script()
             # genvpn, sign csr
             crypto.generate_vpn_files(project_id)
             z.writestr('autorun.sh', boot_script)
@@ -108,19 +127,19 @@ class CloudPipe(object):
         key_name = self.setup_key_pair(context)
         group_name = self.setup_security_group(context)
         instance_type = instance_types.get_instance_type_by_name(
-                FLAGS.vpn_instance_type)
-        instance_name = '%s%s' % (context.project_id, FLAGS.vpn_key_suffix)
+                CONF.vpn_instance_type)
+        instance_name = '%s%s' % (context.project_id, CONF.vpn_key_suffix)
         user_data = self.get_encoded_zip(context.project_id)
         return self.compute_api.create(context,
                                        instance_type,
-                                       FLAGS.vpn_image_id,
+                                       CONF.vpn_image_id,
                                        display_name=instance_name,
                                        user_data=user_data,
                                        key_name=key_name,
                                        security_group=[group_name])
 
     def setup_security_group(self, context):
-        group_name = '%s%s' % (context.project_id, FLAGS.vpn_key_suffix)
+        group_name = '%s%s' % (context.project_id, CONF.vpn_key_suffix)
         if db.security_group_exists(context, context.project_id, group_name):
             return group_name
         group = {'user_id': context.user_id,
@@ -145,13 +164,15 @@ class CloudPipe(object):
         return group_name
 
     def setup_key_pair(self, context):
-        key_name = '%s%s' % (context.project_id, FLAGS.vpn_key_suffix)
+        key_name = '%s%s' % (context.project_id, CONF.vpn_key_suffix)
         try:
-            result = cloud._gen_key(context, context.user_id, key_name)
+            keypair_api = compute.api.KeypairAPI()
+            result = keypair_api.create_key_pair(context,
+                                                 context.user_id,
+                                                 key_name)
             private_key = result['private_key']
-            key_dir = os.path.join(FLAGS.keys_path, context.user_id)
-            if not os.path.exists(key_dir):
-                os.makedirs(key_dir)
+            key_dir = os.path.join(CONF.keys_path, context.user_id)
+            fileutils.ensure_tree(key_dir)
             key_path = os.path.join(key_dir, '%s.pem' % key_name)
             with open(key_path, 'w') as f:
                 f.write(private_key)

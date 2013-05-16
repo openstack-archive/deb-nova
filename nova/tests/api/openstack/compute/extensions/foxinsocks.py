@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -61,7 +61,7 @@ class FoxInSocksFlavorBandsControllerExtension(wsgi.Controller):
 
 
 class Foxinsocks(extensions.ExtensionDescriptor):
-    """The Fox In Socks Extension"""
+    """The Fox In Socks Extension."""
 
     name = "Fox In Socks"
     alias = "FOXNSOX"

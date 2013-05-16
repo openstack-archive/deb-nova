@@ -7,14 +7,35 @@
 # Even minor modifications require translation updates and such
 # changes should be coordinated with translators and reviewers.
 
-Template: nova-common/start_services
+Template: nova/start_services
 Type: boolean
 Default: true
 _Description: Start nova services at boot?
  Please choose whether you want to start Nova services when the
  machine is booted up.
 
-Template: nova-common/configure_db
+Template: nova/auth-host
+Type: string
+Default: 127.0.0.1
+_Description: Auth server hostname:
+ Please specify the URL of your Nova authentication server. Typically
+ this is also the URL of your OpenStack Identity Service (Keystone).
+
+Template: nova/admin-tenant-name
+Type: string
+Default: admin
+_Description: Auth server tenant name:
+
+Template: nova/admin-user
+Type: string
+Default: admin
+_Description: Auth server username:
+
+Template: nova/admin-password
+Type: password
+_Description: Auth server password:
+
+Template: nova/configure_db
 Type: boolean
 Default: false
 _Description: Set up a database for Nova?
@@ -32,3 +53,29 @@ _Description: Set up a database for Nova?
  .
  You can change this setting later on by running "dpkg-reconfigure
  -plow nova-common".
+
+Template: nova/active-api
+Type: multiselect
+Choices: ec2, osapi_compute, metadata
+_Description: API to activate:
+ Openstack Nova supports different API services, each of them binding on a
+ different port. Select which one nova-api should support.
+ .
+ If it is a compute node that you are setting-up, then you only need to run the
+ metadata API server. If you run Cinder, then you don't need osapi_volume (you
+ cannot run osapi_volume and cinder-api on the same server: they bind on the
+ same port).
+
+Template: nova/my-ip
+Type: string
+_Description: Value for my_ip:
+ Enter the IP address that will be set in the my_ip directive of nova.conf.
+
+Template: nova/rabbit-host
+Type: string
+Default: 127.0.0.1
+_Description: Ip address of your rabbitmq host:
+ Enter the IP address that will be set in the rabbitmq_host directive of
+ nova.conf. If you are installing openstack-proxy-node, then the default to use
+ 127.0.0.1 is probably fine. If you are installing openstack-compute-node, then
+ enter the IP address of your proxy-node host.

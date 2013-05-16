@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack, LLC
+# Copyright 2011 OpenStack Foundation
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -18,7 +18,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-"""Starter script for All nova services.
+"""Starter script for all nova services.
 
 This script attempts to start all the nova services in one process.  Each
 service is started in its own greenthread.  Please note that exceptions and
@@ -28,11 +28,12 @@ continue attempting to launch the rest of the services.
 """
 
 import eventlet
-eventlet.monkey_patch()
+eventlet.monkey_patch(os=False)
 
 import os
 import sys
 
+from oslo.config import cfg
 
 possible_topdir = os.path.normpath(os.path.join(os.path.abspath(
         sys.argv[0]), os.pardir, os.pardir))
@@ -40,40 +41,60 @@ if os.path.exists(os.path.join(possible_topdir, "nova", "__init__.py")):
     sys.path.insert(0, possible_topdir)
 
 
-from nova import flags
-from nova import log as logging
+from nova import config
+from nova.objectstore import s3server
+from nova.openstack.common import log as logging
 from nova import service
 from nova import utils
-from nova.objectstore import s3server
 from nova.vnc import xvp_proxy
 
 
+CONF = cfg.CONF
+CONF.import_opt('manager', 'nova.conductor.api', group='conductor')
+CONF.import_opt('topic', 'nova.conductor.api', group='conductor')
+CONF.import_opt('enabled_apis', 'nova.service')
 LOG = logging.getLogger('nova.all')
 
 if __name__ == '__main__':
-    utils.default_flagfile()
-    flags.FLAGS(sys.argv)
-    logging.setup()
+    config.parse_args(sys.argv)
+    logging.setup("nova")
     utils.monkey_patch()
-    servers = []
+    launcher = service.ProcessLauncher()
+
     # nova-api
-    for api in flags.FLAGS.enabled_apis:
+    for api in CONF.enabled_apis:
         try:
-            servers.append(service.WSGIService(api))
+            server = service.WSGIService(api)
+            launcher.launch_server(server, workers=server.workers or 1)
         except (Exception, SystemExit):
-            logging.exception(_('Failed to load %s') % '%s-api' % api)
+            LOG.exception(_('Failed to load %s') % '%s-api' % api)
 
     for mod in [s3server, xvp_proxy]:
         try:
-            servers.append(mod.get_wsgi_server())
+            launcher.launch_server(mod.get_wsgi_server())
         except (Exception, SystemExit):
             LOG.exception(_('Failed to load %s') % mod.__name__)
 
-    for binary in ['nova-compute', 'nova-volume',
-                   'nova-network', 'nova-scheduler', 'nova-cert']:
+    for binary in ['nova-compute', 'nova-network', 'nova-scheduler',
+                   'nova-cert', 'nova-conductor']:
+
+        # FIXME(sirp): Most service configs are defined in nova/service.py, but
+        # conductor has set a new precedent of storing these configs
+        # nova/<service>/api.py.
+        #
+        # We should update the existing services to use this new approach so we
+        # don't have to treat conductor differently here.
+        if binary == 'nova-conductor':
+            topic = CONF.conductor.topic
+            manager = CONF.conductor.manager
+        else:
+            topic = None
+            manager = None
+
         try:
-            servers.append(service.Service.create(binary=binary))
+            launcher.launch_server(service.Service.create(binary=binary,
+                                                          topic=topic,
+                                                          manager=manager))
         except (Exception, SystemExit):
-            LOG.exception(_('Failed to load %s' % binary))
-    service.serve(*servers)
-    service.wait()
+            LOG.exception(_('Failed to load %s'), binary)
+    launcher.wait()

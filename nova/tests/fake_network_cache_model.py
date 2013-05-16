@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -65,6 +65,7 @@ def new_vif(vif_dict=None):
     vif = dict(
         id=1,
         address='aa:aa:aa:aa:aa:aa',
+        type='bridge',
         network=new_network())
     vif_dict = vif_dict or {}
     vif.update(vif_dict)

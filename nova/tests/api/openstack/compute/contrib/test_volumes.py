@@ -14,25 +14,31 @@
 #    under the License.
 
 import datetime
-import json
 
 from lxml import etree
+from oslo.config import cfg
 import webob
+from webob import exc
 
-import nova
 from nova.api.openstack.compute.contrib import volumes
+from nova.compute import api as compute_api
 from nova.compute import instance_types
 from nova import context
-import nova.db
-from nova import flags
+from nova.openstack.common import jsonutils
+from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.api.openstack import fakes
-from nova import volume
+from nova.volume import cinder
 
-
-FLAGS = flags.FLAGS
+CONF = cfg.CONF
+CONF.import_opt('password_length', 'nova.utils')
 
 FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+FAKE_UUID_A = '00000000-aaaa-aaaa-aaaa-000000000000'
+FAKE_UUID_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+FAKE_UUID_C = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+FAKE_UUID_D = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+
 IMAGE_UUID = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
 
 
@@ -58,12 +64,47 @@ def fake_compute_api_create(cls, context, instance_type, image_href, **kwargs):
              }], resv_id)
 
 
+def fake_get_instance(self, context, instance_id):
+    return({'uuid': instance_id})
+
+
+def fake_attach_volume(self, context, instance, volume_id, device):
+    return()
+
+
+def fake_detach_volume(self, context, volume_id):
+    return()
+
+
+def fake_get_instance_bdms(self, context, instance):
+    return([{'id': 1,
+             'instance_uuid': instance['uuid'],
+             'device_name': '/dev/fake0',
+             'delete_on_termination': 'False',
+             'virtual_name': 'MyNamesVirtual',
+             'snapshot_id': None,
+             'volume_id': FAKE_UUID_A,
+             'volume_size': 1},
+            {'id': 2,
+             'instance_uuid': instance['uuid'],
+             'device_name': '/dev/fake1',
+             'delete_on_termination': 'False',
+             'virtual_name': 'MyNamesVirtual',
+             'snapshot_id': None,
+             'volume_id': FAKE_UUID_B,
+             'volume_size': 1}])
+
+
 class BootFromVolumeTest(test.TestCase):
 
     def setUp(self):
         super(BootFromVolumeTest, self).setUp()
-        self.stubs.Set(nova.compute.API, 'create', fake_compute_api_create)
+        self.stubs.Set(compute_api.API, 'create', fake_compute_api_create)
         fakes.stub_out_nw_api(self.stubs)
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Volumes'])
 
     def test_create_root_volume(self):
         body = dict(server=dict(
@@ -80,41 +121,39 @@ class BootFromVolumeTest(test.TestCase):
         _block_device_mapping_seen = None
         req = webob.Request.blank('/v2/fake/os-volumes_boot')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            init_only=('os-volumes_boot', 'servers')))
         self.assertEqual(res.status_int, 202)
-        server = json.loads(res.body)['server']
+        server = jsonutils.loads(res.body)['server']
         self.assertEqual(FAKE_UUID, server['id'])
-        self.assertEqual(FLAGS.password_length, len(server['adminPass']))
+        self.assertEqual(CONF.password_length, len(server['adminPass']))
         self.assertEqual(len(_block_device_mapping_seen), 1)
         self.assertEqual(_block_device_mapping_seen[0]['volume_id'], 1)
         self.assertEqual(_block_device_mapping_seen[0]['device_name'],
                 '/dev/vda')
 
 
-def return_volume(context, volume_id):
-    return {'id': volume_id}
-
-
 class VolumeApiTest(test.TestCase):
     def setUp(self):
         super(VolumeApiTest, self).setUp()
-        fakes.FakeAuthManager.reset_fake_data()
-        fakes.FakeAuthDatabase.data = {}
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
-        fakes.stub_out_auth(self.stubs)
-        self.stubs.Set(nova.db, 'volume_get', return_volume)
 
-        self.stubs.Set(volume.api.API, "delete", fakes.stub_volume_delete)
-        self.stubs.Set(volume.api.API, "get", fakes.stub_volume_get)
-        self.stubs.Set(volume.api.API, "get_all", fakes.stub_volume_get_all)
+        self.stubs.Set(cinder.API, "delete", fakes.stub_volume_delete)
+        self.stubs.Set(cinder.API, "get", fakes.stub_volume_get)
+        self.stubs.Set(cinder.API, "get_all", fakes.stub_volume_get_all)
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Volumes'])
 
         self.context = context.get_admin_context()
+        self.app = fakes.wsgi_app(init_only=('os-volumes',))
 
     def test_volume_create(self):
-        self.stubs.Set(volume.api.API, "create", fakes.stub_volume_create)
+        self.stubs.Set(cinder.API, "create", fakes.stub_volume_create)
 
         vol = {"size": 100,
                "display_name": "Volume Test Name",
@@ -123,13 +162,13 @@ class VolumeApiTest(test.TestCase):
         body = {"volume": vol}
         req = webob.Request.blank('/v2/fake/os-volumes')
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
 
         self.assertEqual(resp.status_int, 200)
 
-        resp_dict = json.loads(resp.body)
+        resp_dict = jsonutils.loads(resp.body)
         self.assertTrue('volume' in resp_dict)
         self.assertEqual(resp_dict['volume']['size'],
                          vol['size'])
@@ -140,50 +179,136 @@ class VolumeApiTest(test.TestCase):
         self.assertEqual(resp_dict['volume']['availabilityZone'],
                          vol['availability_zone'])
 
-    def test_volume_create_no_body(self):
-        req = webob.Request.blank('/v2/fake/os-volumes')
-        req.method = 'POST'
-        req.body = json.dumps({})
-        req.headers['content-type'] = 'application/json'
-
-        resp = req.get_response(fakes.wsgi_app())
-        self.assertEqual(resp.status_int, 422)
-
     def test_volume_index(self):
         req = webob.Request.blank('/v2/fake/os-volumes')
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 200)
 
     def test_volume_detail(self):
         req = webob.Request.blank('/v2/fake/os-volumes/detail')
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 200)
 
     def test_volume_show(self):
         req = webob.Request.blank('/v2/fake/os-volumes/123')
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 200)
 
     def test_volume_show_no_volume(self):
-        self.stubs.Set(volume.api.API, "get", fakes.stub_volume_get_notfound)
+        self.stubs.Set(cinder.API, "get", fakes.stub_volume_get_notfound)
 
         req = webob.Request.blank('/v2/fake/os-volumes/456')
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 404)
 
     def test_volume_delete(self):
         req = webob.Request.blank('/v2/fake/os-volumes/123')
         req.method = 'DELETE'
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 202)
 
     def test_volume_delete_no_volume(self):
-        self.stubs.Set(volume.api.API, "get", fakes.stub_volume_get_notfound)
+        self.stubs.Set(cinder.API, "get", fakes.stub_volume_get_notfound)
 
         req = webob.Request.blank('/v2/fake/os-volumes/456')
         req.method = 'DELETE'
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 404)
+
+
+class VolumeAttachTests(test.TestCase):
+    def setUp(self):
+        super(VolumeAttachTests, self).setUp()
+        self.stubs.Set(compute_api.API,
+                       'get_instance_bdms',
+                       fake_get_instance_bdms)
+        self.stubs.Set(compute_api.API, 'get', fake_get_instance)
+        self.context = context.get_admin_context()
+        self.expected_show = {'volumeAttachment':
+            {'device': '/dev/fake0',
+             'serverId': FAKE_UUID,
+             'id': FAKE_UUID_A,
+             'volumeId': FAKE_UUID_A
+            }}
+
+    def test_show(self):
+        attachments = volumes.VolumeAttachmentController()
+        req = webob.Request.blank('/v2/fake/os-volumes/show')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        result = attachments.show(req, FAKE_UUID, FAKE_UUID_A)
+        self.assertEqual(self.expected_show, result)
+
+    def test_delete(self):
+        self.stubs.Set(compute_api.API,
+                       'detach_volume',
+                       fake_detach_volume)
+        attachments = volumes.VolumeAttachmentController()
+        req = webob.Request.blank('/v2/fake/os-volumes/delete')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        result = attachments.delete(req, FAKE_UUID, FAKE_UUID_A)
+        self.assertEqual('202 Accepted', result.status)
+
+    def test_delete_vol_not_found(self):
+        self.stubs.Set(compute_api.API,
+                       'detach_volume',
+                       fake_detach_volume)
+        attachments = volumes.VolumeAttachmentController()
+        req = webob.Request.blank('/v2/fake/os-volumes/delete')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        self.assertRaises(exc.HTTPNotFound,
+                          attachments.delete,
+                          req,
+                          FAKE_UUID,
+                          FAKE_UUID_C)
+
+    def test_attach_volume(self):
+        self.stubs.Set(compute_api.API,
+                       'attach_volume',
+                       fake_attach_volume)
+        attachments = volumes.VolumeAttachmentController()
+        body = {'volumeAttachment': {'volumeId': FAKE_UUID_A,
+                                    'device': '/dev/fake'}}
+        req = webob.Request.blank('/v2/fake/os-volumes/attach')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+        result = attachments.create(req, FAKE_UUID, body)
+        self.assertEqual(result['volumeAttachment']['id'],
+            '00000000-aaaa-aaaa-aaaa-000000000000')
+
+    def test_attach_volume_bad_id(self):
+        self.stubs.Set(compute_api.API,
+                       'attach_volume',
+                       fake_attach_volume)
+        attachments = volumes.VolumeAttachmentController()
+
+        body = {
+            'volumeAttachment': {
+                'device': None,
+                'volumeId': 'TESTVOLUME',
+            }
+        }
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-volumes/attach')
+        req.method = 'POST'
+        req.content_type = 'application/json'
+        req.body = jsonutils.dumps(body)
+
+        self.assertRaises(webob.exc.HTTPBadRequest, attachments.create,
+                          req, FAKE_UUID, body)
 
 
 class VolumeSerializerTest(test.TestCase):
@@ -208,10 +333,10 @@ class VolumeSerializerTest(test.TestCase):
             elif child.tag == 'metadata':
                 not_seen = set(vol['metadata'].keys())
                 for gr_child in child:
-                    self.assertTrue(gr_child.tag in not_seen)
-                    self.assertEqual(str(vol['metadata'][gr_child.tag]),
+                    self.assertTrue(gr_child.get("key") in not_seen)
+                    self.assertEqual(str(vol['metadata'][gr_child.get("key")]),
                                      gr_child.text)
-                    not_seen.remove(gr_child.tag)
+                    not_seen.remove(gr_child.get("key"))
                 self.assertEqual(0, len(not_seen))
 
     def test_attach_show_create_serializer(self):
@@ -223,7 +348,6 @@ class VolumeSerializerTest(test.TestCase):
             device='/foo')
         text = serializer.serialize(dict(volumeAttachment=raw_attach))
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('volumeAttachment', tree.tag)
@@ -243,7 +367,6 @@ class VolumeSerializerTest(test.TestCase):
                 device='/foo2')]
         text = serializer.serialize(dict(volumeAttachments=raw_attaches))
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('volumeAttachments', tree.tag)
@@ -259,7 +382,7 @@ class VolumeSerializerTest(test.TestCase):
             status='vol_status',
             size=1024,
             availabilityZone='vol_availability',
-            createdAt=datetime.datetime.now(),
+            createdAt=timeutils.utcnow(),
             attachments=[dict(
                     id='vol_id',
                     volumeId='vol_id',
@@ -276,7 +399,6 @@ class VolumeSerializerTest(test.TestCase):
             )
         text = serializer.serialize(dict(volume=raw_volume))
 
-        print text
         tree = etree.fromstring(text)
 
         self._verify_volume(raw_volume, tree)
@@ -288,7 +410,7 @@ class VolumeSerializerTest(test.TestCase):
                 status='vol1_status',
                 size=1024,
                 availabilityZone='vol1_availability',
-                createdAt=datetime.datetime.now(),
+                createdAt=timeutils.utcnow(),
                 attachments=[dict(
                         id='vol1_id',
                         volumeId='vol1_id',
@@ -308,7 +430,7 @@ class VolumeSerializerTest(test.TestCase):
                 status='vol2_status',
                 size=1024,
                 availabilityZone='vol2_availability',
-                createdAt=datetime.datetime.now(),
+                createdAt=timeutils.utcnow(),
                 attachments=[dict(
                         id='vol2_id',
                         volumeId='vol2_id',
@@ -325,10 +447,201 @@ class VolumeSerializerTest(test.TestCase):
                 )]
         text = serializer.serialize(dict(volumes=raw_volumes))
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('volumes', tree.tag)
         self.assertEqual(len(raw_volumes), len(tree))
         for idx, child in enumerate(tree):
             self._verify_volume(raw_volumes[idx], child)
+
+
+class TestVolumeCreateRequestXMLDeserializer(test.TestCase):
+
+    def setUp(self):
+        super(TestVolumeCreateRequestXMLDeserializer, self).setUp()
+        self.deserializer = volumes.CreateDeserializer()
+
+    def test_minimal_volume(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_display_name(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_display_description(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_volume_type(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "display_name": "Volume-xml",
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_availability_zone(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"
+        availability_zone="us-east1"></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+                "availability_zone": "us-east1",
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_metadata(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        display_name="Volume-xml"
+        size="1">
+        <metadata><meta key="Type">work</meta></metadata></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "display_name": "Volume-xml",
+                "size": "1",
+                "metadata": {
+                    "Type": "work",
+                },
+            },
+        }
+        self.assertEquals(request['body'], expected)
+
+    def test_full_volume(self):
+        self_request = """
+<volume xmlns="http://docs.openstack.org/compute/api/v1.1"
+        size="1"
+        display_name="Volume-xml"
+        display_description="description"
+        volume_type="289da7f8-6440-407c-9fb4-7db01ec49164"
+        availability_zone="us-east1">
+        <metadata><meta key="Type">work</meta></metadata></volume>"""
+        request = self.deserializer.deserialize(self_request)
+        expected = {
+            "volume": {
+                "size": "1",
+                "display_name": "Volume-xml",
+                "display_description": "description",
+                "volume_type": "289da7f8-6440-407c-9fb4-7db01ec49164",
+                "availability_zone": "us-east1",
+                "metadata": {
+                    "Type": "work",
+                },
+            },
+        }
+        self.maxDiff = None
+        self.assertEquals(request['body'], expected)
+
+
+class CommonUnprocessableEntityTestCase(object):
+
+    resource = None
+    entity_name = None
+    controller_cls = None
+    kwargs = {}
+
+    """
+    Tests of places we throw 422 Unprocessable Entity from
+    """
+
+    def setUp(self):
+        super(CommonUnprocessableEntityTestCase, self).setUp()
+        self.controller = self.controller_cls()
+
+    def _unprocessable_create(self, body):
+        req = fakes.HTTPRequest.blank('/v2/fake/' + self.resource)
+        req.method = 'POST'
+
+        kwargs = self.kwargs.copy()
+        kwargs['body'] = body
+        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+                          self.controller.create, req, **kwargs)
+
+    def test_create_no_body(self):
+        self._unprocessable_create(body=None)
+
+    def test_create_missing_volume(self):
+        body = {'foo': {'a': 'b'}}
+        self._unprocessable_create(body=body)
+
+    def test_create_malformed_entity(self):
+        body = {self.entity_name: 'string'}
+        self._unprocessable_create(body=body)
+
+
+class UnprocessableVolumeTestCase(CommonUnprocessableEntityTestCase,
+                                  test.TestCase):
+
+    resource = 'os-volumes'
+    entity_name = 'volume'
+    controller_cls = volumes.VolumeController
+
+
+class UnprocessableAttachmentTestCase(CommonUnprocessableEntityTestCase,
+                                      test.TestCase):
+
+    resource = 'servers/' + FAKE_UUID + '/os-volume_attachments'
+    entity_name = 'volumeAttachment'
+    controller_cls = volumes.VolumeAttachmentController
+    kwargs = {'server_id': FAKE_UUID}
+
+
+class UnprocessableSnapshotTestCase(CommonUnprocessableEntityTestCase,
+                                    test.TestCase):
+
+    resource = 'os-snapshots'
+    entity_name = 'snapshot'
+    controller_cls = volumes.SnapshotController

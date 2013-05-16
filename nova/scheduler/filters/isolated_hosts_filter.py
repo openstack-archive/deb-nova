@@ -1,4 +1,4 @@
-# Copyright (c) 2011-2012 OpenStack, LLC.
+# Copyright (c) 2011-2012 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,12 +13,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.config import cfg
 
-from nova import flags
 from nova.scheduler import filters
 
-
-FLAGS = flags.FLAGS
+isolated_opts = [
+    cfg.ListOpt('isolated_images',
+                default=[],
+                help='Images to run on isolated host'),
+    cfg.ListOpt('isolated_hosts',
+                default=[],
+                help='Host reserved for specific images'),
+]
+CONF = cfg.CONF
+CONF.register_opts(isolated_opts)
 
 
 class IsolatedHostsFilter(filters.BaseHostFilter):
@@ -28,6 +36,6 @@ class IsolatedHostsFilter(filters.BaseHostFilter):
         spec = filter_properties.get('request_spec', {})
         props = spec.get('instance_properties', {})
         image_ref = props.get('image_ref')
-        image_isolated = image_ref in FLAGS.isolated_images
-        host_isolated = host_state.host in FLAGS.isolated_hosts
+        image_isolated = image_ref in CONF.isolated_images
+        host_isolated = host_state.host in CONF.isolated_hosts
         return image_isolated == host_isolated

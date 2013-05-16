@@ -25,6 +25,8 @@ eventlet.monkey_patch()
 import os
 import sys
 
+from oslo.config import cfg
+
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
 possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
@@ -34,16 +36,19 @@ if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
     sys.path.insert(0, possible_topdir)
 
 
-from nova import flags
-from nova import log as logging
+from nova import config
+from nova.openstack.common import log as logging
 from nova import service
 from nova import utils
 
+CONF = cfg.CONF
+CONF.import_opt('network_topic', 'nova.network.rpcapi')
+
 if __name__ == '__main__':
-    utils.default_flagfile()
-    flags.FLAGS(sys.argv)
-    logging.setup()
+    config.parse_args(sys.argv)
+    logging.setup("nova")
     utils.monkey_patch()
-    server = service.Service.create(binary='nova-network')
+    server = service.Service.create(binary='nova-network',
+                                    topic=CONF.network_topic)
     service.serve(server)
     service.wait()

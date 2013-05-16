@@ -20,10 +20,20 @@
 """Starter script for Nova Compute."""
 
 import eventlet
-eventlet.monkey_patch()
+import os
+
+if os.name == 'nt':
+    # eventlet monkey patching causes subprocess.Popen to fail on Windows
+    # when using pipes due to missing non blocking I/O support
+    eventlet.monkey_patch(os=False)
+else:
+    eventlet.monkey_patch()
 
 import os
 import sys
+import traceback
+
+from oslo.config import cfg
 
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
@@ -34,16 +44,42 @@ if os.path.exists(os.path.join(POSSIBLE_TOPDIR, 'nova', '__init__.py')):
     sys.path.insert(0, POSSIBLE_TOPDIR)
 
 
-from nova import flags
-from nova import log as logging
+from nova import config
+import nova.db.api
+from nova import exception
+from nova.openstack.common import log as logging
 from nova import service
 from nova import utils
 
+CONF = cfg.CONF
+CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
+CONF.import_opt('use_local', 'nova.conductor.api', group='conductor')
+LOG = logging.getLogger('nova.compute')
+
+
+def block_db_access():
+    class NoDB(object):
+        def __getattr__(self, attr):
+            return self
+
+        def __call__(self, *args, **kwargs):
+            stacktrace = "".join(traceback.format_stack())
+            LOG.error('No db access allowed in nova-compute: %s' % stacktrace)
+            raise exception.DBNotAllowed('nova-compute')
+
+    nova.db.api.IMPL = NoDB()
+
+
 if __name__ == '__main__':
-    utils.default_flagfile()
-    flags.FLAGS(sys.argv)
-    logging.setup()
+    config.parse_args(sys.argv)
+    logging.setup('nova')
     utils.monkey_patch()
-    server = service.Service.create(binary='nova-compute')
+
+    if not CONF.conductor.use_local:
+        block_db_access()
+
+    server = service.Service.create(binary='nova-compute',
+                                    topic=CONF.compute_topic,
+                                    db_allowed=False)
     service.serve(server)
     service.wait()

@@ -1,0 +1,191 @@
+#!/bin/sh
+
+### BEGIN INIT INFO
+# Provides:          nova-xcp-network
+# Required-Start:    $remote_fs $syslog xcp-networkd
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Apply initial OVS flows for Nova and network rules.
+# Description:       Apply initial OVS flows for Nova, and setup networking
+#                    host rules for multi tenancy protections.
+### END INIT INFO
+
+# Written by Thomas Goirand <zigo@debian.org> using
+# plugins/xenserver/networking/etc/init.d/{openvswitch-nova,host-up}
+# as examples.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+. /lib/init/vars.sh
+. /lib/lsb/init-functions
+
+DESC="XCP openvswitch networking rules"
+NAME="xcp-network"
+
+OVS_CONFIGURE_BASE_FLOWS=/usr/lib/xcp/plugins/ovs_configure_base_flows.py
+IPTABLES=/sbin/iptables
+EBTABLES=/sbin/ebtables
+ARPTABLES=/sbin/arptables
+DEFAULTS_FILE=/etc/default/nova-common
+
+. /lib/lsb/init-functions
+
+# Read configuration variable file if it is present
+if [ -s $DEFAULTS_FILE ]; then
+    . $DEFAULTS_FILE
+    case "x$NOVA_ENABLE" in
+        xtrue|xfalse)   ;;
+        *)              log_failure_msg "Value of NOVA_ENABLE in $DEFAULTS_FILE must be either 'true' or 'false';"
+                        log_failure_msg "not starting $NAME daemon."
+                        exit 1
+                        ;;
+    esac
+fi
+
+
+# Quick check if everything is there...
+if ! [ -x ${OVS_CONFIGURE_BASE_FLOWS} ] ; then
+	exit 0
+fi
+if ! [ -x ${IPTABLES} -a -x ${EBTABLES} -a -x ${ARPTABLES} ] ; then
+	exit 0
+fi
+if ! [ -x /usr/bin/ovs-ofctl -a -x /usr/bin/ovs-vsctl -a -x /sbin/ip ] ; then
+	exit 0
+fi
+
+# Load the VERBOSE setting and other rcS variables
+[ -r /lib/init/vars.sh ] && . /lib/init/vars.sh
+
+# Get $INTERFACES from /etc/default/openvswitch-nova,
+# default to all what is available.
+if [ -r /etc/default/openvswitch-nova ] ; then
+	. /etc/default/openvswitch-nova
+fi
+if [ -z "${INTERFACES}" ] ; then
+	INTERFACES=$(cd /sys/class/net/; /bin/ls -d eth*)
+fi
+
+# Get $NETWORK_MODE from /etc/xcp/network.conf,
+# default to openvswitch
+if [ -e /etc/xcp/network.conf ] ; then
+	NETWORK_MODE=`cat /etc/xcp/network.conf`
+fi
+
+if [ -z "${NETWORK_MODE}" ] ; then
+	NETWORK_MODE=openvswitch
+fi
+
+# Check validity of $NETWORK_MODE
+case "${NETWORK_MODE}" in
+vswitch|openvswitch)
+	;;
+bridge)
+	exit 0
+	;;
+*)
+	echo "Open vSwitch disabled (/etc/xcp/network.conf is invalid)" >&2
+	exit 0
+	;;
+esac
+
+run_ovs_conf_base_flows () {
+	my_action="${1}"
+	my_all_interfaces=$(cd /sys/class/net/; /bin/ls -d eth*)
+	for i in ${INTERFACES} ; do
+		/usr/bin/python $OVS_CONFIGURE_BASE_FLOWS $my_action $i
+	done
+}
+
+# Functions to configure the firewall to work with openvswitch, XCP and nova
+iptables_up () {
+	${IPTABLES} -P FORWARD DROP
+	for i in ${INTERFACES} ; do
+		${IPTABLES} -A FORWARD -m physdev --physdev-in ${i} -j ACCEPT
+	done
+}
+ebtables_up () {
+	${EBTABLES} -P FORWARD DROP
+	for i in ${INTERFACES} ; do
+		${EBTABLES} -A FORWARD -o ${i} -j ACCEPT
+	done
+}
+arptables_up () {
+	${ARPTABLES} -P FORWARD DROP
+	for i in ${INTERFACES} ; do
+		${ARPTABLES} -A FORWARD --opcode Request --in-interface ${i} -j ACCEPT
+		${ARPTABLES} -A FORWARD --opcode Reply --in-interface ${i} -j ACCEPT
+	done
+}
+iptables_down () {
+	${IPTABLES} -P FORWARD ACCEPT
+	for i in ${INTERFACES} ; do
+		${IPTABLES} -D FORWARD -m physdev --physdev-in ${i} -j ACCEPT
+	done
+}
+ebtables_down () {
+	${EBTABLES} -P FORWARD ACCEPT
+	for i in ${INTERFACES} ; do
+		${EBTABLES} -D FORWARD -o ${i} -j ACCEPT
+	done
+}
+arptables_down () {
+	${ARPTABLES} -P FORWARD ACCEPT
+	for i in ${INTERFACES} ; do
+		${ARPTABLES} -D FORWARD --opcode Request --in-interface ${i} -j ACCEPT
+		${ARPTABLES} -D FORWARD --opcode Reply --in-interface ${i} -j ACCEPT
+	done
+}
+
+case "${1}" in
+start)
+	if "$NOVA_ENABLE"; then
+	    [ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
+	    iptables_up
+	    ebtables_up
+	    arptables_up
+	    run_ovs_conf_base_flows online
+	    [ "$VERBOSE" != no ] && log_end_msg 0
+	else
+	    [ "$VERBOSE" != no ] && log_warning_msg "nova daemons not enabled in $DEFAULTS_FILE, not starting..."
+	fi
+	;;
+stop)
+	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
+	run_ovs_conf_base_flows offline
+	iptables_down
+	ebtables_down
+	arptables_down
+	[ "$VERBOSE" != no ] && log_end_msg 0
+	;;
+reload|force-reload)
+	if "$NOVA_ENABLE"; then
+	    [ "$VERBOSE" != no ] && log_daemon_msg "Restarting $DESC" "$NAME"
+	    run_ovs_conf_base_flows reset
+	    [ "$VERBOSE" != no ] && log_end_msg 0
+	else
+	    [ "$VERBOSE" != no ] && log_warning_msg "nova daemons not enabled in $DEFAULTS_FILE, not starting..."
+	fi
+	;;
+restart)
+	$0 start
+	sleep 1
+	$0 stop
+	;;
+*)
+	echo "Usage: $0 {start|stop|status|restart|reload|force-reload}" >&2
+	;;
+esac
+
+exit 0

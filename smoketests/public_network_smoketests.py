@@ -30,8 +30,8 @@ possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
 if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
     sys.path.insert(0, possible_topdir)
 
-from smoketests import flags
 from smoketests import base
+from smoketests import flags
 
 #Note that this test should run from
 #public network (outside of private network segments)
@@ -97,7 +97,6 @@ class InstanceTestsFromPublic(base.UserSmokeTestCase):
                                         self.data['ip_v6'], TEST_KEY)
                     conn.close()
                 except Exception as ex:
-                    print ex
                     time.sleep(1)
                 else:
                     break

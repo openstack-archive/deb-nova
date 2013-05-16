@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 OpenStack, LLC.
+# Copyright (c) 2010 OpenStack Foundation
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -23,22 +23,26 @@ Chance (Random) Scheduler implementation
 
 import random
 
+from oslo.config import cfg
+
 from nova import exception
 from nova.scheduler import driver
+
+CONF = cfg.CONF
+CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 
 
 class ChanceScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
 
-    def _filter_hosts(self, request_spec, hosts, **kwargs):
+    def _filter_hosts(self, request_spec, hosts, filter_properties):
         """Filter a list of hosts based on request_spec."""
 
-        filter_properties = kwargs.get('filter_properties', {})
         ignore_hosts = filter_properties.get('ignore_hosts', [])
         hosts = [host for host in hosts if host not in ignore_hosts]
         return hosts
 
-    def _schedule(self, context, topic, request_spec, **kwargs):
+    def _schedule(self, context, topic, request_spec, filter_properties):
         """Picks a host that is up at random."""
 
         elevated = context.elevated()
@@ -47,37 +51,52 @@ class ChanceScheduler(driver.Scheduler):
             msg = _("Is the appropriate service running?")
             raise exception.NoValidHost(reason=msg)
 
-        hosts = self._filter_hosts(request_spec, hosts, **kwargs)
+        hosts = self._filter_hosts(request_spec, hosts, filter_properties)
         if not hosts:
             msg = _("Could not find another compute")
             raise exception.NoValidHost(reason=msg)
 
         return hosts[int(random.random() * len(hosts))]
 
-    def schedule(self, context, topic, method, *_args, **kwargs):
-        """Picks a host that is up at random."""
+    def select_hosts(self, context, request_spec, filter_properties):
+        """Selects a set of random hosts."""
+        return [self._schedule(context, CONF.compute_topic,
+            request_spec, filter_properties)
+            for instance_uuid in request_spec.get('instance_uuids', [])]
 
-        host = self._schedule(context, topic, None, **kwargs)
-        driver.cast_to_host(context, topic, host, method, **kwargs)
-
-    def schedule_run_instance(self, context, request_spec, *_args, **kwargs):
-        """Create and run an instance or instances"""
-        num_instances = request_spec.get('num_instances', 1)
-        instances = []
-        for num in xrange(num_instances):
-            host = self._schedule(context, 'compute', request_spec, **kwargs)
+    def schedule_run_instance(self, context, request_spec,
+                              admin_password, injected_files,
+                              requested_networks, is_first_time,
+                              filter_properties):
+        """Create and run an instance or instances."""
+        instance_uuids = request_spec.get('instance_uuids')
+        for num, instance_uuid in enumerate(instance_uuids):
             request_spec['instance_properties']['launch_index'] = num
-            instance = self.create_instance_db_entry(context, request_spec)
-            driver.cast_to_compute_host(context, host,
-                    'run_instance', instance_uuid=instance['uuid'], **kwargs)
-            instances.append(driver.encode_instance(instance))
-            # So if we loop around, create_instance_db_entry will actually
-            # create a new entry, instead of assume it's been created
-            # already
-            del request_spec['instance_properties']['uuid']
-        return instances
+            try:
+                host = self._schedule(context, CONF.compute_topic,
+                                      request_spec, filter_properties)
+                updated_instance = driver.instance_update_db(context,
+                        instance_uuid)
+                self.compute_rpcapi.run_instance(context,
+                        instance=updated_instance, host=host,
+                        requested_networks=requested_networks,
+                        injected_files=injected_files,
+                        admin_password=admin_password,
+                        is_first_time=is_first_time,
+                        request_spec=request_spec,
+                        filter_properties=filter_properties)
+            except Exception as ex:
+                # NOTE(vish): we don't reraise the exception here to make sure
+                #             that all instances in the request get set to
+                #             error properly
+                driver.handle_schedule_error(context, ex, instance_uuid,
+                                             request_spec)
 
-    def schedule_prep_resize(self, context, request_spec, *args, **kwargs):
+    def schedule_prep_resize(self, context, image, request_spec,
+                             filter_properties, instance, instance_type,
+                             reservations):
         """Select a target for resize."""
-        host = self._schedule(context, 'compute', request_spec, **kwargs)
-        driver.cast_to_compute_host(context, host, 'prep_resize', **kwargs)
+        host = self._schedule(context, CONF.compute_topic, request_spec,
+                              filter_properties)
+        self.compute_rpcapi.prep_resize(context, image, instance,
+                instance_type, host, reservations)

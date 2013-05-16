@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 OpenStack, LLC.
+# Copyright (c) 2010 OpenStack Foundation
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -19,11 +19,17 @@
 
 """
 Scheduler that allows routing some calls to one driver and others to another.
+
+This scheduler was originally used to deal with both compute and volume. But
+is now used for openstack extensions that want to use the nova-scheduler to
+schedule requests to compute nodes but provide their own manager and topic.
+
+https://bugs.launchpad.net/nova/+bug/1009681
 """
 
-from nova import flags
-from nova.openstack.common import cfg
-from nova import utils
+from oslo.config import cfg
+
+from nova.openstack.common import importutils
 from nova.scheduler import driver
 
 
@@ -32,18 +38,13 @@ multi_scheduler_opts = [
                default='nova.scheduler.'
                     'filter_scheduler.FilterScheduler',
                help='Driver to use for scheduling compute calls'),
-    cfg.StrOpt('volume_scheduler_driver',
+    cfg.StrOpt('default_scheduler_driver',
                default='nova.scheduler.chance.ChanceScheduler',
-               help='Driver to use for scheduling volume calls'),
+               help='Default driver to use for scheduling calls'),
     ]
 
-FLAGS = flags.FLAGS
-FLAGS.register_opts(multi_scheduler_opts)
-
-# A mapping of methods to topics so we can figure out which driver to use.
-# There are currently no compute methods proxied through the map
-_METHOD_MAP = {'create_volume': 'volume',
-               'create_volumes': 'volume'}
+CONF = cfg.CONF
+CONF.register_opts(multi_scheduler_opts)
 
 
 class MultiScheduler(driver.Scheduler):
@@ -56,23 +57,13 @@ class MultiScheduler(driver.Scheduler):
 
     def __init__(self):
         super(MultiScheduler, self).__init__()
-        compute_driver = utils.import_object(FLAGS.compute_scheduler_driver)
-        volume_driver = utils.import_object(FLAGS.volume_scheduler_driver)
+        compute_driver = importutils.import_object(
+                CONF.compute_scheduler_driver)
+        default_driver = importutils.import_object(
+                CONF.default_scheduler_driver)
 
         self.drivers = {'compute': compute_driver,
-                        'volume': volume_driver}
-
-    def __getattr__(self, key):
-        if not key.startswith('schedule_'):
-            raise AttributeError(key)
-        method = key[len('schedule_'):]
-        if method not in _METHOD_MAP:
-            raise AttributeError(key)
-        return getattr(self.drivers[_METHOD_MAP[method]], key)
-
-    def schedule(self, context, topic, method, *_args, **_kwargs):
-        return self.drivers[topic].schedule(context, topic,
-                method, *_args, **_kwargs)
+                        'default': default_driver}
 
     def schedule_run_instance(self, *args, **kwargs):
         return self.drivers['compute'].schedule_run_instance(*args, **kwargs)

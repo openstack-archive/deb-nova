@@ -1,0 +1,7 @@
+/var/log/nova/nova-conductor.log {
+    daily
+    missingok
+    compress
+    delaycompress
+    notifempty
+}

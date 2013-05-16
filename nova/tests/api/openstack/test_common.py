@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -24,10 +24,11 @@ import webob
 import webob.exc
 import xml.dom.minidom as minidom
 
-from nova import exception
-from nova import test
 from nova.api.openstack import common
 from nova.api.openstack import xmlutil
+from nova import exception
+from nova import test
+from nova.tests import utils
 
 
 NS = "{http://docs.openstack.org/compute/api/v1.1}"
@@ -42,7 +43,7 @@ class LimiterTest(test.TestCase):
     """
 
     def setUp(self):
-        """ Run before each test. """
+        """Run before each test."""
         super(LimiterTest, self).setUp()
         self.tiny = range(1)
         self.small = range(10)
@@ -50,7 +51,7 @@ class LimiterTest(test.TestCase):
         self.large = range(10000)
 
     def test_limiter_offset_zero(self):
-        """ Test offset key works with 0. """
+        # Test offset key works with 0.
         req = webob.Request.blank('/?offset=0')
         self.assertEqual(common.limited(self.tiny, req), self.tiny)
         self.assertEqual(common.limited(self.small, req), self.small)
@@ -58,7 +59,7 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(self.large, req), self.large[:1000])
 
     def test_limiter_offset_medium(self):
-        """ Test offset key works with a medium sized number. """
+        # Test offset key works with a medium sized number.
         req = webob.Request.blank('/?offset=10')
         self.assertEqual(common.limited(self.tiny, req), [])
         self.assertEqual(common.limited(self.small, req), self.small[10:])
@@ -66,7 +67,7 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(self.large, req), self.large[10:1010])
 
     def test_limiter_offset_over_max(self):
-        """ Test offset key works with a number over 1000 (max_limit). """
+        # Test offset key works with a number over 1000 (max_limit).
         req = webob.Request.blank('/?offset=1001')
         self.assertEqual(common.limited(self.tiny, req), [])
         self.assertEqual(common.limited(self.small, req), [])
@@ -75,19 +76,19 @@ class LimiterTest(test.TestCase):
             common.limited(self.large, req), self.large[1001:2001])
 
     def test_limiter_offset_blank(self):
-        """ Test offset key works with a blank offset. """
+        # Test offset key works with a blank offset.
         req = webob.Request.blank('/?offset=')
         self.assertRaises(
             webob.exc.HTTPBadRequest, common.limited, self.tiny, req)
 
     def test_limiter_offset_bad(self):
-        """ Test offset key works with a BAD offset. """
+        # Test offset key works with a BAD offset.
         req = webob.Request.blank(u'/?offset=\u0020aa')
         self.assertRaises(
             webob.exc.HTTPBadRequest, common.limited, self.tiny, req)
 
     def test_limiter_nothing(self):
-        """ Test request with no offset or limit """
+        # Test request with no offset or limit.
         req = webob.Request.blank('/')
         self.assertEqual(common.limited(self.tiny, req), self.tiny)
         self.assertEqual(common.limited(self.small, req), self.small)
@@ -95,7 +96,7 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(self.large, req), self.large[:1000])
 
     def test_limiter_limit_zero(self):
-        """ Test limit of zero. """
+        # Test limit of zero.
         req = webob.Request.blank('/?limit=0')
         self.assertEqual(common.limited(self.tiny, req), self.tiny)
         self.assertEqual(common.limited(self.small, req), self.small)
@@ -103,7 +104,7 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(self.large, req), self.large[:1000])
 
     def test_limiter_limit_medium(self):
-        """ Test limit of 10. """
+        # Test limit of 10.
         req = webob.Request.blank('/?limit=10')
         self.assertEqual(common.limited(self.tiny, req), self.tiny)
         self.assertEqual(common.limited(self.small, req), self.small)
@@ -111,7 +112,7 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(self.large, req), self.large[:10])
 
     def test_limiter_limit_over_max(self):
-        """ Test limit of 3000. """
+        # Test limit of 3000.
         req = webob.Request.blank('/?limit=3000')
         self.assertEqual(common.limited(self.tiny, req), self.tiny)
         self.assertEqual(common.limited(self.small, req), self.small)
@@ -119,7 +120,7 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(self.large, req), self.large[:1000])
 
     def test_limiter_limit_and_offset(self):
-        """ Test request with both limit and offset. """
+        # Test request with both limit and offset.
         items = range(2000)
         req = webob.Request.blank('/?offset=1&limit=3')
         self.assertEqual(common.limited(items, req), items[1:4])
@@ -131,7 +132,7 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(items, req), [])
 
     def test_limiter_custom_max_limit(self):
-        """ Test a max_limit other than 1000. """
+        # Test a max_limit other than 1000.
         items = range(2000)
         req = webob.Request.blank('/?offset=1&limit=3')
         self.assertEqual(
@@ -146,13 +147,13 @@ class LimiterTest(test.TestCase):
         self.assertEqual(common.limited(items, req, max_limit=2000), [])
 
     def test_limiter_negative_limit(self):
-        """ Test a negative limit. """
+        # Test a negative limit.
         req = webob.Request.blank('/?limit=-3000')
         self.assertRaises(
             webob.exc.HTTPBadRequest, common.limited, self.tiny, req)
 
     def test_limiter_negative_offset(self):
-        """ Test a negative offset. """
+        # Test a negative offset.
         req = webob.Request.blank('/?offset=-30')
         self.assertRaises(
             webob.exc.HTTPBadRequest, common.limited, self.tiny, req)
@@ -166,30 +167,30 @@ class PaginationParamsTest(test.TestCase):
     """
 
     def test_no_params(self):
-        """ Test no params. """
+        # Test no params.
         req = webob.Request.blank('/')
         self.assertEqual(common.get_pagination_params(req), {})
 
     def test_valid_marker(self):
-        """ Test valid marker param. """
+        # Test valid marker param.
         req = webob.Request.blank(
                 '/?marker=263abb28-1de6-412f-b00b-f0ee0c4333c2')
         self.assertEqual(common.get_pagination_params(req),
                          {'marker': '263abb28-1de6-412f-b00b-f0ee0c4333c2'})
 
     def test_valid_limit(self):
-        """ Test valid limit param. """
+        # Test valid limit param.
         req = webob.Request.blank('/?limit=10')
         self.assertEqual(common.get_pagination_params(req), {'limit': 10})
 
     def test_invalid_limit(self):
-        """ Test invalid limit param. """
+        # Test invalid limit param.
         req = webob.Request.blank('/?limit=-2')
         self.assertRaises(
             webob.exc.HTTPBadRequest, common.get_pagination_params, req)
 
     def test_valid_limit_and_marker(self):
-        """ Test valid limit and marker parameters. """
+        # Test valid limit and marker parameters.
         marker = '263abb28-1de6-412f-b00b-f0ee0c4333c2'
         req = webob.Request.blank('/?limit=20&marker=%s' % marker)
         self.assertEqual(common.get_pagination_params(req),
@@ -282,51 +283,46 @@ class MiscFunctionsTest(test.TestCase):
         expected = 'abc123'
         self.assertEqual(actual, expected)
 
-    def test_get_version_from_href(self):
-        fixture = 'http://www.testsite.com/v1.1/images'
-        expected = '1.1'
-        actual = common.get_version_from_href(fixture)
-        self.assertEqual(actual, expected)
-
-    def test_get_version_from_href_2(self):
-        fixture = 'http://www.testsite.com/v1.1'
-        expected = '1.1'
-        actual = common.get_version_from_href(fixture)
-        self.assertEqual(actual, expected)
-
-    def test_get_version_from_href_default(self):
-        fixture = 'http://www.testsite.com/images'
-        expected = '2'
-        actual = common.get_version_from_href(fixture)
-        self.assertEqual(actual, expected)
-
     def test_raise_http_conflict_for_instance_invalid_state(self):
-        # Correct args
         exc = exception.InstanceInvalidState(attr='fake_attr',
-                state='fake_state', method='fake_method')
+                state='fake_state', method='fake_method',
+                instance_uuid='fake')
         try:
             common.raise_http_conflict_for_instance_invalid_state(exc,
                     'meow')
-        except Exception, e:
-            self.assertTrue(isinstance(e, webob.exc.HTTPConflict))
-            msg = str(e)
-            self.assertEqual(msg,
+        except webob.exc.HTTPConflict as e:
+            self.assertEqual(unicode(e),
                 "Cannot 'meow' while instance is in fake_attr fake_state")
         else:
             self.fail("webob.exc.HTTPConflict was not raised")
 
-        # Incorrect args
-        exc = exception.InstanceInvalidState()
-        try:
-            common.raise_http_conflict_for_instance_invalid_state(exc,
-                    'meow')
-        except Exception, e:
-            self.assertTrue(isinstance(e, webob.exc.HTTPConflict))
-            msg = str(e)
-            self.assertEqual(msg,
-                "Instance is in an invalid state for 'meow'")
-        else:
-            self.fail("webob.exc.HTTPConflict was not raised")
+    def test_check_img_metadata_properties_quota_valid_metadata(self):
+        ctxt = utils.get_test_admin_context()
+        metadata1 = {"key": "value"}
+        actual = common.check_img_metadata_properties_quota(ctxt, metadata1)
+        self.assertEqual(actual, None)
+
+        metadata2 = {"key": "v" * 260}
+        actual = common.check_img_metadata_properties_quota(ctxt, metadata2)
+        self.assertEqual(actual, None)
+
+        metadata3 = {"key": ""}
+        actual = common.check_img_metadata_properties_quota(ctxt, metadata3)
+        self.assertEqual(actual, None)
+
+    def test_check_img_metadata_properties_quota_inv_metadata(self):
+        ctxt = utils.get_test_admin_context()
+        metadata1 = {"a" * 260: "value"}
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                common.check_img_metadata_properties_quota, ctxt, metadata1)
+
+        metadata2 = {"": "value"}
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                common.check_img_metadata_properties_quota, ctxt, metadata2)
+
+        metadata3 = "invalid metadata"
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                common.check_img_metadata_properties_quota, ctxt, metadata3)
 
 
 class MetadataXMLDeserializationTest(test.TestCase):
@@ -381,7 +377,6 @@ class MetadataXMLSerializationTest(test.TestCase):
         }
 
         output = serializer.serialize(fixture)
-        print output
         has_dec = output.startswith("<?xml version='1.0' encoding='UTF-8'?>")
         self.assertTrue(has_dec)
 
@@ -394,7 +389,6 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
         metadata_dict = fixture['metadata']
@@ -413,7 +407,6 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
         metadata_dict = fixture['metadata']
@@ -432,7 +425,6 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
         metadata_dict = fixture['metadata']
@@ -451,7 +443,6 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         meta_dict = fixture['meta']
         (meta_key, meta_value) = meta_dict.items()[0]
@@ -467,7 +458,6 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
         metadata_dict = fixture['metadata']
@@ -486,7 +476,6 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         meta_dict = fixture['meta']
         (meta_key, meta_value) = meta_dict.items()[0]
@@ -503,7 +492,6 @@ class MetadataXMLSerializationTest(test.TestCase):
             },
         }
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'metadata')
         metadata_dict = fixture['metadata']
@@ -524,3 +512,11 @@ class MetadataXMLSerializationTest(test.TestCase):
         """.replace("  ", "").replace("\n", ""))
 
         self.assertEqual(expected.toxml(), actual.toxml())
+
+    def test_metadata_deserializer(self):
+        """Should throw a 400 error on corrupt xml."""
+        deserializer = common.MetadataXMLDeserializer()
+        self.assertRaises(
+                exception.MalformedRequestBody,
+                deserializer.deserialize,
+                utils.killer_xml_body())

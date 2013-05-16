@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -22,12 +22,9 @@ from nova.api.openstack import common
 from nova.api.openstack.compute.views import addresses as view_addresses
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova import log as logging
-from nova import flags
-
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-FLAGS = flags.FLAGS
 
 
 def make_network(elem):

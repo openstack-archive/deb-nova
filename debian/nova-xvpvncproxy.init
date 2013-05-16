@@ -16,7 +16,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack XVP VNC proxy"
 NAME=nova-xvpvncproxy
 DAEMON=/usr/bin/nova-xvpvncproxy
-DAEMON_ARGS="--flagfile=/etc/nova/nova.conf"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova

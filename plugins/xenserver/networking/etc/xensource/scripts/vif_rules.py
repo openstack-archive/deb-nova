@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010-2011 OpenStack LLC.
+# Copyright 2010-2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -125,8 +125,8 @@ def apply_ebtables_rules(command, params):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print "usage: %s dom_id online|offline [vif]" % \
-               os.path.basename(sys.argv[0])
+        print ("usage: %s dom_id online|offline [vif]" %
+               os.path.basename(sys.argv[0]))
         sys.exit(1)
     else:
         dom_id, command = sys.argv[1:3]

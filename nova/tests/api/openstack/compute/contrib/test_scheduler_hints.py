@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,14 +15,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.api.openstack  import compute
-from nova.api.openstack.compute import extensions
-from nova.api.openstack import wsgi
+from nova.api.openstack import compute
 import nova.db.api
-import nova.rpc
+from nova.openstack.common import jsonutils
+import nova.openstack.common.rpc
 from nova import test
 from nova.tests.api.openstack import fakes
-from nova import utils
 
 
 UUID = fakes.FAKE_UUID
@@ -33,7 +31,11 @@ class SchedulerHintsTestCase(test.TestCase):
     def setUp(self):
         super(SchedulerHintsTestCase, self).setUp()
         self.fake_instance = fakes.stub_instance(1, uuid=UUID)
-        self.app = compute.APIRouter()
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Scheduler_hints'])
+        self.app = compute.APIRouter(init_only=('servers',))
 
     def test_create_server_without_hints(self):
 
@@ -52,7 +54,7 @@ class SchedulerHintsTestCase(test.TestCase):
                   'flavorRef': '1',
                }}
 
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
         self.assertEqual(202, res.status_int)
 
@@ -76,7 +78,7 @@ class SchedulerHintsTestCase(test.TestCase):
             'os:scheduler_hints': {'a': 'b'},
         }
 
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
         self.assertEqual(202, res.status_int)
 
@@ -93,6 +95,6 @@ class SchedulerHintsTestCase(test.TestCase):
             'os:scheduler_hints': 'here',
         }
 
-        req.body = utils.dumps(body)
+        req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
         self.assertEqual(400, res.status_int)

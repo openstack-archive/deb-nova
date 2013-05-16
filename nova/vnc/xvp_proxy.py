@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2012 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,12 +25,11 @@ import eventlet
 import eventlet.green
 import eventlet.greenio
 import eventlet.wsgi
+from oslo.config import cfg
 
+from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
-from nova import flags
-from nova import log as logging
-from nova.openstack.common import cfg
-from nova import rpc
+from nova.openstack.common import log as logging
 from nova import version
 from nova import wsgi
 
@@ -46,10 +45,8 @@ xvp_proxy_opts = [
                help='Address that the XCP VNC proxy should bind to'),
     ]
 
-FLAGS = flags.FLAGS
-FLAGS.register_opts(xvp_proxy_opts)
-
-flags.DECLARE('consoleauth_topic', 'nova.consoleauth')
+CONF = cfg.CONF
+CONF.register_opts(xvp_proxy_opts)
 
 
 class XCPVNCProxy(object):
@@ -145,9 +142,8 @@ class XCPVNCProxy(object):
                 return "Invalid Request"
 
             ctxt = context.get_admin_context()
-            connect_info = rpc.call(ctxt, FLAGS.consoleauth_topic,
-                                    {'method': 'check_token',
-                                     'args': {'token': token}})
+            api = consoleauth_rpcapi.ConsoleAuthAPI()
+            connect_info = api.check_token(ctxt, token)
 
             if not connect_info:
                 LOG.audit(_("Request made with invalid token: %s"), req)
@@ -178,10 +174,10 @@ class SafeHttpProtocol(eventlet.wsgi.HttpProtocol):
 
 def get_wsgi_server():
     LOG.audit(_("Starting nova-xvpvncproxy node (version %s)"),
-              version.version_string_with_vcs())
+              version.version_string_with_package())
 
-    return  wsgi.Server("XCP VNC Proxy",
-                         XCPVNCProxy(),
-                         protocol=SafeHttpProtocol,
-                         host=FLAGS.xvpvncproxy_host,
-                         port=FLAGS.xvpvncproxy_port)
+    return wsgi.Server("XCP VNC Proxy",
+                       XCPVNCProxy(),
+                       protocol=SafeHttpProtocol,
+                       host=CONF.xvpvncproxy_host,
+                       port=CONF.xvpvncproxy_port)

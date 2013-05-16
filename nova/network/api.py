@@ -17,318 +17,440 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
+import inspect
+
+from nova.compute import instance_types
 from nova.db import base
 from nova import exception
-from nova import flags
-from nova import log as logging
+from nova.network import floating_ips
 from nova.network import model as network_model
-from nova import rpc
-from nova.rpc import common as rpc_common
+from nova.network import rpcapi as network_rpcapi
+from nova.openstack.common import log as logging
+from nova import policy
+from nova import utils
 
-
-FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
 
 
+def refresh_cache(f):
+    """
+    Decorator to update the instance_info_cache
+
+    Requires context and instance as function args
+    """
+    argspec = inspect.getargspec(f)
+
+    @functools.wraps(f)
+    def wrapper(self, context, *args, **kwargs):
+        res = f(self, context, *args, **kwargs)
+
+        try:
+            # get the instance from arguments (or raise ValueError)
+            instance = kwargs.get('instance')
+            if not instance:
+                instance = args[argspec.args.index('instance') - 2]
+        except ValueError:
+            msg = _('instance is a required argument to use @refresh_cache')
+            raise Exception(msg)
+
+        update_instance_cache_with_nw_info(self, context, instance,
+                nw_info=res, conductor_api=kwargs.get('conductor_api'))
+
+        # return the original function's return value
+        return res
+    return wrapper
+
+
+def update_instance_cache_with_nw_info(api, context, instance,
+                                       nw_info=None, conductor_api=None):
+    try:
+        if not isinstance(nw_info, network_model.NetworkInfo):
+            nw_info = None
+        if not nw_info:
+            nw_info = api._get_instance_nw_info(context, instance)
+        # update cache
+        cache = {'network_info': nw_info.json()}
+        if conductor_api:
+            conductor_api.instance_info_cache_update(context, instance, cache)
+        else:
+            api.db.instance_info_cache_update(context, instance['uuid'], cache)
+    except Exception:
+        LOG.exception(_('Failed storing info cache'), instance=instance)
+
+
+def wrap_check_policy(func):
+    """Check policy corresponding to the wrapped methods prior to execution."""
+
+    @functools.wraps(func)
+    def wrapped(self, context, *args, **kwargs):
+        action = func.__name__
+        check_policy(context, action)
+        return func(self, context, *args, **kwargs)
+
+    return wrapped
+
+
+def check_policy(context, action):
+    target = {
+        'project_id': context.project_id,
+        'user_id': context.user_id,
+    }
+    _action = 'network:%s' % action
+    policy.enforce(context, _action, target)
+
+
 class API(base.Base):
-    """API for interacting with the network manager."""
+    """API for doing networking via the nova-network network manager.
 
+    This is a pluggable module - other implementations do networking via
+    other services (such as Quantum).
+    """
+    _sentinel = object()
+
+    def __init__(self, **kwargs):
+        self.network_rpcapi = network_rpcapi.NetworkAPI()
+        helper = utils.ExceptionHelper
+        # NOTE(vish): this local version of floating_manager has to convert
+        #             ClientExceptions back since they aren't going over rpc.
+        self.floating_manager = helper(floating_ips.LocalManager())
+        super(API, self).__init__(**kwargs)
+
+    @wrap_check_policy
     def get_all(self, context):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_all_networks'})
+        try:
+            return self.db.network_get_all(context)
+        except exception.NoNetworksFound:
+            return []
 
+    @wrap_check_policy
     def get(self, context, network_uuid):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_network',
-                         'args': {'network_uuid': network_uuid}})
+        return self.db.network_get_by_uuid(context.elevated(), network_uuid)
 
+    @wrap_check_policy
+    def create(self, context, **kwargs):
+        return self.network_rpcapi.create_networks(context, **kwargs)
+
+    @wrap_check_policy
     def delete(self, context, network_uuid):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'delete_network',
-                         'args': {'fixed_range': None,
-                                  'uuid': network_uuid}})
+        return self.network_rpcapi.delete_network(context, network_uuid, None)
 
+    @wrap_check_policy
     def disassociate(self, context, network_uuid):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'disassociate_network',
-                         'args': {'network_uuid': network_uuid}})
+        network = self.get(context, network_uuid)
+        self.db.network_disassociate(context, network['id'])
 
+    @wrap_check_policy
     def get_fixed_ip(self, context, id):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_fixed_ip',
-                         'args': {'id': id}})
+        return self.db.fixed_ip_get(context, id)
 
+    @wrap_check_policy
     def get_fixed_ip_by_address(self, context, address):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_fixed_ip_by_address',
-                         'args': {'address': address}})
+        return self.db.fixed_ip_get_by_address(context, address)
 
+    @wrap_check_policy
     def get_floating_ip(self, context, id):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_floating_ip',
-                         'args': {'id': id}})
+        return self.db.floating_ip_get(context, id)
 
+    @wrap_check_policy
     def get_floating_ip_pools(self, context):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_floating_pools'})
+        return self.db.floating_ip_get_pools(context)
 
+    @wrap_check_policy
     def get_floating_ip_by_address(self, context, address):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_floating_ip_by_address',
-                         'args': {'address': address}})
+        return self.db.floating_ip_get_by_address(context, address)
 
+    @wrap_check_policy
     def get_floating_ips_by_project(self, context):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_floating_ips_by_project'})
+        return self.db.floating_ip_get_all_by_project(context,
+                                                      context.project_id)
 
+    @wrap_check_policy
     def get_floating_ips_by_fixed_address(self, context, fixed_address):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_floating_ips_by_fixed_address',
-                         'args': {'fixed_address': fixed_address}})
+        floating_ips = self.db.floating_ip_get_by_fixed_address(context,
+                                                                fixed_address)
+        return [floating_ip['address'] for floating_ip in floating_ips]
 
+    @wrap_check_policy
+    def get_backdoor_port(self, context, host):
+        return self.network_rpcapi.get_backdoor_port(context, host)
+
+    @wrap_check_policy
+    def get_instance_id_by_floating_address(self, context, address):
+        fixed_ip = self.db.fixed_ip_get_by_floating_address(context, address)
+        if fixed_ip is None:
+            return None
+        else:
+            return fixed_ip['instance_uuid']
+
+    @wrap_check_policy
     def get_vifs_by_instance(self, context, instance):
-        # NOTE(vish): When the db calls are converted to store network
-        #             data by instance_uuid, this should pass uuid instead.
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_vifs_by_instance',
-                         'args': {'instance_id': instance['id']}})
+        return self.db.virtual_interface_get_by_instance(context,
+                                                         instance['uuid'])
 
+    @wrap_check_policy
     def get_vif_by_mac_address(self, context, mac_address):
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_vif_by_mac_address',
-                         'args': {'mac_address': mac_address}})
+        return self.db.virtual_interface_get_by_address(context,
+                                                        mac_address)
 
+    @wrap_check_policy
     def allocate_floating_ip(self, context, pool=None):
-        """Adds a floating ip to a project from a pool. (allocates)"""
-        # NOTE(vish): We don't know which network host should get the ip
-        #             when we allocate, so just send it to any one.  This
-        #             will probably need to move into a network supervisor
-        #             at some point.
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'allocate_floating_ip',
-                         'args': {'project_id': context.project_id,
-                                  'pool': pool}})
+        """Adds (allocates) a floating ip to a project from a pool."""
+        return self.floating_manager.allocate_floating_ip(context,
+                 context.project_id, False, pool)
 
+    @wrap_check_policy
     def release_floating_ip(self, context, address,
                             affect_auto_assigned=False):
-        """Removes floating ip with address from a project. (deallocates)"""
-        rpc.cast(context,
-                 FLAGS.network_topic,
-                 {'method': 'deallocate_floating_ip',
-                  'args': {'address': address,
-                           'affect_auto_assigned': affect_auto_assigned}})
+        """Removes (deallocates) a floating ip with address from a project."""
+        return self.floating_manager.deallocate_floating_ip(context, address,
+                 affect_auto_assigned)
 
-    def associate_floating_ip(self, context, floating_address, fixed_address,
-                                                 affect_auto_assigned=False):
+    @wrap_check_policy
+    @refresh_cache
+    def associate_floating_ip(self, context, instance,
+                              floating_address, fixed_address,
+                              affect_auto_assigned=False):
         """Associates a floating ip with a fixed ip.
 
-        ensures floating ip is allocated to the project in context
-        """
-        rpc.call(context,
-                 FLAGS.network_topic,
-                 {'method': 'associate_floating_ip',
-                  'args': {'floating_address': floating_address,
-                           'fixed_address': fixed_address,
-                           'affect_auto_assigned': affect_auto_assigned}})
+        Ensures floating ip is allocated to the project in context.
+        Does not verify ownership of the fixed ip. Caller is assumed to have
+        checked that the instance is properly owned.
 
-    def disassociate_floating_ip(self, context, address,
+        """
+        orig_instance_uuid = self.floating_manager.associate_floating_ip(
+                context, floating_address, fixed_address, affect_auto_assigned)
+
+        if orig_instance_uuid:
+            msg_dict = dict(address=floating_address,
+                            instance_id=orig_instance_uuid)
+            LOG.info(_('re-assign floating IP %(address)s from '
+                       'instance %(instance_id)s') % msg_dict)
+            orig_instance = self.db.instance_get_by_uuid(context,
+                                                         orig_instance_uuid)
+
+            # purge cached nw info for the original instance
+            update_instance_cache_with_nw_info(self, context, orig_instance)
+
+    @wrap_check_policy
+    @refresh_cache
+    def disassociate_floating_ip(self, context, instance, address,
                                  affect_auto_assigned=False):
         """Disassociates a floating ip from fixed ip it is associated with."""
-        floating_ip = self.db.floating_ip_get_by_address(context, address)
-        fixed_ip = self.db.fixed_ip_get(context, floating_ip['fixed_ip_id'])
-        instance = self.db.instance_get(context, fixed_ip['instance_id'])
-        rpc.cast(context,
-                 FLAGS.network_topic,
-                 {'method': 'disassociate_floating_ip',
-                  'args': {'address': address}})
-        self.invalidate_instance_cache(context, instance)
+        return self.floating_manager.disassociate_floating_ip(context, address,
+                affect_auto_assigned)
 
-    def invalidate_instance_cache(self, context, instance):
-        # NOTE(vish): get_instance_nw_info will recreate the cache for us
-        self.get_instance_nw_info(context, instance)
-
-    def allocate_for_instance(self, context, instance, **kwargs):
+    @wrap_check_policy
+    @refresh_cache
+    def allocate_for_instance(self, context, instance, vpn,
+                              requested_networks, macs=None,
+                              conductor_api=None, security_groups=None):
         """Allocates all network structures for an instance.
 
+        TODO(someone): document the rest of these parameters.
+
+        :param macs: None or a set of MAC addresses that the instance
+            should use. macs is supplied by the hypervisor driver (contrast
+            with requested_networks which is user supplied).
         :returns: network info as from get_instance_nw_info() below
         """
-        args = kwargs
-        args['instance_id'] = instance['id']
-        args['instance_uuid'] = instance['uuid']
+        # NOTE(vish): We can't do the floating ip allocation here because
+        #             this is called from compute.manager which shouldn't
+        #             have db access so we do it on the other side of the
+        #             rpc.
+        instance_type = instance_types.extract_instance_type(instance)
+        args = {}
+        args['vpn'] = vpn
+        args['requested_networks'] = requested_networks
+        args['instance_id'] = instance['uuid']
         args['project_id'] = instance['project_id']
         args['host'] = instance['host']
-        args['rxtx_factor'] = instance['instance_type']['rxtx_factor']
-
-        nw_info = rpc.call(context, FLAGS.network_topic,
-                           {'method': 'allocate_for_instance',
-                             'args': args})
+        args['rxtx_factor'] = instance_type['rxtx_factor']
+        args['macs'] = macs
+        nw_info = self.network_rpcapi.allocate_for_instance(context, **args)
 
         return network_model.NetworkInfo.hydrate(nw_info)
 
-    def deallocate_for_instance(self, context, instance, **kwargs):
+    @wrap_check_policy
+    def deallocate_for_instance(self, context, instance):
         """Deallocates all network structures related to instance."""
-        args = kwargs
-        args['instance_id'] = instance['id']
+        # NOTE(vish): We can't do the floating ip deallocation here because
+        #             this is called from compute.manager which shouldn't
+        #             have db access so we do it on the other side of the
+        #             rpc.
+        args = {}
+        args['instance_id'] = instance['uuid']
         args['project_id'] = instance['project_id']
         args['host'] = instance['host']
-        rpc.cast(context, FLAGS.network_topic,
-                 {'method': 'deallocate_for_instance',
-                  'args': args})
+        self.network_rpcapi.deallocate_for_instance(context, **args)
 
-    def add_fixed_ip_to_instance(self, context, instance, network_id):
+    # NOTE(danms): Here for quantum compatibility
+    def allocate_port_for_instance(self, context, instance, port_id,
+                                   network_id=None, requested_ip=None,
+                                   conductor_api=None):
+        raise NotImplementedError()
+
+    # NOTE(danms): Here for quantum compatibility
+    def deallocate_port_for_instance(self, context, instance, port_id,
+                                     conductor_api=None):
+        raise NotImplementedError()
+
+    # NOTE(danms): Here for quantum compatibility
+    def list_ports(self, *args, **kwargs):
+        raise NotImplementedError()
+
+    # NOTE(danms): Here for quantum compatibility
+    def show_port(self, *args, **kwargs):
+        raise NotImplementedError()
+
+    @wrap_check_policy
+    @refresh_cache
+    def add_fixed_ip_to_instance(self, context, instance, network_id,
+                                 conductor_api=None):
         """Adds a fixed ip to instance from specified network."""
-        args = {'instance_id': instance['id'],
+        instance_type = instance_types.extract_instance_type(instance)
+        args = {'instance_id': instance['uuid'],
+                'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
                 'network_id': network_id}
-        rpc.cast(context, FLAGS.network_topic,
-                 {'method': 'add_fixed_ip_to_instance',
-                  'args': args})
+        self.network_rpcapi.add_fixed_ip_to_instance(context, **args)
 
-    def remove_fixed_ip_from_instance(self, context, instance, address):
+    @wrap_check_policy
+    @refresh_cache
+    def remove_fixed_ip_from_instance(self, context, instance, address,
+                                      conductor_api=None):
         """Removes a fixed ip from instance from specified network."""
 
-        args = {'instance_id': instance['id'],
+        instance_type = instance_types.extract_instance_type(instance)
+        args = {'instance_id': instance['uuid'],
+                'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
                 'address': address}
-        rpc.cast(context, FLAGS.network_topic,
-                 {'method': 'remove_fixed_ip_from_instance',
-                  'args': args})
+        self.network_rpcapi.remove_fixed_ip_from_instance(context, **args)
 
-    def add_network_to_project(self, context, project_id):
+    @wrap_check_policy
+    def add_network_to_project(self, context, project_id, network_uuid=None):
         """Force adds another network to a project."""
-        rpc.cast(context, FLAGS.network_topic,
-                 {'method': 'add_network_to_project',
-                  'args': {'project_id': project_id}})
+        self.network_rpcapi.add_network_to_project(context, project_id,
+                network_uuid)
 
-    def get_instance_nw_info(self, context, instance):
+    @wrap_check_policy
+    def associate(self, context, network_uuid, host=_sentinel,
+                  project=_sentinel):
+        """Associate or disassociate host or project to network."""
+        associations = {}
+        network_id = self.get(context, network_uuid)['id']
+        if host is not API._sentinel:
+            if host is None:
+                self.db.network_disassociate(context, network_id,
+                                             disassociate_host=True,
+                                             disassociate_project=False)
+            else:
+                self.db.network_set_host(context, network_id, host)
+        if project is not API._sentinel:
+            project = associations['project']
+            if project is None:
+                self.db.network_disassociate(context, network_id,
+                                             disassociate_host=False,
+                                             disassociate_project=True)
+            else:
+                self.db.network_associate(context, project, network_id, True)
+
+    @wrap_check_policy
+    def get_instance_nw_info(self, context, instance, conductor_api=None):
         """Returns all network info related to an instance."""
-        args = {'instance_id': instance['id'],
-                'instance_uuid': instance['uuid'],
-                'rxtx_factor': instance['instance_type']['rxtx_factor'],
+        result = self._get_instance_nw_info(context, instance)
+        update_instance_cache_with_nw_info(self, context, instance,
+                                           result, conductor_api)
+        return result
+
+    def _get_instance_nw_info(self, context, instance):
+        """Returns all network info related to an instance."""
+        instance_type = instance_types.extract_instance_type(instance)
+        args = {'instance_id': instance['uuid'],
+                'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
                 'project_id': instance['project_id']}
-        try:
-            nw_info = rpc.call(context, FLAGS.network_topic,
-                               {'method': 'get_instance_nw_info',
-                                'args': args})
-            return network_model.NetworkInfo.hydrate(nw_info)
-        # FIXME(comstud) rpc calls raise RemoteError if the remote raises
-        # an exception.  In the case here, because of a race condition,
-        # it's possible the remote will raise a InstanceNotFound when
-        # someone deletes the instance while this call is in progress.
-        #
-        # Unfortunately, we don't have access to the original exception
-        # class now.. but we do have the exception class's name.  So,
-        # we're checking it here and raising a new exception.
-        #
-        # Ultimately we need RPC to be able to serialize more things like
-        # classes.
-        except rpc_common.RemoteError as err:
-            if err.exc_type == 'InstanceNotFound':
-                raise exception.InstanceNotFound(instance_id=instance['id'])
-            raise
+        nw_info = self.network_rpcapi.get_instance_nw_info(context, **args)
 
+        return network_model.NetworkInfo.hydrate(nw_info)
+
+    @wrap_check_policy
     def validate_networks(self, context, requested_networks):
         """validate the networks passed at the time of creating
         the server
         """
-        args = {'networks': requested_networks}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'validate_networks',
-                         'args': args})
+        return self.network_rpcapi.validate_networks(context,
+                                                     requested_networks)
 
+    @wrap_check_policy
     def get_instance_uuids_by_ip_filter(self, context, filters):
         """Returns a list of dicts in the form of
         {'instance_uuid': uuid, 'ip': ip} that matched the ip_filter
         """
-        args = {'filters': filters}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'get_instance_uuids_by_ip_filter',
-                         'args': args})
+        return self.network_rpcapi.get_instance_uuids_by_ip_filter(context,
+                                                                   filters)
 
+    @wrap_check_policy
     def get_dns_domains(self, context):
         """Returns a list of available dns domains.
         These can be used to create DNS entries for floating ips.
         """
-        return rpc.call(context,
-                        FLAGS.network_topic,
-                        {'method': 'get_dns_domains'})
+        return self.network_rpcapi.get_dns_domains(context)
 
+    @wrap_check_policy
     def add_dns_entry(self, context, address, name, dns_type, domain):
-        """Create specified DNS entry for address"""
+        """Create specified DNS entry for address."""
         args = {'address': address,
                 'name': name,
                 'dns_type': dns_type,
                 'domain': domain}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'add_dns_entry',
-                         'args': args})
+        return self.network_rpcapi.add_dns_entry(context, **args)
 
+    @wrap_check_policy
     def modify_dns_entry(self, context, name, address, domain):
-        """Create specified DNS entry for address"""
+        """Create specified DNS entry for address."""
         args = {'address': address,
                 'name': name,
                 'domain': domain}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'modify_dns_entry',
-                         'args': args})
+        return self.network_rpcapi.modify_dns_entry(context, **args)
 
+    @wrap_check_policy
     def delete_dns_entry(self, context, name, domain):
         """Delete the specified dns entry."""
         args = {'name': name, 'domain': domain}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'delete_dns_entry',
-                         'args': args})
+        return self.network_rpcapi.delete_dns_entry(context, **args)
 
+    @wrap_check_policy
     def delete_dns_domain(self, context, domain):
         """Delete the specified dns domain."""
-        args = {'domain': domain}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'delete_dns_domain',
-                         'args': args})
+        return self.network_rpcapi.delete_dns_domain(context, domain=domain)
 
+    @wrap_check_policy
     def get_dns_entries_by_address(self, context, address, domain):
-        """Get entries for address and domain"""
+        """Get entries for address and domain."""
         args = {'address': address, 'domain': domain}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'get_dns_entries_by_address',
-                         'args': args})
+        return self.network_rpcapi.get_dns_entries_by_address(context, **args)
 
+    @wrap_check_policy
     def get_dns_entries_by_name(self, context, name, domain):
-        """Get entries for name and domain"""
+        """Get entries for name and domain."""
         args = {'name': name, 'domain': domain}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'get_dns_entries_by_name',
-                         'args': args})
+        return self.network_rpcapi.get_dns_entries_by_name(context, **args)
 
+    @wrap_check_policy
     def create_private_dns_domain(self, context, domain, availability_zone):
         """Create a private DNS domain with nova availability zone."""
         args = {'domain': domain, 'av_zone': availability_zone}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'create_private_dns_domain',
-                         'args': args})
+        return self.network_rpcapi.create_private_dns_domain(context, **args)
 
+    @wrap_check_policy
     def create_public_dns_domain(self, context, domain, project=None):
-        """Create a private DNS domain with optional nova project."""
+        """Create a public DNS domain with optional nova project."""
         args = {'domain': domain, 'project': project}
-        return rpc.call(context, FLAGS.network_topic,
-                        {'method': 'create_public_dns_domain',
-                         'args': args})
+        return self.network_rpcapi.create_public_dns_domain(context, **args)
 
+    @wrap_check_policy
     def setup_networks_on_host(self, context, instance, host=None,
                                                         teardown=False):
         """Setup or teardown the network structures on hosts related to
@@ -341,7 +463,59 @@ class API(base.Base):
                 'host': host,
                 'teardown': teardown}
 
-        # NOTE(tr3buchet): the call is just to wait for completion
-        rpc.call(context, FLAGS.network_topic,
-                 {'method': 'setup_networks_on_host',
-                  'args': args})
+        self.network_rpcapi.setup_networks_on_host(context, **args)
+
+    def _is_multi_host(self, context, instance):
+        try:
+            fixed_ips = self.db.fixed_ip_get_by_instance(context,
+                                                         instance['uuid'])
+        except exception.FixedIpNotFoundForInstance:
+            return False
+        network = self.db.network_get(context, fixed_ips[0]['network_id'],
+                                      project_only='allow_none')
+        return network['multi_host']
+
+    def _get_floating_ip_addresses(self, context, instance):
+        floating_ips = self.db.instance_floating_address_get_all(context,
+                                                            instance['uuid'])
+        return [floating_ip['address'] for floating_ip in floating_ips]
+
+    @wrap_check_policy
+    def migrate_instance_start(self, context, instance, migration):
+        """Start to migrate the network of an instance."""
+        instance_type = instance_types.extract_instance_type(instance)
+        args = dict(
+            instance_uuid=instance['uuid'],
+            rxtx_factor=instance_type['rxtx_factor'],
+            project_id=instance['project_id'],
+            source_compute=migration['source_compute'],
+            dest_compute=migration['dest_compute'],
+            floating_addresses=None,
+        )
+
+        if self._is_multi_host(context, instance):
+            args['floating_addresses'] = \
+                self._get_floating_ip_addresses(context, instance)
+            args['host'] = migration['source_compute']
+
+        self.network_rpcapi.migrate_instance_start(context, **args)
+
+    @wrap_check_policy
+    def migrate_instance_finish(self, context, instance, migration):
+        """Finish migrating the network of an instance."""
+        instance_type = instance_types.extract_instance_type(instance)
+        args = dict(
+            instance_uuid=instance['uuid'],
+            rxtx_factor=instance_type['rxtx_factor'],
+            project_id=instance['project_id'],
+            source_compute=migration['source_compute'],
+            dest_compute=migration['dest_compute'],
+            floating_addresses=None,
+        )
+
+        if self._is_multi_host(context, instance):
+            args['floating_addresses'] = \
+                self._get_floating_ip_addresses(context, instance)
+            args['host'] = migration['dest_compute']
+
+        self.network_rpcapi.migrate_instance_finish(context, **args)

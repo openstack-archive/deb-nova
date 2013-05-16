@@ -13,8 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
 from lxml import etree
 import webob
 
@@ -22,6 +20,7 @@ from nova.api.openstack.compute.contrib import virtual_interfaces
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import network
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -48,13 +47,18 @@ class ServerVirtualInterfaceTest(test.TestCase):
                        compute_api_get)
         self.stubs.Set(network.api.API, "get_vifs_by_instance",
                        get_vifs_by_instance)
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Virtual_interfaces'])
 
     def test_get_virtual_interfaces_list(self):
         url = '/v2/fake/servers/abcd/os-virtual-interfaces'
         req = webob.Request.blank(url)
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            init_only=('os-virtual-interfaces',)))
         self.assertEqual(res.status_int, 200)
-        res_dict = json.loads(res.body)
+        res_dict = jsonutils.loads(res.body)
         response = {'virtual_interfaces': [
                         {'id': '00000000-0000-0000-0000-00000000000000000',
                          'mac_address': '00-00-00-00-00-00'},
@@ -87,7 +91,6 @@ class ServerVirtualInterfaceSerializerTest(test.TestCase):
         vifs = dict(virtual_interfaces=raw_vifs)
         text = self.serializer.serialize(vifs)
 
-        print text
         tree = etree.fromstring(text)
 
         self.assertEqual('virtual_interfaces', self._tag(tree))

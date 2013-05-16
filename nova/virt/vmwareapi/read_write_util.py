@@ -1,7 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2011 Citrix Systems, Inc.
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -27,21 +27,13 @@ import urllib
 import urllib2
 import urlparse
 
-from glance import client
-
-from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
-FLAGS = flags.FLAGS
-
 USER_AGENT = "OpenStack-ESX-Adapter"
 
-try:
-    READ_CHUNKSIZE = client.BaseClient.CHUNKSIZE
-except AttributeError:
-    READ_CHUNKSIZE = 65536
+READ_CHUNKSIZE = 65536
 
 
 class GlanceFileRead(object):
@@ -116,8 +108,8 @@ class VMwareHTTPFile(object):
         raise NotImplementedError
 
 
-class VMWareHTTPWriteFile(VMwareHTTPFile):
-    """VMWare file write handler class."""
+class VMwareHTTPWriteFile(VMwareHTTPFile):
+    """VMware file write handler class."""
 
     def __init__(self, host, data_center_name, datastore_name, cookies,
                  file_path, file_size, scheme="https"):
@@ -148,12 +140,12 @@ class VMWareHTTPWriteFile(VMwareHTTPFile):
             self.conn.getresponse()
         except Exception, excep:
             LOG.debug(_("Exception during HTTP connection close in "
-                      "VMWareHTTpWrite. Exception is %s") % excep)
-        super(VMWareHTTPWriteFile, self).close()
+                      "VMwareHTTPWrite. Exception is %s") % excep)
+        super(VMwareHTTPWriteFile, self).close()
 
 
-class VmWareHTTPReadFile(VMwareHTTPFile):
-    """VMWare file read handler class."""
+class VMwareHTTPReadFile(VMwareHTTPFile):
+    """VMware file read handler class."""
 
     def __init__(self, host, data_center_name, datastore_name, cookies,
                  file_path, scheme="https"):

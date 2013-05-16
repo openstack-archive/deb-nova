@@ -1,4 +1,4 @@
-#   Copyright 2012 OpenStack, LLC.
+#   Copyright 2012 OpenStack Foundation
 #
 #   Licensed under the Apache License, Version 2.0 (the "License"); you may
 #   not use this file except in compliance with the License. You may obtain
@@ -14,47 +14,20 @@
 
 """The Extended Server Attributes API extension."""
 
-from webob import exc
-
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova import compute
-from nova import db
-from nova import exception
-from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 
-
-FLAGS = flags.FLAGS
-LOG = logging.getLogger("nova.api.openstack.compute.contrib."
-                        "extended_server_attributes")
+LOG = logging.getLogger(__name__)
 authorize = extensions.soft_extension_authorizer('compute',
                                                  'extended_server_attributes')
 
 
 class ExtendedServerAttributesController(wsgi.Controller):
-    def __init__(self, *args, **kwargs):
-        super(ExtendedServerAttributesController, self).__init__(*args,
-                                                                 **kwargs)
-        self.compute_api = compute.API()
-
-    def _get_instances(self, context, instance_uuids):
-        filters = {'uuid': instance_uuids}
-        instances = self.compute_api.get_all(context, filters)
-        return dict((instance['uuid'], instance) for instance in instances)
-
-    def _get_hypervisor_hostname(self, context, instance):
-        compute_node = db.compute_node_get_by_host(context, instance["host"])
-
-        try:
-            return compute_node["hypervisor_hostname"]
-        except TypeError:
-            return
-
     def _extend_server(self, context, server, instance):
         key = "%s:hypervisor_hostname" % Extended_server_attributes.alias
-        server[key] = self._get_hypervisor_hostname(context, instance)
+        server[key] = instance['node']
 
         for attr in ['host', 'name']:
             if attr == 'name':
@@ -70,14 +43,11 @@ class ExtendedServerAttributesController(wsgi.Controller):
         if authorize(context):
             # Attach our slave template to the response object
             resp_obj.attach(xml=ExtendedServerAttributeTemplate())
-
-            try:
-                instance = self.compute_api.get(context, id)
-            except exception.NotFound:
-                explanation = _("Server not found.")
-                raise exc.HTTPNotFound(explanation=explanation)
-
-            self._extend_server(context, resp_obj.obj['server'], instance)
+            server = resp_obj.obj['server']
+            db_instance = req.get_db_instance(server['id'])
+            # server['id'] is guaranteed to be in the cache due to
+            # the core API adding it in its 'show' method.
+            self._extend_server(context, server, db_instance)
 
     @wsgi.extends
     def detail(self, req, resp_obj):
@@ -87,17 +57,11 @@ class ExtendedServerAttributesController(wsgi.Controller):
             resp_obj.attach(xml=ExtendedServerAttributesTemplate())
 
             servers = list(resp_obj.obj['servers'])
-            instance_uuids = [server['id'] for server in servers]
-            instances = self._get_instances(context, instance_uuids)
-
-            for server_object in servers:
-                try:
-                    instance_data = instances[server_object['id']]
-                except KeyError:
-                    # Ignore missing instance data
-                    continue
-
-                self._extend_server(context, server_object, instance_data)
+            for server in servers:
+                db_instance = req.get_db_instance(server['id'])
+                # server['id'] is guaranteed to be in the cache due to
+                # the core API adding it in its 'detail' method.
+                self._extend_server(context, server, db_instance)
 
 
 class Extended_server_attributes(extensions.ExtensionDescriptor):
@@ -105,8 +69,8 @@ class Extended_server_attributes(extensions.ExtensionDescriptor):
 
     name = "ExtendedServerAttributes"
     alias = "OS-EXT-SRV-ATTR"
-    namespace = "http://docs.openstack.org/compute/ext/" \
-                "extended_status/api/v1.1"
+    namespace = ("http://docs.openstack.org/compute/ext/"
+                 "extended_status/api/v1.1")
     updated = "2011-11-03T00:00:00+00:00"
 
     def get_controller_extensions(self):
@@ -120,15 +84,17 @@ def make_server(elem):
              '%s:instance_name' % Extended_server_attributes.alias)
     elem.set('{%s}host' % Extended_server_attributes.namespace,
              '%s:host' % Extended_server_attributes.alias)
+    elem.set('{%s}hypervisor_hostname' % Extended_server_attributes.namespace,
+             '%s:hypervisor_hostname' % Extended_server_attributes.alias)
 
 
 class ExtendedServerAttributeTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('server', selector='server')
         make_server(root)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={
-            Extended_server_attributes.alias: \
-            Extended_server_attributes.namespace})
+        alias = Extended_server_attributes.alias
+        namespace = Extended_server_attributes.namespace
+        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})
 
 
 class ExtendedServerAttributesTemplate(xmlutil.TemplateBuilder):
@@ -136,6 +102,6 @@ class ExtendedServerAttributesTemplate(xmlutil.TemplateBuilder):
         root = xmlutil.TemplateElement('servers')
         elem = xmlutil.SubTemplateElement(root, 'server', selector='servers')
         make_server(elem)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={
-            Extended_server_attributes.alias: \
-            Extended_server_attributes.namespace})
+        alias = Extended_server_attributes.alias
+        namespace = Extended_server_attributes.namespace
+        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})

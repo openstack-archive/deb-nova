@@ -18,10 +18,10 @@
 
 import os
 import random
-import sys
-import time
-import tempfile
 import shutil
+import sys
+import tempfile
+import time
 
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
@@ -31,8 +31,8 @@ possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
 if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
     sys.path.insert(0, possible_topdir)
 
-from smoketests import flags
 from smoketests import base
+from smoketests import flags
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('bundle_kernel', 'random.kernel',
@@ -249,13 +249,25 @@ class VolumeTests(base.UserSmokeTestCase):
 
         self.assertTrue(volume.status.startswith('in-use'))
 
-        # Give instance time to recognize volume.
-        time.sleep(5)
-
     def test_003_can_mount_volume(self):
         ip = self.data['instance'].private_ip_address
         conn = self.connect_ssh(ip, TEST_KEY)
-        # NOTE(vish): this will create an dev for images that don't have
+
+        # NOTE(dprince): give some time for volume to show up in partitions
+        stdin, stdout, stderr = conn.exec_command(
+                'COUNT="0";'
+                'until cat /proc/partitions | grep "%s\\$"; do '
+                '[ "$COUNT" -eq "60" ] && exit 1;'
+                'COUNT=$(( $COUNT + 1 ));'
+                'sleep 1; '
+                'done'
+                % self.device.rpartition('/')[2])
+        out = stdout.read()
+        if not out.strip().endswith(self.device.rpartition('/')[2]):
+            self.fail('Timeout waiting for volume partition in instance. %s %s'
+                        % (out, stderr.read()))
+
+        # NOTE(vish): this will create a dev for images that don't have
         #             udev rules
         stdin, stdout, stderr = conn.exec_command(
                 'grep %s /proc/partitions | '
@@ -308,7 +320,14 @@ class VolumeTests(base.UserSmokeTestCase):
     def test_007_me_can_detach_volume(self):
         result = self.conn.detach_volume(volume_id=self.data['volume'].id)
         self.assertTrue(result)
-        time.sleep(5)
+        volume = self.data['volume']
+        for x in xrange(10):
+            volume.update()
+            if volume.status.startswith('available'):
+                break
+            time.sleep(1)
+        else:
+            self.fail('cannot detach volume. state %s' % volume.status)
 
     def test_008_me_can_delete_volume(self):
         result = self.conn.delete_volume(self.data['volume'].id)

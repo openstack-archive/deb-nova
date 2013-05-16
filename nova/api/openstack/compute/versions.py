@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,21 +15,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import datetime
-
 from lxml import etree
 
 from nova.api.openstack.compute.views import versions as views_versions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova.openstack.common import timeutils
 
 
 LINKS = {
    'v2.0': {
        'pdf': 'http://docs.openstack.org/'
-               'api/openstack-compute/1.1/os-compute-devguide-1.1.pdf',
+               'api/openstack-compute/2/os-compute-devguide-2.pdf',
        'wadl': 'http://docs.openstack.org/'
-               'api/openstack-compute/1.1/wadl/os-compute-1.1.wadl',
+               'api/openstack-compute/2/wadl/os-compute-2.wadl'
     },
 }
 
@@ -125,8 +124,8 @@ class AtomSerializer(wsgi.XMLDictSerializer):
     def _get_most_recent_update(self, versions):
         recent = None
         for version in versions:
-            updated = datetime.datetime.strptime(version['updated'],
-                                        '%Y-%m-%dT%H:%M:%SZ')
+            updated = timeutils.parse_strtime(version['updated'],
+                                              '%Y-%m-%dT%H:%M:%SZ')
             if not recent:
                 recent = updated
             elif updated > recent:

@@ -21,84 +21,22 @@
 SQLAlchemy models for nova data.
 """
 
-from sqlalchemy.orm import relationship, backref, object_mapper
 from sqlalchemy import Column, Integer, BigInteger, String, schema
-from sqlalchemy import ForeignKey, DateTime, Boolean, Text, Float
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.schema import ForeignKeyConstraint
+from sqlalchemy import ForeignKey, DateTime, Boolean, Text, Float
+from sqlalchemy.orm import relationship, backref, object_mapper
+from oslo.config import cfg
 
-from nova.db.sqlalchemy.session import get_session
+from nova.db.sqlalchemy import types
+from nova.openstack.common.db.sqlalchemy import models
+from nova.openstack.common import timeutils
 
-from nova import exception
-from nova import flags
-from nova import utils
-
-
-FLAGS = flags.FLAGS
+CONF = cfg.CONF
 BASE = declarative_base()
 
 
-class NovaBase(object):
-    """Base class for Nova Models."""
-    __table_args__ = {'mysql_engine': 'InnoDB'}
-    __table_initialized__ = False
-    created_at = Column(DateTime, default=utils.utcnow)
-    updated_at = Column(DateTime, onupdate=utils.utcnow)
-    deleted_at = Column(DateTime)
-    deleted = Column(Boolean, default=False)
-    metadata = None
-
-    def save(self, session=None):
-        """Save this object."""
-        if not session:
-            session = get_session()
-        session.add(self)
-        try:
-            session.flush()
-        except IntegrityError, e:
-            if str(e).endswith('is not unique'):
-                raise exception.Duplicate(str(e))
-            else:
-                raise
-
-    def delete(self, session=None):
-        """Delete this object."""
-        self.deleted = True
-        self.deleted_at = utils.utcnow()
-        self.save(session=session)
-
-    def __setitem__(self, key, value):
-        setattr(self, key, value)
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
-    def __iter__(self):
-        self._i = iter(object_mapper(self).columns)
-        return self
-
-    def next(self):
-        n = self._i.next().name
-        return n, getattr(self, n)
-
-    def update(self, values):
-        """Make the model object behave like a dict"""
-        for k, v in values.iteritems():
-            setattr(self, k, v)
-
-    def iteritems(self):
-        """Make the model object behave like a dict.
-
-        Includes attributes from joins."""
-        local = dict(self)
-        joined = dict([(k, v) for k, v in self.__dict__.iteritems()
-                      if not k[0] == '_'])
-        local.update(joined)
-        return local.iteritems()
+class NovaBase(models.SoftDeleteMixin, models.ModelBase):
+    pass
 
 
 class Service(BASE, NovaBase):
@@ -111,7 +49,6 @@ class Service(BASE, NovaBase):
     topic = Column(String(255))
     report_count = Column(Integer, nullable=False, default=0)
     disabled = Column(Boolean, default=False)
-    availability_zone = Column(String(255), default='nova')
 
 
 class ComputeNode(BASE, NovaBase):
@@ -125,7 +62,7 @@ class ComputeNode(BASE, NovaBase):
                            foreign_keys=service_id,
                            primaryjoin='and_('
                                 'ComputeNode.service_id == Service.id,'
-                                'ComputeNode.deleted == False)')
+                                'ComputeNode.deleted == 0)')
 
     vcpus = Column(Integer)
     memory_mb = Column(Integer)
@@ -140,8 +77,6 @@ class ComputeNode(BASE, NovaBase):
     # Free Ram, amount of activity (resize, migration, boot, etc) and
     # the number of running VM's are a good starting point for what's
     # important when making scheduling decisions.
-    #
-    # NOTE(sandy): We'll need to make this extensible for other schedulers.
     free_ram_mb = Column(Integer)
     free_disk_gb = Column(Integer)
     current_workload = Column(Integer)
@@ -161,8 +96,26 @@ class ComputeNode(BASE, NovaBase):
     disk_available_least = Column(Integer)
 
 
+class ComputeNodeStat(BASE, NovaBase):
+    """Stats related to the current workload of a compute host that are
+    intended to aid in making scheduler decisions."""
+    __tablename__ = 'compute_node_stats'
+    id = Column(Integer, primary_key=True)
+    key = Column(String(511))
+    value = Column(String(255))
+    compute_node_id = Column(Integer, ForeignKey('compute_nodes.id'))
+
+    primary_join = ('and_(ComputeNodeStat.compute_node_id == '
+                    'ComputeNode.id, ComputeNodeStat.deleted == 0)')
+    stats = relationship("ComputeNode", backref="stats",
+            primaryjoin=primary_join)
+
+    def __str__(self):
+        return "{%d: %s = %s}" % (self.compute_node_id, self.key, self.value)
+
+
 class Certificate(BASE, NovaBase):
-    """Represents a an x509 certificate"""
+    """Represents a x509 certificate."""
     __tablename__ = 'certificates'
     id = Column(Integer, primary_key=True)
 
@@ -172,7 +125,7 @@ class Certificate(BASE, NovaBase):
 
 
 class Instance(BASE, NovaBase):
-    """Represents a guest vm."""
+    """Represents a guest VM."""
     __tablename__ = 'instances'
     injected_files = []
 
@@ -181,23 +134,27 @@ class Instance(BASE, NovaBase):
     @property
     def name(self):
         try:
-            base_name = FLAGS.instance_name_template % self.id
+            base_name = CONF.instance_name_template % self.id
         except TypeError:
             # Support templates like "uuid-%(uuid)s", etc.
             info = {}
-            for key, value in self.iteritems():
+            # NOTE(russellb): Don't use self.iteritems() here, as it will
+            # result in infinite recursion on the name property.
+            for column in iter(object_mapper(self).columns):
+                key = column.name
                 # prevent recursion if someone specifies %(name)s
                 # %(name)s will not be valid.
                 if key == 'name':
                     continue
-                info[key] = value
+                info[key] = self[key]
             try:
-                base_name = FLAGS.instance_name_template % info
+                base_name = CONF.instance_name_template % info
             except KeyError:
                 base_name = self.uuid
-        if getattr(self, '_rescue', False):
-            base_name += "-rescue"
         return base_name
+
+    def _extra_keys(self):
+        return ['name']
 
     user_id = Column(String(255))
     project_id = Column(String(255))
@@ -205,14 +162,7 @@ class Instance(BASE, NovaBase):
     image_ref = Column(String(255))
     kernel_id = Column(String(255))
     ramdisk_id = Column(String(255))
-    server_name = Column(String(255))
-
-#    image_ref = Column(Integer, ForeignKey('images.id'), nullable=True)
-#    kernel_id = Column(Integer, ForeignKey('images.id'), nullable=True)
-#    ramdisk_id = Column(Integer, ForeignKey('images.id'), nullable=True)
-#    ramdisk = relationship(Ramdisk, backref=backref('instances', order_by=id))
-#    kernel = relationship(Kernel, backref=backref('instances', order_by=id))
-#    project = relationship(Project, backref=backref('instances', order_by=id))
+    hostname = Column(String(255))
 
     launch_index = Column(Integer)
     key_name = Column(String(255))
@@ -227,8 +177,12 @@ class Instance(BASE, NovaBase):
     root_gb = Column(Integer)
     ephemeral_gb = Column(Integer)
 
-    hostname = Column(String(255))
+    # This is not related to hostname, above.  It refers
+    #  to the nova node.
     host = Column(String(255))  # , ForeignKey('hosts.id'))
+    # To identify the "ComputeNode" which the instance resides in.
+    # This equals to ComputeNode.hypervisor_hostname.
+    node = Column(String(255))
 
     # *not* flavor_id
     instance_type_id = Column(Integer)
@@ -247,8 +201,8 @@ class Instance(BASE, NovaBase):
     display_name = Column(String(255))
     display_description = Column(String(255))
 
-    # To remember on which host a instance booted.
-    # An instance may have moved to another host by live migraiton.
+    # To remember on which host an instance booted.
+    # An instance may have moved to another host by live migration.
     launched_on = Column(Text)
     locked = Column(Boolean)
 
@@ -264,21 +218,24 @@ class Instance(BASE, NovaBase):
 
     # User editable field meant to represent what ip should be used
     # to connect to the instance
-    access_ip_v4 = Column(String(255))
-    access_ip_v6 = Column(String(255))
+    access_ip_v4 = Column(types.IPAddress())
+    access_ip_v6 = Column(types.IPAddress())
 
     auto_disk_config = Column(Boolean())
     progress = Column(Integer)
 
-    # EC2 instance_initiated_shutdown_teminate
+    # EC2 instance_initiated_shutdown_terminate
     # True: -> 'terminate'
     # False: -> 'stop'
-    shutdown_terminate = Column(Boolean(), default=True, nullable=False)
+    # Note(maoy): currently Nova will always stop instead of terminate
+    # no matter what the flag says. So we set the default to False.
+    shutdown_terminate = Column(Boolean(), default=False, nullable=False)
 
     # EC2 disable_api_termination
     disable_terminate = Column(Boolean(), default=False, nullable=False)
 
-    # OpenStack compute cell name
+    # OpenStack compute cell name.  This will only be set at the top of
+    # the cells tree and it'll be a full cell name such as 'api!hop1!hop2'
     cell_name = Column(String(255))
 
 
@@ -292,25 +249,16 @@ class InstanceInfoCache(BASE, NovaBase):
     # text column used for storing a json object of network data for api
     network_info = Column(Text)
 
-    instance_id = Column(String(36), ForeignKey('instances.uuid'),
-                                     nullable=False, unique=True)
+    instance_uuid = Column(String(36), ForeignKey('instances.uuid'),
+                           nullable=False, unique=True)
     instance = relationship(Instance,
                             backref=backref('info_cache', uselist=False),
-                            foreign_keys=instance_id,
-                            primaryjoin=instance_id == Instance.uuid)
-
-
-class InstanceActions(BASE, NovaBase):
-    """Represents a guest VM's actions and results"""
-    __tablename__ = "instance_actions"
-    id = Column(Integer, primary_key=True)
-    instance_uuid = Column(String(36), ForeignKey('instances.uuid'))
-    action = Column(String(255))
-    error = Column(Text)
+                            foreign_keys=instance_uuid,
+                            primaryjoin=instance_uuid == Instance.uuid)
 
 
 class InstanceTypes(BASE, NovaBase):
-    """Represent possible instance_types or flavor of VM offered"""
+    """Represent possible instance_types or flavor of VM offered."""
     __tablename__ = "instance_types"
     id = Column(Integer, primary_key=True)
     name = Column(String(255))
@@ -322,41 +270,32 @@ class InstanceTypes(BASE, NovaBase):
     swap = Column(Integer, nullable=False, default=0)
     rxtx_factor = Column(Float, nullable=False, default=1)
     vcpu_weight = Column(Integer, nullable=True)
-
-    instances = relationship(Instance,
-                           backref=backref('instance_type', uselist=False),
-                           foreign_keys=id,
-                           primaryjoin='and_('
-                               'Instance.instance_type_id == '
-                               'InstanceTypes.id, '
-                               'InstanceTypes.deleted == False)')
+    disabled = Column(Boolean, default=False)
+    is_public = Column(Boolean, default=True)
 
 
 class Volume(BASE, NovaBase):
-    """Represents a block storage device that can be attached to a vm."""
+    """Represents a block storage device that can be attached to a VM."""
     __tablename__ = 'volumes'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(String(36), primary_key=True)
+    deleted = Column(String(36), default="")
 
     @property
     def name(self):
-        return FLAGS.volume_name_template % self.id
+        return CONF.volume_name_template % self.id
 
+    ec2_id = Column(Integer)
     user_id = Column(String(255))
     project_id = Column(String(255))
 
-    snapshot_id = Column(Integer)
+    snapshot_id = Column(String(36))
 
     host = Column(String(255))  # , ForeignKey('hosts.id'))
     size = Column(Integer)
     availability_zone = Column(String(255))  # TODO(vish): foreign key?
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=True)
-    instance = relationship(Instance,
-                            backref=backref('volumes'),
-                            foreign_keys=instance_id,
-                            primaryjoin='and_(Volume.instance_id==Instance.id,'
-                                             'Volume.deleted==False)')
+    instance_uuid = Column(String(36))
     mountpoint = Column(String(255))
-    attach_time = Column(String(255))  # TODO(vish): datetime
+    attach_time = Column(DateTime)
     status = Column(String(255))  # TODO(vish): enum?
     attach_status = Column(String(255))  # TODO(vish): enum
 
@@ -373,55 +312,14 @@ class Volume(BASE, NovaBase):
     volume_type_id = Column(Integer)
 
 
-class VolumeMetadata(BASE, NovaBase):
-    """Represents a metadata key/value pair for a volume"""
-    __tablename__ = 'volume_metadata'
-    id = Column(Integer, primary_key=True)
-    key = Column(String(255))
-    value = Column(String(255))
-    volume_id = Column(Integer, ForeignKey('volumes.id'), nullable=False)
-    volume = relationship(Volume, backref="volume_metadata",
-                            foreign_keys=volume_id,
-                            primaryjoin='and_('
-                                'VolumeMetadata.volume_id == Volume.id,'
-                                'VolumeMetadata.deleted == False)')
-
-
-class VolumeTypes(BASE, NovaBase):
-    """Represent possible volume_types of volumes offered"""
-    __tablename__ = "volume_types"
-    id = Column(Integer, primary_key=True)
-    name = Column(String(255))
-
-    volumes = relationship(Volume,
-                           backref=backref('volume_type', uselist=False),
-                           foreign_keys=id,
-                           primaryjoin='and_('
-                               'Volume.volume_type_id == VolumeTypes.id, '
-                               'VolumeTypes.deleted == False)')
-
-
-class VolumeTypeExtraSpecs(BASE, NovaBase):
-    """Represents additional specs as key/value pairs for a volume_type"""
-    __tablename__ = 'volume_type_extra_specs'
-    id = Column(Integer, primary_key=True)
-    key = Column(String(255))
-    value = Column(String(255))
-    volume_type_id = Column(Integer, ForeignKey('volume_types.id'),
-                              nullable=False)
-    volume_type = relationship(VolumeTypes, backref="extra_specs",
-                 foreign_keys=volume_type_id,
-                 primaryjoin='and_('
-                 'VolumeTypeExtraSpecs.volume_type_id == VolumeTypes.id,'
-                 'VolumeTypeExtraSpecs.deleted == False)')
-
-
 class Quota(BASE, NovaBase):
     """Represents a single quota override for a project.
 
-    If there is no row for a given project id and resource, then
-    the default for the deployment is used. If the row is present
-    but the hard limit is Null, then the resource is unlimited.
+    If there is no row for a given project id and resource, then the
+    default for the quota class is used.  If there is no row for a
+    given quota class and resource, then the default for the
+    deployment is used. If the row is present but the hard limit is
+    Null, then the resource is unlimited.
     """
 
     __tablename__ = 'quotas'
@@ -433,23 +331,82 @@ class Quota(BASE, NovaBase):
     hard_limit = Column(Integer, nullable=True)
 
 
+class QuotaClass(BASE, NovaBase):
+    """Represents a single quota override for a quota class.
+
+    If there is no row for a given quota class and resource, then the
+    default for the deployment is used.  If the row is present but the
+    hard limit is Null, then the resource is unlimited.
+    """
+
+    __tablename__ = 'quota_classes'
+    id = Column(Integer, primary_key=True)
+
+    class_name = Column(String(255), index=True)
+
+    resource = Column(String(255))
+    hard_limit = Column(Integer, nullable=True)
+
+
+class QuotaUsage(BASE, NovaBase):
+    """Represents the current usage for a given resource."""
+
+    __tablename__ = 'quota_usages'
+    id = Column(Integer, primary_key=True)
+
+    project_id = Column(String(255), index=True)
+    resource = Column(String(255))
+
+    in_use = Column(Integer)
+    reserved = Column(Integer)
+
+    @property
+    def total(self):
+        return self.in_use + self.reserved
+
+    until_refresh = Column(Integer, nullable=True)
+
+
+class Reservation(BASE, NovaBase):
+    """Represents a resource reservation for quotas."""
+
+    __tablename__ = 'reservations'
+    id = Column(Integer, primary_key=True)
+    uuid = Column(String(36), nullable=False)
+
+    usage_id = Column(Integer, ForeignKey('quota_usages.id'), nullable=False)
+
+    project_id = Column(String(255), index=True)
+    resource = Column(String(255))
+
+    delta = Column(Integer)
+    expire = Column(DateTime, nullable=False)
+
+    usage = relationship(
+        "QuotaUsage",
+        foreign_keys=usage_id,
+        primaryjoin='and_(Reservation.usage_id == QuotaUsage.id,'
+                         'QuotaUsage.deleted == 0)')
+
+
 class Snapshot(BASE, NovaBase):
-    """Represents a block storage device that can be attached to a vm."""
+    """Represents a block storage device that can be attached to a VM."""
     __tablename__ = 'snapshots'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(String(36), primary_key=True)
+    deleted = Column(String(36), default="")
 
     @property
     def name(self):
-        return FLAGS.snapshot_name_template % self.id
+        return CONF.snapshot_name_template % self.id
 
     @property
     def volume_name(self):
-        return FLAGS.volume_name_template % self.volume_id
+        return CONF.volume_name_template % self.volume_id
 
     user_id = Column(String(255))
     project_id = Column(String(255))
 
-    volume_id = Column(Integer)
+    volume_id = Column(String(36))
     status = Column(String(255))
     progress = Column(String(255))
     volume_size = Column(Integer)
@@ -459,18 +416,20 @@ class Snapshot(BASE, NovaBase):
 
 
 class BlockDeviceMapping(BASE, NovaBase):
-    """Represents block device mapping that is defined by EC2"""
+    """Represents block device mapping that is defined by EC2."""
     __tablename__ = "block_device_mapping"
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=False)
+    instance_uuid = Column(Integer, ForeignKey('instances.uuid'),
+                           nullable=False)
     instance = relationship(Instance,
-                            backref=backref('balock_device_mapping'),
-                            foreign_keys=instance_id,
-                            primaryjoin='and_(BlockDeviceMapping.instance_id=='
-                                              'Instance.id,'
+                            backref=backref('block_device_mapping'),
+                            foreign_keys=instance_uuid,
+                            primaryjoin='and_(BlockDeviceMapping.'
+                                              'instance_uuid=='
+                                              'Instance.uuid,'
                                               'BlockDeviceMapping.deleted=='
-                                              'False)')
+                                              '0)')
     device_name = Column(String(255), nullable=False)
 
     # default=False for compatibility of the existing code.
@@ -482,15 +441,9 @@ class BlockDeviceMapping(BASE, NovaBase):
     # for ephemeral device
     virtual_name = Column(String(255), nullable=True)
 
-    # for snapshot or volume
-    snapshot_id = Column(Integer, ForeignKey('snapshots.id'), nullable=True)
-    # outer join
-    snapshot = relationship(Snapshot,
-                            foreign_keys=snapshot_id)
+    snapshot_id = Column(String(36))
 
-    volume_id = Column(Integer, ForeignKey('volumes.id'), nullable=True)
-    volume = relationship(Volume,
-                          foreign_keys=volume_id)
+    volume_id = Column(String(36), nullable=True)
     volume_size = Column(Integer, nullable=True)
 
     # for no device to suppress devices.
@@ -500,26 +453,25 @@ class BlockDeviceMapping(BASE, NovaBase):
 
 
 class IscsiTarget(BASE, NovaBase):
-    """Represates an iscsi target for a given host"""
+    """Represents an iscsi target for a given host."""
     __tablename__ = 'iscsi_targets'
-    __table_args__ = (schema.UniqueConstraint("target_num", "host"),
-                      {'mysql_engine': 'InnoDB'})
+    __table_args__ = (schema.UniqueConstraint("target_num", "host"), )
     id = Column(Integer, primary_key=True)
     target_num = Column(Integer)
     host = Column(String(255))
-    volume_id = Column(Integer, ForeignKey('volumes.id'), nullable=True)
+    volume_id = Column(String(36), ForeignKey('volumes.id'), nullable=True)
     volume = relationship(Volume,
                           backref=backref('iscsi_target', uselist=False),
                           foreign_keys=volume_id,
                           primaryjoin='and_(IscsiTarget.volume_id==Volume.id,'
-                                           'IscsiTarget.deleted==False)')
+                                           'IscsiTarget.deleted==0)')
 
 
 class SecurityGroupInstanceAssociation(BASE, NovaBase):
     __tablename__ = 'security_group_instance_association'
     id = Column(Integer, primary_key=True)
     security_group_id = Column(Integer, ForeignKey('security_groups.id'))
-    instance_id = Column(Integer, ForeignKey('instances.id'))
+    instance_uuid = Column(String(36), ForeignKey('instances.uuid'))
 
 
 class SecurityGroup(BASE, NovaBase):
@@ -537,14 +489,14 @@ class SecurityGroup(BASE, NovaBase):
                              primaryjoin='and_('
         'SecurityGroup.id == '
         'SecurityGroupInstanceAssociation.security_group_id,'
-        'SecurityGroupInstanceAssociation.deleted == False,'
-        'SecurityGroup.deleted == False)',
+        'SecurityGroupInstanceAssociation.deleted == 0,'
+        'SecurityGroup.deleted == 0)',
                              secondaryjoin='and_('
-        'SecurityGroupInstanceAssociation.instance_id == Instance.id,'
+        'SecurityGroupInstanceAssociation.instance_uuid == Instance.uuid,'
         # (anthony) the condition below shouldn't be necessary now that the
         # association is being marked as deleted.  However, removing this
         # may cause existing deployments to choke, so I'm leaving it
-        'Instance.deleted == False)',
+        'Instance.deleted == 0)',
                              backref='security_groups')
 
 
@@ -558,12 +510,12 @@ class SecurityGroupIngressRule(BASE, NovaBase):
                                 foreign_keys=parent_group_id,
                                 primaryjoin='and_('
         'SecurityGroupIngressRule.parent_group_id == SecurityGroup.id,'
-        'SecurityGroupIngressRule.deleted == False)')
+        'SecurityGroupIngressRule.deleted == 0)')
 
     protocol = Column(String(5))  # "tcp", "udp", or "icmp"
     from_port = Column(Integer)
     to_port = Column(Integer)
-    cidr = Column(String(255))
+    cidr = Column(types.CIDR())
 
     # Note: This is not the parent SecurityGroup. It's SecurityGroup we're
     # granting access for.
@@ -572,7 +524,16 @@ class SecurityGroupIngressRule(BASE, NovaBase):
                                  foreign_keys=group_id,
                                  primaryjoin='and_('
         'SecurityGroupIngressRule.group_id == SecurityGroup.id,'
-        'SecurityGroupIngressRule.deleted == False)')
+        'SecurityGroupIngressRule.deleted == 0)')
+
+
+class SecurityGroupIngressDefaultRule(BASE, NovaBase):
+    __tablename__ = 'security_group_default_rules'
+    id = Column(Integer, primary_key=True)
+    protocol = Column(String(5))  # "tcp", "udp" or "icmp"
+    from_port = Column(Integer)
+    to_port = Column(Integer)
+    cidr = Column(types.CIDR())
 
 
 class ProviderFirewallRule(BASE, NovaBase):
@@ -583,7 +544,7 @@ class ProviderFirewallRule(BASE, NovaBase):
     protocol = Column(String(5))  # "tcp", "udp", or "icmp"
     from_port = Column(Integer)
     to_port = Column(Integer)
-    cidr = Column(String(255))
+    cidr = Column(types.CIDR())
 
 
 class KeyPair(BASE, NovaBase):
@@ -606,45 +567,52 @@ class Migration(BASE, NovaBase):
     # NOTE(tr3buchet): the ____compute variables are instance['host']
     source_compute = Column(String(255))
     dest_compute = Column(String(255))
+    # nodes are equivalent to a compute node's 'hypvervisor_hostname'
+    source_node = Column(String(255))
+    dest_node = Column(String(255))
     # NOTE(tr3buchet): dest_host, btw, is an ip address
     dest_host = Column(String(255))
     old_instance_type_id = Column(Integer())
     new_instance_type_id = Column(Integer())
-    instance_uuid = Column(String(255), ForeignKey('instances.uuid'),
+    instance_uuid = Column(String(36), ForeignKey('instances.uuid'),
             nullable=True)
     #TODO(_cerberus_): enum
     status = Column(String(255))
+
+    instance = relationship("Instance", foreign_keys=instance_uuid,
+                            primaryjoin='and_(Migration.instance_uuid == '
+                                        'Instance.uuid, Instance.deleted == '
+                                        '0)')
 
 
 class Network(BASE, NovaBase):
     """Represents a network."""
     __tablename__ = 'networks'
     __table_args__ = (schema.UniqueConstraint("vpn_public_address",
-                                              "vpn_public_port"),
-                      {'mysql_engine': 'InnoDB'})
+                                              "vpn_public_port"), )
     id = Column(Integer, primary_key=True)
     label = Column(String(255))
 
     injected = Column(Boolean, default=False)
-    cidr = Column(String(255), unique=True)
-    cidr_v6 = Column(String(255), unique=True)
+    cidr = Column(types.CIDR(), unique=True)
+    cidr_v6 = Column(types.CIDR(), unique=True)
     multi_host = Column(Boolean, default=False)
 
-    gateway_v6 = Column(String(255))
-    netmask_v6 = Column(String(255))
-    netmask = Column(String(255))
+    gateway_v6 = Column(types.IPAddress())
+    netmask_v6 = Column(types.IPAddress())
+    netmask = Column(types.IPAddress())
     bridge = Column(String(255))
     bridge_interface = Column(String(255))
-    gateway = Column(String(255))
-    broadcast = Column(String(255))
-    dns1 = Column(String(255))
-    dns2 = Column(String(255))
+    gateway = Column(types.IPAddress())
+    broadcast = Column(types.IPAddress())
+    dns1 = Column(types.IPAddress())
+    dns2 = Column(types.IPAddress())
 
     vlan = Column(Integer)
-    vpn_public_address = Column(String(255))
+    vpn_public_address = Column(types.IPAddress())
     vpn_public_port = Column(Integer)
-    vpn_private_address = Column(String(255))
-    dhcp_start = Column(String(255))
+    vpn_private_address = Column(types.IPAddress())
+    dhcp_start = Column(types.IPAddress())
 
     rxtx_base = Column(Integer)
 
@@ -660,7 +628,7 @@ class VirtualInterface(BASE, NovaBase):
     id = Column(Integer, primary_key=True)
     address = Column(String(255), unique=True)
     network_id = Column(Integer, nullable=False)
-    instance_id = Column(Integer, nullable=False)
+    instance_uuid = Column(String(36), nullable=False)
     uuid = Column(String(36))
 
 
@@ -669,125 +637,67 @@ class FixedIp(BASE, NovaBase):
     """Represents a fixed ip for an instance."""
     __tablename__ = 'fixed_ips'
     id = Column(Integer, primary_key=True)
-    address = Column(String(255))
+    address = Column(types.IPAddress())
     network_id = Column(Integer, nullable=True)
     virtual_interface_id = Column(Integer, nullable=True)
-    instance_id = Column(Integer, nullable=True)
+    instance_uuid = Column(String(36), nullable=True)
     # associated means that a fixed_ip has its instance_id column set
-    # allocated means that a fixed_ip has a its virtual_interface_id column set
+    # allocated means that a fixed_ip has its virtual_interface_id column set
     allocated = Column(Boolean, default=False)
     # leased means dhcp bridge has leased the ip
     leased = Column(Boolean, default=False)
     reserved = Column(Boolean, default=False)
     host = Column(String(255))
+    network = relationship(Network,
+                           backref=backref('fixed_ips'),
+                           foreign_keys=network_id,
+                           primaryjoin='and_('
+                                'FixedIp.network_id == Network.id,'
+                                'FixedIp.deleted == 0,'
+                                'Network.deleted == 0)')
+    instance = relationship(Instance,
+                            foreign_keys=instance_uuid,
+                            primaryjoin='and_('
+                                'FixedIp.instance_uuid == Instance.uuid,'
+                                'FixedIp.deleted == 0,'
+                                'Instance.deleted == 0)')
 
 
 class FloatingIp(BASE, NovaBase):
     """Represents a floating ip that dynamically forwards to a fixed ip."""
     __tablename__ = 'floating_ips'
     id = Column(Integer, primary_key=True)
-    address = Column(String(255))
+    address = Column(types.IPAddress())
     fixed_ip_id = Column(Integer, nullable=True)
     project_id = Column(String(255))
     host = Column(String(255))  # , ForeignKey('hosts.id'))
     auto_assigned = Column(Boolean, default=False, nullable=False)
     pool = Column(String(255))
     interface = Column(String(255))
-
-
-class AuthToken(BASE, NovaBase):
-    """Represents an authorization token for all API transactions.
-
-    Fields are a string representing the actual token and a user id for
-    mapping to the actual user
-
-    """
-    __tablename__ = 'auth_tokens'
-    token_hash = Column(String(255), primary_key=True)
-    user_id = Column(String(255))
-    server_management_url = Column(String(255))
-    storage_url = Column(String(255))
-    cdn_management_url = Column(String(255))
-
-
-class User(BASE, NovaBase):
-    """Represents a user."""
-    __tablename__ = 'users'
-    id = Column(String(255), primary_key=True)
-
-    name = Column(String(255))
-    access_key = Column(String(255))
-    secret_key = Column(String(255))
-
-    is_admin = Column(Boolean)
-
-
-class Project(BASE, NovaBase):
-    """Represents a project."""
-    __tablename__ = 'projects'
-    id = Column(String(255), primary_key=True)
-    name = Column(String(255))
-    description = Column(String(255))
-
-    project_manager = Column(String(255), ForeignKey(User.id))
-
-    members = relationship(User,
-                           secondary='user_project_association',
-                           backref='projects')
+    fixed_ip = relationship(FixedIp,
+                            backref=backref('floating_ips'),
+                            foreign_keys=fixed_ip_id,
+                            primaryjoin='and_('
+                                'FloatingIp.fixed_ip_id == FixedIp.id,'
+                                'FloatingIp.deleted == 0,'
+                                'FixedIp.deleted == 0)')
 
 
 class DNSDomain(BASE, NovaBase):
     """Represents a DNS domain with availability zone or project info."""
     __tablename__ = 'dns_domains'
+    deleted = Column(Boolean, default=False)
     domain = Column(String(512), primary_key=True)
     scope = Column(String(255))
     availability_zone = Column(String(255))
     project_id = Column(String(255))
-    project = relationship(Project,
-                           primaryjoin=project_id == Project.id,
-                           foreign_keys=[Project.id],
-                           uselist=False)
-
-
-class UserProjectRoleAssociation(BASE, NovaBase):
-    __tablename__ = 'user_project_role_association'
-    user_id = Column(String(255), primary_key=True)
-    user = relationship(User,
-                        primaryjoin=user_id == User.id,
-                        foreign_keys=[User.id],
-                        uselist=False)
-
-    project_id = Column(String(255), primary_key=True)
-    project = relationship(Project,
-                           primaryjoin=project_id == Project.id,
-                           foreign_keys=[Project.id],
-                           uselist=False)
-
-    role = Column(String(255), primary_key=True)
-    ForeignKeyConstraint(['user_id',
-                          'project_id'],
-                         ['user_project_association.user_id',
-                          'user_project_association.project_id'])
-
-
-class UserRoleAssociation(BASE, NovaBase):
-    __tablename__ = 'user_role_association'
-    user_id = Column(String(255), ForeignKey('users.id'), primary_key=True)
-    user = relationship(User, backref='roles')
-    role = Column(String(255), primary_key=True)
-
-
-class UserProjectAssociation(BASE, NovaBase):
-    __tablename__ = 'user_project_association'
-    user_id = Column(String(255), ForeignKey(User.id), primary_key=True)
-    project_id = Column(String(255), ForeignKey(Project.id), primary_key=True)
 
 
 class ConsolePool(BASE, NovaBase):
     """Represents pool of consoles on the same physical node."""
     __tablename__ = 'console_pools'
     id = Column(Integer, primary_key=True)
-    address = Column(String(255))
+    address = Column(types.IPAddress())
     username = Column(String(255))
     password = Column(String(255))
     console_type = Column(String(255))
@@ -801,7 +711,7 @@ class Console(BASE, NovaBase):
     __tablename__ = 'consoles'
     id = Column(Integer, primary_key=True)
     instance_name = Column(String(255))
-    instance_id = Column(Integer)
+    instance_uuid = Column(String(36))
     password = Column(String(255))
     port = Column(Integer, nullable=True)
     pool_id = Column(Integer, ForeignKey('console_pools.id'))
@@ -809,21 +719,55 @@ class Console(BASE, NovaBase):
 
 
 class InstanceMetadata(BASE, NovaBase):
-    """Represents a metadata key/value pair for an instance"""
+    """Represents a user-provided metadata key/value pair for an instance."""
     __tablename__ = 'instance_metadata'
     id = Column(Integer, primary_key=True)
     key = Column(String(255))
     value = Column(String(255))
-    instance_id = Column(Integer, ForeignKey('instances.id'), nullable=False)
+    instance_uuid = Column(String(36), ForeignKey('instances.uuid'),
+                           nullable=False)
     instance = relationship(Instance, backref="metadata",
-                            foreign_keys=instance_id,
+                            foreign_keys=instance_uuid,
                             primaryjoin='and_('
-                                'InstanceMetadata.instance_id == Instance.id,'
-                                'InstanceMetadata.deleted == False)')
+                                'InstanceMetadata.instance_uuid == '
+                                     'Instance.uuid,'
+                                'InstanceMetadata.deleted == 0)')
+
+
+class InstanceSystemMetadata(BASE, NovaBase):
+    """Represents a system-owned metadata key/value pair for an instance."""
+    __tablename__ = 'instance_system_metadata'
+    id = Column(Integer, primary_key=True)
+    key = Column(String(255))
+    value = Column(String(255))
+    instance_uuid = Column(String(36),
+                           ForeignKey('instances.uuid'),
+                           nullable=False)
+
+    primary_join = ('and_(InstanceSystemMetadata.instance_uuid == '
+                    'Instance.uuid, InstanceSystemMetadata.deleted == 0)')
+    instance = relationship(Instance, backref="system_metadata",
+                            foreign_keys=instance_uuid,
+                            primaryjoin=primary_join)
+
+
+class InstanceTypeProjects(BASE, NovaBase):
+    """Represent projects associated instance_types."""
+    __tablename__ = "instance_type_projects"
+    id = Column(Integer, primary_key=True)
+    instance_type_id = Column(Integer, ForeignKey('instance_types.id'),
+                              nullable=False)
+    project_id = Column(String(255))
+
+    instance_type = relationship(InstanceTypes, backref="projects",
+                 foreign_keys=instance_type_id,
+                 primaryjoin='and_('
+                 'InstanceTypeProjects.instance_type_id == InstanceTypes.id,'
+                 'InstanceTypeProjects.deleted == 0)')
 
 
 class InstanceTypeExtraSpecs(BASE, NovaBase):
-    """Represents additional specs as key/value pairs for an instance_type"""
+    """Represents additional specs as key/value pairs for an instance_type."""
     __tablename__ = 'instance_type_extra_specs'
     id = Column(Integer, primary_key=True)
     key = Column(String(255))
@@ -834,15 +778,23 @@ class InstanceTypeExtraSpecs(BASE, NovaBase):
                  foreign_keys=instance_type_id,
                  primaryjoin='and_('
                  'InstanceTypeExtraSpecs.instance_type_id == InstanceTypes.id,'
-                 'InstanceTypeExtraSpecs.deleted == False)')
+                 'InstanceTypeExtraSpecs.deleted == 0)')
 
 
 class Cell(BASE, NovaBase):
-    """Represents parent and child cells of this cell."""
+    """Represents parent and child cells of this cell.  Cells can
+    have multiple parents and children, so there could be any number
+    of entries with is_parent=True or False
+    """
     __tablename__ = 'cells'
     id = Column(Integer, primary_key=True)
+    # Name here is the 'short name' of a cell.  For instance: 'child1'
     name = Column(String(255))
     api_url = Column(String(255))
+    # FIXME(comstud): username and password refer to the credentials
+    # used for talking with the AMQP server within a particular cell.
+    # This table needs cleanup to support more generic cells
+    # communication (including via 0mq, for instance)
     username = Column(String(255))
     password = Column(String(255))
     weight_offset = Column(Float(), default=0.0)
@@ -857,7 +809,7 @@ class AggregateHost(BASE, NovaBase):
     """Represents a host that is member of an aggregate."""
     __tablename__ = 'aggregate_hosts'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    host = Column(String(255), unique=True)
+    host = Column(String(255), unique=False)
     aggregate_id = Column(Integer, ForeignKey('aggregates.id'), nullable=False)
 
 
@@ -874,32 +826,21 @@ class Aggregate(BASE, NovaBase):
     """Represents a cluster of hosts that exists in this zone."""
     __tablename__ = 'aggregates'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(255), unique=True)
-    operational_state = Column(String(255), nullable=False)
-    availability_zone = Column(String(255), nullable=False)
+    name = Column(String(255))
     _hosts = relationship(AggregateHost,
-                          secondary="aggregate_hosts",
                           primaryjoin='and_('
-                                 'Aggregate.id == AggregateHost.aggregate_id,'
-                                 'AggregateHost.deleted == False,'
-                                 'Aggregate.deleted == False)',
-                         secondaryjoin='and_('
-                                'AggregateHost.aggregate_id == Aggregate.id, '
-                                'AggregateHost.deleted == False,'
-                                'Aggregate.deleted == False)',
-                         backref='aggregates')
+                          'Aggregate.id == AggregateHost.aggregate_id,'
+                          'AggregateHost.deleted == 0,'
+                          'Aggregate.deleted == 0)')
 
     _metadata = relationship(AggregateMetadata,
-                         secondary="aggregate_metadata",
-                         primaryjoin='and_('
+                             primaryjoin='and_('
                              'Aggregate.id == AggregateMetadata.aggregate_id,'
-                             'AggregateMetadata.deleted == False,'
-                             'Aggregate.deleted == False)',
-                         secondaryjoin='and_('
-                             'AggregateMetadata.aggregate_id == Aggregate.id, '
-                             'AggregateMetadata.deleted == False,'
-                             'Aggregate.deleted == False)',
-                         backref='aggregates')
+                             'AggregateMetadata.deleted == 0,'
+                             'Aggregate.deleted == 0)')
+
+    def _extra_keys(self):
+        return ['hosts', 'metadetails', 'availability_zone']
 
     @property
     def hosts(self):
@@ -908,6 +849,12 @@ class Aggregate(BASE, NovaBase):
     @property
     def metadetails(self):
         return dict([(m.key, m.value) for m in self._metadata])
+
+    @property
+    def availability_zone(self):
+        if 'availability_zone' not in self.metadetails:
+            return None
+        return self.metadetails['availability_zone']
 
 
 class AgentBuild(BASE, NovaBase):
@@ -923,47 +870,56 @@ class AgentBuild(BASE, NovaBase):
 
 
 class BandwidthUsage(BASE, NovaBase):
-    """Cache for instance bandwidth usage data pulled from the hypervisor"""
+    """Cache for instance bandwidth usage data pulled from the hypervisor."""
     __tablename__ = 'bw_usage_cache'
     id = Column(Integer, primary_key=True, nullable=False)
+    uuid = Column(String(36), nullable=False)
     mac = Column(String(255), nullable=False)
     start_period = Column(DateTime, nullable=False)
     last_refreshed = Column(DateTime)
     bw_in = Column(BigInteger)
     bw_out = Column(BigInteger)
+    last_ctr_in = Column(BigInteger)
+    last_ctr_out = Column(BigInteger)
+
+
+class VolumeUsage(BASE, NovaBase):
+    """Cache for volume usage data pulled from the hypervisor."""
+    __tablename__ = 'volume_usage_cache'
+    id = Column(Integer, primary_key=True, nullable=False)
+    volume_id = Column(String(36), nullable=False)
+    instance_id = Column(Integer)
+    tot_last_refreshed = Column(DateTime)
+    tot_reads = Column(BigInteger, default=0)
+    tot_read_bytes = Column(BigInteger, default=0)
+    tot_writes = Column(BigInteger, default=0)
+    tot_write_bytes = Column(BigInteger, default=0)
+    curr_last_refreshed = Column(DateTime)
+    curr_reads = Column(BigInteger, default=0)
+    curr_read_bytes = Column(BigInteger, default=0)
+    curr_writes = Column(BigInteger, default=0)
+    curr_write_bytes = Column(BigInteger, default=0)
 
 
 class S3Image(BASE, NovaBase):
-    """Compatibility layer for the S3 image service talking to Glance"""
+    """Compatibility layer for the S3 image service talking to Glance."""
     __tablename__ = 's3_images'
     id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
     uuid = Column(String(36), nullable=False)
 
 
-class SMFlavors(BASE, NovaBase):
-    """Represents a flavor for SM volumes."""
-    __tablename__ = 'sm_flavors'
-    id = Column(Integer(), primary_key=True)
-    label = Column(String(255))
-    description = Column(String(255))
+class VolumeIdMapping(BASE, NovaBase):
+    """Compatibility layer for the EC2 volume service."""
+    __tablename__ = 'volume_id_mappings'
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    uuid = Column(String(36), nullable=False)
 
 
-class SMBackendConf(BASE, NovaBase):
-    """Represents the connection to the backend for SM."""
-    __tablename__ = 'sm_backend_config'
-    id = Column(Integer(), primary_key=True)
-    flavor_id = Column(Integer, ForeignKey('sm_flavors.id'), nullable=False)
-    sr_uuid = Column(String(255))
-    sr_type = Column(String(255))
-    config_params = Column(String(2047))
-
-
-class SMVolume(BASE, NovaBase):
-    __tablename__ = 'sm_volume'
-    id = Column(Integer(), ForeignKey(Volume.id), primary_key=True)
-    backend_id = Column(Integer, ForeignKey('sm_backend_config.id'),
-                        nullable=False)
-    vdi_uuid = Column(String(255))
+class SnapshotIdMapping(BASE, NovaBase):
+    """Compatibility layer for the EC2 snapshot service."""
+    __tablename__ = 'snapshot_id_mappings'
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    uuid = Column(String(36), nullable=False)
 
 
 class InstanceFault(BASE, NovaBase):
@@ -975,50 +931,58 @@ class InstanceFault(BASE, NovaBase):
     code = Column(Integer(), nullable=False)
     message = Column(String(255))
     details = Column(Text)
+    host = Column(String(255))
 
 
-def register_models():
-    """Register Models and create metadata.
+class InstanceAction(BASE, NovaBase):
+    """Track client actions on an instance.
 
-    Called from nova.db.sqlalchemy.__init__ as part of loading the driver,
-    it will never need to be called explicitly elsewhere unless the
-    connection is lost and needs to be reestablished.
+    The intention is that there will only be one of these per user request.  A
+    lookup by (instance_uuid, request_id) should always return a single result.
     """
-    from sqlalchemy import create_engine
-    models = (AgentBuild,
-              Aggregate,
-              AggregateHost,
-              AggregateMetadata,
-              AuthToken,
-              Certificate,
-              Cell,
-              Console,
-              ConsolePool,
-              FixedIp,
-              FloatingIp,
-              Instance,
-              InstanceActions,
-              InstanceFault,
-              InstanceMetadata,
-              InstanceTypeExtraSpecs,
-              InstanceTypes,
-              IscsiTarget,
-              Migration,
-              Network,
-              Project,
-              SecurityGroup,
-              SecurityGroupIngressRule,
-              SecurityGroupInstanceAssociation,
-              Service,
-              SMBackendConf,
-              SMFlavors,
-              SMVolume,
-              User,
-              Volume,
-              VolumeMetadata,
-              VolumeTypeExtraSpecs,
-              VolumeTypes,
-              )
-    engine = create_engine(FLAGS.sql_connection, echo=False)
-    for model in models:
-        model.metadata.create_all(engine)
+    __tablename__ = 'instance_actions'
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    action = Column(String(255))
+    instance_uuid = Column(String(36),
+                           ForeignKey('instances.uuid'),
+                           nullable=False)
+    request_id = Column(String(255))
+    user_id = Column(String(255))
+    project_id = Column(String(255))
+    start_time = Column(DateTime, default=timeutils.utcnow)
+    finish_time = Column(DateTime)
+    message = Column(String(255))
+
+
+class InstanceActionEvent(BASE, NovaBase):
+    """Track events that occur during an InstanceAction."""
+    __tablename__ = 'instance_actions_events'
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    event = Column(String(255))
+    action_id = Column(Integer, ForeignKey('instance_actions.id'),
+                       nullable=False)
+    start_time = Column(DateTime, default=timeutils.utcnow)
+    finish_time = Column(DateTime)
+    result = Column(String(255))
+    traceback = Column(Text)
+
+
+class InstanceIdMapping(BASE, NovaBase):
+    """Compatibility layer for the EC2 instance service."""
+    __tablename__ = 'instance_id_mappings'
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    uuid = Column(String(36), nullable=False)
+
+
+class TaskLog(BASE, NovaBase):
+    """Audit log for background periodic tasks."""
+    __tablename__ = 'task_log'
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    task_name = Column(String(255), nullable=False)
+    state = Column(String(255), nullable=False)
+    host = Column(String(255))
+    period_beginning = Column(DateTime, default=timeutils.utcnow)
+    period_ending = Column(DateTime, default=timeutils.utcnow)
+    message = Column(String(255), nullable=False)
+    task_items = Column(Integer(), default=0)
+    errors = Column(Integer(), default=0)

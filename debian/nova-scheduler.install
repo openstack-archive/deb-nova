@@ -1,1 +1,3 @@
 usr/bin/nova-scheduler
+usr/bin/nova-clear-rabbit-queues
+usr/bin/nova-rpc-zmq-receiver

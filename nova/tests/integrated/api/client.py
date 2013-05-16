@@ -14,12 +14,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
 import httplib
 import urllib
 import urlparse
 
-from nova import log as logging
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -134,11 +134,15 @@ class TestOpenStackClient(object):
         self.auth_result = auth_headers
         return self.auth_result
 
-    def api_request(self, relative_uri, check_response_status=None, **kwargs):
+    def api_request(self, relative_uri, check_response_status=None,
+                    strip_version=False, **kwargs):
         auth_result = self._authenticate()
 
         # NOTE(justinsb): httplib 'helpfully' converts headers to lower case
         base_uri = auth_result['x-server-management-url']
+        if strip_version:
+            # NOTE(vish): cut out version number and tenant_id
+            base_uri = '/'.join(base_uri.split('/', 3)[:-1])
 
         full_uri = '%s/%s' % (base_uri, relative_uri)
 
@@ -151,7 +155,7 @@ class TestOpenStackClient(object):
         LOG.debug(_("%(relative_uri)s => code %(http_status)s") % locals())
 
         if check_response_status:
-            if not http_status in check_response_status:
+            if http_status not in check_response_status:
                 if http_status == 404:
                     raise OpenStackApiNotFoundException(response=response)
                 elif http_status == 401:
@@ -167,7 +171,7 @@ class TestOpenStackClient(object):
         body = response.read()
         LOG.debug(_("Decoding JSON: %s") % (body))
         if body:
-            return json.loads(body)
+            return jsonutils.loads(body)
         else:
             return ""
 
@@ -181,7 +185,7 @@ class TestOpenStackClient(object):
         if body:
             headers = kwargs.setdefault('headers', {})
             headers['Content-Type'] = 'application/json'
-            kwargs['body'] = json.dumps(body)
+            kwargs['body'] = jsonutils.dumps(body)
 
         kwargs.setdefault('check_response_status', [200, 202])
         response = self.api_request(relative_uri, **kwargs)
@@ -192,7 +196,7 @@ class TestOpenStackClient(object):
         if body:
             headers = kwargs.setdefault('headers', {})
             headers['Content-Type'] = 'application/json'
-            kwargs['body'] = json.dumps(body)
+            kwargs['body'] = jsonutils.dumps(body)
 
         kwargs.setdefault('check_response_status', [200, 202, 204])
         response = self.api_request(relative_uri, **kwargs)

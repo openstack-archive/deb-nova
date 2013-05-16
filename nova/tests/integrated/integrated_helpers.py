@@ -21,16 +21,23 @@ Provides common functionality for integrated unit tests
 
 import random
 import string
+import uuid
+
+from oslo.config import cfg
 
 import nova.image.glance
-from nova.log import logging
+from nova.openstack.common import log as logging
 from nova import service
-from nova import test  # For the flags
+from nova import test
+from nova.tests import fake_crypto
+import nova.tests.image.fake
 from nova.tests.integrated.api import client
-from nova import utils
 
 
+CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
+CONF.import_opt('manager', 'nova.cells.opts', group='cells')
 
 
 def generate_random_alphanumeric(length):
@@ -52,7 +59,7 @@ def generate_new_element(items, prefix, numeric=False):
             candidate = prefix + generate_random_numeric(8)
         else:
             candidate = prefix + generate_random_alphanumeric(8)
-        if not candidate in items:
+        if candidate not in items:
             return candidate
         LOG.debug("Random collision on %s" % candidate)
 
@@ -65,18 +72,19 @@ class _IntegratedTestBase(test.TestCase):
         self.flags(**f)
         self.flags(verbose=True)
 
-        def fake_get_image_service(context, image_href):
-            image_id = str(image_href).split('/')[-1]
-            return (nova.image.fake.FakeImageService(), image_id)
-        self.stubs.Set(nova.image, 'get_image_service', fake_get_image_service)
-        self.flags(compute_scheduler_driver='nova.scheduler.'
+        self.useFixture(test.ReplaceModule('crypto', fake_crypto))
+        nova.tests.image.fake.stub_out_image_service(self.stubs)
+        self.flags(scheduler_driver='nova.scheduler.'
                     'chance.ChanceScheduler')
 
         # set up services
+        self.conductor = self.start_service('conductor',
+                manager=CONF.conductor.manager)
         self.compute = self.start_service('compute')
-        self.volume = self.start_service('volume')
+        self.scheduler = self.start_service('cert')
         self.network = self.start_service('network')
         self.scheduler = self.start_service('scheduler')
+        self.cells = self.start_service('cells', manager=CONF.cells.manager)
 
         self._start_api_service()
 
@@ -84,6 +92,7 @@ class _IntegratedTestBase(test.TestCase):
 
     def tearDown(self):
         self.osapi.stop()
+        nova.tests.image.fake.FakeImageService_reset()
         super(_IntegratedTestBase, self).tearDown()
 
     def _start_api_service(self):
@@ -96,13 +105,16 @@ class _IntegratedTestBase(test.TestCase):
         """An opportunity to setup flags, before the services are started."""
         f = {}
 
+        # Ensure tests only listen on localhost
+        f['ec2_listen'] = '127.0.0.1'
+        f['osapi_compute_listen'] = '127.0.0.1'
+        f['metadata_listen'] = '127.0.0.1'
+
         # Auto-assign ports to allow concurrent tests
         f['ec2_listen_port'] = 0
         f['osapi_compute_listen_port'] = 0
-        f['osapi_volume_listen_port'] = 0
         f['metadata_listen_port'] = 0
 
-        f['image_service'] = 'nova.image.fake.FakeImageService'
         f['fake_network'] = True
         return f
 
@@ -112,7 +124,7 @@ class _IntegratedTestBase(test.TestCase):
         return generate_new_element(server_names, 'server')
 
     def get_invalid_image(self):
-        return str(utils.gen_uuid())
+        return str(uuid.uuid4())
 
     def _build_minimal_create_server_request(self):
         server = {}

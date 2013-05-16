@@ -1,2 +1,2 @@
 usr/bin/nova-compute
-usr/lib/python*/dist-packages/nova/rootwrap/compute.py
+etc/nova/rootwrap.d/compute.filters

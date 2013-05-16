@@ -1,7 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2011 Citrix Systems, Inc.
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -17,36 +17,29 @@
 
 """VMRC Console Manager."""
 
+from oslo.config import cfg
+
+from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
-from nova import flags
-from nova import log as logging
 from nova import manager
-from nova.openstack.common import cfg
-from nova import rpc
-from nova import utils
-from nova.virt import vmwareapi_conn
+from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
+from nova.virt.vmwareapi import driver as vmwareapi_conn
 
 
 LOG = logging.getLogger(__name__)
 
-vmrc_manager_opts = [
-    cfg.StrOpt('console_public_hostname',
-               default='',
-               help='Publicly visible name for this console host'),
-    cfg.StrOpt('console_driver',
-               default='nova.console.vmrc.VMRCConsole',
-               help='Driver to use for the console'),
-    ]
-
-FLAGS = flags.FLAGS
-FLAGS.register_opts(vmrc_manager_opts)
+CONF = cfg.CONF
+CONF.import_opt('console_driver', 'nova.console.manager')
+CONF.import_opt('console_public_hostname', 'nova.console.manager')
 
 
 class ConsoleVMRCManager(manager.Manager):
     """Manager to handle VMRC connections for accessing instance consoles."""
 
     def __init__(self, console_driver=None, *args, **kwargs):
-        self.driver = utils.import_object(FLAGS.console_driver)
+        self.driver = importutils.import_object(CONF.console_driver)
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         super(ConsoleVMRCManager, self).__init__(*args, **kwargs)
 
     def init_host(self):
@@ -57,11 +50,11 @@ class ConsoleVMRCManager(manager.Manager):
         """Get VIM session for the pool specified."""
         vim_session = None
         if pool['id'] not in self.sessions.keys():
-            vim_session = vmwareapi_conn.VMWareAPISession(
+            vim_session = vmwareapi_conn.VMwareAPISession(
                     pool['address'],
                     pool['username'],
                     pool['password'],
-                    FLAGS.console_vmrc_error_retries)
+                    CONF.console_vmrc_error_retries)
             self.sessions[pool['id']] = vim_session
         return self.sessions[pool['id']]
 
@@ -83,7 +76,6 @@ class ConsoleVMRCManager(manager.Manager):
         self.driver.setup_console(context, console)
         return console
 
-    @exception.wrap_exception()
     def add_console(self, context, instance_id, password=None,
                     port=None, **kwargs):
         """Adds a console for the instance.
@@ -98,7 +90,7 @@ class ConsoleVMRCManager(manager.Manager):
         try:
             console = self.db.console_get_by_pool_instance(context,
                                                       pool['id'],
-                                                      instance_id)
+                                                      instance['uuid'])
             if self.driver.is_otp():
                 console = self._generate_console(context,
                                                  pool,
@@ -113,7 +105,6 @@ class ConsoleVMRCManager(manager.Manager):
                                              instance)
         return console['id']
 
-    @exception.wrap_exception()
     def remove_console(self, context, console_id, **_kwargs):
         """Removes a console entry."""
         try:
@@ -137,19 +128,15 @@ class ConsoleVMRCManager(manager.Manager):
                                                          self.host,
                                                          console_type)
         except exception.NotFound:
-            pool_info = rpc.call(context,
-                                 self.db.queue_get_for(context,
-                                                       FLAGS.compute_topic,
-                                                       instance_host),
-                                 {'method': 'get_console_pool_info',
-                                  'args': {'console_type': console_type}})
+            pool_info = self.compute_rpcapi.get_console_pool_info(context,
+                    console_type, instance_host)
             pool_info['password'] = self.driver.fix_pool_password(
                                                     pool_info['password'])
             pool_info['host'] = self.host
             # ESX Address or Proxy Address
             public_host_name = pool_info['address']
-            if FLAGS.console_public_hostname:
-                public_host_name = FLAGS.console_public_hostname
+            if CONF.console_public_hostname:
+                public_host_name = CONF.console_public_hostname
             pool_info['public_hostname'] = public_host_name
             pool_info['console_type'] = console_type
             pool_info['compute_host'] = instance_host

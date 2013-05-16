@@ -1,4 +1,4 @@
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -22,7 +22,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -74,7 +74,8 @@ class MultinicController(wsgi.Controller):
         try:
             self.compute_api.remove_fixed_ip(context, instance, address)
         except exception.FixedIpNotFoundForSpecificInstance:
-            LOG.exception(_("Unable to find address %r") % address)
+            LOG.exception(_("Unable to find address %r") % address,
+                          instance=instance)
             raise exc.HTTPBadRequest()
 
         return webob.Response(status_int=202)
@@ -83,7 +84,7 @@ class MultinicController(wsgi.Controller):
 # Note: The class name is as it has to be for this to be loaded as an
 # extension--only first character capitalized.
 class Multinic(extensions.ExtensionDescriptor):
-    """Multiple network support"""
+    """Multiple network support."""
 
     name = "Multinic"
     alias = "NMN"

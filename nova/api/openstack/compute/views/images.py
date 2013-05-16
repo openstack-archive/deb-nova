@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010-2011 OpenStack LLC.
+# Copyright 2010-2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,11 +18,7 @@
 import os.path
 
 from nova.api.openstack import common
-from nova import flags
-from nova import utils
-
-
-FLAGS = flags.FLAGS
+from nova.image import glance
 
 
 class ViewBuilder(common.ViewBuilder):
@@ -35,7 +31,9 @@ class ViewBuilder(common.ViewBuilder):
             "image": {
                 "id": image.get("id"),
                 "name": image.get("name"),
-                "links": self._get_links(request, image["id"]),
+                "links": self._get_links(request,
+                                         image["id"],
+                                         self._collection_name),
             },
         }
 
@@ -51,16 +49,15 @@ class ViewBuilder(common.ViewBuilder):
             "updated": self._format_date(image.get("updated_at")),
             "status": self._get_status(image),
             "progress": self._get_progress(image),
-            "links": self._get_links(request, image["id"]),
+            "links": self._get_links(request,
+                                     image["id"],
+                                     self._collection_name),
         }
 
         instance_uuid = image.get("properties", {}).get("instance_uuid")
 
         if instance_uuid is not None:
-            server_ref = os.path.join(request.application_url, 'servers',
-                                      instance_uuid)
-            server_ref = self._update_link_prefix(server_ref,
-                    FLAGS.osapi_compute_link_prefix)
+            server_ref = self._get_href_link(request, instance_uuid, 'servers')
             image_dict["server"] = {
                 "id": instance_uuid,
                 "links": [{
@@ -69,7 +66,9 @@ class ViewBuilder(common.ViewBuilder):
                 },
                 {
                     "rel": "bookmark",
-                    "href": common.remove_version_from_href(server_ref),
+                    "href": self._get_bookmark_link(request,
+                                                    instance_uuid,
+                                                    'servers'),
                 }],
             }
 
@@ -88,7 +87,9 @@ class ViewBuilder(common.ViewBuilder):
     def _list_view(self, list_func, request, images):
         """Provide a view for a list of images."""
         image_list = [list_func(request, image)["image"] for image in images]
-        images_links = self._get_collection_links(request, images)
+        images_links = self._get_collection_links(request,
+                                                  images,
+                                                  self._collection_name)
         images_dict = dict(images=image_list)
 
         if images_links:
@@ -96,15 +97,17 @@ class ViewBuilder(common.ViewBuilder):
 
         return images_dict
 
-    def _get_links(self, request, identifier):
+    def _get_links(self, request, identifier, collection_name):
         """Return a list of links for this image."""
         return [{
             "rel": "self",
-            "href": self._get_href_link(request, identifier),
+            "href": self._get_href_link(request, identifier, collection_name),
         },
         {
             "rel": "bookmark",
-            "href": self._get_bookmark_link(request, identifier),
+            "href": self._get_bookmark_link(request,
+                                            identifier,
+                                            collection_name),
         },
         {
             "rel": "alternate",
@@ -113,10 +116,9 @@ class ViewBuilder(common.ViewBuilder):
         }]
 
     def _get_alternate_link(self, request, identifier):
-        """Create an alternate link for a specific flavor id."""
-        glance_url = utils.generate_glance_url()
-        glance_url = self._update_link_prefix(glance_url,
-                                              FLAGS.osapi_glance_link_prefix)
+        """Create an alternate link for a specific image id."""
+        glance_url = glance.generate_glance_url()
+        glance_url = self._update_glance_link_prefix(glance_url)
         return os.path.join(glance_url,
                             request.environ["nova.context"].project_id,
                             self._collection_name,

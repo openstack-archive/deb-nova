@@ -1,4 +1,4 @@
-# Copyright (c) 2011 OpenStack, LLC.
+# Copyright (c) 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,43 +17,44 @@
 Manage hosts in the current zone.
 """
 
-import datetime
 import UserDict
 
+from oslo.config import cfg
+
+from nova.compute import task_states
+from nova.compute import vm_states
 from nova import db
 from nova import exception
-from nova import flags
-from nova import log as logging
-from nova.openstack.common import cfg
+from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova.scheduler import filters
-from nova import utils
-
+from nova.scheduler import weights
 
 host_manager_opts = [
-    cfg.IntOpt('reserved_host_disk_mb',
-               default=0,
-               help='Amount of disk in MB to reserve for host/dom0'),
-    cfg.IntOpt('reserved_host_memory_mb',
-               default=512,
-               help='Amount of memory in MB to reserve for host/dom0'),
     cfg.MultiStrOpt('scheduler_available_filters',
-            default=['nova.scheduler.filters.standard_filters'],
+            default=['nova.scheduler.filters.all_filters'],
             help='Filter classes available to the scheduler which may '
                     'be specified more than once.  An entry of '
                     '"nova.scheduler.filters.standard_filters" '
                     'maps to all filters included with nova.'),
     cfg.ListOpt('scheduler_default_filters',
                 default=[
+                  'RetryFilter',
                   'AvailabilityZoneFilter',
                   'RamFilter',
-                  'ComputeFilter'
+                  'ComputeFilter',
+                  'ComputeCapabilitiesFilter',
+                  'ImagePropertiesFilter'
                   ],
                 help='Which filter class names to use for filtering hosts '
                       'when not specified in the request.'),
+    cfg.ListOpt('scheduler_weight_classes',
+                default=['nova.scheduler.weights.all_weighers'],
+                help='Which weight class names to use for weighing hosts'),
     ]
 
-FLAGS = flags.FLAGS
-FLAGS.register_opts(host_manager_opts)
+CONF = cfg.CONF
+CONF.register_opts(host_manager_opts)
 
 LOG = logging.getLogger(__name__)
 
@@ -96,112 +97,194 @@ class HostState(object):
     previously used and lock down access.
     """
 
-    def __init__(self, host, topic, capabilities=None, service=None):
+    def __init__(self, host, node, capabilities=None, service=None):
         self.host = host
-        self.topic = topic
+        self.nodename = node
+        self.update_capabilities(capabilities, service)
 
-        # Read-only capability dicts
-
-        if capabilities is None:
-            capabilities = {}
-        self.capabilities = ReadOnlyDict(capabilities.get(topic, None))
-        if service is None:
-            service = {}
-        self.service = ReadOnlyDict(service)
         # Mutable available resources.
         # These will change as resources are virtually "consumed".
+        self.total_usable_disk_gb = 0
+        self.disk_mb_used = 0
         self.free_ram_mb = 0
         self.free_disk_mb = 0
         self.vcpus_total = 0
         self.vcpus_used = 0
+        # Valid vm types on this host: 'pv', 'hvm' or 'all'
+        if 'allowed_vm_type' in self.capabilities:
+            self.allowed_vm_type = self.capabilities['allowed_vm_type']
+        else:
+            self.allowed_vm_type = 'all'
+
+        # Additional host information from the compute node stats:
+        self.vm_states = {}
+        self.task_states = {}
+        self.num_instances = 0
+        self.num_instances_by_project = {}
+        self.num_instances_by_os_type = {}
+        self.num_io_ops = 0
+
+        # Resource oversubscription values for the compute host:
+        self.limits = {}
+
+        self.updated = None
+
+    def update_capabilities(self, capabilities=None, service=None):
+        # Read-only capability dicts
+
+        if capabilities is None:
+            capabilities = {}
+        self.capabilities = ReadOnlyDict(capabilities)
+        if service is None:
+            service = {}
+        self.service = ReadOnlyDict(service)
 
     def update_from_compute_node(self, compute):
         """Update information about a host from its compute_node info."""
-        all_disk_mb = compute['local_gb'] * 1024
+        if (self.updated and compute['updated_at']
+            and self.updated > compute['updated_at']):
+            return
         all_ram_mb = compute['memory_mb']
-        vcpus_total = compute['vcpus']
-        if FLAGS.reserved_host_disk_mb > 0:
-            all_disk_mb -= FLAGS.reserved_host_disk_mb
-        if FLAGS.reserved_host_memory_mb > 0:
-            all_ram_mb -= FLAGS.reserved_host_memory_mb
-        self.free_ram_mb = all_ram_mb
-        self.free_disk_mb = all_disk_mb
-        self.vcpus_total = vcpus_total
+
+        # Assume virtual size is all consumed by instances if use qcow2 disk.
+        least = compute.get('disk_available_least')
+        free_disk_mb = least if least is not None else compute['free_disk_gb']
+        free_disk_mb *= 1024
+
+        self.disk_mb_used = compute['local_gb_used'] * 1024
+
+        #NOTE(jogo) free_ram_mb can be negative
+        self.free_ram_mb = compute['free_ram_mb']
+        self.total_usable_ram_mb = all_ram_mb
+        self.total_usable_disk_gb = compute['local_gb']
+        self.free_disk_mb = free_disk_mb
+        self.vcpus_total = compute['vcpus']
+        self.vcpus_used = compute['vcpus_used']
+        self.updated = compute['updated_at']
+
+        stats = compute.get('stats', [])
+        statmap = self._statmap(stats)
+
+        # Track number of instances on host
+        self.num_instances = int(statmap.get('num_instances', 0))
+
+        # Track number of instances by project_id
+        project_id_keys = [k for k in statmap.keys() if
+                k.startswith("num_proj_")]
+        for key in project_id_keys:
+            project_id = key[9:]
+            self.num_instances_by_project[project_id] = int(statmap[key])
+
+        # Track number of instances in certain vm_states
+        vm_state_keys = [k for k in statmap.keys() if k.startswith("num_vm_")]
+        for key in vm_state_keys:
+            vm_state = key[7:]
+            self.vm_states[vm_state] = int(statmap[key])
+
+        # Track number of instances in certain task_states
+        task_state_keys = [k for k in statmap.keys() if
+                k.startswith("num_task_")]
+        for key in task_state_keys:
+            task_state = key[9:]
+            self.task_states[task_state] = int(statmap[key])
+
+        # Track number of instances by host_type
+        os_keys = [k for k in statmap.keys() if k.startswith("num_os_type_")]
+        for key in os_keys:
+            os = key[12:]
+            self.num_instances_by_os_type[os] = int(statmap[key])
+
+        self.num_io_ops = int(statmap.get('io_workload', 0))
 
     def consume_from_instance(self, instance):
-        """Update information about a host from instance info."""
+        """Incrementally update host state from an instance."""
         disk_mb = (instance['root_gb'] + instance['ephemeral_gb']) * 1024
         ram_mb = instance['memory_mb']
         vcpus = instance['vcpus']
         self.free_ram_mb -= ram_mb
         self.free_disk_mb -= disk_mb
         self.vcpus_used += vcpus
+        self.updated = timeutils.utcnow()
 
-    def passes_filters(self, filter_fns, filter_properties):
-        """Return whether or not this host passes filters."""
+        # Track number of instances on host
+        self.num_instances += 1
 
-        if self.host in filter_properties.get('ignore_hosts', []):
-            LOG.debug(_('Host filter fails for ignored host %(host)s'),
-                      {'host': self.host})
-            return False
+        # Track number of instances by project_id
+        project_id = instance.get('project_id')
+        if project_id not in self.num_instances_by_project:
+            self.num_instances_by_project[project_id] = 0
+        self.num_instances_by_project[project_id] += 1
 
-        force_hosts = filter_properties.get('force_hosts', [])
-        if force_hosts:
-            if not self.host in force_hosts:
-                LOG.debug(_('Host filter fails for non-forced host %(host)s'),
-                          {'host': self.host})
-            return self.host in force_hosts
+        # Track number of instances in certain vm_states
+        vm_state = instance.get('vm_state', vm_states.BUILDING)
+        if vm_state not in self.vm_states:
+            self.vm_states[vm_state] = 0
+        self.vm_states[vm_state] += 1
 
-        for filter_fn in filter_fns:
-            if not filter_fn(self, filter_properties):
-                LOG.debug(_('Host filter function %(func)s failed for '
-                            '%(host)s'),
-                          {'func': repr(filter_fn),
-                           'host': self.host})
-                return False
+        # Track number of instances in certain task_states
+        task_state = instance.get('task_state')
+        if task_state not in self.task_states:
+            self.task_states[task_state] = 0
+        self.task_states[task_state] += 1
 
-        LOG.debug(_('Host filter passes for %(host)s'), {'host': self.host})
-        return True
+        # Track number of instances by host_type
+        os_type = instance.get('os_type')
+        if os_type not in self.num_instances_by_os_type:
+            self.num_instances_by_os_type[os_type] = 0
+        self.num_instances_by_os_type[os_type] += 1
+
+        vm_state = instance.get('vm_state', vm_states.BUILDING)
+        task_state = instance.get('task_state')
+        if vm_state == vm_states.BUILDING or task_state in [
+                task_states.RESIZE_MIGRATING, task_states.REBUILDING,
+                task_states.RESIZE_PREP, task_states.IMAGE_SNAPSHOT,
+                task_states.IMAGE_BACKUP]:
+            self.num_io_ops += 1
+
+    def _statmap(self, stats):
+        return dict((st['key'], st['value']) for st in stats)
 
     def __repr__(self):
-        return ("host '%s': free_ram_mb:%s free_disk_mb:%s" %
-                (self.host, self.free_ram_mb, self.free_disk_mb))
+        return ("(%s, %s) ram:%s disk:%s io_ops:%s instances:%s vm_type:%s" %
+                (self.host, self.nodename, self.free_ram_mb, self.free_disk_mb,
+                 self.num_io_ops, self.num_instances, self.allowed_vm_type))
 
 
 class HostManager(object):
     """Base HostManager class."""
 
-    # Can be overriden in a subclass
+    # Can be overridden in a subclass
     host_state_cls = HostState
 
     def __init__(self):
-        self.service_states = {}  # { <host> : { <service> : { cap k : v }}}
-        self.filter_classes = filters.get_filter_classes(
-                FLAGS.scheduler_available_filters)
+        # { (host, hypervisor_hostname) : { <service> : { cap k : v }}}
+        self.service_states = {}
+        self.host_state_map = {}
+        self.filter_handler = filters.HostFilterHandler()
+        self.filter_classes = self.filter_handler.get_matching_classes(
+                CONF.scheduler_available_filters)
+        self.weight_handler = weights.HostWeightHandler()
+        self.weight_classes = self.weight_handler.get_matching_classes(
+                CONF.scheduler_weight_classes)
 
-    def _choose_host_filters(self, filters):
+    def _choose_host_filters(self, filter_cls_names):
         """Since the caller may specify which filters to use we need
         to have an authoritative list of what is permissible. This
         function checks the filter names against a predefined set
         of acceptable filters.
         """
-        if filters is None:
-            filters = FLAGS.scheduler_default_filters
-        if not isinstance(filters, (list, tuple)):
-            filters = [filters]
+        if filter_cls_names is None:
+            filter_cls_names = CONF.scheduler_default_filters
+        if not isinstance(filter_cls_names, (list, tuple)):
+            filter_cls_names = [filter_cls_names]
         good_filters = []
         bad_filters = []
-        for filter_name in filters:
+        for filter_name in filter_cls_names:
             found_class = False
             for cls in self.filter_classes:
                 if cls.__name__ == filter_name:
+                    good_filters.append(cls)
                     found_class = True
-                    filter_instance = cls()
-                    # Get the filter function
-                    filter_func = getattr(filter_instance,
-                            'host_passes', None)
-                    if filter_func:
-                        good_filters.append(filter_func)
                     break
             if not found_class:
                 bad_filters.append(filter_name)
@@ -210,134 +293,111 @@ class HostManager(object):
             raise exception.SchedulerHostFilterNotFound(filter_name=msg)
         return good_filters
 
-    def filter_hosts(self, hosts, filter_properties, filters=None):
-        """Filter hosts and return only ones passing all filters"""
-        filtered_hosts = []
-        filter_fns = self._choose_host_filters(filters)
-        for host in hosts:
-            if host.passes_filters(filter_fns, filter_properties):
-                filtered_hosts.append(host)
-        return filtered_hosts
+    def get_filtered_hosts(self, hosts, filter_properties,
+            filter_class_names=None):
+        """Filter hosts and return only ones passing all filters."""
 
-    def get_host_list(self):
-        """Returns a list of dicts for each host that the Zone Manager
-        knows about. Each dict contains the host_name and the service
-        for that host.
-        """
-        all_hosts = self.service_states.keys()
-        ret = []
-        for host in self.service_states:
-            for svc in self.service_states[host]:
-                ret.append({"service": svc, "host_name": host})
-        return ret
+        def _strip_ignore_hosts(host_map, hosts_to_ignore):
+            ignored_hosts = []
+            for host in hosts_to_ignore:
+                if host in host_map:
+                    del host_map[host]
+                    ignored_hosts.append(host)
+            ignored_hosts_str = ', '.join(ignored_hosts)
+            msg = _('Host filter ignoring hosts: %(ignored_hosts_str)s')
+            LOG.debug(msg, locals())
 
-    def get_service_capabilities(self):
-        """Roll up all the individual host info to generic 'service'
-           capabilities. Each capability is aggregated into
-           <cap>_min and <cap>_max values."""
-        hosts_dict = self.service_states
+        def _match_forced_hosts(host_map, hosts_to_force):
+            for host in host_map.keys():
+                if host not in hosts_to_force:
+                    del host_map[host]
+            if not host_map:
+                forced_hosts_str = ', '.join(hosts_to_force)
+                msg = _("No hosts matched due to not matching 'force_hosts'"
+                        "value of '%(forced_hosts_str)s'")
+                LOG.debug(msg, locals())
+                return
+            forced_hosts_str = ', '.join(host_map.iterkeys())
+            msg = _('Host filter forcing available hosts to '
+                    '%(forced_hosts_str)s')
+            LOG.debug(msg, locals())
 
-        # TODO(sandy) - be smarter about fabricating this structure.
-        # But it's likely to change once we understand what the Best-Match
-        # code will need better.
-        combined = {}  # { <service>_<cap> : (min, max), ... }
-        stale_host_services = {}  # { host1 : [svc1, svc2], host2 :[svc1]}
-        for host, host_dict in hosts_dict.iteritems():
-            for service_name, service_dict in host_dict.iteritems():
-                if not service_dict.get("enabled", True):
-                    # Service is disabled; do no include it
-                    continue
+        filter_classes = self._choose_host_filters(filter_class_names)
+        ignore_hosts = filter_properties.get('ignore_hosts', [])
+        force_hosts = filter_properties.get('force_hosts', [])
+        if ignore_hosts or force_hosts:
+            name_to_cls_map = dict([(x.host, x) for x in hosts])
+            if ignore_hosts:
+                _strip_ignore_hosts(name_to_cls_map, ignore_hosts)
+                if not name_to_cls_map:
+                    return []
+            if force_hosts:
+                _match_forced_hosts(name_to_cls_map, force_hosts)
+                # NOTE(vish): Skip filters on forced hosts.
+                if name_to_cls_map:
+                    return name_to_cls_map.values()
+            hosts = name_to_cls_map.itervalues()
 
-                # Check if the service capabilities became stale
-                if self.host_service_caps_stale(host, service_name):
-                    if host not in stale_host_services:
-                        stale_host_services[host] = []  # Adding host key once
-                    stale_host_services[host].append(service_name)
-                    continue
-                for cap, value in service_dict.iteritems():
-                    if cap == "timestamp":  # Timestamp is not needed
-                        continue
-                    key = "%s_%s" % (service_name, cap)
-                    min_value, max_value = combined.get(key, (value, value))
-                    min_value = min(min_value, value)
-                    max_value = max(max_value, value)
-                    combined[key] = (min_value, max_value)
+        return self.filter_handler.get_filtered_objects(filter_classes,
+                hosts, filter_properties)
 
-        # Delete the expired host services
-        self.delete_expired_host_services(stale_host_services)
-        return combined
+    def get_weighed_hosts(self, hosts, weight_properties):
+        """Weigh the hosts."""
+        return self.weight_handler.get_weighed_objects(self.weight_classes,
+                hosts, weight_properties)
 
     def update_service_capabilities(self, service_name, host, capabilities):
         """Update the per-service capabilities based on this notification."""
+
+        if service_name != 'compute':
+            LOG.debug(_('Ignoring %(service_name)s service update '
+                    'from %(host)s'), locals())
+            return
+
+        state_key = (host, capabilities.get('hypervisor_hostname'))
         LOG.debug(_("Received %(service_name)s service update from "
-                    "%(host)s.") % locals())
-        service_caps = self.service_states.get(host, {})
+                    "%(state_key)s.") % locals())
         # Copy the capabilities, so we don't modify the original dict
         capab_copy = dict(capabilities)
-        capab_copy["timestamp"] = utils.utcnow()  # Reported time
-        service_caps[service_name] = capab_copy
-        self.service_states[host] = service_caps
+        capab_copy["timestamp"] = timeutils.utcnow()  # Reported time
+        self.service_states[state_key] = capab_copy
 
-    def host_service_caps_stale(self, host, service):
-        """Check if host service capabilites are not recent enough."""
-        allowed_time_diff = FLAGS.periodic_interval * 3
-        caps = self.service_states[host][service]
-        if ((utils.utcnow() - caps["timestamp"]) <=
-            datetime.timedelta(seconds=allowed_time_diff)):
-            return False
-        return True
+    def get_all_host_states(self, context):
+        """Returns a list of HostStates that represents all the hosts
+        the HostManager knows about. Also, each of the consumable resources
+        in HostState are pre-populated and adjusted based on data in the db.
+        """
 
-    def delete_expired_host_services(self, host_services_dict):
-        """Delete all the inactive host services information."""
-        for host, services in host_services_dict.iteritems():
-            service_caps = self.service_states[host]
-            for service in services:
-                del service_caps[service]
-                if len(service_caps) == 0:  # Delete host if no services
-                    del self.service_states[host]
-
-    def get_all_host_states(self, context, topic):
-        """Returns a dict of all the hosts the HostManager
-        knows about. Also, each of the consumable resources in HostState
-        are pre-populated and adjusted based on data in the db.
-
-        For example:
-        {'192.168.1.100': HostState(), ...}
-
-        Note: this can be very slow with a lot of instances.
-        InstanceType table isn't required since a copy is stored
-        with the instance (in case the InstanceType changed since the
-        instance was created)."""
-
-        if topic != 'compute':
-            raise NotImplementedError(_(
-                "host_manager only implemented for 'compute'"))
-
-        host_state_map = {}
-
-        # Make a compute node dict with the bare essential metrics.
+        # Get resource usage across the available compute nodes:
         compute_nodes = db.compute_node_get_all(context)
+        seen_nodes = set()
         for compute in compute_nodes:
             service = compute['service']
             if not service:
                 LOG.warn(_("No service for compute ID %s") % compute['id'])
                 continue
             host = service['host']
-            capabilities = self.service_states.get(host, None)
-            host_state = self.host_state_cls(host, topic,
-                    capabilities=capabilities,
-                    service=dict(service.iteritems()))
+            node = compute.get('hypervisor_hostname')
+            state_key = (host, node)
+            capabilities = self.service_states.get(state_key, None)
+            host_state = self.host_state_map.get(state_key)
+            if host_state:
+                host_state.update_capabilities(capabilities,
+                                               dict(service.iteritems()))
+            else:
+                host_state = self.host_state_cls(host, node,
+                        capabilities=capabilities,
+                        service=dict(service.iteritems()))
+                self.host_state_map[state_key] = host_state
             host_state.update_from_compute_node(compute)
-            host_state_map[host] = host_state
+            seen_nodes.add(state_key)
 
-        # "Consume" resources from the host the instance resides on.
-        instances = db.instance_get_all(context)
-        for instance in instances:
-            host = instance['host']
-            if not host:
-                continue
-            host_state = host_state_map.get(host, None)
-            if not host_state:
-                continue
-            host_state.consume_from_instance(instance)
-        return host_state_map
+        # remove compute nodes from host_state_map if they are not active
+        dead_nodes = set(self.host_state_map.keys()) - seen_nodes
+        for state_key in dead_nodes:
+            host, node = state_key
+            LOG.info(_("Removing dead compute node %(host)s:%(node)s "
+                       "from scheduler") % locals())
+            del self.host_state_map[state_key]
+
+        return self.host_state_map.itervalues()

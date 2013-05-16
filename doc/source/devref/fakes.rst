@@ -44,26 +44,6 @@ The :mod:`nova.auth.fakeldap` Module
     :show-inheritance:
     
 
-The :mod:`nova.testing.fake.rabbit` Module
-------------------------------------------
-
-.. automodule:: nova.testing.fake.rabbit
-    :noindex:
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-
-The :class:`nova.volume.driver.FakeAOEDriver` Class
----------------------------------------------------
-
-.. autoclass:: nova.volume.driver.FakeAOEDriver
-    :noindex:
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-
 The :class:`nova.tests.service_unittest.FakeManager` Class
 ----------------------------------------------------------
 

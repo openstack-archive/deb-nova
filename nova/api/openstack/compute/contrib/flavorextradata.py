@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 OpenStack, LLC
+# Copyright 2012 OpenStack Foundation
 # Copyright 2011 Canonical Ltd.
 # All Rights Reserved.
 #
@@ -24,78 +24,46 @@ attributes.  This extension adds to that list:
 - OS-FLV-EXT-DATA:ephemeral
 """
 
-from nova import exception
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.compute import instance_types
 
 
 authorize = extensions.soft_extension_authorizer('compute', 'flavorextradata')
 
 
 class FlavorextradataController(wsgi.Controller):
-    def _get_flavor_refs(self):
-        """Return a dictionary mapping flavorid to flavor_ref."""
-        flavor_refs = instance_types.get_all_types(True)
-        rval = {}
-        for name, obj in flavor_refs.iteritems():
-            rval[obj['flavorid']] = obj
-        return rval
+    def _extend_flavors(self, req, flavors):
+        for flavor in flavors:
+            db_flavor = req.get_db_flavor(flavor['id'])
+            key = "%s:ephemeral" % Flavorextradata.alias
+            flavor[key] = db_flavor['ephemeral_gb']
 
-    def _extend_flavor(self, flavor_rval, flavor_ref):
-        key = "%s:ephemeral" % (Flavorextradata.alias)
-        flavor_rval[key] = flavor_ref['ephemeral_gb']
+    def _show(self, req, resp_obj):
+        if not authorize(req.environ['nova.context']):
+            return
+        if 'flavor' in resp_obj.obj:
+            resp_obj.attach(xml=FlavorextradatumTemplate())
+            self._extend_flavors(req, [resp_obj.obj['flavor']])
 
     @wsgi.extends
     def show(self, req, resp_obj, id):
-        context = req.environ['nova.context']
-        if authorize(context):
-            # Attach our slave template to the response object
-            resp_obj.attach(xml=FlavorextradatumTemplate())
+        return self._show(req, resp_obj)
 
-            try:
-                flavor_ref = instance_types.\
-                                get_instance_type_by_flavor_id(id)
-            except exception.FlavorNotFound:
-                explanation = _("Flavor not found.")
-                raise exception.HTTPNotFound(explanation=explanation)
-
-            self._extend_flavor(resp_obj.obj['flavor'], flavor_ref)
+    @wsgi.extends(action='create')
+    def create(self, req, resp_obj, body):
+        return self._show(req, resp_obj)
 
     @wsgi.extends
     def detail(self, req, resp_obj):
-        context = req.environ['nova.context']
-        if authorize(context):
-            # Attach our slave template to the response object
-            resp_obj.attach(xml=FlavorextradataTemplate())
-
-            flavors = list(resp_obj.obj['flavors'])
-            flavor_refs = self._get_flavor_refs()
-
-            for flavor_rval in flavors:
-                flavor_ref = flavor_refs[flavor_rval['id']]
-                self._extend_flavor(flavor_rval, flavor_ref)
-
-    @wsgi.extends(action='create')
-    def create(self, req, body, resp_obj):
-        context = req.environ['nova.context']
-        if authorize(context):
-            # Attach our slave template to the response object
-            resp_obj.attach(xml=FlavorextradatumTemplate())
-
-            try:
-                fid = resp_obj.obj['flavor']['id']
-                flavor_ref = instance_types.get_instance_type_by_flavor_id(fid)
-            except exception.FlavorNotFound:
-                explanation = _("Flavor not found.")
-                raise exception.HTTPNotFound(explanation=explanation)
-
-            self._extend_flavor(resp_obj.obj['flavor'], flavor_ref)
+        if not authorize(req.environ['nova.context']):
+            return
+        resp_obj.attach(xml=FlavorextradataTemplate())
+        self._extend_flavors(req, list(resp_obj.obj['flavors']))
 
 
 class Flavorextradata(extensions.ExtensionDescriptor):
-    """Provide additional data for flavors"""
+    """Provide additional data for flavors."""
 
     name = "FlavorExtraData"
     alias = "OS-FLV-EXT-DATA"
@@ -118,8 +86,9 @@ class FlavorextradatumTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('flavor', selector='flavor')
         make_flavor(root)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={
-            Flavorextradata.alias: Flavorextradata.namespace})
+        alias = Flavorextradata.alias
+        namespace = Flavorextradata.namespace
+        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})
 
 
 class FlavorextradataTemplate(xmlutil.TemplateBuilder):
@@ -127,5 +96,6 @@ class FlavorextradataTemplate(xmlutil.TemplateBuilder):
         root = xmlutil.TemplateElement('flavors')
         elem = xmlutil.SubTemplateElement(root, 'flavor', selector='flavors')
         make_flavor(elem)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={
-            Flavorextradata.alias: Flavorextradata.namespace})
+        alias = Flavorextradata.alias
+        namespace = Flavorextradata.namespace
+        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})

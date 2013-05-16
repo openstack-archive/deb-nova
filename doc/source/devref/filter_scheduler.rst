@@ -26,22 +26,74 @@ filtering`.
 There are some standard filter classes to use (:mod:`nova.scheduler.filters`):
 
 * |AllHostsFilter| - frankly speaking, this filter does no operation. It
-  returns all the available hosts after its work.
-* |AvailabilityZoneFilter| - filters hosts by availability zone. It returns
-  hosts with the same availability zone as the requested instance has in its
-  properties.
-* |ComputeFilter| - checks that the capabilities provided by the compute
-  service satisfy the extra specifications, associated with the instance type.
-  It returns a list of hosts that can create instance type.
-* |CoreFilter| - filters based on CPU core utilization. It will approve host if
-  it has sufficient number of CPU cores.
+  passes all the available hosts.
+* |ImagePropertiesFilter| - filters hosts based on properties defined
+  on the instance's image.  It passes hosts that can support the specified
+  image properties contained in the instance.
+* |AvailabilityZoneFilter| - filters hosts by availability zone. It passes
+  hosts matching the availability zone specified in the instance properties.
+* |ComputeCapabilitiesFilter| - checks that the capabilities provided by the
+  host compute service satisfy any extra specifications associated with the
+  instance type.  It passes hosts that can create the specified instance type.
+
+  The extra specifications can have a scope at the beginning of the key string
+  of a key/value pair. The scope format is "scope:key" and can be nested,
+  i.e. key_string := scope:key_string. Example like "capabilities:cpu_info:
+  features" is valid scope format. A key string without any ':' is non-scope
+  format. Each filter defines it's valid scope, and not all filters accept
+  non-scope format.
+
+  The extra specifications can have an operator at the beginning of the value
+  string of a key/value pair. If there is no operator specified, then a
+  default operator of 's==' is used. Valid operators are:
+
+::
+
+  * = (equal to or greater than as a number; same as vcpus case)
+  * == (equal to as a number)
+  * != (not equal to as a number)
+  * >= (greater than or equal to as a number)
+  * <= (less than or equal to as a number)
+  * s== (equal to as a string)
+  * s!= (not equal to as a string)
+  * s>= (greater than or equal to as a string)
+  * s> (greater than as a string)
+  * s<= (less than or equal to as a string)
+  * s< (less than as a string)
+  * <in> (substring)
+  * <or> (find one of these)
+
+  Examples are: ">= 5", "s== 2.1.0", "<in> gcc", and "<or> fpu <or> gpu"
+
+* |AggregateInstanceExtraSpecsFilter| - checks that the aggregate metadata
+  satisfies any extra specifications associated with the instance type (that
+  have no scope).  It passes hosts that can create the specified instance type.
+  The extra specifications can have the same operators as
+  |ComputeCapabilitiesFilter|.
+* |ComputeFilter| - passes all hosts that are operational and enabled.
+* |CoreFilter| - filters based on CPU core utilization. It passes hosts with
+  sufficient number of CPU cores.
 * |IsolatedHostsFilter| - filter based on "image_isolated" and "host_isolated"
   flags.
 * |JsonFilter| - allows simple JSON-based grammar for selecting hosts.
-* |RamFilter| - filters hosts by their RAM. So, it returns only the hosts with
-  enough available RAM.
+* |RamFilter| - filters hosts by their RAM. Only hosts with sufficient RAM
+  to host the instance are passed.
 * |SimpleCIDRAffinityFilter| - allows to put a new instance on a host within
   the same IP block.
+* |DifferentHostFilter| - allows to put the instance on a different host from a
+  set of instances.
+* |SameHostFilter| - puts the instance on the same host as another instance in
+  a set of of instances.
+* |RetryFilter| - filters hosts that have been attempted for scheduling.
+  Only passes hosts that have not been previously attempted.
+* |TrustedFilter| - filters hosts based on their trust.  Only passes hosts
+  that meet the trust requirements specified in the instance properties.
+* |TypeAffinityFilter| - Only passes hosts that are not already running an
+  instance of the requested type.
+* |AggregateTypeAffinityFilter| - limits instance_type by aggregate.
+* |GroupAntiAffinityFilter| - ensures that each instance in group is on a
+  different host.
+* |AggregateMultiTenancyIsolation| - isolate tenants in specific aggregates.
 
 Now we can focus on these standard filter classes in details. I will pass the
 simplest ones, such as |AllHostsFilter|, |CoreFilter| and |RamFilter| are,
@@ -58,7 +110,9 @@ code. For example class |RamFilter| has the next realization:
             instance_type = filter_properties.get('instance_type')
             requested_ram = instance_type['memory_mb']
             free_ram_mb = host_state.free_ram_mb
-            return free_ram_mb * FLAGS.ram_allocation_ratio >= requested_ram
+            total_usable_ram_mb = host_state.total_usable_ram_mb
+            used_ram_mb = total_usable_ram_mb - free_ram_mb
+            return total_usable_ram_mb * FLAGS.ram_allocation_ratio  - used_ram_mb >= requested_ram
 
 Here `ram_allocation_ratio` means the virtual RAM to physical RAM allocation
 ratio (it is 1.5 by default). Really, nice and simple.
@@ -71,15 +125,29 @@ scheduler with availability zones support and can configure availability zones
 on each compute host. This classes method `host_passes` returns `True` if
 availability zone mentioned in request is the same on the current compute host.
 
-|ComputeFilter| checks if host can create `instance_type`. Let's note that
-instance types describe the compute, memory and storage capacity of nova
-compute nodes, it is the list of characteristics such as number of vCPUs,
-amount RAM and so on. So |ComputeFilter| looks at hosts' capabilities (host
-without requested specifications can't be chosen for the creating of the
-instance), checks if the hosts service is up based on last heartbeat. Finally,
-this Scheduler can verify if host satisfies some `extra specifications`
-associated with the instance type (of course if there are no such extra
-specifications, every host suits them).
+The |ImagePropertiesFilter| filters hosts based on the architecture,
+hypervisor type, and virtual machine mode specified in the
+instance.  E.g., an instance might require a host that supports the arm
+architecture on a qemu compute host.  The |ImagePropertiesFilter| will only
+pass hosts that can satisfy this request.  These instance
+properties are populated from properties define on the instance's image.
+E.g. an image can be decorated with these properties using
+`glance image-update img-uuid --property architecture=arm --property
+hypervisor_type=qemu`
+Only hosts that satisfy these requirements will pass the
+|ImagePropertiesFilter|.
+
+|ComputeCapabilitiesFilter| checks if the host satisfies any 'extra specs'
+specified on the instance type.  The 'extra specs' can contain key/value pairs.
+The key for the filter is either non-scope format (i.e. no ':' contained), or
+scope format in capabilities scope (i.e. 'capabilities:xxx:yyy'). One example
+of capabilities scope is "capabilities:cpu_info:features", which will match
+host's cpu features capabilities. The |ComputeCapabilitiesFilter| will only
+pass hosts whose capabilities satisfy the requested specifications.  All hosts
+are passed if no 'extra specs' are specified.
+
+|ComputeFilter| is quite simple and passes any host whose compute service is
+enabled and operational.
 
 Now we are going to |IsolatedHostsFilter|. There can be some special hosts
 reserved for specific images. These hosts are called **isolated**. So the
@@ -87,9 +155,20 @@ images to run on the isolated hosts are also called isolated. This Scheduler
 checks if `image_isolated` flag named in instance specifications is the same
 that the host has.
 
+|DifferentHostFilter| - its method `host_passes` returns `True` if host to
+place instance on is different from all the hosts used by set of instances.
+
+|SameHostFilter| does the opposite to what |DifferentHostFilter| does. So its
+`host_passes` returns `True` if the host we want to place instance on is one
+of the set of instances uses.
+
 |SimpleCIDRAffinityFilter| looks at the subnet mask and investigates if
 the network address of the current host is in the same sub network as it was
 defined in the request.
+
+|GroupAntiAffinityFilter| its method `host_passes` returns `True` if host to
+place the instance on is not in a group of hosts. The group of hosts is
+maintained by a group name. The scheduler hint contains the group name.
 
 |JsonFilter| - this filter provides the opportunity to write complicated
 queries for the hosts capabilities filtering, based on simple JSON-like syntax.
@@ -109,25 +188,38 @@ This query will filter all hosts with free RAM greater or equal than 1024 MB
 and at the same time with free disk space greater or equal than 200 GB.
 
 Many filters use data from `scheduler_hints`, that is defined in the moment of
-creation of the new server for the user. The only exeption for this rule is
+creation of the new server for the user. The only exception for this rule is
 |JsonFilter|, that takes data in some strange difficult to understand way.
+
+The |RetryFilter| filters hosts that have already been attempted for scheduling.
+It only passes hosts that have not been previously attempted.
+
+The |TrustedFilter| filters hosts based on their trust.  Only passes hosts
+that match the trust requested in the `extra_specs' for the flavor. The key
+for this filter must be scope format as `trust:trusted_host', where `trust'
+is the scope of the key and `trusted_host' is the actual key value.
+The value of this pair (`trusted'/`untrusted') must match the
+integrity of a host (obtained from the Attestation service) before it is
+passed by the |TrustedFilter|.
 
 To use filters you specify next two settings:
 
-* `scheduler_available_filters` - points available filters.
-* `scheduler_default_filters` - points filters to be used by default from the
-  list of available ones.
+* `scheduler_available_filters` - Defines filter classes made available to the
+   scheduler.  This setting can be used multiple times.
+* `scheduler_default_filters` - Of the available filters, defines those that
+  the scheduler uses by default.
 
-Host Manager sets up these flags in `nova.conf` by default on the next values:
+The default values for these settings in nova.conf are:
 
 ::
 
     --scheduler_available_filters=nova.scheduler.filters.standard_filters
-    --scheduler_default_filters=RamFilter,ComputeFilter,AvailabilityZoneFilter
+    --scheduler_default_filters=RamFilter,ComputeFilter,AvailabilityZoneFilter,ComputeCapabilitiesFilter,ImagePropertiesFilter
 
-These two lines mean, that all the filters in the `nova.scheduler.filters`
-would be available, and the default ones would be |RamFilter|, |ComputeFilter|
-and |AvailabilityZoneFilter|. 
+With this configuration, all filters in `nova.scheduler.filters`
+would be available, and by default the |RamFilter|, |ComputeFilter|,
+|AvailabilityZoneFilter|, |ComputeCapabilitiesFilter|, and
+|ImagePropertiesFilter| would be used.
 
 If you want to create **your own filter** you just need to inherit from
 |BaseHostFilter| and implement one method:
@@ -135,19 +227,20 @@ If you want to create **your own filter** you just need to inherit from
 takes `host_state` (describes host) and `filter_properties` dictionary as the
 parameters.
 
-So in the end file nova.conf should contain lines like these:
+As an example, nova.conf could contain the following scheduler-related
+settings:
 
 ::
 
-    --scheduler_driver=nova.scheduler.distributed_scheduler.FilterScheduler
+    --scheduler_driver=nova.scheduler.FilterScheduler
     --scheduler_available_filters=nova.scheduler.filters.standard_filters
     --scheduler_available_filters=myfilter.MyFilter
     --scheduler_default_filters=RamFilter,ComputeFilter,MyFilter
 
-As you see, flag `scheduler_driver` is set up for the `FilterSchedule`,
-available filters can be specified more than once and description of the
-default filters should not contain full paths with class names you need, only
-class names.
+With these settings, nova will use the `FilterScheduler` for the scheduler
+driver.  The standard nova filters and MyFilter are available to the
+FilterScheduler.  The RamFilter, ComputeFilter, and MyFilter are used by
+default when no filters are specified in the request.
 
 Costs and weights
 -----------------
@@ -214,11 +307,17 @@ The line with this description looks the following way:
 **function_name_weight**.
 
 As for default cost function, it would be: `compute_fill_first_cost_fn_weight`,
-and by default it is 1.0.
+and by default it is -1.0.
 
-::
+In the end Filter Scheduler sorts selected hosts by their weight and provisions
+instances on them.
 
-    --compute_fill_first_cost_fn_weight=1.0
+    --compute_fill_first_cost_fn_weight=-1.0
+
+Negative function's weight means that the more free RAM Compute Node has, the
+better it is. Nova tries to spread instances as much as possible over the
+Compute Nodes. Positive weight here would mean that Nova would fill up a single
+Compute Node first.
 
 Filter Scheduler finds local list of acceptable hosts by repeated filtering and
 weighing. Each time it chooses a host, it virtually consumes resources on it,
@@ -235,11 +334,22 @@ P.S.: you can find more examples of using Filter Scheduler and standard filters
 in :mod:`nova.tests.scheduler`.
 
 .. |AllHostsFilter| replace:: :class:`AllHostsFilter <nova.scheduler.filters.all_hosts_filter.AllHostsFilter>`
+.. |ImagePropertiesFilter| replace:: :class:`ImagePropertiesFilter <nova.scheduler.filters.image_props_filter.ImagePropertiesFilter>`
 .. |AvailabilityZoneFilter| replace:: :class:`AvailabilityZoneFilter <nova.scheduler.filters.availability_zone_filter.AvailabilityZoneFilter>`
 .. |BaseHostFilter| replace:: :class:`BaseHostFilter <nova.scheduler.filters.BaseHostFilter>`
+.. |ComputeCapabilitiesFilter| replace:: :class:`ComputeCapabilitiesFilter <nova.scheduler.filters.compute_capabilities_filter.ComputeCapabilitiesFilter>`
 .. |ComputeFilter| replace:: :class:`ComputeFilter <nova.scheduler.filters.compute_filter.ComputeFilter>`
 .. |CoreFilter| replace:: :class:`CoreFilter <nova.scheduler.filters.core_filter.CoreFilter>`
 .. |IsolatedHostsFilter| replace:: :class:`IsolatedHostsFilter <nova.scheduler.filters.isolated_hosts_filter>`
 .. |JsonFilter| replace:: :class:`JsonFilter <nova.scheduler.filters.json_filter.JsonFilter>`
 .. |RamFilter| replace:: :class:`RamFilter <nova.scheduler.filters.ram_filter.RamFilter>`
 .. |SimpleCIDRAffinityFilter| replace:: :class:`SimpleCIDRAffinityFilter <nova.scheduler.filters.affinity_filter.SimpleCIDRAffinityFilter>`
+.. |GroupAntiAffinityFilter| replace:: :class:`GroupAntiAffinityFilter <nova.scheduler.filters.affinity_filter.GroupAntiAffinityFilter>`
+.. |DifferentHostFilter| replace:: :class:`DifferentHostFilter <nova.scheduler.filters.affinity_filter.DifferentHostFilter>`
+.. |SameHostFilter| replace:: :class:`SameHostFilter <nova.scheduler.filters.affinity_filter.SameHostFilter>`
+.. |RetryFilter| replace:: :class:`RetryFilter <nova.scheduler.filters.retry_filter.RetryFilter>`
+.. |TrustedFilter| replace:: :class:`TrustedFilter <nova.scheduler.filters.trusted_filter.TrustedFilter>`
+.. |TypeAffinityFilter| replace:: :class:`TypeAffinityFilter <nova.scheduler.filters.type_filter.TypeAffinityFilter>`
+.. |AggregateTypeAffinityFilter| replace:: :class:`AggregateTypeAffinityFilter <nova.scheduler.filters.type_filter.AggregateTypeAffinityFilter>`
+.. |AggregateInstanceExtraSpecsFilter| replace:: :class:`AggregateInstanceExtraSpecsFilter <nova.scheduler.filters.aggregate_instance_extra_specs.AggregateInstanceExtraSpecsFilter>`
+.. |AggregateMultiTenancyIsolation| replace:: :class:`AggregateMultiTenancyIsolation <nova.scheduler.filters.aggregate_multitenancy_isolation.AggregateMultiTenancyIsolation>`

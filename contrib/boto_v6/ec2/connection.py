@@ -3,11 +3,11 @@ Created on 2010/12/20
 
 @author: Nachi Ueno <ueno.nachi@lab.ntt.co.jp>
 '''
-import boto
 import base64
+import boto
 import boto.ec2
-from boto_v6.ec2.instance import  ReservationV6
-from boto.ec2.securitygroup import SecurityGroup
+import boto.ec2.securitygroup as securitygroup
+from boto_v6.ec2.instance import ReservationV6
 
 
 class EC2ConnectionV6(boto.ec2.EC2Connection):
@@ -114,7 +114,7 @@ class EC2ConnectionV6(boto.ec2.EC2Connection):
         if security_groups:
             l = []
             for group in security_groups:
-                if isinstance(group, SecurityGroup):
+                if isinstance(group, securitygroup.SecurityGroup):
                     l.append(group.name)
                 else:
                     l.append(group)

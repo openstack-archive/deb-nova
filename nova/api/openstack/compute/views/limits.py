@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010-2011 OpenStack LLC.
+# Copyright 2010-2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,7 +17,7 @@
 
 import datetime
 
-from nova import utils
+from nova.openstack.common import timeutils
 
 
 class ViewBuilder(object):
@@ -47,9 +47,13 @@ class ViewBuilder(object):
             "ram": ["maxTotalRAMSize"],
             "instances": ["maxTotalInstances"],
             "cores": ["maxTotalCores"],
+            "key_pairs": ["maxTotalKeypairs"],
+            "floating_ips": ["maxTotalFloatingIps"],
             "metadata_items": ["maxServerMeta", "maxImageMeta"],
             "injected_files": ["maxPersonality"],
             "injected_file_content_bytes": ["maxPersonalitySize"],
+            "security_groups": ["maxSecurityGroups"],
+            "security_group_rules": ["maxSecurityGroupRules"],
         }
         limits = {}
         for name, value in absolute_limits.iteritems():
@@ -92,5 +96,5 @@ class ViewBuilder(object):
             "value": rate_limit["value"],
             "remaining": int(rate_limit["remaining"]),
             "unit": rate_limit["unit"],
-            "next-available": utils.isotime(at=next_avail),
+            "next-available": timeutils.isotime(at=next_avail),
         }

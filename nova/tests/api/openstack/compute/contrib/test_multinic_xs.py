@@ -1,4 +1,4 @@
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,11 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
 import webob
 
 from nova import compute
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -53,6 +52,11 @@ class FixedIpTest(test.TestCase):
         self.stubs.Set(compute.api.API, "remove_fixed_ip",
                        compute_api_remove_fixed_ip)
         self.stubs.Set(compute.api.API, 'get', compute_api_get)
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Multinic'])
+        self.app = fakes.wsgi_app(init_only=('servers',))
 
     def test_add_fixed_ip(self):
         global last_add_fixed_ip
@@ -61,10 +65,10 @@ class FixedIpTest(test.TestCase):
         body = dict(addFixedIp=dict(networkId='test_net'))
         req = webob.Request.blank('/v2/fake/servers/%s/action' % UUID)
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
 
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 202)
         self.assertEqual(last_add_fixed_ip, (UUID, 'test_net'))
 
@@ -75,10 +79,10 @@ class FixedIpTest(test.TestCase):
         body = dict(addFixedIp=dict())
         req = webob.Request.blank('/v2/fake/servers/%s/action' % UUID)
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
 
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 422)
         self.assertEqual(last_add_fixed_ip, (None, None))
 
@@ -89,10 +93,10 @@ class FixedIpTest(test.TestCase):
         body = dict(removeFixedIp=dict(address='10.10.10.1'))
         req = webob.Request.blank('/v2/fake/servers/%s/action' % UUID)
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
 
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 202)
         self.assertEqual(last_remove_fixed_ip, (UUID, '10.10.10.1'))
 
@@ -103,9 +107,9 @@ class FixedIpTest(test.TestCase):
         body = dict(removeFixedIp=dict())
         req = webob.Request.blank('/v2/fake/servers/%s/action' % UUID)
         req.method = 'POST'
-        req.body = json.dumps(body)
+        req.body = jsonutils.dumps(body)
         req.headers['content-type'] = 'application/json'
 
-        resp = req.get_response(fakes.wsgi_app())
+        resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 422)
         self.assertEqual(last_remove_fixed_ip, (None, None))

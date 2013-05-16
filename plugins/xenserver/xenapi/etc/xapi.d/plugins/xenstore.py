@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # Copyright (c) 2010 Citrix Systems, Inc.
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -26,6 +26,7 @@ try:
     import json
 except ImportError:
     import simplejson as json
+
 import logging
 import os
 import subprocess
@@ -37,7 +38,7 @@ pluginlib.configure_logging("xenstore")
 
 
 class XenstoreError(pluginlib.PluginError):
-    """Errors that occur when calling xenstore-* through subprocesses"""
+    """Errors that occur when calling xenstore-* through subprocesses."""
 
     def __init__(self, cmd, return_code, stderr, stdout):
         msg = "cmd: %s; returncode: %d; stderr: %s; stdout: %s"

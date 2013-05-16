@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2010 OpenStack, LLC.
+# Copyright (c) 2010 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,8 +18,7 @@
 
 """Module for VNC Proxying."""
 
-from nova import flags
-from nova.openstack.common import cfg
+from oslo.config import cfg
 
 
 vnc_opts = [
@@ -33,7 +32,7 @@ vnc_opts = [
                     '"http://127.0.0.1:6081/console"'),
     cfg.StrOpt('vncserver_listen',
                default='127.0.0.1',
-               help='Ip address on which instance vncserversshould listen'),
+               help='IP address on which instance vncservers should listen'),
     cfg.StrOpt('vncserver_proxyclient_address',
                default='127.0.0.1',
                help='the address to which proxy clients '
@@ -46,5 +45,5 @@ vnc_opts = [
                help='keymap for vnc'),
     ]
 
-FLAGS = flags.FLAGS
-FLAGS.register_opts(vnc_opts)
+CONF = cfg.CONF
+CONF.register_opts(vnc_opts)

@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,15 +18,16 @@
 import datetime
 import urlparse
 
+from webob import exc
+
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import api
+from nova.compute import instance_types
 from nova import exception
-from nova import flags
+from nova.openstack.common import timeutils
 
-
-FLAGS = flags.FLAGS
 authorize_show = extensions.extension_authorizer('compute',
                                                  'simple_tenant_usage:show')
 authorize_list = extensions.extension_authorizer('compute',
@@ -43,9 +44,9 @@ def make_usage(elem):
     server_usages = xmlutil.SubTemplateElement(elem, 'server_usages')
     server_usage = xmlutil.SubTemplateElement(server_usages, 'server_usage',
                                               selector='server_usages')
-    for subelem_tag in ('name', 'hours', 'memory_mb', 'local_gb', 'vcpus',
-                        'tenant_id', 'flavor', 'started_at', 'ended_at',
-                        'state', 'uptime'):
+    for subelem_tag in ('instance_id', 'name', 'hours', 'memory_mb',
+                        'local_gb', 'vcpus', 'tenant_id', 'flavor',
+                        'started_at', 'ended_at', 'state', 'uptime'):
         subelem = xmlutil.SubTemplateElement(server_usage, subelem_tag)
         subelem.text = subelem_tag
 
@@ -72,13 +73,13 @@ class SimpleTenantUsageController(object):
         terminated_at = instance['terminated_at']
         if terminated_at is not None:
             if not isinstance(terminated_at, datetime.datetime):
-                terminated_at = datetime.datetime.strptime(terminated_at,
-                                                  "%Y-%m-%d %H:%M:%S.%f")
+                terminated_at = timeutils.parse_strtime(terminated_at,
+                                                        "%Y-%m-%d %H:%M:%S.%f")
 
         if launched_at is not None:
             if not isinstance(launched_at, datetime.datetime):
-                launched_at = datetime.datetime.strptime(launched_at,
-                                                "%Y-%m-%d %H:%M:%S.%f")
+                launched_at = timeutils.parse_strtime(launched_at,
+                                                      "%Y-%m-%d %H:%M:%S.%f")
 
         if terminated_at and terminated_at < period_start:
             return 0
@@ -103,6 +104,30 @@ class SimpleTenantUsageController(object):
             # instance hasn't launched, so no charge
             return 0
 
+    def _get_flavor(self, context, compute_api, instance, flavors_cache):
+        """Get flavor information from the instance's system_metadata,
+        allowing a fallback to lookup by-id for deleted instances only"""
+        try:
+            return instance_types.extract_instance_type(instance)
+        except KeyError:
+            if not instance['deleted']:
+                # Only support the fallback mechanism for deleted instances
+                # that would have been skipped by migration #153
+                raise
+
+        flavor_type = instance['instance_type_id']
+        if flavor_type in flavors_cache:
+            return flavors_cache[flavor_type]
+
+        try:
+            it_ref = compute_api.get_instance_type(context, flavor_type)
+            flavors_cache[flavor_type] = it_ref
+        except exception.InstanceTypeNotFound:
+            # can't bill if there is no instance type
+            it_ref = None
+
+        return it_ref
+
     def _tenant_usages_for_period(self, context, period_start,
                                   period_stop, tenant_id=None, detailed=True):
 
@@ -119,19 +144,11 @@ class SimpleTenantUsageController(object):
             info['hours'] = self._hours_for(instance,
                                             period_start,
                                             period_stop)
-            flavor_type = instance['instance_type_id']
+            flavor = self._get_flavor(context, compute_api, instance, flavors)
+            if not flavor:
+                continue
 
-            if not flavors.get(flavor_type):
-                try:
-                    it_ref = compute_api.get_instance_type(context,
-                                                           flavor_type)
-                    flavors[flavor_type] = it_ref
-                except exception.InstanceTypeNotFound:
-                    # can't bill if there is no instance type
-                    continue
-
-            flavor = flavors[flavor_type]
-
+            info['instance_id'] = instance['uuid']
             info['name'] = instance['display_name']
 
             info['memory_mb'] = flavor['memory_mb']
@@ -151,7 +168,7 @@ class SimpleTenantUsageController(object):
             else:
                 info['state'] = instance['vm_state']
 
-            now = datetime.datetime.utcnow()
+            now = timeutils.utcnow()
 
             if info['state'] == 'terminated':
                 delta = info['ended_at'] - info['started_at']
@@ -160,7 +177,7 @@ class SimpleTenantUsageController(object):
 
             info['uptime'] = delta.days * 24 * 3600 + delta.seconds
 
-            if not info['tenant_id'] in rval:
+            if info['tenant_id'] not in rval:
                 summary = {}
                 summary['tenant_id'] = info['tenant_id']
                 if detailed:
@@ -186,37 +203,44 @@ class SimpleTenantUsageController(object):
         return rval.values()
 
     def _parse_datetime(self, dtstr):
-        if isinstance(dtstr, datetime.datetime):
+        if not dtstr:
+            return timeutils.utcnow()
+        elif isinstance(dtstr, datetime.datetime):
             return dtstr
         try:
-            return datetime.datetime.strptime(dtstr, "%Y-%m-%dT%H:%M:%S")
+            return timeutils.parse_strtime(dtstr, "%Y-%m-%dT%H:%M:%S")
         except Exception:
             try:
-                return datetime.datetime.strptime(dtstr,
-                        "%Y-%m-%dT%H:%M:%S.%f")
+                return timeutils.parse_strtime(dtstr, "%Y-%m-%dT%H:%M:%S.%f")
             except Exception:
-                return datetime.datetime.strptime(dtstr,
-                        "%Y-%m-%d %H:%M:%S.%f")
+                return timeutils.parse_strtime(dtstr, "%Y-%m-%d %H:%M:%S.%f")
 
     def _get_datetime_range(self, req):
         qs = req.environ.get('QUERY_STRING', '')
         env = urlparse.parse_qs(qs)
-        period_start = self._parse_datetime(env.get('start',
-                [datetime.datetime.utcnow().isoformat()])[0])
-        period_stop = self._parse_datetime(env.get('end',
-                [datetime.datetime.utcnow().isoformat()])[0])
+        # NOTE(lzyeval): env.get() always returns a list
+        period_start = self._parse_datetime(env.get('start', [None])[0])
+        period_stop = self._parse_datetime(env.get('end', [None])[0])
 
-        detailed = bool(env.get('detailed', False))
+        if not period_start < period_stop:
+            msg = _("Invalid start time. The start time cannot occur after "
+                    "the end time.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
+        detailed = env.get('detailed', ['0'])[0] == '1'
         return (period_start, period_stop, detailed)
 
     @wsgi.serializers(xml=SimpleTenantUsagesTemplate)
     def index(self, req):
-        """Retrive tenant_usage for all tenants"""
+        """Retrieve tenant_usage for all tenants."""
         context = req.environ['nova.context']
 
         authorize_list(context)
 
         (period_start, period_stop, detailed) = self._get_datetime_range(req)
+        now = timeutils.utcnow()
+        if period_stop > now:
+            period_stop = now
         usages = self._tenant_usages_for_period(context,
                                                 period_start,
                                                 period_stop,
@@ -225,13 +249,16 @@ class SimpleTenantUsageController(object):
 
     @wsgi.serializers(xml=SimpleTenantUsageTemplate)
     def show(self, req, id):
-        """Retrive tenant_usage for a specified tenant"""
+        """Retrieve tenant_usage for a specified tenant."""
         tenant_id = id
         context = req.environ['nova.context']
 
         authorize_show(context, {'project_id': tenant_id})
 
         (period_start, period_stop, ignore) = self._get_datetime_range(req)
+        now = timeutils.utcnow()
+        if period_stop > now:
+            period_stop = now
         usage = self._tenant_usages_for_period(context,
                                                period_start,
                                                period_stop,
@@ -245,7 +272,7 @@ class SimpleTenantUsageController(object):
 
 
 class Simple_tenant_usage(extensions.ExtensionDescriptor):
-    """Simple tenant usage extension"""
+    """Simple tenant usage extension."""
 
     name = "SimpleTenantUsage"
     alias = "os-simple-tenant-usage"

@@ -25,6 +25,8 @@ import gettext
 import os
 import sys
 
+from oslo.config import cfg
+
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
 possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
@@ -35,31 +37,31 @@ if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
 
 gettext.install('nova', unicode=1)
 
+from nova import config
 from nova import context
 from nova import db
-from nova import flags
-from nova import log as logging
-from nova import rpc
-from nova import utils
-from nova.network import linux_net
+from nova.network import rpcapi as network_rpcapi
+from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import rpc
 
-FLAGS = flags.FLAGS
-
+CONF = cfg.CONF
+CONF.import_opt('host', 'nova.netconf')
+CONF.import_opt('network_manager', 'nova.service')
 LOG = logging.getLogger('nova.dhcpbridge')
 
 
 def add_lease(mac, ip_address):
     """Set the IP that was assigned by the DHCP server."""
-    if FLAGS.fake_rabbit:
+    if CONF.fake_rabbit:
         LOG.debug(_("leasing ip"))
-        network_manager = utils.import_object(FLAGS.network_manager)
+        network_manager = importutils.import_object(CONF.network_manager)
         network_manager.lease_fixed_ip(context.get_admin_context(),
                                        ip_address)
     else:
-        rpc.cast(context.get_admin_context(),
-                 "%s.%s" % (FLAGS.network_topic, FLAGS.host),
-                 {"method": "lease_fixed_ip",
-                  "args": {"address": ip_address}})
+        api = network_rpcapi.NetworkAPI()
+        api.lease_fixed_ip(context.get_admin_context(), ip_address, CONF.host)
 
 
 def old_lease(mac, ip_address):
@@ -72,46 +74,69 @@ def old_lease(mac, ip_address):
 
 def del_lease(mac, ip_address):
     """Called when a lease expires."""
-    if FLAGS.fake_rabbit:
+    if CONF.fake_rabbit:
         LOG.debug(_("releasing ip"))
-        network_manager = utils.import_object(FLAGS.network_manager)
+        network_manager = importutils.import_object(CONF.network_manager)
         network_manager.release_fixed_ip(context.get_admin_context(),
                                          ip_address)
     else:
-        rpc.cast(context.get_admin_context(),
-                 "%s.%s" % (FLAGS.network_topic, FLAGS.host),
-                 {"method": "release_fixed_ip",
-                  "args": {"address": ip_address}})
+        api = network_rpcapi.NetworkAPI()
+        api.release_fixed_ip(context.get_admin_context(), ip_address,
+                             CONF.host)
 
 
 def init_leases(network_id):
     """Get the list of hosts for a network."""
     ctxt = context.get_admin_context()
     network_ref = db.network_get(ctxt, network_id)
-    network_manager = utils.import_object(FLAGS.network_manager)
+    network_manager = importutils.import_object(CONF.network_manager)
     return network_manager.get_dhcp_leases(ctxt, network_ref)
 
 
+def add_action_parsers(subparsers):
+    parser = subparsers.add_parser('init')
+
+    # NOTE(cfb): dnsmasq always passes mac, and ip. hostname
+    #            is passed if known. We don't care about
+    #            hostname, but argparse will complain if we
+    #            do not accept it.
+    for action in ['add', 'del', 'old']:
+        parser = subparsers.add_parser(action)
+        parser.add_argument('mac')
+        parser.add_argument('ip')
+        parser.add_argument('hostname', nargs='?', default='')
+        parser.set_defaults(func=globals()[action + '_lease'])
+
+
+CONF.register_cli_opt(
+    cfg.SubCommandOpt('action',
+                      title='Action options',
+                      help='Available dhcpbridge options',
+                      handler=add_action_parsers))
+
+
 def main():
-    """Parse environment and arguments and call the approproate action."""
-    flagfile = os.environ.get('FLAGFILE', FLAGS.dhcpbridge_flagfile)
-    utils.default_flagfile(flagfile)
-    argv = FLAGS(sys.argv)
-    logging.setup()
+    """Parse environment and arguments and call the appropriate action."""
+    try:
+        config_file = os.environ['CONFIG_FILE']
+    except KeyError:
+        config_file = os.environ['FLAGFILE']
+
+    config.parse_args(sys.argv,
+        default_config_files=jsonutils.loads(config_file))
+
+    logging.setup("nova")
 
     if int(os.environ.get('TESTING', '0')):
-        from nova.tests import fake_flags
+        from nova.tests import conf_fixture
 
-    action = argv[1]
-    if action in ['add', 'del', 'old']:
-        mac = argv[2]
-        ip = argv[3]
-        msg = _("Called '%(action)s' for mac '%(mac)s' with ip '%(ip)s'") % \
-                    {"action": action,
-                     "mac": mac,
-                     "ip": ip}
+    if CONF.action.name in ['add', 'del', 'old']:
+        msg = (_("Called '%(action)s' for mac '%(mac)s' with ip '%(ip)s'") %
+               {"action": CONF.action.name,
+                "mac": CONF.action.mac,
+                "ip": CONF.action.ip})
         LOG.debug(msg)
-        globals()[action + '_lease'](mac, ip)
+        CONF.action.func(CONF.action.mac, CONF.action.ip)
     else:
         try:
             network_id = int(os.environ.get('NETWORK_ID'))

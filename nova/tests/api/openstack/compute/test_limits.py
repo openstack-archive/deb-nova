@@ -1,4 +1,4 @@
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,21 +18,20 @@ Tests dealing with HTTP rate-limiting.
 """
 
 import httplib
-import json
 import StringIO
-import unittest
 from xml.dom import minidom
 
 from lxml import etree
-import stubout
 import webob
 
 from nova.api.openstack.compute import limits
 from nova.api.openstack.compute import views
-from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 import nova.context
+from nova.openstack.common import jsonutils
 from nova import test
+from nova.tests.api.openstack import fakes
+from nova.tests import matchers
 
 
 TEST_LIMITS = [
@@ -57,10 +56,11 @@ class BaseLimitTestSuite(test.TestCase):
         self.stubs.Set(limits.Limit, "_get_time", self._get_time)
         self.absolute_limits = {}
 
-        def stub_get_project_quotas(context, project_id):
-            return self.absolute_limits
+        def stub_get_project_quotas(context, project_id, usages=True):
+            return dict((k, dict(limit=v))
+                        for k, v in self.absolute_limits.items())
 
-        self.stubs.Set(nova.quota, "get_project_quotas",
+        self.stubs.Set(nova.quota.QUOTAS, "get_project_quotas",
                        stub_get_project_quotas)
 
     def _get_time(self):
@@ -77,6 +77,7 @@ class LimitsControllerTest(BaseLimitTestSuite):
         """Run before each test."""
         super(LimitsControllerTest, self).setUp()
         self.controller = limits.create_resource()
+        self.ctrler = limits.LimitsController()
 
     def _get_index_request(self, accept_header="application/json"):
         """Helper to set routing arguments."""
@@ -102,7 +103,7 @@ class LimitsControllerTest(BaseLimitTestSuite):
         return request
 
     def test_empty_index_json(self):
-        """Test getting empty limit details in JSON."""
+        # Test getting empty limit details in JSON.
         request = self._get_index_request()
         response = request.get_response(self.controller)
         expected = {
@@ -111,17 +112,21 @@ class LimitsControllerTest(BaseLimitTestSuite):
                 "absolute": {},
             },
         }
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body)
 
     def test_index_json(self):
-        """Test getting limit details in JSON."""
+        # Test getting limit details in JSON.
         request = self._get_index_request()
         request = self._populate_limits(request)
         self.absolute_limits = {
             'ram': 512,
             'instances': 5,
             'cores': 21,
+            'key_pairs': 10,
+            'floating_ips': 10,
+            'security_groups': 10,
+            'security_group_rules': 20,
         }
         response = request.get_response(self.controller)
         expected = {
@@ -166,10 +171,14 @@ class LimitsControllerTest(BaseLimitTestSuite):
                     "maxTotalRAMSize": 512,
                     "maxTotalInstances": 5,
                     "maxTotalCores": 21,
+                    "maxTotalKeypairs": 10,
+                    "maxTotalFloatingIps": 10,
+                    "maxSecurityGroups": 10,
+                    "maxSecurityGroupRules": 20,
                     },
             },
         }
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body)
 
     def _populate_limits_diff_regex(self, request):
@@ -182,7 +191,7 @@ class LimitsControllerTest(BaseLimitTestSuite):
         return request
 
     def test_index_diff_regex(self):
-        """Test getting limit details in JSON."""
+        # Test getting limit details in JSON.
         request = self._get_index_request()
         request = self._populate_limits_diff_regex(request)
         response = request.get_response(self.controller)
@@ -220,13 +229,13 @@ class LimitsControllerTest(BaseLimitTestSuite):
                 "absolute": {},
             },
         }
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body)
 
     def _test_index_absolute_limits_json(self, expected):
         request = self._get_index_request()
         response = request.get_response(self.controller)
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         self.assertEqual(expected, body['limits']['absolute'])
 
     def test_index_ignores_extra_absolute_limits_json(self):
@@ -266,6 +275,42 @@ class LimitsControllerTest(BaseLimitTestSuite):
         }
         self._test_index_absolute_limits_json(expected)
 
+    def test_index_absolute_security_groups(self):
+        self.absolute_limits = {
+            'security_groups': 8,
+            'security_group_rules': 16,
+        }
+        expected = {
+            'maxSecurityGroups': 8,
+            'maxSecurityGroupRules': 16,
+        }
+        self._test_index_absolute_limits_json(expected)
+
+    def test_limit_create(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/limits')
+        self.assertRaises(webob.exc.HTTPNotImplemented, self.ctrler.create,
+                          req, {})
+
+    def test_limit_delete(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/limits')
+        self.assertRaises(webob.exc.HTTPNotImplemented, self.ctrler.delete,
+                          req, 1)
+
+    def test_limit_detail(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/limits')
+        self.assertRaises(webob.exc.HTTPNotImplemented, self.ctrler.detail,
+                          req)
+
+    def test_limit_show(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/limits')
+        self.assertRaises(webob.exc.HTTPNotImplemented, self.ctrler.show,
+                          req, 1)
+
+    def test_limit_update(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/limits')
+        self.assertRaises(webob.exc.HTTPNotImplemented, self.ctrler.update,
+                          req, 1, {})
+
 
 class TestLimiter(limits.Limiter):
     pass
@@ -290,17 +335,17 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
                                                  self.__class__.__module__)
 
     def test_limit_class(self):
-        """Test that middleware selected correct limiter class."""
+        # Test that middleware selected correct limiter class.
         assert isinstance(self.app._limiter, TestLimiter)
 
     def test_good_request(self):
-        """Test successful GET request through middleware."""
+        # Test successful GET request through middleware.
         request = webob.Request.blank("/")
         response = request.get_response(self.app)
         self.assertEqual(200, response.status_int)
 
     def test_limited_request_json(self):
-        """Test a rate-limited (413) GET request through middleware."""
+        # Test a rate-limited (413) GET request through middleware.
         request = webob.Request.blank("/")
         response = request.get_response(self.app)
         self.assertEqual(200, response.status_int)
@@ -313,13 +358,17 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
         retry_after = int(response.headers['Retry-After'])
         self.assertAlmostEqual(retry_after, 60, 1)
 
-        body = json.loads(response.body)
+        body = jsonutils.loads(response.body)
         expected = "Only 1 GET request(s) can be made to * every minute."
-        value = body["overLimitFault"]["details"].strip()
+        value = body["overLimit"]["details"].strip()
         self.assertEqual(value, expected)
 
+        self.assertTrue("retryAfter" in body["overLimit"])
+        retryAfter = body["overLimit"]["retryAfter"]
+        self.assertEqual(retryAfter, "60")
+
     def test_limited_request_xml(self):
-        """Test a rate-limited (413) response as XML"""
+        # Test a rate-limited (413) response as XML.
         request = webob.Request.blank("/")
         response = request.get_response(self.app)
         self.assertEqual(200, response.status_int)
@@ -331,6 +380,10 @@ class LimitMiddlewareTest(BaseLimitTestSuite):
 
         root = minidom.parseString(response.body).childNodes[0]
         expected = "Only 1 GET request(s) can be made to * every minute."
+
+        self.assertNotEqual(root.attributes.getNamedItem("retryAfter"), None)
+        retryAfter = root.attributes.getNamedItem("retryAfter").value
+        self.assertEqual(retryAfter, "60")
 
         details = root.getElementsByTagName("details")
         self.assertEqual(details.length, 1)
@@ -345,7 +398,7 @@ class LimitTest(BaseLimitTestSuite):
     """
 
     def test_GET_no_delay(self):
-        """Test a limit handles 1 GET per second."""
+        # Test a limit handles 1 GET per second.
         limit = limits.Limit("GET", "*", ".*", 1, 1)
         delay = limit("GET", "/anything")
         self.assertEqual(None, delay)
@@ -353,7 +406,7 @@ class LimitTest(BaseLimitTestSuite):
         self.assertEqual(0, limit.last_request)
 
     def test_GET_delay(self):
-        """Test two calls to 1 GET per second limit."""
+        # Test two calls to 1 GET per second limit.
         limit = limits.Limit("GET", "*", ".*", 1, 1)
         delay = limit("GET", "/anything")
         self.assertEqual(None, delay)
@@ -378,32 +431,32 @@ class ParseLimitsTest(BaseLimitTestSuite):
     """
 
     def test_invalid(self):
-        """Test that parse_limits() handles invalid input correctly."""
+        # Test that parse_limits() handles invalid input correctly.
         self.assertRaises(ValueError, limits.Limiter.parse_limits,
                           ';;;;;')
 
     def test_bad_rule(self):
-        """Test that parse_limits() handles bad rules correctly."""
+        # Test that parse_limits() handles bad rules correctly.
         self.assertRaises(ValueError, limits.Limiter.parse_limits,
                           'GET, *, .*, 20, minute')
 
     def test_missing_arg(self):
-        """Test that parse_limits() handles missing args correctly."""
+        # Test that parse_limits() handles missing args correctly.
         self.assertRaises(ValueError, limits.Limiter.parse_limits,
                           '(GET, *, .*, 20)')
 
     def test_bad_value(self):
-        """Test that parse_limits() handles bad values correctly."""
+        # Test that parse_limits() handles bad values correctly.
         self.assertRaises(ValueError, limits.Limiter.parse_limits,
                           '(GET, *, .*, foo, minute)')
 
     def test_bad_unit(self):
-        """Test that parse_limits() handles bad units correctly."""
+        # Test that parse_limits() handles bad units correctly.
         self.assertRaises(ValueError, limits.Limiter.parse_limits,
                           '(GET, *, .*, 20, lightyears)')
 
     def test_multiple_rules(self):
-        """Test that parse_limits() handles multiple rules correctly."""
+        # Test that parse_limits() handles multiple rules correctly.
         try:
             l = limits.Limiter.parse_limits('(get, *, .*, 20, minute);'
                                             '(PUT, /foo*, /foo.*, 10, hour);'
@@ -467,9 +520,7 @@ class LimiterTest(BaseLimitTestSuite):
         self.assertEqual(delay, (None, None))
 
     def test_no_delay_PUT(self):
-        """
-        Simple test to ensure no delay on a single call for a known limit.
-        """
+        # Simple test to ensure no delay on a single call for a known limit.
         delay = self.limiter.check_for_delay("PUT", "/anything")
         self.assertEqual(delay, (None, None))
 
@@ -497,9 +548,7 @@ class LimiterTest(BaseLimitTestSuite):
         self.failUnlessAlmostEqual(expected, results, 8)
 
     def test_delay_GET(self):
-        """
-        Ensure the 11th GET will result in NO delay.
-        """
+        # Ensure the 11th GET will result in NO delay.
         expected = [None] * 11
         results = list(self._check(11, "GET", "/anything"))
 
@@ -538,9 +587,7 @@ class LimiterTest(BaseLimitTestSuite):
         self.assertEqual(expected, results)
 
     def test_multiple_delays(self):
-        """
-        Ensure multiple requests still get a delay.
-        """
+        # Ensure multiple requests still get a delay.
         expected = [None] * 10 + [6.0] * 10
         results = list(self._check(20, "PUT", "/anything"))
         self.assertEqual(expected, results)
@@ -552,15 +599,11 @@ class LimiterTest(BaseLimitTestSuite):
         self.assertEqual(expected, results)
 
     def test_user_limit(self):
-        """
-        Test user-specific limits.
-        """
+        # Test user-specific limits.
         self.assertEqual(self.limiter.levels['user3'], [])
 
     def test_multiple_users(self):
-        """
-        Tests involving multiple users.
-        """
+        # Tests involving multiple users.
         # User1
         expected = [None] * 10 + [6.0] * 10
         results = list(self._check(20, "PUT", "/anything", "user1"))
@@ -602,8 +645,8 @@ class WsgiLimiterTest(BaseLimitTestSuite):
         self.app = limits.WsgiLimiter(TEST_LIMITS)
 
     def _request_data(self, verb, path):
-        """Get data decribing a limit request verb/path."""
-        return json.dumps({"verb": verb, "path": path})
+        """Get data describing a limit request verb/path."""
+        return jsonutils.dumps({"verb": verb, "path": path})
 
     def _request(self, verb, url, username=None):
         """Make sure that POSTing to the given url causes the given username
@@ -626,7 +669,7 @@ class WsgiLimiterTest(BaseLimitTestSuite):
         self.assertEqual(response.status_int, 204)
 
     def test_invalid_methods(self):
-        """Only POSTs should work."""
+        # Only POSTs should work.
         requests = []
         for method in ["GET", "PUT", "DELETE", "HEAD", "OPTIONS"]:
             request = webob.Request.blank("/", method=method)
@@ -729,6 +772,9 @@ def wire_HTTPConnection_to_WSGI(host, app):
 
     This method may be called multiple times to map different hosts to
     different apps.
+
+    This method returns the original HTTPConnection object, so that the caller
+    can restore the default HTTPConnection interface (for all hosts).
     """
     class HTTPConnectionDecorator(object):
         """Wraps the real HTTPConnection class so that when you instantiate
@@ -743,7 +789,9 @@ def wire_HTTPConnection_to_WSGI(host, app):
             else:
                 return self.wrapped(connection_host, *args, **kwargs)
 
+    oldHTTPConnection = httplib.HTTPConnection
     httplib.HTTPConnection = HTTPConnectionDecorator(httplib.HTTPConnection)
+    return oldHTTPConnection
 
 
 class WsgiLimiterProxyTest(BaseLimitTestSuite):
@@ -758,16 +806,17 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
         """
         super(WsgiLimiterProxyTest, self).setUp()
         self.app = limits.WsgiLimiter(TEST_LIMITS)
-        wire_HTTPConnection_to_WSGI("169.254.0.1:80", self.app)
+        self.oldHTTPConnection = (
+            wire_HTTPConnection_to_WSGI("169.254.0.1:80", self.app))
         self.proxy = limits.WsgiLimiterProxy("169.254.0.1:80")
 
     def test_200(self):
-        """Successful request test."""
+        # Successful request test.
         delay = self.proxy.check_for_delay("GET", "/anything")
         self.assertEqual(delay, (None, None))
 
     def test_403(self):
-        """Forbidden request test."""
+        # Forbidden request test.
         delay = self.proxy.check_for_delay("GET", "/delayed")
         self.assertEqual(delay, (None, None))
 
@@ -778,6 +827,11 @@ class WsgiLimiterProxyTest(BaseLimitTestSuite):
                     "made to /delayed every minute.")
 
         self.assertEqual((delay, error), expected)
+
+    def tearDown(self):
+        # restore original HTTPConnection object
+        httplib.HTTPConnection = self.oldHTTPConnection
+        super(WsgiLimiterProxyTest, self).tearDown()
 
 
 class LimitsViewBuilderTest(test.TestCase):
@@ -826,7 +880,7 @@ class LimitsViewBuilderTest(test.TestCase):
 
         output = self.view_builder.build(self.rate_limits,
                                          self.absolute_limits)
-        self.assertDictMatch(output, expected_limits)
+        self.assertThat(output, matchers.DictMatches(expected_limits))
 
     def test_build_limits_empty_limits(self):
         expected_limits = {"limits": {"rate": [],
@@ -835,7 +889,7 @@ class LimitsViewBuilderTest(test.TestCase):
         abs_limits = {}
         rate_limits = []
         output = self.view_builder.build(rate_limits, abs_limits)
-        self.assertDictMatch(output, expected_limits)
+        self.assertThat(output, matchers.DictMatches(expected_limits))
 
 
 class LimitsXMLSerializationTest(test.TestCase):
@@ -847,7 +901,6 @@ class LimitsXMLSerializationTest(test.TestCase):
                    "absolute": {}}}
 
         output = serializer.serialize(fixture)
-        print output
         has_dec = output.startswith("<?xml version='1.0' encoding='UTF-8'?>")
         self.assertTrue(has_dec)
 
@@ -878,7 +931,6 @@ class LimitsXMLSerializationTest(test.TestCase):
                                  "maxPersonalitySize": 10240}}}
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'limits')
 
@@ -913,7 +965,6 @@ class LimitsXMLSerializationTest(test.TestCase):
                    "absolute": {}}}
 
         output = serializer.serialize(fixture)
-        print output
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'limits')
 

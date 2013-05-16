@@ -16,9 +16,47 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import oslo.config.cfg
+
 # Importing full names to not pollute the namespace and cause possible
 # collisions with use of 'from nova.compute import <foo>' elsewhere.
-import nova.flags
-import nova.utils
+import nova.openstack.common.importutils
 
-API = nova.utils.import_class(nova.flags.FLAGS.compute_api_class)
+_compute_opts = [
+    oslo.config.cfg.StrOpt('compute_api_class',
+                           default='nova.compute.api.API',
+                           help='The full class name of the '
+                                'compute API class to use'),
+]
+
+oslo.config.cfg.CONF.register_opts(_compute_opts)
+
+
+def API(*args, **kwargs):
+    importutils = nova.openstack.common.importutils
+    class_name = oslo.config.cfg.CONF.compute_api_class
+    return importutils.import_object(class_name, *args, **kwargs)
+
+
+def HostAPI(*args, **kwargs):
+    """
+    Returns the 'HostAPI' class from the same module as the configured compute
+    api
+    """
+    importutils = nova.openstack.common.importutils
+    compute_api_class_name = oslo.config.cfg.CONF.compute_api_class
+    compute_api_class = importutils.import_class(compute_api_class_name)
+    class_name = compute_api_class.__module__ + ".HostAPI"
+    return importutils.import_object(class_name, *args, **kwargs)
+
+
+def InstanceActionAPI(*args, **kwargs):
+    """
+    Returns the 'InstanceActionAPI' class from the same module as the
+    configured compute api.
+    """
+    importutils = nova.openstack.common.importutils
+    compute_api_class_name = oslo.config.cfg.CONF.compute_api_class
+    compute_api_class = importutils.import_class(compute_api_class_name)
+    class_name = compute_api_class.__module__ + ".InstanceActionAPI"
+    return importutils.import_object(class_name, *args, **kwargs)

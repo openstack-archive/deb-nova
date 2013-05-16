@@ -1,4 +1,4 @@
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,21 +13,15 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
-
-import webob
 from lxml import etree
+import webob
 
 from nova.api.openstack.compute.contrib import extended_server_attributes
 from nova import compute
 from nova import exception
-from nova import flags
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
-
-
-FLAGS = flags.FLAGS
-
 
 UUID1 = '00000000-0000-0000-0000-000000000001'
 UUID2 = '00000000-0000-0000-0000-000000000002'
@@ -35,13 +29,14 @@ UUID3 = '00000000-0000-0000-0000-000000000003'
 
 
 def fake_compute_get(*args, **kwargs):
-    return fakes.stub_instance(1, uuid=UUID3, host="host-fake")
+    return fakes.stub_instance(1, uuid=UUID3, host="host-fake",
+                               node="node-fake")
 
 
 def fake_compute_get_all(*args, **kwargs):
     return [
-        fakes.stub_instance(1, uuid=UUID1, host="host-1"),
-        fakes.stub_instance(2, uuid=UUID2, host="host-2")
+        fakes.stub_instance(1, uuid=UUID1, host="host-1", node="node-1"),
+        fakes.stub_instance(2, uuid=UUID2, host="host-2", node="node-2")
     ]
 
 
@@ -54,23 +49,29 @@ class ExtendedServerAttributesTest(test.TestCase):
         fakes.stub_out_nw_api(self.stubs)
         self.stubs.Set(compute.api.API, 'get', fake_compute_get)
         self.stubs.Set(compute.api.API, 'get_all', fake_compute_get_all)
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Extended_server_attributes'])
 
     def _make_request(self, url):
         req = webob.Request.blank(url)
         req.headers['Accept'] = self.content_type
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(init_only=('servers',)))
         return res
 
     def _get_server(self, body):
-        return json.loads(body).get('server')
+        return jsonutils.loads(body).get('server')
 
     def _get_servers(self, body):
-        return json.loads(body).get('servers')
+        return jsonutils.loads(body).get('servers')
 
-    def assertServerAttributes(self, server, host, instance_name):
+    def assertServerAttributes(self, server, host, node, instance_name):
         self.assertEqual(server.get('%shost' % self.prefix), host)
         self.assertEqual(server.get('%sinstance_name' % self.prefix),
                          instance_name)
+        self.assertEqual(server.get('%shypervisor_hostname' % self.prefix),
+                         node)
 
     def test_show(self):
         url = '/v2/fake/servers/%s' % UUID3
@@ -79,6 +80,7 @@ class ExtendedServerAttributesTest(test.TestCase):
         self.assertEqual(res.status_int, 200)
         self.assertServerAttributes(self._get_server(res.body),
                                 host='host-fake',
+                                node='node-fake',
                                 instance_name='instance-1')
 
     def test_detail(self):
@@ -89,12 +91,13 @@ class ExtendedServerAttributesTest(test.TestCase):
         for i, server in enumerate(self._get_servers(res.body)):
             self.assertServerAttributes(server,
                                     host='host-%s' % (i + 1),
+                                    node='node-%s' % (i + 1),
                                     instance_name='instance-%s' % (i + 1))
 
     def test_no_instance_passthrough_404(self):
 
         def fake_compute_get(*args, **kwargs):
-            raise exception.InstanceNotFound()
+            raise exception.InstanceNotFound(instance_id='fake')
 
         self.stubs.Set(compute.api.API, 'get', fake_compute_get)
         url = '/v2/fake/servers/70f6db34-de8d-4fbd-aafb-4065bdfa6115'

@@ -1,2 +1,2 @@
-debian/mans/nova-network.8
-debian/mans/nova-dhcpbridge.8
+doc/build/man/nova-network.1
+doc/build/man/nova-dhcpbridge.1

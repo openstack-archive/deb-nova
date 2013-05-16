@@ -1,4 +1,4 @@
-#   Copyright 2011 OpenStack, LLC.
+#   Copyright 2011 OpenStack Foundation
 #
 #   Licensed under the Apache License, Version 2.0 (the "License"); you may
 #   not use this file except in compliance with the License. You may obtain
@@ -14,18 +14,12 @@
 
 """The Extended Status Admin API extension."""
 
-from webob import exc
-
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
-from nova import exception
-from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 
-
-FLAGS = flags.FLAGS
 LOG = logging.getLogger(__name__)
 authorize = extensions.soft_extension_authorizer('compute', 'extended_status')
 
@@ -34,14 +28,6 @@ class ExtendedStatusController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(ExtendedStatusController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
-
-    def _get_instances(self, context, instance_uuids):
-        if not instance_uuids:
-            return {}
-
-        filters = {'uuid': instance_uuids}
-        instances = self.compute_api.get_all(context, filters)
-        return dict((instance['uuid'], instance) for instance in instances)
 
     def _extend_server(self, server, instance):
         for state in ['task_state', 'vm_state', 'power_state']:
@@ -54,14 +40,11 @@ class ExtendedStatusController(wsgi.Controller):
         if authorize(context):
             # Attach our slave template to the response object
             resp_obj.attach(xml=ExtendedStatusTemplate())
-
-            try:
-                instance = self.compute_api.get(context, id)
-            except exception.NotFound:
-                explanation = _("Server not found.")
-                raise exc.HTTPNotFound(explanation=explanation)
-
-            self._extend_server(resp_obj.obj['server'], instance)
+            server = resp_obj.obj['server']
+            db_instance = req.get_db_instance(server['id'])
+            # server['id'] is guaranteed to be in the cache due to
+            # the core API adding it in its 'show' method.
+            self._extend_server(server, db_instance)
 
     @wsgi.extends
     def detail(self, req, resp_obj):
@@ -69,23 +52,16 @@ class ExtendedStatusController(wsgi.Controller):
         if authorize(context):
             # Attach our slave template to the response object
             resp_obj.attach(xml=ExtendedStatusesTemplate())
-
             servers = list(resp_obj.obj['servers'])
-            instance_uuids = [server['id'] for server in servers]
-            instances = self._get_instances(context, instance_uuids)
-
-            for server_object in servers:
-                try:
-                    instance_data = instances[server_object['id']]
-                except KeyError:
-                    # Ignore missing instance data
-                    continue
-
-                self._extend_server(server_object, instance_data)
+            for server in servers:
+                db_instance = req.get_db_instance(server['id'])
+                # server['id'] is guaranteed to be in the cache due to
+                # the core API adding it in its 'detail' method.
+                self._extend_server(server, db_instance)
 
 
 class Extended_status(extensions.ExtensionDescriptor):
-    """Extended Status support"""
+    """Extended Status support."""
 
     name = "ExtendedStatus"
     alias = "OS-EXT-STS"

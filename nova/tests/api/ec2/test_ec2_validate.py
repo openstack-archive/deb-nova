@@ -16,46 +16,49 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import webob.exc
+import datetime
+
+from oslo.config import cfg
 
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
-from nova.api.ec2 import inst_state
-from nova.compute import power_state
-from nova.compute import vm_states
+from nova.compute import utils as compute_utils
 from nova import context
 from nova import db
 from nova import exception
-from nova import flags
-from nova.image import fake
-from nova import log as logging
-from nova import rpc
+from nova.openstack.common import log as logging
+from nova.openstack.common import rpc
+from nova.openstack.common import timeutils
 from nova import test
-from nova import utils
+from nova.tests import fake_network
+from nova.tests.image import fake
 
-LOG = logging.getLogger('nova.tests.ec2_validate')
-FLAGS = flags.FLAGS
+CONF = cfg.CONF
+CONF.import_opt('compute_driver', 'nova.virt.driver')
+LOG = logging.getLogger(__name__)
 
 
 class EC2ValidateTestCase(test.TestCase):
     def setUp(self):
         super(EC2ValidateTestCase, self).setUp()
-        self.flags(connection_type='fake',
-                   stub_network=True)
+        self.flags(compute_driver='nova.virt.fake.FakeDriver')
 
         def dumb(*args, **kwargs):
             pass
 
-        self.stubs.Set(utils, 'usage_from_instance', dumb)
+        self.stubs.Set(compute_utils, 'notify_about_instance_usage', dumb)
+        fake_network.set_stub_network_methods(self.stubs)
+
         # set up our cloud
         self.cloud = cloud.CloudController()
 
         # set up services
+        self.conductor = self.start_service('conductor',
+                manager=CONF.conductor.manager)
         self.compute = self.start_service('compute')
         self.scheduter = self.start_service('scheduler')
         self.network = self.start_service('network')
-        self.volume = self.start_service('volume')
-        self.image_service = utils.import_object(FLAGS.image_service)
+        self.image_service = fake.FakeImageService()
 
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -85,8 +88,14 @@ class EC2ValidateTestCase(test.TestCase):
                         'type': 'machine',
                         'image_state': 'available'}}
 
+        def fake_detail(self, context, **kwargs):
+            image = fake_show(self, context, None)
+            image['name'] = kwargs.get('name')
+            return [image]
+
+        fake.stub_out_image_service(self.stubs)
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
-        self.stubs.Set(fake._FakeImageService, 'show_by_name', fake_show)
+        self.stubs.Set(fake._FakeImageService, 'detail', fake_detail)
 
         # NOTE(comstud): Make 'cast' behave like a 'call' which will
         # ensure that operations complete
@@ -98,6 +107,10 @@ class EC2ValidateTestCase(test.TestCase):
         db.api.s3_image_create(self.context,
                                '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6')
 
+    def tearDown(self):
+        super(EC2ValidateTestCase, self).tearDown()
+        fake.FakeImageService_reset()
+
     #EC2_API tests (InvalidInstanceID.Malformed)
     def test_console_output(self):
         for ec2_id, e in self.ec2_id_exception_map:
@@ -106,24 +119,7 @@ class EC2ValidateTestCase(test.TestCase):
                               context=self.context,
                               instance_id=[ec2_id])
 
-    def test_attach_volume(self):
-        for ec2_id, e in self.ec2_id_exception_map:
-            self.assertRaises(e,
-                              self.cloud.attach_volume,
-                              context=self.context,
-                              volume_id='i-1234',
-                              instance_id=ec2_id,
-                              device='/dev/vdc')
-        #missing instance error gets priority
-        for ec2_id, e in self.ec2_id_exception_map:
-            self.assertRaises(e,
-                              self.cloud.attach_volume,
-                              context=self.context,
-                              volume_id=ec2_id,
-                              instance_id='i-1234',
-                              device='/dev/vdc')
-
-    def test_describe_instance_ttribute(self):
+    def test_describe_instance_attribute(self):
         for ec2_id, e in self.ec2_id_exception_map:
             self.assertRaises(e,
                               self.cloud.describe_instance_attribute,
@@ -178,3 +174,80 @@ class EC2ValidateTestCase(test.TestCase):
                               self.cloud.detach_volume,
                               context=self.context,
                               volume_id=ec2_id)
+
+
+class EC2TimestampValidationTestCase(test.TestCase):
+    """Test case for EC2 request timestamp validation."""
+
+    def test_validate_ec2_timestamp_valid(self):
+        params = {'Timestamp': '2011-04-22T11:29:49Z'}
+        expired = ec2utils.is_ec2_timestamp_expired(params)
+        self.assertFalse(expired)
+
+    def test_validate_ec2_timestamp_old_format(self):
+        params = {'Timestamp': '2011-04-22T11:29:49'}
+        expired = ec2utils.is_ec2_timestamp_expired(params)
+        self.assertTrue(expired)
+
+    def test_validate_ec2_timestamp_not_set(self):
+        params = {}
+        expired = ec2utils.is_ec2_timestamp_expired(params)
+        self.assertFalse(expired)
+
+    def test_validate_ec2_timestamp_invalid_format(self):
+        params = {'Timestamp': '2011-04-22T11:29:49.000P'}
+        expired = ec2utils.is_ec2_timestamp_expired(params)
+        self.assertTrue(expired)
+
+    def test_validate_ec2_timestamp_advanced_time(self):
+
+        #EC2 request with Timestamp in advanced time
+        timestamp = timeutils.utcnow() + datetime.timedelta(seconds=250)
+        params = {'Timestamp': timeutils.strtime(timestamp,
+                                           "%Y-%m-%dT%H:%M:%SZ")}
+        expired = ec2utils.is_ec2_timestamp_expired(params, expires=300)
+        self.assertFalse(expired)
+
+    def test_validate_ec2_timestamp_advanced_time_expired(self):
+        timestamp = timeutils.utcnow() + datetime.timedelta(seconds=350)
+        params = {'Timestamp': timeutils.strtime(timestamp,
+                                           "%Y-%m-%dT%H:%M:%SZ")}
+        expired = ec2utils.is_ec2_timestamp_expired(params, expires=300)
+        self.assertTrue(expired)
+
+    def test_validate_ec2_req_timestamp_not_expired(self):
+        params = {'Timestamp': timeutils.isotime()}
+        expired = ec2utils.is_ec2_timestamp_expired(params, expires=15)
+        self.assertFalse(expired)
+
+    def test_validate_ec2_req_timestamp_expired(self):
+        params = {'Timestamp': '2011-04-22T12:00:00Z'}
+        compare = ec2utils.is_ec2_timestamp_expired(params, expires=300)
+        self.assertTrue(compare)
+
+    def test_validate_ec2_req_expired(self):
+        params = {'Expires': timeutils.isotime()}
+        expired = ec2utils.is_ec2_timestamp_expired(params)
+        self.assertTrue(expired)
+
+    def test_validate_ec2_req_not_expired(self):
+        expire = timeutils.utcnow() + datetime.timedelta(seconds=350)
+        params = {'Expires': timeutils.strtime(expire, "%Y-%m-%dT%H:%M:%SZ")}
+        expired = ec2utils.is_ec2_timestamp_expired(params)
+        self.assertFalse(expired)
+
+    def test_validate_Expires_timestamp_invalid_format(self):
+
+        #EC2 request with invalid Expires
+        params = {'Expires': '2011-04-22T11:29:49'}
+        expired = ec2utils.is_ec2_timestamp_expired(params)
+        self.assertTrue(expired)
+
+    def test_validate_ec2_req_timestamp_Expires(self):
+
+        #EC2 request with both Timestamp and Expires
+        params = {'Timestamp': '2011-04-22T11:29:49Z',
+                  'Expires': timeutils.isotime()}
+        self.assertRaises(exception.InvalidRequest,
+                          ec2utils.is_ec2_timestamp_expired,
+                          params)

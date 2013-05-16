@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010 OpenStack LLC.
+# Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,16 +15,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import json
 from xml.dom import minidom
 
 import webob
 import webob.dec
 import webob.exc
 
-from nova import test
 from nova.api.openstack import common
 from nova.api.openstack import wsgi
+from nova.openstack.common import jsonutils
+from nova import test
 
 
 class TestFaults(test.TestCase):
@@ -38,7 +38,7 @@ class TestFaults(test.TestCase):
         return xml_string
 
     def test_400_fault_json(self):
-        """Test fault serialized to JSON via file-extension and/or header."""
+        # Test fault serialized to JSON via file-extension and/or header.
         requests = [
             webob.Request.blank('/.json'),
             webob.Request.blank('/', headers={"Accept": "application/json"}),
@@ -54,13 +54,13 @@ class TestFaults(test.TestCase):
                     "code": 400,
                 },
             }
-            actual = json.loads(response.body)
+            actual = jsonutils.loads(response.body)
 
             self.assertEqual(response.content_type, "application/json")
             self.assertEqual(expected, actual)
 
     def test_413_fault_json(self):
-        """Test fault serialized to JSON via file-extension and/or header."""
+        # Test fault serialized to JSON via file-extension and/or header.
         requests = [
             webob.Request.blank('/.json'),
             webob.Request.blank('/', headers={"Accept": "application/json"}),
@@ -68,6 +68,8 @@ class TestFaults(test.TestCase):
 
         for request in requests:
             exc = webob.exc.HTTPRequestEntityTooLarge
+            # NOTE(aloga): we intentionally pass an integer for the
+            # 'Retry-After' header. It should be then converted to a str
             fault = wsgi.Fault(exc(explanation='sorry',
                         headers={'Retry-After': 4}))
             response = request.get_response(fault)
@@ -76,16 +78,16 @@ class TestFaults(test.TestCase):
                 "overLimit": {
                     "message": "sorry",
                     "code": 413,
-                    "retryAfter": 4,
+                    "retryAfter": "4",
                 },
             }
-            actual = json.loads(response.body)
+            actual = jsonutils.loads(response.body)
 
             self.assertEqual(response.content_type, "application/json")
             self.assertEqual(expected, actual)
 
     def test_raise(self):
-        """Ensure the ability to raise :class:`Fault` in WSGI-ified methods."""
+        # Ensure the ability to raise :class:`Fault` in WSGI-ified methods.
         @webob.dec.wsgify
         def raiser(req):
             raise wsgi.Fault(webob.exc.HTTPNotFound(explanation='whut?'))
@@ -97,7 +99,7 @@ class TestFaults(test.TestCase):
         self.assertTrue('whut?' in resp.body)
 
     def test_raise_403(self):
-        """Ensure the ability to raise :class:`Fault` in WSGI-ified methods."""
+        # Ensure the ability to raise :class:`Fault` in WSGI-ified methods.
         @webob.dec.wsgify
         def raiser(req):
             raise wsgi.Fault(webob.exc.HTTPForbidden(explanation='whut?'))
@@ -110,12 +112,12 @@ class TestFaults(test.TestCase):
         self.assertTrue('forbidden' in resp.body)
 
     def test_fault_has_status_int(self):
-        """Ensure the status_int is set correctly on faults"""
+        # Ensure the status_int is set correctly on faults.
         fault = wsgi.Fault(webob.exc.HTTPBadRequest(explanation='what?'))
         self.assertEqual(fault.status_int, 400)
 
     def test_xml_serializer(self):
-        """Ensure that a v1.1 request responds with a v1.1 xmlns"""
+        # Ensure that a v1.1 request responds with a v1.1 xmlns.
         request = webob.Request.blank('/v1.1',
                                       headers={"Accept": "application/xml"})
 

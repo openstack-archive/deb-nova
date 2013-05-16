@@ -17,6 +17,7 @@
 #    under the License.
 
 import boto
+from boto.ec2 import regioninfo
 import commands
 import httplib
 import os
@@ -24,7 +25,6 @@ import paramiko
 import sys
 import time
 import unittest
-from boto.ec2.regioninfo import RegionInfo
 
 from smoketests import flags
 
@@ -41,7 +41,7 @@ class SmokeTestCase(unittest.TestCase):
         while(True):
             try:
                 client = paramiko.SSHClient()
-                client.set_missing_host_key_policy(paramiko.WarningPolicy())
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 client.connect(ip, username='root', pkey=key, timeout=5)
                 return client
             except (paramiko.AuthenticationException, paramiko.SSHException):
@@ -63,7 +63,7 @@ class SmokeTestCase(unittest.TestCase):
         return status == 0
 
     def wait_for_running(self, instance, tries=60, wait=1):
-        """Wait for instance to be running"""
+        """Wait for instance to be running."""
         for x in xrange(tries):
             instance.update()
             if instance.state.startswith('running'):
@@ -72,18 +72,20 @@ class SmokeTestCase(unittest.TestCase):
         else:
             return False
 
-    def wait_for_not_running(self, instance, tries=60, wait=1):
-        """Wait for instance to not be running"""
+    def wait_for_deleted(self, instance, tries=60, wait=1):
+        """Wait for instance to be deleted."""
         for x in xrange(tries):
-            instance.update()
-            if not instance.state.startswith('running'):
+            try:
+                #NOTE(dprince): raises exception when instance id disappears
+                instance.update(validate=True)
+            except ValueError:
                 return True
             time.sleep(wait)
         else:
             return False
 
     def wait_for_ping(self, ip, command="ping", tries=120):
-        """Wait for ip to be pingable"""
+        """Wait for ip to be pingable."""
         for x in xrange(tries):
             if self.can_ping(ip, command):
                 return True
@@ -91,7 +93,7 @@ class SmokeTestCase(unittest.TestCase):
             return False
 
     def wait_for_ssh(self, ip, key_name, tries=30, wait=5):
-        """Wait for ip to be sshable"""
+        """Wait for ip to be sshable."""
         for x in xrange(tries):
             try:
                 conn = self.connect_ssh(ip, key_name)
@@ -121,7 +123,7 @@ class SmokeTestCase(unittest.TestCase):
             return boto_v6.connect_ec2(aws_access_key_id=access_key,
                                 aws_secret_access_key=secret_key,
                                 is_secure=parts['is_secure'],
-                                region=RegionInfo(None,
+                                region=regioninfo.RegionInfo(None,
                                                   'nova',
                                                   parts['ip']),
                                 port=parts['port'],
@@ -131,7 +133,7 @@ class SmokeTestCase(unittest.TestCase):
         return boto.connect_ec2(aws_access_key_id=access_key,
                                 aws_secret_access_key=secret_key,
                                 is_secure=parts['is_secure'],
-                                region=RegionInfo(None,
+                                region=regioninfo.RegionInfo(None,
                                                   'nova',
                                                   parts['ip']),
                                 port=parts['port'],
@@ -139,9 +141,7 @@ class SmokeTestCase(unittest.TestCase):
                                 **kwargs)
 
     def split_clc_url(self, clc_url):
-        """
-        Splits a cloud controller endpoint url.
-        """
+        """Splits a cloud controller endpoint url."""
         parts = httplib.urlsplit(clc_url)
         is_secure = parts.scheme == 'https'
         ip, port = parts.netloc.split(':')
@@ -150,7 +150,7 @@ class SmokeTestCase(unittest.TestCase):
     def create_key_pair(self, conn, key_name):
         try:
             os.remove('/tmp/%s.pem' % key_name)
-        except:
+        except Exception:
             pass
         key = conn.create_key_pair(key_name)
         key.save('/tmp/')
@@ -160,7 +160,7 @@ class SmokeTestCase(unittest.TestCase):
         conn.delete_key_pair(key_name)
         try:
             os.remove('/tmp/%s.pem' % key_name)
-        except:
+        except Exception:
             pass
 
     def bundle_image(self, image, tempdir='/tmp', kernel=False):
@@ -169,7 +169,6 @@ class SmokeTestCase(unittest.TestCase):
             cmd += ' --kernel true'
         status, output = commands.getstatusoutput(cmd)
         if status != 0:
-            print '%s -> \n %s' % (cmd, output)
             raise Exception(output)
         return True
 
@@ -178,7 +177,6 @@ class SmokeTestCase(unittest.TestCase):
         cmd += '%s -m %s/%s.manifest.xml' % (bucket_name, tempdir, image)
         status, output = commands.getstatusoutput(cmd)
         if status != 0:
-            print '%s -> \n %s' % (cmd, output)
             raise Exception(output)
         return True
 
@@ -186,7 +184,6 @@ class SmokeTestCase(unittest.TestCase):
         cmd = 'euca-delete-bundle --clear -b %s' % (bucket_name)
         status, output = commands.getstatusoutput(cmd)
         if status != 0:
-            print '%s -> \n%s' % (cmd, output)
             raise Exception(output)
         return True
 

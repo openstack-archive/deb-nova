@@ -1,4 +1,4 @@
-#   Copyright 2011 OpenStack, LLC.
+#   Copyright 2011 OpenStack Foundation
 #
 #   Licensed under the Apache License, Version 2.0 (the "License"); you may
 #   not use this file except in compliance with the License. You may obtain
@@ -14,40 +14,45 @@
 
 """Connect your vlan to the world."""
 
-import os
+from oslo.config import cfg
 
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.api.openstack import extensions
-from nova.auth import manager
 from nova.cloudpipe import pipelib
 from nova import compute
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import db
 from nova import exception
-from nova import flags
-from nova import log as logging
 from nova import network
+from nova.openstack.common import fileutils
+from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova import utils
 
-
-FLAGS = flags.FLAGS
+CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'cloudpipe')
 
 
 class CloudpipeTemplate(xmlutil.TemplateBuilder):
     def construct(self):
-        return xmlutil.MasterTemplate(xmlutil.make_flat_dict('cloudpipe'), 1)
+        root = xmlutil.TemplateElement('cloudpipe')
+        elem = xmlutil.SubTemplateElement(root, 'instance_id',
+                                          selector='instance_id')
+        elem.text = str
+        return xmlutil.MasterTemplate(root, 1)
 
 
 class CloudpipesTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('cloudpipes')
-        elem = xmlutil.make_flat_dict('cloudpipe', selector='cloudpipes',
-                                      subselector='cloudpipe')
-        root.append(elem)
+        elem1 = xmlutil.SubTemplateElement(root, 'cloudpipe',
+                                           selector='cloudpipes')
+        elem2 = xmlutil.SubTemplateElement(elem1, xmlutil.Selector(0),
+                                           selector=xmlutil.get_items)
+        elem2.text = 1
         return xmlutil.MasterTemplate(root, 1)
 
 
@@ -57,7 +62,6 @@ class CloudpipeController(object):
     def __init__(self):
         self.compute_api = compute.API()
         self.network_api = network.API()
-        self.auth_manager = manager.AuthManager()
         self.cloudpipe = pipelib.CloudPipe()
         self.setup()
 
@@ -66,13 +70,14 @@ class CloudpipeController(object):
         # NOTE(vish): One of the drawbacks of doing this in the api is
         #             the keys will only be on the api node that launched
         #             the cloudpipe.
-        if not os.path.exists(FLAGS.keys_path):
-            os.makedirs(FLAGS.keys_path)
+        fileutils.ensure_tree(CONF.keys_path)
 
     def _get_all_cloudpipes(self, context):
-        """Get all cloudpipes"""
-        return [instance for instance in self.compute_api.get_all(context)
-                if instance['image_ref'] == str(FLAGS.vpn_image_id)
+        """Get all cloudpipes."""
+        instances = self.compute_api.get_all(context,
+                                             search_opts={'deleted': False})
+        return [instance for instance in instances
+                if pipelib.is_vpn_image(instance['image_ref'])
                 and instance['vm_state'] != vm_states.DELETED]
 
     def _get_cloudpipe_for_project(self, context, project_id):
@@ -90,7 +95,7 @@ class CloudpipeController(object):
             rv['state'] = 'pending'
             return rv
         rv['instance_id'] = instance['uuid']
-        rv['created_at'] = utils.isotime(instance['created_at'])
+        rv['created_at'] = timeutils.isotime(instance['created_at'])
         nw_info = compute_utils.get_nw_info_for_instance(instance)
         if not nw_info:
             return rv

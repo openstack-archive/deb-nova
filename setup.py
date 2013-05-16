@@ -15,84 +15,62 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-import glob
-import os
-
 import setuptools
 from setuptools.command import sdist
 
 from nova.openstack.common import setup as common_setup
-from nova import version
 
+requires = common_setup.parse_requirements()
+depend_links = common_setup.parse_dependency_links()
+project = 'nova'
 
-class local_sdist(sdist.sdist):
-    """Customized sdist hook - builds the ChangeLog file from VC first."""
-    def run(self):
-        common_setup.write_git_changelog()
-        # sdist.sdist is an old style class, can't user super()
-        sdist.sdist.run(self)
-
-nova_cmdclass = {'sdist': local_sdist}
-
-try:
-    from sphinx import setup_command
-
-    class local_BuildDoc(setup_command.BuildDoc):
-        def run(self):
-            for builder in ['html', 'man']:
-                self.builder = builder
-                self.finalize_options()
-                setup_command.BuildDoc.run(self)
-    nova_cmdclass['build_sphinx'] = local_BuildDoc
-
-except Exception:
-    pass
-
-
-def find_data_files(destdir, srcdir):
-    package_data = []
-    files = []
-    for d in glob.glob('%s/*' % (srcdir, )):
-        if os.path.isdir(d):
-            package_data += find_data_files(
-                                 os.path.join(destdir, os.path.basename(d)), d)
-        else:
-            files += [d]
-    package_data += [(destdir, files)]
-    return package_data
-
-
-setuptools.setup(name='nova',
-      version=version.canonical_version_string(),
+setuptools.setup(
+      name=project,
+      version=common_setup.get_version(project, '2013.1'),
       description='cloud computing fabric controller',
       author='OpenStack',
       author_email='nova@lists.launchpad.net',
       url='http://www.openstack.org/',
-      cmdclass=nova_cmdclass,
+      classifiers=[
+          'Environment :: OpenStack',
+          'Intended Audience :: Information Technology',
+          'Intended Audience :: System Administrators',
+          'License :: OSI Approved :: Apache Software License',
+          'Operating System :: POSIX :: Linux',
+          'Programming Language :: Python',
+          'Programming Language :: Python :: 2',
+          'Programming Language :: Python :: 2.7',
+          ],
+      cmdclass=common_setup.get_cmdclass(),
       packages=setuptools.find_packages(exclude=['bin', 'smoketests']),
+      install_requires=requires,
+      dependency_links=depend_links,
       include_package_data=True,
       test_suite='nose.collector',
-      scripts=['bin/clear_rabbit_queues',
-               'bin/instance-usage-audit',
-               'bin/nova-all',
+      setup_requires=['setuptools_git>=0.4'],
+      scripts=['bin/nova-all',
                'bin/nova-api',
                'bin/nova-api-ec2',
                'bin/nova-api-metadata',
                'bin/nova-api-os-compute',
-               'bin/nova-api-os-volume',
+               'bin/nova-baremetal-deploy-helper',
+               'bin/nova-baremetal-manage',
+               'bin/nova-rpc-zmq-receiver',
+               'bin/nova-cells',
                'bin/nova-cert',
+               'bin/nova-clear-rabbit-queues',
                'bin/nova-compute',
+               'bin/nova-conductor',
                'bin/nova-console',
                'bin/nova-consoleauth',
                'bin/nova-dhcpbridge',
-               'bin/nova-direct-api',
                'bin/nova-manage',
                'bin/nova-network',
+               'bin/nova-novncproxy',
                'bin/nova-objectstore',
                'bin/nova-rootwrap',
                'bin/nova-scheduler',
-               'bin/nova-volume',
+               'bin/nova-spicehtml5proxy',
                'bin/nova-xvpvncproxy',
-               'bin/stack',
-               'tools/nova-debug'],
+              ],
         py_modules=[])

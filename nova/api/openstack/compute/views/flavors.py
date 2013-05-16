@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2010-2011 OpenStack LLC.
+# Copyright 2010-2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -27,23 +27,27 @@ class ViewBuilder(common.ViewBuilder):
             "flavor": {
                 "id": flavor["flavorid"],
                 "name": flavor["name"],
-                "links": self._get_links(request, flavor["flavorid"]),
+                "links": self._get_links(request,
+                                         flavor["flavorid"],
+                                         self._collection_name),
             },
         }
 
     def show(self, request, flavor):
-        return {
+        flavor_dict = {
             "flavor": {
                 "id": flavor["flavorid"],
                 "name": flavor["name"],
                 "ram": flavor["memory_mb"],
                 "disk": flavor["root_gb"],
                 "vcpus": flavor.get("vcpus") or "",
-                "swap": flavor.get("swap") or "",
-                "rxtx_factor": flavor.get("rxtx_factor") or "",
-                "links": self._get_links(request, flavor["flavorid"]),
+                "links": self._get_links(request,
+                                         flavor["flavorid"],
+                                         self._collection_name),
             },
         }
+
+        return flavor_dict
 
     def index(self, request, flavors):
         """Return the 'index' view of flavors."""
@@ -58,6 +62,7 @@ class ViewBuilder(common.ViewBuilder):
         flavor_list = [func(request, flavor)["flavor"] for flavor in flavors]
         flavors_links = self._get_collection_links(request,
                                                    flavors,
+                                                   self._collection_name,
                                                    "flavorid")
         flavors_dict = dict(flavors=flavor_list)
 

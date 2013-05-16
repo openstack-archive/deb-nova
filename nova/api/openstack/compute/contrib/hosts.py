@@ -1,4 +1,4 @@
-# Copyright (c) 2011 OpenStack, LLC.
+# Copyright (c) 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,35 +16,25 @@
 """The hosts admin extension."""
 
 import webob.exc
-from xml.dom import minidom
-from xml.parsers import expat
 
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.api.openstack import extensions
-from nova.compute import api as compute_api
-from nova import db
+from nova import compute
 from nova import exception
-from nova import flags
-from nova import log as logging
-from nova.scheduler import api as scheduler_api
-
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-FLAGS = flags.FLAGS
 authorize = extensions.extension_authorizer('compute', 'hosts')
 
 
 class HostIndexTemplate(xmlutil.TemplateBuilder):
     def construct(self):
-        def shimmer(obj, do_raise=False):
-            # A bare list is passed in; we need to wrap it in a dict
-            return dict(hosts=obj)
-
-        root = xmlutil.TemplateElement('hosts', selector=shimmer)
+        root = xmlutil.TemplateElement('hosts')
         elem = xmlutil.SubTemplateElement(root, 'host', selector='hosts')
         elem.set('host_name')
         elem.set('service')
+        elem.set('zone')
 
         return xmlutil.MasterTemplate(root, 1)
 
@@ -78,143 +68,238 @@ class HostShowTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class HostDeserializer(wsgi.XMLDeserializer):
+class HostUpdateDeserializer(wsgi.XMLDeserializer):
     def default(self, string):
-        try:
-            node = minidom.parseString(string)
-        except expat.ExpatError:
-            msg = _("cannot understand XML")
-            raise exception.MalformedRequestBody(reason=msg)
+        node = xmlutil.safe_minidom_parse_string(string)
 
         updates = {}
-        for child in node.childNodes[0].childNodes:
-            updates[child.tagName] = self.extract_text(child)
+        updates_node = self.find_first_child_named(node, 'updates')
+        if updates_node is not None:
+            maintenance = self.find_first_child_named(updates_node,
+                                                      'maintenance_mode')
+            if maintenance is not None:
+                updates[maintenance.tagName] = self.extract_text(maintenance)
+
+            status = self.find_first_child_named(updates_node, 'status')
+            if status is not None:
+                updates[status.tagName] = self.extract_text(status)
 
         return dict(body=updates)
-
-
-def _list_hosts(req, service=None):
-    """Returns a summary list of hosts, optionally filtering
-    by service type.
-    """
-    context = req.environ['nova.context']
-    hosts = scheduler_api.get_host_list(context)
-    if service:
-        hosts = [host for host in hosts
-                if host["service"] == service]
-    return hosts
-
-
-def check_host(fn):
-    """Makes sure that the host exists."""
-    def wrapped(self, req, id, service=None, *args, **kwargs):
-        listed_hosts = _list_hosts(req, service)
-        hosts = [h["host_name"] for h in listed_hosts]
-        if id in hosts:
-            return fn(self, req, id, *args, **kwargs)
-        else:
-            raise exception.HostNotFound(host=id)
-    return wrapped
 
 
 class HostController(object):
     """The Hosts API controller for the OpenStack API."""
     def __init__(self):
-        self.api = compute_api.HostAPI()
+        self.api = compute.HostAPI()
         super(HostController, self).__init__()
 
     @wsgi.serializers(xml=HostIndexTemplate)
     def index(self, req):
-        authorize(req.environ['nova.context'])
-        return {'hosts': _list_hosts(req)}
+        """
+        :returns: A dict in the format:
+
+            {'hosts': [{'host_name': 'some.host.name',
+               'service': 'cells'},
+              {'host_name': 'some.other.host.name',
+               'service': 'cells'},
+              {'host_name': 'some.celly.host.name',
+               'service': 'cells'},
+              {'host_name': 'console1.host.com',
+               'service': 'consoleauth'},
+              {'host_name': 'network1.host.com',
+               'service': 'network'},
+              {'host_name': 'netwwork2.host.com',
+               'service': 'network'},
+              {'host_name': 'sched1.host.com',
+               'service': 'scheduler'},
+              {'host_name': 'sched2.host.com',
+               'service': 'scheduler'},
+              {'host_name': 'vol1.host.com',
+               'service': 'volume'}]}
+        """
+        context = req.environ['nova.context']
+        authorize(context)
+        filters = {'disabled': False}
+        zone = req.GET.get('zone', None)
+        if zone:
+            filters['availability_zone'] = zone
+        services = self.api.service_get_all(context, filters=filters,
+                                            set_zones=True)
+        hosts = []
+        for service in services:
+            hosts.append({'host_name': service['host'],
+                          'service': service['topic'],
+                          'zone': service['availability_zone']})
+        return {'hosts': hosts}
 
     @wsgi.serializers(xml=HostUpdateTemplate)
-    @wsgi.deserializers(xml=HostDeserializer)
-    @check_host
+    @wsgi.deserializers(xml=HostUpdateDeserializer)
     def update(self, req, id, body):
-        authorize(req.environ['nova.context'])
-        update_values = {}
-        for raw_key, raw_val in body.iteritems():
-            key = raw_key.lower().strip()
-            val = raw_val.lower().strip()
-            if key == "status":
-                if val in ("enable", "disable"):
-                    update_values['status'] = val.startswith("enable")
-                else:
-                    explanation = _("Invalid status: '%s'") % raw_val
-                    raise webob.exc.HTTPBadRequest(explanation=explanation)
-            elif key == "maintenance_mode":
-                if val not in ['enable', 'disable']:
-                    explanation = _("Invalid mode: '%s'") % raw_val
-                    raise webob.exc.HTTPBadRequest(explanation=explanation)
-                update_values['maintenance_mode'] = val == 'enable'
+        """
+        :param body: example format {'status': 'enable',
+                                     'maintenance_mode': 'enable'}
+        :returns:
+        """
+        def read_enabled(orig_val, msg):
+            """
+            :param orig_val: A string with either 'enable' or 'disable'. May
+                             be surrounded by whitespace, and case doesn't
+                             matter
+            :param msg: The message to be passed to HTTPBadRequest. A single
+                        %s will be replaced with orig_val.
+            :returns:   True for 'enabled' and False for 'disabled'
+            """
+            val = orig_val.strip().lower()
+            if val == "enable":
+                return True
+            elif val == "disable":
+                return False
             else:
-                explanation = _("Invalid update setting: '%s'") % raw_key
-                raise webob.exc.HTTPBadRequest(explanation=explanation)
-
-        # this is for handling multiple settings at the same time:
-        # the result dictionaries are merged in the first one.
-        # Note: the 'host' key will always be the same so it's
-        # okay that it gets overwritten.
-        update_setters = {'status': self._set_enabled_status,
-                          'maintenance_mode': self._set_host_maintenance}
-        result = {}
-        for key, value in update_values.iteritems():
-            result.update(update_setters[key](req, id, value))
+                raise webob.exc.HTTPBadRequest(explanation=msg % orig_val)
+        context = req.environ['nova.context']
+        authorize(context)
+        # See what the user wants to 'update'
+        params = dict([(k.strip().lower(), v) for k, v in body.iteritems()])
+        orig_status = status = params.pop('status', None)
+        orig_maint_mode = maint_mode = params.pop('maintenance_mode', None)
+        # Validate the request
+        if len(params) > 0:
+            # Some extra param was passed. Fail.
+            explanation = _("Invalid update setting: '%s'") % params.keys()[0]
+            raise webob.exc.HTTPBadRequest(explanation=explanation)
+        if orig_status is not None:
+            status = read_enabled(orig_status, _("Invalid status: '%s'"))
+        if orig_maint_mode is not None:
+            maint_mode = read_enabled(orig_maint_mode, _("Invalid mode: '%s'"))
+        if status is None and maint_mode is None:
+            explanation = _("'status' or 'maintenance_mode' needed for "
+                            "host update")
+            raise webob.exc.HTTPBadRequest(explanation=explanation)
+        # Make the calls and merge the results
+        result = {'host': id}
+        if status is not None:
+            result['status'] = self._set_enabled_status(context, id, status)
+        if maint_mode is not None:
+            result['maintenance_mode'] = self._set_host_maintenance(context,
+                id, maint_mode)
         return result
 
-    def _set_host_maintenance(self, req, host, mode=True):
+    def _set_host_maintenance(self, context, host_name, mode=True):
         """Start/Stop host maintenance window. On start, it triggers
         guest VMs evacuation."""
-        context = req.environ['nova.context']
-        LOG.audit(_("Putting host %(host)s in maintenance "
+        LOG.audit(_("Putting host %(host_name)s in maintenance "
                     "mode %(mode)s.") % locals())
-        result = self.api.set_host_maintenance(context, host, mode)
+        try:
+            result = self.api.set_host_maintenance(context, host_name, mode)
+        except NotImplementedError:
+            msg = _("Virt driver does not implement host maintenance mode.")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
+        except exception.NotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
         if result not in ("on_maintenance", "off_maintenance"):
             raise webob.exc.HTTPBadRequest(explanation=result)
-        return {"host": host, "maintenance_mode": result}
+        return result
 
-    def _set_enabled_status(self, req, host, enabled):
-        """Sets the specified host's ability to accept new instances."""
-        context = req.environ['nova.context']
-        state = "enabled" if enabled else "disabled"
-        LOG.audit(_("Setting host %(host)s to %(state)s.") % locals())
-        result = self.api.set_host_enabled(context, host=host,
-                enabled=enabled)
+    def _set_enabled_status(self, context, host_name, enabled):
+        """Sets the specified host's ability to accept new instances.
+        :param enabled: a boolean - if False no new VMs will be able to start
+        on the host"""
+        if enabled:
+            LOG.audit(_("Enabling host %s.") % host_name)
+        else:
+            LOG.audit(_("Disabling host %s.") % host_name)
+        try:
+            result = self.api.set_host_enabled(context, host_name=host_name,
+                    enabled=enabled)
+        except NotImplementedError:
+            msg = _("Virt driver does not implement host disabled status.")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
+        except exception.NotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
         if result not in ("enabled", "disabled"):
-            # An error message was returned
             raise webob.exc.HTTPBadRequest(explanation=result)
-        return {"host": host, "status": result}
+        return result
 
-    def _host_power_action(self, req, host, action):
+    def _host_power_action(self, req, host_name, action):
         """Reboots, shuts down or powers up the host."""
         context = req.environ['nova.context']
         authorize(context)
         try:
-            result = self.api.host_power_action(context, host=host,
+            result = self.api.host_power_action(context, host_name=host_name,
                     action=action)
-        except NotImplementedError as e:
-            raise webob.exc.HTTPBadRequest(explanation=e.msg)
-        return {"host": host, "power_action": result}
+        except NotImplementedError:
+            msg = _("Virt driver does not implement host power management.")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
+        except exception.NotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
+        return {"host": host_name, "power_action": result}
 
     @wsgi.serializers(xml=HostActionTemplate)
     def startup(self, req, id):
-        return self._host_power_action(req, host=id, action="startup")
+        return self._host_power_action(req, host_name=id, action="startup")
 
     @wsgi.serializers(xml=HostActionTemplate)
     def shutdown(self, req, id):
-        return self._host_power_action(req, host=id, action="shutdown")
+        return self._host_power_action(req, host_name=id, action="shutdown")
 
     @wsgi.serializers(xml=HostActionTemplate)
     def reboot(self, req, id):
-        return self._host_power_action(req, host=id, action="reboot")
+        return self._host_power_action(req, host_name=id, action="reboot")
+
+    @staticmethod
+    def _get_total_resources(host_name, compute_node):
+        return {'resource': {'host': host_name,
+                             'project': '(total)',
+                             'cpu': compute_node['vcpus'],
+                             'memory_mb': compute_node['memory_mb'],
+                             'disk_gb': compute_node['local_gb']}}
+
+    @staticmethod
+    def _get_used_now_resources(host_name, compute_node):
+        return {'resource': {'host': host_name,
+                             'project': '(used_now)',
+                             'cpu': compute_node['vcpus_used'],
+                             'memory_mb': compute_node['memory_mb_used'],
+                             'disk_gb': compute_node['local_gb_used']}}
+
+    @staticmethod
+    def _get_resource_totals_from_instances(host_name, instances):
+        cpu_sum = 0
+        mem_sum = 0
+        hdd_sum = 0
+        for instance in instances:
+            cpu_sum += instance['vcpus']
+            mem_sum += instance['memory_mb']
+            hdd_sum += instance['root_gb'] + instance['ephemeral_gb']
+
+        return {'resource': {'host': host_name,
+                             'project': '(used_max)',
+                             'cpu': cpu_sum,
+                             'memory_mb': mem_sum,
+                             'disk_gb': hdd_sum}}
+
+    @staticmethod
+    def _get_resources_by_project(host_name, instances):
+        # Getting usage resource per project
+        project_map = {}
+        for instance in instances:
+            resource = project_map.setdefault(instance['project_id'],
+                    {'host': host_name,
+                     'project': instance['project_id'],
+                     'cpu': 0,
+                     'memory_mb': 0,
+                     'disk_gb': 0})
+            resource['cpu'] += instance['vcpus']
+            resource['memory_mb'] += instance['memory_mb']
+            resource['disk_gb'] += (instance['root_gb'] +
+                                    instance['ephemeral_gb'])
+        return project_map
 
     @wsgi.serializers(xml=HostShowTemplate)
     def show(self, req, id):
         """Shows the physical/usage resource given by hosts.
 
-        :param context: security context
-        :param host: hostname
+        :param id: hostname
         :returns: expected to use HostShowTemplate.
             ex.::
 
@@ -222,72 +307,31 @@ class HostController(object):
                 D: {'host': 'hostname','project': 'admin',
                     'cpu': 1, 'memory_mb': 2048, 'disk_gb': 30}
         """
-        host = id
         context = req.environ['nova.context']
-        # Expected to use AuthMiddleware.
-        # Otherwise, non-admin user can use describe-resource
-        if not context.is_admin:
+        host_name = id
+        try:
+            service = self.api.service_get_by_compute_host(context, host_name)
+        except exception.NotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
+        except exception.AdminRequired:
             msg = _("Describe-resource is admin only functionality")
             raise webob.exc.HTTPForbidden(explanation=msg)
-
-        # Getting compute node info and related instances info
-        try:
-            compute_ref = db.service_get_all_compute_by_host(context, host)
-            compute_ref = compute_ref[0]
-        except exception.ComputeHostNotFound:
-            raise webob.exc.HTTPNotFound(explanation=_("Host not found"))
-        instance_refs = db.instance_get_all_by_host(context,
-                                                    compute_ref['host'])
-
-        # Getting total available/used resource
-        compute_ref = compute_ref['compute_node'][0]
-        resources = [{'resource': {'host': host, 'project': '(total)',
-                      'cpu': compute_ref['vcpus'],
-                      'memory_mb': compute_ref['memory_mb'],
-                      'disk_gb': compute_ref['local_gb']}},
-                     {'resource': {'host': host, 'project': '(used_now)',
-                      'cpu': compute_ref['vcpus_used'],
-                      'memory_mb': compute_ref['memory_mb_used'],
-                      'disk_gb': compute_ref['local_gb_used']}}]
-
-        cpu_sum = 0
-        mem_sum = 0
-        hdd_sum = 0
-        for i in instance_refs:
-            cpu_sum += i['vcpus']
-            mem_sum += i['memory_mb']
-            hdd_sum += i['root_gb'] + i['ephemeral_gb']
-
-        resources.append({'resource': {'host': host,
-                          'project': '(used_max)',
-                          'cpu': cpu_sum,
-                          'memory_mb': mem_sum,
-                          'disk_gb': hdd_sum}})
-
-        # Getting usage resource per project
-        project_ids = [i['project_id'] for i in instance_refs]
-        project_ids = list(set(project_ids))
-        for project_id in project_ids:
-            vcpus = [i['vcpus'] for i in instance_refs
-                     if i['project_id'] == project_id]
-
-            mem = [i['memory_mb']  for i in instance_refs
-                   if i['project_id'] == project_id]
-
-            disk = [i['root_gb'] + i['ephemeral_gb'] for i in instance_refs
-                    if i['project_id'] == project_id]
-
-            resources.append({'resource': {'host': host,
-                              'project': project_id,
-                              'cpu': reduce(lambda x, y: x + y, vcpus),
-                              'memory_mb': reduce(lambda x, y: x + y, mem),
-                              'disk_gb': reduce(lambda x, y: x + y, disk)}})
-
+        compute_node = service['compute_node'][0]
+        instances = self.api.instance_get_all_by_host(context, host_name)
+        resources = [self._get_total_resources(host_name, compute_node)]
+        resources.append(self._get_used_now_resources(host_name,
+                                                      compute_node))
+        resources.append(self._get_resource_totals_from_instances(host_name,
+                                                                  instances))
+        by_proj_resources = self._get_resources_by_project(host_name,
+                                                           instances)
+        for resource in by_proj_resources.itervalues():
+            resources.append({'resource': resource})
         return {'host': resources}
 
 
 class Hosts(extensions.ExtensionDescriptor):
-    """Admin-only host administration"""
+    """Admin-only host administration."""
 
     name = "Hosts"
     alias = "os-hosts"

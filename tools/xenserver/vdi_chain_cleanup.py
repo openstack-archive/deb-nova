@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2012 OpenStack, LLC
+# Copyright 2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -94,7 +94,7 @@ def main():
 
         stdout = stdout.strip()
 
-        if  stdout.endswith('.vhd'):
+        if stdout.endswith('.vhd'):
             try:
                 descendents[stdout].append(fname)
             except KeyError:

@@ -20,7 +20,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -40,25 +40,31 @@ class ServerStartStopActionController(wsgi.Controller):
 
     @wsgi.action('os-start')
     def _start_server(self, req, id, body):
-        """Start an instance. """
+        """Start an instance."""
         context = req.environ['nova.context']
-        LOG.debug(_("start instance %r"), id)
         instance = self._get_instance(context, id)
-        self.compute_api.start(context, instance)
+        LOG.debug(_('start instance'), instance=instance)
+        try:
+            self.compute_api.start(context, instance)
+        except exception.InstanceNotReady as e:
+            raise webob.exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
     @wsgi.action('os-stop')
     def _stop_server(self, req, id, body):
         """Stop an instance."""
         context = req.environ['nova.context']
-        LOG.debug(_("stop instance %r"), id)
         instance = self._get_instance(context, id)
-        self.compute_api.stop(context, instance)
+        LOG.debug(_('stop instance'), instance=instance)
+        try:
+            self.compute_api.stop(context, instance)
+        except exception.InstanceNotReady as e:
+            raise webob.exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
 
 class Server_start_stop(extensions.ExtensionDescriptor):
-    """Start/Stop instance compute API support"""
+    """Start/Stop instance compute API support."""
 
     name = "ServerStartStop"
     alias = "os-server-start-stop"

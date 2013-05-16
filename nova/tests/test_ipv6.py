@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-#    Copyright (c) 2011 OpenStack LLC
+#    Copyright (c) 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -17,7 +17,7 @@
 """Test suite for IPv6."""
 
 from nova import ipv6
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import test
 
 LOG = logging.getLogger(__name__)

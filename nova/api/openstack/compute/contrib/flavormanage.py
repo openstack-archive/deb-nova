@@ -20,7 +20,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.compute import instance_types
 from nova import exception
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -42,9 +42,10 @@ class FlavorManageController(wsgi.Controller):
         authorize(context)
 
         try:
-            flavor = instance_types.get_instance_type_by_flavor_id(id)
+            flavor = instance_types.get_instance_type_by_flavor_id(
+                    id, read_deleted="no")
         except exception.NotFound, e:
-            raise webob.exc.HTTPNotFound(explanation=str(e))
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
         instance_types.destroy(flavor['name'])
 
@@ -58,20 +59,23 @@ class FlavorManageController(wsgi.Controller):
 
         vals = body['flavor']
         name = vals['name']
-        flavorid = vals['id']
+        flavorid = vals.get('id')
         memory_mb = vals.get('ram')
         vcpus = vals.get('vcpus')
         root_gb = vals.get('disk')
         ephemeral_gb = vals.get('OS-FLV-EXT-DATA:ephemeral')
         swap = vals.get('swap')
         rxtx_factor = vals.get('rxtx_factor')
+        is_public = vals.get('os-flavor-access:is_public', True)
 
         try:
             flavor = instance_types.create(name, memory_mb, vcpus,
                                            root_gb, ephemeral_gb, flavorid,
-                                           swap, rxtx_factor)
-        except exception.InstanceTypeExists as err:
-            raise webob.exc.HTTPConflict(explanation=str(err))
+                                           swap, rxtx_factor, is_public)
+            req.cache_db_flavor(flavor)
+        except (exception.InstanceTypeExists,
+                exception.InstanceTypeIdExists) as err:
+            raise webob.exc.HTTPConflict(explanation=err.format_message())
 
         return self._view_builder.show(req, flavor)
 

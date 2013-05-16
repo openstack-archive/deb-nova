@@ -57,8 +57,8 @@ To run a single test module:
 
 import gettext
 import os
-import unittest
 import sys
+import unittest
 
 # If ../nova/__init__.py exists, add ../ to Python search path, so that
 # it will override what happens to be installed in /usr/(local/)lib/python...
@@ -110,7 +110,7 @@ class _AnsiColorizer(object):
                 except curses.error:
                     curses.setupterm()
                     return curses.tigetnum("colors") > 2
-            except:
+            except Exception:
                 raise
                 # guess false in case of error
                 return False
@@ -133,13 +133,17 @@ class _Win32Colorizer(object):
     See _AnsiColorizer docstring.
     """
     def __init__(self, stream):
-        from win32console import GetStdHandle, STD_OUT_HANDLE, \
-             FOREGROUND_RED, FOREGROUND_BLUE, FOREGROUND_GREEN, \
-             FOREGROUND_INTENSITY
+        from win32console import FOREGROUND_BLUE
+        from win32console import FOREGROUND_GREEN
+        from win32console import FOREGROUND_INTENSITY
+        from win32console import FOREGROUND_RED
+        from win32console import GetStdHandle
+        from win32console import STD_OUTPUT_HANDLE
+
         red, green, blue, bold = (FOREGROUND_RED, FOREGROUND_GREEN,
                                   FOREGROUND_BLUE, FOREGROUND_INTENSITY)
         self.stream = stream
-        self.screenBuffer = GetStdHandle(STD_OUT_HANDLE)
+        self.screenBuffer = GetStdHandle(STD_OUTPUT_HANDLE)
         self._colors = {
             'normal': red | green | blue,
             'red': red | bold,
@@ -155,7 +159,7 @@ class _Win32Colorizer(object):
         try:
             import win32console
             screenBuffer = win32console.GetStdHandle(
-                win32console.STD_OUT_HANDLE)
+                win32console.STD_OUTPUT_HANDLE)
         except ImportError:
             return False
         import pywintypes
@@ -291,8 +295,8 @@ class NovaTestRunner(core.TextTestRunner):
 
 if __name__ == '__main__':
     if not os.getenv('EC2_ACCESS_KEY'):
-        print _('Missing EC2 environment variables. Please ' \
-                'source the appropriate novarc file before ' \
+        print _('Missing EC2 environment variables. Please '
+                'source the appropriate novarc file before '
                 'running this test.')
         sys.exit(1)
 

@@ -12,14 +12,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.config import cfg
 import webob.dec
 import webob.exc
 
 from nova import context
-from nova import flags
 from nova import utils
 
-FLAGS = flags.FLAGS
+CONF = cfg.CONF
 
 
 class Fault(webob.exc.HTTPException):
@@ -44,7 +44,7 @@ class Fault(webob.exc.HTTPException):
         user_id, _sep, project_id = req.params['AWSAccessKeyId'].partition(':')
         project_id = project_id or user_id
         remote_address = getattr(req, 'remote_address', '127.0.0.1')
-        if FLAGS.use_forwarded_for:
+        if CONF.use_forwarded_for:
             remote_address = req.headers.get('X-Forwarded-For', remote_address)
 
         ctxt = context.RequestContext(user_id,
@@ -58,7 +58,8 @@ class Fault(webob.exc.HTTPException):
                          '<Response><Errors><Error><Code>%s</Code>'
                          '<Message>%s</Message></Error></Errors>'
                          '<RequestID>%s</RequestID></Response>' %
-                         (utils.utf8(code), utils.utf8(message),
-                         utils.utf8(ctxt.request_id)))
+                         (utils.xhtml_escape(utils.utf8(code)),
+                          utils.xhtml_escape(utils.utf8(message)),
+                          utils.xhtml_escape(utils.utf8(ctxt.request_id))))
 
         return resp

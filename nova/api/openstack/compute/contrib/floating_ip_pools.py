@@ -14,11 +14,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License
 
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
-from nova.api.openstack import extensions
-from nova import log as logging
 from nova import network
+from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -76,9 +76,9 @@ class FloatingIPPoolsController(object):
 
 
 class Floating_ip_pools(extensions.ExtensionDescriptor):
-    """Floating IPs support"""
+    """Floating IPs support."""
 
-    name = "Floating_ip_pools"
+    name = "FloatingIpPools"
     alias = "os-floating-ip-pools"
     namespace = ("http://docs.openstack.org/compute/ext/"
                  "floating_ip_pools/api/v1.1")

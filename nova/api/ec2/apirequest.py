@@ -26,11 +26,9 @@ from xml.dom import minidom
 
 from nova.api.ec2 import ec2utils
 from nova import exception
-from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-FLAGS = flags.FLAGS
 
 
 def _underscore_to_camelcase(str):
@@ -43,7 +41,7 @@ def _underscore_to_xmlcase(str):
 
 
 def _database_to_isoformat(datetimeobj):
-    """Return a xs:dateTime parsable string from datatime"""
+    """Return a xs:dateTime parsable string from datatime."""
     return datetimeobj.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + 'Z'
 
 

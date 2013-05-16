@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -22,10 +22,15 @@ import random
 
 import mox
 
+from nova.compute import rpcapi as compute_rpcapi
+from nova.compute import utils as compute_utils
+from nova.compute import vm_states
+from nova.conductor import api as conductor_api
 from nova import context
+from nova import db
 from nova import exception
-from nova.scheduler import driver
 from nova.scheduler import chance
+from nova.scheduler import driver
 from nova.tests.scheduler import test_scheduler
 
 
@@ -62,172 +67,131 @@ class ChanceSchedulerTestCase(test_scheduler.SchedulerTestCase):
         ctxt = context.RequestContext('fake', 'fake', False)
         ctxt_elevated = 'fake-context-elevated'
         fake_args = (1, 2, 3)
-        fake_kwargs = {'fake_kwarg1': 'fake_value1',
-                       'fake_kwarg2': 'fake_value2'}
-        instance_opts = {'fake_opt1': 'meow'}
-        request_spec = {'num_instances': 2,
-                        'instance_properties': instance_opts}
+        instance_opts = {'fake_opt1': 'meow', 'launch_index': -1}
         instance1 = {'uuid': 'fake-uuid1'}
         instance2 = {'uuid': 'fake-uuid2'}
+        request_spec = {'instance_uuids': ['fake-uuid1', 'fake-uuid2'],
+                        'instance_properties': instance_opts}
         instance1_encoded = {'uuid': 'fake-uuid1', '_is_precooked': False}
         instance2_encoded = {'uuid': 'fake-uuid2', '_is_precooked': False}
+        reservations = ['resv1', 'resv2']
 
-        # create_instance_db_entry() usually does this, but we're
-        # stubbing it.
-        def _add_uuid1(ctxt, request_spec):
-            request_spec['instance_properties']['uuid'] = 'fake-uuid1'
-
-        def _add_uuid2(ctxt, request_spec):
-            request_spec['instance_properties']['uuid'] = 'fake-uuid2'
+        def inc_launch_index(*args):
+            request_spec['instance_properties']['launch_index'] = (
+                request_spec['instance_properties']['launch_index'] + 1)
 
         self.mox.StubOutWithMock(ctxt, 'elevated')
         self.mox.StubOutWithMock(self.driver, 'hosts_up')
         self.mox.StubOutWithMock(random, 'random')
-        self.mox.StubOutWithMock(self.driver, 'create_instance_db_entry')
-        self.mox.StubOutWithMock(driver, 'cast_to_compute_host')
-        self.mox.StubOutWithMock(driver, 'encode_instance')
+        self.mox.StubOutWithMock(driver, 'instance_update_db')
+        self.mox.StubOutWithMock(compute_rpcapi.ComputeAPI, 'run_instance')
 
         ctxt.elevated().AndReturn(ctxt_elevated)
         # instance 1
         self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn(
                 ['host1', 'host2', 'host3', 'host4'])
         random.random().AndReturn(.5)
-        self.driver.create_instance_db_entry(ctxt,
-                request_spec).WithSideEffects(_add_uuid1).AndReturn(
-                instance1)
-        driver.cast_to_compute_host(ctxt, 'host3', 'run_instance',
-                instance_uuid=instance1['uuid'], **fake_kwargs)
-        driver.encode_instance(instance1).AndReturn(instance1_encoded)
+        driver.instance_update_db(ctxt, instance1['uuid']).WithSideEffects(
+                inc_launch_index).AndReturn(instance1)
+        compute_rpcapi.ComputeAPI.run_instance(ctxt, host='host3',
+                instance=instance1, requested_networks=None,
+                injected_files=None, admin_password=None, is_first_time=None,
+                request_spec=request_spec, filter_properties={})
+
         # instance 2
         ctxt.elevated().AndReturn(ctxt_elevated)
         self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn(
                 ['host1', 'host2', 'host3', 'host4'])
         random.random().AndReturn(.2)
-        self.driver.create_instance_db_entry(ctxt,
-                request_spec).WithSideEffects(_add_uuid2).AndReturn(
-                instance2)
-        driver.cast_to_compute_host(ctxt, 'host1', 'run_instance',
-                instance_uuid=instance2['uuid'], **fake_kwargs)
-        driver.encode_instance(instance2).AndReturn(instance2_encoded)
+        driver.instance_update_db(ctxt, instance2['uuid']).WithSideEffects(
+                inc_launch_index).AndReturn(instance2)
+        compute_rpcapi.ComputeAPI.run_instance(ctxt, host='host1',
+                instance=instance2, requested_networks=None,
+                injected_files=None, admin_password=None, is_first_time=None,
+                request_spec=request_spec, filter_properties={})
 
         self.mox.ReplayAll()
-        result = self.driver.schedule_run_instance(ctxt, request_spec,
-                *fake_args, **fake_kwargs)
-        expected = [instance1_encoded, instance2_encoded]
-        self.assertEqual(result, expected)
-
-    def test_scheduler_includes_launch_index(self):
-        ctxt = "fake-context"
-        instance_opts = {'fake_opt1': 'meow'}
-        request_spec = {'num_instances': 2,
-                        'instance_properties': instance_opts}
-        instance1 = {'uuid': 'fake-uuid1'}
-        instance2 = {'uuid': 'fake-uuid2'}
-
-        # create_instance_db_entry() usually does this, but we're
-        # stubbing it.
-        def _add_uuid(num):
-            """Return a function that adds the provided uuid number."""
-            def _add_uuid_num(_, spec):
-                spec['instance_properties']['uuid'] = 'fake-uuid%d' % num
-            return _add_uuid_num
-
-        def _has_launch_index(expected_index):
-            """Return a function that verifies the expected index."""
-            def _check_launch_index(value):
-                if 'instance_properties' in value:
-                    if 'launch_index' in value['instance_properties']:
-                        index = value['instance_properties']['launch_index']
-                        if index == expected_index:
-                            return True
-                return False
-            return _check_launch_index
-
-        self.mox.StubOutWithMock(self.driver, '_schedule')
-        self.mox.StubOutWithMock(self.driver, 'create_instance_db_entry')
-        self.mox.StubOutWithMock(driver, 'cast_to_compute_host')
-        self.mox.StubOutWithMock(driver, 'encode_instance')
-        # instance 1
-        self.driver._schedule(ctxt, 'compute', request_spec).AndReturn('host')
-        self.driver.create_instance_db_entry(
-            ctxt, mox.Func(_has_launch_index(0))
-            ).WithSideEffects(_add_uuid(1)).AndReturn(instance1)
-        driver.cast_to_compute_host(ctxt, 'host', 'run_instance',
-                                    instance_uuid=instance1['uuid'])
-        driver.encode_instance(instance1).AndReturn(instance1)
-        # instance 2
-        self.driver._schedule(ctxt, 'compute', request_spec).AndReturn('host')
-        self.driver.create_instance_db_entry(
-            ctxt, mox.Func(_has_launch_index(1))
-            ).WithSideEffects(_add_uuid(2)).AndReturn(instance2)
-        driver.cast_to_compute_host(ctxt, 'host', 'run_instance',
-                                    instance_uuid=instance2['uuid'])
-        driver.encode_instance(instance2).AndReturn(instance2)
-        self.mox.ReplayAll()
-
-        self.driver.schedule_run_instance(ctxt, request_spec)
+        self.driver.schedule_run_instance(ctxt, request_spec,
+                None, None, None, None, {})
 
     def test_basic_schedule_run_instance_no_hosts(self):
         ctxt = context.RequestContext('fake', 'fake', False)
         ctxt_elevated = 'fake-context-elevated'
         fake_args = (1, 2, 3)
-        fake_kwargs = {'fake_kwarg1': 'fake_value1',
-                       'fake_kwarg2': 'fake_value2'}
-        instance_opts = 'fake_instance_opts'
-        request_spec = {'num_instances': 2,
+        uuid = 'fake-uuid1'
+        instance_opts = {'fake_opt1': 'meow', 'launch_index': -1}
+        request_spec = {'instance_uuids': [uuid],
                         'instance_properties': instance_opts}
 
         self.mox.StubOutWithMock(ctxt, 'elevated')
         self.mox.StubOutWithMock(self.driver, 'hosts_up')
+        self.mox.StubOutWithMock(compute_utils, 'add_instance_fault_from_exc')
+        self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
 
         # instance 1
         ctxt.elevated().AndReturn(ctxt_elevated)
         self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn([])
+        old_ref, new_ref = db.instance_update_and_get_original(ctxt, uuid,
+                {'vm_state': vm_states.ERROR,
+                 'task_state': None}).AndReturn(({}, {}))
+        compute_utils.add_instance_fault_from_exc(ctxt,
+                mox.IsA(conductor_api.LocalAPI), new_ref,
+                mox.IsA(exception.NoValidHost), mox.IgnoreArg())
 
         self.mox.ReplayAll()
-        self.assertRaises(exception.NoValidHost,
-                self.driver.schedule_run_instance, ctxt, request_spec,
-                *fake_args, **fake_kwargs)
+        self.driver.schedule_run_instance(
+                ctxt, request_spec, None, None, None, None, {})
 
-    def test_basic_schedule_fallback(self):
+    def test_schedule_prep_resize_doesnt_update_host(self):
+        fake_context = context.RequestContext('user', 'project',
+                is_admin=True)
+
+        def _return_host(*args, **kwargs):
+            return 'host2'
+
+        self.stubs.Set(self.driver, '_schedule', _return_host)
+
+        info = {'called': 0}
+
+        def _fake_instance_update_db(*args, **kwargs):
+            # This should not be called
+            info['called'] = 1
+
+        self.stubs.Set(driver, 'instance_update_db',
+                _fake_instance_update_db)
+
+        instance = {'uuid': 'fake-uuid', 'host': 'host1'}
+
+        self.driver.schedule_prep_resize(fake_context, {}, {}, {},
+                instance, {}, None)
+        self.assertEqual(info['called'], 0)
+
+    def test_select_hosts(self):
         ctxt = context.RequestContext('fake', 'fake', False)
         ctxt_elevated = 'fake-context-elevated'
-        topic = 'fake_topic'
-        method = 'fake_method'
         fake_args = (1, 2, 3)
-        fake_kwargs = {'fake_kwarg1': 'fake_value1',
-                       'fake_kwarg2': 'fake_value2'}
+        instance_opts = {'fake_opt1': 'meow', 'launch_index': -1}
+        instance1 = {'uuid': 'fake-uuid1'}
+        instance2 = {'uuid': 'fake-uuid2'}
+        request_spec = {'instance_uuids': ['fake-uuid1', 'fake-uuid2'],
+                        'instance_properties': instance_opts}
 
         self.mox.StubOutWithMock(ctxt, 'elevated')
         self.mox.StubOutWithMock(self.driver, 'hosts_up')
         self.mox.StubOutWithMock(random, 'random')
-        self.mox.StubOutWithMock(driver, 'cast_to_host')
 
         ctxt.elevated().AndReturn(ctxt_elevated)
-        self.driver.hosts_up(ctxt_elevated, topic).AndReturn(
-                ['host1', 'host2', 'host3', 'host4'])
+        # instance 1
+        self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn(
+            ['host1', 'host2', 'host3', 'host4'])
         random.random().AndReturn(.5)
-        driver.cast_to_host(ctxt, topic, 'host3', method, **fake_kwargs)
 
-        self.mox.ReplayAll()
-        self.driver.schedule(ctxt, topic, method, *fake_args, **fake_kwargs)
-
-    def test_basic_schedule_fallback_no_hosts(self):
-        ctxt = context.RequestContext('fake', 'fake', False)
-        ctxt_elevated = 'fake-context-elevated'
-        topic = 'fake_topic'
-        method = 'fake_method'
-        fake_args = (1, 2, 3)
-        fake_kwargs = {'fake_kwarg1': 'fake_value1',
-                       'fake_kwarg2': 'fake_value2'}
-
-        self.mox.StubOutWithMock(ctxt, 'elevated')
-        self.mox.StubOutWithMock(self.driver, 'hosts_up')
-
+        # instance 2
         ctxt.elevated().AndReturn(ctxt_elevated)
-        self.driver.hosts_up(ctxt_elevated, topic).AndReturn([])
+        self.driver.hosts_up(ctxt_elevated, 'compute').AndReturn(
+            ['host1', 'host2', 'host3', 'host4'])
+        random.random().AndReturn(.2)
 
         self.mox.ReplayAll()
-        self.assertRaises(exception.NoValidHost,
-                self.driver.schedule, ctxt, topic, method,
-                *fake_args, **fake_kwargs)
+        hosts = self.driver.select_hosts(ctxt, request_spec, {})
+        self.assertEquals(['host3', 'host1'], hosts)

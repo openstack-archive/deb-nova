@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2011 OpenStack LLC.
+# Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -20,18 +20,14 @@ from webob import exc
 from nova.api.openstack import common
 from nova.api.openstack import wsgi
 from nova import exception
-from nova import flags
-from nova import image
-
-
-FLAGS = flags.FLAGS
+from nova.image import glance
 
 
 class Controller(object):
-    """The image metadata API controller for the OpenStack API"""
+    """The image metadata API controller for the OpenStack API."""
 
     def __init__(self):
-        self.image_service = image.get_default_image_service()
+        self.image_service = glance.get_default_image_service()
 
     def _get_image(self, context, image_id):
         try:
@@ -42,7 +38,7 @@ class Controller(object):
 
     @wsgi.serializers(xml=common.MetadataTemplate)
     def index(self, req, image_id):
-        """Returns the list of metadata for a given instance"""
+        """Returns the list of metadata for a given instance."""
         context = req.environ['nova.context']
         metadata = self._get_image(context, image_id)['properties']
         return dict(metadata=metadata)
@@ -64,8 +60,9 @@ class Controller(object):
         if 'metadata' in body:
             for key, value in body['metadata'].iteritems():
                 image['properties'][key] = value
-        common.check_img_metadata_quota_limit(context, image['properties'])
-        self.image_service.update(context, image_id, image, None)
+        common.check_img_metadata_properties_quota(context,
+                                                   image['properties'])
+        image = self.image_service.update(context, image_id, image, None)
         return dict(metadata=image['properties'])
 
     @wsgi.serializers(xml=common.MetaItemTemplate)
@@ -79,7 +76,7 @@ class Controller(object):
             expl = _('Incorrect request body format')
             raise exc.HTTPBadRequest(explanation=expl)
 
-        if not id in meta:
+        if id not in meta:
             expl = _('Request body and URI mismatch')
             raise exc.HTTPBadRequest(explanation=expl)
         if len(meta) > 1:
@@ -88,7 +85,8 @@ class Controller(object):
 
         image = self._get_image(context, image_id)
         image['properties'][id] = meta[id]
-        common.check_img_metadata_quota_limit(context, image['properties'])
+        common.check_img_metadata_properties_quota(context,
+                                                   image['properties'])
         self.image_service.update(context, image_id, image, None)
         return dict(meta=meta)
 
@@ -98,7 +96,7 @@ class Controller(object):
         context = req.environ['nova.context']
         image = self._get_image(context, image_id)
         metadata = body.get('metadata', {})
-        common.check_img_metadata_quota_limit(context, metadata)
+        common.check_img_metadata_properties_quota(context, metadata)
         image['properties'] = metadata
         self.image_service.update(context, image_id, image, None)
         return dict(metadata=metadata)
@@ -107,7 +105,7 @@ class Controller(object):
     def delete(self, req, image_id, id):
         context = req.environ['nova.context']
         image = self._get_image(context, image_id)
-        if not id in image['properties']:
+        if id not in image['properties']:
             msg = _("Invalid metadata key")
             raise exc.HTTPNotFound(explanation=msg)
         image['properties'].pop(id)
