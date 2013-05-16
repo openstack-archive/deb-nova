@@ -145,8 +145,8 @@ class ResourceTracker(object):
 
             # Mark the resources in-use for the resize landing on this
             # compute host:
-            self._update_usage_from_migration(instance_ref, self.compute_node,
-                                              migration_ref)
+            self._update_usage_from_migration(context, instance_ref,
+                                              self.compute_node, migration_ref)
             elevated = context.elevated()
             self._update(elevated, self.compute_node)
 
@@ -226,7 +226,7 @@ class ResourceTracker(object):
         return self.compute_node is None
 
     @lockutils.synchronized(COMPUTE_RESOURCE_SEMAPHORE, 'nova-')
-    def update_available_resource(self, context, delete=False):
+    def update_available_resource(self, context):
         """Override in-memory calculations of compute node resource usage based
         on data audited from the hypervisor layer.
 
@@ -236,16 +236,13 @@ class ResourceTracker(object):
         """
         LOG.audit(_("Auditing locally available compute resources"))
         resources = self.driver.get_available_resource(self.nodename)
+
         if not resources:
-            if delete:
-                self._delete_compute_node(context)
-                return
-            else:
-                # The virt driver does not support this function
-                LOG.audit(_("Virt driver does not support "
-                    "'get_available_resource'  Compute tracking is disabled."))
-                self.compute_node = None
-                return
+            # The virt driver does not support this function
+            LOG.audit(_("Virt driver does not support "
+                 "'get_available_resource'  Compute tracking is disabled."))
+            self.compute_node = None
+            return
 
         self._verify_resources(resources)
 
@@ -263,7 +260,7 @@ class ResourceTracker(object):
         migrations = capi.migration_get_in_progress_by_host_and_node(context,
                 self.host, self.nodename)
 
-        self._update_usage_from_migrations(resources, migrations)
+        self._update_usage_from_migrations(context, resources, migrations)
 
         # Detect and account for orphaned instances that may exist on the
         # hypervisor, but are not in the DB:
@@ -273,13 +270,6 @@ class ResourceTracker(object):
         self._report_final_resource_view(resources)
 
         self._sync_compute_node(context, resources)
-
-    def _delete_compute_node(self, context):
-        """Delete a compute node DB record."""
-        if self.compute_node:
-            LOG.audit(_("Deleting compute node %s") % self.compute_node['id'])
-            self.compute_node = self.conductor_api.compute_node_delete(
-                    context, self.compute_node)
 
     def _sync_compute_node(self, context, resources):
         """Create or update the compute node DB record."""
@@ -387,7 +377,8 @@ class ResourceTracker(object):
         resources['running_vms'] = self.stats.num_instances
         resources['vcpus_used'] = self.stats.num_vcpus_used
 
-    def _update_usage_from_migration(self, instance, resources, migration):
+    def _update_usage_from_migration(self, context, instance, resources,
+                                     migration):
         """Update usage for a single migration.  The record may
         represent an incoming or outbound migration.
         """
@@ -408,19 +399,23 @@ class ResourceTracker(object):
             # instance is *not* in:
             if (instance['instance_type_id'] ==
                 migration['old_instance_type_id']):
-                itype = instance_types.extract_instance_type(instance)
+                itype = self._get_instance_type(context, instance, 'new_',
+                        migration['new_instance_type_id'])
             else:
                 # instance record already has new flavor, hold space for a
                 # possible revert to the old instance type:
-                itype = instance_types.extract_instance_type(instance, 'old_')
+                itype = self._get_instance_type(context, instance, 'old_',
+                        migration['old_instance_type_id'])
 
         elif incoming and not record:
             # instance has not yet migrated here:
-            itype = instance_types.extract_instance_type(instance, 'new_')
+            itype = self._get_instance_type(context, instance, 'new_',
+                    migration['new_instance_type_id'])
 
         elif outbound and not record:
             # instance migrated, but record usage for a possible revert:
-            itype = instance_types.extract_instance_type(instance, 'old_')
+            itype = self._get_instance_type(context, instance, 'old_',
+                    migration['old_instance_type_id'])
 
         if itype:
             self.stats.update_stats_for_migration(itype)
@@ -428,7 +423,7 @@ class ResourceTracker(object):
             resources['stats'] = self.stats
             self.tracked_migrations[uuid] = (migration, itype)
 
-    def _update_usage_from_migrations(self, resources, migrations):
+    def _update_usage_from_migrations(self, context, resources, migrations):
 
         self.tracked_migrations.clear()
 
@@ -458,8 +453,9 @@ class ResourceTracker(object):
                 filtered[uuid] = migration
 
         for migration in filtered.values():
+            instance = migration['instance']
             try:
-                self._update_usage_from_migration(instance, resources,
+                self._update_usage_from_migration(context, instance, resources,
                                                   migration)
             except exception.InstanceTypeNotFound:
                 LOG.warn(_("InstanceType could not be found, skipping "
@@ -575,3 +571,19 @@ class ResourceTracker(object):
             return True
 
         return False
+
+    def _get_instance_type(self, context, instance, prefix,
+            instance_type_id=None):
+        """Get the instance type from sys metadata if it's stashed.  If not,
+        fall back to fetching it via the conductor API.
+
+        See bug 1164110
+        """
+        if not instance_type_id:
+            instance_type_id = instance['instance_type_id']
+
+        try:
+            return instance_types.extract_instance_type(instance, prefix)
+        except KeyError:
+            return self.conductor_api.instance_type_get(context,
+                    instance_type_id)

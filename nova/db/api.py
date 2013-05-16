@@ -496,6 +496,11 @@ def fixed_ip_get_by_instance(context, instance_uuid):
     return IMPL.fixed_ip_get_by_instance(context, instance_uuid)
 
 
+def fixed_ip_get_by_host(context, host):
+    """Get fixed ips by compute host."""
+    return IMPL.fixed_ip_get_by_host(context, host)
+
+
 def fixed_ip_get_by_network_host(context, network_uuid, host):
     """Get fixed ip for a host in a network."""
     return IMPL.fixed_ip_get_by_network_host(context, network_uuid, host)
@@ -604,11 +609,13 @@ def instance_get_all(context, columns_to_join=None):
 
 
 def instance_get_all_by_filters(context, filters, sort_key='created_at',
-                                sort_dir='desc', limit=None, marker=None):
+                                sort_dir='desc', limit=None, marker=None,
+                                columns_to_join=None):
     """Get all instances that match all filters."""
     return IMPL.instance_get_all_by_filters(context, filters, sort_key,
                                             sort_dir, limit=limit,
-                                            marker=marker)
+                                            marker=marker,
+                                            columns_to_join=columns_to_join)
 
 
 def instance_get_active_by_window_joined(context, begin, end=None,
@@ -622,9 +629,9 @@ def instance_get_active_by_window_joined(context, begin, end=None,
                                               project_id, host)
 
 
-def instance_get_all_by_host(context, host):
+def instance_get_all_by_host(context, host, columns_to_join=None):
     """Get all instances belonging to a host."""
-    return IMPL.instance_get_all_by_host(context, host)
+    return IMPL.instance_get_all_by_host(context, host, columns_to_join)
 
 
 def instance_get_all_by_host_and_node(context, host, node):

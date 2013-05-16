@@ -20,6 +20,7 @@
 """Unit tests for the DB API."""
 
 import datetime
+import types
 import uuid as stdlib_uuid
 
 from oslo.config import cfg
@@ -30,6 +31,7 @@ from sqlalchemy.sql.expression import select
 
 from nova import context
 from nova import db
+from nova.db.sqlalchemy import api as sqlalchemy_api
 from nova import exception
 from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common import timeutils
@@ -55,7 +57,8 @@ class DbTestCase(test.TestCase):
 
     def create_instances_with_args(self, **kwargs):
         args = {'reservation_id': 'a', 'image_ref': 1, 'host': 'host1',
-                'project_id': self.project_id, 'vm_state': 'fake'}
+                'node': 'node1', 'project_id': self.project_id,
+                'vm_state': 'fake'}
         if 'context' in kwargs:
             ctxt = kwargs.pop('context')
             args['project_id'] = ctxt.project_id
@@ -63,6 +66,20 @@ class DbTestCase(test.TestCase):
             ctxt = self.context
         args.update(kwargs)
         return db.instance_create(ctxt, args)
+
+    def fake_metadata(self, content):
+        meta = {}
+        for i in range(0, 10):
+            meta["foo%i" % i] = "this is %s item %i" % (content, i)
+        return meta
+
+    def create_metadata_for_instance(self, instance_uuid):
+        meta = self.fake_metadata('metadata')
+        db.instance_metadata_update(self.context, instance_uuid, meta, False)
+        sys_meta = self.fake_metadata('system_metadata')
+        db.instance_system_metadata_update(self.context, instance_uuid,
+                                           sys_meta, False)
+        return meta, sys_meta
 
 
 class DbApiTestCase(DbTestCase):
@@ -111,6 +128,37 @@ class DbApiTestCase(DbTestCase):
         check_exc_format(db.get_ec2_instance_id_by_uuid)
         check_exc_format(db.get_instance_uuid_by_ec2_id)
 
+    def test_instance_get_all_with_meta(self):
+        inst = self.create_instances_with_args()
+        fake_meta, fake_sys = self.create_metadata_for_instance(inst['uuid'])
+        result = db.instance_get_all(self.context)
+        for inst in result:
+            meta = utils.metadata_to_dict(inst['metadata'])
+            self.assertEqual(meta, fake_meta)
+            sys_meta = utils.metadata_to_dict(inst['system_metadata'])
+            self.assertEqual(sys_meta, fake_sys)
+
+    def test_instance_get_all_by_filters_with_meta(self):
+        inst = self.create_instances_with_args()
+        fake_meta, fake_sys = self.create_metadata_for_instance(inst['uuid'])
+        result = db.instance_get_all_by_filters(self.context, {})
+        for inst in result:
+            meta = utils.metadata_to_dict(inst['metadata'])
+            self.assertEqual(meta, fake_meta)
+            sys_meta = utils.metadata_to_dict(inst['system_metadata'])
+            self.assertEqual(sys_meta, fake_sys)
+
+    def test_instance_get_all_by_filters_without_meta(self):
+        inst = self.create_instances_with_args()
+        fake_meta, fake_sys = self.create_metadata_for_instance(inst['uuid'])
+        result = db.instance_get_all_by_filters(self.context, {},
+                                                columns_to_join=[])
+        for inst in result:
+            meta = utils.metadata_to_dict(inst['metadata'])
+            self.assertEqual(meta, {})
+            sys_meta = utils.metadata_to_dict(inst['system_metadata'])
+            self.assertEqual(sys_meta, {})
+
     def test_instance_get_all_by_filters(self):
         self.create_instances_with_args()
         self.create_instances_with_args()
@@ -150,6 +198,20 @@ class DbApiTestCase(DbTestCase):
             self.assertTrue(result[0]['deleted'])
         else:
             self.assertTrue(result[1]['deleted'])
+
+    def test_instance_get_all_by_host_and_node_no_join(self):
+        # Test that system metadata is not joined.
+        sys_meta = {'foo': 'bar'}
+        expected = self.create_instances_with_args(system_metadata=sys_meta)
+
+        elevated = self.context.elevated()
+        instances = db.instance_get_all_by_host_and_node(elevated, 'host1',
+                                                         'node1')
+        self.assertEqual(1, len(instances))
+        instance = instances[0]
+        self.assertEqual(expected['uuid'], instance['uuid'])
+        sysmeta = dict(instance)['system_metadata']
+        self.assertEqual(len(sysmeta), 0)
 
     def test_migration_get_unconfirmed_by_dest_compute(self):
         ctxt = context.get_admin_context()
@@ -239,6 +301,27 @@ class DbApiTestCase(DbTestCase):
         floating = db.floating_ip_create(ctxt, values)
         fixed_ip_ref = db.fixed_ip_get_by_floating_address(ctxt, floating)
         self.assertEqual(fixed, fixed_ip_ref['address'])
+
+    def test_fixed_ip_get_by_host(self):
+        ctxt = context.get_admin_context()
+
+        values = {'address': 'fixed1'}
+        fixed1 = db.fixed_ip_create(ctxt, values)
+        instance1 = self.create_instances_with_args()
+        db.fixed_ip_associate(ctxt, 'fixed1', instance1['uuid'])
+
+        values = {'address': 'fixed2'}
+        fixed2 = db.fixed_ip_create(ctxt, values)
+        instance2 = self.create_instances_with_args()
+        db.fixed_ip_associate(ctxt, 'fixed2', instance2['uuid'])
+
+        values = {'address': 'fixed3'}
+        fixed3 = db.fixed_ip_create(ctxt, values)
+        instance3 = self.create_instances_with_args(host='host2')
+        db.fixed_ip_associate(ctxt, 'fixed3', instance3['uuid'])
+
+        result = db.fixed_ip_get_by_host(ctxt, 'host1')
+        self.assertEqual(2, len(result))
 
     def test_floating_ip_get_by_fixed_address(self):
         ctxt = context.get_admin_context()
@@ -1494,6 +1577,26 @@ class AggregateDBApiTestCase(test.TestCase):
                           ctxt, result['id'], _get_fake_aggr_hosts()[0])
 
 
+class SqlAlchemyDbApiTestCase(DbTestCase):
+    def test_instance_get_all_by_host(self):
+        ctxt = context.get_admin_context()
+
+        self.create_instances_with_args()
+        self.create_instances_with_args()
+        self.create_instances_with_args(host='host2')
+        result = sqlalchemy_api._instance_get_all_uuids_by_host(ctxt, 'host1')
+        self.assertEqual(2, len(result))
+
+    def test_instance_get_all_uuids_by_host(self):
+        ctxt = context.get_admin_context()
+        self.create_instances_with_args()
+        self.create_instances_with_args()
+        self.create_instances_with_args(host='host2')
+        result = sqlalchemy_api._instance_get_all_uuids_by_host(ctxt, 'host1')
+        self.assertEqual(2, len(result))
+        self.assertEqual(types.UnicodeType, type(result[0]))
+
+
 class CapacityTestCase(test.TestCase):
     def setUp(self):
         super(CapacityTestCase, self).setUp()
@@ -2535,6 +2638,15 @@ class ArchiveTestCase(test.TestCase):
         # SQLite doesn't enforce foreign key constraints without a pragma.
         dialect = self.engine.url.get_dialect()
         if dialect == sqlite.dialect:
+            # We're seeing issues with foreign key support in SQLite 3.6.20
+            # SQLAlchemy doesn't support it at all with < SQLite 3.6.19
+            # It works fine in SQLite 3.7.
+            # So return early to skip this test if running SQLite < 3.7
+            import sqlite3
+            tup = sqlite3.sqlite_version_info
+            if tup[0] < 3 or (tup[0] == 3 and tup[1] < 7):
+                self.skipTest(
+                    'sqlite version too old for reliable SQLA foreign_keys')
             self.conn.execute("PRAGMA foreign_keys = ON")
         insert_statement = self.console_pools.insert().values(deleted=1)
         result = self.conn.execute(insert_statement)

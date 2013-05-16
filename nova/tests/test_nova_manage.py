@@ -15,6 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import fixtures
 import imp
 import os
 import StringIO
@@ -66,6 +67,24 @@ class FixedIpCommandsTestCase(test.TestCase):
                           self.commands.unreserve,
                           '55.55.55.55')
 
+    def test_list(self):
+        self.useFixture(fixtures.MonkeyPatch('sys.stdout',
+                                             StringIO.StringIO()))
+        self.commands.list()
+        self.assertTrue(sys.stdout.getvalue().find('192.168.0.100') != -1)
+
+    def test_list_just_one_host(self):
+        def fake_fixed_ip_get_by_host(*args, **kwargs):
+            return [db_fakes.fixed_ip_fields]
+
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.db.fixed_ip_get_by_host',
+            fake_fixed_ip_get_by_host))
+        self.useFixture(fixtures.MonkeyPatch('sys.stdout',
+                                             StringIO.StringIO()))
+        self.commands.list('banana')
+        self.assertTrue(sys.stdout.getvalue().find('192.168.0.100') != -1)
+
 
 class FloatingIpCommandsTestCase(test.TestCase):
     def setUp(self):
@@ -99,6 +118,13 @@ class FloatingIpCommandsTestCase(test.TestCase):
         result = address_to_hosts('192.168.100.0/28')
         self.assertTrue(len(list(result)) == 14)
         assert_loop(result, expected)
+        # /16
+        result = address_to_hosts('192.168.100.0/16')
+        self.assertTrue(len(list(result)) == 65534)
+        # NOTE(dripton): I don't test /13 because it makes the test take 3s.
+        # /12 gives over a million IPs, which is ridiculous.
+        self.assertRaises(exception.InvalidInput, address_to_hosts,
+                          '192.168.100.1/12')
 
 
 class NetworkCommandsTestCase(test.TestCase):

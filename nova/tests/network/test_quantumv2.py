@@ -19,6 +19,7 @@ import uuid
 
 import mox
 from oslo.config import cfg
+from quantumclient.common import exceptions as qexceptions
 from quantumclient.v2_0 import client
 
 from nova.compute import instance_types
@@ -825,6 +826,20 @@ class TestQuantumv2(test.TestCase):
         except exception.NetworkNotFound as ex:
             self.assertTrue("my_netid2, my_netid3" in str(ex))
 
+    def test_validate_networks_duplicate(self):
+        """Verify that the correct exception is thrown when duplicate
+           network ids are passed to validate_networks.
+        """
+        requested_networks = [('my_netid1', None, None),
+                              ('my_netid1', None, None)]
+        self.mox.ReplayAll()
+        # Expected call from setUp.
+        quantumv2.get_client(None)
+        api = quantumapi.API()
+        self.assertRaises(exception.NetworkDuplicated,
+                          api.validate_networks,
+                          self.context, requested_networks)
+
     def _mock_list_ports(self, port_data=None):
         if port_data is None:
             port_data = self.port_data2
@@ -1209,6 +1224,18 @@ class TestQuantumv2(test.TestCase):
 
         self.mox.ReplayAll()
         api.remove_fixed_ip_from_instance(self.context, self.instance, address)
+
+    def test_list_floating_ips_without_l3_support(self):
+        api = quantumapi.API()
+        QuantumNotFound = qexceptions.QuantumClientException(
+            status_code=404)
+        self.moxed_client.list_floatingips(
+            fixed_ip_address='1.1.1.1', port_id=1).AndRaise(QuantumNotFound)
+        self.mox.ReplayAll()
+        quantumv2.get_client('fake')
+        floatingips = api._get_floating_ips_by_fixed_and_port(
+            self.moxed_client, '1.1.1.1', 1)
+        self.assertEqual(floatingips, [])
 
 
 class TestQuantumv2ModuleMethods(test.TestCase):
