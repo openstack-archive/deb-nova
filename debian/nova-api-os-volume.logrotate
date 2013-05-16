@@ -1,4 +1,0 @@
-/var/log/nova/nova-api-os-volume.log {
-    daily
-    missingok
-}

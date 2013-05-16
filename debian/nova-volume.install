@@ -1,2 +1,0 @@
-usr/bin/nova-volume
-usr/lib/python*/dist-packages/nova/rootwrap/volume.py
