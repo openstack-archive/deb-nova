@@ -202,7 +202,7 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, dpkg-dev, libvirt-bin, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-kvm, nova-compute-qemu, nova-compute-uml, nova-compute-xen
+Conflicts: nova-compute-kvm, nova-compute-qemu, nova-compute-uml, nova-compute-xen, nova-baremetal
 Description: OpenStack Compute - compute node (LXC)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -222,7 +222,7 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, dpkg-dev, libvirt-bin, user-mode-linux, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-xen, nova-compute-qemu, nova-compute-kvm
+Conflicts: nova-compute-lxc, nova-compute-xen, nova-compute-qemu, nova-compute-kvm, nova-baremetal
 Description: OpenStack Compute - compute node (UserModeLinux)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -242,7 +242,7 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-xenapi, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-qemu, nova-compute-kvm
+Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-qemu, nova-compute-kvm, nova-baremetal
 Description: OpenStack Compute - compute node (Xen)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -263,7 +263,7 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, dpkg-dev, libvirt-bin, qemu, ${misc:Depends}, adduser, nova-common
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-kvm
+Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-kvm, nova-baremetal
 Description: OpenStack Compute - compute node (QEmu)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -284,7 +284,7 @@ Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser, nova-common, dpkg-dev
 Recommends: guestmount
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-qemu
+Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-qemu, nova-baremetal
 Description: OpenStack Compute - compute node (KVM)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -552,7 +552,6 @@ Description: OpenStack Compute - Console Authenticator
  user requests for console access based on tokens in the identity service and
  allows access to virtual consoles via a browser.
 
-
 Package: nova-doc
 Architecture: all
 Section: doc
@@ -596,10 +595,16 @@ Description: Openstack Compute - cells
 Package: nova-baremetal
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: nova-common (= ${binary:Version}),
+Depends: dnsmasq,
+ ipmitool,
+ open-iscsi,
+ syslinux,
+ nova-common (= ${binary:Version}),
  ${misc:Depends},  
  ${ostack-lsb-base},
  ${python:Depends}
+Provides: nova-compute-hypervisor
+Conflicts: nova-compute-kvm, nova-compute-qemu, nova-compute-uml, nova-compute-lxc, nova-compute-xen
 Description: Openstack Compute - baremetal virt
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
