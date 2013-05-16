@@ -1,5 +1,7 @@
-nova (2013.1-2) experimental; urgency=low
+nova (2013.1.1-1) unstable; urgency=low
 
+  * Uploading to unstable.
+  * New upstream release.
   * Added Should-Start/stop: postgresql mysql in init scripts (Closes: #706013)
     thanks to Julien Cristau for reporting.
   * Fixed logrotate scripts for nova-xvpvncproxy and nova-consoleauth
