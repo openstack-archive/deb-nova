@@ -639,4 +639,4 @@ Description: Openstack Compute - Spice HTML5 Proxy
  many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
- This is the baremetal virt component.
+ This package provides the SPICE html5 proxy.
