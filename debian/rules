@@ -71,6 +71,7 @@ override_dh_fixperms:
 		chmod +x $$i ; \
 	done
 	# Don't ask, that's as stupid as it seems... (and it wouldn't work without this!)
+	mkdir -p $(CURDIR)/debian/nova-xcp-plugins/etc/xcp
 	echo "{}" >$(CURDIR)/debian/nova-xcp-plugins/etc/xcp/xenhost.conf
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
