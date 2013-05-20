@@ -11,6 +11,7 @@ nova (2013.1.1-1) unstable; urgency=low
     api-paste.ini (Closes: #707600).
   * Removes memcache_convert_host_value_from_unicode_to_a_string.patch which
     is now applied upstream.
+  * Moves Suggests: as Depends: for novnc and websockify for nova-novncproxy.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Apr 2013 00:04:19 +0800
 
