@@ -382,7 +382,7 @@ Section: oldlibs
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: cinder-volume, cinder-api, cinder-scheduler, ${misc:Depends}
-Description: OpenStack Compute - storage
+Description: OpenStack Compute - storage metapackage
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
  and private cloud providers regardless of size, by being simple to implement
@@ -394,7 +394,7 @@ Description: OpenStack Compute - storage
  many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
- This package equips a system to function as a storage node.
+ This metapackage is for the transition from nova-volume to Cinder.
 
 Package: nova-xvpvncproxy
 Provides: nova-vncproxy
@@ -640,4 +640,4 @@ Description: Openstack Compute - Spice HTML5 Proxy
  many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
- This is the baremetal virt component.
+ This package provides the SPICE html5 proxy.
