@@ -580,7 +580,8 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Conflicts: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy
 Replaces: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy
-Depends: nova-common (= ${binary:Version}),
+Depends: debconf,
+ nova-common (= ${binary:Version}),
  novnc,
  websockify,
  spice-html5,
