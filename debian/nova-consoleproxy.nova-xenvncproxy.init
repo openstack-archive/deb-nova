@@ -9,7 +9,7 @@
 # Description:       Nova XVP VNC proxy
 ### END INIT INFO
 
-# Author: Julien Danjou <acid@debian.org>
+# Authors: Julien Danjou <acid@debian.org> & Thomas Goirand <zigo@debian.org>
 
 # PATH should only include /usr/* if it runs after the mountnfs.sh script
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
@@ -26,9 +26,13 @@ DEFAULTS_FILE=/etc/default/nova-common
 # Exit if the package is not installed, or the default file not present,
 # or not set to this daemon
 [ -x $DAEMON ] || exit 0
-[ ! -r /etc/default/nova-consoleproxy ] || exit 0
+if ! [ -r /etc/default/nova-consoleproxy ] ; then
+	exit 0
+fi
 . /etc/default/nova-consoleproxy
-[ ! "${NOVA_CONSOLE_PROXY_TYPE}" = "xenvnc" ] || exit 0 
+if ! [ "${NOVA_CONSOLE_PROXY_TYPE}" = "xenvnc" ] ; then
+	exit 0
+fi
 
 mkdir -p ${LOCK_DIR}
 chown ${NOVA_USER} ${LOCK_DIR}
