@@ -132,6 +132,7 @@ Depends: ${python:Depends},
  python-xattr,
  sudo,
  websockify,
+ subunit,
  ${misc:Depends}
 Suggests: python-suds (>= 0.4.0),
 Conflicts: python-cjson
