@@ -396,52 +396,6 @@ Description: OpenStack Compute - storage metapackage
  .
  This metapackage is for the transition from nova-volume to Cinder.
 
-Package: nova-xvpvncproxy
-Provides: nova-vncproxy
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
-Description: OpenStack Compute - XVP VNC proxy
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package provides the XVP VNC proxy. It is a publicly reachable
- component which proxies access to VNCs running on compute nodes.
-
-Package: nova-novncproxy
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: nova-common (= ${binary:Version}),
- novnc,
- websockify,
- ${misc:Depends},   
- ${ostack-lsb-base},
- ${python:Depends}
-Description: OpenStack Compute - NoVNC proxy
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to
- implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it
- supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package provides the VNC proxy. It is a publically reachable
- component which proxies access to VNCs running on compute nodes. 
-
 Package: nova-api
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
@@ -620,24 +574,31 @@ Description: Openstack Compute - baremetal virt
  .
  This is the baremetal virt component.
 
-Package: nova-spicehtml5proxy
+Package: nova-consoleproxy
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
+ novnc,
+ websockify,
  spice-html5,
- ${misc:Depends},
+ ${misc:Depends},   
  ${ostack-lsb-base},
  ${python:Depends}
-Description: Openstack Compute - Spice HTML5 Proxy
+Description: OpenStack Compute - NoVNC proxy
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
+ and private cloud providers regardless of size, by being simple to
+ implement
  and massively scalable.
  .
  OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
  designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+ "native" OpenStack API, it also supports the Amazon EC2 API, and it
+ supports
  many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
- This package provides the SPICE html5 proxy.
+ This package provides the proxy for the console in Nova: either the VNC proxy,
+ the SPICE HTML5 proxy, or the XVP (Xen VNC Proxy) proxy. It is a publically
+ reachable component which proxies access to the console running on compute
+ nodes.

@@ -1,0 +1,3 @@
+usr/bin/nova-novncproxy
+usr/bin/nova-spicehtml5proxy
+usr/bin/nova-xvpvncproxy

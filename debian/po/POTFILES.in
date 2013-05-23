@@ -1,3 +1,4 @@
 [type: gettext/rfc822deb] nova-common.templates
 [type: gettext/rfc822deb] nova-compute-xen.templates
 [type: gettext/rfc822deb] nova-api.templates
+[type: gettext/rfc822deb] nova-consoleproxy.templates

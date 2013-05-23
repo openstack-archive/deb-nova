@@ -1,0 +1,12 @@
+Template: nova-consoleproxy/daemon_type
+Type: select
+Choices: spicehtml5, xenvnc, novnc
+Default: spicehtml5
+_Description: Type of console daemon to start at boot time:
+ Nova Console supports 3 types of consoles. One is specific to Xen, called
+ XVP (Xen VNC Proxy), and the other daemon supports KVM. While the SPICE
+ protocol is normally faster than VNC, it also requires support for web
+ sockets in your browser, and that is a feature only very modern browsers
+ have support for.
+ .
+ This can later be edited in /etc/default/nova-consoleproxy.

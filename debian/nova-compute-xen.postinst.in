@@ -33,6 +33,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 		echo "xenapi_connection_password=" >> ${XENAPI_CONFFILE}
 	fi
 	sed -i "s#^[- \t]*xenapi_connection_password=.*#xenapi_connection_password=${XENAPI_PASS}#" ${XENAPI_CONFFILE}
+	db_stop
 fi
 
 #DEBHELPER#

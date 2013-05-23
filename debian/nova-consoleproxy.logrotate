@@ -1,0 +1,16 @@
+/var/log/nova/nova-consoleproxy.log {
+    daily
+    missingok
+    compress
+    delaycompress
+    create 640 nova nova
+    postrotate
+        if [ -f /var/run/nova-spicehtml5proxy.pid ] ; then \
+            if dpkg-vendor --derives-from ubuntu ; then \
+                echo "TODO: restart the daemon in Ubuntu" ; \
+            else
+                /etc/init.d/nova-spicehtml5proxy restart 2>/dev/null >/dev/null; \
+            fi ; \
+        fi
+    endscript
+}

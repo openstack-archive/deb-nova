@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "purge" ] ; then
+	rm -f /var/log/nova/nova-*proxy.log*
+	rm -f /etc/default/nova-consoleproxy
+fi
+
+
+#DEBHELPER#

@@ -16,15 +16,19 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute novncproxy"
 NAME=nova-novncproxy
 DAEMON=/usr/bin/nova-novncproxy
-DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
+DAEMON_ARGS="--config-file /etc/nova/nova.conf --log-file /var/log/nova/nova-consoleproxy.log"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
 LOCK_DIR=/var/lock/nova/
 DEFAULTS_FILE=/etc/default/nova-common
 
-# Exit if the package is not installed
+# Exit if the package is not installed, or the default file not present,
+# or not set to this daemon
 [ -x $DAEMON ] || exit 0
+[ ! -r /etc/default/nova-consoleproxy ] || exit 0
+. /etc/default/nova-consoleproxy
+[ ! "${NOVA_CONSOLE_PROXY_TYPE}" = "novnc" ] || exit 0
 
 . /lib/lsb/init-functions
 

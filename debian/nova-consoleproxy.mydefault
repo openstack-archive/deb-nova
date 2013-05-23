@@ -1,0 +1,7 @@
+# The below switch enables you to select which type of console proxy daemon you
+# wish to start at boot time. Possible values are:
+# - spicehtml5
+# - xenvnc
+# - novnc
+
+NOVA_CONSOLE_PROXY_TYPE=spicehtml5

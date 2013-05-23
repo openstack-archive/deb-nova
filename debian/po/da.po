@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-01-18 07:18+0000\n"
+"POT-Creation-Date: 2013-05-23 16:12+0800\n"
 "PO-Revision-Date: 2012-07-05 23:51+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
@@ -324,3 +324,28 @@ msgid ""
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
 msgstr ""
+
+#. Type: select
+#. Description
+#: ../nova-consoleproxy.templates:1001
+msgid "Type of console daemon to start at boot time:"
+msgstr ""
+
+#. Type: select
+#. Description
+#: ../nova-consoleproxy.templates:1001
+msgid ""
+"Nova Console supports 3 types of consoles. One is specific to Xen, called "
+"XVP (Xen VNC Proxy), and the other daemon supports KVM. While the SPICE "
+"protocol is normally faster than VNC, it also requires support for web "
+"sockets in your browser, and that is a feature only very modern browsers "
+"have support for."
+msgstr ""
+
+#. Type: select
+#. Description
+#: ../nova-consoleproxy.templates:1001
+#, fuzzy
+#| msgid "This can later be edited in /etc/nova/nova-compute.conf."
+msgid "This can later be edited in /etc/default/nova-consoleproxy."
+msgstr "Dette kan senere redigeres i /etc/nova/nova-compute.conf."

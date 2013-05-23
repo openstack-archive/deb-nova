@@ -85,7 +85,11 @@ endif
 # Obviously, we will never use a Desktop menu in such a package, so that's
 # not a problem.
 override_dh_installmenu:
-	dh_installinit -pnova-console --name=nova-consoleauth
+	#dh_installinit -pnova-console --name=nova-consoleauth
+	dh_installinit --name=nova-novncproxy
+	dh_installinit --name=nova-spicehtml5proxy
+	dh_installinit --name=nova-xenvncproxy
+	install -D -m 0644 $(CURDIR)/debian/nova-consoleproxy.mydefault $(CURDIR)/debian/nova-consoleproxy/usr/share/nova-consoleproxy/default
 
 override_dh_installdocs:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))

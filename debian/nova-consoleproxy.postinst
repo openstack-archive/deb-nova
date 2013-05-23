@@ -1,0 +1,27 @@
+#!/bin/sh
+
+set -e
+
+DEF_FILE=/etc/default/nova-consoleproxy
+
+if [ "${1}" = "configure" ] || [ "$1" = "reconfigure" ] ; then
+	if [ ! -e ${DEF_FILE} ] && [ -r /usr/share/nova-consoleproxy/default ] ; then
+		cp /usr/share/nova-consoleproxy/default ${DEF_FILE}
+	fi
+	if [ ! -r ${DEF_FILE} ] ; then
+		exit 0
+	fi
+
+	. /usr/share/debconf/confmodule
+	db_get nova-consoleproxy/daemon_type
+	DAEMON_TYPE=$RET
+	if ! grep -E -q "^[- \t]*NOVA_CONSOLE_PROXY_TYPE=" ${DEF_FILE} ; then
+		echo "xenapi_connection_url=" >> ${DEF_FILE}
+	fi
+	sed -i "s#^[- \t]*NOVA_CONSOLE_PROXY_TYPE=.*#NOVA_CONSOLE_PROXY_TYPE=${DAEMON_TYPE}#" ${DEF_FILE}
+	db_stop
+fi
+
+#DEBHELPER#
+
+exit 0
