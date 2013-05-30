@@ -3,3 +3,4 @@ install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
 fix-libvirt-unit-tests_Enable-tox-use-of-site-packages-for-libvirt.patch
+Make-nova-api-use-servicegroup.API.service_is_up.patch
