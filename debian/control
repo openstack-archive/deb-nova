@@ -8,74 +8,73 @@ Uploaders: Loic Dachary (OuoU) <loic@debian.org>,
            Ghe Rivero <ghe.rivero@stackops.com>,
            Mehdi Abaakouk <sileht@sileht.net>
 Build-Depends: debhelper (>= 9),
- po-debconf,
- python-all (>= 2.6.6-3~),
- openstack-pkg-tools (>= 4)
-Build-Depends-Indep:
- bpython,
- euca2ools,
- ipython,
- libvirt-bin,
- openssh-client,
- pep8 (>= 1.3.3),
- procps,
- python-amqplib,
- python-anyjson,
- python-pyasn1,
- python-babel,
- python-boto,
- python-carrot,
- python-cheetah,
- python-cinderclient (>= 1:1.0.1),
- python-coverage,
- python-distutils-extra,
- python-eventlet (>= 0.9.17),
- python-fixtures (>= 0.3.12),
- python-feedparser,
- python-gflags,
- python-glanceclient (>= 1:0.5.0),
- python-greenlet,
- python-iso8601,
- python-keystoneclient (>= 1:0.2.0),
- python-ldap,
- python-lockfile,
- python-lxml,
- python-m2crypto,
- python-migrate,
- python-mox,
- python-netaddr,
- python-nose,
- python-novaclient (>= 1:2.9.0),
- python-oslo.config,
- python-paramiko,
- python-paste,
- python-pastedeploy,
- python-psycopg2,
- python-qpid,
- python-quantumclient (>= 1:2.1),
- python-routes,
- python-setuptools,
- python-setuptools-git,
- python-simplejson,
- python-stevedore (>= 0.7.2),
- python-sphinx (>> 1.0),
- python-sqlalchemy-ext ( >= 0.7.8-1~) | python-sqlalchemy (<< 0.6.3-2),
- python-subunit,
- python-suds (>= 0.4.0),
- python-tempita,
- python-testtools (>= 0.9.22),
- python-tox,
- python-unittest2,
- python-webob (>= 1.2.3),
- python-xattr,
- python-memcache,
- python-xenapi,
- python-zmq,
- pyflakes,
- pylint,
- testrepository,
- websockify,
- subunit
+               openstack-pkg-tools (>= 4),
+               po-debconf,
+               python-all (>= 2.6.6-3~)
+Build-Depends-Indep: bpython,
+                     euca2ools,
+                     ipython,
+                     libvirt-bin,
+                     openssh-client,
+                     pep8 (>= 1.3.3),
+                     procps,
+                     pyflakes,
+                     pylint,
+                     python-amqplib,
+                     python-anyjson,
+                     python-babel,
+                     python-boto,
+                     python-carrot,
+                     python-cheetah,
+                     python-cinderclient (>= 1:1.0.1),
+                     python-coverage,
+                     python-distutils-extra,
+                     python-eventlet (>= 0.9.17),
+                     python-feedparser,
+                     python-fixtures (>= 0.3.12),
+                     python-gflags,
+                     python-glanceclient (>= 1:0.5.0),
+                     python-greenlet,
+                     python-iso8601,
+                     python-keystoneclient (>= 1:0.2.0),
+                     python-ldap,
+                     python-lockfile,
+                     python-lxml,
+                     python-m2crypto,
+                     python-memcache,
+                     python-migrate,
+                     python-mox,
+                     python-netaddr,
+                     python-nose,
+                     python-novaclient (>= 1:2.9.0),
+                     python-oslo.config,
+                     python-paramiko,
+                     python-paste,
+                     python-pastedeploy,
+                     python-psycopg2,
+                     python-pyasn1,
+                     python-qpid,
+                     python-quantumclient (>= 1:2.1),
+                     python-routes,
+                     python-setuptools,
+                     python-setuptools-git,
+                     python-simplejson,
+                     python-sphinx (>> 1.0),
+                     python-sqlalchemy-ext ( >= 0.7.8-1~) | python-sqlalchemy (<< 0.6.3-2),
+                     python-stevedore (>= 0.7.2),
+                     python-subunit,
+                     python-suds (>= 0.4.0),
+                     python-tempita,
+                     python-testtools (>= 0.9.22),
+                     python-tox,
+                     python-unittest2,
+                     python-webob (>= 1.2.3),
+                     python-xattr,
+                     python-xenapi,
+                     python-zmq,
+                     subunit,
+                     testrepository,
+                     websockify
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.4
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
@@ -86,55 +85,55 @@ Package: python-nova
 Architecture: all
 Section: python
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${python:Depends},
- openssh-client,
- openssl,
- python-amqplib,
- python-anyjson,
- python-argparse,
- python-pyasn1,
- python-babel,
- python-boto,
- python-carrot,  
- python-cheetah,
- python-cinderclient (>= 1:1.0.1),
- python-daemon,  
- python-eventlet (>= 0.9.17),
- python-feedparser,
- python-gflags,
- python-glanceclient (>= 1:0.5.0),
- python-iso8601,
- python-keystoneclient (>= 1:0.2.0),
- python-kombu,
- python-ldap,
- python-libxml2,
- python-lockfile,
- python-lxml, 
- python-m2crypto,
- python-memcache,
- python-migrate,
- python-netaddr,
- python-novaclient (>= 1:2.9.0),
- python-oslo.config,
- python-paramiko,
- python-paste,
- python-pastedeploy,
- python-support,
- python-pycurl,
- python-quantumclient (>= 1:2.1),
- python-routes,
- python-simplejson,
- python-sqlalchemy-ext (>= 0.7.8-1~) | python-sqlalchemy (<< 0.6.3-2),
- python-subunit,
- python-suds,
- python-tempita,
- python-testrepository,
- python-webob (>= 1.2.3),
- python-xattr,
- sudo,
- websockify,
- ${misc:Depends}
-Suggests: python-suds (>= 0.4.0),
+Depends: openssh-client,
+         openssl,
+         python-amqplib,
+         python-anyjson,
+         python-argparse,
+         python-babel,
+         python-boto,
+         python-carrot,
+         python-cheetah,
+         python-cinderclient (>= 1:1.0.1),
+         python-daemon,
+         python-eventlet (>= 0.9.17),
+         python-feedparser,
+         python-gflags,
+         python-glanceclient (>= 1:0.5.0),
+         python-iso8601,
+         python-keystoneclient (>= 1:0.2.0),
+         python-kombu,
+         python-ldap,
+         python-libxml2,
+         python-lockfile,
+         python-lxml,
+         python-m2crypto,
+         python-memcache,
+         python-migrate,
+         python-netaddr,
+         python-novaclient (>= 1:2.9.0),
+         python-oslo.config,
+         python-paramiko,
+         python-paste,
+         python-pastedeploy,
+         python-pyasn1,
+         python-pycurl,
+         python-quantumclient (>= 1:2.1),
+         python-routes,
+         python-simplejson,
+         python-sqlalchemy-ext (>= 0.7.8-1~) | python-sqlalchemy (<< 0.6.3-2),
+         python-subunit,
+         python-suds,
+         python-support,
+         python-tempita,
+         python-testrepository,
+         python-webob (>= 1.2.3),
+         python-xattr,
+         sudo,
+         websockify,
+         ${misc:Depends},
+         ${python:Depends}
+Suggests: python-suds (>= 0.4.0)
 Conflicts: python-cjson
 Recommends: python-mysqldb
 Description: OpenStack Compute - libraries
@@ -154,11 +153,15 @@ Description: OpenStack Compute - libraries
 Package: nova-common
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-amqplib, python-nova (= ${binary:Version}), ${python:Depends}, ${misc:Depends}, adduser,
- python-iso8601,
- python-configobj,
- sqlite3, 
- dbconfig-common
+Depends: adduser,
+         dbconfig-common,
+         python-amqplib,
+         python-configobj,
+         python-iso8601,
+         python-nova (= ${binary:Version}),
+         sqlite3,
+         ${misc:Depends},
+         ${python:Depends}
 Suggests: python-pysqlite2 | python-mysqldb | python-pygresql
 Description: OpenStack Compute - common files
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -177,10 +180,22 @@ Description: OpenStack Compute - common files
 Package: nova-compute
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base},  nova-common (= ${binary:Version}), qemu-utils, kpartx, curl, parted, vlan,
- ebtables, gawk, iptables, open-iscsi, python-cinderclient, nova-compute-kvm | nova-compute-hypervisor,
- adduser,
- ${python:Depends}, ${misc:Depends}
+Depends: adduser,
+         curl,
+         ebtables,
+         gawk,
+         iptables,
+         kpartx,
+         nova-common (= ${binary:Version}),
+         nova-compute-kvm | nova-compute-hypervisor,
+         open-iscsi,
+         parted,
+         python-cinderclient,
+         qemu-utils,
+         vlan,
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
 Description: OpenStack Compute - compute node
@@ -201,9 +216,18 @@ Description: OpenStack Compute - compute node
 Package: nova-compute-lxc
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, dpkg-dev, libvirt-bin, ${misc:Depends}, adduser, nova-common
+Depends: adduser,
+         dpkg-dev,
+         libvirt-bin,
+         nova-common,
+         python-libvirt,
+         ${misc:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-kvm, nova-compute-qemu, nova-compute-uml, nova-compute-xen, nova-baremetal
+Conflicts: nova-baremetal,
+           nova-compute-kvm,
+           nova-compute-qemu,
+           nova-compute-uml,
+           nova-compute-xen
 Description: OpenStack Compute - compute node (LXC)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -221,9 +245,19 @@ Description: OpenStack Compute - compute node (LXC)
 Package: nova-compute-uml
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, dpkg-dev, libvirt-bin, user-mode-linux, ${misc:Depends}, adduser, nova-common
+Depends: adduser,
+         dpkg-dev,
+         libvirt-bin,
+         nova-common,
+         python-libvirt,
+         user-mode-linux,
+         ${misc:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-xen, nova-compute-qemu, nova-compute-kvm, nova-baremetal
+Conflicts: nova-baremetal,
+           nova-compute-kvm,
+           nova-compute-lxc,
+           nova-compute-qemu,
+           nova-compute-xen
 Description: OpenStack Compute - compute node (UserModeLinux)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -241,9 +275,13 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 Package: nova-compute-xen
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-xenapi, ${misc:Depends}, adduser, nova-common
+Depends: adduser, nova-common, python-xenapi, ${misc:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-qemu, nova-compute-kvm, nova-baremetal
+Conflicts: nova-baremetal,
+           nova-compute-kvm,
+           nova-compute-lxc,
+           nova-compute-qemu,
+           nova-compute-uml
 Description: OpenStack Compute - compute node (Xen)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -262,9 +300,19 @@ Description: OpenStack Compute - compute node (Xen)
 Package: nova-compute-qemu
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, dpkg-dev, libvirt-bin, qemu, ${misc:Depends}, adduser, nova-common
+Depends: adduser,
+         dpkg-dev,
+         libvirt-bin,
+         nova-common,
+         python-libvirt,
+         qemu,
+         ${misc:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-kvm, nova-baremetal
+Conflicts: nova-baremetal,
+           nova-compute-kvm,
+           nova-compute-lxc,
+           nova-compute-uml,
+           nova-compute-xen
 Description: OpenStack Compute - compute node (QEmu)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -282,10 +330,20 @@ Description: OpenStack Compute - compute node (QEmu)
 Package: nova-compute-kvm
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-libvirt, libvirt-bin, kvm, ${misc:Depends}, adduser, nova-common, dpkg-dev
+Depends: adduser,
+         dpkg-dev,
+         kvm,
+         libvirt-bin,
+         nova-common,
+         python-libvirt,
+         ${misc:Depends}
 Recommends: guestmount
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-lxc, nova-compute-uml, nova-compute-xen, nova-compute-qemu, nova-baremetal
+Conflicts: nova-baremetal,
+           nova-compute-lxc,
+           nova-compute-qemu,
+           nova-compute-uml,
+           nova-compute-xen
 Description: OpenStack Compute - compute node (KVM)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -303,7 +361,7 @@ Description: OpenStack Compute - compute node (KVM)
 Package: nova-xcp-plugins
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: xcp-xapi, ${python:Depends}, ${misc:Depends}
+Depends: xcp-xapi, ${misc:Depends}, ${python:Depends}
 Description: OpenStack Compute plugin for the Xen Cloud Platform
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -324,16 +382,16 @@ Package: nova-conductor
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
- ${misc:Depends},
- ${ostack-lsb-base},
- ${python:Depends}
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Description: OpenStack Compute - conductor service
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
  and private cloud providers regardless of size, by being simple to implement
  and massively scalable.
  .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller   
+ OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
  designed to be modular and easy to extend and adapt. In addition to its
  "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
  many different database backends (including SQLite, MySQL, and PostgreSQL),
@@ -344,7 +402,10 @@ Description: OpenStack Compute - conductor service
 Package: nova-cert
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: nova-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Description: OpenStack Compute - certificate manager
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -363,7 +424,10 @@ Description: OpenStack Compute - certificate manager
 Package: nova-scheduler
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: nova-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Description: OpenStack Compute - virtual machine scheduler
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -382,7 +446,7 @@ Package: nova-volume
 Section: oldlibs
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: cinder-volume, cinder-api, cinder-scheduler, ${misc:Depends}
+Depends: cinder-api, cinder-scheduler, cinder-volume, ${misc:Depends}
 Description: OpenStack Compute - storage metapackage
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -400,7 +464,12 @@ Description: OpenStack Compute - storage metapackage
 Package: nova-api
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: debconf, ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}, python-keystoneclient
+Depends: debconf,
+         nova-common (= ${binary:Version}),
+         python-keystoneclient,
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Recommends: python-keystone
 Description: OpenStack Compute - compute API frontend
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -419,8 +488,17 @@ Description: OpenStack Compute - compute API frontend
 Package: nova-network
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, netcat, vlan, bridge-utils, dnsmasq-base, iputils-arping, dnsmasq-utils, iptables,
- nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: bridge-utils,
+         dnsmasq-base,
+         dnsmasq-utils,
+         iptables,
+         iputils-arping,
+         netcat,
+         nova-common (= ${binary:Version}),
+         vlan,
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Replaces: python-nova (<< 2012.1~rc1-1)
 Breaks: python-nova (<< 2012.1~rc1-1)
 Suggests: radvd
@@ -445,7 +523,10 @@ Description: OpenStack Compute - network manager
 Package: nova-objectstore
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: nova-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Description: OpenStack Compute - object store
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -465,7 +546,10 @@ Package: nova-console
 Provides: nova-consoleauth
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${ostack-lsb-base}, nova-common (= ${binary:Version}), ${python:Depends}, ${misc:Depends}
+Depends: nova-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Recommends: nova-consoleauth
 Description: OpenStack Compute - console
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -487,9 +571,9 @@ Package: nova-consoleauth
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
- ${misc:Depends},  
- ${ostack-lsb-base},
- ${python:Depends}
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Breaks: nova-console (<< 2013.1)
 Replaces: nova-console (<< 2013.1)
 Description: OpenStack Compute - Console Authenticator
@@ -499,7 +583,7 @@ Description: OpenStack Compute - Console Authenticator
  and massively scalable.
  .
  OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its   
+ designed to be modular and easy to extend and adapt. In addition to its
  "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
  many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
@@ -512,7 +596,7 @@ Package: nova-doc
 Architecture: all
 Section: doc
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${misc:Depends}, libjs-jquery, libjs-underscore
+Depends: libjs-jquery, libjs-underscore, ${misc:Depends}
 Description: OpenStack Compute - documentation
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -528,12 +612,12 @@ Description: OpenStack Compute - documentation
  This package contains the documentation for Nova.
 
 Package: nova-cells
-Architecture: all   
+Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
- ${misc:Depends},
- ${ostack-lsb-base},
- ${python:Depends}
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Description: Openstack Compute - cells
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -552,15 +636,19 @@ Package: nova-baremetal
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: dnsmasq,
- ipmitool,
- open-iscsi,
- syslinux,
- nova-common (= ${binary:Version}),
- ${misc:Depends},  
- ${ostack-lsb-base},
- ${python:Depends}
+         ipmitool,
+         nova-common (= ${binary:Version}),
+         open-iscsi,
+         syslinux,
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-compute-kvm, nova-compute-qemu, nova-compute-uml, nova-compute-lxc, nova-compute-xen
+Conflicts: nova-compute-kvm,
+           nova-compute-lxc,
+           nova-compute-qemu,
+           nova-compute-uml,
+           nova-compute-xen
 Description: Openstack Compute - baremetal virt
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
@@ -568,9 +656,9 @@ Description: Openstack Compute - baremetal virt
  and massively scalable.
  .
  OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its   
+ designed to be modular and easy to extend and adapt. In addition to its
  "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL), 
+ many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
  This is the baremetal virt component.
@@ -581,13 +669,13 @@ Pre-Depends: dpkg (>= 1.15.6~)
 Conflicts: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy
 Replaces: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy
 Depends: debconf,
- nova-common (= ${binary:Version}),
- novnc,
- websockify,
- spice-html5,
- ${misc:Depends},   
- ${ostack-lsb-base},
- ${python:Depends}
+         nova-common (= ${binary:Version}),
+         novnc,
+         spice-html5,
+         websockify,
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends}
 Description: OpenStack Compute - NoVNC proxy
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public

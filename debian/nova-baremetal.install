@@ -1,2 +1,2 @@
-usr/bin/nova-baremetal-manage
 usr/bin/nova-baremetal-deploy-helper
+usr/bin/nova-baremetal-manage
