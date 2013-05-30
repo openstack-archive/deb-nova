@@ -17,6 +17,7 @@ nova (2013.1.1-1) unstable; urgency=low
   * Ran wrap-and-sort.
   * Added Make nova-api use servicegroup.API.service_is_up() patch, so that
     nova can work with multiple redundant memecached using heartbeat.
+  * Killed the nova-objectstore package.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Apr 2013 00:04:19 +0800
 

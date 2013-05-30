@@ -520,28 +520,6 @@ Description: OpenStack Compute - network manager
  can be accessed by setting the network_manager flag to FlatManager,
  FlatDHCPManager, or VlanManager (the default).
 
-Package: nova-objectstore
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: nova-common (= ${binary:Version}),
-         ${misc:Depends},
-         ${ostack-lsb-base},
-         ${python:Depends}
-Description: OpenStack Compute - object store
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package contains a very simple S3-like object store. For production use,
- you should use OpenStack Storage, codenamed Swift.
-
 Package: nova-console
 Provides: nova-consoleauth
 Architecture: all
