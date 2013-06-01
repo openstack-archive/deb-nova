@@ -21,6 +21,9 @@ nova (2013.1.1-1) unstable; urgency=low
     nova can work with multiple redundant memecached using heartbeat.
   * Killed the nova-objectstore package.
   * testrepository build-depends is now version >= 0.0.14
+  * Reviewed a bit the init scripts boot dependencies, and added a few
+    Should-Start / Should-Stop to make sure mysql, postgress and keystone are
+    up and running.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Apr 2013 00:04:19 +0800
 
