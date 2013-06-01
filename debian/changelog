@@ -14,6 +14,8 @@ nova (2013.1.1-1) unstable; urgency=low
   * Moves Suggests: as Depends: for novnc and websockify for nova-novncproxy.
   * Merged nova-xcp* into a single binary package.
   * Merged NoVNC, XVP and SPICE console into a single binary package.
+  * Now using a single log file for all types of console proxy, and
+    logrotate that (Closes: #706011).
   * Ran wrap-and-sort.
   * Added Make nova-api use servicegroup.API.service_is_up() patch, so that
     nova can work with multiple redundant memecached using heartbeat.
