@@ -73,7 +73,7 @@ Build-Depends-Indep: bpython,
                      python-xenapi,
                      python-zmq,
                      subunit,
-                     testrepository,
+                     testrepository (>= 0.0.14),
                      websockify
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.4
