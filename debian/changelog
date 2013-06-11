@@ -24,6 +24,8 @@ nova (2013.1.1-1) unstable; urgency=low
   * Reviewed a bit the init scripts boot dependencies, and added a few
     Should-Start / Should-Stop to make sure mysql, postgress and keystone are
     up and running.
+  * Removed debian/python-nova.postinst, as update-python-modules
+    --post-install is managed by dh_python2.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Apr 2013 00:04:19 +0800
 
