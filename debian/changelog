@@ -26,6 +26,8 @@ nova (2013.1.1-1) unstable; urgency=low
     up and running.
   * Removed debian/python-nova.postinst, as update-python-modules
     --post-install is managed by dh_python2.
+  * Added missing nova-compute dependencies in the nova-compute-<whatever>
+    packages.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Apr 2013 00:04:19 +0800
 

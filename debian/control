@@ -220,6 +220,7 @@ Depends: adduser,
          dpkg-dev,
          libvirt-bin,
          nova-common,
+         nova-compute,
          python-libvirt,
          ${misc:Depends}
 Provides: nova-compute-hypervisor
@@ -249,6 +250,7 @@ Depends: adduser,
          dpkg-dev,
          libvirt-bin,
          nova-common,
+         nova-compute,
          python-libvirt,
          user-mode-linux,
          ${misc:Depends}
@@ -275,7 +277,7 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 Package: nova-compute-xen
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: adduser, nova-common, python-xenapi, ${misc:Depends}
+Depends: adduser, nova-common, nova-compute, python-xenapi, ${misc:Depends}
 Provides: nova-compute-hypervisor
 Conflicts: nova-baremetal,
            nova-compute-kvm,
@@ -304,6 +306,7 @@ Depends: adduser,
          dpkg-dev,
          libvirt-bin,
          nova-common,
+         nova-compute,
          python-libvirt,
          qemu,
          ${misc:Depends}
@@ -335,6 +338,7 @@ Depends: adduser,
          kvm,
          libvirt-bin,
          nova-common,
+         nova-compute,
          python-libvirt,
          ${misc:Depends}
 Recommends: guestmount
