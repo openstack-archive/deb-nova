@@ -760,6 +760,9 @@ def floating_forward_rules(floating_ip, fixed_ip, device):
             ('PREROUTING', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)))
     rules.append(
             ('OUTPUT', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)))
+    rules.append(('POSTROUTING', '-s %s -m conntrack --ctstate DNAT -j SNAT '
+                  '--to-source %s' %
+                  (fixed_ip, floating_ip)))
     return rules
 
 
@@ -1042,7 +1045,7 @@ def restart_dhcp(context, dev, network_ref):
     if network_ref['multi_host'] or dns_servers:
         cmd.append('--no-hosts')
     if network_ref['multi_host']:
-        '--addn-hosts=%s' % _dhcp_file(dev, 'hosts')
+        cmd.append('--addn-hosts=%s' % _dhcp_file(dev, 'hosts'))
     if dns_servers:
         cmd.append('--no-resolv')
     for dns_server in dns_servers:

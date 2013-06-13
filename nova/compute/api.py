@@ -1610,7 +1610,7 @@ class API(base.Base):
                 snapshot = self.volume_api.create_snapshot_force(
                     context, volume, name, volume['display_description'])
                 bdm['snapshot_id'] = snapshot['id']
-                del bdm['volume_id']
+                bdm['volume_id'] = None
 
             mapping.append(bdm)
 
@@ -1697,8 +1697,10 @@ class API(base.Base):
                                       task_states.SUSPENDING])
     def reboot(self, context, instance, reboot_type):
         """Reboot the given instance."""
-        if (reboot_type == 'SOFT' and
-            instance['task_state'] == task_states.REBOOTING):
+        if ((reboot_type == 'SOFT' and
+                instance['task_state'] == task_states.REBOOTING) or
+            (reboot_type == 'HARD' and
+                instance['task_state'] == task_states.REBOOTING_HARD)):
             raise exception.InstanceInvalidState(
                 attr='task_state',
                 instance_uuid=instance['uuid'],
@@ -1706,7 +1708,7 @@ class API(base.Base):
                 method='reboot')
         state = {'SOFT': task_states.REBOOTING,
                  'HARD': task_states.REBOOTING_HARD}[reboot_type]
-        instance = self.update(context, instance, vm_state=vm_states.ACTIVE,
+        instance = self.update(context, instance,
                                task_state=state,
                                expected_task_state=[None,
                                                     task_states.REBOOTING])
@@ -1859,10 +1861,6 @@ class API(base.Base):
         deltas = self._downsize_quota_delta(context, instance)
         reservations = self._reserve_quota_delta(context, deltas)
 
-        instance = self.update(context, instance, vm_state=vm_states.ACTIVE,
-                               task_state=None,
-                               expected_task_state=None)
-
         self.db.migration_update(elevated, migration_ref['id'],
                 {'status': 'confirming'})
         # With cells, the best we can do right now is commit the reservations
@@ -1987,7 +1985,11 @@ class API(base.Base):
             raise exception.FlavorNotFound(flavor_id=flavor_id)
 
         # NOTE(markwash): look up the image early to avoid auth problems later
-        image = self.image_service.show(context, instance['image_ref'])
+        image_ref = instance.get('image_ref')
+        if image_ref:
+            image = self.image_service.show(context, image_ref)
+        else:
+            image = {}
 
         if same_instance_type and flavor_id:
             raise exception.CannotResizeToSameFlavor()
@@ -2075,7 +2077,6 @@ class API(base.Base):
         """Pause the given instance."""
         self.update(context,
                     instance,
-                    vm_state=vm_states.ACTIVE,
                     task_state=task_states.PAUSING,
                     expected_task_state=None)
 
@@ -2090,7 +2091,6 @@ class API(base.Base):
         """Unpause the given instance."""
         self.update(context,
                     instance,
-                    vm_state=vm_states.PAUSED,
                     task_state=task_states.UNPAUSING,
                     expected_task_state=None)
 
@@ -2114,7 +2114,6 @@ class API(base.Base):
         """Suspend the given instance."""
         self.update(context,
                     instance,
-                    vm_state=vm_states.ACTIVE,
                     task_state=task_states.SUSPENDING,
                     expected_task_state=None)
 
@@ -2129,7 +2128,6 @@ class API(base.Base):
         """Resume the given instance."""
         self.update(context,
                     instance,
-                    vm_state=vm_states.SUSPENDED,
                     task_state=task_states.RESUMING,
                     expected_task_state=None)
 
@@ -2152,7 +2150,6 @@ class API(base.Base):
 
         self.update(context,
                     instance,
-                    vm_state=vm_states.ACTIVE,
                     task_state=task_states.RESCUING,
                     expected_task_state=None)
 
@@ -2168,7 +2165,6 @@ class API(base.Base):
         """Unrescue the given instance."""
         self.update(context,
                     instance,
-                    vm_state=vm_states.RESCUED,
                     task_state=task_states.UNRESCUING,
                     expected_task_state=None)
 

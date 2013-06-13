@@ -195,6 +195,34 @@ class ServerActionsControllerTest(test.TestCase):
                           self.controller._action_reboot,
                           req, FAKE_UUID, body)
 
+    def test_reboot_soft_with_soft_in_progress_raises_conflict(self):
+        body = dict(reboot=dict(type="SOFT"))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.stubs.Set(db, 'instance_get_by_uuid',
+                       fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                            task_state=task_states.REBOOTING))
+        self.assertRaises(webob.exc.HTTPConflict,
+                          self.controller._action_reboot,
+                          req, FAKE_UUID, body)
+
+    def test_reboot_hard_with_soft_in_progress_does_not_raise(self):
+        body = dict(reboot=dict(type="HARD"))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.stubs.Set(db, 'instance_get_by_uuid',
+                       fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                        task_state=task_states.REBOOTING))
+        self.controller._action_reboot(req, FAKE_UUID, body)
+
+    def test_reboot_hard_with_hard_in_progress_raises_conflict(self):
+        body = dict(reboot=dict(type="HARD"))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.stubs.Set(db, 'instance_get_by_uuid',
+                       fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                        task_state=task_states.REBOOTING_HARD))
+        self.assertRaises(webob.exc.HTTPConflict,
+                          self.controller._action_reboot,
+                          req, FAKE_UUID, body)
+
     def test_rebuild_accepted_minimum(self):
         return_server = fakes.fake_instance_get(image_ref='2',
                 vm_state=vm_states.ACTIVE, host='fake_host')
@@ -601,6 +629,34 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.controller._action_resize,
                           req, FAKE_UUID, body)
+
+    def test_resize_with_image_exceptions(self):
+        body = dict(resize=dict(flavorRef="http://localhost/3"))
+        self.resize_called = 0
+        image_id = 'fake_image_id'
+
+        exceptions = [
+            (exception.ImageNotAuthorized(image_id=image_id),
+             webob.exc.HTTPUnauthorized),
+            (exception.ImageNotFound(image_id=image_id),
+             webob.exc.HTTPBadRequest),
+            (exception.Invalid, webob.exc.HTTPBadRequest),
+        ]
+
+        raised, expected = map(iter, zip(*exceptions))
+
+        def _fake_resize(obj, context, instance, flavor_id):
+            self.resize_called += 1
+            raise raised.next()
+
+        self.stubs.Set(compute_api.API, 'resize', _fake_resize)
+
+        for call_no in range(len(exceptions)):
+            req = fakes.HTTPRequest.blank(self.url)
+            self.assertRaises(expected.next(),
+                              self.controller._action_resize,
+                              req, FAKE_UUID, body)
+            self.assertEqual(self.resize_called, call_no + 1)
 
     def test_resize_with_too_many_instances(self):
         body = dict(resize=dict(flavorRef="http://localhost/3"))
