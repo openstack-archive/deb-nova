@@ -29,6 +29,7 @@ nova (2013.1.2-1) unstable; urgency=low
   * Added missing nova-compute dependencies in the nova-compute-<whatever>
     packages.
   * Sets default security_group_api = quantum.
+  * Starts nova after rabbit and ntp.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Apr 2013 00:04:19 +0800
 
