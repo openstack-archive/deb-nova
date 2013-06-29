@@ -1,3 +1,9 @@
+nova (2013.2~b1-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 29 Jun 2013 22:50:28 +0800
+
 nova (2013.1.2-1) unstable; urgency=low
 
   * Uploading to unstable.
