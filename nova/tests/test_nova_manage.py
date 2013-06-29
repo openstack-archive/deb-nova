@@ -69,24 +69,6 @@ class FixedIpCommandsTestCase(test.TestCase):
         self.commands.list('banana')
         self.assertTrue(sys.stdout.getvalue().find('192.168.0.100') != -1)
 
-    def test_list(self):
-        self.useFixture(fixtures.MonkeyPatch('sys.stdout',
-                                             StringIO.StringIO()))
-        self.commands.list()
-        self.assertTrue(sys.stdout.getvalue().find('192.168.0.100') != -1)
-
-    def test_list_just_one_host(self):
-        def fake_fixed_ip_get_by_host(*args, **kwargs):
-            return [db_fakes.fixed_ip_fields]
-
-        self.useFixture(fixtures.MonkeyPatch(
-            'nova.db.fixed_ip_get_by_host',
-            fake_fixed_ip_get_by_host))
-        self.useFixture(fixtures.MonkeyPatch('sys.stdout',
-                                             StringIO.StringIO()))
-        self.commands.list('banana')
-        self.assertTrue(sys.stdout.getvalue().find('192.168.0.100') != -1)
-
 
 class FloatingIpCommandsTestCase(test.TestCase):
     def setUp(self):

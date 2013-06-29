@@ -19,7 +19,6 @@ import uuid
 
 import mox
 from oslo.config import cfg
-from quantumclient.common import exceptions as qexceptions
 from quantumclient.v2_0 import client
 
 from nova.compute import flavors

@@ -1610,50 +1610,6 @@ def _manual_join_columns(columns_to_join):
     return manual_joins, columns_to_join
 
 
-def _instances_fill_metadata(context, instances, manual_joins=None):
-    """Selectively fill instances with manually-joined metadata. Note that
-    instance will be converted to a dict.
-
-    :param context: security context
-    :param instances: list of instances to fill
-    :param manual_joins: list of tables to manually join (can be any
-                         combination of 'metadata' and 'system_metadata' or
-                         None to take the default of both)
-    """
-    uuids = [inst['uuid'] for inst in instances]
-
-    if manual_joins is None:
-        manual_joins = ['metadata', 'system_metadata']
-
-    meta = collections.defaultdict(list)
-    if 'metadata' in manual_joins:
-        for row in _instance_metadata_get_multi(context, uuids):
-            meta[row['instance_uuid']].append(row)
-
-    sys_meta = collections.defaultdict(list)
-    if 'system_metadata' in manual_joins:
-        for row in _instance_system_metadata_get_multi(context, uuids):
-            sys_meta[row['instance_uuid']].append(row)
-
-    filled_instances = []
-    for inst in instances:
-        inst = dict(inst.iteritems())
-        inst['system_metadata'] = sys_meta[inst['uuid']]
-        inst['metadata'] = meta[inst['uuid']]
-        filled_instances.append(inst)
-
-    return filled_instances
-
-
-def _manual_join_columns(columns_to_join):
-    manual_joins = []
-    for column in ('metadata', 'system_metadata'):
-        if column in columns_to_join:
-            columns_to_join.remove(column)
-            manual_joins.append(column)
-    return manual_joins, columns_to_join
-
-
 @require_context
 def instance_get_all(context, columns_to_join=None):
     if columns_to_join is None:

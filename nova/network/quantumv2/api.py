@@ -19,7 +19,6 @@
 import time
 
 from oslo.config import cfg
-from quantumclient.common import exceptions as qexceptions
 
 from nova.compute import flavors
 from nova import conductor

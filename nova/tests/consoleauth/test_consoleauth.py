@@ -146,48 +146,6 @@ class ControlauthMemcacheEncodingTestCase(test.TestCase):
         self.manager.delete_tokens_for_instance(self.context, self.u_instance)
 
 
-class ControlauthMemcacheEncodingTestCase(test.TestCase):
-    def setUp(self):
-        super(ControlauthMemcacheEncodingTestCase, self).setUp()
-        self.manager = manager.ConsoleAuthManager()
-        self.context = context.get_admin_context()
-        self.u_token = u"token"
-        self.u_instance = u"instance"
-
-    def test_authorize_console_encoding(self):
-        self.mox.StubOutWithMock(self.manager.mc, "set")
-        self.mox.StubOutWithMock(self.manager.mc, "get")
-        self.manager.mc.set(mox.IsA(str), mox.IgnoreArg(), mox.IgnoreArg()
-                           ).AndReturn(True)
-        self.manager.mc.get(mox.IsA(str)).AndReturn(None)
-        self.manager.mc.set(mox.IsA(str), mox.IgnoreArg()).AndReturn(True)
-
-        self.mox.ReplayAll()
-
-        self.manager.authorize_console(self.context, self.u_token, 'novnc',
-                                       '127.0.0.1', '8080', 'host',
-                                       self.u_instance)
-
-    def test_check_token_encoding(self):
-        self.mox.StubOutWithMock(self.manager.mc, "get")
-        self.manager.mc.get(mox.IsA(str)).AndReturn(None)
-
-        self.mox.ReplayAll()
-
-        self.manager.check_token(self.context, self.u_token)
-
-    def test_delete_tokens_for_instance_encoding(self):
-        self.mox.StubOutWithMock(self.manager.mc, "delete")
-        self.mox.StubOutWithMock(self.manager.mc, "get")
-        self.manager.mc.get(mox.IsA(str)).AndReturn('["token"]')
-        self.manager.mc.delete(mox.IsA(str)).AndReturn(True)
-        self.manager.mc.delete(mox.IsA(str)).AndReturn(True)
-
-        self.mox.ReplayAll()
-
-        self.manager.delete_tokens_for_instance(self.context, self.u_instance)
-
-
 class CellsConsoleauthTestCase(ConsoleauthTestCase):
     """Test Case for consoleauth w/ cells enabled."""
 
