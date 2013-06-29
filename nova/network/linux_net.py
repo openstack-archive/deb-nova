@@ -33,8 +33,8 @@ from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
-from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import processutils
 from nova.openstack.common import timeutils
 from nova import paths
 from nova import utils
@@ -118,6 +118,10 @@ linux_net_opts = [
                default='',
                help='Regular expression to match iptables rule that should'
                     'always be on the bottom.'),
+    cfg.StrOpt('iptables_drop_action',
+               default='DROP',
+               help=('The table that iptables to jump to when a packet is '
+                     'to be dropped.')),
     ]
 
 CONF = cfg.CONF
@@ -392,7 +396,7 @@ class IptablesManager(object):
 
         self._apply()
 
-    @lockutils.synchronized('iptables', 'nova-', external=True)
+    @utils.synchronized('iptables', external=True)
     def _apply(self):
         """Apply the current in-memory set of iptables rules.
 
@@ -766,6 +770,14 @@ def floating_forward_rules(floating_ip, fixed_ip, device):
     return rules
 
 
+def clean_conntrack(fixed_ip):
+    try:
+        _execute('conntrack', '-D', '-r', fixed_ip, run_as_root=True,
+                 check_exit_code=[0, 1])
+    except processutils.ProcessExecutionError:
+        LOG.exception(_('Error deleting conntrack entries for %s'), fixed_ip)
+
+
 def initialize_gateway_device(dev, network_ref):
     if not network_ref:
         return
@@ -812,7 +824,7 @@ def initialize_gateway_device(dev, network_ref):
         if CONF.send_arp_for_ha and CONF.send_arp_for_ha_count > 0:
             send_arp_for_ip(network_ref['dhcp_server'], dev,
                             CONF.send_arp_for_ha_count)
-    if(CONF.use_ipv6):
+    if CONF.use_ipv6:
         _execute('ip', '-f', 'inet6', 'addr',
                  'change', network_ref['cidr_v6'],
                  'dev', dev, run_as_root=True)
@@ -970,7 +982,7 @@ def kill_dhcp(dev):
 # NOTE(ja): Sending a HUP only reloads the hostfile, so any
 #           configuration options (like dchp-range, vlan, ...)
 #           aren't reloaded.
-@lockutils.synchronized('dnsmasq_start', 'nova-')
+@utils.synchronized('dnsmasq_start')
 def restart_dhcp(context, dev, network_ref):
     """(Re)starts a dnsmasq server for a given network.
 
@@ -1058,7 +1070,7 @@ def restart_dhcp(context, dev, network_ref):
     _add_dnsmasq_accept_rules(dev)
 
 
-@lockutils.synchronized('radvd_start', 'nova-')
+@utils.synchronized('radvd_start')
 def update_ra(context, dev, network_ref):
     conffile = _ra_file(dev, 'conf')
     conf_str = """
@@ -1218,12 +1230,7 @@ def _create_veth_pair(dev1_name, dev2_name):
     deleting any previous devices with those names.
     """
     for dev in [dev1_name, dev2_name]:
-        if device_exists(dev):
-            try:
-                utils.execute('ip', 'link', 'delete', dev1_name,
-                              run_as_root=True, check_exit_code=[0, 2, 254])
-            except exception.ProcessExecutionError:
-                LOG.exception(_("Error clearing stale veth %s") % dev)
+        delete_net_dev(dev)
 
     utils.execute('ip', 'link', 'add', dev1_name, 'type', 'veth', 'peer',
                   'name', dev2_name, run_as_root=True)
@@ -1247,8 +1254,7 @@ def create_ovs_vif_port(bridge, dev, iface_id, mac, instance_id):
 def delete_ovs_vif_port(bridge, dev):
     utils.execute('ovs-vsctl', 'del-port', bridge, dev,
                   run_as_root=True)
-    utils.execute('ip', 'link', 'delete', dev,
-                  run_as_root=True)
+    delete_net_dev(dev)
 
 
 def create_tap_dev(dev, mac_address=None):
@@ -1257,7 +1263,7 @@ def create_tap_dev(dev, mac_address=None):
             # First, try with 'ip'
             utils.execute('ip', 'tuntap', 'add', dev, 'mode', 'tap',
                           run_as_root=True, check_exit_code=[0, 2, 254])
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             # Second option: tunctl
             utils.execute('tunctl', '-b', '-t', dev, run_as_root=True)
         if mac_address:
@@ -1265,6 +1271,18 @@ def create_tap_dev(dev, mac_address=None):
                           run_as_root=True, check_exit_code=[0, 2, 254])
         utils.execute('ip', 'link', 'set', dev, 'up', run_as_root=True,
                       check_exit_code=[0, 2, 254])
+
+
+def delete_net_dev(dev):
+    """Delete a network device only if it exists."""
+    if device_exists(dev):
+        try:
+            utils.execute('ip', 'link', 'delete', dev, run_as_root=True,
+                          check_exit_code=[0, 2, 254])
+            LOG.debug(_("Net device removed: '%s'"), dev)
+        except processutils.ProcessExecutionError:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_("Failed removing net device: '%s'"), dev)
 
 
 # Similar to compute virt layers, the Linux network node
@@ -1377,7 +1395,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         LinuxBridgeInterfaceDriver.remove_vlan(vlan_num)
 
     @classmethod
-    @lockutils.synchronized('lock_vlan', 'nova-', external=True)
+    @utils.synchronized('lock_vlan', external=True)
     def ensure_vlan(_self, vlan_num, bridge_interface, mac_address=None):
         """Create a vlan unless it already exists."""
         interface = 'vlan%s' % vlan_num
@@ -1402,24 +1420,14 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         return interface
 
     @classmethod
-    @lockutils.synchronized('lock_vlan', 'nova-', external=True)
+    @utils.synchronized('lock_vlan', external=True)
     def remove_vlan(cls, vlan_num):
         """Delete a vlan."""
         vlan_interface = 'vlan%s' % vlan_num
-        if not device_exists(vlan_interface):
-            return
-        else:
-            try:
-                utils.execute('ip', 'link', 'delete', vlan_interface,
-                              run_as_root=True, check_exit_code=[0, 2, 254])
-            except exception.ProcessExecutionError:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_("Failed unplugging VLAN interface '%s'"),
-                              vlan_interface)
-            LOG.debug(_("Unplugged VLAN interface '%s'"), vlan_interface)
+        delete_net_dev(vlan_interface)
 
     @classmethod
-    @lockutils.synchronized('lock_bridge', 'nova-', external=True)
+    @utils.synchronized('lock_bridge', external=True)
     def ensure_bridge(_self, bridge, interface, net_attrs=None, gateway=True,
                       filtering=True):
         """Create a bridge unless it already exists.
@@ -1497,12 +1505,14 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                     ipv4_filter.add_rule(*rule)
             else:
                 ipv4_filter.add_rule('FORWARD',
-                                     '--in-interface %s -j DROP' % bridge)
+                                     ('--in-interface %s -j %s'
+                                      % (bridge, CONF.iptables_drop_action)))
                 ipv4_filter.add_rule('FORWARD',
-                                     '--out-interface %s -j DROP' % bridge)
+                                     ('--out-interface %s -j %s'
+                                      % (bridge, CONF.iptables_drop_action)))
 
     @classmethod
-    @lockutils.synchronized('lock_bridge', 'nova-', external=True)
+    @utils.synchronized('lock_bridge', external=True)
     def remove_bridge(cls, bridge, gateway=True, filtering=True):
         """Delete a bridge."""
         if not device_exists(bridge):
@@ -1514,22 +1524,21 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                     for rule in get_gateway_rules(bridge):
                         ipv4_filter.remove_rule(*rule)
                 else:
-                    ipv4_filter.remove_rule('FORWARD',
-                                    '--in-interface %s -j DROP' % bridge)
-                    ipv4_filter.remove_rule('FORWARD',
-                                    '--out-interface %s -j DROP' % bridge)
-            try:
-                utils.execute('ip', 'link', 'delete', bridge, run_as_root=True,
-                              check_exit_code=[0, 2, 254])
-            except exception.ProcessExecutionError:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_("Failed unplugging bridge interface '%s'"),
-                              bridge)
+                    drop_actions = ['DROP']
+                    if CONF.iptables_drop_action != 'DROP':
+                        drop_actions.append(CONF.iptables_drop_action)
 
-        LOG.debug(_("Unplugged bridge interface '%s'"), bridge)
+                    for drop_action in drop_actions:
+                        ipv4_filter.remove_rule('FORWARD',
+                                                ('--in-interface %s -j %s'
+                                                 % (bridge, drop_action)))
+                        ipv4_filter.remove_rule('FORWARD',
+                                                ('--out-interface %s -j %s'
+                                                 % (bridge, drop_action)))
+            delete_net_dev(bridge)
 
 
-@lockutils.synchronized('ebtables', 'nova-', external=True)
+@utils.synchronized('ebtables', external=True)
 def ensure_ebtables_rules(rules, table='filter'):
     for rule in rules:
         cmd = ['ebtables', '-t', table, '-D'] + rule.split()
@@ -1538,7 +1547,7 @@ def ensure_ebtables_rules(rules, table='filter'):
         _execute(*cmd, run_as_root=True)
 
 
-@lockutils.synchronized('ebtables', 'nova-', external=True)
+@utils.synchronized('ebtables', external=True)
 def remove_ebtables_rules(rules, table='filter'):
     for rule in rules:
         cmd = ['ebtables', '-t', table, '-D'] + rule.split()
@@ -1557,18 +1566,24 @@ def isolate_dhcp_address(interface, address):
     # block dhcp broadcast traffic across the interface
     ipv4_filter = iptables_manager.ipv4['filter']
     ipv4_filter.add_rule('FORWARD',
-                         '-m physdev --physdev-in %s -d 255.255.255.255 '
-                         '-p udp --dport 67 -j DROP' % interface, top=True)
+                         ('-m physdev --physdev-in %s -d 255.255.255.255 '
+                          '-p udp --dport 67 -j %s'
+                          % (interface, CONF.iptables_drop_action)),
+                         top=True)
     ipv4_filter.add_rule('FORWARD',
-                         '-m physdev --physdev-out %s -d 255.255.255.255 '
-                         '-p udp --dport 67 -j DROP' % interface, top=True)
+                         ('-m physdev --physdev-out %s -d 255.255.255.255 '
+                          '-p udp --dport 67 -j %s'
+                          % (interface, CONF.iptables_drop_action)),
+                         top=True)
     # block ip traffic to address across the interface
     ipv4_filter.add_rule('FORWARD',
-                         '-m physdev --physdev-in %s -d %s -j DROP'
-                         % (interface, address), top=True)
+                         ('-m physdev --physdev-in %s -d %s -j %s'
+                          % (interface, address, CONF.iptables_drop_action)),
+                         top=True)
     ipv4_filter.add_rule('FORWARD',
-                         '-m physdev --physdev-out %s -s %s -j DROP'
-                         % (interface, address), top=True)
+                         ('-m physdev --physdev-out %s -s %s -j %s'
+                          % (interface, address, CONF.iptables_drop_action)),
+                         top=True)
 
 
 def remove_isolate_dhcp_address(interface, address):
@@ -1582,19 +1597,34 @@ def remove_isolate_dhcp_address(interface, address):
     # NOTE(vish): the above is not possible with iptables/arptables
     # block dhcp broadcast traffic across the interface
     ipv4_filter = iptables_manager.ipv4['filter']
-    ipv4_filter.remove_rule('FORWARD',
-                         '-m physdev --physdev-in %s -d 255.255.255.255 '
-                         '-p udp --dport 67 -j DROP' % interface, top=True)
-    ipv4_filter.remove_rule('FORWARD',
-                         '-m physdev --physdev-out %s -d 255.255.255.255 '
-                         '-p udp --dport 67 -j DROP' % interface, top=True)
-    # block ip traffic to address across the interface
-    ipv4_filter.remove_rule('FORWARD',
-                         '-m physdev --physdev-in %s -d %s -j DROP'
-                         % (interface, address), top=True)
-    ipv4_filter.remove_rule('FORWARD',
-                         '-m physdev --physdev-out %s -s %s -j DROP'
-                         % (interface, address), top=True)
+
+    drop_actions = ['DROP']
+    if CONF.iptables_drop_action != 'DROP':
+        drop_actions.append(CONF.iptables_drop_action)
+
+    for drop_action in drop_actions:
+        ipv4_filter.remove_rule('FORWARD',
+                                ('-m physdev --physdev-in %s '
+                                 '-d 255.255.255.255 '
+                                 '-p udp --dport 67 -j %s'
+                                 % (interface, drop_action)),
+                                top=True)
+        ipv4_filter.remove_rule('FORWARD',
+                                ('-m physdev --physdev-out %s '
+                                 '-d 255.255.255.255 '
+                                 '-p udp --dport 67 -j %s'
+                                 % (interface, drop_action)),
+                                top=True)
+
+        # block ip traffic to address across the interface
+        ipv4_filter.remove_rule('FORWARD',
+                                ('-m physdev --physdev-in %s -d %s -j %s'
+                                 % (interface, address, drop_action)),
+                                top=True)
+        ipv4_filter.remove_rule('FORWARD',
+                                ('-m physdev --physdev-out %s -s %s -j %s'
+                                 % (interface, address, drop_action)),
+                                top=True)
 
 
 def get_gateway_rules(bridge):
@@ -1610,8 +1640,10 @@ def get_gateway_rules(bridge):
             rules.append(('FORWARD', '-i %s -o %s -j ACCEPT' % (iface,
                                                                 bridge)))
     rules.append(('FORWARD', '-i %s -o %s -j ACCEPT' % (bridge, bridge)))
-    rules.append(('FORWARD', '-i %s -j DROP' % bridge))
-    rules.append(('FORWARD', '-o %s -j DROP' % bridge))
+    rules.append(('FORWARD', '-i %s -j %s' % (bridge,
+                                              CONF.iptables_drop_action)))
+    rules.append(('FORWARD', '-o %s -j %s' % (bridge,
+                                              CONF.iptables_drop_action)))
     return rules
 
 
@@ -1649,9 +1681,11 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
                          mac_address, run_as_root=True)
                 # .. and make sure iptbles won't forward it as well.
                 iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                        '--in-interface %s -j DROP' % bridge)
+                    '--in-interface %s -j %s' % (bridge,
+                                                 CONF.iptables_drop_action))
                 iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                        '--out-interface %s -j DROP' % bridge)
+                    '--out-interface %s -j %s' % (bridge,
+                                                  CONF.iptables_drop_action))
             else:
                 for rule in get_gateway_rules(bridge):
                     iptables_manager.ipv4['filter'].add_rule(*rule)
@@ -1684,9 +1718,11 @@ class QuantumLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             # appropriate flows to block all non-dhcp traffic.
             # .. and make sure iptbles won't forward it as well.
             iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                    '--in-interface %s -j DROP' % bridge)
+                    ('--in-interface %s -j %s'
+                     % (bridge, CONF.iptables_drop_action)))
             iptables_manager.ipv4['filter'].add_rule('FORWARD',
-                    '--out-interface %s -j DROP' % bridge)
+                    ('--out-interface %s -j %s'
+                     % (bridge, CONF.iptables_drop_action)))
             return bridge
         else:
             for rule in get_gateway_rules(bridge):
@@ -1714,18 +1750,10 @@ class QuantumLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
 
     def unplug(self, network):
         dev = self.get_dev(network)
-
         if not device_exists(dev):
             return None
         else:
-            try:
-                utils.execute('ip', 'link', 'delete', dev, run_as_root=True,
-                              check_exit_code=[0, 2, 254])
-            except exception.ProcessExecutionError:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_("Failed unplugging gateway interface '%s'"),
-                              dev)
-            LOG.debug(_("Unplugged gateway interface '%s'"), dev)
+            delete_net_dev(dev)
             return dev
 
     def get_dev(self, network):

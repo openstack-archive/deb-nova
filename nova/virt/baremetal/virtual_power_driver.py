@@ -19,20 +19,22 @@
 
 from oslo.config import cfg
 
+from nova import context as nova_context
 from nova import exception
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova import utils
+from nova.openstack.common import processutils
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import base
+from nova.virt.baremetal import db
 import nova.virt.powervm.common as connection
 
 opts = [
     cfg.StrOpt('virtual_power_ssh_host',
                default='',
                help='ip or name to virtual power host'),
-    cfg.StrOpt('virtual_power_ssh_port',
-               default='22',
+    cfg.IntOpt('virtual_power_ssh_port',
+               default=22,
                help='Port to use for ssh to virtual power host'),
     cfg.StrOpt('virtual_power_type',
                default='virsh',
@@ -64,6 +66,10 @@ _cmds = None
 LOG = logging.getLogger(__name__)
 
 
+def _normalize_mac(mac):
+    return mac.replace(':', '').lower()
+
+
 class VirtualPowerManager(base.PowerManager):
     """Virtual Power Driver for Baremetal Nova Compute
 
@@ -92,8 +98,9 @@ class VirtualPowerManager(base.PowerManager):
         node = kwargs.pop('node', {})
         instance = kwargs.pop('instance', {})
         self._node_name = instance.get('hostname', "")
-        self._mac_address = node.get('prov_mac_address', "")
-        self._mac_address = self._mac_address.replace(':', '')
+        context = nova_context.get_admin_context()
+        ifs = db.bm_interface_get_all_by_bm_node_id(context, node['id'])
+        self._mac_addresses = [_normalize_mac(i['address']) for i in ifs]
         self._connection = None
         self._matched_name = ''
         self.state = None
@@ -135,7 +142,7 @@ class VirtualPowerManager(base.PowerManager):
         return full_list
 
     def _check_for_node(self):
-        LOG.debug("Looking up Name for Mac address %s." % self._mac_address)
+        LOG.debug("Looking up Name for Mac address %s." % self._mac_addresses)
         self._matched_name = ''
         full_node_list = self._get_full_node_list()
 
@@ -144,11 +151,9 @@ class VirtualPowerManager(base.PowerManager):
             mac_address_list = self._run_command(cmd)
 
             for mac in mac_address_list:
-                if self._mac_address.lower() in mac.lower():
+                if _normalize_mac(mac) in self._mac_addresses:
                     self._matched_name = ('"%s"' % node)
                     break
-            if self._matched_name:
-                break
         return self._matched_name
 
     def activate_node(self):
@@ -224,11 +229,11 @@ class VirtualPowerManager(base.PowerManager):
         cmd = '%s %s' % (self._vp_cmd.base_cmd, cmd)
 
         try:
-            stdout, stderr = utils.ssh_execute(self._connection, cmd,
-                                           check_exit_code=check_exit_code)
+            stdout, stderr = processutils.ssh_execute(
+                self._connection, cmd, check_exit_code=check_exit_code)
             result = stdout.strip().splitlines()
             LOG.debug('Result for run_command: %s' % result)
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             result = []
             LOG.exception("Error running command: %s" % cmd)
         return result

@@ -25,13 +25,13 @@ import os
 
 from oslo.config import cfg
 
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova import exception
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import loopingcall
 from nova.openstack.common import timeutils
-from nova import utils
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import base
 from nova.virt.baremetal import db
@@ -174,7 +174,7 @@ def get_pxe_config_file_path(instance):
 
 
 def get_partition_sizes(instance):
-    instance_type = instance_types.extract_instance_type(instance)
+    instance_type = flavors.extract_instance_type(instance)
     root_mb = instance_type['root_gb'] * 1024
     swap_mb = instance_type['swap']
 
@@ -242,7 +242,6 @@ class PXE(base.NodeDriver):
 
     def _collect_mac_addresses(self, context, node):
         macs = set()
-        macs.add(db.bm_node_get(context, node['id'])['prov_mac_address'])
         for nic in db.bm_interface_get_all_by_bm_node_id(context, node['id']):
             if nic['address']:
                 macs.add(nic['address'])
@@ -459,7 +458,7 @@ class PXE(base.NodeDriver):
                 if instance['uuid'] != row.get('instance_uuid'):
                     locals['error'] = _("Node associated with another instance"
                                         " while waiting for deploy of %s")
-                    raise utils.LoopingCallDone()
+                    raise loopingcall.LoopingCallDone()
 
                 status = row.get('task_state')
                 if (status == baremetal_states.DEPLOYING
@@ -471,7 +470,7 @@ class PXE(base.NodeDriver):
                                 baremetal_states.ACTIVE):
                     LOG.info(_("PXE deploy completed for instance %s")
                                 % instance['uuid'])
-                    raise utils.LoopingCallDone()
+                    raise loopingcall.LoopingCallDone()
                 elif status == baremetal_states.DEPLOYFAIL:
                     locals['error'] = _("PXE deploy failed for instance %s")
             except exception.NodeNotFound:
@@ -483,11 +482,11 @@ class PXE(base.NodeDriver):
                 locals['error'] = _("Timeout reached while waiting for "
                                      "PXE deploy of instance %s")
             if locals['error']:
-                raise utils.LoopingCallDone()
+                raise loopingcall.LoopingCallDone()
 
         expiration = timeutils.utcnow() + datetime.timedelta(
                             seconds=CONF.baremetal.pxe_deploy_timeout)
-        timer = utils.FixedIntervalLoopingCall(_wait_for_deploy)
+        timer = loopingcall.FixedIntervalLoopingCall(_wait_for_deploy)
         timer.start(interval=1).wait()
 
         if locals['error']:

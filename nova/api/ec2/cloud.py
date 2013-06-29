@@ -36,7 +36,7 @@ from nova import block_device
 from nova.cloudpipe import pipelib
 from nova import compute
 from nova.compute import api as compute_api
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova.compute import vm_states
 from nova import db
 from nova import exception
@@ -391,8 +391,8 @@ class CloudController(object):
         LOG.audit(_("Create snapshot of volume %s"), volume_id,
                   context=context)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
-        volume = self.volume_api.get(context, volume_id)
-        args = (context, volume, kwargs.get('name'), kwargs.get('description'))
+        args = (context, volume_id, kwargs.get('name'),
+                kwargs.get('description'))
         if kwargs.get('force', False):
             snapshot = self.volume_api.create_snapshot_force(*args)
         else:
@@ -403,8 +403,7 @@ class CloudController(object):
 
     def delete_snapshot(self, context, snapshot_id, **kwargs):
         snapshot_id = ec2utils.ec2_snap_id_to_uuid(snapshot_id)
-        snapshot = self.volume_api.get_snapshot(context, snapshot_id)
-        self.volume_api.delete_snapshot(context, snapshot)
+        self.volume_api.delete_snapshot(context, snapshot_id)
         return True
 
     def describe_key_pairs(self, context, key_name=None, **kwargs):
@@ -621,8 +620,7 @@ class CloudController(object):
         validprotocols = ['tcp', 'udp', 'icmp', '6', '17', '1']
         if 'ip_protocol' in values and \
             values['ip_protocol'] not in validprotocols:
-            protocol = values['ip_protocol']
-            err = _("Invalid IP protocol %(protocol)s.") % locals()
+            err = _('Invalid IP protocol %s.') % values['ip_protocol']
             raise exception.EC2APIError(message=err, code="400")
 
     def revoke_security_group_ingress(self, context, group_name=None,
@@ -788,6 +786,10 @@ class CloudController(object):
         return {'volumeSet': volumes}
 
     def _format_volume(self, context, volume):
+        valid_ec2_api_volume_status_map = {
+            'attaching': 'in-use',
+            'detaching': 'in-use'}
+
         instance_ec2_id = None
         instance_data = None
 
@@ -801,7 +803,8 @@ class CloudController(object):
                                         instance['host'])
         v = {}
         v['volumeId'] = ec2utils.id_to_ec2_vol_id(volume['id'])
-        v['status'] = volume['status']
+        v['status'] = valid_ec2_api_volume_status_map.get(volume['status'],
+                                                          volume['status'])
         v['size'] = volume['size']
         v['availabilityZone'] = volume['availability_zone']
         v['createTime'] = volume['created_at']
@@ -855,8 +858,7 @@ class CloudController(object):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
         try:
-            volume = self.volume_api.get(context, volume_id)
-            self.volume_api.delete(context, volume)
+            self.volume_api.delete(context, volume_id)
         except exception.InvalidVolume:
             raise exception.EC2APIError(_('Delete Failed'))
 
@@ -871,9 +873,12 @@ class CloudController(object):
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, instance_id)
         instance = self.compute_api.get(context, instance_uuid)
-        msg = _("Attach volume %(volume_id)s to instance %(instance_id)s"
-                " at %(device)s") % locals()
-        LOG.audit(msg, context=context)
+        LOG.audit(_('Attach volume %(volume_id)s to instance %(instance_id)s '
+                    'at %(device)s'),
+                  {'volume_id': volume_id,
+                   'instance_id': instance_id,
+                   'device': device},
+                  context=context)
 
         try:
             self.compute_api.attach_volume(context, instance,
@@ -889,14 +894,24 @@ class CloudController(object):
                 'status': volume['attach_status'],
                 'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
 
+    def _get_instance_from_volume(self, context, volume):
+        if volume['instance_uuid']:
+            try:
+                return db.instance_get_by_uuid(context,
+                                               volume['instance_uuid'])
+            except exception.InstanceNotFound:
+                pass
+        raise exception.VolumeUnattached(volume_id=volume['id'])
+
     def detach_volume(self, context, volume_id, **kwargs):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
         volume = self.volume_api.get(context, volume_id)
+        instance = self._get_instance_from_volume(context, volume)
 
         try:
-            self.compute_api.detach_volume(context, volume_id=volume_id)
+            self.compute_api.detach_volume(context, instance, volume)
         except exception.InvalidVolume:
             raise exception.EC2APIError(_('Detach Volume Failed.'))
 
@@ -1076,7 +1091,7 @@ class CloudController(object):
 
     @staticmethod
     def _format_instance_type(instance, result):
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         result['instanceType'] = instance_type['name']
 
     @staticmethod
@@ -1156,6 +1171,10 @@ class CloudController(object):
             i['ipAddress'] = floating_ip or fixed_ip
             i['dnsName'] = i['publicDnsName'] or i['privateDnsName']
             i['keyName'] = instance['key_name']
+            i['tagSet'] = []
+            for k, v in self.compute_api.get_instance_metadata(
+                    context, instance).iteritems():
+                i['tagSet'].append({'key': k, 'value': v})
 
             if context.is_admin:
                 i['keyName'] = '%s (%s, %s)' % (i['keyName'],
@@ -1219,7 +1238,7 @@ class CloudController(object):
         return {'publicIp': public_ip}
 
     def release_address(self, context, public_ip, **kwargs):
-        LOG.audit(_("Release address %s"), public_ip, context=context)
+        LOG.audit(_('Release address %s'), public_ip, context=context)
         try:
             self.network_api.release_floating_ip(context, address=public_ip)
             return {'return': "true"}
@@ -1227,8 +1246,10 @@ class CloudController(object):
             raise exception.EC2APIError(_('Unable to release IP Address.'))
 
     def associate_address(self, context, instance_id, public_ip, **kwargs):
-        LOG.audit(_("Associate address %(public_ip)s to"
-                " instance %(instance_id)s") % locals(), context=context)
+        LOG.audit(_("Associate address %(public_ip)s to instance "
+                    "%(instance_id)s"),
+                  {'public_ip': public_ip, 'instance_id': instance_id},
+                  context=context)
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, instance_id)
         instance = self.compute_api.get(context, instance_uuid)
 
@@ -1304,7 +1325,7 @@ class CloudController(object):
             raise exception.EC2APIError(_('Image must be available'))
 
         (instances, resv_id) = self.compute_api.create(context,
-            instance_type=instance_types.get_instance_type_by_name(
+            instance_type=flavors.get_instance_type_by_name(
                 kwargs.get('instance_type', None)),
             image_href=image_uuid,
             max_count=int(kwargs.get('max_count', min_count)),
@@ -1487,9 +1508,10 @@ class CloudController(object):
             metadata['properties']['block_device_mapping'] = mappings
 
         image_id = self._register_image(context, metadata)
-        msg = _("Registered image %(image_location)s with"
-                " id %(image_id)s") % locals()
-        LOG.audit(msg, context=context)
+        LOG.audit(_('Registered image %(image_location)s with id '
+                    '%(image_id)s'),
+                  {'image_location': image_location, 'image_id': image_id},
+                  context=context)
         return {'imageId': image_id}
 
     def describe_image_attribute(self, context, image_id, attribute, **kwargs):
@@ -1596,10 +1618,10 @@ class CloudController(object):
         # CreateImage only supported for the analogue of EBS-backed instances
         if not self.compute_api.is_volume_backed_instance(context, instance,
                                                           bdms):
-            root = instance['root_device_name']
             msg = _("Invalid value '%(ec2_instance_id)s' for instanceId. "
                     "Instance does not have a volume attached at root "
-                    "(%(root)s)") % locals()
+                    "(%(root)s)") % {'root': instance['root_device_name'],
+                                     'ec2_instance_id': ec2_instance_id}
             raise exception.InvalidParameterValue(err=msg)
 
         # stop the instance if necessary
@@ -1658,6 +1680,137 @@ class CloudController(object):
             self.compute_api.start(context, instance)
 
         return {'imageId': ec2_id}
+
+    def create_tags(self, context, **kwargs):
+        """Add tags to a resource
+
+        Returns True on success, error on failure.
+
+        :param context: context under which the method is called
+        """
+        resources = kwargs.get('resource_id', None)
+        tags = kwargs.get('tag', None)
+        if resources is None or tags is None:
+            raise exception.EC2APIError(_('resource_id and tag are required'))
+
+        if not isinstance(resources, (tuple, list, set)):
+            raise exception.EC2APIError(_('Expecting a list of resources'))
+
+        for r in resources:
+            if ec2utils.resource_type_from_id(context, r) != 'instance':
+                raise exception.EC2APIError(_('Only instances implemented'))
+
+        if not isinstance(tags, (tuple, list, set)):
+            raise exception.EC2APIError(_('Expecting a list of tagSets'))
+
+        metadata = {}
+        for tag in tags:
+            if not isinstance(tag, dict):
+                raise exception.EC2APIError(_
+                        ('Expecting tagSet to be key/value pairs'))
+
+            key = tag.get('key', None)
+            val = tag.get('value', None)
+
+            if key is None or val is None:
+                raise exception.EC2APIError(_
+                        ('Expecting both key and value to be set'))
+
+            metadata[key] = val
+
+        for ec2_id in resources:
+            instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
+            instance = self.compute_api.get(context, instance_uuid)
+            self.compute_api.update_instance_metadata(context,
+                instance, metadata)
+
+        return True
+
+    def delete_tags(self, context, **kwargs):
+        """Delete tags
+
+        Returns True on success, error on failure.
+
+        :param context: context under which the method is called
+        """
+        resources = kwargs.get('resource_id', None)
+        tags = kwargs.get('tag', None)
+        if resources is None or tags is None:
+            raise exception.EC2APIError(_('resource_id and tag are required'))
+
+        if not isinstance(resources, (tuple, list, set)):
+            raise exception.EC2APIError(_('Expecting a list of resources'))
+
+        for r in resources:
+            if ec2utils.resource_type_from_id(context, r) != 'instance':
+                raise exception.EC2APIError(_('Only instances implemented'))
+
+        if not isinstance(tags, (tuple, list, set)):
+            raise exception.EC2APIError(_('Expecting a list of tagSets'))
+
+        for ec2_id in resources:
+            instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
+            instance = self.compute_api.get(context, instance_uuid)
+            for tag in tags:
+                if not isinstance(tag, dict):
+                    raise exception.EC2APIError(_
+                            ('Expecting tagSet to be key/value pairs'))
+
+                key = tag.get('key', None)
+                if key is None:
+                    raise exception.EC2APIError(_('Expecting key to be set'))
+
+                self.compute_api.delete_instance_metadata(context,
+                        instance, key)
+
+        return True
+
+    def describe_tags(self, context, **kwargs):
+        """List tags
+
+        Returns a dict with a single key 'tagSet' on success, error on failure.
+
+        :param context: context under which the method is called
+        """
+        filters = kwargs.get('filter', None)
+
+        search_filts = []
+        if filters:
+            for filter_block in filters:
+                key_name = filter_block.get('name', None)
+                val = filter_block.get('value', None)
+                if val:
+                    if isinstance(val, dict):
+                        val = val.values()
+                    if not isinstance(val, (tuple, list, set)):
+                        val = (val,)
+                if key_name:
+                    search_block = {}
+                    if key_name == 'resource_id':
+                        search_block['resource_id'] = []
+                        for res_id in val:
+                            search_block['resource_id'].append(
+                                ec2utils.ec2_inst_id_to_uuid(context, res_id))
+                    elif key_name in ['key', 'value']:
+                        search_block[key_name] = val
+                    elif key_name == 'resource_type':
+                        for res_type in val:
+                            if res_type != 'instance':
+                                raise exception.EC2APIError(_
+                                        ('Only instances implemented'))
+                            search_block[key_name] = 'instance'
+                    if len(search_block.keys()) > 0:
+                        search_filts.append(search_block)
+        ts = []
+        for tag in self.compute_api.get_all_instance_metadata(context,
+                                                              search_filts):
+            ts.append({
+                'resource_id': ec2utils.id_to_ec2_inst_id(tag['instance_id']),
+                'resource_type': 'instance',
+                'key': tag['key'],
+                'value': tag['value']
+            })
+        return {"tagSet": ts}
 
 
 class EC2SecurityGroupExceptions(object):

@@ -35,8 +35,10 @@ CONF = cfg.CONF
 BASE = declarative_base()
 
 
-class NovaBase(models.SoftDeleteMixin, models.ModelBase):
-    pass
+class NovaBase(models.SoftDeleteMixin,
+               models.TimestampMixin,
+               models.ModelBase):
+    metadata = None
 
 
 class Service(BASE, NovaBase):
@@ -550,6 +552,7 @@ class ProviderFirewallRule(BASE, NovaBase):
 class KeyPair(BASE, NovaBase):
     """Represents a public key pair for ssh."""
     __tablename__ = 'key_pairs'
+    __table_args__ = (schema.UniqueConstraint("name", "user_id"), )
     id = Column(Integer, primary_key=True)
 
     name = Column(String(255))
@@ -888,7 +891,10 @@ class VolumeUsage(BASE, NovaBase):
     __tablename__ = 'volume_usage_cache'
     id = Column(Integer, primary_key=True, nullable=False)
     volume_id = Column(String(36), nullable=False)
-    instance_id = Column(Integer)
+    instance_uuid = Column(String(36))
+    project_id = Column(String(36))
+    user_id = Column(String(36))
+    availability_zone = Column(String(255))
     tot_last_refreshed = Column(DateTime)
     tot_reads = Column(BigInteger, default=0)
     tot_read_bytes = Column(BigInteger, default=0)

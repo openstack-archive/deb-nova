@@ -28,13 +28,14 @@ import base64
 
 from nova import crypto
 from nova import manager
-from nova.openstack.common import log as logging
-
-LOG = logging.getLogger(__name__)
 
 
 class CertManager(manager.Manager):
     RPC_API_VERSION = '1.1'
+
+    def __init__(self, *args, **kwargs):
+        super(CertManager, self).__init__(service_name='cert',
+                                          *args, **kwargs)
 
     def init_host(self):
         crypto.ensure_ca_filesystem()
@@ -67,5 +68,7 @@ class CertManager(manager.Manager):
         """Decrypt base64 encoded text using the projects private key."""
         return crypto.decrypt_text(project_id, base64.b64decode(text))
 
+    # NOTE(russellb) This method can be removed in 2.0 of this API.  It is
+    # deprecated in favor of the method in the base API.
     def get_backdoor_port(self, context):
         return self.backdoor_port

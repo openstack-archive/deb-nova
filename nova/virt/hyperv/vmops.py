@@ -28,6 +28,7 @@ from nova import exception
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import processutils
 from nova import utils
 from nova.virt import configdrive
 from nova.virt.hyperv import constants
@@ -44,22 +45,18 @@ hyperv_opts = [
     cfg.BoolOpt('limit_cpu_features',
                 default=False,
                 help='Required for live migration among '
-                     'hosts with different CPU features',
-                deprecated_group='DEFAULT'),
+                     'hosts with different CPU features'),
     cfg.BoolOpt('config_drive_inject_password',
                 default=False,
-                help='Sets the admin password in the config drive image',
-                deprecated_group='DEFAULT'),
+                help='Sets the admin password in the config drive image'),
     cfg.StrOpt('qemu_img_cmd',
                default="qemu-img.exe",
                help='qemu-img is used to convert between '
-                    'different image types',
-               deprecated_group='DEFAULT'),
+                    'different image types'),
     cfg.BoolOpt('config_drive_cdrom',
                 default=False,
                 help='Attaches the Config Drive image as a cdrom drive '
-                     'instead of a disk drive',
-                deprecated_group='DEFAULT')
+                     'instead of a disk drive')
 ]
 
 CONF = cfg.CONF
@@ -158,6 +155,9 @@ class VMOps(object):
         if self._vmutils.vm_exists(instance_name):
             raise exception.InstanceExists(name=instance_name)
 
+        # Make sure we're starting with a clean slate.
+        self._delete_disk_files(instance_name)
+
         if self._volumeops.ebs_root_in_block_devices(block_device_info):
             root_vhd_path = None
         else:
@@ -230,7 +230,7 @@ class VMOps(object):
         with configdrive.ConfigDriveBuilder(instance_md=inst_md) as cdb:
             try:
                 cdb.make_drive(configdrive_path_iso)
-            except exception.ProcessExecutionError, e:
+            except processutils.ProcessExecutionError as e:
                 with excutils.save_and_reraise_exception():
                     LOG.error(_('Creating config drive failed with error: %s'),
                               e, instance=instance)
@@ -310,7 +310,6 @@ class VMOps(object):
 
     def suspend(self, instance):
         """Suspend the specified instance."""
-        print instance
         LOG.debug(_("Suspend instance"), instance=instance)
         self._set_vm_state(instance["name"],
                            constants.HYPERV_VM_STATE_SUSPENDED)

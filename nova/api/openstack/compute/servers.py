@@ -28,11 +28,12 @@ from nova.api.openstack.compute.views import servers as views_servers
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova import exception
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
+from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import utils
@@ -185,7 +186,8 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
 
         res_id = server_node.getAttribute('return_reservation_id')
         if res_id:
-            server['return_reservation_id'] = utils.bool_from_str(res_id)
+            server['return_reservation_id'] = \
+                    strutils.bool_from_string(res_id)
 
         scheduler_hints = self._extract_scheduler_hints(server_node)
         if scheduler_hints:
@@ -253,7 +255,7 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
                 for attr in attributes:
                     value = child.getAttribute(attr)
                     if value:
-                        mapping[attr] = utils.bool_from_str(value)
+                        mapping[attr] = strutils.bool_from_string(value)
                 block_device_mapping.append(mapping)
             return block_device_mapping
         else:
@@ -789,6 +791,9 @@ class Controller(wsgi.Controller):
             requested_networks = server_dict.get('networks')
 
         if requested_networks is not None:
+            if not isinstance(requested_networks, list):
+                expl = _('Bad networks format')
+                raise exc.HTTPBadRequest(explanation=expl)
             requested_networks = self._get_requested_networks(
                 requested_networks)
 
@@ -826,7 +831,7 @@ class Controller(wsgi.Controller):
             for bdm in block_device_mapping:
                 self._validate_device_name(bdm["device_name"])
                 if 'delete_on_termination' in bdm:
-                    bdm['delete_on_termination'] = utils.bool_from_str(
+                    bdm['delete_on_termination'] = strutils.bool_from_string(
                         bdm['delete_on_termination'])
 
         ret_resv_id = False
@@ -872,7 +877,7 @@ class Controller(wsgi.Controller):
             scheduler_hints = server_dict.get('scheduler_hints', {})
 
         try:
-            _get_inst_type = instance_types.get_instance_type_by_flavor_id
+            _get_inst_type = flavors.get_instance_type_by_flavor_id
             inst_type = _get_inst_type(flavor_id, read_deleted="no")
 
             (instances, resv_id) = self.compute_api.create(context,
@@ -900,32 +905,18 @@ class Controller(wsgi.Controller):
             raise exc.HTTPRequestEntityTooLarge(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
-        except exception.InstanceTypeMemoryTooSmall as error:
-            raise exc.HTTPBadRequest(explanation=error.format_message())
-        except exception.InstanceTypeNotFound as error:
-            raise exc.HTTPBadRequest(explanation=error)
-        except exception.InstanceTypeDiskTooSmall as error:
-            raise exc.HTTPBadRequest(explanation=error.format_message())
-        except exception.InvalidMetadata as error:
-            raise exc.HTTPBadRequest(explanation=error.format_message())
         except exception.InvalidMetadataSize as error:
             raise exc.HTTPRequestEntityTooLarge(
                 explanation=error.format_message())
-        except exception.InvalidRequest as error:
-            raise exc.HTTPBadRequest(explanation=error.format_message())
         except exception.ImageNotFound as error:
             msg = _("Can not find requested image")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.ImageNotActive as error:
-            raise exc.HTTPBadRequest(explanation=error.format_message())
         except exception.FlavorNotFound as error:
             msg = _("Invalid flavorRef provided.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.KeypairNotFound as error:
             msg = _("Invalid key_name provided.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.SecurityGroupNotFound as error:
-            raise exc.HTTPBadRequest(explanation=error.format_message())
         except rpc_common.RemoteError as err:
             msg = "%(err_type)s: %(err_msg)s" % {'err_type': err.exc_type,
                                                  'err_msg': err.value}
@@ -933,7 +924,14 @@ class Controller(wsgi.Controller):
         except UnicodeDecodeError as error:
             msg = "UnicodeError: %s" % unicode(error)
             raise exc.HTTPBadRequest(explanation=msg)
-        # Let the caller deal with unhandled exceptions.
+        except (exception.ImageNotActive,
+                exception.InstanceTypeDiskTooSmall,
+                exception.InstanceTypeMemoryTooSmall,
+                exception.InstanceTypeNotFound,
+                exception.InvalidMetadata,
+                exception.InvalidRequest,
+                exception.SecurityGroupNotFound) as error:
+            raise exc.HTTPBadRequest(explanation=error.format_message())
 
         # If the caller wanted a reservation_id, return it
         if ret_resv_id:
@@ -991,7 +989,7 @@ class Controller(wsgi.Controller):
             update_dict['access_ip_v6'] = access_ipv6.strip()
 
         if 'auto_disk_config' in body['server']:
-            auto_disk_config = utils.bool_from_str(
+            auto_disk_config = strutils.bool_from_string(
                     body['server']['auto_disk_config'])
             update_dict['auto_disk_config'] = auto_disk_config
 
@@ -1291,18 +1289,16 @@ class Controller(wsgi.Controller):
         except exception.InstanceNotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
-        except exception.InvalidMetadata as error:
-            raise exc.HTTPBadRequest(
-                explanation=error.format_message())
         except exception.InvalidMetadataSize as error:
             raise exc.HTTPRequestEntityTooLarge(
                 explanation=error.format_message())
         except exception.ImageNotFound:
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.InstanceTypeMemoryTooSmall as error:
-            raise exc.HTTPBadRequest(explanation=error.format_message())
-        except exception.InstanceTypeDiskTooSmall as error:
+        except (exception.ImageNotActive,
+                exception.InstanceTypeDiskTooSmall,
+                exception.InstanceTypeMemoryTooSmall,
+                exception.InvalidMetadata) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
 
         instance = self._get_server(context, req, id)
@@ -1401,7 +1397,7 @@ class Controller(wsgi.Controller):
     def _get_server_search_options(self):
         """Return server search options allowed by non-admin."""
         return ('reservation_id', 'name', 'status', 'image', 'flavor',
-                'changes-since', 'all_tenants')
+                'ip', 'changes-since', 'all_tenants')
 
 
 def create_resource(ext_mgr):
@@ -1415,9 +1411,8 @@ def remove_invalid_options(context, search_options, allowed_search_options):
         return
     # Otherwise, strip out all unknown options
     unknown_options = [opt for opt in search_options
-            if opt not in allowed_search_options]
-    unk_opt_str = ", ".join(unknown_options)
-    log_msg = _("Removing options '%(unk_opt_str)s' from query") % locals()
-    LOG.debug(log_msg)
+                        if opt not in allowed_search_options]
+    LOG.debug(_("Removing options '%s' from query"),
+              ", ".join(unknown_options))
     for opt in unknown_options:
         search_options.pop(opt, None)

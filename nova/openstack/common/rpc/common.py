@@ -22,6 +22,7 @@ import sys
 import traceback
 
 from oslo.config import cfg
+import six
 
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
@@ -68,10 +69,6 @@ _RPC_ENVELOPE_VERSION = '2.0'
 
 _VERSION_KEY = 'oslo.version'
 _MESSAGE_KEY = 'oslo.message'
-
-
-# TODO(russellb) Turn this on after Grizzly.
-_SEND_RPC_ENVELOPE = False
 
 
 class RPCException(Exception):
@@ -122,7 +119,25 @@ class Timeout(RPCException):
     This exception is raised if the rpc_response_timeout is reached while
     waiting for a response from the remote side.
     """
-    message = _("Timeout while waiting on RPC response.")
+    message = _('Timeout while waiting on RPC response - '
+                'topic: "%(topic)s", RPC method: "%(method)s" '
+                'info: "%(info)s"')
+
+    def __init__(self, info=None, topic=None, method=None):
+        """
+        :param info: Extra info to convey to the user
+        :param topic: The topic that the rpc call was sent to
+        :param rpc_method_name: The name of the rpc method being
+                                called
+        """
+        self.info = info
+        self.topic = topic
+        self.method = method
+        super(Timeout, self).__init__(
+            None,
+            info=info or _('<unknown>'),
+            topic=topic or _('<unknown>'),
+            method=method or _('<unknown>'))
 
 
 class DuplicateMessageError(RPCException):
@@ -141,6 +156,10 @@ class UnsupportedRpcVersion(RPCException):
 class UnsupportedRpcEnvelopeVersion(RPCException):
     message = _("Specified RPC envelope version, %(version)s, "
                 "not supported by this endpoint.")
+
+
+class RpcVersionCapError(RPCException):
+    message = _("Specified RPC version cap, %(version_cap)s, is too low")
 
 
 class Connection(object):
@@ -262,7 +281,7 @@ def _safe_log(log_func, msg, msg_data):
                 for elem in arg[:-1]:
                     d = d[elem]
                 d[arg[-1]] = '<SANITIZED>'
-            except KeyError, e:
+            except KeyError as e:
                 LOG.info(_('Failed to sanitize %(item)s. Key error %(err)s'),
                          {'item': arg,
                           'err': e})
@@ -285,7 +304,8 @@ def serialize_remote_exception(failure_info, log_failure=True):
     tb = traceback.format_exception(*failure_info)
     failure = failure_info[1]
     if log_failure:
-        LOG.error(_("Returning exception %s to caller"), unicode(failure))
+        LOG.error(_("Returning exception %s to caller"),
+                  six.text_type(failure))
         LOG.error(tb)
 
     kwargs = {}
@@ -295,7 +315,7 @@ def serialize_remote_exception(failure_info, log_failure=True):
     data = {
         'class': str(failure.__class__.__name__),
         'module': str(failure.__class__.__module__),
-        'message': unicode(failure),
+        'message': six.text_type(failure),
         'tb': tb,
         'args': failure.args,
         'kwargs': kwargs
@@ -325,7 +345,7 @@ def deserialize_remote_exception(conf, data):
         if not issubclass(klass, Exception):
             raise TypeError("Can only deserialize Exceptions")
 
-        failure = klass(**failure.get('kwargs', {}))
+        failure = klass(*failure.get('args', []), **failure.get('kwargs', {}))
     except (AttributeError, TypeError, ImportError):
         return RemoteError(name, failure.get('message'), trace)
 
@@ -405,7 +425,7 @@ class ClientException(Exception):
 def catch_client_exception(exceptions, func, *args, **kwargs):
     try:
         return func(*args, **kwargs)
-    except Exception, e:
+    except Exception as e:
         if type(e) in exceptions:
             raise ClientException()
         else:
@@ -441,10 +461,7 @@ def version_is_compatible(imp_version, version):
     return True
 
 
-def serialize_msg(raw_msg, force_envelope=False):
-    if not _SEND_RPC_ENVELOPE and not force_envelope:
-        return raw_msg
-
+def serialize_msg(raw_msg):
     # NOTE(russellb) See the docstring for _RPC_ENVELOPE_VERSION for more
     # information about this format.
     msg = {_VERSION_KEY: _RPC_ENVELOPE_VERSION,

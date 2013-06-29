@@ -22,7 +22,7 @@ from webob import exc
 
 from nova.api.openstack.compute.contrib import volumes
 from nova.compute import api as compute_api
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova import context
 from nova import exception
 from nova.openstack.common import jsonutils
@@ -47,38 +47,52 @@ def fake_compute_api_create(cls, context, instance_type, image_href, **kwargs):
     global _block_device_mapping_seen
     _block_device_mapping_seen = kwargs.get('block_device_mapping')
 
-    inst_type = instance_types.get_instance_type_by_flavor_id(2)
+    inst_type = flavors.get_instance_type_by_flavor_id(2)
     resv_id = None
     return ([{'id': 1,
-             'display_name': 'test_server',
-             'uuid': FAKE_UUID,
-             'instance_type': dict(inst_type),
-             'access_ip_v4': '1.2.3.4',
-             'access_ip_v6': 'fead::1234',
-             'image_ref': IMAGE_UUID,
-             'user_id': 'fake',
-             'project_id': 'fake',
-             'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
-             'updated_at': datetime.datetime(2010, 11, 11, 11, 0, 0),
-             'progress': 0,
-             'fixed_ips': []
-             }], resv_id)
+              'display_name': 'test_server',
+              'uuid': FAKE_UUID,
+              'instance_type': dict(inst_type),
+              'access_ip_v4': '1.2.3.4',
+              'access_ip_v6': 'fead::1234',
+              'image_ref': IMAGE_UUID,
+              'user_id': 'fake',
+              'project_id': 'fake',
+              'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+              'updated_at': datetime.datetime(2010, 11, 11, 11, 0, 0),
+              'progress': 0,
+              'fixed_ips': []
+              }], resv_id)
 
 
 def fake_get_instance(self, context, instance_id):
-    return({'uuid': instance_id})
+    return {'uuid': instance_id}
+
+
+def fake_get_volume(self, context, id):
+    return {'id': 'woot'}
 
 
 def fake_attach_volume(self, context, instance, volume_id, device):
-    return()
+    pass
 
 
-def fake_detach_volume(self, context, volume_id):
-    return()
+def fake_detach_volume(self, context, instance, volume):
+    pass
+
+
+def fake_create_snapshot(self, context, volume, name, description):
+    return {'id': 123,
+            'volume_id': 'fakeVolId',
+            'status': 'available',
+            'volume_size': 123,
+            'created_at': '2013-01-01 00:00:01',
+            'display_name': 'myVolumeName',
+            'display_description': 'myVolumeDescription'}
 
 
 def fake_get_instance_bdms(self, context, instance):
-    return([{'id': 1,
+    return [{'id': 1,
              'instance_uuid': instance['uuid'],
              'device_name': '/dev/fake0',
              'delete_on_termination': 'False',
@@ -93,7 +107,7 @@ def fake_get_instance_bdms(self, context, instance):
              'virtual_name': 'MyNamesVirtual',
              'snapshot_id': None,
              'volume_id': FAKE_UUID_B,
-             'volume_size': 1}])
+             'volume_size': 1}]
 
 
 class BootFromVolumeTest(test.TestCase):
@@ -213,7 +227,7 @@ class VolumeApiTest(test.TestCase):
         self.assertEqual(resp.status_int, 200)
 
     def test_volume_show_no_volume(self):
-        self.stubs.Set(cinder.API, "get", fakes.stub_volume_get_notfound)
+        self.stubs.Set(cinder.API, "get", fakes.stub_volume_notfound)
 
         req = webob.Request.blank('/v2/fake/os-volumes/456')
         resp = req.get_response(self.app)
@@ -226,7 +240,7 @@ class VolumeApiTest(test.TestCase):
         self.assertEqual(resp.status_int, 202)
 
     def test_volume_delete_no_volume(self):
-        self.stubs.Set(cinder.API, "get", fakes.stub_volume_get_notfound)
+        self.stubs.Set(cinder.API, "delete", fakes.stub_volume_notfound)
 
         req = webob.Request.blank('/v2/fake/os-volumes/456')
         req.method = 'DELETE'
@@ -241,6 +255,7 @@ class VolumeAttachTests(test.TestCase):
                        'get_instance_bdms',
                        fake_get_instance_bdms)
         self.stubs.Set(compute_api.API, 'get', fake_get_instance)
+        self.stubs.Set(cinder.API, 'get', fake_get_volume)
         self.context = context.get_admin_context()
         self.expected_show = {'volumeAttachment':
             {'device': '/dev/fake0',
@@ -663,3 +678,29 @@ class UnprocessableSnapshotTestCase(CommonUnprocessableEntityTestCase,
     resource = 'os-snapshots'
     entity_name = 'snapshot'
     controller_cls = volumes.SnapshotController
+
+
+class CreateSnapshotTestCase(test.TestCase):
+    def setUp(self):
+        super(CreateSnapshotTestCase, self).setUp()
+        self.controller = volumes.SnapshotController()
+        self.stubs.Set(cinder.API, 'get', fake_get_volume)
+        self.stubs.Set(cinder.API, 'create_snapshot_force',
+                       fake_create_snapshot)
+        self.stubs.Set(cinder.API, 'create_snapshot', fake_create_snapshot)
+        self.req = fakes.HTTPRequest.blank('/v2/fake/os-snapshots')
+        self.req.method = 'POST'
+        self.body = {'snapshot': {'volume_id': 1}}
+
+    def test_force_true(self):
+        self.body['snapshot']['force'] = 'True'
+        self.controller.create(self.req, body=self.body)
+
+    def test_force_false(self):
+        self.body['snapshot']['force'] = 'f'
+        self.controller.create(self.req, body=self.body)
+
+    def test_force_invalid(self):
+        self.body['snapshot']['force'] = 'foo'
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.controller.create, self.req, body=self.body)

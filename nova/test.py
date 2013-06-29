@@ -23,12 +23,14 @@ inline callbacks.
 
 """
 
+import eventlet
+eventlet.monkey_patch(os=False)
+
 import os
 import shutil
 import sys
 import uuid
 
-import eventlet
 import fixtures
 import mox
 from oslo.config import cfg
@@ -62,9 +64,6 @@ CONF.import_opt('sqlite_db', 'nova.openstack.common.db.sqlalchemy.session')
 CONF.set_override('use_stderr', False)
 
 logging.setup('nova')
-LOG = logging.getLogger(__name__)
-
-eventlet.monkey_patch(os=False)
 
 _DB_CACHE = None
 
@@ -174,9 +173,9 @@ class MoxStubout(fixtures.Fixture):
         # because it screws with our generators
         self.mox = mox.Mox()
         self.stubs = stubout.StubOutForTesting()
-        self.addCleanup(self.mox.UnsetStubs)
         self.addCleanup(self.stubs.UnsetAll)
         self.addCleanup(self.stubs.SmartUnsetAll)
+        self.addCleanup(self.mox.UnsetStubs)
         self.addCleanup(self.mox.VerifyAll)
 
 
@@ -210,7 +209,7 @@ class TestCase(testtools.TestCase):
             stderr = self.useFixture(fixtures.StringStream('stderr')).stream
             self.useFixture(fixtures.MonkeyPatch('sys.stderr', stderr))
 
-        self.log_fixture = self.useFixture(fixtures.FakeLogger('nova'))
+        self.log_fixture = self.useFixture(fixtures.FakeLogger())
         self.useFixture(conf_fixture.ConfFixture(CONF))
 
         global _DB_CACHE

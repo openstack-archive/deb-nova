@@ -22,7 +22,7 @@ model.
 from oslo.config import cfg
 
 from nova.compute import claims
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import conductor
@@ -30,8 +30,8 @@ from nova import context
 from nova import exception
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
-from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
+from nova import utils
 
 resource_tracker_opts = [
     cfg.IntOpt('reserved_host_disk_mb', default=0,
@@ -47,7 +47,7 @@ CONF = cfg.CONF
 CONF.register_opts(resource_tracker_opts)
 
 LOG = logging.getLogger(__name__)
-COMPUTE_RESOURCE_SEMAPHORE = claims.COMPUTE_RESOURCE_SEMAPHORE
+COMPUTE_RESOURCE_SEMAPHORE = "compute_resources"
 
 
 class ResourceTracker(object):
@@ -65,7 +65,7 @@ class ResourceTracker(object):
         self.tracked_migrations = {}
         self.conductor_api = conductor.API()
 
-    @lockutils.synchronized(COMPUTE_RESOURCE_SEMAPHORE, 'nova-')
+    @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def instance_claim(self, context, instance_ref, limits=None):
         """Indicate that some resources are needed for an upcoming compute
         instance build operation.
@@ -115,7 +115,7 @@ class ResourceTracker(object):
         else:
             raise exception.ComputeResourcesUnavailable()
 
-    @lockutils.synchronized(COMPUTE_RESOURCE_SEMAPHORE, 'nova-')
+    @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def resize_claim(self, context, instance_ref, instance_type, limits=None):
         """Indicate that resources are needed for a resize operation to this
         compute host.
@@ -160,7 +160,7 @@ class ResourceTracker(object):
         be done while the COMPUTE_RESOURCES_SEMAPHORE is held so the resource
         claim will not be lost if the audit process starts.
         """
-        old_instance_type = instance_types.extract_instance_type(instance)
+        old_instance_type = flavors.extract_instance_type(instance)
 
         return self.conductor_api.migration_create(context, instance,
                 {'dest_compute': self.host,
@@ -183,6 +183,7 @@ class ResourceTracker(object):
         instance_ref['launched_on'] = self.host
         instance_ref['node'] = self.nodename
 
+    @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def abort_instance_claim(self, instance):
         """Remove usage from the given instance."""
         # flag the instance as deleted to revert the resource usage
@@ -193,19 +194,25 @@ class ResourceTracker(object):
         ctxt = context.get_admin_context()
         self._update(ctxt, self.compute_node)
 
-    def abort_resize_claim(self, instance_uuid, instance_type):
-        """Remove usage for an incoming migration."""
-        if instance_uuid in self.tracked_migrations:
-            migration, itype = self.tracked_migrations.pop(instance_uuid)
+    @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
+    def drop_resize_claim(self, instance, instance_type=None, prefix='new_'):
+        """Remove usage for an incoming/outgoing migration."""
+        if instance['uuid'] in self.tracked_migrations:
+            migration, itype = self.tracked_migrations.pop(instance['uuid'])
 
-            if instance_type['id'] == migration['new_instance_type_id']:
+            if not instance_type:
+                ctxt = context.get_admin_context()
+                instance_type = self._get_instance_type(ctxt, instance, prefix)
+
+            if instance_type['id'] == itype['id']:
                 self.stats.update_stats_for_migration(itype, sign=-1)
                 self._update_usage(self.compute_node, itype, sign=-1)
+                self.compute_node['stats'] = self.stats
 
                 ctxt = context.get_admin_context()
                 self._update(ctxt, self.compute_node)
 
-    @lockutils.synchronized(COMPUTE_RESOURCE_SEMAPHORE, 'nova-')
+    @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def update_usage(self, context, instance):
         """Update the resource usage and stats after a change in an
         instance
@@ -225,7 +232,7 @@ class ResourceTracker(object):
     def disabled(self):
         return self.compute_node is None
 
-    @lockutils.synchronized(COMPUTE_RESOURCE_SEMAPHORE, 'nova-')
+    @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def update_available_resource(self, context):
         """Override in-memory calculations of compute node resource usage based
         on data audited from the hypervisor layer.
@@ -352,16 +359,6 @@ class ResourceTracker(object):
             del self.compute_node['service']
         self.compute_node = self.conductor_api.compute_node_update(
             context, self.compute_node, values, prune_stats)
-
-    def confirm_resize(self, context, migration, status='confirmed'):
-        """Cleanup usage for a confirmed resize."""
-        elevated = context.elevated()
-        self.conductor_api.migration_update(elevated, migration, status)
-        self.update_available_resource(elevated)
-
-    def revert_resize(self, context, migration, status='reverted'):
-        """Cleanup usage for a reverted resize."""
-        self.confirm_resize(context, migration, status)
 
     def _update_usage(self, resources, usage, sign=1):
         resources['memory_mb_used'] += sign * usage['memory_mb']
@@ -583,7 +580,7 @@ class ResourceTracker(object):
             instance_type_id = instance['instance_type_id']
 
         try:
-            return instance_types.extract_instance_type(instance, prefix)
+            return flavors.extract_instance_type(instance, prefix)
         except KeyError:
             return self.conductor_api.instance_type_get(context,
                     instance_type_id)

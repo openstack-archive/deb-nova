@@ -29,13 +29,10 @@ import nova.context
 from nova.db.sqlalchemy import api as sqlalchemy_api
 from nova import exception
 from nova.openstack.common.db import exception as db_exc
-from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova.virt.baremetal.db.sqlalchemy import models
 from nova.virt.baremetal.db.sqlalchemy import session as db_session
-
-LOG = logging.getLogger(__name__)
 
 
 def model_query(context, *args, **kwargs):
@@ -400,7 +397,7 @@ def bm_interface_set_vif_uuid(context, if_id, vif_uuid):
         try:
             session.add(bm_interface)
             session.flush()
-        except db_exc.DBError, e:
+        except db_exc.DBError as e:
             # TODO(deva): clean up when db layer raises DuplicateKeyError
             if str(e).find('IntegrityError') != -1:
                 raise exception.NovaException(_("Baremetal interface %s "

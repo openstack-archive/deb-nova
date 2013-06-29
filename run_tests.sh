@@ -129,15 +129,26 @@ function run_tests {
   if [ $coverage -eq 1 ]; then
     TESTRTESTS="$TESTRTESTS --coverage"
   else
-    TESTRTESTS="$TESTRTESTS --slowest"
+    TESTRTESTS="$TESTRTESTS"
   fi
 
   # Just run the test suites in current environment
   set +e
   testrargs=`echo "$testrargs" | sed -e's/^\s*\(.*\)\s*$/\1/'`
   TESTRTESTS="$TESTRTESTS --testr-args='--subunit $testropts $testrargs'"
+  if [ setup.cfg -nt nova.egg-info/entry_points.txt ]
+  then
+    ${wrapper} python setup.py egg_info
+  fi
   echo "Running \`${wrapper} $TESTRTESTS\`"
-  bash -c "${wrapper} $TESTRTESTS | ${wrapper} subunit2pyunit"
+  if ${wrapper} which subunit-2to1 2>&1 > /dev/null
+  then
+    # subunit-2to1 is present, testr subunit stream should be in version 2
+    # format. Convert to version one before colorizing.
+    bash -c "${wrapper} $TESTRTESTS | ${wrapper} subunit-2to1 | ${wrapper} tools/colorizer.py"
+  else
+    bash -c "${wrapper} $TESTRTESTS | ${wrapper} tools/colorizer.py"
+  fi
   RESULT=$?
   set -e
 
@@ -161,8 +172,8 @@ function copy_subunit_log {
 }
 
 function run_pep8 {
-  echo "Running PEP8 and HACKING compliance check..."
-  bash -c "${wrapper} tools/run_pep8.sh"
+  echo "Running flake8 ..."
+  bash -c "${wrapper} flake8"
 }
 
 

@@ -52,12 +52,12 @@ from nova.tests.api.openstack.compute.contrib import test_fping
 from nova.tests.api.openstack.compute.contrib import test_networks
 from nova.tests.api.openstack.compute.contrib import test_services
 from nova.tests.api.openstack import fakes
-from nova.tests.baremetal.db import base as bm_db_base
 from nova.tests import fake_instance_actions
 from nova.tests import fake_network
 from nova.tests.image import fake
 from nova.tests.integrated import integrated_helpers
 from nova.tests import utils as test_utils
+from nova.tests.virt.baremetal.db import base as bm_db_base
 from nova import utils
 from nova.volume import cinder
 
@@ -83,12 +83,15 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
     extension_name = None
 
     def setUp(self):
+        extends = []
         self.flags(use_ipv6=False,
                    osapi_compute_link_prefix=self._get_host(),
                    osapi_glance_link_prefix=self._get_glance_host())
         if not self.all_extensions:
+            if hasattr(self, 'extends_name'):
+                extends = [self.extends_name]
             ext = [self.extension_name] if self.extension_name else []
-            self.flags(osapi_compute_extension=ext)
+            self.flags(osapi_compute_extension=ext + extends)
         super(ApiSampleTestBase, self).setUp()
         fake_network.stub_compute_with_ips(self.stubs)
         self.generate_samples = os.getenv('GENERATE_SAMPLES') is not None
@@ -271,7 +274,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         """
         return subs
 
-    def _verify_response(self, name, subs, response):
+    def _verify_response(self, name, subs, response, exp_code):
+        self.assertEqual(response.status, exp_code)
         response_data = response.read()
         response_data = self._pretty_data(response_data)
         if not os.path.exists(self._get_template(name)):
@@ -431,7 +435,7 @@ class VersionsSampleJsonTest(ApiSampleTestBase):
     def test_versions_get(self):
         response = self._do_get('', strip_version=True)
         subs = self._get_regexes()
-        return self._verify_response('versions-get-resp', subs, response)
+        self._verify_response('versions-get-resp', subs, response, 200)
 
 
 class VersionsSampleXmlTest(VersionsSampleJsonTest):
@@ -445,9 +449,8 @@ class ServersSampleBase(ApiSampleTestBase):
             'host': self._get_host(),
         }
         response = self._do_post('servers', 'server-post-req', subs)
-        self.assertEqual(response.status, 202)
         subs = self._get_regexes()
-        return self._verify_response('server-post-resp', subs, response)
+        return self._verify_response('server-post-resp', subs, response, 202)
 
 
 class ServersSampleJsonTest(ServersSampleBase):
@@ -461,25 +464,25 @@ class ServersSampleJsonTest(ServersSampleBase):
         subs['hostid'] = '[a-f0-9]+'
         subs['id'] = uuid
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
-        return self._verify_response('server-get-resp', subs, response)
+        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
+        self._verify_response('server-get-resp', subs, response, 200)
 
     def test_servers_list(self):
         uuid = self._post_server()
         response = self._do_get('servers')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['id'] = uuid
-        return self._verify_response('servers-list-resp', subs, response)
+        self._verify_response('servers-list-resp', subs, response, 200)
 
     def test_servers_details(self):
         uuid = self._post_server()
         response = self._do_get('servers/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         subs['id'] = uuid
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
-        return self._verify_response('servers-details-resp', subs, response)
+        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
+        self._verify_response('servers-details-resp', subs, response, 200)
 
 
 class ServersSampleXmlTest(ServersSampleJsonTest):
@@ -510,9 +513,7 @@ class ServersMetadataJsonTest(ServersSampleBase):
         response = self._do_put('servers/%s/metadata' % uuid,
                                 'server-metadata-all-req',
                                 subs)
-        self.assertEqual(response.status, 200)
-        self._verify_response('server-metadata-all-resp', subs, response)
-
+        self._verify_response('server-metadata-all-resp', subs, response, 200)
         return uuid
 
     def generalize_subs(self, subs, vanilla_regexes):
@@ -522,7 +523,7 @@ class ServersMetadataJsonTest(ServersSampleBase):
     def test_metadata_put_all(self):
         # Test setting all metadata for a server.
         subs = {'value': 'Foo Value'}
-        return self._create_and_set(subs)
+        self._create_and_set(subs)
 
     def test_metadata_post_all(self):
         # Test updating all metadata for a server.
@@ -532,16 +533,14 @@ class ServersMetadataJsonTest(ServersSampleBase):
         response = self._do_post('servers/%s/metadata' % uuid,
                                  'server-metadata-all-req',
                                  subs)
-        self.assertEqual(response.status, 200)
-        self._verify_response('server-metadata-all-resp', subs, response)
+        self._verify_response('server-metadata-all-resp', subs, response, 200)
 
     def test_metadata_get_all(self):
         # Test getting all metadata for a server.
         subs = {'value': 'Foo Value'}
         uuid = self._create_and_set(subs)
         response = self._do_get('servers/%s/metadata' % uuid)
-        self.assertEqual(response.status, 200)
-        self._verify_response('server-metadata-all-resp', subs, response)
+        self._verify_response('server-metadata-all-resp', subs, response, 200)
 
     def test_metadata_put(self):
         # Test putting an individual metadata item for a server.
@@ -551,16 +550,14 @@ class ServersMetadataJsonTest(ServersSampleBase):
         response = self._do_put('servers/%s/metadata/foo' % uuid,
                                 'server-metadata-req',
                                 subs)
-        self.assertEqual(response.status, 200)
-        return self._verify_response('server-metadata-resp', subs, response)
+        self._verify_response('server-metadata-resp', subs, response, 200)
 
     def test_metadata_get(self):
         # Test getting an individual metadata item for a server.
         subs = {'value': 'Foo Value'}
         uuid = self._create_and_set(subs)
         response = self._do_get('servers/%s/metadata/foo' % uuid)
-        self.assertEqual(response.status, 200)
-        return self._verify_response('server-metadata-resp', subs, response)
+        self._verify_response('server-metadata-resp', subs, response, 200)
 
     def test_metadata_delete(self):
         # Test deleting an individual metadata item for a server.
@@ -581,14 +578,14 @@ class ServersIpsJsonTest(ServersSampleBase):
         uuid = self._post_server()
         response = self._do_get('servers/%s/ips' % uuid)
         subs = self._get_regexes()
-        return self._verify_response('server-ips-resp', subs, response)
+        self._verify_response('server-ips-resp', subs, response, 200)
 
     def test_get_by_network(self):
         # Test getting a server's IP information by network id.
         uuid = self._post_server()
         response = self._do_get('servers/%s/ips/private' % uuid)
         subs = self._get_regexes()
-        return self._verify_response('server-ips-network-resp', subs, response)
+        self._verify_response('server-ips-network-resp', subs, response, 200)
 
 
 class ServersIpsXmlTest(ServersIpsJsonTest):
@@ -601,7 +598,7 @@ class ExtensionsSampleJsonTest(ApiSampleTestBase):
     def test_extensions_get(self):
         response = self._do_get('extensions')
         subs = self._get_regexes()
-        return self._verify_response('extensions-get-resp', subs, response)
+        self._verify_response('extensions-get-resp', subs, response, 200)
 
 
 class ExtensionsSampleXmlTest(ExtensionsSampleJsonTest):
@@ -613,12 +610,12 @@ class FlavorsSampleJsonTest(ApiSampleTestBase):
     def test_flavors_get(self):
         response = self._do_get('flavors/1')
         subs = self._get_regexes()
-        return self._verify_response('flavor-get-resp', subs, response)
+        self._verify_response('flavor-get-resp', subs, response, 200)
 
     def test_flavors_list(self):
         response = self._do_get('flavors')
         subs = self._get_regexes()
-        return self._verify_response('flavors-list-resp', subs, response)
+        self._verify_response('flavors-list-resp', subs, response, 200)
 
 
 class FlavorsSampleXmlTest(FlavorsSampleJsonTest):
@@ -630,41 +627,34 @@ class HostsSampleJsonTest(ApiSampleTestBase):
 
     def test_host_startup(self):
         response = self._do_get('os-hosts/%s/startup' % self.compute.host)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('host-get-startup', subs, response)
+        self._verify_response('host-get-startup', subs, response, 200)
 
     def test_host_reboot(self):
         response = self._do_get('os-hosts/%s/reboot' % self.compute.host)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('host-get-reboot', subs, response)
+        self._verify_response('host-get-reboot', subs, response, 200)
 
     def test_host_shutdown(self):
         response = self._do_get('os-hosts/%s/shutdown' % self.compute.host)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('host-get-shutdown', subs, response)
+        self._verify_response('host-get-shutdown', subs, response, 200)
 
     def test_host_maintenance(self):
         response = self._do_put('os-hosts/%s' % self.compute.host,
                                 'host-put-maintenance-req', {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('host-put-maintenance-resp', subs,
-                                     response)
+        self._verify_response('host-put-maintenance-resp', subs, response, 200)
 
     def test_host_get(self):
         response = self._do_get('os-hosts/%s' % self.compute.host)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('host-get-resp', subs, response)
+        self._verify_response('host-get-resp', subs, response, 200)
 
     def test_hosts_list(self):
         response = self._do_get('os-hosts')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('hosts-list-resp', subs, response)
+        self._verify_response('hosts-list-resp', subs, response, 200)
 
 
 class HostsSampleXmlTest(HostsSampleJsonTest):
@@ -684,22 +674,21 @@ class ImagesSampleJsonTest(ApiSampleTestBase):
         # Get api sample of images get list request.
         response = self._do_get('images')
         subs = self._get_regexes()
-        return self._verify_response('images-list-get-resp', subs, response)
+        self._verify_response('images-list-get-resp', subs, response, 200)
 
     def test_image_get(self):
         # Get api sample of one single image details request.
         image_id = fake.get_valid_image_id()
         response = self._do_get('images/%s' % image_id)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['image_id'] = image_id
-        return self._verify_response('image-get-resp', subs, response)
+        self._verify_response('image-get-resp', subs, response, 200)
 
     def test_images_details(self):
         # Get api sample of all images details request.
         response = self._do_get('images/detail')
         subs = self._get_regexes()
-        return self._verify_response('images-details-get-resp', subs, response)
+        self._verify_response('images-details-get-resp', subs, response, 200)
 
     def test_image_metadata_get(self):
         # Get api sample of an image metadata request.
@@ -707,7 +696,7 @@ class ImagesSampleJsonTest(ApiSampleTestBase):
         response = self._do_get('images/%s/metadata' % image_id)
         subs = self._get_regexes()
         subs['image_id'] = image_id
-        return self._verify_response('image-metadata-get-resp', subs, response)
+        self._verify_response('image-metadata-get-resp', subs, response, 200)
 
     def test_image_metadata_post(self):
         # Get api sample to update metadata of an image metadata request.
@@ -715,20 +704,16 @@ class ImagesSampleJsonTest(ApiSampleTestBase):
         response = self._do_post(
                 'images/%s/metadata' % image_id,
                 'image-metadata-post-req', {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('image-metadata-post-resp',
-                                     subs, response)
+        self._verify_response('image-metadata-post-resp', subs, response, 200)
 
     def test_image_metadata_put(self):
         # Get api sample of image metadata put request.
         image_id = fake.get_valid_image_id()
         response = self._do_put('images/%s/metadata' % image_id,
                                 'image-metadata-put-req', {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('image-metadata-put-resp',
-                                     subs, response)
+        self._verify_response('image-metadata-put-resp', subs, response, 200)
 
     def test_image_meta_key_get(self):
         # Get api sample of an image metadata key request.
@@ -736,7 +721,7 @@ class ImagesSampleJsonTest(ApiSampleTestBase):
         key = "kernel_id"
         response = self._do_get('images/%s/metadata/%s' % (image_id, key))
         subs = self._get_regexes()
-        return self._verify_response('image-meta-key-get', subs, response)
+        self._verify_response('image-meta-key-get', subs, response, 200)
 
     def test_image_meta_key_put(self):
         # Get api sample of image metadata key put request.
@@ -744,11 +729,8 @@ class ImagesSampleJsonTest(ApiSampleTestBase):
         key = "auto_disk_config"
         response = self._do_put('images/%s/metadata/%s' % (image_id, key),
                                 'image-meta-key-put-req', {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('image-meta-key-put-resp',
-                                     subs,
-                                     response)
+        self._verify_response('image-meta-key-put-resp', subs, response, 200)
 
 
 class ImagesSampleXmlTest(ImagesSampleJsonTest):
@@ -759,7 +741,7 @@ class LimitsSampleJsonTest(ApiSampleTestBase):
     def test_limits_get(self):
         response = self._do_get('limits')
         subs = self._get_regexes()
-        return self._verify_response('limit-get-resp', subs, response)
+        self._verify_response('limit-get-resp', subs, response, 200)
 
 
 class LimitsSampleXmlTest(LimitsSampleJsonTest):
@@ -804,10 +786,8 @@ class CoverageExtJsonTests(ApiSampleTestBase):
         }
         response = self._do_post('os-coverage/action',
                                  'coverage-stop-post-req', subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('coverage-stop-post-resp',
-                                     subs, response)
+        self._verify_response('coverage-stop-post-resp', subs, response, 200)
 
     def test_report_coverage(self):
         # Generate a coverage report.
@@ -817,10 +797,8 @@ class CoverageExtJsonTests(ApiSampleTestBase):
         }
         response = self._do_post('os-coverage/action',
                                  'coverage-report-post-req', subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('coverage-report-post-resp',
-                                     subs, response)
+        self._verify_response('coverage-report-post-resp', subs, response, 200)
 
     def test_xml_report_coverage(self):
         subs = {
@@ -829,10 +807,9 @@ class CoverageExtJsonTests(ApiSampleTestBase):
         }
         response = self._do_post('os-coverage/action',
                                  'coverage-xml-report-post-req', subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('coverage-xml-report-post-resp',
-                                     subs, response)
+        self._verify_response('coverage-xml-report-post-resp',
+                              subs, response, 200)
 
 
 class CoverageExtXmlTests(CoverageExtJsonTests):
@@ -846,11 +823,11 @@ class ServersActionsJsonTest(ServersSampleBase):
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-action-%s' % action.lower(),
                                  subs)
-        self.assertEqual(response.status, code)
         if resp_tpl:
             subs.update(self._get_regexes())
-            return self._verify_response(resp_tpl, subs, response)
+            self._verify_response(resp_tpl, subs, response, code)
         else:
+            self.assertEqual(response.status, code)
             self.assertEqual(response.read(), "")
 
     def test_server_password(self):
@@ -953,9 +930,8 @@ class UserDataJsonTest(ApiSampleTestBase):
             }
         response = self._do_post('servers', 'userdata-post-req', subs)
 
-        self.assertEqual(response.status, 202)
         subs.update(self._get_regexes())
-        return self._verify_response('userdata-post-resp', subs, response)
+        self._verify_response('userdata-post-resp', subs, response, 202)
 
 
 class UserDataXmlTest(UserDataJsonTest):
@@ -977,21 +953,19 @@ class FlavorsExtraDataJsonTest(ApiSampleTestBase):
     def test_flavors_extra_data_get(self):
         flavor_id = 1
         response = self._do_get('flavors/%s' % flavor_id)
-        self.assertEqual(response.status, 200)
         subs = {
             'flavor_id': flavor_id,
             'flavor_name': 'm1.tiny'
         }
         subs.update(self._get_regexes())
-        return self._verify_response('flavors-extra-data-get-resp', subs,
-                                     response)
+        self._verify_response('flavors-extra-data-get-resp',
+                              subs, response, 200)
 
     def test_flavors_extra_data_list(self):
         response = self._do_get('flavors/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('flavors-extra-data-list-resp', subs,
-                                     response)
+        self._verify_response('flavors-extra-data-list-resp',
+                              subs, response, 200)
 
     def test_flavors_extra_data_create(self):
         subs = {
@@ -1001,10 +975,9 @@ class FlavorsExtraDataJsonTest(ApiSampleTestBase):
         response = self._do_post('flavors',
                                  'flavors-extra-data-post-req',
                                  subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('flavors-extra-data-post-resp',
-                                     subs, response)
+        self._verify_response('flavors-extra-data-post-resp',
+                              subs, response, 200)
 
 
 class FlavorsExtraDataXmlTest(FlavorsExtraDataJsonTest):
@@ -1026,21 +999,17 @@ class FlavorRxtxJsonTest(ApiSampleTestBase):
     def test_flavor_rxtx_get(self):
         flavor_id = 1
         response = self._do_get('flavors/%s' % flavor_id)
-        self.assertEqual(response.status, 200)
         subs = {
             'flavor_id': flavor_id,
             'flavor_name': 'm1.tiny'
         }
         subs.update(self._get_regexes())
-        return self._verify_response('flavor-rxtx-get-resp', subs,
-                                     response)
+        self._verify_response('flavor-rxtx-get-resp', subs, response, 200)
 
     def test_flavors_rxtx_list(self):
         response = self._do_get('flavors/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('flavor-rxtx-list-resp', subs,
-                                     response)
+        self._verify_response('flavor-rxtx-list-resp', subs, response, 200)
 
     def test_flavors_rxtx_create(self):
         subs = {
@@ -1050,10 +1019,8 @@ class FlavorRxtxJsonTest(ApiSampleTestBase):
         response = self._do_post('flavors',
                                  'flavor-rxtx-post-req',
                                  subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('flavor-rxtx-post-resp',
-                                     subs, response)
+        self._verify_response('flavor-rxtx-post-resp', subs, response, 200)
 
 
 class FlavorRxtxXmlTest(FlavorRxtxJsonTest):
@@ -1075,21 +1042,17 @@ class FlavorSwapJsonTest(ApiSampleTestBase):
     def test_flavor_swap_get(self):
         flavor_id = 1
         response = self._do_get('flavors/%s' % flavor_id)
-        self.assertEqual(response.status, 200)
         subs = {
             'flavor_id': flavor_id,
             'flavor_name': 'm1.tiny'
         }
         subs.update(self._get_regexes())
-        return self._verify_response('flavor-swap-get-resp', subs,
-                                     response)
+        self._verify_response('flavor-swap-get-resp', subs, response, 200)
 
     def test_flavor_swap_list(self):
         response = self._do_get('flavors/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('flavor-swap-list-resp', subs,
-                                     response)
+        self._verify_response('flavor-swap-list-resp', subs, response, 200)
 
     def test_flavor_swap_create(self):
         subs = {
@@ -1099,10 +1062,8 @@ class FlavorSwapJsonTest(ApiSampleTestBase):
         response = self._do_post('flavors',
                                  'flavor-swap-post-req',
                                  subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('flavor-swap-post-resp',
-                                     subs, response)
+        self._verify_response('flavor-swap-post-resp', subs, response, 200)
 
 
 class FlavorSwapXmlTest(FlavorSwapJsonTest):
@@ -1113,42 +1074,73 @@ class SecurityGroupsSampleJsonTest(ServersSampleBase):
     extension_name = "nova.api.openstack.compute.contrib" + \
                      ".security_groups.Security_groups"
 
-    def test_security_group_create(self):
-        name = self.ctype + '-test'
-        subs = {
-                'group_name': name,
+    def _get_create_subs(self):
+        return {
+                'group_name': 'test',
                 "description": "description",
         }
-        response = self._do_post('os-security-groups',
-                                 'security-group-post-req', subs)
-        self.assertEqual(response.status, 200)
-        self._verify_response('security-groups-create-resp', subs, response)
+
+    def _create_security_group(self):
+        subs = self._get_create_subs()
+        return self._do_post('os-security-groups',
+                             'security-group-post-req', subs)
+
+    def _add_group(self, uuid):
+        subs = {
+                'group_name': 'test'
+        }
+        return self._do_post('servers/%s/action' % uuid,
+                             'security-group-add-post-req', subs)
+
+    def test_security_group_create(self):
+        response = self._create_security_group()
+        subs = self._get_create_subs()
+        self._verify_response('security-groups-create-resp', subs,
+                              response, 200)
 
     def test_security_groups_list(self):
         # Get api sample of security groups get list request.
         response = self._do_get('os-security-groups')
         subs = self._get_regexes()
-        return self._verify_response('security-groups-list-get-resp',
-                                      subs, response)
+        self._verify_response('security-groups-list-get-resp',
+                              subs, response, 200)
 
     def test_security_groups_get(self):
         # Get api sample of security groups get request.
         security_group_id = '1'
         response = self._do_get('os-security-groups/%s' % security_group_id)
         subs = self._get_regexes()
-        return self._verify_response('security-groups-get-resp',
-                                      subs, response)
+        self._verify_response('security-groups-get-resp', subs, response, 200)
 
     def test_security_groups_list_server(self):
         # Get api sample of security groups for a specific server.
         uuid = self._post_server()
         response = self._do_get('servers/%s/os-security-groups' % uuid)
         subs = self._get_regexes()
-        return self._verify_response('server-security-groups-list-resp',
-                                      subs, response)
+        self._verify_response('server-security-groups-list-resp',
+                              subs, response, 200)
+
+    def test_security_groups_add(self):
+        self._create_security_group()
+        uuid = self._post_server()
+        response = self._add_group(uuid)
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
+
+    def test_security_groups_remove(self):
+        self._create_security_group()
+        uuid = self._post_server()
+        self._add_group(uuid)
+        subs = {
+                'group_name': 'test'
+        }
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'security-group-remove-post-req', subs)
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
 
 
-class SecurityGroupsSampleXmlTest(ApiSampleTestBase):
+class SecurityGroupsSampleXmlTest(SecurityGroupsSampleJsonTest):
     ctype = 'xml'
 
 
@@ -1161,22 +1153,21 @@ class SecurityGroupDefaultRulesSampleJsonTest(ServersSampleBase):
         response = self._do_post('os-security-group-default-rules',
                                  'security-group-default-rules-create-req',
                                  {})
-        self.assertEqual(response.status, 200)
-        return self._verify_response(
-            'security-group-default-rules-create-resp', {}, response)
+        self._verify_response('security-group-default-rules-create-resp',
+                              {}, response, 200)
 
     def test_security_group_default_rules_list(self):
         self.test_security_group_default_rules_create()
         response = self._do_get('os-security-group-default-rules')
-        return self._verify_response('security-group-default-rules-list-resp',
-                                     {}, response)
+        self._verify_response('security-group-default-rules-list-resp',
+                              {}, response, 200)
 
     def test_security_group_default_rules_show(self):
         self.test_security_group_default_rules_create()
         rule_id = '1'
         response = self._do_get('os-security-group-default-rules/%s' % rule_id)
-        return self._verify_response('security-group-default-rules-show-resp',
-                                     {}, response)
+        self._verify_response('security-group-default-rules-show-resp',
+                              {}, response, 200)
 
 
 class SecurityGroupDefaultRulesSampleXmlTest(
@@ -1195,10 +1186,8 @@ class SchedulerHintsJsonTest(ApiSampleTestBase):
         }
         response = self._do_post('servers', 'scheduler-hints-post-req',
                                  hints)
-        self.assertEqual(response.status, 202)
         subs = self._get_regexes()
-        return self._verify_response('scheduler-hints-post-resp', subs,
-                                     response)
+        self._verify_response('scheduler-hints-post-resp', subs, response, 202)
 
 
 class SchedulerHintsXmlTest(SchedulerHintsJsonTest):
@@ -1214,10 +1203,8 @@ class ConsoleOutputSampleJsonTest(ServersSampleBase):
         response = self._do_post('servers/%s/action' % uuid,
                                  'console-output-post-req',
                                 {'action': 'os-getConsoleOutput'})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('console-output-post-resp',
-                                       subs, response)
+        self._verify_response('console-output-post-resp', subs, response, 200)
 
 
 class ConsoleOutputSampleXmlTest(ConsoleOutputSampleJsonTest):
@@ -1238,8 +1225,7 @@ class ExtendedServerAttributesJsonTest(ServersSampleBase):
         subs['id'] = uuid
         subs['instance_name'] = 'instance-\d{8}'
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
-        return self._verify_response('server-get-resp',
-                                     subs, response)
+        self._verify_response('server-get-resp', subs, response, 200)
 
     def test_detail(self):
         uuid = self._post_server()
@@ -1250,8 +1236,7 @@ class ExtendedServerAttributesJsonTest(ServersSampleBase):
         subs['id'] = uuid
         subs['instance_name'] = 'instance-\d{8}'
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
-        return self._verify_response('servers-detail-resp',
-                                     subs, response)
+        self._verify_response('servers-detail-resp', subs, response, 200)
 
 
 class ExtendedServerAttributesXmlTest(ExtendedServerAttributesJsonTest):
@@ -1295,10 +1280,9 @@ class FloatingIpsJsonTest(ApiSampleTestBase):
     def test_floating_ips_list_empty(self):
         response = self._do_get('os-floating-ips')
 
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('floating-ips-list-empty-resp',
-                                     subs, response)
+        self._verify_response('floating-ips-list-empty-resp',
+                              subs, response, 200)
 
     def test_floating_ips_list(self):
         self._do_post('os-floating-ips',
@@ -1309,38 +1293,32 @@ class FloatingIpsJsonTest(ApiSampleTestBase):
                       {})
 
         response = self._do_get('os-floating-ips')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('floating-ips-list-resp',
-                                     subs, response)
+        self._verify_response('floating-ips-list-resp',
+                              subs, response, 200)
 
     def test_floating_ips_create_nopool(self):
         response = self._do_post('os-floating-ips',
                                  'floating-ips-create-nopool-req',
                                  {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         self._verify_response('floating-ips-create-resp',
-                              subs, response)
+                              subs, response, 200)
 
     def test_floating_ips_create(self):
         response = self._do_post('os-floating-ips',
                                  'floating-ips-create-req',
                                  {"pool": CONF.default_floating_pool})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('floating-ips-create-resp',
-                              subs, response)
+        self._verify_response('floating-ips-create-resp', subs, response, 200)
 
     def test_floating_ips_get(self):
         self.test_floating_ips_create()
         # NOTE(sdague): the first floating ip will always have 1 as an id,
         # but it would be better if we could get this from the create
         response = self._do_get('os-floating-ips/%d' % 1)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('floating-ips-create-resp',
-                              subs, response)
+        self._verify_response('floating-ips-create-resp', subs, response, 200)
 
     def test_floating_ips_delete(self):
         self.test_floating_ips_create()
@@ -1348,7 +1326,18 @@ class FloatingIpsJsonTest(ApiSampleTestBase):
         self.assertEqual(response.status, 202)
 
 
+class ExtendedFloatingIpsJsonTest(FloatingIpsJsonTest):
+    extends_name = ("nova.api.openstack.compute.contrib."
+                         "floating_ips.Floating_ips")
+    extension_name = ("nova.api.openstack.compute.contrib."
+                         "extended_floating_ips.Extended_floating_ips")
+
+
 class FloatingIpsXmlTest(FloatingIpsJsonTest):
+    ctype = 'xml'
+
+
+class ExtendedFloatingIpsXmlTest(ExtendedFloatingIpsJsonTest):
     ctype = 'xml'
 
 
@@ -1389,17 +1378,15 @@ class FloatingIpsBulkJsonTest(ApiSampleTestBase):
 
     def test_floating_ips_bulk_list(self):
         response = self._do_get('os-floating-ips-bulk')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('floating-ips-bulk-list-resp', subs,
-                                     response)
+        self._verify_response('floating-ips-bulk-list-resp',
+                              subs, response, 200)
 
     def test_floating_ips_bulk_list_by_host(self):
         response = self._do_get('os-floating-ips-bulk/testHost')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('floating-ips-bulk-list-by-host-resp',
-                                     subs, response)
+        self._verify_response('floating-ips-bulk-list-by-host-resp',
+                              subs, response, 200)
 
     def test_floating_ips_bulk_create(self):
         response = self._do_post('os-floating-ips-bulk',
@@ -1407,19 +1394,17 @@ class FloatingIpsBulkJsonTest(ApiSampleTestBase):
                                  {"ip_range": "192.168.1.0/24",
                                   "pool": CONF.default_floating_pool,
                                   "interface": CONF.public_interface})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('floating-ips-bulk-create-resp', subs,
-                                     response)
+        self._verify_response('floating-ips-bulk-create-resp', subs,
+                              response, 200)
 
     def test_floating_ips_bulk_delete(self):
         response = self._do_put('os-floating-ips-bulk/delete',
                                 'floating-ips-bulk-delete-req',
                                 {"ip_range": "192.168.1.0/24"})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('floating-ips-bulk-delete-resp', subs,
-                                     response)
+        self._verify_response('floating-ips-bulk-delete-resp', subs,
+                              response, 200)
 
 
 class FloatingIpsBulkXmlTest(FloatingIpsBulkJsonTest):
@@ -1440,8 +1425,7 @@ class KeyPairsSampleJsonTest(ApiSampleTestBase):
                                  {'keypair_name': key_name})
         subs = self._get_regexes()
         subs['keypair_name'] = '(%s)' % key_name
-        self.assertEqual(response.status, 200)
-        self._verify_response('keypairs-post-resp', subs, response)
+        self._verify_response('keypairs-post-resp', subs, response, 200)
         # NOTE(maurosr): return the key_name is necessary cause the
         # verification returns the label of the last compared information in
         # the response, not necessarily the key name.
@@ -1462,8 +1446,7 @@ class KeyPairsSampleJsonTest(ApiSampleTestBase):
                                  subs)
         subs = self._get_regexes()
         subs['keypair_name'] = '(%s)' % key_name
-        self.assertEqual(response.status, 200)
-        self._verify_response('keypairs-import-post-resp', subs, response)
+        self._verify_response('keypairs-import-post-resp', subs, response, 200)
 
     def test_keypairs_get(self):
         # Get api sample of key pairs get request.
@@ -1471,7 +1454,7 @@ class KeyPairsSampleJsonTest(ApiSampleTestBase):
         response = self._do_get('os-keypairs')
         subs = self._get_regexes()
         subs['keypair_name'] = '(%s)' % key_name
-        return self._verify_response('keypairs-get-resp', subs, response)
+        self._verify_response('keypairs-get-resp', subs, response, 200)
 
 
 class KeyPairsSampleXmlTest(KeyPairsSampleJsonTest):
@@ -1488,7 +1471,7 @@ class RescueJsonTest(ServersSampleBase):
         }
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-rescue-req', req_subs)
-        self._verify_response('server-rescue', req_subs, response)
+        self._verify_response('server-rescue', req_subs, response, 200)
 
     def _unrescue(self, uuid):
         response = self._do_post('servers/%s/action' % uuid,
@@ -1507,7 +1490,7 @@ class RescueJsonTest(ServersSampleBase):
         subs['id'] = uuid
         subs['status'] = 'RESCUE'
 
-        self._verify_response('server-get-resp-rescue', subs, response)
+        self._verify_response('server-get-resp-rescue', subs, response, 200)
 
     def test_server_unrescue(self):
         uuid = self._post_server()
@@ -1522,7 +1505,7 @@ class RescueJsonTest(ServersSampleBase):
         subs['id'] = uuid
         subs['status'] = 'ACTIVE'
 
-        self._verify_response('server-get-resp-unrescue', subs, response)
+        self._verify_response('server-get-resp-unrescue', subs, response, 200)
 
 
 class RescueXmlTest(RescueJsonTest):
@@ -1537,12 +1520,11 @@ class VirtualInterfacesJsonTest(ServersSampleBase):
         uuid = self._post_server()
 
         response = self._do_get('servers/%s/os-virtual-interfaces' % uuid)
-        self.assertEqual(response.status, 200)
 
         subs = self._get_regexes()
         subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
 
-        self._verify_response('vifs-list-resp', subs, response)
+        self._verify_response('vifs-list-resp', subs, response, 200)
 
 
 class VirtualInterfacesXmlTest(VirtualInterfacesJsonTest):
@@ -1578,22 +1560,20 @@ class CloudPipeSampleJsonTest(ApiSampleTestBase):
         project = {'project_id': 'cloudpipe-' + str(uuid_lib.uuid4())}
         response = self._do_post('os-cloudpipe', 'cloud-pipe-create-req',
                                  project)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs.update(project)
         subs['image_id'] = CONF.vpn_image_id
-        self._verify_response('cloud-pipe-create-resp', subs, response)
+        self._verify_response('cloud-pipe-create-resp', subs, response, 200)
         return project
 
     def test_cloud_pipe_list(self):
         # Get api samples of cloud pipe extension get request.
         project = self.test_cloud_pipe_create()
         response = self._do_get('os-cloudpipe')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs.update(project)
         subs['image_id'] = CONF.vpn_image_id
-        return self._verify_response('cloud-pipe-get-resp', subs, response)
+        self._verify_response('cloud-pipe-get-resp', subs, response, 200)
 
 
 class CloudPipeSampleXmlTest(CloudPipeSampleJsonTest):
@@ -1686,15 +1666,13 @@ class AgentsJsonTest(ApiSampleTestBase):
                 }
         response = self._do_post('os-agents', 'agent-post-req',
                                  project)
-        self.assertEqual(response.status, 200)
         project['agent_id'] = 1
-        self._verify_response('agent-post-resp', project, response)
+        self._verify_response('agent-post-resp', project, response, 200)
         return project
 
     def test_agent_list(self):
         # Return a list of all agent builds.
         response = self._do_get('os-agents')
-        self.assertEqual(response.status, 200)
         project = {'url': 'xxxxxxxxxxxx',
                 'hypervisor': 'hypervisor',
                 'architecture': 'x86',
@@ -1703,7 +1681,7 @@ class AgentsJsonTest(ApiSampleTestBase):
                 'md5hash': 'add6bb58e139be103324d04d82d8f545',
                 'agent_id': 1
                 }
-        return self._verify_response('agents-get-resp', project, response)
+        self._verify_response('agents-get-resp', project, response, 200)
 
     def test_agent_update(self):
         # Update an existing agent build.
@@ -1713,9 +1691,8 @@ class AgentsJsonTest(ApiSampleTestBase):
                 'md5hash': 'add6bb58e139be103324d04d82d8f545'}
         response = self._do_put('os-agents/%s' % agent_id,
                                 'agent-update-put-req', subs)
-        self.assertEqual(response.status, 200)
         subs['agent_id'] = 1
-        return self._verify_response('agent-update-put-resp', subs, response)
+        self._verify_response('agent-update-put-resp', subs, response, 200)
 
     def test_agent_delete(self):
         # Deletes an existing agent build.
@@ -1800,12 +1777,11 @@ class FixedIpJsonTest(ApiSampleTestBase):
     def test_get_fixed_ip(self):
         # Return data about the given fixed ip.
         response = self._do_get('os-fixed-ips/192.168.1.1')
-        self.assertEqual(response.status, 200)
         project = {'cidr': '192.168.1.0/24',
                    'hostname': 'openstack',
                    'host': 'host',
                    'address': '192.168.1.1'}
-        return self._verify_response('fixedips-get-resp', project, response)
+        self._verify_response('fixedips-get-resp', project, response, 200)
 
 
 class FixedIpXmlTest(FixedIpJsonTest):
@@ -1821,22 +1797,21 @@ class AggregatesSampleJsonTest(ServersSampleBase):
             "aggregate_id": '(?P<id>\d+)'
         }
         response = self._do_post('os-aggregates', 'aggregate-post-req', subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('aggregate-post-resp', subs, response)
+        return self._verify_response('aggregate-post-resp',
+                                     subs, response, 200)
 
     def test_list_aggregates(self):
         self.test_aggregate_create()
         response = self._do_get('os-aggregates')
         subs = self._get_regexes()
-        return self._verify_response('aggregates-list-get-resp',
-                                      subs, response)
+        self._verify_response('aggregates-list-get-resp', subs, response, 200)
 
     def test_aggregate_get(self):
         agg_id = self.test_aggregate_create()
         response = self._do_get('os-aggregates/%s' % agg_id)
         subs = self._get_regexes()
-        return self._verify_response('aggregates-get-resp', subs, response)
+        self._verify_response('aggregates-get-resp', subs, response, 200)
 
     def test_add_metadata(self):
         agg_id = self.test_aggregate_create()
@@ -1844,8 +1819,8 @@ class AggregatesSampleJsonTest(ServersSampleBase):
                                  'aggregate-metadata-post-req',
                                  {'action': 'set_metadata'})
         subs = self._get_regexes()
-        return self._verify_response('aggregates-metadata-post-resp',
-                                      subs, response)
+        self._verify_response('aggregates-metadata-post-resp', subs,
+                              response, 200)
 
     def test_add_host(self):
         aggregate_id = self.test_aggregate_create()
@@ -1855,8 +1830,8 @@ class AggregatesSampleJsonTest(ServersSampleBase):
         response = self._do_post('os-aggregates/%s/action' % aggregate_id,
                                  'aggregate-add-host-post-req', subs)
         subs.update(self._get_regexes())
-        return self._verify_response('aggregates-add-host-post-resp',
-                                      subs, response)
+        self._verify_response('aggregates-add-host-post-resp', subs,
+                              response, 200)
 
     def test_remove_host(self):
         self.test_add_host()
@@ -1866,16 +1841,16 @@ class AggregatesSampleJsonTest(ServersSampleBase):
         response = self._do_post('os-aggregates/1/action',
                                  'aggregate-remove-host-post-req', subs)
         subs.update(self._get_regexes())
-        return self._verify_response('aggregates-remove-host-post-resp',
-                                      subs, response)
+        self._verify_response('aggregates-remove-host-post-resp',
+                              subs, response, 200)
 
     def test_update_aggregate(self):
         aggregate_id = self.test_aggregate_create()
         response = self._do_put('os-aggregates/%s' % aggregate_id,
                                   'aggregate-update-post-req', {})
         subs = self._get_regexes()
-        return self._verify_response('aggregate-update-post-resp',
-                                      subs, response)
+        self._verify_response('aggregate-update-post-resp',
+                              subs, response, 200)
 
 
 class AggregatesSampleXmlTest(AggregatesSampleJsonTest):
@@ -1889,16 +1864,13 @@ class CertificatesSamplesJsonTest(ApiSampleTestBase):
     def test_create_certificates(self):
         response = self._do_post('os-certificates',
                                  'certificate-create-req', {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('certificate-create-resp', subs, response)
+        self._verify_response('certificate-create-resp', subs, response, 200)
 
     def test_get_root_certificate(self):
         response = self._do_get('os-certificates/root')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('certificate-get-root-resp', subs,
-                                     response)
+        self._verify_response('certificate-get-root-resp', subs, response, 200)
 
 
 class CertificatesSamplesXmlTest(CertificatesSamplesJsonTest):
@@ -1912,9 +1884,8 @@ class UsedLimitsSamplesJsonTest(ApiSampleTestBase):
     def test_get_used_limits(self):
         # Get api sample to used limits.
         response = self._do_get('limits')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('usedlimits-get-resp', subs, response)
+        self._verify_response('usedlimits-get-resp', subs, response, 200)
 
 
 class UsedLimitsSamplesXmlTest(UsedLimitsSamplesJsonTest):
@@ -1933,10 +1904,8 @@ class MultipleCreateJsonTest(ServersSampleBase):
             'max_count': "3"
         }
         response = self._do_post('servers', 'multiple-create-post-req', subs)
-        self.assertEqual(response.status, 202)
         subs.update(self._get_regexes())
-        return self._verify_response('multiple-create-post-resp',
-                                      subs, response)
+        self._verify_response('multiple-create-post-resp', subs, response, 202)
 
     def test_multiple_create_without_reservation_id(self):
         subs = {
@@ -1947,10 +1916,9 @@ class MultipleCreateJsonTest(ServersSampleBase):
         }
         response = self._do_post('servers', 'multiple-create-no-resv-post-req',
                                   subs)
-        self.assertEqual(response.status, 202)
         subs.update(self._get_regexes())
-        return self._verify_response('multiple-create-no-resv-post-resp',
-                                      subs, response)
+        self._verify_response('multiple-create-no-resv-post-resp', subs,
+                              response, 202)
 
 
 class MultipleCreateXmlTest(MultipleCreateJsonTest):
@@ -1977,15 +1945,13 @@ class ServicesJsonTest(ApiSampleTestBase):
     def test_services_list(self):
         """Return a list of all agent builds."""
         response = self._do_get('os-services')
-        self.assertEqual(response.status, 200)
         subs = {'binary': 'nova-compute',
                 'host': 'host1',
                 'zone': 'nova',
                 'status': 'disabled',
                 'state': 'up'}
         subs.update(self._get_regexes())
-        return self._verify_response('services-list-get-resp',
-                                     subs, response)
+        self._verify_response('services-list-get-resp', subs, response, 200)
 
     def test_service_enable(self):
         """Enable an existing agent build."""
@@ -1993,11 +1959,9 @@ class ServicesJsonTest(ApiSampleTestBase):
                 'binary': 'nova-compute'}
         response = self._do_put('os-services/enable',
                                 'service-enable-put-req', subs)
-        self.assertEqual(response.status, 200)
         subs = {"host": "host1",
                 "binary": "nova-compute"}
-        return self._verify_response('service-enable-put-resp',
-                                      subs, response)
+        self._verify_response('service-enable-put-resp', subs, response, 200)
 
     def test_service_disable(self):
         """Disable an existing agent build."""
@@ -2005,11 +1969,13 @@ class ServicesJsonTest(ApiSampleTestBase):
                 'binary': 'nova-compute'}
         response = self._do_put('os-services/disable',
                                 'service-disable-put-req', subs)
-        self.assertEqual(response.status, 200)
         subs = {"host": "host1",
                 "binary": "nova-compute"}
-        return self._verify_response('service-disable-put-resp',
-                                     subs, response)
+        self._verify_response('service-disable-put-resp', subs, response, 200)
+
+
+class ServicesXmlTest(ServicesJsonTest):
+    ctype = 'xml'
 
 
 class ServicesXmlTest(ServicesJsonTest):
@@ -2040,19 +2006,17 @@ class SimpleTenantUsageSampleJsonTest(ServersSampleBase):
         # Get api sample to get all tenants usage request.
         response = self._do_get('os-simple-tenant-usage?%s' % (
                                                 urllib.urlencode(self.query)))
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('simple-tenant-usage-get', subs, response)
+        self._verify_response('simple-tenant-usage-get', subs, response, 200)
 
     def test_get_tenant_usage_details(self):
         # Get api sample to get specific tenant usage request.
         tenant_id = 'openstack'
         response = self._do_get('os-simple-tenant-usage/%s?%s' % (tenant_id,
                                                 urllib.urlencode(self.query)))
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         self._verify_response('simple-tenant-usage-get-specific', subs,
-                              response)
+                              response, 200)
 
 
 class SimpleTenantUsageSampleXmlTest(SimpleTenantUsageSampleJsonTest):
@@ -2066,10 +2030,9 @@ class ServerDiagnosticsSamplesJsonTest(ServersSampleBase):
     def test_server_diagnostics_get(self):
         uuid = self._post_server()
         response = self._do_get('servers/%s/diagnostics' % uuid)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('server-diagnostics-get-resp', subs,
-                                     response)
+        self._verify_response('server-diagnostics-get-resp', subs,
+                              response, 200)
 
 
 class ServerDiagnosticsSamplesXmlTest(ServerDiagnosticsSamplesJsonTest):
@@ -2087,10 +2050,9 @@ class AvailabilityZoneJsonTest(ServersSampleBase):
             "availability_zone": "nova"
         }
         response = self._do_post('servers', 'availability-zone-post-req', subs)
-        self.assertEqual(response.status, 202)
         subs.update(self._get_regexes())
-        return self._verify_response('availability-zone-post-resp',
-                                      subs, response)
+        self._verify_response('availability-zone-post-resp', subs,
+                              response, 202)
 
 
 class AvailabilityZoneXmlTest(AvailabilityZoneJsonTest):
@@ -2241,24 +2203,21 @@ class ConsolesSampleJsonTests(ServersSampleBase):
         response = self._do_post('servers/%s/action' % uuid,
                                  'get-vnc-console-post-req',
                                 {'action': 'os-getVNCConsole'})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs["url"] = \
             "((https?):((//)|(\\\\))+([\w\d:#@%/;$()~_?\+-=\\\.&](#!)?)*)"
-        return self._verify_response('get-vnc-console-post-resp',
-                                       subs, response)
+        self._verify_response('get-vnc-console-post-resp', subs, response, 200)
 
     def test_get_spice_console(self):
         uuid = self._post_server()
         response = self._do_post('servers/%s/action' % uuid,
                                  'get-spice-console-post-req',
                                 {'action': 'os-getSPICEConsole'})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs["url"] = \
             "((https?):((//)|(\\\\))+([\w\d:#@%/;$()~_?\+-=\\\.&](#!)?)*)"
-        return self._verify_response('get-spice-console-post-resp',
-                                       subs, response)
+        self._verify_response('get-spice-console-post-resp', subs,
+                              response, 200)
 
 
 class ConsolesSampleXmlTests(ConsolesSampleJsonTests):
@@ -2302,26 +2261,39 @@ class QuotasSampleJsonTests(ApiSampleTestBase):
     def test_show_quotas(self):
         # Get api sample to show quotas.
         response = self._do_get('os-quota-sets/fake_tenant')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('quotas-show-get-resp', {}, response)
+        self._verify_response('quotas-show-get-resp', {}, response, 200)
 
     def test_show_quotas_defaults(self):
         # Get api sample to show quotas defaults.
         response = self._do_get('os-quota-sets/fake_tenant/defaults')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('quotas-show-defaults-get-resp',
-                                     {}, response)
+        self._verify_response('quotas-show-defaults-get-resp',
+                              {}, response, 200)
 
     def test_update_quotas(self):
         # Get api sample to update quotas.
         response = self._do_put('os-quota-sets/fake_tenant',
                                 'quotas-update-post-req',
                                 {})
-        self.assertEqual(response.status, 200)
-        return self._verify_response('quotas-update-post-resp', {}, response)
+        self._verify_response('quotas-update-post-resp', {}, response, 200)
 
 
 class QuotasSampleXmlTests(QuotasSampleJsonTests):
+    ctype = "xml"
+
+
+class ExtendedQuotasSampleJsonTests(ApiSampleTestBase):
+    extends_name = "nova.api.openstack.compute.contrib.quotas.Quotas"
+    extension_name = ("nova.api.openstack.compute.contrib"
+                      ".extended_quotas.Extended_quotas")
+
+    def test_delete_quotas(self):
+        # Get api sample to delete quota.
+        response = self._do_delete('os-quota-sets/fake_tenant')
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
+
+
+class ExtendedQuotasSampleXmlTests(ExtendedQuotasSampleJsonTests):
     ctype = "xml"
 
 
@@ -2332,12 +2304,39 @@ class ExtendedIpsSampleJsonTests(ServersSampleBase):
     def test_show(self):
         uuid = self._post_server()
         response = self._do_get('servers/%s' % uuid)
+        subs = self._get_regexes()
+        subs['hostid'] = '[a-f0-9]+'
+        subs['id'] = uuid
+        subs['hypervisor_hostname'] = r'[\w\.\-]+'
+        self._verify_response('server-get-resp', subs, response, 200)
+
+    def test_detail(self):
+        uuid = self._post_server()
+        response = self._do_get('servers/detail')
+        subs = self._get_regexes()
+        subs['id'] = uuid
+        subs['hostid'] = '[a-f0-9]+'
+        self._verify_response('servers-detail-resp', subs, response, 200)
+
+
+class ExtendedIpsSampleXmlTests(ExtendedIpsSampleJsonTests):
+        ctype = 'xml'
+
+
+class ExtendedIpsMacSampleJsonTests(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib"
+                      ".extended_ips_mac.Extended_ips_mac")
+
+    def test_show(self):
+        uuid = self._post_server()
+        response = self._do_get('servers/%s' % uuid)
         self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         subs['id'] = uuid
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
-        return self._verify_response('server-get-resp', subs, response)
+        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
+        self._verify_response('server-get-resp', subs, response, 200)
 
     def test_detail(self):
         uuid = self._post_server()
@@ -2346,10 +2345,11 @@ class ExtendedIpsSampleJsonTests(ServersSampleBase):
         subs = self._get_regexes()
         subs['id'] = uuid
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('servers-detail-resp', subs, response)
+        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
+        self._verify_response('servers-detail-resp', subs, response, 200)
 
 
-class ExtendedIpsSampleXmlTests(ExtendedIpsSampleJsonTests):
+class ExtendedIpsMacSampleXmlTests(ExtendedIpsMacSampleJsonTests):
         ctype = 'xml'
 
 
@@ -2360,22 +2360,50 @@ class ExtendedStatusSampleJsonTests(ServersSampleBase):
     def test_show(self):
         uuid = self._post_server()
         response = self._do_get('servers/%s' % uuid)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('server-get-resp', subs, response)
+        self._verify_response('server-get-resp', subs, response, 200)
 
     def test_detail(self):
         uuid = self._post_server()
         response = self._do_get('servers/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['id'] = uuid
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('servers-detail-resp', subs, response)
+        self._verify_response('servers-detail-resp', subs, response, 200)
 
 
 class ExtendedStatusSampleXmlTests(ExtendedStatusSampleJsonTests):
+        ctype = 'xml'
+
+
+class ExtendedVIFNetSampleJsonTests(ServersSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib"
+          ".extended_virtual_interfaces_net.Extended_virtual_interfaces_net")
+
+    def _get_flags(self):
+        f = super(ExtendedVIFNetSampleJsonTests, self)._get_flags()
+        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
+        # extended_virtual_interfaces_net_update also
+        # needs virtual_interfaces to be loaded
+        f['osapi_compute_extension'].append(
+            ('nova.api.openstack.compute.contrib'
+             '.virtual_interfaces.Virtual_interfaces'))
+        return f
+
+    def test_vifs_list(self):
+        uuid = self._post_server()
+
+        response = self._do_get('servers/%s/os-virtual-interfaces' % uuid)
+        self.assertEqual(response.status, 200)
+
+        subs = self._get_regexes()
+        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
+
+        self._verify_response('vifs-list-resp', subs, response, 200)
+
+
+class ExtendedVIFNetSampleXmlTests(ExtendedIpsSampleJsonTests):
         ctype = 'xml'
 
 
@@ -2392,9 +2420,8 @@ class FlavorManageSampleJsonTests(ApiSampleTestBase):
         response = self._do_post("flavors",
                                  "flavor-create-post-req",
                                  subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response("flavor-create-post-resp", subs, response)
+        self._verify_response("flavor-create-post-resp", subs, response, 200)
 
     def test_create_flavor(self):
         # Get api sample to create a flavor.
@@ -2430,10 +2457,9 @@ class ServerPasswordSampleJsonTests(ServersSampleBase):
         self.stubs.Set(password, "extract_password", fake_ext_password)
         uuid = self._post_server()
         response = self._do_get('servers/%s/os-server-password' % uuid)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['encrypted_password'] = fake_ext_password().replace('+', '\\+')
-        return self._verify_response('get-password-resp', subs, response)
+        self._verify_response('get-password-resp', subs, response, 200)
 
     def test_reset_password(self):
         uuid = self._post_server()
@@ -2452,30 +2478,25 @@ class DiskConfigJsonTest(ServersSampleBase):
     def test_list_servers_detail(self):
         uuid = self._post_server()
         response = self._do_get('servers/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         subs['id'] = uuid
-        return self._verify_response('list-servers-detail-get',
-                                     subs, response)
+        self._verify_response('list-servers-detail-get', subs, response, 200)
 
     def test_get_server(self):
         uuid = self._post_server()
         response = self._do_get('servers/%s' % uuid)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('server-get-resp', subs, response)
+        self._verify_response('server-get-resp', subs, response, 200)
 
     def test_update_server(self):
         uuid = self._post_server()
         response = self._do_put('servers/%s' % uuid,
                                 'server-update-put-req', {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('server-update-put-resp',
-                                      subs, response)
+        self._verify_response('server-update-put-resp', subs, response, 200)
 
     def test_resize_server(self):
         self.flags(allow_resize_to_same_host=True)
@@ -2495,25 +2516,22 @@ class DiskConfigJsonTest(ServersSampleBase):
         }
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-action-rebuild-req', subs)
-        self.assertEqual(response.status, 202)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('server-action-rebuild-resp',
-                                      subs, response)
+        self._verify_response('server-action-rebuild-resp',
+                              subs, response, 202)
 
     def test_get_image(self):
         image_id = fake.get_valid_image_id()
         response = self._do_get('images/%s' % image_id)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['image_id'] = image_id
-        return self._verify_response('image-get-resp', subs, response)
+        self._verify_response('image-get-resp', subs, response, 200)
 
     def test_list_images(self):
         response = self._do_get('images/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('image-list-resp', subs, response)
+        self._verify_response('image-list-resp', subs, response, 200)
 
 
 class DiskConfigXmlTest(DiskConfigJsonTest):
@@ -2540,15 +2558,13 @@ class OsNetworksJsonTests(ApiSampleTestBase):
 
     def test_list_networks(self):
         response = self._do_get('os-tenant-networks')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('networks-list-res', subs, response)
+        self._verify_response('networks-list-res', subs, response, 200)
 
     def test_create_network(self):
         response = self._do_post('os-tenant-networks', "networks-post-req", {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('networks-post-res', subs, response)
+        self._verify_response('networks-post-res', subs, response, 200)
 
     def test_delete_network(self):
         response = self._do_post('os-tenant-networks', "networks-post-req", {})
@@ -2580,9 +2596,8 @@ class NetworksJsonTests(ApiSampleTestBase):
 
     def test_network_list(self):
         response = self._do_get('os-networks')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('networks-list-resp', subs, response)
+        self._verify_response('networks-list-resp', subs, response, 200)
 
     def test_network_disassociate(self):
         uuid = test_networks.FAKE_NETWORKS[0]['uuid']
@@ -2593,16 +2608,14 @@ class NetworksJsonTests(ApiSampleTestBase):
     def test_network_show(self):
         uuid = test_networks.FAKE_NETWORKS[0]['uuid']
         response = self._do_get('os-networks/%s' % uuid)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('network-show-resp', subs, response)
+        self._verify_response('network-show-resp', subs, response, 200)
 
     def test_network_create(self):
         response = self._do_post("os-networks",
                                  'network-create-req', {})
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('network-create-resp', subs, response)
+        self._verify_response('network-create-resp', subs, response, 200)
 
     def test_network_add(self):
         response = self._do_post("os-networks/add",
@@ -2675,19 +2688,15 @@ class FlavorDisabledSampleJsonTests(ApiSampleTestBase):
         # Get api sample to show flavor_disabled attr. of a flavor.
         flavor_id = 1
         response = self._do_get('flavors/%s' % flavor_id)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['flavor_id'] = flavor_id
-        return self._verify_response('flavor-show-get-resp', subs,
-                                     response)
+        self._verify_response('flavor-show-get-resp', subs, response, 200)
 
     def test_detail_flavor(self):
         # Get api sample to show details of a flavor.
         response = self._do_get('flavors/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('flavor-detail-get-resp', subs,
-                                     response)
+        self._verify_response('flavor-detail-get-resp', subs, response, 200)
 
 
 class FlavorDisabledSampleXmlTests(FlavorDisabledSampleJsonTests):
@@ -2702,19 +2711,17 @@ class QuotaClassesSampleJsonTests(ApiSampleTestBase):
     def test_show_quota_classes(self):
         # Get api sample to show quota classes.
         response = self._do_get('os-quota-class-sets/%s' % self.set_id)
-        self.assertEqual(response.status, 200)
         subs = {'set_id': self.set_id}
-        return self._verify_response('quota-classes-show-get-resp', subs,
-                                     response)
+        self._verify_response('quota-classes-show-get-resp', subs,
+                              response, 200)
 
     def test_update_quota_classes(self):
         # Get api sample to update quota classes.
         response = self._do_put('os-quota-class-sets/%s' % self.set_id,
                                 'quota-classes-update-post-req',
                                 {})
-        self.assertEqual(response.status, 200)
-        return self._verify_response('quota-classes-update-post-resp',
-                                     {}, response)
+        self._verify_response('quota-classes-update-post-resp',
+                              {}, response, 200)
 
 
 class QuotaClassesSampleXmlTests(QuotaClassesSampleJsonTests):
@@ -2760,21 +2767,18 @@ class CellsSampleJsonTest(ApiSampleTestBase):
         # Override this
         self._stub_cells(num_cells=0)
         response = self._do_get('os-cells')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('cells-list-empty-resp', subs, response)
+        self._verify_response('cells-list-empty-resp', subs, response, 200)
 
     def test_cells_list(self):
         response = self._do_get('os-cells')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('cells-list-resp', subs, response)
+        self._verify_response('cells-list-resp', subs, response, 200)
 
     def test_cells_get(self):
         response = self._do_get('os-cells/cell3')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('cells-get-resp', subs, response)
+        self._verify_response('cells-get-resp', subs, response, 200)
 
 
 class CellsSampleXmlTest(CellsSampleJsonTest):
@@ -2789,37 +2793,48 @@ class BareMetalNodesJsonTest(ApiSampleTestBase, bm_db_base.BMDBTestCase):
         response = self._do_post("os-baremetal-nodes",
                                  "baremetal-node-create-req",
                                  {})
-        self.assertEqual(response.status, 200)
         subs = {'node_id': '(?P<id>\d+)'}
-        return self._verify_response("baremetal-node-create-resp",
-                                     subs, response)
+        return self._verify_response("baremetal-node-create-resp", subs,
+                                     response, 200)
+
+    def _create_node_with_address(self):
+        address = '12:34:56:78:90:ab'
+        req_subs = {'address': address}
+        response = self._do_post("os-baremetal-nodes",
+                                 "baremetal-node-create-with-address-req",
+                                 req_subs)
+        subs = {'node_id': '(?P<id>\d+)',
+                'interface_id': '\d+',
+                'address': address}
+        self._verify_response("baremetal-node-create-with-address-resp",
+                              subs, response, 200)
 
     def test_create_node(self):
         self._create_node()
+
+    def test_create_node_with_address(self):
+        self._create_node_with_address()
 
     def test_list_nodes(self):
         node_id = self._create_node()
         interface_id = self._add_interface(node_id)
         response = self._do_get('os-baremetal-nodes')
-        self.assertEqual(response.status, 200)
         subs = {'node_id': node_id,
                 'interface_id': interface_id,
                 'address': 'aa:aa:aa:aa:aa:aa',
                 }
-        return self._verify_response('baremetal-node-list-resp',
-                                     subs, response)
+        self._verify_response('baremetal-node-list-resp', subs,
+                              response, 200)
 
     def test_show_node(self):
         node_id = self._create_node()
         interface_id = self._add_interface(node_id)
         response = self._do_get('os-baremetal-nodes/%s' % node_id)
-        self.assertEqual(response.status, 200)
         subs = {'node_id': node_id,
                 'interface_id': interface_id,
                 'address': 'aa:aa:aa:aa:aa:aa',
                 }
-        return self._verify_response('baremetal-node-show-resp',
-                                     subs, response)
+        self._verify_response('baremetal-node-show-resp', subs, response, 200)
 
     def test_delete_node(self):
         node_id = self._create_node()
@@ -2830,10 +2845,9 @@ class BareMetalNodesJsonTest(ApiSampleTestBase, bm_db_base.BMDBTestCase):
         response = self._do_post("os-baremetal-nodes/%s/action" % node_id,
                                  "baremetal-node-add-interface-req",
                                  {'address': 'aa:aa:aa:aa:aa:aa'})
-        self.assertEqual(response.status, 200)
         subs = {'interface_id': r'(?P<id>\d+)'}
-        return self._verify_response("baremetal-node-add-interface-resp",
-                                     subs, response)
+        return self._verify_response("baremetal-node-add-interface-resp", subs,
+                                     response, 200)
 
     def test_add_interface(self):
         node_id = self._create_node()
@@ -2867,13 +2881,11 @@ class FloatingIPPoolsSampleJsonTests(ApiSampleTestBase):
         self.stubs.Set(network_api.API, "get_floating_ip_pools",
                        fake_get_floating_ip_pools)
         response = self._do_get('os-floating-ip-pools')
-        self.assertEqual(response.status, 200)
         subs = {
             'pool1': pool_list[0],
             'pool2': pool_list[1]
         }
-        return self._verify_response('floatingippools-list-resp',
-                                     subs, response)
+        self._verify_response('floatingippools-list-resp', subs, response, 200)
 
 
 class FloatingIPPoolsSampleXmlTests(FloatingIPPoolsSampleJsonTests):
@@ -2911,19 +2923,17 @@ class InstanceUsageAuditLogJsonTest(ApiSampleTestBase):
     def test_show_instance_usage_audit_log(self):
         response = self._do_get('os-instance_usage_audit_log/%s' %
                                 urllib.quote('2012-07-05 10:00:00'))
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('inst-usage-audit-log-show-get-resp',
-                                     subs, response)
+        self._verify_response('inst-usage-audit-log-show-get-resp',
+                              subs, response, 200)
 
     def test_index_instance_usage_audit_log(self):
         response = self._do_get('os-instance_usage_audit_log')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('inst-usage-audit-log-index-get-resp',
-                                     subs, response)
+        self._verify_response('inst-usage-audit-log-index-get-resp',
+                              subs, response, 200)
 
 
 class InstanceUsageAuditLogXmlTest(InstanceUsageAuditLogJsonTest):
@@ -2940,17 +2950,15 @@ class FlavorExtraSpecsSampleJsonTests(ApiSampleTestBase):
         }
         response = self._do_post('flavors/1/os-extra_specs',
                                  'flavor-extra-specs-create-req', subs)
-        self.assertEqual(response.status, 200)
-        return self._verify_response('flavor-extra-specs-create-resp',
-                                     subs, response)
+        self._verify_response('flavor-extra-specs-create-resp',
+                              subs, response, 200)
 
     def test_flavor_extra_specs_get(self):
         subs = {'value1': 'value1'}
         self._flavor_extra_specs_create()
         response = self._do_get('flavors/1/os-extra_specs/key1')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('flavor-extra-specs-get-resp',
-                                     subs, response)
+        self._verify_response('flavor-extra-specs-get-resp',
+                              subs, response, 200)
 
     def test_flavor_extra_specs_list(self):
         subs = {'value1': 'value1',
@@ -2958,21 +2966,19 @@ class FlavorExtraSpecsSampleJsonTests(ApiSampleTestBase):
         }
         self._flavor_extra_specs_create()
         response = self._do_get('flavors/1/os-extra_specs')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('flavor-extra-specs-list-resp',
-                                     subs, response)
+        self._verify_response('flavor-extra-specs-list-resp',
+                              subs, response, 200)
 
     def test_flavor_extra_specs_create(self):
-        return self._flavor_extra_specs_create()
+        self._flavor_extra_specs_create()
 
     def test_flavor_extra_specs_update(self):
         subs = {'value1': 'new_value1'}
         self._flavor_extra_specs_create()
         response = self._do_put('flavors/1/os-extra_specs/key1',
                                 'flavor-extra-specs-update-req', subs)
-        self.assertEqual(response.status, 200)
-        return self._verify_response('flavor-extra-specs-update-resp',
-                                     subs, response)
+        self._verify_response('flavor-extra-specs-update-resp',
+                              subs, response, 200)
 
     def test_flavor_extra_specs_delete(self):
         self._flavor_extra_specs_create()
@@ -3000,16 +3006,14 @@ class FpingSampleJsonTests(ServersSampleBase):
     def test_get_fping(self):
         self._post_server()
         response = self._do_get('os-fping')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('fping-get-resp', subs, response)
+        self._verify_response('fping-get-resp', subs, response, 200)
 
     def test_get_fping_details(self):
         uuid = self._post_server()
         response = self._do_get('os-fping/%s' % (uuid))
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('fping-get-details-resp', subs, response)
+        self._verify_response('fping-get-details-resp', subs, response, 200)
 
 
 class FpingSampleXmlTests(FpingSampleJsonTests):
@@ -3024,18 +3028,16 @@ class ExtendedAvailabilityZoneJsonTests(ServersSampleBase):
     def test_show(self):
         uuid = self._post_server()
         response = self._do_get('servers/%s' % uuid)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('server-get-resp', subs, response)
+        self._verify_response('server-get-resp', subs, response, 200)
 
     def test_detail(self):
         uuid = self._post_server()
         response = self._do_get('servers/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
-        return self._verify_response('servers-detail-resp', subs, response)
+        self._verify_response('servers-detail-resp', subs, response, 200)
 
 
 class ExtendedAvailabilityZoneXmlTests(ExtendedAvailabilityZoneJsonTests):
@@ -3065,10 +3067,8 @@ class EvacuateJsonTest(ServersSampleBase):
 
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-evacuate-req', req_subs)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('server-evacuate-resp', subs,
-                                     response)
+        self._verify_response('server-evacuate-resp', subs, response, 200)
 
 
 class EvacuateXmlTest(EvacuateJsonTest):
@@ -3092,9 +3092,8 @@ class FloatingIpDNSJsonTest(ApiSampleTestBase):
                 'scope': self.scope}
         response = self._do_put('os-floating-ip-dns/%s' % self.domain,
                                 'floating-ip-dns-create-or-update-req', subs)
-        self.assertEqual(response.status, 200)
         self._verify_response('floating-ip-dns-create-or-update-resp', subs,
-                              response)
+                              response, 200)
 
     def _create_or_update_entry(self):
         subs = {'ip': self.ip, 'dns_type': self.dns_type}
@@ -3102,20 +3101,18 @@ class FloatingIpDNSJsonTest(ApiSampleTestBase):
                                 % (self.domain, self.name),
                                 'floating-ip-dns-create-or-update-entry-req',
                                 subs)
-        self.assertEqual(response.status, 200)
         subs.update({'name': self.name, 'domain': self.domain})
         self._verify_response('floating-ip-dns-create-or-update-entry-resp',
-                              subs, response)
+                              subs, response, 200)
 
     def test_floating_ip_dns_list(self):
         self._create_or_update()
         response = self._do_get('os-floating-ip-dns')
-        self.assertEqual(response.status, 200)
         subs = {'domain': self.domain,
                 'project': self.project,
                 'scope': self.scope}
-        return self._verify_response('floating-ip-dns-list-resp', subs,
-                                     response)
+        self._verify_response('floating-ip-dns-list-resp', subs,
+                              response, 200)
 
     def test_floating_ip_dns_create_or_update(self):
         self._create_or_update()
@@ -3132,12 +3129,11 @@ class FloatingIpDNSJsonTest(ApiSampleTestBase):
         self._create_or_update_entry()
         response = self._do_get('os-floating-ip-dns/%s/entries/%s'
                                 % (self.domain, self.name))
-        self.assertEqual(response.status, 200)
         subs = {'domain': self.domain,
                 'ip': self.ip,
                 'name': self.name}
-        return self._verify_response('floating-ip-dns-entry-get-resp', subs,
-                                     response)
+        self._verify_response('floating-ip-dns-entry-get-resp', subs,
+                              response, 200)
 
     def test_floating_ip_dns_entry_delete(self):
         self._create_or_update_entry()
@@ -3149,12 +3145,11 @@ class FloatingIpDNSJsonTest(ApiSampleTestBase):
         self._create_or_update_entry()
         response = self._do_get('os-floating-ip-dns/%s/entries/%s'
                                 % (self.domain, self.ip))
-        self.assertEqual(response.status, 200)
         subs = {'domain': self.domain,
                 'ip': self.ip,
                 'name': self.name}
-        return self._verify_response('floating-ip-dns-entry-list-resp', subs,
-                                     response)
+        self._verify_response('floating-ip-dns-entry-list-resp', subs,
+                              response, 200)
 
 
 class FloatingIpDNSXmlTest(FloatingIpDNSJsonTest):
@@ -3210,8 +3205,7 @@ class InstanceActionsSampleJsonTest(ApiSampleTestBase):
         subs['start_time'] = fake_action['start_time']
         subs['result'] = '(Success)|(Error)'
         subs['event'] = '(schedule)|(compute_create)'
-        return self._verify_response('instance-action-get-resp', subs,
-                                     response)
+        self._verify_response('instance-action-get-resp', subs, response, 200)
 
     def test_instance_actions_list(self):
         fake_uuid = fake_instance_actions.FAKE_UUID
@@ -3221,8 +3215,8 @@ class InstanceActionsSampleJsonTest(ApiSampleTestBase):
         subs['integer_id'] = '[0-9]+'
         subs['request_id'] = ('req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}'
                               '-[0-9a-f]{4}-[0-9a-f]{12}')
-        return self._verify_response('instance-actions-list-resp', subs,
-                                     response)
+        self._verify_response('instance-actions-list-resp', subs,
+                              response, 200)
 
 
 class InstanceActionsSampleXmlTest(InstanceActionsSampleJsonTest):
@@ -3237,16 +3231,15 @@ class ImageSizeSampleJsonTests(ApiSampleTestBase):
         # Get api sample of one single image details request.
         image_id = fake.get_valid_image_id()
         response = self._do_get('images/%s' % image_id)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['image_id'] = image_id
-        return self._verify_response('image-get-resp', subs, response)
+        self._verify_response('image-get-resp', subs, response, 200)
 
     def test_detail(self):
         # Get api sample of all images details request.
         response = self._do_get('images/detail')
         subs = self._get_regexes()
-        return self._verify_response('images-details-get-resp', subs, response)
+        self._verify_response('images-details-get-resp', subs, response, 200)
 
 
 class ImageSizeSampleXmlTests(ImageSizeSampleJsonTests):
@@ -3266,24 +3259,22 @@ class ConfigDriveSampleJsonTest(ServersSampleBase):
     def test_config_drive_show(self):
         uuid = self._post_server()
         response = self._do_get('servers/%s' % uuid)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         # config drive can be an uuid or empty value
         subs['cdrive'] = '(%s)?' % subs['uuid']
-        return self._verify_response('server-config-drive-get-resp', subs,
-                                     response)
+        self._verify_response('server-config-drive-get-resp', subs,
+                              response, 200)
 
     def test_config_drive_detail(self):
         uuid = self._post_server()
         response = self._do_get('servers/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         # config drive can be an uuid or empty value
         subs['cdrive'] = '(%s)?' % subs['uuid']
-        return self._verify_response('servers-config-drive-details-resp',
-                                     subs, response)
+        self._verify_response('servers-config-drive-details-resp',
+                              subs, response, 200)
 
 
 class ConfigDriveSampleXmlTest(ConfigDriveSampleJsonTest):
@@ -3310,9 +3301,8 @@ class FlavorAccessSampleJsonTests(ApiSampleTestBase):
         response = self._do_post('flavors/10/action',
                                  'flavor-access-add-tenant-req',
                                  subs)
-        self.assertEqual(response.status, 200)
-        return self._verify_response('flavor-access-add-tenant-resp',
-                                     subs, response)
+        self._verify_response('flavor-access-add-tenant-resp',
+                              subs, response, 200)
 
     def _create_flavor(self):
         subs = {
@@ -3322,44 +3312,36 @@ class FlavorAccessSampleJsonTests(ApiSampleTestBase):
         response = self._do_post("flavors",
                                  "flavor-access-create-req",
                                  subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response("flavor-access-create-resp",
-                                     subs, response)
+        self._verify_response("flavor-access-create-resp", subs, response, 200)
 
     def test_flavor_access_create(self):
         self._create_flavor()
 
     def test_flavor_access_detail(self):
         response = self._do_get('flavors/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('flavor-access-detail-resp',
-                                     subs, response)
+        self._verify_response('flavor-access-detail-resp', subs, response, 200)
 
     def test_flavor_access_list(self):
         self._create_flavor()
         self._add_tenant()
         flavor_id = 10
         response = self._do_get('flavors/%s/os-flavor-access' % flavor_id)
-        self.assertEqual(response.status, 200)
         subs = {
             'flavor_id': flavor_id,
             'tenant_id': 'fake_tenant',
         }
-        return self._verify_response('flavor-access-list-resp',
-                                     subs, response)
+        self._verify_response('flavor-access-list-resp', subs, response, 200)
 
     def test_flavor_access_show(self):
         flavor_id = 1
         response = self._do_get('flavors/%s' % flavor_id)
-        self.assertEqual(response.status, 200)
         subs = {
             'flavor_id': flavor_id
         }
         subs.update(self._get_regexes())
-        return self._verify_response('flavor-access-show-resp',
-                                     subs, response)
+        self._verify_response('flavor-access-show-resp', subs, response, 200)
 
     def test_flavor_access_add_tenant(self):
         self._create_flavor()
@@ -3374,9 +3356,8 @@ class FlavorAccessSampleJsonTests(ApiSampleTestBase):
         response = self._do_post('flavors/10/action',
                                  "flavor-access-remove-tenant-req",
                                  subs)
-        self.assertEqual(response.status, 200)
-        return self._verify_response('flavor-access-remove-tenant-resp',
-                                     {}, response)
+        self._verify_response('flavor-access-remove-tenant-resp',
+                              {}, response, 200)
 
 
 class FlavorAccessSampleXmlTests(FlavorAccessSampleJsonTests):
@@ -3389,21 +3370,15 @@ class HypervisorsSampleJsonTests(ApiSampleTestBase):
 
     def test_hypervisors_list(self):
         response = self._do_get('os-hypervisors')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('hypervisors-list-resp',
-                                     {}, response)
+        self._verify_response('hypervisors-list-resp', {}, response, 200)
 
     def test_hypervisors_search(self):
         response = self._do_get('os-hypervisors/fake/search')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('hypervisors-search-resp',
-                                     {}, response)
+        self._verify_response('hypervisors-search-resp', {}, response, 200)
 
     def test_hypervisors_servers(self):
         response = self._do_get('os-hypervisors/fake/servers')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('hypervisors-servers-resp',
-                                     {}, response)
+        self._verify_response('hypervisors-servers-resp', {}, response, 200)
 
     def test_hypervisors_show(self):
         hypervisor_id = 1
@@ -3411,16 +3386,12 @@ class HypervisorsSampleJsonTests(ApiSampleTestBase):
             'hypervisor_id': hypervisor_id
         }
         response = self._do_get('os-hypervisors/%s' % hypervisor_id)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('hypervisors-show-resp',
-                                     subs, response)
+        self._verify_response('hypervisors-show-resp', subs, response, 200)
 
     def test_hypervisors_statistics(self):
         response = self._do_get('os-hypervisors/statistics')
-        self.assertEqual(response.status, 200)
-        return self._verify_response('hypervisors-statistics-resp',
-                                     {}, response)
+        self._verify_response('hypervisors-statistics-resp', {}, response, 200)
 
     def test_hypervisors_uptime(self):
         def fake_get_host_uptime(self, context, hyp):
@@ -3431,12 +3402,10 @@ class HypervisorsSampleJsonTests(ApiSampleTestBase):
                        'get_host_uptime', fake_get_host_uptime)
         hypervisor_id = 1
         response = self._do_get('os-hypervisors/%s/uptime' % hypervisor_id)
-        self.assertEqual(response.status, 200)
         subs = {
             'hypervisor_id': hypervisor_id,
         }
-        return self._verify_response('hypervisors-uptime-resp',
-                                     subs, response)
+        self._verify_response('hypervisors-uptime-resp', subs, response, 200)
 
 
 class HypervisorsSampleXmlTests(HypervisorsSampleJsonTests):
@@ -3549,7 +3518,6 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
     def test_list_interfaces(self):
         instance_uuid = self._post_server()
         response = self._do_get('servers/%s/os-interface' % instance_uuid)
-        self.assertEqual(response.status, 200)
         subs = {
                 'ip_address': '192.168.1.3',
                 'subnet_id': 'f8a6e8f8-c2ec-497c-9f23-da9616de54ef',
@@ -3558,7 +3526,8 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
                 'port_id': 'ce531f90-199f-48c0-816c-13e38010b442',
                 'port_state': 'ACTIVE'
                 }
-        self._verify_response('attach-interfaces-list-resp', subs, response)
+        self._verify_response('attach-interfaces-list-resp', subs,
+                              response, 200)
 
     def _stub_show_for_instance(self, instance_uuid, port_id):
         show_port = network_api.API().show_port(None, port_id)
@@ -3571,7 +3540,6 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
         self._stub_show_for_instance(instance_uuid, port_id)
         response = self._do_get('servers/%s/os-interface/%s' %
                                 (instance_uuid, port_id))
-        self.assertEqual(response.status, 200)
         subs = {
                 'ip_address': '192.168.1.3',
                 'subnet_id': 'f8a6e8f8-c2ec-497c-9f23-da9616de54ef',
@@ -3580,7 +3548,8 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
                 'port_id': port_id,
                 'port_state': 'ACTIVE'
                 }
-        self._verify_response('attach-interfaces-show-resp', subs, response)
+        self._verify_response('attach-interfaces-show-resp', subs,
+                              response, 200)
 
     def test_create_interfaces(self, instance_uuid=None):
         if instance_uuid is None:
@@ -3596,10 +3565,9 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
         self._stub_show_for_instance(instance_uuid, subs['port_id'])
         response = self._do_post('servers/%s/os-interface' % instance_uuid,
                                  'attach-interfaces-create-req', subs)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        self._verify_response('attach-interfaces-create-resp',
-                              subs, response)
+        self._verify_response('attach-interfaces-create-resp', subs,
+                              response, 200)
 
     def test_delete_interfaces(self):
         instance_uuid = self._post_server()
@@ -3632,7 +3600,6 @@ class SnapshotsSampleJsonTests(ApiSampleTestBase):
     def _create_snapshot(self):
         self.stubs.Set(cinder.API, "create_snapshot",
                        fakes.stub_snapshot_create)
-        self.stubs.Set(cinder.API, "get", fakes.stub_volume_get)
 
         response = self._do_post("os-snapshots",
                                  "snapshot-create-req",
@@ -3641,10 +3608,9 @@ class SnapshotsSampleJsonTests(ApiSampleTestBase):
 
     def test_snapshots_create(self):
         response = self._create_snapshot()
-        self.assertEqual(response.status, 200)
         self.create_subs.update(self._get_regexes())
-        return self._verify_response("snapshot-create-resp",
-                                     self.create_subs, response)
+        self._verify_response("snapshot-create-resp",
+                              self.create_subs, response, 200)
 
     def test_snapshots_delete(self):
         self.stubs.Set(cinder.API, "delete_snapshot",
@@ -3656,28 +3622,22 @@ class SnapshotsSampleJsonTests(ApiSampleTestBase):
 
     def test_snapshots_detail(self):
         response = self._do_get('os-snapshots/detail')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('snapshots-detail-resp',
-                                     subs, response)
+        self._verify_response('snapshots-detail-resp', subs, response, 200)
 
     def test_snapshots_list(self):
         response = self._do_get('os-snapshots')
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        return self._verify_response('snapshots-list-resp',
-                                     subs, response)
+        self._verify_response('snapshots-list-resp', subs, response, 200)
 
     def test_snapshots_show(self):
         response = self._do_get('os-snapshots/100')
-        self.assertEqual(response.status, 200)
         subs = {
             'snapshot_name': 'Default name',
             'description': 'Default description'
         }
         subs.update(self._get_regexes())
-        return self._verify_response('snapshots-show-resp',
-                                     subs, response)
+        self._verify_response('snapshots-show-resp', subs, response, 200)
 
 
 class SnapshotsSampleXmlTests(SnapshotsSampleJsonTests):
@@ -3707,10 +3667,9 @@ class VolumeAttachmentsSampleJsonTest(ServersSampleBase):
                                  % server_id,
                                  'attach-volume-to-server-req', subs)
 
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        self._verify_response('attach-volume-to-server-resp',
-                              subs, response)
+        self._verify_response('attach-volume-to-server-resp', subs,
+                              response, 200)
 
     def _stub_compute_api_get_instance_bdms(self, server_id):
 
@@ -3742,10 +3701,9 @@ class VolumeAttachmentsSampleJsonTest(ServersSampleBase):
 
         response = self._do_get('servers/%s/os-volume_attachments'
                                 % server_id)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('list-volume-attachments-resp',
-                              subs, response)
+        self._verify_response('list-volume-attachments-resp', subs,
+                              response, 200)
 
     def test_volume_attachment_detail(self):
         server_id = self._post_server()
@@ -3754,16 +3712,16 @@ class VolumeAttachmentsSampleJsonTest(ServersSampleBase):
         self._stub_compute_api_get()
         response = self._do_get('servers/%s/os-volume_attachments/%s'
                                 % (server_id, attach_id))
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
-        self._verify_response('volume-attachment-detail-resp',
-                              subs, response)
+        self._verify_response('volume-attachment-detail-resp', subs,
+                              response, 200)
 
     def test_volume_attachment_delete(self):
         server_id = self._post_server()
         attach_id = "a26887c6-c47b-4654-abb5-dfadf7d3f803"
         self._stub_compute_api_get_instance_bdms(server_id)
         self._stub_compute_api_get()
+        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
         self.stubs.Set(compute_api.API, 'detach_volume', lambda *a, **k: None)
         response = self._do_delete('servers/%s/os-volume_attachments/%s'
                                    % (server_id, attach_id))
@@ -3835,10 +3793,9 @@ class VolumesSampleJsonTest(ServersSampleBase):
         self.stubs.Set(cinder.API, "create", self._stub_volume_create)
         response = self._do_post('os-volumes', 'os-volumes-post-req',
                                  subs_req)
-        self.assertEqual(response.status, 200)
         subs = self._get_regexes()
         subs.update(subs_req)
-        return self._verify_response('os-volumes-post-resp', subs, response)
+        self._verify_response('os-volumes-post-resp', subs, response, 200)
 
     def test_volumes_show(self):
         subs = {
@@ -3847,9 +3804,8 @@ class VolumesSampleJsonTest(ServersSampleBase):
         }
         vol_id = self._get_volume_id()
         response = self._do_get('os-volumes/%s' % vol_id)
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('os-volumes-get-resp', subs, response)
+        self._verify_response('os-volumes-get-resp', subs, response, 200)
 
     def test_volumes_index(self):
         subs = {
@@ -3857,9 +3813,8 @@ class VolumesSampleJsonTest(ServersSampleBase):
                 'volume_desc': "Volume Description",
         }
         response = self._do_get('os-volumes')
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('os-volumes-index-resp', subs, response)
+        self._verify_response('os-volumes-index-resp', subs, response, 200)
 
     def test_volumes_detail(self):
         # For now, index and detail are the same.
@@ -3869,12 +3824,11 @@ class VolumesSampleJsonTest(ServersSampleBase):
                 'volume_desc': "Volume Description",
         }
         response = self._do_get('os-volumes/detail')
-        self.assertEqual(response.status, 200)
         subs.update(self._get_regexes())
-        return self._verify_response('os-volumes-detail-resp', subs, response)
+        self._verify_response('os-volumes-detail-resp', subs, response, 200)
 
     def test_volumes_create(self):
-        return self._post_volume()
+        self._post_volume()
 
     def test_volumes_delete(self):
         self._post_volume()

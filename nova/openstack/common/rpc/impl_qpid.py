@@ -320,7 +320,7 @@ class Connection(object):
         # Reconnection is done by self.reconnect()
         self.connection.reconnect = False
         self.connection.heartbeat = self.conf.qpid_heartbeat
-        self.connection.protocol = self.conf.qpid_protocol
+        self.connection.transport = self.conf.qpid_protocol
         self.connection.tcp_nodelay = self.conf.qpid_tcp_nodelay
 
     def _register_consumer(self, consumer):
@@ -331,22 +331,23 @@ class Connection(object):
 
     def reconnect(self):
         """Handles reconnecting and re-establishing sessions and queues"""
-        if self.connection.opened():
-            try:
-                self.connection.close()
-            except qpid_exceptions.ConnectionError:
-                pass
-
         attempt = 0
         delay = 1
         while True:
+            # Close the session if necessary
+            if self.connection.opened():
+                try:
+                    self.connection.close()
+                except qpid_exceptions.ConnectionError:
+                    pass
+
             broker = self.brokers[attempt % len(self.brokers)]
             attempt += 1
 
             try:
                 self.connection_create(broker)
                 self.connection.open()
-            except qpid_exceptions.ConnectionError, e:
+            except qpid_exceptions.ConnectionError as e:
                 msg_dict = dict(e=e, delay=delay)
                 msg = _("Unable to connect to AMQP server: %(e)s. "
                         "Sleeping %(delay)s seconds") % msg_dict
@@ -374,7 +375,7 @@ class Connection(object):
             try:
                 return method(*args, **kwargs)
             except (qpid_exceptions.Empty,
-                    qpid_exceptions.ConnectionError), e:
+                    qpid_exceptions.ConnectionError) as e:
                 if error_callback:
                     error_callback(e)
                 self.reconnect()

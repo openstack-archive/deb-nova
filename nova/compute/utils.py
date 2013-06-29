@@ -23,7 +23,7 @@ import traceback
 from oslo.config import cfg
 
 from nova import block_device
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova import exception
 from nova.network import model as network_model
 from nova import notifications
@@ -151,7 +151,7 @@ def get_device_name_for_instance(context, instance, bdms, device):
     # NOTE(vish): remove this when xenapi is properly setting
     #             default_ephemeral_device and default_swap_device
     if driver.compute_driver_matches('xenapi.XenAPIDriver'):
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         if instance_type['ephemeral_gb']:
             used_letters.add('b')
 
@@ -245,9 +245,14 @@ def notify_about_instance_usage(context, instance, event_suffix,
     usage_info = notifications.info_from_instance(context, instance,
             network_info, system_metadata, **extra_usage_info)
 
+    if event_suffix.endswith("error"):
+        level = notifier_api.ERROR
+    else:
+        level = notifier_api.INFO
+
     notifier_api.notify(context, 'compute.%s' % host,
-                        'compute.instance.%s' % event_suffix,
-                        notifier_api.INFO, usage_info)
+                        'compute.instance.%s' % event_suffix, level,
+                        usage_info)
 
 
 def get_nw_info_for_instance(instance):
@@ -290,7 +295,10 @@ def usage_volume_info(vol_usage):
 
     usage_info = dict(
           volume_id=vol_usage['volume_id'],
-          instance_id=vol_usage['instance_id'],
+          tenant_id=vol_usage['project_id'],
+          user_id=vol_usage['user_id'],
+          availability_zone=vol_usage['availability_zone'],
+          instance_id=vol_usage['instance_uuid'],
           last_refreshed=null_safe_str(last_refreshed_time),
           reads=vol_usage['tot_reads'] + vol_usage['curr_reads'],
           read_bytes=vol_usage['tot_read_bytes'] +

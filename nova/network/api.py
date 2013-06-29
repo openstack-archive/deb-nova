@@ -3,6 +3,7 @@
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
+# Copyright 2013 IBM Corp.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -20,7 +21,8 @@
 import functools
 import inspect
 
-from nova.compute import instance_types
+from nova.cells import rpcapi as cells_rpcapi
+from nova.compute import flavors
 from nova.db import base
 from nova import exception
 from nova.network import floating_ips
@@ -63,7 +65,8 @@ def refresh_cache(f):
 
 
 def update_instance_cache_with_nw_info(api, context, instance,
-                                       nw_info=None, conductor_api=None):
+                                       nw_info=None, conductor_api=None,
+                                       update_cells=True):
     try:
         if not isinstance(nw_info, network_model.NetworkInfo):
             nw_info = None
@@ -72,9 +75,20 @@ def update_instance_cache_with_nw_info(api, context, instance,
         # update cache
         cache = {'network_info': nw_info.json()}
         if conductor_api:
-            conductor_api.instance_info_cache_update(context, instance, cache)
+            rv = conductor_api.instance_info_cache_update(context,
+                                                          instance,
+                                                          cache)
         else:
-            api.db.instance_info_cache_update(context, instance['uuid'], cache)
+            rv = api.db.instance_info_cache_update(context,
+                                                   instance['uuid'],
+                                                   cache)
+        if update_cells:
+            cells_api = cells_rpcapi.CellsAPI()
+            try:
+                cells_api.instance_info_cache_update_at_top(context, rv)
+            except Exception:
+                LOG.exception(_("Failed to notify cells of instance info "
+                                "cache update"))
     except Exception:
         LOG.exception(_('Failed storing info cache'), instance=instance)
 
@@ -172,10 +186,6 @@ class API(base.Base):
         return [floating_ip['address'] for floating_ip in floating_ips]
 
     @wrap_check_policy
-    def get_backdoor_port(self, context, host):
-        return self.network_rpcapi.get_backdoor_port(context, host)
-
-    @wrap_check_policy
     def get_instance_id_by_floating_address(self, context, address):
         fixed_ip = self.db.fixed_ip_get_by_floating_address(context, address)
         if fixed_ip is None:
@@ -185,13 +195,24 @@ class API(base.Base):
 
     @wrap_check_policy
     def get_vifs_by_instance(self, context, instance):
-        return self.db.virtual_interface_get_by_instance(context,
+        vifs = self.db.virtual_interface_get_by_instance(context,
                                                          instance['uuid'])
+        for vif in vifs:
+            if vif.get('network_id') is not None:
+                network = self.db.network_get(context, vif['network_id'],
+                                              project_only="allow_none")
+                vif['net_uuid'] = network['uuid']
+        return vifs
 
     @wrap_check_policy
     def get_vif_by_mac_address(self, context, mac_address):
-        return self.db.virtual_interface_get_by_address(context,
-                                                        mac_address)
+        vif = self.db.virtual_interface_get_by_address(context,
+                                                       mac_address)
+        if vif.get('network_id') is not None:
+            network = self.db.network_get(context, vif['network_id'],
+                                          project_only="allow_none")
+            vif['net_uuid'] = network['uuid']
+        return vif
 
     @wrap_check_policy
     def allocate_floating_ip(self, context, pool=None):
@@ -258,7 +279,7 @@ class API(base.Base):
         #             this is called from compute.manager which shouldn't
         #             have db access so we do it on the other side of the
         #             rpc.
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         args = {}
         args['vpn'] = vpn
         args['requested_networks'] = requested_networks
@@ -308,7 +329,7 @@ class API(base.Base):
     def add_fixed_ip_to_instance(self, context, instance, network_id,
                                  conductor_api=None):
         """Adds a fixed ip to instance from specified network."""
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
@@ -321,7 +342,7 @@ class API(base.Base):
                                       conductor_api=None):
         """Removes a fixed ip from instance from specified network."""
 
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
@@ -338,7 +359,6 @@ class API(base.Base):
     def associate(self, context, network_uuid, host=_sentinel,
                   project=_sentinel):
         """Associate or disassociate host or project to network."""
-        associations = {}
         network_id = self.get(context, network_uuid)['id']
         if host is not API._sentinel:
             if host is None:
@@ -348,7 +368,6 @@ class API(base.Base):
             else:
                 self.db.network_set_host(context, network_id, host)
         if project is not API._sentinel:
-            project = associations['project']
             if project is None:
                 self.db.network_disassociate(context, network_id,
                                              disassociate_host=False,
@@ -360,13 +379,18 @@ class API(base.Base):
     def get_instance_nw_info(self, context, instance, conductor_api=None):
         """Returns all network info related to an instance."""
         result = self._get_instance_nw_info(context, instance)
+        # NOTE(comstud): Don't update API cell with new info_cache every
+        # time we pull network info for an instance.  The periodic healing
+        # of info_cache causes too many cells messages.  Healing the API
+        # will happen separately.
         update_instance_cache_with_nw_info(self, context, instance,
-                                           result, conductor_api)
+                                           result, conductor_api,
+                                           update_cells=False)
         return result
 
     def _get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
@@ -478,12 +502,12 @@ class API(base.Base):
     def _get_floating_ip_addresses(self, context, instance):
         floating_ips = self.db.instance_floating_address_get_all(context,
                                                             instance['uuid'])
-        return [floating_ip['address'] for floating_ip in floating_ips]
+        return floating_ips
 
     @wrap_check_policy
     def migrate_instance_start(self, context, instance, migration):
         """Start to migrate the network of an instance."""
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         args = dict(
             instance_uuid=instance['uuid'],
             rxtx_factor=instance_type['rxtx_factor'],
@@ -503,7 +527,7 @@ class API(base.Base):
     @wrap_check_policy
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         args = dict(
             instance_uuid=instance['uuid'],
             rxtx_factor=instance_type['rxtx_factor'],

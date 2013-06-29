@@ -33,6 +33,14 @@
             "updated": "%(timestamp)s"
         },
         {
+            "alias": "OS-EXT-IPS-MAC",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ExtendedIpsMac",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_ips_mac/api/v1.1",
+            "updated": "%(timestamp)s"
+        },
+        {
             "alias": "OS-EXT-IMG-SIZE",
             "description": "%(text)s",
             "links": [],
@@ -54,6 +62,14 @@
             "links": [],
             "name": "ExtendedStatus",
             "namespace": "http://docs.openstack.org/compute/ext/extended_status/api/v1.1",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "OS-EXT-VIF-NET",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ExtendedVIFNet",
+            "namespace": "http://docs.openstack.org/compute/ext/extended-virtual-interfaces-net/api/v1.1",
             "updated": "%(timestamp)s"
         },
         {
@@ -214,6 +230,14 @@
             "links": [],
             "name": "Evacuate",
             "namespace": "http://docs.openstack.org/compute/ext/evacuate/api/v2",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "os-extended-floating-ips",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ExtendedFloatingIps",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_floating_ips/api/v2",
             "updated": "%(timestamp)s"
         },
         {
@@ -390,6 +414,14 @@
             "links": [],
             "name": "QuotaClasses",
             "namespace": "http://docs.openstack.org/compute/ext/quota-classes-sets/api/v1.1",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "os-extended-quotas",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ExtendedQuotas",
+            "namespace": "http://docs.openstack.org/compute/ext/quota-delete/api/v1.1",
             "updated": "%(timestamp)s"
         },
         {

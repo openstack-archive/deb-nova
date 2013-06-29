@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
@@ -45,7 +46,7 @@ from oslo.config import cfg
 from nova import exception
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova import utils
+from nova.openstack.common import loopingcall
 from nova.virt import driver
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import host
@@ -143,11 +144,9 @@ class VMwareESXDriver(driver.ComputeDriver):
         self._session = VMwareAPISession(self._host_ip,
                                          host_username, host_password,
                                          api_retry_count, scheme=scheme)
-        self._cluster_name = CONF.vmwareapi_cluster_name
-        self._volumeops = volumeops.VMwareVolumeOps(self._session,
-                                                    self._cluster_name)
+        self._volumeops = volumeops.VMwareVolumeOps(self._session)
         self._vmops = vmops.VMwareVMOps(self._session, self.virtapi,
-                                        self._volumeops, self._cluster_name)
+                                        self._volumeops)
         self._host = host.Host(self._session)
         self._host_state = None
 
@@ -346,14 +345,19 @@ class VMwareVCDriver(VMwareESXDriver):
 
     def __init__(self, virtapi, read_only=False, scheme="https"):
         super(VMwareVCDriver, self).__init__(virtapi)
+        self._cluster_name = CONF.vmwareapi_cluster_name
         if not self._cluster_name:
             self._cluster = None
         else:
             self._cluster = vm_util.get_cluster_ref_from_name(
-                self._session, self._cluster_name)
+                            self._session, self._cluster_name)
             if self._cluster is None:
                 raise exception.NotFound(_("VMware Cluster %s is not found")
                                            % self._cluster_name)
+        self._volumeops = volumeops.VMwareVolumeOps(self._session,
+                                                    self._cluster)
+        self._vmops = vmops.VMwareVMOps(self._session, self.virtapi,
+                                        self._volumeops, self._cluster)
         self._vc_state = None
 
     @property
@@ -439,7 +443,7 @@ class VMwareAPISession(object):
                         self.vim.TerminateSession(
                                 self.vim.get_service_content().sessionManager,
                                 sessionId=[self._session_id])
-                    except Exception, excep:
+                    except Exception as excep:
                         # This exception is something we can live with. It is
                         # just an extra caution on our side. The session may
                         # have been cleared. We could have made a call to
@@ -448,7 +452,7 @@ class VMwareAPISession(object):
                         LOG.debug(excep)
                 self._session_id = session.key
                 return
-            except Exception, excep:
+            except Exception as excep:
                 LOG.critical(_("In vmwareapi:_create_session, "
                               "got this exception: %s") % excep)
                 raise exception.NovaException(excep)
@@ -459,7 +463,7 @@ class VMwareAPISession(object):
         # ESX host
         try:
             self.vim.Logout(self.vim.get_service_content().sessionManager)
-        except Exception, excep:
+        except Exception as excep:
             # It is just cautionary on our part to do a logout in del just
             # to ensure that the session is not left active.
             LOG.debug(excep)
@@ -492,7 +496,7 @@ class VMwareAPISession(object):
                     temp_module = getattr(temp_module, method_elem)
 
                 return temp_module(*args, **kwargs)
-            except error_util.VimFaultException, excep:
+            except error_util.VimFaultException as excep:
                 # If it is a Session Fault Exception, it may point
                 # to a session gone bad. So we try re-creating a session
                 # and then proceeding ahead with the call.
@@ -516,11 +520,11 @@ class VMwareAPISession(object):
                     # and is the caller's fault. Caller should handle these
                     # errors. e.g, InvalidArgument fault.
                     break
-            except error_util.SessionOverLoadException, excep:
+            except error_util.SessionOverLoadException as excep:
                 # For exceptions which may come because of session overload,
                 # we retry
                 exc = excep
-            except Exception, excep:
+            except Exception as excep:
                 # If it is a proper exception, say not having furnished
                 # proper data in the SOAP call or the retry limit having
                 # exceeded, we raise the exception
@@ -548,8 +552,9 @@ class VMwareAPISession(object):
         The task is polled until it completes.
         """
         done = event.Event()
-        loop = utils.FixedIntervalLoopingCall(self._poll_task, instance_uuid,
-                                              task_ref, done)
+        loop = loopingcall.FixedIntervalLoopingCall(self._poll_task,
+                                                    instance_uuid,
+                                                    task_ref, done)
         loop.start(CONF.vmwareapi_task_poll_interval)
         ret_val = done.wait()
         loop.stop()
@@ -575,6 +580,6 @@ class VMwareAPISession(object):
                 LOG.warn(_("Task [%(task_name)s] %(task_ref)s "
                           "status: error %(error_info)s") % locals())
                 done.send_exception(exception.NovaException(error_info))
-        except Exception, excep:
+        except Exception as excep:
             LOG.warn(_("In vmwareapi:_poll_task, Got this error %s") % excep)
             done.send_exception(excep)

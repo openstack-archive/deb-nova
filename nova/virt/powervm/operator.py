@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 IBM Corp.
+# Copyright 2013 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -22,10 +22,9 @@ import time
 from oslo.config import cfg
 
 from nova.compute import power_state
-from nova import exception as nova_exception
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
-from nova import utils
+from nova.openstack.common import processutils
 from nova.virt.powervm import blockdev
 from nova.virt.powervm import command
 from nova.virt.powervm import common
@@ -183,7 +182,7 @@ class PowerVMOperator(object):
                 vhost = self._operator.get_vhost_by_instance_id(lpar_id)
                 self._operator.attach_disk_to_vhost(
                         root_volume['device_name'], vhost)
-            except Exception, e:
+            except Exception as e:
                 LOG.exception(_("PowerVM image creation failed: %s") % str(e))
                 raise exception.PowerVMImageCreationFailed()
 
@@ -199,7 +198,7 @@ class PowerVMOperator(object):
                 #             system (1 in 2^28)
                 self._operator.create_lpar(lpar_inst)
                 LOG.debug(_("Creating LPAR instance '%s'") % instance['name'])
-            except nova_exception.ProcessExecutionError:
+            except processutils.ProcessExecutionError:
                 LOG.exception(_("LPAR instance '%s' creation failed") %
                         instance['name'])
                 raise exception.PowerVMLPARCreationFailed(
@@ -416,23 +415,24 @@ class PowerVMOperator(object):
         return disk_info
 
     def deploy_from_migrated_file(self, lpar, file_path, size):
-        # decompress file
-        gzip_ending = '.gz'
-        if file_path.endswith(gzip_ending):
-            raw_file_path = file_path[:-len(gzip_ending)]
-        else:
-            raw_file_path = file_path
+        """Deploy the logical volume and attach to new lpar.
 
-        self._operator._decompress_image_file(file_path, raw_file_path)
+        :param lpar: lar instance
+        :param file_path: logical volume path
+        :param size: new size of the logical volume
+        """
+        need_decompress = file_path.endswith('.gz')
 
         try:
             # deploy lpar from file
-            self._deploy_from_vios_file(lpar, raw_file_path, size)
+            self._deploy_from_vios_file(lpar, file_path, size,
+                                        decompress=need_decompress)
         finally:
             # cleanup migrated file
-            self._operator._remove_file(raw_file_path)
+            self._operator._remove_file(file_path)
 
-    def _deploy_from_vios_file(self, lpar, file_path, size):
+    def _deploy_from_vios_file(self, lpar, file_path, size,
+                               decompress=True):
         self._operator.create_lpar(lpar)
         lpar = self._operator.get_lpar(lpar['name'])
         instance_id = lpar['lpar_id']
@@ -444,7 +444,8 @@ class PowerVMOperator(object):
         self._operator.attach_disk_to_vhost(diskName, vhost)
 
         # Copy file to device
-        self._disk_adapter._copy_file_to_device(file_path, diskName)
+        self._disk_adapter._copy_file_to_device(file_path, diskName,
+                                                decompress)
 
         self._operator.start_lpar(lpar['name'])
 
@@ -463,8 +464,10 @@ class BaseOperator(object):
         self.connection_data = connection
 
     def _set_connection(self):
-        if self._connection is None:
-            self._connection = common.ssh_connect(self.connection_data)
+        # create a new connection or verify an existing connection
+        # and re-establish if the existing connection is dead
+        self._connection = common.check_connection(self._connection,
+                                                   self.connection_data)
 
     def get_lpar(self, instance_name, resource_type='lpar'):
         """Return a LPAR object by its instance name.
@@ -662,8 +665,15 @@ class BaseOperator(object):
         :param command: String with the command to run.
         """
         self._set_connection()
-        stdout, stderr = utils.ssh_execute(self._connection, cmd,
-                                           check_exit_code=check_exit_code)
+        stdout, stderr = processutils.ssh_execute(
+            self._connection, cmd, check_exit_code=check_exit_code)
+
+        error_text = stderr.strip()
+        if error_text:
+            LOG.debug(
+                _("Found error stream for command \"%(cmd)s\": %(error_text)s")
+                % locals())
+
         return stdout.strip().splitlines()
 
     def run_vios_command_as_root(self, command, check_exit_code=True):
@@ -674,6 +684,13 @@ class BaseOperator(object):
         self._set_connection()
         stdout, stderr = common.ssh_command_as_root(
             self._connection, command, check_exit_code=check_exit_code)
+
+        error_text = stderr.read()
+        if error_text:
+            LOG.debug(
+                _("Found error stream for command \"%(command)s\":"
+                  " %(error_text)s") % locals())
+
         return stdout.read().splitlines()
 
     def macs_for_instance(self, instance):

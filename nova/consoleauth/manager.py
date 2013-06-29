@@ -53,7 +53,8 @@ class ConsoleAuthManager(manager.Manager):
     RPC_API_VERSION = '1.2'
 
     def __init__(self, scheduler_driver=None, *args, **kwargs):
-        super(ConsoleAuthManager, self).__init__(*args, **kwargs)
+        super(ConsoleAuthManager, self).__init__(service_name='consoleauth',
+                                                 *args, **kwargs)
         self.mc = memorycache.get_client()
         self.conductor_api = conductor_api.API()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
@@ -121,5 +122,7 @@ class ConsoleAuthManager(manager.Manager):
             self.mc.delete(token.encode('UTF-8'))
         self.mc.delete(instance_uuid.encode('UTF-8'))
 
+    # NOTE(russellb) This method can be removed in 2.0 of this API.  It is
+    # deprecated in favor of the method in the base API.
     def get_backdoor_port(self, context):
         return self.backdoor_port

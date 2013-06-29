@@ -41,6 +41,7 @@ from nova import exception
 from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import processutils
 from nova.openstack.common import timeutils
 from nova import paths
 from nova import utils
@@ -138,7 +139,7 @@ def generate_fingerprint(public_key):
             with open(pubfile, 'w') as f:
                 f.write(public_key)
             return _generate_fingerprint(pubfile)
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             raise exception.InvalidKeypair()
 
 
@@ -184,7 +185,7 @@ def decrypt_text(project_id, text):
                                   '-inkey', '%s' % private_key,
                                   process_input=text)
         return dec
-    except exception.ProcessExecutionError as exc:
+    except processutils.ProcessExecutionError as exc:
         raise exception.DecryptionFailure(reason=exc.stderr)
 
 
@@ -229,10 +230,10 @@ def convert_from_sshrsa_to_pkcs8(pubkey):
     #              +- INTEGER 65537
 
     # Build the sequence for the bit string
-    n_val = eval(
-        '0x' + ''.join(['%02X' % struct.unpack('B', x)[0] for x in parts[2]]))
-    e_val = eval(
-        '0x' + ''.join(['%02X' % struct.unpack('B', x)[0] for x in parts[1]]))
+    n_val = int(
+        ''.join(['%02X' % struct.unpack('B', x)[0] for x in parts[2]]), 16)
+    e_val = int(
+        ''.join(['%02X' % struct.unpack('B', x)[0] for x in parts[1]]), 16)
     pkinfo = _to_sequence(univ.Integer(n_val), univ.Integer(e_val))
 
     # Convert the sequence into a bit string
@@ -267,7 +268,7 @@ def ssh_encrypt_text(ssh_public_key, text):
                                       '-keyform', 'PEM',
                                       process_input=text)
             return enc
-        except exception.ProcessExecutionError as exc:
+        except processutils.ProcessExecutionError as exc:
             raise exception.EncryptionFailure(reason=exc.stderr)
 
 

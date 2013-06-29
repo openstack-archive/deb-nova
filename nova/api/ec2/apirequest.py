@@ -21,6 +21,7 @@ APIRequest class
 """
 
 import datetime
+from lxml import etree
 # TODO(termie): replace minidom with etree
 from xml.dom import minidom
 
@@ -57,11 +58,10 @@ class APIRequest(object):
             method = getattr(self.controller,
                              ec2utils.camelcase_to_underscore(self.action))
         except AttributeError:
-            controller = self.controller
-            action = self.action
-            _error = _('Unsupported API request: controller = %(controller)s,'
-                    ' action = %(action)s') % locals()
-            LOG.exception(_error)
+            LOG.exception(_('Unsupported API request: controller = '
+                            '%(controller)s, action = %(action)s'),
+                          {'controller': self.controller,
+                           'action': self.action})
             # TODO(gundlach): Raise custom exception, trap in apiserver,
             #       and reraise as 400 error.
             raise exception.InvalidRequest()
@@ -96,6 +96,9 @@ class APIRequest(object):
         xml.appendChild(response_el)
 
         response = xml.toxml()
+        root = etree.fromstring(response)
+        response = etree.tostring(root, pretty_print=True)
+
         xml.unlink()
 
         # Don't write private key to log

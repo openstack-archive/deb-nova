@@ -23,11 +23,8 @@ Tests for Consoleauth Code.
 import mox
 from nova.consoleauth import manager
 from nova import context
-from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import test
-
-LOG = logging.getLogger(__name__)
 
 
 class ConsoleauthTestCase(test.TestCase):
@@ -106,10 +103,47 @@ class ConsoleauthTestCase(test.TestCase):
                                         instance_uuid=None)
         self.assertFalse(self.manager.check_token(self.context, u"token"))
 
-    def test_get_backdoor_port(self):
-        self.manager.backdoor_port = 59697
-        port = self.manager.get_backdoor_port(self.context)
-        self.assertEqual(port, self.manager.backdoor_port)
+
+class ControlauthMemcacheEncodingTestCase(test.TestCase):
+    def setUp(self):
+        super(ControlauthMemcacheEncodingTestCase, self).setUp()
+        self.manager = manager.ConsoleAuthManager()
+        self.context = context.get_admin_context()
+        self.u_token = u"token"
+        self.u_instance = u"instance"
+
+    def test_authorize_console_encoding(self):
+        self.mox.StubOutWithMock(self.manager.mc, "set")
+        self.mox.StubOutWithMock(self.manager.mc, "get")
+        self.manager.mc.set(mox.IsA(str), mox.IgnoreArg(), mox.IgnoreArg()
+                           ).AndReturn(True)
+        self.manager.mc.get(mox.IsA(str)).AndReturn(None)
+        self.manager.mc.set(mox.IsA(str), mox.IgnoreArg()).AndReturn(True)
+
+        self.mox.ReplayAll()
+
+        self.manager.authorize_console(self.context, self.u_token, 'novnc',
+                                       '127.0.0.1', '8080', 'host',
+                                       self.u_instance)
+
+    def test_check_token_encoding(self):
+        self.mox.StubOutWithMock(self.manager.mc, "get")
+        self.manager.mc.get(mox.IsA(str)).AndReturn(None)
+
+        self.mox.ReplayAll()
+
+        self.manager.check_token(self.context, self.u_token)
+
+    def test_delete_tokens_for_instance_encoding(self):
+        self.mox.StubOutWithMock(self.manager.mc, "delete")
+        self.mox.StubOutWithMock(self.manager.mc, "get")
+        self.manager.mc.get(mox.IsA(str)).AndReturn('["token"]')
+        self.manager.mc.delete(mox.IsA(str)).AndReturn(True)
+        self.manager.mc.delete(mox.IsA(str)).AndReturn(True)
+
+        self.mox.ReplayAll()
+
+        self.manager.delete_tokens_for_instance(self.context, self.u_instance)
 
 
 class ControlauthMemcacheEncodingTestCase(test.TestCase):

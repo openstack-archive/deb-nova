@@ -16,6 +16,7 @@
 #    under the License.
 
 import functools
+import itertools
 import os
 import re
 import urlparse
@@ -112,7 +113,8 @@ def status_from_state(vm_state, task_state='default'):
     if status == "UNKNOWN":
         LOG.error(_("status is UNKNOWN from vm_state=%(vm_state)s "
                     "task_state=%(task_state)s. Bad upgrade or db "
-                    "corrupted?") % locals())
+                    "corrupted?"),
+                  {'vm_state': vm_state, 'task_state': task_state})
     return status
 
 
@@ -320,6 +322,9 @@ def get_networks_for_instance_from_nw_info(nw_info):
 
         networks[label]['ips'].extend(ips)
         networks[label]['floating_ips'].extend(floaters)
+        for ip in itertools.chain(networks[label]['ips'],
+                                  networks[label]['floating_ips']):
+            ip['mac_address'] = vif['address']
     return networks
 
 
@@ -328,10 +333,18 @@ def get_networks_for_instance(context, instance):
 
     We end up with a data structure like::
 
-        {'public': {'ips': [{'addr': '10.0.0.1', 'version': 4},
-                            {'addr': '2001::1', 'version': 6}],
-                    'floating_ips': [{'addr': '172.16.0.1', 'version': 4},
-                                     {'addr': '172.16.2.1', 'version': 4}]},
+        {'public': {'ips': [{'address': '10.0.0.1',
+                             'version': 4,
+                             'mac_address': 'aa:aa:aa:aa:aa:aa'},
+                            {'address': '2001::1',
+                             'version': 6,
+                             'mac_address': 'aa:aa:aa:aa:aa:aa'}],
+                    'floating_ips': [{'address': '172.16.0.1',
+                                      'version': 4,
+                                      'mac_address': 'aa:aa:aa:aa:aa:aa'},
+                                     {'address': '172.16.2.1',
+                                      'version': 4,
+                                      'mac_address': 'aa:aa:aa:aa:aa:aa'}]},
          ...}
     """
     nw_info = compute_utils.get_nw_info_for_instance(instance)
@@ -346,11 +359,12 @@ def raise_http_conflict_for_instance_invalid_state(exc, action):
     attr = exc.kwargs.get('attr')
     state = exc.kwargs.get('state')
     if attr and state:
-        msg = _("Cannot '%(action)s' while instance is in %(attr)s %(state)s")
+        msg = _("Cannot '%(action)s' while instance is in %(attr)s "
+                "%(state)s") % {'action': action, 'attr': attr, 'state': state}
     else:
         # At least give some meaningful message
-        msg = _("Instance is in an invalid state for '%(action)s'")
-    raise webob.exc.HTTPConflict(explanation=msg % locals())
+        msg = _("Instance is in an invalid state for '%s'") % action
+    raise webob.exc.HTTPConflict(explanation=msg)
 
 
 class MetadataDeserializer(wsgi.MetadataXMLDeserializer):

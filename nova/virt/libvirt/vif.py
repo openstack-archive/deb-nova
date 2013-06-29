@@ -27,6 +27,7 @@ from nova import exception
 from nova.network import linux_net
 from nova.network import model as network_model
 from nova.openstack.common import log as logging
+from nova.openstack.common import processutils
 from nova import utils
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import designer
@@ -417,7 +418,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             network, mapping = vif
             linux_net.delete_ovs_vif_port(self.get_bridge_name(network),
                                           self.get_vif_devname(mapping))
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
     def unplug_ovs_bridge(self, instance, vif):
@@ -446,7 +447,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
 
             linux_net.delete_ovs_vif_port(self.get_bridge_name(network),
                                           v2_name)
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
     def unplug_ovs(self, instance, vif):
@@ -497,6 +498,11 @@ class LibvirtBridgeDriver(LibvirtGenericVIFDriver):
        Will be deprecated in Havana, and removed in Ixxxx."""
 
     def get_config(self, instance, network, mapping, image_meta):
+        LOG.deprecated(_("The LibvirtBridgeDriver VIF driver is now "
+                         "deprecated and will be removed in the next release. "
+                         "Please use the LibvirtGenericVIFDriver VIF driver, "
+                         "together with a network plugin that reports the "
+                         "'vif_type' attribute"))
         return self.get_config_bridge(instance, network, mapping, image_meta)
 
     def plug(self, instance, vif):
@@ -518,6 +524,11 @@ class LibvirtOpenVswitchDriver(LibvirtGenericVIFDriver):
         return mapping.get('ovs_interfaceid') or mapping['vif_uuid']
 
     def get_config(self, instance, network, mapping, image_meta):
+        LOG.deprecated(_("The LibvirtOpenVswitchDriver VIF driver is now "
+                         "deprecated and will be removed in the next release. "
+                         "Please use the LibvirtGenericVIFDriver VIF driver, "
+                         "together with a network plugin that reports the "
+                         "'vif_type' attribute"))
         return self.get_config_ovs_ethernet(instance,
                                             network, mapping,
                                             image_meta)
@@ -541,6 +552,11 @@ class LibvirtHybridOVSBridgeDriver(LibvirtGenericVIFDriver):
         return mapping.get('ovs_interfaceid') or mapping['vif_uuid']
 
     def get_config(self, instance, network, mapping, image_meta):
+        LOG.deprecated(_("The LibvirtHybridOVSBridgeDriver VIF driver is now "
+                         "deprecated and will be removed in the next release. "
+                         "Please use the LibvirtGenericVIFDriver VIF driver, "
+                         "together with a network plugin that reports the "
+                         "'vif_type' attribute"))
         return self.get_config_ovs_hybrid(instance,
                                           network, mapping,
                                           image_meta)
@@ -564,6 +580,11 @@ class LibvirtOpenVswitchVirtualPortDriver(LibvirtGenericVIFDriver):
         return mapping.get('ovs_interfaceid') or mapping['vif_uuid']
 
     def get_config(self, instance, network, mapping, image_meta):
+        LOG.deprecated(_("The LibvirtOpenVswitchVirtualPortDriver VIF driver "
+                         "is now deprecated and will be removed in the next "
+                         "release. Please use the LibvirtGenericVIFDriver VIF "
+                         "driver, together with a network plugin that reports "
+                         "the 'vif_type' attribute"))
         return self.get_config_ovs_bridge(instance,
                                           network, mapping,
                                           image_meta)
@@ -585,6 +606,11 @@ class QuantumLinuxBridgeVIFDriver(LibvirtGenericVIFDriver):
         return network.get('bridge') or def_bridge
 
     def get_config(self, instance, network, mapping, image_meta):
+        LOG.deprecated(_("The QuantumLinuxBridgeVIFDriver VIF driver is now "
+                         "deprecated and will be removed in the next release. "
+                         "Please use the LibvirtGenericVIFDriver VIF driver, "
+                         "together with a network plugin that reports the "
+                         "'vif_type' attribute"))
         # In order for libvirt to make use of the bridge name then it has
         # to ensure that the bridge exists
         if 'should_create_bridge' not in mapping:

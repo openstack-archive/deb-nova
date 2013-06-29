@@ -18,6 +18,9 @@ Filter support
 """
 
 from nova import loadables
+from nova.openstack.common import log as logging
+
+LOG = logging.getLogger(__name__)
 
 
 class BaseFilter(object):
@@ -48,6 +51,17 @@ class BaseFilterHandler(loadables.BaseLoader):
 
     def get_filtered_objects(self, filter_classes, objs,
             filter_properties):
+        list_objs = list(objs)
+        LOG.debug("Starting with %d host(s)", len(list_objs))
         for filter_cls in filter_classes:
-            objs = filter_cls().filter_all(objs, filter_properties)
-        return list(objs)
+            cls_name = filter_cls.__name__
+            objs = filter_cls().filter_all(list_objs,
+                                           filter_properties)
+            if objs is None:
+                LOG.debug("Filter %(cls_name)s says to stop filtering",
+                          {'cls_name': cls_name})
+                return
+            list_objs = list(objs)
+            LOG.debug("Filter %(cls_name)s returned %(obj_len)d host(s)",
+                      {'cls_name': cls_name, 'obj_len': len(list_objs)})
+        return list_objs

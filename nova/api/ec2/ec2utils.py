@@ -73,6 +73,31 @@ def image_type(image_type):
     return image_type
 
 
+def resource_type_from_id(context, resource_id):
+    """Get resource type by ID
+
+    Returns a string representation of the Amazon resource type, if known.
+    Returns None on failure.
+
+    :param context: context under which the method is called
+    :param resource_id: resource_id to evaluate
+    """
+
+    known_types = {
+        'i': 'instance',
+        'r': 'reservation',
+        'vol': 'volume',
+        'snap': 'snapshot',
+        'ami': 'image',
+        'aki': 'image',
+        'ari': 'image'
+    }
+
+    type_marker = resource_id.split('-')[0]
+
+    return known_types.get(type_marker)
+
+
 @memoize
 def id_to_glance_id(context, image_id):
     """Convert an internal (db) id to a glance id."""
@@ -111,12 +136,7 @@ def ec2_id_to_id(ec2_id):
 def image_ec2_id(image_id, image_type='ami'):
     """Returns image ec2_id using id and three letter type."""
     template = image_type + '-%08x'
-    try:
-        return id_to_ec2_id(image_id, template=template)
-    except ValueError:
-        #TODO(wwolf): once we have ec2_id -> glance_id mapping
-        # in place, this wont be necessary
-        return "ami-00000000"
+    return id_to_ec2_id(image_id, template=template)
 
 
 def get_ip_info_for_instance_from_nw_info(nw_info):

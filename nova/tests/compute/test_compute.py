@@ -22,6 +22,7 @@ import base64
 import copy
 import datetime
 import sys
+import testtools
 import time
 import traceback
 import uuid
@@ -32,7 +33,7 @@ from oslo.config import cfg
 import nova
 from nova import compute
 from nova.compute import api as compute_api
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova.compute import manager as compute_manager
 from nova.compute import power_state
 from nova.compute import rpcapi as compute_rpcapi
@@ -134,7 +135,7 @@ class BaseTestCase(test.TestCase):
                                    'memory_mb': 131072,
                                    'current_workload': 0,
                                    'vcpus': 16,
-                                   'cpu_info':'ppc64,powervm,3940',
+                                   'cpu_info': 'ppc64,powervm,3940',
                                    'running_vms': 0,
                                    'free_disk_gb': 259,
                                    'service_id': 7,
@@ -219,8 +220,8 @@ class BaseTestCase(test.TestCase):
 
         def make_fake_sys_meta():
             sys_meta = {}
-            inst_type = instance_types.get_instance_type_by_name(type_name)
-            for key in instance_types.system_metadata_instance_type_props:
+            inst_type = flavors.get_instance_type_by_name(type_name)
+            for key in flavors.system_metadata_instance_type_props:
                 sys_meta['instance_type_%s' % key] = inst_type[key]
             return sys_meta
 
@@ -233,7 +234,7 @@ class BaseTestCase(test.TestCase):
         inst['project_id'] = self.project_id
         inst['host'] = 'fake_host'
         inst['node'] = NODENAME
-        type_id = instance_types.get_instance_type_by_name(type_name)['id']
+        type_id = flavors.get_instance_type_by_name(type_name)['id']
         inst['instance_type_id'] = type_id
         inst['ami_launch_index'] = 0
         inst['memory_mb'] = 0
@@ -279,9 +280,11 @@ class BaseTestCase(test.TestCase):
 
 
 class ComputeVolumeTestCase(BaseTestCase):
+
     def setUp(self):
         super(ComputeVolumeTestCase, self).setUp()
         self.volume_id = 'fake'
+        self.fetched_attempts = 0
         self.instance = {
             'id': 'fake',
             'uuid': 'fake',
@@ -292,11 +295,13 @@ class ComputeVolumeTestCase(BaseTestCase):
                        {'id': self.volume_id})
         self.stubs.Set(self.compute.driver, 'get_volume_connector',
                        lambda *a, **kw: None)
-        self.stubs.Set(self.compute.driver, 'attach_volume',
-                       lambda *a, **kw: None)
         self.stubs.Set(self.compute.volume_api, 'initialize_connection',
                        lambda *a, **kw: {})
+        self.stubs.Set(self.compute.volume_api, 'terminate_connection',
+                       lambda *a, **kw: None)
         self.stubs.Set(self.compute.volume_api, 'attach',
+                       lambda *a, **kw: None)
+        self.stubs.Set(self.compute.volume_api, 'detach',
                        lambda *a, **kw: None)
         self.stubs.Set(self.compute.volume_api, 'check_attach',
                        lambda *a, **kw: None)
@@ -317,6 +322,40 @@ class ComputeVolumeTestCase(BaseTestCase):
                                    '/dev/vdb', self.instance)
         self.assertEqual(self.cinfo.get('serial'), self.volume_id)
 
+    def test_await_block_device_created_to_slow(self):
+
+        def never_get(context, vol_id):
+            return {
+                'status': 'creating',
+                'id': 'blah',
+            }
+
+        self.stubs.Set(self.compute.volume_api, 'get', never_get)
+        self.assertRaises(exception.VolumeNotCreated,
+                          self.compute._await_block_device_map_created,
+                          self.context, '1', max_tries=2, wait_between=0.1)
+
+    def test_await_block_device_created_slow(self):
+        c = self.compute
+
+        def slow_get(context, vol_id):
+            while self.fetched_attempts < 2:
+                self.fetched_attempts += 1
+                return {
+                    'status': 'creating',
+                    'id': 'blah',
+                }
+            return {
+                'status': 'available',
+                'id': 'blah',
+            }
+
+        self.stubs.Set(c.volume_api, 'get', slow_get)
+        attempts = c._await_block_device_map_created(self.context, '1',
+                                                     max_tries=4,
+                                                     wait_between=0.1)
+        self.assertEqual(attempts, 3)
+
     def test_boot_volume_serial(self):
         block_device_mapping = [{
             'id': 1,
@@ -330,6 +369,230 @@ class ComputeVolumeTestCase(BaseTestCase):
         self.compute._setup_block_device_mapping(self.context, self.instance,
                                                  block_device_mapping)
         self.assertEqual(self.cinfo.get('serial'), self.volume_id)
+
+    def test_poll_volume_usage_disabled(self):
+        ctxt = 'MockContext'
+        self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
+        self.mox.StubOutWithMock(utils, 'last_completed_audit_period')
+        # None of the mocks should be called.
+        self.mox.ReplayAll()
+
+        CONF.volume_usage_poll_interval = 0
+        self.compute._poll_volume_usage(ctxt)
+        self.mox.UnsetStubs()
+
+    def test_poll_volume_usage_interval_not_elapsed(self):
+        ctxt = 'MockContext'
+        self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
+        self.mox.StubOutWithMock(utils, 'last_completed_audit_period')
+        self.mox.StubOutWithMock(self.compute.driver, 'get_all_volume_usage')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_send_volume_usage_notifications')
+        self.mox.StubOutWithMock(time, 'time')
+        # Following methods will be called.
+        utils.last_completed_audit_period().AndReturn((0, 0))
+        time.time().AndReturn(10)
+        self.mox.ReplayAll()
+
+        CONF.volume_usage_poll_interval = 2
+        self.compute._last_vol_usage_poll = 9
+        self.compute._poll_volume_usage(ctxt)
+        self.mox.UnsetStubs()
+
+    def test_poll_volume_usage_returns_no_vols(self):
+        ctxt = 'MockContext'
+        self.compute.host = 'MockHost'
+        self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
+        self.mox.StubOutWithMock(utils, 'last_completed_audit_period')
+        self.mox.StubOutWithMock(self.compute.driver, 'get_all_volume_usage')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_send_volume_usage_notifications')
+        # Following methods are called.
+        utils.last_completed_audit_period().AndReturn((0, 0))
+        self.compute._get_host_volume_bdms(ctxt, 'MockHost').AndReturn([])
+        self.mox.ReplayAll()
+
+        CONF.volume_usage_poll_interval = 10
+        self.compute._last_vol_usage_poll = 0
+        self.compute._poll_volume_usage(ctxt)
+        self.mox.UnsetStubs()
+
+    def test_poll_volume_usage_with_data(self):
+        ctxt = 'MockContext'
+        self.compute.host = 'MockHost'
+        curr_time = time.time()
+        self.mox.StubOutWithMock(utils, 'last_completed_audit_period')
+        self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
+        self.mox.StubOutWithMock(timeutils, 'utcnow')
+        self.mox.StubOutWithMock(self.compute, '_update_volume_usage_cache')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_send_volume_usage_notifications')
+        self.stubs.Set(self.compute.driver, 'get_all_volume_usage',
+                       lambda x, y: [3, 4])
+        # All the mocks are called
+        utils.last_completed_audit_period().AndReturn((10, 20))
+        self.compute._get_host_volume_bdms(ctxt, 'MockHost').AndReturn([1, 2])
+        timeutils.utcnow().AndReturn(5)
+        self.compute._update_volume_usage_cache(ctxt, [3, 4], 5)
+        self.compute._send_volume_usage_notifications(ctxt, 20)
+        self.mox.ReplayAll()
+        CONF.volume_usage_poll_interval = 10
+        self.compute._last_vol_usage_poll = 0
+        self.compute._poll_volume_usage(ctxt)
+        self.assertTrue((curr_time < self.compute._last_vol_usage_poll),
+                        "_last_vol_usage_poll was not properly updated <%s>" %
+                        self.compute._last_vol_usage_poll)
+        self.mox.UnsetStubs()
+
+    def test_send_volume_usage_notifications(self):
+        ctxt = 'MockContext'
+        test_notifier.NOTIFICATIONS = []
+        self.compute.host = 'MockHost'
+        fake_usage = {'tot_last_refreshed': 20,
+                      'curr_last_refreshed': 10,
+                      'volume_id': 'fake_volume_id',
+                      'instance_uuid': 'fake_instance_uuid',
+                      'project_id': 'fake_project_id',
+                      'user_id': 'fake_user_id',
+                      'availability_zone': 'fake-az',
+                      'tot_reads': 11,
+                      'curr_reads': 22,
+                      'tot_read_bytes': 33,
+                      'curr_read_bytes': 44,
+                      'tot_writes': 55,
+                      'curr_writes': 66,
+                      'tot_write_bytes': 77,
+                      'curr_write_bytes': 88}
+
+        self.stubs.Set(self.compute.conductor_api,
+                       'vol_get_usage_by_time',
+                       lambda x, y:
+                       [db.sqlalchemy.models.VolumeUsage(**fake_usage)])
+        self.stubs.Set(self.compute.conductor_api,
+                       'instance_get_all_by_filters',
+                       lambda x, y: [{'project_id': 'fake_project_id',
+                                      'user_id': 'fake_user_id'}])
+
+        self.compute._send_volume_usage_notifications(ctxt, 20)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        msg = test_notifier.NOTIFICATIONS[0]
+        payload = msg['payload']
+        self.assertEquals(payload['instance_id'], 'fake_instance_uuid')
+        self.assertEquals(payload['user_id'], 'fake_user_id')
+        self.assertEquals(payload['tenant_id'], 'fake_project_id')
+        self.assertEquals(payload['reads'], 33)
+        self.assertEquals(payload['read_bytes'], 77)
+        self.assertEquals(payload['writes'], 121)
+        self.assertEquals(payload['write_bytes'], 165)
+        self.assertEquals(payload['availability_zone'], 'fake-az')
+
+    def test_detach_volume_usage(self):
+        # Test that detach volume update the volume usage cache table correctly
+        instance = self._create_fake_instance()
+        vol = {'id': 1,
+               'attach_status': 'in-use',
+               'instance_uuid': instance['uuid']}
+        bdm = {'id': 1,
+               'device_name': '/dev/vdb',
+               'connection_info': '{}',
+               'instance_uuid': instance['uuid'],
+               'volume_id': 1}
+
+        self.mox.StubOutWithMock(self.compute, '_get_instance_volume_bdm')
+        self.mox.StubOutWithMock(self.compute.driver, 'block_stats')
+        self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
+        self.mox.StubOutWithMock(self.compute.driver, 'get_all_volume_usage')
+
+        # The following methods will be called
+        self.compute._get_instance_volume_bdm(self.context, instance, 1).\
+            AndReturn(bdm)
+        self.compute.driver.block_stats(instance['name'], 'vdb').\
+            AndReturn([1L, 30L, 1L, 20L, None])
+        self.compute._get_host_volume_bdms(self.context, 'fake-mini').\
+            AndReturn(bdm)
+        self.compute.driver.get_all_volume_usage(self.context, bdm).\
+            AndReturn([{'volume': 1,
+                        'rd_req': 1,
+                        'rd_bytes': 10,
+                        'wr_req': 1,
+                        'wr_bytes': 5,
+                        'instance': instance}])
+
+        self.mox.ReplayAll()
+
+        self.compute.attach_volume(self.context, 1, '/dev/vdb', instance)
+
+        # Poll volume usage & then detach the volume. This will update the
+        # total fields in the volume usage cache.
+        CONF.volume_usage_poll_interval = 10
+        self.compute._poll_volume_usage(self.context)
+        self.compute.detach_volume(self.context, 1, instance)
+
+        # Check the database for the
+        volume_usages = db.vol_get_usage_by_time(self.context, 0)
+        self.assertEqual(1, len(volume_usages))
+        volume_usage = volume_usages[0]
+        self.assertEqual(0, volume_usage['curr_reads'])
+        self.assertEqual(0, volume_usage['curr_read_bytes'])
+        self.assertEqual(0, volume_usage['curr_writes'])
+        self.assertEqual(0, volume_usage['curr_write_bytes'])
+        self.assertEqual(1, volume_usage['tot_reads'])
+        self.assertEqual(30, volume_usage['tot_read_bytes'])
+        self.assertEqual(1, volume_usage['tot_writes'])
+        self.assertEqual(20, volume_usage['tot_write_bytes'])
+
+    def test_validate_bdm(self):
+        # Test if volume is checked for availability before being attached
+        # at boot time
+
+        def fake_bdms(context, instance_uuid):
+            block_device_mapping = [{
+                'id': 1,
+                'no_device': None,
+                'virtual_name': None,
+                'snapshot_id': None,
+                'volume_id': self.volume_id,
+                'device_name': 'vda',
+                'delete_on_termination': False,
+            }]
+            return block_device_mapping
+        self.stubs.Set(self.compute.db,
+                       'block_device_mapping_get_all_by_instance',
+                       fake_bdms)
+
+        # Check that the volume status is 'available' and reject if not
+        def fake_volume_get_1(self, context, volume_id):
+            return {'id': volume_id,
+                    'status': 'creating',
+                    'attach_status': 'detached'}
+        self.stubs.Set(cinder.API, 'get', fake_volume_get_1)
+
+        self.assertRaises(exception.InvalidBDMVolume,
+                          self.compute_api._validate_bdm,
+                          self.context,
+                          instance=self.instance)
+
+        # Check that the volume attach_status is 'detached' and reject if not
+        def fake_volume_get_2(self, context, volume_id):
+            return {'id': volume_id,
+                    'status': 'available',
+                    'attach_status': 'attached'}
+        self.stubs.Set(cinder.API, 'get', fake_volume_get_2)
+
+        self.assertRaises(exception.InvalidBDMVolume,
+                          self.compute_api._validate_bdm,
+                          self.context,
+                          instance=self.instance)
+
+        # Check that the volume status is 'available' and attach_status is
+        # 'detached' and accept the request if so
+        def fake_volume_get_3(self, context, volume_id):
+            return {'id': volume_id,
+                    'status': 'available',
+                    'attach_status': 'detached'}
+        self.stubs.Set(cinder.API, 'get', fake_volume_get_3)
+
+        self.compute_api._validate_bdm(self.context, instance=self.instance)
 
 
 class ComputeTestCase(BaseTestCase):
@@ -1058,6 +1321,33 @@ class ComputeTestCase(BaseTestCase):
 
         self.compute.terminate_instance(self.context, instance=instance)
 
+    def test_rescue_handle_err(self):
+        # If the driver fails to rescue, instance state should remain the same
+        # and the exception should be converted to InstanceNotRescuable
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        self.mox.StubOutWithMock(self.compute, '_get_rescue_image_ref')
+        self.mox.StubOutWithMock(nova.virt.fake.FakeDriver, 'rescue')
+
+        self.compute._get_rescue_image_ref(
+            mox.IgnoreArg(), instance).AndReturn('resc_image_ref')
+        nova.virt.fake.FakeDriver.rescue(
+            mox.IgnoreArg(), instance, [], mox.IgnoreArg(), 'password'
+            ).AndRaise(RuntimeError("Try again later"))
+
+        self.mox.ReplayAll()
+
+        expected_message = ('Instance %s cannot be rescued: '
+                            'Driver Error: Try again later' % instance['uuid'])
+        instance['vm_state'] = 'some_random_state'
+
+        with testtools.ExpectedException(
+            exception.InstanceNotRescuable, expected_message):
+                self.compute.rescue_instance(
+                    self.context, instance=instance,
+                    rescue_password='password')
+
+        self.assertEqual('some_random_state', instance['vm_state'])
+
     def test_power_on(self):
         # Ensure instance can be powered on.
 
@@ -1192,7 +1482,8 @@ class ComputeTestCase(BaseTestCase):
         self.compute.terminate_instance(self.context,
                 instance=jsonutils.to_primitive(instance))
 
-    def _test_reboot(self, soft, legacy_nwinfo_driver, test_delete=False):
+    def _test_reboot(self, soft, legacy_nwinfo_driver,
+                     test_delete=False, test_unrescue=False):
         # This is a true unit test, so we don't need the network stubs.
         fake_network.unset_stub_network_methods(self.stubs)
 
@@ -1204,11 +1495,15 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(self.compute.driver, 'reboot')
 
         instance = dict(uuid='fake-instance',
-                        power_state='unknown')
+                        power_state='unknown',
+                        vm_state=vm_states.ACTIVE)
         updated_instance1 = dict(uuid='updated-instance1',
                                  power_state='fake')
         updated_instance2 = dict(uuid='updated-instance2',
                                  power_state='fake')
+
+        if test_unrescue:
+            instance['vm_state'] = vm_states.RESCUED
 
         fake_nw_model = network_model.NetworkInfo()
         self.mox.StubOutWithMock(fake_nw_model, 'legacy')
@@ -1239,7 +1534,7 @@ class ComputeTestCase(BaseTestCase):
                 instance).AndReturn(fake_power_state1)
         self.compute._instance_update(econtext, instance['uuid'],
                 power_state=fake_power_state1,
-                vm_state=vm_states.ACTIVE).AndReturn(updated_instance1)
+                vm_state=instance['vm_state']).AndReturn(updated_instance1)
 
         # Reboot should check the driver to see if legacy nwinfo is
         # needed.  If it is, the model's legacy() method should be
@@ -1307,11 +1602,23 @@ class ComputeTestCase(BaseTestCase):
     def test_reboot_soft_and_delete(self):
         self._test_reboot(True, False, True)
 
+    def test_reboot_soft_and_rescued(self):
+        self._test_reboot(True, False, False, True)
+
+    def test_reboot_soft_and_delete_and_rescued(self):
+        self._test_reboot(True, False, True, True)
+
     def test_reboot_hard(self):
         self._test_reboot(False, False)
 
     def test_reboot_hard_and_delete(self):
         self._test_reboot(False, False, True)
+
+    def test_reboot_hard_and_rescued(self):
+        self._test_reboot(False, False, False, True)
+
+    def test_reboot_hard_and_delete_and_rescued(self):
+        self._test_reboot(False, False, True, True)
 
     def test_reboot_soft_legacy_nwinfo_driver(self):
         self._test_reboot(True, True)
@@ -1853,7 +2160,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], inst_ref['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         self.assertEquals(payload['state'], 'active')
         self.assertTrue('display_name' in payload)
@@ -1862,8 +2169,80 @@ class ComputeTestCase(BaseTestCase):
         self.assertTrue(payload['launched_at'])
         image_ref_url = glance.generate_image_url(FAKE_IMAGE_REF)
         self.assertEquals(payload['image_ref_url'], image_ref_url)
+        self.assertEqual('Success', payload['message'])
         self.compute.terminate_instance(self.context,
                 instance=jsonutils.to_primitive(inst_ref))
+
+    def test_run_instance_end_notification_on_abort(self):
+        # Test that an end notif is sent if the build is aborted
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance_uuid = instance['uuid']
+
+        def build_inst_abort(*args, **kwargs):
+            raise exception.BuildAbortException(reason="already deleted",
+                    instance_uuid=instance_uuid)
+
+        self.stubs.Set(self.compute, '_build_instance', build_inst_abort)
+
+        self.compute.run_instance(self.context, instance=instance)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 2)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['event_type'], 'compute.instance.create.start')
+        msg = test_notifier.NOTIFICATIONS[1]
+
+        self.assertEquals(msg['event_type'], 'compute.instance.create.end')
+        self.assertEquals('INFO', msg['priority'])
+        payload = msg['payload']
+        message = payload['message']
+        self.assertTrue(message.find("already deleted") != -1)
+
+    def test_run_instance_error_notification_on_reschedule(self):
+        # Test that error notif is sent if the build got rescheduled
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance_uuid = instance['uuid']
+
+        def build_inst_fail(*args, **kwargs):
+            raise exception.RescheduledException(instance_uuid=instance_uuid,
+                    reason="something bad happened")
+
+        self.stubs.Set(self.compute, '_build_instance', build_inst_fail)
+
+        self.compute.run_instance(self.context, instance=instance)
+
+        self.assertTrue(len(test_notifier.NOTIFICATIONS) >= 2)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['event_type'], 'compute.instance.create.start')
+        msg = test_notifier.NOTIFICATIONS[1]
+
+        self.assertEquals(msg['event_type'], 'compute.instance.create.error')
+        self.assertEquals('ERROR', msg['priority'])
+        payload = msg['payload']
+        message = payload['message']
+        self.assertTrue(message.find("something bad happened") != -1)
+
+    def test_run_instance_error_notification_on_failure(self):
+        # Test that error notif is sent if build fails hard
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance_uuid = instance['uuid']
+
+        def build_inst_fail(*args, **kwargs):
+            raise test.TestingException("i'm dying")
+
+        self.stubs.Set(self.compute, '_build_instance', build_inst_fail)
+
+        self.assertRaises(test.TestingException, self.compute.run_instance,
+                self.context, instance=instance)
+
+        self.assertTrue(len(test_notifier.NOTIFICATIONS) >= 2)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['event_type'], 'compute.instance.create.start')
+        msg = test_notifier.NOTIFICATIONS[1]
+
+        self.assertEquals(msg['event_type'], 'compute.instance.create.error')
+        self.assertEquals('ERROR', msg['priority'])
+        payload = msg['payload']
+        message = payload['message']
+        self.assertTrue(message.find("i'm dying") != -1)
 
     def test_terminate_usage_notification(self):
         # Ensure terminate_instance generates correct usage notification.
@@ -1894,7 +2273,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], instance['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         self.assertTrue('display_name' in payload)
         self.assertTrue('created_at' in payload)
@@ -2268,7 +2647,7 @@ class ComputeTestCase(BaseTestCase):
         reservations = self._ensure_quota_reservations_committed()
 
         instance = jsonutils.to_primitive(self._create_fake_instance())
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
         db.instance_update(self.context, instance["uuid"],
                           {"task_state": task_states.RESIZE_PREP})
         self.compute.prep_resize(self.context, instance=instance,
@@ -2348,7 +2727,7 @@ class ComputeTestCase(BaseTestCase):
                               jsonutils.dumps(connection_info))
 
         # begin resize
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
         db.instance_update(self.context, instance["uuid"],
                           {"task_state": task_states.RESIZE_PREP})
         self.compute.prep_resize(self.context, instance=instance,
@@ -2442,7 +2821,7 @@ class ComputeTestCase(BaseTestCase):
         reservations = self._ensure_quota_reservations_rolledback()
 
         instance = jsonutils.to_primitive(self._create_fake_instance())
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
         self.compute.prep_resize(self.context, instance=instance,
                                  instance_type=instance_type,
                                  image={}, reservations=reservations)
@@ -2520,7 +2899,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], inst_ref['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         self.assertTrue('display_name' in payload)
         self.assertTrue('created_at' in payload)
@@ -2536,7 +2915,7 @@ class ComputeTestCase(BaseTestCase):
         cur_time = datetime.datetime(2012, 12, 21, 12, 21)
         timeutils.set_time_override(old_time)
         instance = jsonutils.to_primitive(self._create_fake_instance())
-        new_type = instance_types.get_instance_type_by_name('m1.small')
+        new_type = flavors.get_instance_type_by_name('m1.small')
         new_type = jsonutils.to_primitive(new_type)
         new_type_id = new_type['id']
         self.compute.run_instance(self.context, instance=instance)
@@ -2598,7 +2977,7 @@ class ComputeTestCase(BaseTestCase):
         new_instance = db.instance_update(self.context, instance['uuid'],
                                       {'host': 'foo'})
         new_instance = jsonutils.to_primitive(new_instance)
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
         self.compute.prep_resize(self.context, instance=new_instance,
                 instance_type=instance_type, image={})
         db.migration_get_by_instance_and_status(self.context.elevated(),
@@ -2621,7 +3000,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], new_instance['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         self.assertTrue('display_name' in payload)
         self.assertTrue('created_at' in payload)
@@ -2644,7 +3023,7 @@ class ComputeTestCase(BaseTestCase):
         new_instance = db.instance_update(self.context, instance['uuid'],
                                           {'host': self.compute.host})
         new_instance = jsonutils.to_primitive(new_instance)
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
 
         self.assertRaises(exception.MigrationError, self.compute.prep_resize,
                           self.context, instance=new_instance,
@@ -2664,7 +3043,7 @@ class ComputeTestCase(BaseTestCase):
         new_instance = db.instance_update(self.context, instance['uuid'],
                                           {'host': None})
         new_instance = jsonutils.to_primitive(new_instance)
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
 
         self.assertRaises(exception.MigrationError, self.compute.prep_resize,
                           self.context, instance=new_instance,
@@ -2682,7 +3061,7 @@ class ComputeTestCase(BaseTestCase):
                        throw_up)
 
         instance = jsonutils.to_primitive(self._create_fake_instance())
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
 
         reservations = self._ensure_quota_reservations_rolledback()
 
@@ -2710,10 +3089,47 @@ class ComputeTestCase(BaseTestCase):
         self.compute.terminate_instance(self.context,
             instance=jsonutils.to_primitive(instance))
 
+    def test_resize_instance_driver_rollback(self):
+        # Ensure instance status set to Running after rollback.
+
+        def throw_up(*args, **kwargs):
+            raise exception.InstanceFaultRollback(test.TestingException())
+
+        self.stubs.Set(self.compute.driver, 'migrate_disk_and_power_off',
+                       throw_up)
+
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance_type = flavors.get_default_instance_type()
+        reservations = self._ensure_quota_reservations_rolledback()
+        self.compute.run_instance(self.context, instance=instance)
+        new_instance = db.instance_update(self.context, instance['uuid'],
+                                      {'host': 'foo'})
+        new_instance = jsonutils.to_primitive(new_instance)
+        self.compute.prep_resize(self.context, instance=new_instance,
+                                 instance_type=instance_type, image={},
+                                 reservations=reservations)
+        migration_ref = db.migration_get_by_instance_and_status(
+                self.context.elevated(), new_instance['uuid'], 'pre-migrating')
+        db.instance_update(self.context, new_instance['uuid'],
+                           {"task_state": task_states.RESIZE_PREP})
+
+        self.assertRaises(test.TestingException, self.compute.resize_instance,
+                          self.context, instance=new_instance,
+                          migration=migration_ref, image={},
+                          reservations=reservations,
+                          instance_type=jsonutils.to_primitive(instance_type))
+
+        instance = db.instance_get_by_uuid(self.context, new_instance['uuid'])
+        self.assertEqual(instance['vm_state'], vm_states.ACTIVE)
+        self.assertEqual(instance['task_state'], None)
+
+        self.compute.terminate_instance(self.context,
+            instance=jsonutils.to_primitive(instance))
+
     def test_resize_instance(self):
         # Ensure instance can be migrated/resized.
         instance = jsonutils.to_primitive(self._create_fake_instance())
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
 
         self.compute.run_instance(self.context, instance=instance)
         new_instance = db.instance_update(self.context, instance['uuid'],
@@ -2837,20 +3253,20 @@ class ComputeTestCase(BaseTestCase):
         instance['system_metadata'].append(dict(key='instance_type_id',
                                                 value=old))
         sys_meta = dict(instance_type_id=old)
-        self.mox.StubOutWithMock(instance_types, 'extract_instance_type')
-        self.mox.StubOutWithMock(instance_types, 'delete_instance_type_info')
-        self.mox.StubOutWithMock(instance_types, 'save_instance_type_info')
+        self.mox.StubOutWithMock(flavors, 'extract_instance_type')
+        self.mox.StubOutWithMock(flavors, 'delete_instance_type_info')
+        self.mox.StubOutWithMock(flavors, 'save_instance_type_info')
         if revert:
-            instance_types.extract_instance_type(instance, 'old_').AndReturn(
+            flavors.extract_instance_type(instance, 'old_').AndReturn(
                 {'instance_type_id': old})
-            instance_types.save_instance_type_info(
+            flavors.save_instance_type_info(
                 sys_meta, {'instance_type_id': old}).AndReturn(sys_meta)
         else:
-            instance_types.extract_instance_type(instance).AndReturn(
+            flavors.extract_instance_type(instance).AndReturn(
                 {'instance_type_id': new})
-        instance_types.delete_instance_type_info(
+        flavors.delete_instance_type_info(
             sys_meta, 'old_').AndReturn(sys_meta)
-        instance_types.delete_instance_type_info(
+        flavors.delete_instance_type_info(
             sys_meta, 'new_').AndReturn(sys_meta)
 
         self.mox.ReplayAll()
@@ -2873,7 +3289,7 @@ class ComputeTestCase(BaseTestCase):
         self._test_cleanup_stored_instance_types('1', '1', True)
 
     def test_get_by_flavor_id(self):
-        type = instance_types.get_instance_type_by_flavor_id(1)
+        type = flavors.get_instance_type_by_flavor_id(1)
         self.assertEqual(type['name'], 'm1.tiny')
 
     def test_resize_same_source_fails(self):
@@ -2883,7 +3299,7 @@ class ComputeTestCase(BaseTestCase):
         instance = jsonutils.to_primitive(self._create_fake_instance())
         self.compute.run_instance(self.context, instance=instance)
         instance = db.instance_get_by_uuid(self.context, instance['uuid'])
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
         self.assertRaises(exception.MigrationError, self.compute.prep_resize,
                 self.context, instance=instance,
                 instance_type=instance_type, image={},
@@ -2902,7 +3318,7 @@ class ComputeTestCase(BaseTestCase):
         reservations = self._ensure_quota_reservations_rolledback()
 
         inst_ref = jsonutils.to_primitive(self._create_fake_instance())
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
 
         self.compute.run_instance(self.context, instance=inst_ref)
         inst_ref = db.instance_update(self.context, inst_ref['uuid'],
@@ -3077,6 +3493,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.driver.ensure_filtering_rules_for_instance(
             mox.IsA(instance), nw_info)
 
+        test_notifier.NOTIFICATIONS = []
         # start test
         self.mox.ReplayAll()
         migrate_data = {'is_shared_storage': False}
@@ -3084,6 +3501,13 @@ class ComputeTestCase(BaseTestCase):
                                               block_migration=False,
                                               migrate_data=migrate_data)
         self.assertEqual(ret, None)
+        self.assertEqual(len(test_notifier.NOTIFICATIONS), 2)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEqual(msg['event_type'],
+                         'compute.instance.live_migration.pre.start')
+        msg = test_notifier.NOTIFICATIONS[1]
+        self.assertEqual(msg['event_type'],
+                         'compute.instance.live_migration.pre.end')
 
         # cleanup
         db.instance_destroy(c, instance['uuid'])
@@ -3118,7 +3542,7 @@ class ComputeTestCase(BaseTestCase):
                 instance['name']).AndReturn('fake_disk')
         self.compute.compute_rpcapi.pre_live_migration(c,
                 instance, True, 'fake_disk', dest_host,
-                None).AndRaise(test.TestingException())
+                {}).AndRaise(test.TestingException())
 
         self.compute._instance_update(c, instance['uuid'],
                 host=src_host, vm_state=vm_states.ACTIVE,
@@ -3199,10 +3623,12 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(rpc, 'call')
         rpc.call(c, rpc.queue_get_for(c, CONF.compute_topic, dest),
             {"method": "post_live_migration_at_destination",
+             "namespace": None,
              "args": {'instance': inst_ref, 'block_migration': False},
              "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION},
             None)
         rpc.call(c, 'network', {'method': 'setup_networks_on_host',
+                                'namespace': None,
                                 'args': {'instance_id': inst_id,
                                          'host': self.compute.host,
                                          'teardown': True},
@@ -3245,12 +3671,14 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(rpc, 'call')
         rpc.call(c, rpc.queue_get_for(c, CONF.compute_topic, dest),
             {"method": "post_live_migration_at_destination",
+             "namespace": None,
              "args": {'instance': inst_ref, 'block_migration': False},
              "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION},
             None)
         self.mox.StubOutWithMock(self.compute.driver, 'unplug_vifs')
         self.compute.driver.unplug_vifs(inst_ref, [])
         rpc.call(c, 'network', {'method': 'setup_networks_on_host',
+                                'namespace': None,
                                 'args': {'instance_id': inst_id,
                                          'host': self.compute.host,
                                          'teardown': True},
@@ -3299,10 +3727,19 @@ class ComputeTestCase(BaseTestCase):
         self.compute.network_api.setup_networks_on_host(self.admin_ctxt,
                 mox.IgnoreArg(), self.compute.host)
 
+        test_notifier.NOTIFICATIONS = []
         self.mox.ReplayAll()
 
         self.compute.post_live_migration_at_destination(self.admin_ctxt,
                                                         self.instance)
+
+        self.assertEqual(len(test_notifier.NOTIFICATIONS), 2)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEqual(msg['event_type'],
+                         'compute.instance.live_migration.post.dest.start')
+        msg = test_notifier.NOTIFICATIONS[1]
+        self.assertEqual(msg['event_type'],
+                         'compute.instance.live_migration.post.dest.end')
 
         return self.compute.conductor_api.instance_get_by_uuid(self.admin_ctxt,
                                                         self.instance['uuid'])
@@ -3328,6 +3765,31 @@ class ComputeTestCase(BaseTestCase):
                                                         exception.NotFound())
         updated = self._finish_post_live_migration_at_destination()
         self.assertIsNone(updated['node'])
+
+    def test_rollback_live_migration_at_destination_correctly(self):
+        # creating instance testdata
+        c = context.get_admin_context()
+        instance_ref = self._create_fake_instance({'host': 'dummy'})
+        inst_uuid = instance_ref['uuid']
+        inst_id = instance_ref['id']
+
+        instance = jsonutils.to_primitive(db.instance_get(c, inst_id))
+        test_notifier.NOTIFICATIONS = []
+        # start test
+        self.mox.ReplayAll()
+        ret = self.compute.rollback_live_migration_at_destination(c,
+                                          instance=instance)
+        self.assertEqual(ret, None)
+        self.assertEqual(len(test_notifier.NOTIFICATIONS), 2)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEqual(msg['event_type'],
+                       'compute.instance.live_migration.rollback.dest.start')
+        msg = test_notifier.NOTIFICATIONS[1]
+        self.assertEqual(msg['event_type'],
+                        'compute.instance.live_migration.rollback.dest.end')
+
+        # cleanup
+        db.instance_destroy(c, inst_uuid)
 
     def test_run_kill_vm(self):
         # Detect when a vm is terminated behind the scenes.
@@ -3468,13 +3930,15 @@ class ComputeTestCase(BaseTestCase):
         deleted_at = (timeutils.utcnow() -
                       datetime.timedelta(hours=1, minutes=5))
         instance = self._create_fake_instance({"deleted_at": deleted_at,
-                                          "deleted": True})
+                                               "deleted": True})
 
         self.compute.host = instance['host']
 
         self.mox.StubOutWithMock(self.compute, '_get_instances_on_driver')
-        self.compute._get_instances_on_driver(admin_context).AndReturn(
-                [instance])
+        self.compute._get_instances_on_driver(
+            admin_context, {'deleted': True,
+                            'soft_deleted': False,
+                            'host': self.compute.host}).AndReturn([instance])
         self.flags(running_deleted_instance_timeout=3600,
                    running_deleted_instance_action='reap')
 
@@ -3502,13 +3966,11 @@ class ComputeTestCase(BaseTestCase):
         instance1['deleted'] = True
         instance1['deleted_at'] = "sometimeago"
 
-        instance2 = {}
-        instance2['deleted'] = False
-        instance2['deleted_at'] = None
-
         self.mox.StubOutWithMock(self.compute, '_get_instances_on_driver')
-        self.compute._get_instances_on_driver(admin_context).AndReturn(
-                [instance1, instance2])
+        self.compute._get_instances_on_driver(
+            admin_context, {'deleted': True,
+                            'soft_deleted': False,
+                            'host': self.compute.host}).AndReturn([instance1])
 
         self.mox.StubOutWithMock(timeutils, 'is_older_than')
         timeutils.is_older_than('sometimeago',
@@ -3521,14 +3983,18 @@ class ComputeTestCase(BaseTestCase):
     def test_get_instance_nw_info(self):
         fake_network.unset_stub_network_methods(self.stubs)
 
-        fake_instance = 'fake-instance'
+        fake_instance = {'uuid': 'fake-instance'}
         fake_nw_info = network_model.NetworkInfo()
 
         self.mox.StubOutWithMock(self.compute.network_api,
                                  'get_instance_nw_info')
         self.mox.StubOutWithMock(self.compute.conductor_api,
                                  'instance_info_cache_update')
+        self.mox.StubOutWithMock(self.compute.conductor_api,
+                                 'instance_get_by_uuid')
 
+        self.compute.conductor_api.instance_get_by_uuid(
+            self.context, fake_instance['uuid']).AndReturn(fake_instance)
         self.compute.network_api.get_instance_nw_info(self.context,
                 fake_instance, conductor_api=self.compute.conductor_api
                 ).AndReturn(fake_nw_info)
@@ -3554,8 +4020,9 @@ class ComputeTestCase(BaseTestCase):
         call_info = {'get_all_by_host': 0, 'get_by_uuid': 0,
                 'get_nw_info': 0, 'expected_instance': None}
 
-        def fake_instance_get_all_by_host(context, host):
+        def fake_instance_get_all_by_host(context, host, columns_to_join):
             call_info['get_all_by_host'] += 1
+            self.assertEqual(columns_to_join, [])
             return instances[:]
 
         def fake_instance_get_by_uuid(context, instance_uuid):
@@ -3621,24 +4088,23 @@ class ComputeTestCase(BaseTestCase):
 
         instances = [{'uuid': 'fake_uuid1', 'vm_state': vm_states.RESCUED,
                       'launched_at': timed_out_time},
-                     {'uuid': 'fake_uuid2', 'vm_state': vm_states.ACTIVE,
+                     {'uuid': 'fake_uuid2', 'vm_state': vm_states.RESCUED,
                       'launched_at': timed_out_time},
-                     {'uuid': 'fake_uuid3', 'vm_state': vm_states.ACTIVE,
-                      'launched_at': not_timed_out_time},
-                     {'uuid': 'fake_uuid4', 'vm_state': vm_states.RESCUED,
-                      'launched_at': timed_out_time},
-                     {'uuid': 'fake_uuid5', 'vm_state': vm_states.RESCUED,
+                     {'uuid': 'fake_uuid3', 'vm_state': vm_states.RESCUED,
                       'launched_at': not_timed_out_time}]
-        unrescued_instances = {'fake_uuid1': False, 'fake_uuid4': False}
+        unrescued_instances = {'fake_uuid1': False, 'fake_uuid2': False}
 
-        def fake_instance_get_all_by_host(context, host):
+        def fake_instance_get_all_by_filters(context, filters,
+                                             columns_to_join):
+            self.assertEqual(columns_to_join, [])
             return instances
 
         def fake_unrescue(context, instance):
             unrescued_instances[instance['uuid']] = True
 
-        self.stubs.Set(self.compute.conductor_api, 'instance_get_all_by_host',
-                       fake_instance_get_all_by_host)
+        self.stubs.Set(self.compute.conductor_api,
+                       'instance_get_all_by_filters',
+                       fake_instance_get_all_by_filters)
         self.stubs.Set(self.compute.conductor_api, 'compute_unrescue',
                        fake_unrescue)
 
@@ -3677,7 +4143,8 @@ class ComputeTestCase(BaseTestCase):
                                'instance_uuid': instance['uuid'],
                                'status': None})
 
-        def fake_instance_get_by_uuid(context, instance_uuid):
+        def fake_instance_get_by_uuid(context, instance_uuid,
+                cols_to_join=None):
             # raise InstanceNotFound exception for uuid 'noexist'
             if instance_uuid == 'noexist':
                 raise exception.InstanceNotFound(instance_id=instance_uuid)
@@ -3734,8 +4201,10 @@ class ComputeTestCase(BaseTestCase):
         called = {'get_all': False, 'set_error_state': 0}
         created_at = timeutils.utcnow() + datetime.timedelta(seconds=-60)
 
-        def fake_instance_get_all_by_filters(*args, **kwargs):
+        def fake_instance_get_all_by_filters(context, filters, *args, **kw):
             called['get_all'] = True
+            self.assertIn('host', filters)
+            self.assertEqual(kw['columns_to_join'], [])
             return instances[:]
 
         self.stubs.Set(db, 'instance_get_all_by_filters',
@@ -3856,7 +4325,7 @@ class ComputeTestCase(BaseTestCase):
         instance = self._create_fake_instance(params)
         self.compute._instance_update(self.context, instance['uuid'])
 
-    def test_destroy_evacuated_instances(self):
+    def test_destroy_evacuated_instance_on_shared_storage(self):
         fake_context = context.get_admin_context()
 
         # instances in central db
@@ -3881,22 +4350,137 @@ class ComputeTestCase(BaseTestCase):
                                  '_get_instance_nw_info')
         self.mox.StubOutWithMock(self.compute,
                                  '_get_instance_volume_block_device_info')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_is_instance_storage_shared')
         self.mox.StubOutWithMock(self.compute, '_legacy_nw_info')
         self.mox.StubOutWithMock(self.compute.driver, 'destroy')
 
-        self.compute._get_instances_on_driver(fake_context).AndReturn(
-                instances)
+        self.compute._get_instances_on_driver(
+                fake_context, {'deleted': False}).AndReturn(instances)
         self.compute._get_instance_nw_info(fake_context,
                                            evacuated_instance).AndReturn(
                                                    'fake_network_info')
         self.compute._get_instance_volume_block_device_info(
                 fake_context, evacuated_instance).AndReturn('fake_bdi')
+        self.compute._is_instance_storage_shared(fake_context,
+                        evacuated_instance).AndReturn(True)
         self.compute._legacy_nw_info('fake_network_info').AndReturn(
                 'fake_legacy_network_info')
         self.compute.driver.destroy(evacuated_instance,
                                     'fake_legacy_network_info',
                                     'fake_bdi',
                                     False)
+
+        self.mox.ReplayAll()
+        self.compute._destroy_evacuated_instances(fake_context)
+
+    def test_destroy_evacuated_instance_with_disks(self):
+        fake_context = context.get_admin_context()
+
+        # instances in central db
+        instances = [
+            # those are still related to this host
+            jsonutils.to_primitive(self._create_fake_instance(
+                                                {'host': self.compute.host})),
+            jsonutils.to_primitive(self._create_fake_instance(
+                                                {'host': self.compute.host})),
+            jsonutils.to_primitive(self._create_fake_instance(
+                                                {'host': self.compute.host}))
+        ]
+
+        # those are already been evacuated to other host
+        evacuated_instance = self._create_fake_instance({'host': 'otherhost'})
+
+        instances.append(evacuated_instance)
+
+        self.mox.StubOutWithMock(self.compute,
+                                 '_get_instances_on_driver')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_get_instance_nw_info')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_get_instance_volume_block_device_info')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_instance_shared_storage_local')
+        self.mox.StubOutWithMock(self.compute.compute_rpcapi,
+                                 'check_instance_shared_storage')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_instance_shared_storage_cleanup')
+        self.mox.StubOutWithMock(self.compute, '_legacy_nw_info')
+        self.mox.StubOutWithMock(self.compute.driver, 'destroy')
+
+        self.compute._get_instances_on_driver(
+                fake_context, {'deleted': False}).AndReturn(instances)
+        self.compute._get_instance_nw_info(fake_context,
+                                           evacuated_instance).AndReturn(
+                                                   'fake_network_info')
+        self.compute._get_instance_volume_block_device_info(
+                fake_context, evacuated_instance).AndReturn('fake_bdi')
+        self.compute.driver.check_instance_shared_storage_local(fake_context,
+                evacuated_instance).AndReturn({'filename': 'tmpfilename'})
+        self.compute.compute_rpcapi.check_instance_shared_storage(fake_context,
+                evacuated_instance,
+                {'filename': 'tmpfilename'}).AndReturn(False)
+        self.compute.driver.check_instance_shared_storage_cleanup(fake_context,
+                {'filename': 'tmpfilename'})
+        self.compute._legacy_nw_info('fake_network_info').AndReturn(
+                'fake_legacy_network_info')
+        self.compute.driver.destroy(evacuated_instance,
+                                    'fake_legacy_network_info',
+                                    'fake_bdi',
+                                    True)
+
+        self.mox.ReplayAll()
+        self.compute._destroy_evacuated_instances(fake_context)
+
+    def test_destroy_evacuated_instance_not_implemented(self):
+        fake_context = context.get_admin_context()
+
+        # instances in central db
+        instances = [
+            # those are still related to this host
+            jsonutils.to_primitive(self._create_fake_instance(
+                                                {'host': self.compute.host})),
+            jsonutils.to_primitive(self._create_fake_instance(
+                                                {'host': self.compute.host})),
+            jsonutils.to_primitive(self._create_fake_instance(
+                                                {'host': self.compute.host}))
+        ]
+
+        # those are already been evacuated to other host
+        evacuated_instance = self._create_fake_instance({'host': 'otherhost'})
+
+        instances.append(evacuated_instance)
+
+        self.mox.StubOutWithMock(self.compute,
+                                 '_get_instances_on_driver')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_get_instance_nw_info')
+        self.mox.StubOutWithMock(self.compute,
+                                 '_get_instance_volume_block_device_info')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_instance_shared_storage_local')
+        self.mox.StubOutWithMock(self.compute.compute_rpcapi,
+                                 'check_instance_shared_storage')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'check_instance_shared_storage_cleanup')
+        self.mox.StubOutWithMock(self.compute, '_legacy_nw_info')
+        self.mox.StubOutWithMock(self.compute.driver, 'destroy')
+
+        self.compute._get_instances_on_driver(
+                fake_context, {'deleted': False}).AndReturn(instances)
+        self.compute._get_instance_nw_info(fake_context,
+                                           evacuated_instance).AndReturn(
+                                                   'fake_network_info')
+        self.compute._get_instance_volume_block_device_info(
+                fake_context, evacuated_instance).AndReturn('fake_bdi')
+        self.compute.driver.check_instance_shared_storage_local(fake_context,
+                evacuated_instance).AndRaise(NotImplementedError())
+        self.compute._legacy_nw_info('fake_network_info').AndReturn(
+                'fake_legacy_network_info')
+        self.compute.driver.destroy(evacuated_instance,
+                                    'fake_legacy_network_info',
+                                    'fake_bdi',
+                                    True)
 
         self.mox.ReplayAll()
         self.compute._destroy_evacuated_instances(fake_context)
@@ -3951,6 +4535,56 @@ class ComputeTestCase(BaseTestCase):
         self.mox.ResetAll()
         self.flags(defer_iptables_apply=False)
         _do_mock_calls(False)
+
+        self.mox.ReplayAll()
+        self.compute.init_host()
+        # tearDown() uses context.get_admin_context(), so we have
+        # to do the verification here and unstub it.
+        self.mox.VerifyAll()
+        self.mox.UnsetStubs()
+
+    def test_init_host_with_deleted_migration(self):
+        our_host = self.compute.host
+        not_our_host = 'not-' + our_host
+        fake_context = 'fake-context'
+
+        deleted_instance = {
+            'name': 'fake-name',
+            'host': not_our_host,
+            'uuid': 'fake-uuid',
+            }
+
+        self.mox.StubOutWithMock(self.compute.driver, 'init_host')
+        self.mox.StubOutWithMock(self.compute.driver, 'destroy')
+        self.mox.StubOutWithMock(self.compute.conductor_api,
+                                 'instance_get_all_by_host')
+        self.mox.StubOutWithMock(context, 'get_admin_context')
+        self.mox.StubOutWithMock(self.compute, 'init_virt_events')
+        self.mox.StubOutWithMock(self.compute, '_get_instances_on_driver')
+        self.mox.StubOutWithMock(self.compute, '_init_instance')
+        self.mox.StubOutWithMock(self.compute, '_report_driver_status')
+        self.mox.StubOutWithMock(self.compute, 'publish_service_capabilities')
+        self.mox.StubOutWithMock(self.compute, '_get_instance_nw_info')
+
+        self.compute.driver.init_host(host=our_host)
+        context.get_admin_context().AndReturn(fake_context)
+        self.compute.conductor_api.instance_get_all_by_host(
+            fake_context, our_host).AndReturn([])
+        self.compute.init_virt_events()
+
+        # simulate failed instance
+        self.compute._get_instances_on_driver(
+            fake_context, {'deleted': False}).AndReturn([deleted_instance])
+        self.compute._get_instance_nw_info(fake_context, deleted_instance
+            ).AndRaise(exception.InstanceNotFound(
+                instance_id=deleted_instance['uuid']))
+        # ensure driver.destroy is called so that driver may
+        # clean up any dangling files
+        self.compute.driver.destroy(deleted_instance,
+            mox.IgnoreArg(), mox.IgnoreArg(), mox.IgnoreArg())
+
+        self.compute._report_driver_status(fake_context)
+        self.compute.publish_service_capabilities(fake_context)
 
         self.mox.ReplayAll()
         self.compute.init_host()
@@ -4134,8 +4768,10 @@ class ComputeTestCase(BaseTestCase):
         self.compute.driver.list_instance_uuids().AndReturn(
                 [inst['uuid'] for inst in driver_instances])
         self.compute.conductor_api.instance_get_all_by_filters(
-                fake_context, {'uuid': [inst['uuid'] for
-                                        inst in driver_instances]}).AndReturn(
+                fake_context,
+                {'uuid': [inst['uuid'] for
+                          inst in driver_instances]},
+                columns_to_join=[]).AndReturn(
                         driver_instances)
 
         self.mox.ReplayAll()
@@ -4147,6 +4783,7 @@ class ComputeTestCase(BaseTestCase):
         # Test getting instances when driver doesn't support
         # 'list_instance_uuids'
         self.compute.host = 'host'
+        filters = {'host': self.compute.host}
         fake_context = context.get_admin_context()
 
         all_instances = []
@@ -4162,18 +4799,19 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(self.compute.driver,
                 'list_instances')
         self.mox.StubOutWithMock(self.compute.conductor_api,
-                'instance_get_all_by_host')
+                'instance_get_all_by_filters')
 
         self.compute.driver.list_instance_uuids().AndRaise(
                 NotImplementedError())
         self.compute.driver.list_instances().AndReturn(
                 [inst['name'] for inst in driver_instances])
-        self.compute.conductor_api.instance_get_all_by_host(
-                fake_context, self.compute.host).AndReturn(all_instances)
+        self.compute.conductor_api.instance_get_all_by_filters(
+                fake_context, filters,
+                columns_to_join=[]).AndReturn(all_instances)
 
         self.mox.ReplayAll()
 
-        result = self.compute._get_instances_on_driver(fake_context)
+        result = self.compute._get_instances_on_driver(fake_context, filters)
         self.assertEqual(driver_instances, result)
 
     def test_instance_usage_audit(self):
@@ -4265,7 +4903,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_create_with_too_little_ram(self):
         # Test an instance type with too little memory.
 
-        inst_type = instance_types.get_default_instance_type()
+        inst_type = flavors.get_default_instance_type()
         inst_type['memory_mb'] = 1
 
         self.fake_image['min_ram'] = 2
@@ -4284,7 +4922,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_create_with_too_little_disk(self):
         # Test an instance type with too little disk space.
 
-        inst_type = instance_types.get_default_instance_type()
+        inst_type = flavors.get_default_instance_type()
         inst_type['root_gb'] = 1
 
         self.fake_image['min_disk'] = 2
@@ -4300,10 +4938,30 @@ class ComputeAPITestCase(BaseTestCase):
                 inst_type, self.fake_image['id'])
         db.instance_destroy(self.context, refs[0]['uuid'])
 
+    def test_create_with_too_large_image(self):
+        # Test an instance type with too little disk space.
+
+        inst_type = flavors.get_default_instance_type()
+        inst_type['root_gb'] = 1
+
+        self.fake_image['size'] = '1073741825'
+
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        self.assertRaises(exception.InstanceTypeDiskTooSmall,
+            self.compute_api.create, self.context,
+            inst_type, self.fake_image['id'])
+
+        # Reduce image to 1 GB limit and ensure it works
+        self.fake_image['size'] = '1073741824'
+        (refs, resv_id) = self.compute_api.create(self.context,
+                inst_type, self.fake_image['id'])
+        db.instance_destroy(self.context, refs[0]['uuid'])
+
     def test_create_just_enough_ram_and_disk(self):
         # Test an instance type with just enough ram and disk space.
 
-        inst_type = instance_types.get_default_instance_type()
+        inst_type = flavors.get_default_instance_type()
         inst_type['root_gb'] = 2
         inst_type['memory_mb'] = 2
 
@@ -4319,7 +4977,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_create_with_no_ram_and_disk_reqs(self):
         # Test an instance type with no min_ram or min_disk.
 
-        inst_type = instance_types.get_default_instance_type()
+        inst_type = flavors.get_default_instance_type()
         inst_type['root_gb'] = 1
         inst_type['memory_mb'] = 1
 
@@ -4329,12 +4987,29 @@ class ComputeAPITestCase(BaseTestCase):
                 inst_type, self.fake_image['id'])
         db.instance_destroy(self.context, refs[0]['uuid'])
 
+    def test_create_with_deleted_image(self):
+        # If we're given a deleted image by glance, we should not be able to
+        # build from it
+        inst_type = flavors.get_default_instance_type()
+
+        self.fake_image['name'] = 'fake_name'
+        self.fake_image['status'] = 'DELETED'
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        expected_message = (
+            exception.ImageNotActive.message % {'image_id':
+            self.fake_image['id']})
+        with testtools.ExpectedException(exception.ImageNotActive,
+                                         expected_message):
+            self.compute_api.create(self.context, inst_type,
+                                    self.fake_image['id'])
+
     def test_create_instance_defaults_display_name(self):
         # Verify that an instance cannot be created without a display_name.
         cases = [dict(), dict(display_name=None)]
         for instance in cases:
             (ref, resv_id) = self.compute_api.create(self.context,
-                instance_types.get_default_instance_type(),
+                flavors.get_default_instance_type(),
                 'fake-image-uuid', **instance)
             try:
                 self.assertNotEqual(ref[0]['display_name'], None)
@@ -4345,7 +5020,7 @@ class ComputeAPITestCase(BaseTestCase):
         # Make sure image properties are copied into system metadata.
         (ref, resv_id) = self.compute_api.create(
                 self.context,
-                instance_type=instance_types.get_default_instance_type(),
+                instance_type=flavors.get_default_instance_type(),
                 image_href='fake-image-uuid')
         try:
             sys_metadata = db.instance_system_metadata_get(self.context,
@@ -4362,7 +5037,7 @@ class ComputeAPITestCase(BaseTestCase):
             db.instance_destroy(self.context, ref[0]['uuid'])
 
     def test_create_saves_type_in_system_metadata(self):
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
         (ref, resv_id) = self.compute_api.create(
                 self.context,
                 instance_type=instance_type,
@@ -4388,7 +5063,7 @@ class ComputeAPITestCase(BaseTestCase):
         group = self._create_group()
         (ref, resv_id) = self.compute_api.create(
                 self.context,
-                instance_type=instance_types.get_default_instance_type(),
+                instance_type=flavors.get_default_instance_type(),
                 image_href=None,
                 security_group=['testgroup'])
         try:
@@ -4401,7 +5076,7 @@ class ComputeAPITestCase(BaseTestCase):
             db.instance_destroy(self.context, ref[0]['uuid'])
 
     def test_create_instance_with_invalid_security_group_raises(self):
-        instance_type = instance_types.get_default_instance_type()
+        instance_type = flavors.get_default_instance_type()
 
         pre_build_len = len(db.instance_get_all(self.context))
         self.assertRaises(exception.SecurityGroupNotFoundForProject,
@@ -4416,7 +5091,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_create_with_large_user_data(self):
         # Test an instance type with too much user data.
 
-        inst_type = instance_types.get_default_instance_type()
+        inst_type = flavors.get_default_instance_type()
 
         self.fake_image['min_ram'] = 2
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
@@ -4428,7 +5103,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_create_with_malformed_user_data(self):
         # Test an instance type with malformed user data.
 
-        inst_type = instance_types.get_default_instance_type()
+        inst_type = flavors.get_default_instance_type()
 
         self.fake_image['min_ram'] = 2
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
@@ -4440,7 +5115,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_create_with_base64_user_data(self):
         # Test an instance type with ok much user data.
 
-        inst_type = instance_types.get_default_instance_type()
+        inst_type = flavors.get_default_instance_type()
 
         self.fake_image['min_ram'] = 2
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
@@ -4471,7 +5146,7 @@ class ComputeAPITestCase(BaseTestCase):
                  ('hello_server', 'hello-server')]
         for display_name, hostname in cases:
             (ref, resv_id) = self.compute_api.create(self.context,
-                instance_types.get_default_instance_type(), None,
+                flavors.get_default_instance_type(), None,
                 display_name=display_name)
             try:
                 self.assertEqual(ref[0]['hostname'], hostname)
@@ -4484,7 +5159,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         (ref, resv_id) = self.compute_api.create(
                 self.context,
-                instance_type=instance_types.get_default_instance_type(),
+                instance_type=flavors.get_default_instance_type(),
                 image_href=None,
                 security_group=['testgroup'])
         try:
@@ -4500,7 +5175,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         (ref, resv_id) = self.compute_api.create(
                 self.context,
-                instance_type=instance_types.get_default_instance_type(),
+                instance_type=flavors.get_default_instance_type(),
                 image_href=None,
                 security_group=['testgroup'])
 
@@ -4611,7 +5286,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_delete_in_resizing(self):
         def fake_quotas_reserve(context, expire=None, project_id=None,
                                                              **deltas):
-            old_type = instance_types.get_instance_type_by_name('m1.tiny')
+            old_type = flavors.get_instance_type_by_name('m1.tiny')
             # ensure using old instance type to create reservations
             self.assertEqual(deltas['cores'], -old_type['vcpus'])
             self.assertEqual(deltas['ram'], -old_type['memory_mb'])
@@ -4622,7 +5297,7 @@ class ComputeAPITestCase(BaseTestCase):
                 'host': CONF.host})
 
         # create a fake migration record (manager does this)
-        new_inst_type = instance_types.get_instance_type_by_name('m1.small')
+        new_inst_type = flavors.get_instance_type_by_name('m1.small')
         db.migration_create(self.context.elevated(),
                  {'instance_uuid': instance['uuid'],
                   'old_instance_type_id': instance['instance_type_id'],
@@ -4938,6 +5613,128 @@ class ComputeAPITestCase(BaseTestCase):
         instance = db.instance_get_by_uuid(self.context, instance_uuid)
         self.assertEqual(instance['task_state'], task_states.REBUILDING)
 
+    def test_rebuild_with_deleted_image(self):
+        # If we're given a deleted image by glance, we should not be able to
+        # rebuild from it
+        instance = jsonutils.to_primitive(
+            self._create_fake_instance(params={'image_ref': '1'}))
+
+        self.fake_image['name'] = 'fake_name'
+        self.fake_image['status'] = 'DELETED'
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        expected_message = (
+            exception.ImageNotActive.message % {'image_id':
+            self.fake_image['id']})
+        with testtools.ExpectedException(exception.ImageNotActive,
+                                         expected_message):
+            self.compute_api.rebuild(self.context, instance,
+                                     self.fake_image['id'], 'new_password')
+
+    def test_rebuild_with_too_little_ram(self):
+        instance = jsonutils.to_primitive(
+            self._create_fake_instance(params={'image_ref': '1'}))
+
+        def fake_extract_instance_type(_inst):
+            return dict(memory_mb=64, root_gb=1)
+
+        self.stubs.Set(flavors, 'extract_instance_type',
+                       fake_extract_instance_type)
+
+        self.fake_image['min_ram'] = 128
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        self.assertRaises(exception.InstanceTypeMemoryTooSmall,
+            self.compute_api.rebuild, self.context,
+            instance, self.fake_image['id'], 'new_password')
+
+        # Reduce image memory requirements and make sure it works
+        self.fake_image['min_ram'] = 64
+
+        self.compute_api.rebuild(self.context,
+                instance, self.fake_image['id'], 'new_password')
+        db.instance_destroy(self.context, instance['uuid'])
+
+    def test_rebuild_with_too_little_disk(self):
+        instance = jsonutils.to_primitive(
+            self._create_fake_instance(params={'image_ref': '1'}))
+
+        def fake_extract_instance_type(_inst):
+            return dict(memory_mb=64, root_gb=1)
+
+        self.stubs.Set(flavors, 'extract_instance_type',
+                       fake_extract_instance_type)
+
+        self.fake_image['min_disk'] = 2
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        self.assertRaises(exception.InstanceTypeDiskTooSmall,
+            self.compute_api.rebuild, self.context,
+            instance, self.fake_image['id'], 'new_password')
+
+        # Reduce image disk requirements and make sure it works
+        self.fake_image['min_disk'] = 1
+
+        self.compute_api.rebuild(self.context,
+                instance, self.fake_image['id'], 'new_password')
+        db.instance_destroy(self.context, instance['uuid'])
+
+    def test_rebuild_with_just_enough_ram_and_disk(self):
+        instance = jsonutils.to_primitive(
+            self._create_fake_instance(params={'image_ref': '1'}))
+
+        def fake_extract_instance_type(_inst):
+            return dict(memory_mb=64, root_gb=1)
+
+        self.stubs.Set(flavors, 'extract_instance_type',
+                       fake_extract_instance_type)
+
+        self.fake_image['min_ram'] = 64
+        self.fake_image['min_disk'] = 1
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        self.compute_api.rebuild(self.context,
+                instance, self.fake_image['id'], 'new_password')
+        db.instance_destroy(self.context, instance['uuid'])
+
+    def test_rebuild_with_no_ram_and_disk_reqs(self):
+        instance = jsonutils.to_primitive(
+            self._create_fake_instance(params={'image_ref': '1'}))
+
+        def fake_extract_instance_type(_inst):
+            return dict(memory_mb=64, root_gb=1)
+
+        self.stubs.Set(flavors, 'extract_instance_type',
+                       fake_extract_instance_type)
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        self.compute_api.rebuild(self.context,
+                instance, self.fake_image['id'], 'new_password')
+        db.instance_destroy(self.context, instance['uuid'])
+
+    def test_rebuild_with_too_large_image(self):
+        instance = jsonutils.to_primitive(
+            self._create_fake_instance(params={'image_ref': '1'}))
+
+        def fake_extract_instance_type(_inst):
+            return dict(memory_mb=64, root_gb=1)
+
+        self.stubs.Set(flavors, 'extract_instance_type',
+                       fake_extract_instance_type)
+
+        self.fake_image['size'] = '1073741825'
+        self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
+
+        self.assertRaises(exception.InstanceTypeDiskTooSmall,
+            self.compute_api.rebuild, self.context,
+            instance, self.fake_image['id'], 'new_password')
+
+        # Reduce image to 1 GB limit and ensure it works
+        self.fake_image['size'] = '1073741824'
+        self.compute_api.rebuild(self.context,
+                instance, self.fake_image['id'], 'new_password')
+        db.instance_destroy(self.context, instance['uuid'])
+
     def _stub_out_reboot(self, device_name):
         def fake_reboot_instance(rpcapi, context, instance,
                                  block_device_info,
@@ -5065,7 +5862,7 @@ class ComputeAPITestCase(BaseTestCase):
 
     def test_hostname_create(self):
         # Ensure instance hostname is set during creation.
-        inst_type = instance_types.get_instance_type_by_name('m1.tiny')
+        inst_type = flavors.get_instance_type_by_name('m1.tiny')
         (instances, _) = self.compute_api.create(self.context,
                                                  inst_type,
                                                  None,
@@ -5141,10 +5938,16 @@ class ComputeAPITestCase(BaseTestCase):
         volume_backed_uuid_2 = volume_backed_inst_2['uuid']
 
         def fake_get_instance_bdms(*args, **kwargs):
-            return [{'device_name': '/dev/vda'}]
+            return [{'device_name': '/dev/vda',
+                     'volume_id': 'bf0b6b00-a20c-11e2-9e96-0800200c9a66'}]
 
         self.stubs.Set(self.compute_api, 'get_instance_bdms',
                        fake_get_instance_bdms)
+
+        def fake_volume_get(self, context, volume_id):
+            return {'id': volume_id, 'status': 'in-use'}
+
+        self.stubs.Set(cinder.API, 'get', fake_volume_get)
 
         self.compute.run_instance(self.context,
                                   instance=volume_backed_inst_1)
@@ -5220,7 +6023,7 @@ class ComputeAPITestCase(BaseTestCase):
                                           {'extra_param': 'value1'})
 
         self.assertEqual(image['name'], 'snap1')
-        instance_type = instance_types.extract_instance_type(instance)
+        instance_type = flavors.extract_instance_type(instance)
         self.assertEqual(image['min_ram'], self.fake_image['min_ram'])
         self.assertEqual(image['min_disk'], instance_type['root_gb'])
         properties = image['properties']
@@ -5448,14 +6251,14 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute_api.resize(self.context, instance, '4')
 
         # Do the prep/finish_resize steps (manager does this)
-        old_type = instance_types.extract_instance_type(instance)
-        new_type = instance_types.get_instance_type_by_flavor_id('4')
+        old_type = flavors.extract_instance_type(instance)
+        new_type = flavors.get_instance_type_by_flavor_id('4')
         sys_meta = utils.metadata_to_dict(instance['system_metadata'])
-        sys_meta = instance_types.save_instance_type_info(sys_meta,
+        sys_meta = flavors.save_instance_type_info(sys_meta,
                                                           old_type, 'old_')
-        sys_meta = instance_types.save_instance_type_info(sys_meta,
+        sys_meta = flavors.save_instance_type_info(sys_meta,
                                                           new_type, 'new_')
-        sys_meta = instance_types.save_instance_type_info(sys_meta,
+        sys_meta = flavors.save_instance_type_info(sys_meta,
                                                           new_type)
 
         # create a fake migration record (manager does this)
@@ -5517,12 +6320,9 @@ class ComputeAPITestCase(BaseTestCase):
 
         name = 'test_resize_new_flavor'
         flavorid = 11
-        memory_mb = 128
-        root_gb = 0
-        vcpus = 1
-        instance_types.create(name, memory_mb, vcpus, root_gb, 0,
-                              flavorid, 0, 1.0, True)
-        instance_types.destroy(name)
+        flavors.create(name, 128, 1, 0, ephemeral_gb=0, flavorid=flavorid,
+                       swap=0, rxtx_factor=1.0, is_public=True)
+        flavors.destroy(name)
         self.assertRaises(exception.FlavorNotFound, self.compute_api.resize,
                 self.context, instance, flavorid)
 
@@ -5549,25 +6349,20 @@ class ComputeAPITestCase(BaseTestCase):
 
         name = 'test_resize_with_big_mem'
         flavorid = 11
-        memory_mb = 102400
-        root_gb = 0
-        vcpus = 1
-        instance_types.create(name, memory_mb, vcpus, root_gb, 0,
-                              flavorid, 0, 1.0, True)
+        flavors.create(name, 102400, 1, 0, ephemeral_gb=0, flavorid=flavorid,
+                       swap=0, rxtx_factor=1.0, is_public=True)
         self.assertRaises(exception.TooManyInstances, self.compute_api.resize,
                 self.context, instance, flavorid)
 
-        instance_types.destroy(name)
+        flavors.destroy(name)
         self.compute.terminate_instance(self.context, instance=instance)
 
     def test_resize_revert_deleted_flavor_fails(self):
         orig_name = 'test_resize_revert_orig_flavor'
         orig_flavorid = 11
-        memory_mb = 128
-        root_gb = 0
-        vcpus = 1
-        instance_types.create(orig_name, memory_mb, vcpus, root_gb, 0,
-                              orig_flavorid, 0, 1.0, True)
+        flavors.create(orig_name, 128, 1, 0, ephemeral_gb=0,
+                       flavorid=orig_flavorid, swap=0, rxtx_factor=1.0,
+                       is_public=True)
 
         instance = self._create_fake_instance(type_name=orig_name)
         instance = db.instance_get_by_uuid(self.context, instance['uuid'])
@@ -5575,7 +6370,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute.run_instance(self.context, instance=instance)
 
         old_instance_type_id = instance['instance_type_id']
-        new_flavor = instance_types.get_instance_type_by_name('m1.tiny')
+        new_flavor = flavors.get_instance_type_by_name('m1.tiny')
         new_flavorid = new_flavor['flavorid']
         new_instance_type_id = new_flavor['id']
         self.compute_api.resize(self.context, instance, new_flavorid)
@@ -5588,7 +6383,7 @@ class ComputeAPITestCase(BaseTestCase):
         instance = db.instance_update(self.context, instance['uuid'],
                                       {'task_state': None,
                                        'vm_state': vm_states.RESIZED})
-        instance_types.destroy(orig_name)
+        flavors.destroy(orig_name)
         self.assertRaises(exception.InstanceTypeNotFound,
                           self.compute_api.revert_resize,
                           self.context, instance)
@@ -5652,7 +6447,7 @@ class ComputeAPITestCase(BaseTestCase):
         instance = self._create_fake_instance(dict(host='host2'))
         instance = db.instance_get_by_uuid(self.context, instance['uuid'])
         instance = jsonutils.to_primitive(instance)
-        orig_instance_type = instance_types.extract_instance_type(instance)
+        orig_instance_type = flavors.extract_instance_type(instance)
         self.compute.run_instance(self.context, instance=instance)
         # We need to set the host to something 'known'.  Unfortunately,
         # the compute manager is using a cached copy of CONF.host,
@@ -5692,6 +6487,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         self.stubs.Set(rpc, 'cast', _fake_cast)
         self.flags(allow_resize_to_same_host=True)
+        self.flags(allow_migrate_to_same_host=True)
 
         instance = self._create_fake_instance(dict(host='host2'))
         instance = db.instance_get_by_uuid(self.context, instance['uuid'])
@@ -6212,7 +7008,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertThat(bdms, matchers.DictListMatches(expected_result))
 
         self.compute_api._update_block_device_mapping(
-            self.context, instance_types.get_default_instance_type(),
+            self.context, flavors.get_default_instance_type(),
             instance['uuid'], block_device_mapping)
         bdms = [self._parse_db_block_device_mapping(bdm_ref)
                 for bdm_ref in db.block_device_mapping_get_all_by_instance(
@@ -6271,7 +7067,7 @@ class ComputeAPITestCase(BaseTestCase):
         """Verify building an instance has a reservation_id that
         matches return value from create"""
         (refs, resv_id) = self.compute_api.create(self.context,
-                instance_types.get_default_instance_type(), None)
+                flavors.get_default_instance_type(), None)
         try:
             self.assertEqual(len(refs), 1)
             self.assertEqual(refs[0]['reservation_id'], resv_id)
@@ -6284,7 +7080,7 @@ class ComputeAPITestCase(BaseTestCase):
         in both instances
         """
         (refs, resv_id) = self.compute_api.create(self.context,
-                instance_types.get_default_instance_type(), None,
+                flavors.get_default_instance_type(), None,
                 min_count=2, max_count=2)
         try:
             self.assertEqual(len(refs), 2)
@@ -6298,7 +7094,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_multi_instance_display_name_template(self):
         self.flags(multi_instance_display_name_template='%(name)s')
         (refs, resv_id) = self.compute_api.create(self.context,
-                instance_types.get_default_instance_type(), None,
+                flavors.get_default_instance_type(), None,
                 min_count=2, max_count=2, display_name='x')
         self.assertEqual(refs[0]['display_name'], 'x')
         self.assertEqual(refs[0]['hostname'], 'x')
@@ -6307,7 +7103,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         self.flags(multi_instance_display_name_template='%(name)s-%(count)s')
         (refs, resv_id) = self.compute_api.create(self.context,
-                instance_types.get_default_instance_type(), None,
+                flavors.get_default_instance_type(), None,
                 min_count=2, max_count=2, display_name='x')
         self.assertEqual(refs[0]['display_name'], 'x-1')
         self.assertEqual(refs[0]['hostname'], 'x-1')
@@ -6316,7 +7112,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         self.flags(multi_instance_display_name_template='%(name)s-%(uuid)s')
         (refs, resv_id) = self.compute_api.create(self.context,
-                instance_types.get_default_instance_type(), None,
+                flavors.get_default_instance_type(), None,
                 min_count=2, max_count=2, display_name='x')
         self.assertEqual(refs[0]['display_name'], 'x-%s' % refs[0]['uuid'])
         self.assertEqual(refs[0]['hostname'], 'x-%s' % refs[0]['uuid'])
@@ -6404,26 +7200,34 @@ class ComputeAPITestCase(BaseTestCase):
         params = {'vm_state': vm_states.RESCUED}
         instance = self._create_fake_instance(params=params)
 
-        def fake(*args, **kwargs):
-            pass
-
-        def fake_volume_get(self, context, volume_id):
-            pass
-            return {'id': volume_id, 'attach_status': 'in-use',
-                    'instance_uuid': instance['uuid']}
-
-        def fake_rpc_detach_volume(self, context, **kwargs):
-            pass
-
-        self.stubs.Set(cinder.API, 'get', fake_volume_get)
-        self.stubs.Set(cinder.API, 'check_detach', fake)
-        self.stubs.Set(cinder.API, 'begin_detaching', fake)
-        self.stubs.Set(compute_rpcapi.ComputeAPI, 'detach_volume',
-                       fake_rpc_detach_volume)
+        volume = {'id': 1, 'attach_status': 'in-use',
+                  'instance_uuid': instance['uuid']}
 
         self.assertRaises(exception.InstanceInvalidState,
                 self.compute_api.detach_volume,
-                self.context, 1)
+                self.context, instance, volume)
+
+    def test_no_rescue_in_volume_state_attaching(self):
+        # Make sure a VM cannot be rescued while volume is being attached
+        instance = self._create_fake_instance()
+
+        def fake_get_instance_bdms(*args, **kwargs):
+            return [{'device_name': '/dev/vda',
+                     'volume_id': 'bf0b6b00-a20c-11e2-9e96-0800200c9a66'}]
+
+        self.stubs.Set(self.compute_api, 'get_instance_bdms',
+                       fake_get_instance_bdms)
+
+        def fake_volume_get(self, context, volume_id):
+            return {'id': volume_id, 'status': 'attaching'}
+
+        self.stubs.Set(cinder.API, 'get', fake_volume_get)
+
+        volume = {'id': 'bf0b6b00-a20c-11e2-9e96-0800200c9a66',
+                  'state': 'active', 'instance_uuid': instance['uuid']}
+
+        self.assertRaises(exception.InvalidVolume,
+                self.compute_api.rescue, self.context, instance)
 
     def test_vnc_console(self):
         # Make sure we can a vnc console for an instance.
@@ -6443,10 +7247,12 @@ class ComputeAPITestCase(BaseTestCase):
         self.mox.StubOutWithMock(rpc, 'call')
 
         rpc_msg1 = {'method': 'get_vnc_console',
+                    'namespace': None,
                     'args': {'instance': fake_instance,
                              'console_type': fake_console_type},
                    'version': compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION}
         rpc_msg2 = {'method': 'authorize_console',
+                    'namespace': None,
                     'args': fake_connect_info,
                     'version': '1.2'}
 
@@ -6488,10 +7294,12 @@ class ComputeAPITestCase(BaseTestCase):
         self.mox.StubOutWithMock(rpc, 'call')
 
         rpc_msg1 = {'method': 'get_spice_console',
+                    'namespace': None,
                     'args': {'instance': fake_instance,
                              'console_type': fake_console_type},
                    'version': '2.24'}
         rpc_msg2 = {'method': 'authorize_console',
+                    'namespace': None,
                     'args': fake_connect_info,
                     'version': '1.2'}
 
@@ -6515,23 +7323,6 @@ class ComputeAPITestCase(BaseTestCase):
 
         db.instance_destroy(self.context, instance['uuid'])
 
-    def test_get_backdoor_port(self):
-        # Test api call to get backdoor_port.
-        fake_backdoor_port = 59697
-
-        self.mox.StubOutWithMock(rpc, 'call')
-
-        rpc_msg = {'method': 'get_backdoor_port',
-                   'args': {},
-                   'version': compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION}
-        rpc.call(self.context, 'compute.fake_host', rpc_msg,
-                 None).AndReturn(fake_backdoor_port)
-
-        self.mox.ReplayAll()
-
-        port = self.compute_api.get_backdoor_port(self.context, 'fake_host')
-        self.assertEqual(port, fake_backdoor_port)
-
     def test_console_output(self):
         fake_instance = {'uuid': 'fake_uuid',
                          'host': 'fake_compute_host'}
@@ -6541,6 +7332,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.mox.StubOutWithMock(rpc, 'call')
 
         rpc_msg = {'method': 'get_console_output',
+                   'namespace': None,
                    'args': {'instance': fake_instance,
                             'tail_length': fake_tail_length},
                    'version': compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION}
@@ -6655,9 +7447,10 @@ class ComputeAPITestCase(BaseTestCase):
 
     def test_detach_volume(self):
         # Ensure volume can be detached from instance
-
         called = {}
         instance = self._create_fake_instance()
+        volume = {'id': 1, 'attach_status': 'in-use',
+                  'instance_uuid': instance['uuid']}
 
         def fake_check_detach(*args, **kwargs):
             called['fake_check_detach'] = True
@@ -6665,35 +7458,43 @@ class ComputeAPITestCase(BaseTestCase):
         def fake_begin_detaching(*args, **kwargs):
             called['fake_begin_detaching'] = True
 
-        def fake_volume_get(self, context, volume_id):
-            called['fake_volume_get'] = True
-            return {'id': volume_id, 'attach_status': 'in-use',
-                    'instance_uuid': instance['uuid']}
-
         def fake_rpc_detach_volume(self, context, **kwargs):
             called['fake_rpc_detach_volume'] = True
 
-        self.stubs.Set(cinder.API, 'get', fake_volume_get)
         self.stubs.Set(cinder.API, 'check_detach', fake_check_detach)
         self.stubs.Set(cinder.API, 'begin_detaching', fake_begin_detaching)
         self.stubs.Set(compute_rpcapi.ComputeAPI, 'detach_volume',
                        fake_rpc_detach_volume)
 
-        self.compute_api.detach_volume(self.context, 1)
-        self.assertTrue(called.get('fake_volume_get'))
+        self.compute_api.detach_volume(self.context,
+                instance, volume)
         self.assertTrue(called.get('fake_check_detach'))
         self.assertTrue(called.get('fake_begin_detaching'))
         self.assertTrue(called.get('fake_rpc_detach_volume'))
 
     def test_detach_invalid_volume(self):
         # Ensure exception is raised while detaching an un-attached volume
+        instance = {'uuid': 'uuid1',
+                    'locked': False,
+                    'vm_state': vm_states.ACTIVE}
+        volume = {'id': 1, 'attach_status': 'detached'}
 
-        def fake_volume_get(self, context, volume_id):
-            return {'id': volume_id, 'attach_status': 'detached'}
-
-        self.stubs.Set(cinder.API, 'get', fake_volume_get)
         self.assertRaises(exception.InvalidVolume,
-                          self.compute_api.detach_volume, self.context, 1)
+                          self.compute_api.detach_volume, self.context,
+                          instance, volume)
+
+    def test_detach_unattached_volume(self):
+        # Ensure exception is raised when volume's idea of attached
+        # instance doesn't match.
+        instance = {'uuid': 'uuid1',
+                    'locked': False,
+                    'vm_state': vm_states.ACTIVE}
+        volume = {'id': 1, 'attach_status': 'in-use',
+                  'instance_uuid': 'uuid2'}
+
+        self.assertRaises(exception.VolumeUnattached,
+                          self.compute_api.detach_volume, self.context,
+                          instance, volume)
 
     def test_detach_volume_libvirt_is_down(self):
         # Ensure rollback during detach if libvirt goes down
@@ -6711,16 +7512,11 @@ class ComputeAPITestCase(BaseTestCase):
 
         def fake_libvirt_driver_detach_volume_fails(*args, **kwargs):
             called['fake_libvirt_driver_detach_volume_fails'] = True
-            raise AttributeError
+            raise AttributeError()
 
         def fake_roll_detaching(*args, **kwargs):
             called['fake_roll_detaching'] = True
 
-        def fake_volume_get(self, context, volume_id):
-            called['fake_volume_get'] = True
-            return {'id': volume_id, 'attach_status': 'in-use'}
-
-        self.stubs.Set(cinder.API, 'get', fake_volume_get)
         self.stubs.Set(cinder.API, 'roll_detaching', fake_roll_detaching)
         self.stubs.Set(self.compute, "_get_instance_volume_bdm",
                        fake_get_instance_volume_bdm)
@@ -6732,7 +7528,6 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertRaises(AttributeError, self.compute.detach_volume,
                           self.context, 1, instance)
         self.assertTrue(called.get('fake_libvirt_driver_instance_exists'))
-        self.assertTrue(called.get('fake_volume_get'))
         self.assertTrue(called.get('fake_roll_detaching'))
 
     def test_terminate_with_volumes(self):
@@ -6748,18 +7543,18 @@ class ComputeAPITestCase(BaseTestCase):
                   }
         db.block_device_mapping_create(admin, values)
 
-        def fake_volume_get(self, context, volume):
+        def fake_volume_get(self, context, volume_id):
             return {'id': volume_id}
         self.stubs.Set(cinder.API, "get", fake_volume_get)
 
         # Stub out and record whether it gets detached
         result = {"detached": False}
 
-        def fake_detach(self, context, volume):
-            result["detached"] = volume["id"] == volume_id
+        def fake_detach(self, context, volume_id_param):
+            result["detached"] = volume_id_param == volume_id
         self.stubs.Set(cinder.API, "detach", fake_detach)
 
-        def fake_terminate_connection(self, context, volume, connector):
+        def fake_terminate_connection(self, context, volume_id, connector):
             return {}
         self.stubs.Set(cinder.API, "terminate_connection",
                        fake_terminate_connection)
@@ -6848,6 +7643,7 @@ class ComputeAPITestCase(BaseTestCase):
                                   instance['host'])
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
+                 "namespace": None,
                  "args": {'instance': jsonutils.to_primitive(instance)},
                  "version":
                     compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
@@ -6877,6 +7673,7 @@ class ComputeAPITestCase(BaseTestCase):
                                   instance['host'])
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
+                 "namespace": None,
                  "args": {'instance': jsonutils.to_primitive(instance)},
                  "version":
                    compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
@@ -6918,6 +7715,7 @@ class ComputeAPITestCase(BaseTestCase):
                                   instance['host'])
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
+                 "namespace": None,
                  "args": {'instance': jsonutils.to_primitive(instance)},
                  "version":
                    compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
@@ -6939,6 +7737,7 @@ class ComputeAPITestCase(BaseTestCase):
                                   instance['host'])
         rpc.cast(self.context, topic,
                 {"method": "refresh_instance_security_rules",
+                 "namespace": None,
                  "args": {'instance': jsonutils.to_primitive(instance)},
                  "version":
                    compute_rpcapi.SecurityGroupAPI.BASE_RPC_API_VERSION})
@@ -7010,7 +7809,7 @@ class ComputeAPITestCase(BaseTestCase):
         inst['project_id'] = self.project_id
         inst['host'] = 'fake_host'
         inst['node'] = NODENAME
-        type_id = instance_types.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
         inst['instance_type_id'] = type_id
         inst['ami_launch_index'] = 0
         inst['memory_mb'] = 0
@@ -7205,19 +8004,6 @@ class ComputeAPIAggrTestCase(BaseTestCase):
         self.assertRaises(exception.ComputeHostNotFound,
                           self.api.remove_host_from_aggregate,
                           self.context, aggr['id'], 'invalid_host')
-
-
-class ComputeBackdoorPortTestCase(BaseTestCase):
-    """This is for unit test coverage of backdoor port rpc."""
-
-    def setUp(self):
-        super(ComputeBackdoorPortTestCase, self).setUp()
-        self.context = context.get_admin_context()
-        self.compute.backdoor_port = 59697
-
-    def test_get_backdoor_port(self):
-        port = self.compute.get_backdoor_port(self.context)
-        self.assertEqual(port, self.compute.backdoor_port)
 
 
 class ComputeAggrTestCase(BaseTestCase):
@@ -7459,6 +8245,9 @@ class KeypairAPITestCase(BaseTestCase):
                           self.ctxt, self.ctxt.user_id, '* BAD CHARACTERS! *')
 
     def test_create_keypair_already_exists(self):
+        def db_key_pair_create_duplicate(context, keypair):
+            raise exception.KeyPairExists(key_name=keypair.get('name', ''))
+        self.stubs.Set(db, "key_pair_create", db_key_pair_create_duplicate)
         self.assertRaises(exception.KeyPairExists,
                           self.keypair_api.create_key_pair,
                           self.ctxt, self.ctxt.user_id,
@@ -7529,7 +8318,7 @@ class DisabledInstanceTypesTestCase(BaseTestCase):
     def setUp(self):
         super(DisabledInstanceTypesTestCase, self).setUp()
         self.compute_api = compute.API()
-        self.inst_type = instance_types.get_default_instance_type()
+        self.inst_type = flavors.get_default_instance_type()
 
     def test_can_build_instance_from_visible_instance_type(self):
         self.inst_type['disabled'] = False
@@ -7544,7 +8333,7 @@ class DisabledInstanceTypesTestCase(BaseTestCase):
     def test_can_resize_to_visible_instance_type(self):
         instance = self._create_fake_instance()
         orig_get_instance_type_by_flavor_id =\
-                instance_types.get_instance_type_by_flavor_id
+                flavors.get_instance_type_by_flavor_id
 
         def fake_get_instance_type_by_flavor_id(flavor_id, ctxt=None,
                                                 read_deleted="yes"):
@@ -7554,7 +8343,7 @@ class DisabledInstanceTypesTestCase(BaseTestCase):
             instance_type['disabled'] = False
             return instance_type
 
-        self.stubs.Set(instance_types, 'get_instance_type_by_flavor_id',
+        self.stubs.Set(flavors, 'get_instance_type_by_flavor_id',
                        fake_get_instance_type_by_flavor_id)
 
         # FIXME(sirp): for legacy this raises FlavorNotFound instead of
@@ -7565,7 +8354,7 @@ class DisabledInstanceTypesTestCase(BaseTestCase):
     def test_cannot_resize_to_disabled_instance_type(self):
         instance = self._create_fake_instance()
         orig_get_instance_type_by_flavor_id = \
-                instance_types.get_instance_type_by_flavor_id
+                flavors.get_instance_type_by_flavor_id
 
         def fake_get_instance_type_by_flavor_id(flavor_id, ctxt=None,
                                                 read_deleted="yes"):
@@ -7575,7 +8364,7 @@ class DisabledInstanceTypesTestCase(BaseTestCase):
             instance_type['disabled'] = True
             return instance_type
 
-        self.stubs.Set(instance_types, 'get_instance_type_by_flavor_id',
+        self.stubs.Set(flavors, 'get_instance_type_by_flavor_id',
                        fake_get_instance_type_by_flavor_id)
 
         # FIXME(sirp): for legacy this raises FlavorNotFound instead of
@@ -7680,26 +8469,28 @@ class InnerTestingException(Exception):
     pass
 
 
-class ComputeRescheduleOrReraiseTestCase(BaseTestCase):
+class ComputeRescheduleOrErrorTestCase(BaseTestCase):
     """Test logic and exception handling around rescheduling or re-raising
     original exceptions when builds fail.
     """
 
     def setUp(self):
-        super(ComputeRescheduleOrReraiseTestCase, self).setUp()
+        super(ComputeRescheduleOrErrorTestCase, self).setUp()
         self.instance = self._create_fake_instance()
 
-    def test_reschedule_or_reraise_called(self):
-        """Basic sanity check to make sure _reschedule_or_reraise is called
+    def test_reschedule_or_error_called(self):
+        """Basic sanity check to make sure _reschedule_or_error is called
         when a build fails.
         """
         self.mox.StubOutWithMock(self.compute, '_spawn')
-        self.mox.StubOutWithMock(self.compute, '_reschedule_or_reraise')
+        self.mox.StubOutWithMock(self.compute, '_reschedule_or_error')
 
-        self.compute._spawn(mox.IgnoreArg(), self.instance, None, None, None,
-                False, None).AndRaise(test.TestingException("BuildError"))
-        self.compute._reschedule_or_reraise(mox.IgnoreArg(), self.instance,
-                mox.IgnoreArg(), None, None, None, False, None, {}, [])
+        self.compute._spawn(mox.IgnoreArg(), self.instance, mox.IgnoreArg(),
+                [], mox.IgnoreArg(), [], None, set_access_ip=False).AndRaise(
+                        test.TestingException("BuildError"))
+        self.compute._reschedule_or_error(mox.IgnoreArg(), self.instance,
+                mox.IgnoreArg(), None, None, None, False, None, {}, []).\
+                        AndReturn(True)
 
         self.mox.ReplayAll()
         self.compute._run_instance(self.context, None, {}, None, None, None,
@@ -7729,11 +8520,16 @@ class ComputeRescheduleOrReraiseTestCase(BaseTestCase):
             # should raise the deallocation exception, not the original build
             # error:
             self.assertRaises(InnerTestingException,
-                    self.compute._reschedule_or_reraise, self.context,
+                    self.compute._reschedule_or_error, self.context,
                     self.instance, exc_info, None, None, None, False, None, {})
 
     def test_reschedule_fail(self):
         # Test handling of exception from _reschedule.
+        try:
+            raise test.TestingException("Original")
+        except Exception:
+            exc_info = sys.exc_info()
+
         instance_uuid = self.instance['uuid']
         method_args = (None, None, None, None, False, {})
         self.mox.StubOutWithMock(self.compute, '_shutdown_instance')
@@ -7746,19 +8542,13 @@ class ComputeRescheduleOrReraiseTestCase(BaseTestCase):
                                         mox.IgnoreArg())
         self.compute._reschedule(self.context, None, instance_uuid,
                 {}, self.compute.scheduler_rpcapi.run_instance,
-                method_args, task_states.SCHEDULING).AndRaise(
+                method_args, task_states.SCHEDULING, exc_info).AndRaise(
                         InnerTestingException("Inner"))
 
         self.mox.ReplayAll()
 
-        try:
-            raise test.TestingException("Original")
-        except Exception:
-            # not re-scheduling, should raise the original build error:
-            exc_info = sys.exc_info()
-            self.assertRaises(test.TestingException,
-                    self.compute._reschedule_or_reraise, self.context,
-                    self.instance, exc_info, None, None, None, False, None, {})
+        self.assertFalse(self.compute._reschedule_or_error(self.context,
+            self.instance, exc_info, None, None, None, False, None, {}))
 
     def test_reschedule_false(self):
         # Test not-rescheduling, but no nested exception.
@@ -7788,9 +8578,8 @@ class ComputeRescheduleOrReraiseTestCase(BaseTestCase):
 
             # re-scheduling is False, the original build error should be
             # raised here:
-            self.assertRaises(test.TestingException,
-                    self.compute._reschedule_or_reraise, self.context,
-                    self.instance, exc_info, None, None, None, False, None, {})
+            self.assertFalse(self.compute._reschedule_or_error(self.context,
+                self.instance, exc_info, None, None, None, False, None, {}))
 
     def test_reschedule_true(self):
         # Test behavior when re-scheduling happens.
@@ -7822,14 +8611,14 @@ class ComputeRescheduleOrReraiseTestCase(BaseTestCase):
 
             # re-scheduling is True, original error is logged, but nothing
             # is raised:
-            self.compute._reschedule_or_reraise(self.context, self.instance,
+            self.compute._reschedule_or_error(self.context, self.instance,
                     exc_info, None, None, None, False, None, {})
 
     def test_no_reschedule_on_delete_during_spawn(self):
         # instance should not be rescheduled if instance is deleted
         # during the build
         self.mox.StubOutWithMock(self.compute, '_spawn')
-        self.mox.StubOutWithMock(self.compute, '_reschedule_or_reraise')
+        self.mox.StubOutWithMock(self.compute, '_reschedule_or_error')
 
         exc = exception.UnexpectedTaskStateError(expected=task_states.SPAWNING,
                 actual=task_states.DELETING)
@@ -7838,7 +8627,7 @@ class ComputeRescheduleOrReraiseTestCase(BaseTestCase):
                 mox.IgnoreArg(), set_access_ip=False).AndRaise(exc)
 
         self.mox.ReplayAll()
-        # test succeeds if mocked method '_reschedule_or_reraise' is not
+        # test succeeds if mocked method '_reschedule_or_error' is not
         # called.
         self.compute._run_instance(self.context, None, {}, None, None, None,
                 False, None, self.instance)
@@ -7847,7 +8636,7 @@ class ComputeRescheduleOrReraiseTestCase(BaseTestCase):
         # instance shouldn't be rescheduled if unexpected task state arises.
         # the exception should get reraised.
         self.mox.StubOutWithMock(self.compute, '_spawn')
-        self.mox.StubOutWithMock(self.compute, '_reschedule_or_reraise')
+        self.mox.StubOutWithMock(self.compute, '_reschedule_or_error')
 
         exc = exception.UnexpectedTaskStateError(expected=task_states.SPAWNING,
                 actual=task_states.SCHEDULING)
@@ -7869,7 +8658,7 @@ class ComputeRescheduleResizeOrReraiseTestCase(BaseTestCase):
         super(ComputeRescheduleResizeOrReraiseTestCase, self).setUp()
         self.instance = self._create_fake_instance()
         self.instance_uuid = self.instance['uuid']
-        self.instance_type = instance_types.get_instance_type_by_name(
+        self.instance_type = flavors.get_instance_type_by_name(
                 "m1.tiny")
 
     def test_reschedule_resize_or_reraise_called(self):
@@ -7976,7 +8765,7 @@ class ComputeInactiveImageTestCase(BaseTestCase):
 
     def test_create_instance_with_deleted_image(self):
         # Make sure we can't start an instance with a deleted image.
-        inst_type = instance_types.get_instance_type_by_name('m1.tiny')
+        inst_type = flavors.get_instance_type_by_name('m1.tiny')
         self.assertRaises(exception.ImageNotActive,
                           self.compute_api.create,
                           self.context, inst_type, 'fake-image-uuid')
@@ -8196,12 +8985,138 @@ class ComputeInjectedFilesTestCase(BaseTestCase):
             ('/d/e/f', base64.b64encode('seespotrun')),
         ]
 
-        def _ror(context, instance, exc_info, requested_networks,
+        def _roe(context, instance, exc_info, requested_networks,
                  admin_password, injected_files, is_first_time, request_spec,
                  filter_properties, bdms=None):
             self.assertEqual(expected, injected_files)
+            return True
 
-        self.stubs.Set(self.compute, '_reschedule_or_reraise', _ror)
+        def spawn_explode(context, instance, image_meta, injected_files,
+                admin_password, nw_info, block_device_info):
+            # force reschedule logic to execute
+            raise test.TestingException(_("spawn error"))
+
+        self.stubs.Set(self.compute.driver, 'spawn', spawn_explode)
+        self.stubs.Set(self.compute, '_reschedule_or_error', _roe)
 
         self.compute.run_instance(self.context, self.instance,
                                   injected_files=expected)
+
+
+class CheckConfigDriveTestCase(test.TestCase):
+    # NOTE(sirp): `TestCase` is far too heavyweight for this test, this should
+    # probably derive from a `test.FastTestCase` that omits DB and env
+    # handling
+    def setUp(self):
+        super(CheckConfigDriveTestCase, self).setUp()
+        self.compute_api = compute.API()
+        self.context = context.RequestContext(
+                'fake_user_id', 'fake_project_id')
+
+        self.called = called = {'show': False}
+
+        def fake_get_remote_image_service(context, image_id):
+            class FakeGlance(object):
+                def show(self, context, image_id):
+                    called['show'] = True
+
+            return FakeGlance(), image_id
+
+        self.stubs.Set(glance, 'get_remote_image_service',
+                       fake_get_remote_image_service)
+
+    def tearDown(self):
+        self.stubs.UnsetAll()
+        super(CheckConfigDriveTestCase, self).tearDown()
+
+    def assertCheck(self, expected, config_drive):
+        self.assertEqual(expected,
+                         self.compute_api._check_config_drive(
+                             self.context, config_drive))
+
+    def test_value_is_none(self):
+        self.assertFalse(self.called['show'])
+        self.assertCheck((None, None), None)
+        self.assertFalse(self.called['show'])
+
+    def test_bool_string_or_id(self):
+        self.assertCheck((None, True), "true")
+        self.assertCheck((None, True), 1)
+        self.assertCheck((None, True), 't')
+
+    def test_value_is_image_id(self):
+        self.assertCheck(("fake-uuid", None), "fake-uuid")
+
+
+class CheckRequestedImageTestCase(test.TestCase):
+    def setUp(self):
+        super(CheckRequestedImageTestCase, self).setUp()
+        self.compute_api = compute.API()
+        self.context = context.RequestContext(
+                'fake_user_id', 'fake_project_id')
+
+        self.instance_type = flavors.get_default_instance_type()
+        self.instance_type['memory_mb'] = 64
+        self.instance_type['root_gb'] = 1
+
+    def test_no_image_specified(self):
+        self.compute_api._check_requested_image(self.context, None, {},
+                self.instance_type)
+
+    def test_image_status_must_be_active(self):
+        image = dict(id='123', status='foo')
+
+        self.assertRaises(exception.ImageNotActive,
+                self.compute_api._check_requested_image, self.context,
+                image['id'], image, self.instance_type)
+
+        image['status'] = 'active'
+        self.compute_api._check_requested_image(self.context, image['id'],
+                image, self.instance_type)
+
+    def test_image_min_ram_check(self):
+        image = dict(id='123', status='active', min_ram='65')
+
+        self.assertRaises(exception.InstanceTypeMemoryTooSmall,
+                self.compute_api._check_requested_image, self.context,
+                image['id'], image, self.instance_type)
+
+        image['min_ram'] = '64'
+        self.compute_api._check_requested_image(self.context, image['id'],
+                image, self.instance_type)
+
+    def test_image_min_disk_check(self):
+        image = dict(id='123', status='active', min_disk='2')
+
+        self.assertRaises(exception.InstanceTypeDiskTooSmall,
+                self.compute_api._check_requested_image, self.context,
+                image['id'], image, self.instance_type)
+
+        image['min_disk'] = '1'
+        self.compute_api._check_requested_image(self.context, image['id'],
+                image, self.instance_type)
+
+    def test_image_too_large(self):
+        image = dict(id='123', status='active', size='1073741825')
+
+        self.assertRaises(exception.InstanceTypeDiskTooSmall,
+                self.compute_api._check_requested_image, self.context,
+                image['id'], image, self.instance_type)
+
+        image['size'] = '1073741824'
+        self.compute_api._check_requested_image(self.context, image['id'],
+                image, self.instance_type)
+
+    def test_root_gb_zero_disables_size_check(self):
+        self.instance_type['root_gb'] = 0
+        image = dict(id='123', status='active', size='1073741825')
+
+        self.compute_api._check_requested_image(self.context, image['id'],
+                image, self.instance_type)
+
+    def test_root_gb_zero_disables_min_disk(self):
+        self.instance_type['root_gb'] = 0
+        image = dict(id='123', status='active', min_disk='2')
+
+        self.compute_api._check_requested_image(self.context, image['id'],
+                image, self.instance_type)

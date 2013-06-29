@@ -47,17 +47,34 @@ datetime_fields = ['launched_at', 'terminated_at', 'updated_at']
 
 
 class ConductorManager(manager.Manager):
-    """Mission: TBD."""
+    """Mission: Conduct things.
 
-    RPC_API_VERSION = '1.48'
+    The methods in the base API for nova-conductor are various proxy operations
+    performed on behalf of the nova-compute service running on compute nodes.
+    Compute nodes are not allowed to directly access the database, so this set
+    of methods allows them to get specific work done without locally accessing
+    the database.
+
+    The nova-conductor service also exposes an API in the 'compute_task'
+    namespace.  See the ComputeTaskManager class for details.
+    """
+
+    RPC_API_VERSION = '1.49'
 
     def __init__(self, *args, **kwargs):
-        super(ConductorManager, self).__init__(*args, **kwargs)
+        super(ConductorManager, self).__init__(service_name='conductor',
+                                               *args, **kwargs)
         self.security_group_api = (
             openstack_driver.get_openstack_security_group_driver())
         self._network_api = None
         self._compute_api = None
+        self.compute_task_mgr = ComputeTaskManager()
         self.quotas = quota.QUOTAS
+
+    def create_rpc_dispatcher(self, *args, **kwargs):
+        kwargs['additional_apis'] = [self.compute_task_mgr]
+        return super(ConductorManager, self).create_rpc_dispatcher(*args,
+                **kwargs)
 
     @property
     def network_api(self):
@@ -75,6 +92,8 @@ class ConductorManager(manager.Manager):
         return self._compute_api
 
     def ping(self, context, arg):
+        # NOTE(russellb) This method can be removed in 2.0 of this API.  It is
+        # now a part of the base rpc API.
         return jsonutils.to_primitive({'service': 'conductor', 'arg': arg})
 
     @rpc_common.client_exceptions(KeyError, ValueError,
@@ -102,10 +121,13 @@ class ConductorManager(manager.Manager):
             self.db.instance_get(context, instance_id))
 
     @rpc_common.client_exceptions(exception.InstanceNotFound)
-    def instance_get_by_uuid(self, context, instance_uuid):
+    def instance_get_by_uuid(self, context, instance_uuid,
+                             columns_to_join=None):
         return jsonutils.to_primitive(
-            self.db.instance_get_by_uuid(context, instance_uuid))
+            self.db.instance_get_by_uuid(context, instance_uuid,
+                columns_to_join))
 
+    # NOTE(hanlind): This method can be removed in v2.0 of the RPC API.
     def instance_get_all(self, context):
         return jsonutils.to_primitive(self.db.instance_get_all(context))
 
@@ -202,6 +224,8 @@ class ConductorManager(manager.Manager):
         usage = self.db.bw_usage_get(context, uuid, start_period, mac)
         return jsonutils.to_primitive(usage)
 
+    # NOTE(russellb) This method can be removed in 2.0 of this API.  It is
+    # deprecated in favor of the method in the base API.
     def get_backdoor_port(self, context):
         return self.backdoor_port
 
@@ -262,6 +286,7 @@ class ConductorManager(manager.Manager):
             columns_to_join=columns_to_join)
         return jsonutils.to_primitive(result)
 
+    # NOTE(hanlind): This method can be removed in v2.0 of the RPC API.
     def instance_get_all_hung_in_rebooting(self, context, timeout):
         result = self.db.instance_get_all_hung_in_rebooting(context, timeout)
         return jsonutils.to_primitive(result)
@@ -305,8 +330,10 @@ class ConductorManager(manager.Manager):
                          wr_bytes, instance, last_refreshed=None,
                          update_totals=False):
         self.db.vol_usage_update(context, vol_id, rd_req, rd_bytes, wr_req,
-                                 wr_bytes, instance['uuid'], last_refreshed,
-                                 update_totals)
+                                 wr_bytes, instance['uuid'],
+                                 instance['project_id'], instance['user_id'],
+                                 instance['availability_zone'],
+                                 last_refreshed, update_totals)
 
     @rpc_common.client_exceptions(exception.ComputeHostNotFound,
                                   exception.HostBinaryNotFound)
@@ -431,3 +458,19 @@ class ConductorManager(manager.Manager):
 
     def compute_unrescue(self, context, instance):
         self.compute_api.unrescue(context, instance)
+
+
+class ComputeTaskManager(object):
+    """Namespace for compute methods.
+
+    This class presents an rpc API for nova-conductor under the 'compute_task'
+    namespace.  The methods here are compute operations that are invoked
+    by the API service.  These methods see the operation to completion, which
+    may involve coordinating activities on multiple compute nodes.
+    """
+
+    RPC_API_NAMESPACE = 'compute_task'
+    RPC_API_VERSION = '1.0'
+
+    def __init__(self):
+        pass

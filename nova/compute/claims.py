@@ -18,11 +18,9 @@ Claim objects for use with resource tracking.
 """
 
 from nova.openstack.common import jsonutils
-from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-COMPUTE_RESOURCE_SEMAPHORE = "compute_resources"
 
 
 class NopClaim(object):
@@ -86,7 +84,6 @@ class Claim(NopClaim):
     def vcpus(self):
         return self.instance['vcpus']
 
-    @lockutils.synchronized(COMPUTE_RESOURCE_SEMAPHORE, 'nova-')
     def abort(self):
         """Compute operation requiring claimed resources has failed or
         been aborted.
@@ -162,28 +159,33 @@ class Claim(NopClaim):
         """Test if the given type of resource needed for a claim can be safely
         allocated.
         """
-        msg = _("Total %(type_)s: %(total)d %(unit)s, used: %(used)d %(unit)s")
-        LOG.audit(msg % locals(), instance=self.instance)
+        LOG.audit(_('Total %(type)s: %(total)d %(unit)s, used: %(used).02f '
+                    '%(unit)s'),
+                  {'type': type_, 'total': total, 'unit': unit, 'used': used},
+                  instance=self.instance)
 
         if limit is None:
             # treat resource as unlimited:
-            LOG.audit(_("%(type_)s limit not specified, defaulting to "
-                        "unlimited") % locals(), instance=self.instance)
+            LOG.audit(_('%(type)s limit not specified, defaulting to '
+                        'unlimited'), {'type': type_}, instance=self.instance)
             return True
 
         free = limit - used
 
         # Oversubscribed resource policy info:
-        msg = _("%(type_)s limit: %(limit)d %(unit)s, free: %(free)d "
-                "%(unit)s") % locals()
-        LOG.audit(msg, instance=self.instance)
+        LOG.audit(_('%(type)s limit: %(limit).02f %(unit)s, free: %(free).02f '
+                    '%(unit)s'),
+                  {'type': type_, 'limit': limit, 'free': free, 'unit': unit},
+                  instance=self.instance)
 
         can_claim = requested <= free
 
         if not can_claim:
-            msg = _("Unable to claim resources.  Free %(type_)s %(free)d "
-                    "%(unit)s < requested %(requested)d %(unit)s") % locals()
-            LOG.info(msg, instance=self.instance)
+            LOG.info(_('Unable to claim resources.  Free %(type)s %(free).02f '
+                       '%(unit)s < requested %(requested)d %(unit)s'),
+                     {'type': type_, 'free': free, 'unit': unit,
+                      'requested': requested},
+                     instance=self.instance)
 
         return can_claim
 
@@ -210,11 +212,9 @@ class ResizeClaim(Claim):
     def vcpus(self):
         return self.instance_type['vcpus']
 
-    @lockutils.synchronized(COMPUTE_RESOURCE_SEMAPHORE, 'nova-')
     def abort(self):
         """Compute operation requiring claimed resources has failed or
         been aborted.
         """
         LOG.debug(_("Aborting claim: %s") % self, instance=self.instance)
-        self.tracker.abort_resize_claim(self.instance['uuid'],
-                self.instance_type)
+        self.tracker.drop_resize_claim(self.instance, self.instance_type)

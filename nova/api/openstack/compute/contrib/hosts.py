@@ -99,23 +99,38 @@ class HostController(object):
         :returns: A dict in the format:
 
             {'hosts': [{'host_name': 'some.host.name',
-               'service': 'cells'},
+               'service': 'cells',
+               'zone': 'internal'},
               {'host_name': 'some.other.host.name',
-               'service': 'cells'},
+               'service': 'cells',
+               'zone': 'internal'},
               {'host_name': 'some.celly.host.name',
-               'service': 'cells'},
+               'service': 'cells',
+               'zone': 'internal'},
               {'host_name': 'console1.host.com',
-               'service': 'consoleauth'},
+               'service': 'consoleauth',
+               'zone': 'internal'},
               {'host_name': 'network1.host.com',
-               'service': 'network'},
+               'service': 'network',
+               'zone': 'internal'},
               {'host_name': 'netwwork2.host.com',
-               'service': 'network'},
+               'service': 'network',
+               'zone': 'internal'},
+              {'host_name': 'compute1.host.com',
+               'service': 'compute',
+               'zone': 'nova'},
+              {'host_name': 'compute2.host.com',
+               'service': 'compute',
+               'zone': 'nova'},
               {'host_name': 'sched1.host.com',
-               'service': 'scheduler'},
+               'service': 'scheduler',
+               'zone': 'internal'},
               {'host_name': 'sched2.host.com',
-               'service': 'scheduler'},
+               'service': 'scheduler',
+               'zone': 'internal'},
               {'host_name': 'vol1.host.com',
-               'service': 'volume'}]}
+               'service': 'volume'},
+               'zone': 'internal']}
         """
         context = req.environ['nova.context']
         authorize(context)
@@ -187,8 +202,9 @@ class HostController(object):
     def _set_host_maintenance(self, context, host_name, mode=True):
         """Start/Stop host maintenance window. On start, it triggers
         guest VMs evacuation."""
-        LOG.audit(_("Putting host %(host_name)s in maintenance "
-                    "mode %(mode)s.") % locals())
+        LOG.audit(_("Putting host %(host_name)s in maintenance mode "
+                    "%(mode)s."),
+                  {'host_name': host_name, 'mode': mode})
         try:
             result = self.api.set_host_maintenance(context, host_name, mode)
         except NotImplementedError:

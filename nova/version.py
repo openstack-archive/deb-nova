@@ -14,14 +14,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.openstack.common import version as common_version
+import pbr.version
 
 NOVA_VENDOR = "OpenStack Foundation"
 NOVA_PRODUCT = "OpenStack Nova"
 NOVA_PACKAGE = None  # OS distro package version suffix
 
 loaded = False
-version_info = common_version.VersionInfo('nova')
+version_info = pbr.version.VersionInfo('nova')
 version_string = version_info.version_string
 
 
@@ -60,7 +60,7 @@ def _load_config():
         NOVA_PACKAGE = cfg.get("Nova", "package")
         if cfg.has_option("Nova", "package"):
             NOVA_PACKAGE = cfg.get("Nova", "package")
-    except Exception, ex:
+    except Exception as ex:
         LOG = logging.getLogger(__name__)
         LOG.error("Failed to load %(cfgfile)s: %(ex)s" % locals())
 

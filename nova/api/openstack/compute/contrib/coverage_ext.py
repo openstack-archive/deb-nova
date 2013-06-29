@@ -28,15 +28,10 @@ from oslo.config import cfg
 from webob import exc
 
 from nova.api.openstack import extensions
-from nova.cert import rpcapi as cert_api
-from nova.compute import api as compute_api
-from nova.conductor import api as conductor_api
-from nova.console import api as console_api
-from nova.consoleauth import rpcapi as consoleauth_api
+from nova import baserpc
 from nova import db
-from nova.network import api as network_api
 from nova.openstack.common import log as logging
-from nova.scheduler import rpcapi as scheduler_api
+from nova.openstack.common.rpc import common as rpc_common
 
 
 LOG = logging.getLogger(__name__)
@@ -47,13 +42,6 @@ CONF = cfg.CONF
 class CoverageController(object):
     """The Coverage report API controller for the OpenStack API."""
     def __init__(self):
-        self.compute_api = compute_api.API()
-        self.network_api = network_api.API()
-        self.conductor_api = conductor_api.API()
-        self.consoleauth_api = consoleauth_api.ConsoleAuthAPI()
-        self.console_api = console_api.API()
-        self.scheduler_api = scheduler_api.SchedulerAPI()
-        self.cert_api = cert_api.CertAPI()
         self.data_path = None
         self.services = []
         self.combine = False
@@ -86,37 +74,28 @@ class CoverageController(object):
     def _find_ports(self, req, hosts):
         """Return a list of backdoor ports for all services in the list."""
         context = req.environ['nova.context']
-
-        apicommands = {
-            "compute": self.compute_api.get_backdoor_port,
-            "network": self.network_api.get_backdoor_port,
-            "conductor": self.conductor_api.get_backdoor_port,
-            "consoleauth": self.consoleauth_api.get_backdoor_port,
-            "console": self.console_api.get_backdoor_port,
-            "scheduler": self.scheduler_api.get_backdoor_port,
-            "cert": self.cert_api.get_backdoor_port,
-        }
         ports = []
         #TODO(mtreinish): Figure out how to bind the backdoor socket to 0.0.0.0
         # Currently this will only work if the host is resolved as loopback on
         # the same host as api-server
         for host in hosts:
-            if host['service'] in apicommands:
-                get_port_fn = apicommands[host['service']]
-                _host = host
-                _host['port'] = get_port_fn(context, host['host'])
-                #NOTE(mtreinish): if the port is None then it wasn't set in
-                # the configuration file for this service. However, that
-                # doesn't necessarily mean that we don't have backdoor ports
-                # for all the services. So, skip the telnet connection for
-                # this service.
-                if _host['port']:
-                    ports.append(_host)
-                else:
-                    LOG.warning(_("Can't connect to service: %s, no port"
-                                  "specified\n"), host['service'])
+            base = baserpc.BaseAPI(host['service'])
+            _host = host
+            try:
+                _host['port'] = base.get_backdoor_port(context, host['host'])
+            except rpc_common.UnsupportedRpcVersion:
+                _host['port'] = None
+
+            #NOTE(mtreinish): if the port is None then it wasn't set in
+            # the configuration file for this service. However, that
+            # doesn't necessarily mean that we don't have backdoor ports
+            # for all the services. So, skip the telnet connection for
+            # this service.
+            if _host['port']:
+                ports.append(_host)
             else:
-                LOG.debug(_("No backdoor API command for service: %s\n"), host)
+                LOG.warning(_("Can't connect to service: %s, no port"
+                              "specified\n"), host['service'])
         return ports
 
     def _start_coverage_telnet(self, tn, service):
@@ -226,17 +205,20 @@ class CoverageController(object):
             html = body['html']
 
         if self.combine:
-            self.coverInst.combine()
+            data_out = os.path.join(self.data_path, '.nova-coverage')
+            import coverage
+            coverInst = coverage.coverage(data_file=data_out)
+            coverInst.combine()
             if xml:
-                self.coverInst.xml_report(outfile=path)
+                coverInst.xml_report(outfile=path)
             elif html:
                 if os.path.isdir(path):
                     msg = _("Directory conflict: %s already exists")
                     raise exc.HTTPBadRequest(explanation=msg)
-                self.coverInst.html_report(directory=path)
+                coverInst.html_report(directory=path)
             else:
                 output = open(path, 'w')
-                self.coverInst.report(file=output)
+                coverInst.report(file=output)
                 output.close()
             for service in self.services:
                 service['telnet'].close()
@@ -258,18 +240,41 @@ class CoverageController(object):
                 output.close()
         return {'path': path}
 
+    def _reset_coverage_telnet(self, tn):
+        tn.write("coverInst.erase()\n")
+        tn.write("print 'finished'\n")
+        tn.expect([re.compile('finished')])
+
+    def _reset_coverage(self, req):
+        # Reopen telnet connections if they are closed.
+        for service in self.services:
+            if not service['telnet'].get_socket():
+                service['telnet'].open(service['host'], service['port'])
+
+        # Stop coverage if it is started.
+        try:
+            self._stop_coverage(req)
+        except exc.HTTPNotFound:
+            pass
+
+        for service in self.services:
+            self._reset_coverage_telnet(service['telnet'])
+            service['telnet'].close()
+        self.coverInst.erase()
+
     def action(self, req, body):
         _actions = {
                 'start': self._start_coverage,
                 'stop': self._stop_coverage,
                 'report': self._report_coverage,
+                'reset': self._reset_coverage,
         }
         authorize(req.environ['nova.context'])
         if not self.coverInst:
             msg = _("Python coverage module is not installed.")
             raise exc.HTTPServiceUnavailable(explanation=msg)
         for action, data in body.iteritems():
-            if action == 'stop':
+            if action == 'stop' or action == 'reset':
                 return _actions[action](req)
             elif action == 'report' or action == 'start':
                 return _actions[action](req, body)

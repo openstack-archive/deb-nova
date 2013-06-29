@@ -15,7 +15,8 @@
                 {
                     "OS-EXT-IPS:type": "fixed",
                     "addr": "%(ip)s",
-                    "version": 4
+                    "version": 4,
+                    "OS-EXT-IPS-MAC:mac_addr": "%(mac_addr)s"
                 }
             ]
         },

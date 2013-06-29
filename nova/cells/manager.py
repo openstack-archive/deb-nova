@@ -28,7 +28,7 @@ from nova import context
 from nova import exception
 from nova import manager
 from nova.openstack.common import importutils
-from nova.openstack.common import log as logging
+from nova.openstack.common import periodic_task
 from nova.openstack.common import timeutils
 
 cell_manager_opts = [
@@ -44,8 +44,6 @@ cell_manager_opts = [
                 help="Number of instances to update per periodic task run")
 ]
 
-
-LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
 CONF.register_opts(cell_manager_opts, group='cells')
@@ -66,12 +64,13 @@ class CellsManager(manager.Manager):
 
     Scheduling requests get passed to the scheduler class.
     """
-    RPC_API_VERSION = '1.6'
+    RPC_API_VERSION = '1.7'
 
     def __init__(self, *args, **kwargs):
         # Mostly for tests.
         cell_state_manager = kwargs.pop('cell_state_manager', None)
-        super(CellsManager, self).__init__(*args, **kwargs)
+        super(CellsManager, self).__init__(service_name='cells',
+                                           *args, **kwargs)
         if cell_state_manager is None:
             cell_state_manager = cells_state.CellStateManager
         self.state_manager = cell_state_manager()
@@ -99,7 +98,7 @@ class CellsManager(manager.Manager):
         else:
             self._update_our_parents(ctxt)
 
-    @manager.periodic_task
+    @periodic_task.periodic_task
     def _update_our_parents(self, ctxt):
         """Update our parent cells with our capabilities and capacity
         if we're at the bottom of the tree.
@@ -107,7 +106,7 @@ class CellsManager(manager.Manager):
         self.msg_runner.tell_parents_our_capabilities(ctxt)
         self.msg_runner.tell_parents_our_capacities(ctxt)
 
-    @manager.periodic_task
+    @periodic_task.periodic_task
     def _heal_instances(self, ctxt):
         """Periodic task to send updates for a number of instances to
         parent cells.
@@ -249,6 +248,24 @@ class CellsManager(manager.Manager):
         response = self.msg_runner.service_get_by_compute_host(ctxt,
                                                                cell_name,
                                                                host_name)
+        service = response.value_or_raise()
+        cells_utils.add_cell_to_service(service, response.cell_name)
+        return service
+
+    def service_update(self, ctxt, host_name, binary, params_to_update):
+        """
+        Used to enable/disable a service. For compute services, setting to
+        disabled stops new builds arriving on that host.
+
+        :param host_name: the name of the host machine that the service is
+                          running
+        :param binary: The name of the executable that the service runs as
+        :param params_to_update: eg. {'disabled': True}
+        :returns: the service reference
+        """
+        cell_name, host_name = cells_utils.split_cell_and_item(host_name)
+        response = self.msg_runner.service_update(
+            ctxt, cell_name, host_name, binary, params_to_update)
         service = response.value_or_raise()
         cells_utils.add_cell_to_service(service, response.cell_name)
         return service

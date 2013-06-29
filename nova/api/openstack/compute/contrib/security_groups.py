@@ -30,11 +30,9 @@ from nova.compute import api as compute_api
 from nova import exception
 from nova.network.security_group import openstack_driver
 from nova.network.security_group import quantum_driver
-from nova.openstack.common import log as logging
 from nova.virt import netutils
 
 
-LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'security_groups')
 softauth = extensions.soft_extension_authorizer('compute', 'security_groups')
 
@@ -297,6 +295,30 @@ class SecurityGroupController(SecurityGroupControllerBase):
         return {'security_group': self._format_security_group(context,
                                                               group_ref)}
 
+    @wsgi.serializers(xml=SecurityGroupTemplate)
+    def update(self, req, id, body):
+        """Update a security group."""
+        context = _authorize_context(req)
+
+        id = self.security_group_api.validate_id(id)
+
+        security_group = self.security_group_api.get(context, None, id,
+                                                     map_exception=True)
+        security_group_data = self._from_body(body, 'security_group')
+
+        group_name = security_group_data.get('name', None)
+        group_description = security_group_data.get('description', None)
+
+        self.security_group_api.validate_property(group_name, 'name', None)
+        self.security_group_api.validate_property(group_description,
+                                                  'description', None)
+
+        group_ref = self.security_group_api.update_security_group(
+            context, security_group, group_name, group_description)
+
+        return {'security_group': self._format_security_group(context,
+                                                              group_ref)}
+
 
 class SecurityGroupRulesController(SecurityGroupControllerBase):
 
@@ -468,6 +490,8 @@ class SecurityGroupsOutputController(wsgi.Controller):
     def _extend_servers(self, req, servers):
         # TODO(arosen) this function should be refactored to reduce duplicate
         # code and use get_instance_security_groups instead of get_db_instance.
+        if not len(servers):
+            return
         key = "security_groups"
         context = _authorize_context(req)
         if not openstack_driver.is_quantum_security_groups():
@@ -482,13 +506,20 @@ class SecurityGroupsOutputController(wsgi.Controller):
             # quantum security groups the requested security groups for the
             # instance are not in the db and have not been sent to quantum yet.
             if req.method != 'POST':
-                sg_instance_bindings = (
-                    self.security_group_api
-                    .get_instances_security_groups_bindings(context))
-                for server in servers:
-                    groups = sg_instance_bindings.get(server['id'])
-                    if groups:
-                        server[key] = groups
+                if len(servers) == 1:
+                    group = (self.security_group_api
+                             .get_instance_security_groups(context,
+                                                           servers[0]['id']))
+                    if group:
+                        servers[0][key] = group
+                else:
+                    sg_instance_bindings = (
+                        self.security_group_api
+                        .get_instances_security_groups_bindings(context))
+                    for server in servers:
+                        groups = sg_instance_bindings.get(server['id'])
+                        if groups:
+                            server[key] = groups
             # In this section of code len(servers) == 1 as you can only POST
             # one server in an API request.
             else:
@@ -570,7 +601,7 @@ class Security_groups(extensions.ExtensionDescriptor):
     name = "SecurityGroups"
     alias = "os-security-groups"
     namespace = "http://docs.openstack.org/compute/ext/securitygroups/api/v1.1"
-    updated = "2011-07-21T00:00:00+00:00"
+    updated = "2013-05-28T00:00:00+00:00"
 
     def get_controller_extensions(self):
         controller = SecurityGroupActionController()

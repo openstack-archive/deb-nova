@@ -46,10 +46,8 @@ class DbDriver(api.ServiceGroupDriver):
                                  ' ServiceGroup driver'))
         report_interval = service.report_interval
         if report_interval:
-            pulse = utils.FixedIntervalLoopingCall(self._report_state, service)
-            pulse.start(interval=report_interval,
-                        initial_delay=report_interval)
-            return pulse
+            service.tg.add_timer(report_interval, self._report_state,
+                                 report_interval, service)
 
     def is_up(self, service_ref):
         """Moved from nova.utils

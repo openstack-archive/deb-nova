@@ -33,9 +33,6 @@ from nova.api.openstack.compute import limits
 from nova.api.openstack.compute import server_metadata
 from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import versions
-from nova.openstack.common import log as logging
-
-LOG = logging.getLogger(__name__)
 
 allow_instance_snapshots_opt = cfg.BoolOpt('allow_instance_snapshots',
         default=True,
@@ -131,3 +128,15 @@ class APIRouter(nova.api.openstack.APIRouter):
                            controller=server_metadata_controller,
                            action='update_all',
                            conditions={"method": ['PUT']})
+
+
+class APIRouterV3(nova.api.openstack.APIRouterV3):
+    """
+    Routes requests on the OpenStack API to the appropriate controller
+    and method.
+    """
+
+    def _register_extensions(self, ext):
+        pass
+        # TODO(cyeoh): bp v3-api-extension-framework - Register extension
+        # information

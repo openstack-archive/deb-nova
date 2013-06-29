@@ -60,6 +60,15 @@ _MEDIA_TYPE_MAP = {
     'application/atom+xml': 'atom',
 }
 
+# These are typically automatically created by routes as either defaults
+# collection or member methods.
+_ROUTES_METHODS = [
+    'create',
+    'delete',
+    'show',
+    'update',
+]
+
 
 class Request(webob.Request):
     """Add some OpenStack API-specific logic to the base webob.Request."""
@@ -907,7 +916,10 @@ class Resource(wsgi.Application):
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
         if body:
-            LOG.debug(_("Action: '%(action)s', body: %(body)s") % locals())
+            msg = _("Action: '%(action)s', body: "
+                    "%(body)s") % {'action': action,
+                                   'body': unicode(body, 'utf-8')}
+            LOG.debug(msg)
         LOG.debug(_("Calling method %s") % meth)
 
         # Now, deserialize the request body...
@@ -929,7 +941,11 @@ class Resource(wsgi.Application):
         project_id = action_args.pop("project_id", None)
         context = request.environ.get('nova.context')
         if (context and project_id and (project_id != context.project_id)):
-            msg = _("Malformed request url")
+            msg = _("Malformed request URL: URL's project_id '%(project_id)s'"
+                    " doesn't match Context's project_id"
+                    " '%(context_project_id)s'") % \
+                    {'project_id': project_id,
+                     'context_project_id': context.project_id}
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
         # Run pre-processing extensions
@@ -998,8 +1014,7 @@ class Resource(wsgi.Application):
                 meth = getattr(self.controller, action)
         except AttributeError:
             if (not self.wsgi_actions or
-                action not in ['action', 'create', 'delete', 'update',
-                               'show']):
+                action not in _ROUTES_METHODS + ['action']):
                 # Propagate the error
                 raise
         else:

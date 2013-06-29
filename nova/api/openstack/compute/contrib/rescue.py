@@ -23,12 +23,10 @@ from nova.api.openstack import extensions as exts
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
-from nova.openstack.common import log as logging
 from nova import utils
 
 
 CONF = cfg.CONF
-LOG = logging.getLogger(__name__)
 authorize = exts.extension_authorizer('compute', 'rescue')
 
 
@@ -45,7 +43,6 @@ class RescueController(wsgi.Controller):
             raise exc.HTTPNotFound(msg)
 
     @wsgi.action('rescue')
-    @exts.wrap_errors
     def _rescue(self, req, id, body):
         """Rescue an instance."""
         context = req.environ["nova.context"]
@@ -63,6 +60,8 @@ class RescueController(wsgi.Controller):
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                                                                   'rescue')
+        except exception.InvalidVolume as volume_error:
+            raise exc.HTTPConflict(explanation=volume_error.format_message())
         except exception.InstanceNotRescuable as non_rescuable:
             raise exc.HTTPBadRequest(
                 explanation=non_rescuable.format_message())
@@ -70,7 +69,6 @@ class RescueController(wsgi.Controller):
         return {'adminPass': password}
 
     @wsgi.action('unrescue')
-    @exts.wrap_errors
     def _unrescue(self, req, id, body):
         """Unrescue an instance."""
         context = req.environ["nova.context"]

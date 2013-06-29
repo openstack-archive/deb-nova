@@ -80,7 +80,7 @@ class VMwareHTTPFile(object):
         """Close the file handle."""
         try:
             self.file_handle.close()
-        except Exception, exc:
+        except Exception as exc:
             LOG.exception(exc)
 
     def __del__(self):
@@ -97,15 +97,15 @@ class VMwareHTTPFile(object):
 
     def write(self, data):
         """Write data to the file."""
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def read(self, chunk_size):
         """Read a chunk of data."""
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def get_size(self):
         """Get size of the file to be read."""
-        raise NotImplementedError
+        raise NotImplementedError()
 
 
 class VMwareHTTPWriteFile(VMwareHTTPFile):
@@ -138,7 +138,7 @@ class VMwareHTTPWriteFile(VMwareHTTPFile):
         """Get the response and close the connection."""
         try:
             self.conn.getresponse()
-        except Exception, excep:
+        except Exception as excep:
             LOG.debug(_("Exception during HTTP connection close in "
                       "VMwareHTTPWrite. Exception is %s") % excep)
         super(VMwareHTTPWriteFile, self).close()

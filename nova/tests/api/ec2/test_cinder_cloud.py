@@ -26,12 +26,11 @@ from oslo.config import cfg
 from nova.api.ec2 import cloud
 from nova.api.ec2 import ec2utils
 from nova.compute import api as compute_api
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova.compute import utils as compute_utils
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
 from nova import test
 from nova.tests import fake_network
@@ -41,9 +40,8 @@ from nova import volume
 
 CONF = cfg.CONF
 CONF.import_opt('compute_driver', 'nova.virt.driver')
-CONF.import_opt('default_instance_type', 'nova.compute.instance_types')
+CONF.import_opt('default_instance_type', 'nova.compute.flavors')
 CONF.import_opt('use_ipv6', 'nova.netconf')
-LOG = logging.getLogger(__name__)
 
 
 def get_fake_cache():
@@ -190,6 +188,35 @@ class CinderCloudTestCase(test.TestCase):
 
         self.cloud.delete_volume(self.context, vol1['volumeId'])
         self.cloud.delete_volume(self.context, vol2['volumeId'])
+
+    def test_format_volume_maps_status(self):
+        fake_volume = {'id': 1,
+                       'status': 'creating',
+                       'availability_zone': 'nova',
+                       'volumeId': 'vol-0000000a',
+                       'attachmentSet': [{}],
+                       'snapshotId': None,
+                       'created_at': '2013-04-18T06:03:35.025626',
+                       'size': 1,
+                       'mountpoint': None,
+                       'attach_status': None}
+
+        self.assertEqual(self.cloud._format_volume(self.context,
+                                                   fake_volume)['status'],
+                                                   'creating')
+
+        fake_volume['status'] = 'attaching'
+        self.assertEqual(self.cloud._format_volume(self.context,
+                                                   fake_volume)['status'],
+                                                   'in-use')
+        fake_volume['status'] = 'detaching'
+        self.assertEqual(self.cloud._format_volume(self.context,
+                                                   fake_volume)['status'],
+                                                   'in-use')
+        fake_volume['status'] = 'banana'
+        self.assertEqual(self.cloud._format_volume(self.context,
+                                                   fake_volume)['status'],
+                                                   'banana')
 
     def test_create_volume_in_availability_zone(self):
         """Makes sure create_volume works when we specify an availability
@@ -374,20 +401,20 @@ class CinderCloudTestCase(test.TestCase):
                                                         **kwargs)
                 if 'snapshot_id' in values:
                     self.volume_api.create_snapshot(self.context,
-                                                    vol,
+                                                    vol['id'],
                                                     'snapshot-bdm',
                                                     'fake snap for bdm tests',
                                                     values['snapshot_id'])
 
-                self.volume_api.attach(self.context, vol,
+                self.volume_api.attach(self.context, vol['id'],
                                        instance_uuid, bdm['device_name'])
                 volumes.append(vol)
         return volumes
 
     def _setUpBlockDeviceMapping(self):
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
-        sys_meta = instance_types.save_instance_type_info(
-            {}, instance_types.get_instance_type(1))
+        sys_meta = flavors.save_instance_type_info(
+            {}, flavors.get_instance_type(1))
         inst1 = db.instance_create(self.context,
                                   {'image_ref': image_uuid,
                                    'instance_type_id': 1,
@@ -444,7 +471,7 @@ class CinderCloudTestCase(test.TestCase):
 
     def _tearDownBlockDeviceMapping(self, inst1, inst2, volumes):
         for vol in volumes:
-            self.volume_api.delete(self.context, vol)
+            self.volume_api.delete(self.context, vol['id'])
         for uuid in (inst1['uuid'], inst2['uuid']):
             for bdm in db.block_device_mapping_get_all_by_instance(
                 self.context, uuid):
@@ -748,11 +775,11 @@ class CinderCloudTestCase(test.TestCase):
         for vol in vols:
             self.assertTrue(str(vol['id']) == str(vol1_uuid) or
                 str(vol['id']) == str(vol2_uuid))
-            if(str(vol['id']) == str(vol1_uuid)):
-                self.volume_api.attach(self.context, vol,
+            if str(vol['id']) == str(vol1_uuid):
+                self.volume_api.attach(self.context, vol['id'],
                                        instance_uuid, '/dev/sdb')
-            elif(str(vol['id']) == str(vol2_uuid)):
-                self.volume_api.attach(self.context, vol,
+            elif str(vol['id']) == str(vol2_uuid):
+                self.volume_api.attach(self.context, vol['id'],
                                        instance_uuid, '/dev/sdc')
 
         vol = self.volume_api.get(self.context, vol1_uuid)
@@ -842,7 +869,7 @@ class CinderCloudTestCase(test.TestCase):
         self._assert_volume_attached(vol2, instance_uuid, '/dev/sdc')
 
         self.cloud.compute_api.detach_volume(self.context,
-                                             volume_id=vol1_uuid)
+                                             instance, vol1)
 
         vol1 = self.volume_api.get(self.context, vol1_uuid)
         self._assert_volume_detached(vol1)

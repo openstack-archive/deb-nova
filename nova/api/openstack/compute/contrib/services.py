@@ -21,13 +21,9 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
-from nova import db
 from nova import exception
-from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
-from nova import utils
+from nova import servicegroup
 
-LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'services')
 CONF = cfg.CONF
 CONF.import_opt('service_down_time', 'nova.service')
@@ -74,6 +70,7 @@ class ServiceController(object):
 
     def __init__(self):
         self.host_api = compute.HostAPI()
+        self.servicegroup_api = servicegroup.API()
 
     @wsgi.serializers(xml=ServicesIndexTemplate)
     def index(self, req):
@@ -82,7 +79,6 @@ class ServiceController(object):
         """
         context = req.environ['nova.context']
         authorize(context)
-        now = timeutils.utcnow()
         services = self.host_api.service_get_all(
             context, set_zones=True)
 
@@ -99,8 +95,7 @@ class ServiceController(object):
 
         svcs = []
         for svc in services:
-            delta = now - (svc['updated_at'] or svc['created_at'])
-            alive = abs(utils.total_seconds(delta)) <= CONF.service_down_time
+            alive = self.servicegroup_api.service_is_up(svc)
             art = (alive and "up") or "down"
             active = 'enabled'
             if svc['disabled']:
@@ -123,7 +118,10 @@ class ServiceController(object):
         elif id == "disable":
             disabled = True
         else:
-            raise webob.exc.HTTPNotFound("Unknown action")
+            raise webob.exc.HTTPNotFound(_("Unknown action"))
+
+        status = id + 'd'
+
         try:
             host = body['host']
             binary = body['binary']
@@ -131,15 +129,11 @@ class ServiceController(object):
             raise webob.exc.HTTPUnprocessableEntity()
 
         try:
-            svc = db.service_get_by_args(context, host, binary)
-            if not svc:
-                raise webob.exc.HTTPNotFound('Unknown service')
+            svc = self.host_api.service_update(context, host, binary,
+                                               {'disabled': disabled})
+        except exception.ServiceNotFound as exc:
+            raise webob.exc.HTTPNotFound(_("Unknown service"))
 
-            db.service_update(context, svc['id'], {'disabled': disabled})
-        except exception.ServiceNotFound:
-            raise webob.exc.HTTPNotFound("service not found")
-
-        status = id + 'd'
         return {'service': {'host': host, 'binary': binary, 'status': status}}
 
 

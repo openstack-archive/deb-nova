@@ -21,14 +21,13 @@ import copy
 
 from oslo.config import cfg
 
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova.network import api as network_api
 from nova import notifications
-from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common.notifier import test_notifier
 from nova import test
@@ -36,7 +35,6 @@ from nova.tests import fake_network
 
 CONF = cfg.CONF
 CONF.import_opt('compute_driver', 'nova.virt.driver')
-LOG = logging.getLogger(__name__)
 
 
 class NotificationsTestCase(test.TestCase):
@@ -71,8 +69,8 @@ class NotificationsTestCase(test.TestCase):
         self.instance = self._wrapped_create()
 
     def _wrapped_create(self, params=None):
-        instance_type = instance_types.get_instance_type_by_name('m1.tiny')
-        sys_meta = instance_types.save_instance_type_info({}, instance_type)
+        instance_type = flavors.get_instance_type_by_name('m1.tiny')
+        sys_meta = flavors.save_instance_type_info({}, instance_type)
         inst = {}
         inst['image_ref'] = 1
         inst['user_id'] = self.user_id

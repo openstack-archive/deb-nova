@@ -157,12 +157,12 @@ class FloatingIPController(object):
         try:
             address = self.network_api.allocate_floating_ip(context, pool)
             ip = self.network_api.get_floating_ip_by_address(context, address)
-        except exception.NoMoreFloatingIps, nmfi:
+        except exception.NoMoreFloatingIps:
             if pool:
-                nmfi.message = _("No more floating ips in pool %s.") % pool
+                msg = _("No more floating ips in pool %s.") % pool
             else:
-                nmfi.message = _("No more floating ips available.")
-            raise
+                msg = _("No more floating ips available.")
+            raise webob.exc.HTTPNotFound(explanation=msg)
 
         return _translate_floating_ip_view(ip)
 
@@ -198,10 +198,11 @@ class FloatingIPController(object):
 
 
 class FloatingIPActionController(wsgi.Controller):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, ext_mgr=None, *args, **kwargs):
         super(FloatingIPActionController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
         self.network_api = network.API()
+        self.ext_mgr = ext_mgr
 
     @wsgi.action('addFloatingIp')
     def _add_floating_ip(self, req, id, body):
@@ -230,18 +231,27 @@ class FloatingIPActionController(wsgi.Controller):
             msg = _('No fixed ips associated to instance')
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        # TODO(tr3buchet): this will associate the floating IP with the
-        # first fixed_ip an instance has. This should be
-        # changed to support specifying a particular fixed_ip if
-        # multiple exist.
-        if len(fixed_ips) > 1:
-            msg = _('multiple fixed_ips exist, using the first: %s')
-            LOG.warning(msg, fixed_ips[0]['address'])
+        fixed_address = None
+        if self.ext_mgr.is_loaded('os-extended-floating-ips'):
+            if 'fixed_address' in body['addFloatingIp']:
+                fixed_address = body['addFloatingIp']['fixed_address']
+                for fixed in fixed_ips:
+                    if fixed['address'] == fixed_address:
+                        break
+                else:
+                    msg = _('Specified fixed address not assigned to instance')
+                    raise webob.exc.HTTPBadRequest(explanation=msg)
+
+        if not fixed_address:
+            fixed_address = fixed_ips[0]['address']
+            if len(fixed_ips) > 1:
+                msg = _('multiple fixed_ips exist, using the first: %s')
+                LOG.warning(msg, fixed_address)
 
         try:
             self.network_api.associate_floating_ip(context, instance,
                                   floating_address=address,
-                                  fixed_address=fixed_ips[0]['address'])
+                                  fixed_address=fixed_address)
         except exception.FloatingIpAssociated:
             msg = _('floating ip is already associated')
             raise webob.exc.HTTPBadRequest(explanation=msg)
@@ -299,7 +309,7 @@ class FloatingIPActionController(wsgi.Controller):
             return webob.Response(status_int=202)
         else:
             msg = _("Floating ip %(address)s is not associated with instance "
-                    "%(id)s.") % locals()
+                    "%(id)s.") % {'address': address, 'id': id}
             raise webob.exc.HTTPUnprocessableEntity(explanation=msg)
 
 
@@ -322,6 +332,6 @@ class Floating_ips(extensions.ExtensionDescriptor):
         return resources
 
     def get_controller_extensions(self):
-        controller = FloatingIPActionController()
+        controller = FloatingIPActionController(self.ext_mgr)
         extension = extensions.ControllerExtension(self, 'servers', controller)
         return [extension]

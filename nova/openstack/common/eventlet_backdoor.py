@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright (c) 2012 OpenStack Foundation
+# Copyright (c) 2012 OpenStack Foundation.
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
@@ -15,6 +15,8 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+
+from __future__ import print_function
 
 import gc
 import pprint
@@ -37,7 +39,7 @@ CONF.register_opts(eventlet_backdoor_opts)
 
 
 def _dont_use_this():
-    print "Don't use this, just disconnect instead"
+    print("Don't use this, just disconnect instead")
 
 
 def _find_objects(t):
@@ -46,16 +48,16 @@ def _find_objects(t):
 
 def _print_greenthreads():
     for i, gt in enumerate(_find_objects(greenlet.greenlet)):
-        print i, gt
+        print(i, gt)
         traceback.print_stack(gt.gr_frame)
-        print
+        print()
 
 
 def _print_nativethreads():
     for threadId, stack in sys._current_frames().items():
-        print threadId
+        print(threadId)
         traceback.print_stack(stack)
-        print
+        print()
 
 
 def initialize_if_enabled():

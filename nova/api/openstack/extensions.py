@@ -16,6 +16,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import abc
 import os
 
 import webob.dec
@@ -274,7 +275,8 @@ class ExtensionManager(object):
                 self.load_extension(ext_factory)
             except Exception as exc:
                 LOG.warn(_('Failed to load extension %(ext_factory)s: '
-                           '%(exc)s') % locals())
+                           '%(exc)s'),
+                         {'ext_factory': ext_factory, 'exc': exc})
 
 
 class ControllerExtension(object):
@@ -307,18 +309,6 @@ class ResourceExtension(object):
         self.member_actions = member_actions
         self.custom_routes_fn = custom_routes_fn
         self.inherits = inherits
-
-
-def wrap_errors(fn):
-    """Ensure errors are not passed along."""
-    def wrapped(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except webob.exc.HTTPException:
-            raise
-        except Exception:
-            raise webob.exc.HTTPInternalServerError()
-    return wrapped
 
 
 def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
@@ -355,19 +345,18 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
                 ext_mgr.load_extension(classpath)
             except Exception as exc:
                 logger.warn(_('Failed to load extension %(classpath)s: '
-                              '%(exc)s') % locals())
+                              '%(exc)s'),
+                            {'classpath': classpath, 'exc': exc})
 
         # Now, let's consider any subdirectories we may have...
         subdirs = []
         for dname in dirnames:
             # Skip it if it does not have __init__.py
-            if not os.path.exists(os.path.join(dirpath, dname,
-                                               '__init__.py')):
+            if not os.path.exists(os.path.join(dirpath, dname, '__init__.py')):
                 continue
 
             # If it has extension(), delegate...
-            ext_name = ("%s%s.%s.extension" %
-                        (package, relpkg, dname))
+            ext_name = "%s%s.%s.extension" % (package, relpkg, dname)
             try:
                 ext = importutils.import_class(ext_name)
             except ImportError:
@@ -378,8 +367,9 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
                 try:
                     ext(ext_mgr)
                 except Exception as exc:
-                    logger.warn(_('Failed to load extension %(ext_name)s: '
-                                  '%(exc)s') % locals())
+                    logger.warn(_('Failed to load extension %(ext_name)s:'
+                                  '%(exc)s'),
+                                {'ext_name': ext_name, 'exc': exc})
 
         # Update the list of directories we'll explore...
         dirnames[:] = subdirs
@@ -408,3 +398,52 @@ def soft_extension_authorizer(api_name, extension_name):
         except exception.NotAuthorized:
             return False
     return authorize
+
+
+class V3APIExtensionBase(object):
+    """Abstract base class for all V3 API extensions.
+
+    All V3 API extensions must derive from this class and implement
+    the abstract methods get_resources and get_controller_extensions
+    even if they just return an empty list. The extensions must also
+    define the abstract properties.
+    """
+    __metaclass__ = abc.ABCMeta
+
+    @abc.abstractmethod
+    def get_resources(self):
+        """Return a list of resources extensions.
+
+        The extensions should return a list of ResourceExtension
+        objects. This list may be empty.
+        """
+        pass
+
+    @abc.abstractmethod
+    def get_controller_extensions(self):
+        """Return a list of controller extensions.
+
+        The extensions should return a list of ControllerExtension
+        objects. This list may be empty.
+        """
+        pass
+
+    @abc.abstractproperty
+    def name(self):
+        """Name of the extension."""
+        pass
+
+    @abc.abstractproperty
+    def alias(self):
+        """Alias for the extension."""
+        pass
+
+    @abc.abstractproperty
+    def namespace(self):
+        """Namespace for the extension."""
+        pass
+
+    @abc.abstractproperty
+    def version(self):
+        """Version of the extension."""
+        pass

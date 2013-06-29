@@ -308,7 +308,13 @@ class HostSystem(ManagedObject):
         config.product = product
         summary.config = config
 
+        pnic_do = DataObject()
+        pnic_do.device = "vmnic0"
+        net_info_pnic = DataObject()
+        net_info_pnic.PhysicalNic = [pnic_do]
+
         self.set("summary", summary)
+        self.set("config.network.pnic", net_info_pnic)
 
         if _db_content.get("Network", None) is None:
             create_network()
@@ -697,7 +703,7 @@ class FakeVim(object):
                         for prop in properties:
                             temp_mdo.set(prop, mdo.get(prop))
                         lst_ret_objs.append(temp_mdo)
-            except Exception, exc:
+            except Exception as exc:
                 LOG.exception(exc)
                 continue
         return lst_ret_objs

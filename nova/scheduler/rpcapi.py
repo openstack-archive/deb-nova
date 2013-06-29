@@ -96,9 +96,6 @@ class SchedulerAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 filter_properties=filter_properties,
                 reservations=reservations_p))
 
-    def show_host_resources(self, ctxt, host):
-        return self.call(ctxt, self.make_msg('show_host_resources', host=host))
-
     def live_migration(self, ctxt, block_migration, disk_over_commit,
             instance, dest):
         # NOTE(comstud): Call vs cast so we can get exceptions back, otherwise
@@ -115,10 +112,6 @@ class SchedulerAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 service_name=service_name, host=host,
                 capabilities=capabilities),
                 version='2.4')
-
-    def get_backdoor_port(self, context, host):
-        return self.call(context, self.make_msg('get_backdoor_port'),
-                         version='2.5')
 
     def select_hosts(self, ctxt, request_spec, filter_properties):
         return self.call(ctxt, self.make_msg('select_hosts',

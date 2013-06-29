@@ -21,7 +21,7 @@ import datetime
 from oslo.config import cfg
 
 from nova import compute
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova import context
 from nova import db
 from nova.db.sqlalchemy import api as sqa_api
@@ -95,7 +95,7 @@ class QuotaIntegrationTestCase(test.TestCase):
         for i in range(CONF.quota_instances):
             instance = self._create_instance()
             instance_uuids.append(instance['uuid'])
-        inst_type = instance_types.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_instance_type_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         self.assertRaises(exception.QuotaError, compute.API().create,
                                             self.context,
@@ -108,7 +108,7 @@ class QuotaIntegrationTestCase(test.TestCase):
 
     def test_too_many_cores(self):
         instance = self._create_instance(cores=4)
-        inst_type = instance_types.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_instance_type_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         self.assertRaises(exception.QuotaError, compute.API().create,
                                             self.context,
@@ -146,7 +146,7 @@ class QuotaIntegrationTestCase(test.TestCase):
         metadata = {}
         for i in range(CONF.quota_metadata_items + 1):
             metadata['key%s' % i] = 'value%s' % i
-        inst_type = instance_types.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_instance_type_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         self.assertRaises(exception.QuotaError, compute.API().create,
                                             self.context,
@@ -158,7 +158,7 @@ class QuotaIntegrationTestCase(test.TestCase):
 
     def _create_with_injected_files(self, files):
         api = compute.API()
-        inst_type = instance_types.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_instance_type_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         api.create(self.context, min_count=1, max_count=1,
                 instance_type=inst_type, image_href=image_uuid,
@@ -166,7 +166,7 @@ class QuotaIntegrationTestCase(test.TestCase):
 
     def test_no_injected_files(self):
         api = compute.API()
-        inst_type = instance_types.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_instance_type_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         api.create(self.context,
                    instance_type=inst_type,
@@ -739,22 +739,35 @@ class DbQuotaDriverTestCase(test.TestCase):
 
     def test_get_defaults(self):
         # Use our pre-defined resources
+        self._stub_quota_class_get_default()
         result = self.driver.get_defaults(None, quota.QUOTAS._resources)
 
         self.assertEqual(result, dict(
-                instances=10,
+                instances=5,
                 cores=20,
-                ram=50 * 1024,
+                ram=25 * 1024,
                 floating_ips=10,
                 fixed_ips=10,
-                metadata_items=128,
+                metadata_items=64,
                 injected_files=5,
-                injected_file_content_bytes=10 * 1024,
+                injected_file_content_bytes=5 * 1024,
                 injected_file_path_bytes=255,
                 security_groups=10,
                 security_group_rules=20,
                 key_pairs=100,
                 ))
+
+    def _stub_quota_class_get_default(self):
+        # Stub out quota_class_get_default
+        def fake_qcgd(context):
+            self.calls.append('quota_class_get_default')
+            return dict(
+                instances=5,
+                ram=25 * 1024,
+                metadata_items=64,
+                injected_file_content_bytes=5 * 1024,
+                )
+        self.stubs.Set(db, 'quota_class_get_default', fake_qcgd)
 
     def _stub_quota_class_get_all_by_name(self):
         # Stub out quota_class_get_all_by_name
@@ -831,6 +844,7 @@ class DbQuotaDriverTestCase(test.TestCase):
         self.stubs.Set(db, 'quota_usage_get_all_by_project', fake_qugabp)
 
         self._stub_quota_class_get_all_by_name()
+        self._stub_quota_class_get_default()
 
     def test_get_project_quotas(self):
         self.maxDiff = None
@@ -843,6 +857,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                 'quota_get_all_by_project',
                 'quota_usage_get_all_by_project',
                 'quota_class_get_all_by_name',
+                'quota_class_get_default',
                 ])
         self.assertEqual(result, dict(
                 instances=dict(
@@ -917,10 +932,11 @@ class DbQuotaDriverTestCase(test.TestCase):
         self.assertEqual(self.calls, [
                 'quota_get_all_by_project',
                 'quota_usage_get_all_by_project',
+                'quota_class_get_default',
                 ])
         self.assertEqual(result, dict(
                 instances=dict(
-                    limit=10,
+                    limit=5,
                     in_use=2,
                     reserved=2,
                     ),
@@ -930,7 +946,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                     reserved=4,
                     ),
                 ram=dict(
-                    limit=50 * 1024,
+                    limit=25 * 1024,
                     in_use=10 * 1024,
                     reserved=0,
                     ),
@@ -945,7 +961,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                     reserved=0,
                     ),
                 metadata_items=dict(
-                    limit=128,
+                    limit=64,
                     in_use=0,
                     reserved=0,
                     ),
@@ -955,7 +971,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                     reserved=0,
                     ),
                 injected_file_content_bytes=dict(
-                    limit=10 * 1024,
+                    limit=5 * 1024,
                     in_use=0,
                     reserved=0,
                     ),
@@ -992,6 +1008,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                 'quota_get_all_by_project',
                 'quota_usage_get_all_by_project',
                 'quota_class_get_all_by_name',
+                'quota_class_get_default',
                 ])
         self.assertEqual(result, dict(
                 instances=dict(
@@ -1066,6 +1083,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                 'quota_get_all_by_project',
                 'quota_usage_get_all_by_project',
                 'quota_class_get_all_by_name',
+                'quota_class_get_default',
                 ])
         self.assertEqual(result, dict(
                 cores=dict(
@@ -1094,6 +1112,7 @@ class DbQuotaDriverTestCase(test.TestCase):
         self.assertEqual(self.calls, [
                 'quota_get_all_by_project',
                 'quota_class_get_all_by_name',
+                'quota_class_get_default',
                 ])
         self.assertEqual(result, dict(
                 instances=dict(

@@ -37,10 +37,9 @@ ADDRESS_IN_USE_ERROR = 'Address already in use'
 
 vmwareapi_wsdl_loc_opt = cfg.StrOpt('vmwareapi_wsdl_loc',
         default=None,
-        help='VIM Service WSDL Location '
+        help='Optional VIM Service WSDL Location '
              'e.g http://<server>/vimService.wsdl. '
-             'Due to a bug in vSphere ESX 4.1 default wsdl. '
-             'Refer readme-vmware to setup')
+             'Optional over-ride to default location for bug work-arounds')
 
 CONF = cfg.CONF
 CONF.register_opt(vmwareapi_wsdl_loc_opt)
@@ -86,16 +85,44 @@ class Vim:
 
         self._protocol = protocol
         self._host_name = host
+        self.wsdl_url = Vim.get_wsdl_url(protocol, host)
+        self.url = Vim.get_soap_url(protocol, host)
+        self.client = suds.client.Client(self.wsdl_url, location=self.url,
+                                         plugins=[VIMMessagePlugin()])
+        self._service_content = self.RetrieveServiceContent(
+                                        "ServiceInstance")
+
+    @staticmethod
+    def get_wsdl_url(protocol, host_name):
+        """
+        allows override of the wsdl location, making this static
+        means we can test the logic outside of the constructor
+        without forcing the test environment to have multiple valid
+        wsdl locations to test against.
+
+        :param protocol: https or http
+        :param host_name: localhost or other server name
+        :return: string to WSDL location for vSphere WS Management API
+        """
+        # optional WSDL location over-ride for work-arounds
         wsdl_url = CONF.vmwareapi_wsdl_loc
         if wsdl_url is None:
-            raise Exception(_("Must specify vmwareapi_wsdl_loc"))
-        # TODO(sateesh): Use this when VMware fixes their faulty wsdl
-        #wsdl_url = '%s://%s/sdk/vimService.wsdl' % (self._protocol,
-        #        self._host_name)
-        url = '%s://%s/sdk' % (self._protocol, self._host_name)
-        self.client = suds.client.Client(wsdl_url, location=url,
-                            plugins=[VIMMessagePlugin()])
-        self._service_content = self.RetrieveServiceContent("ServiceInstance")
+            # calculate default WSDL location if no override supplied
+            wsdl_url = '%s://%s/sdk/vimService.wsdl' % (protocol, host_name)
+        return wsdl_url
+
+    @staticmethod
+    def get_soap_url(protocol, host_name):
+        """
+        Calculates the location of the SOAP services
+        for a particular server. Created as a static
+        method for testing.
+
+        :param protocol: https or http
+        :param host_name: localhost or other vSphere server name
+        :return: the url to the active vSphere WS Management API
+        """
+        return '%s://%s/sdk' % (protocol, host_name)
 
     def get_service_content(self):
         """Gets the service content object."""
@@ -129,24 +156,24 @@ class Vim:
                 return response
             # Catch the VimFaultException that is raised by the fault
             # check of the SOAP response
-            except error_util.VimFaultException, excep:
+            except error_util.VimFaultException as excep:
                 raise
-            except suds.WebFault, excep:
+            except suds.WebFault as excep:
                 doc = excep.document
                 detail = doc.childAtPath("/Envelope/Body/Fault/detail")
                 fault_list = []
                 for child in detail.getChildren():
                     fault_list.append(child.get("type"))
                 raise error_util.VimFaultException(fault_list, excep)
-            except AttributeError, excep:
+            except AttributeError as excep:
                 raise error_util.VimAttributeError(_("No such SOAP method "
                      "'%s' provided by VI SDK") % (attr_name), excep)
             except (httplib.CannotSendRequest,
                     httplib.ResponseNotReady,
-                    httplib.CannotSendHeader), excep:
+                    httplib.CannotSendHeader) as excep:
                 raise error_util.SessionOverLoadException(_("httplib "
                                 "error in %s: ") % (attr_name), excep)
-            except Exception, excep:
+            except Exception as excep:
                 # Socket errors which need special handling for they
                 # might be caused by ESX API call overload
                 if (str(excep).find(ADDRESS_IN_USE_ERROR) != -1 or

@@ -20,14 +20,11 @@ from nova import block_device
 from nova.cells import rpcapi as cells_rpcapi
 from nova.cells import utils as cells_utils
 from nova.compute import api as compute_api
-from nova.compute import instance_types
+from nova.compute import flavors
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import vm_states
 from nova import exception
 from nova.openstack.common import excutils
-from nova.openstack.common import log as logging
-
-LOG = logging.getLogger(__name__)
 
 
 check_instance_state = compute_api.check_instance_state
@@ -341,19 +338,19 @@ class ComputeCellsAPI(compute_api.API):
         # specified flavor_id is valid and exists. We'll need to load
         # it again, but that should be safe.
 
-        old_instance_type = instance_types.extract_instance_type(instance)
+        old_instance_type = flavors.extract_instance_type(instance)
 
         if not flavor_id:
             new_instance_type = old_instance_type
         else:
-            new_instance_type = instance_types.get_instance_type_by_flavor_id(
+            new_instance_type = flavors.get_instance_type_by_flavor_id(
                     flavor_id, read_deleted="no")
 
         # NOTE(johannes): Later, when the resize is confirmed or reverted,
         # the superclass implementations of those methods will need access
         # to a local migration record for quota reasons. We don't need
         # source and/or destination information, just the old and new
-        # instance_types. Status is set to 'finished' since nothing else
+        # flavors. Status is set to 'finished' since nothing else
         # will update the status along the way.
         self.db.migration_create(context.elevated(),
                     {'instance_uuid': instance['uuid'],
@@ -523,16 +520,12 @@ class ComputeCellsAPI(compute_api.API):
         self._cast_to_cells(context, instance, 'attach_volume',
                 volume_id, device)
 
-    @check_instance_lock
     @validate_cell
-    def _detach_volume(self, context, instance, volume_id):
+    def _detach_volume(self, context, instance, volume):
         """Detach a volume from an instance."""
-        check_policy(context, 'detach_volume', instance)
-
-        volume = self.volume_api.get(context, volume_id)
         self.volume_api.check_detach(context, volume)
         self._cast_to_cells(context, instance, 'detach_volume',
-                volume_id)
+                volume)
 
     @wrap_check_policy
     @validate_cell
@@ -565,6 +558,16 @@ class ComputeCellsAPI(compute_api.API):
         except exception.InstanceUnknownCell:
             pass
         return rv
+
+    @validate_cell
+    def live_migrate(self, context, instance, block_migration,
+                     disk_over_commit, host_name):
+        """Migrate a server lively to a new host."""
+        super(ComputeCellsAPI, self).live_migrate(context,
+            instance, block_migration, disk_over_commit, host_name)
+
+        self._cast_to_cells(context, instance, 'live_migrate',
+                            block_migration, disk_over_commit, host_name)
 
 
 class HostAPI(compute_api.HostAPI):
@@ -609,6 +612,19 @@ class HostAPI(compute_api.HostAPI):
     def service_get_by_compute_host(self, context, host_name):
         return self.cells_rpcapi.service_get_by_compute_host(context,
                                                              host_name)
+
+    def service_update(self, context, host_name, binary, params_to_update):
+        """
+        Used to enable/disable a service. For compute services, setting to
+        disabled stops new builds arriving on that host.
+
+        :param host_name: the name of the host machine that the service is
+                          running
+        :param binary: The name of the executable that the service runs as
+        :param params_to_update: eg. {'disabled': True}
+        """
+        return self.cells_rpcapi.service_update(
+            context, host_name, binary, params_to_update)
 
     def instance_get_all_by_host(self, context, host_name):
         """Get all instances by host.  Host might have a cell prepended

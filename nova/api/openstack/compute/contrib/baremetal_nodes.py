@@ -21,14 +21,12 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import exception
-from nova.openstack.common import log as logging
 from nova.virt.baremetal import db
 
-LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'baremetal_nodes')
 
 node_fields = ['id', 'cpus', 'local_gb', 'memory_mb', 'pm_address',
-               'pm_user', 'prov_mac_address', 'prov_vlan_id',
+               'pm_user',
                'service_host', 'terminal_port', 'instance_uuid',
                ]
 
@@ -131,9 +129,20 @@ class BareMetalNodeController(wsgi.Controller):
     def create(self, req, body):
         context = req.environ['nova.context']
         authorize(context)
-        node = db.bm_node_create(context, body['node'])
+        values = body['node'].copy()
+        prov_mac_address = values.pop('prov_mac_address', None)
+        node = db.bm_node_create(context, values)
         node = _node_dict(node)
-        node['interfaces'] = []
+        if prov_mac_address:
+            if_id = db.bm_interface_create(context,
+                                           bm_node_id=node['id'],
+                                           address=prov_mac_address,
+                                           datapath_id=None,
+                                           port_no=None)
+            if_ref = db.bm_interface_get(context, if_id)
+            node['interfaces'] = [_interface_dict(if_ref)]
+        else:
+            node['interfaces'] = []
         return {'node': node}
 
     def delete(self, req, id):
@@ -176,7 +185,6 @@ class BareMetalNodeController(wsgi.Controller):
         authorize(context)
         self._check_node_exists(context, id)
         body = body['remove_interface']
-        print "body(%s)" % body
         if_id = body.get('id')
         address = body.get('address')
         if not if_id and not address:

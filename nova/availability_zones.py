@@ -18,23 +18,24 @@
 from oslo.config import cfg
 
 from nova import db
-from nova.openstack.common import log as logging
+from nova.openstack.common import memorycache
+
+# NOTE(vish): azs don't change that often, so cache them for an hour to
+#             avoid hitting the db multiple times on every request.
+AZ_CACHE_SECONDS = 60 * 60
+MC = memorycache.get_client()
 
 availability_zone_opts = [
     cfg.StrOpt('internal_service_availability_zone',
                default='internal',
                help='availability_zone to show internal services under'),
     cfg.StrOpt('default_availability_zone',
-               # deprecated in Grizzly release
-               deprecated_name='node_availability_zone',
                default='nova',
                help='default compute node availability_zone'),
     ]
 
 CONF = cfg.CONF
 CONF.register_opts(availability_zone_opts)
-
-LOG = logging.getLogger(__name__)
 
 
 def set_availability_zones(context, services):
@@ -86,3 +87,18 @@ def get_availability_zones(context):
         if zone not in not_available_zones:
             not_available_zones.append(zone)
     return (available_zones, not_available_zones)
+
+
+def get_instance_availability_zone(context, instance):
+    """Return availability zone of specified instance."""
+    host = str(instance.get('host'))
+    if not host:
+        return None
+
+    cache_key = "azcache-%s" % host
+    az = MC.get(cache_key)
+    if not az:
+        elevated = context.elevated()
+        az = get_host_availability_zone(elevated, host)
+        MC.set(cache_key, az, AZ_CACHE_SECONDS)
+    return az

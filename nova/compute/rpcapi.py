@@ -165,6 +165,7 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                vnc on the correct port
         2.27 - Adds 'reservations' to terminate_instance() and
                soft_delete_instance()
+        2.28 - Adds check_instance_shared_storage()
     '''
 
     #
@@ -246,6 +247,15 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                                              dest_check_data=dest_check_data),
                          topic=_compute_topic(self.topic, ctxt, None,
                                               instance))
+
+    def check_instance_shared_storage(self, ctxt, instance, data):
+        instance_p = jsonutils.to_primitive(instance)
+        return self.call(ctxt, self.make_msg('check_instance_shared_storage',
+                                             instance=instance_p,
+                                             data=data),
+                         topic=_compute_topic(self.topic, ctxt, None,
+                                              instance),
+                         version='2.28')
 
     def confirm_resize(self, ctxt, instance, migration, host,
             reservations=None, cast=True):
@@ -609,10 +619,6 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         self.cast(ctxt, self.make_msg('unrescue_instance',
                 instance=instance_p),
                 topic=_compute_topic(self.topic, ctxt, None, instance))
-
-    def get_backdoor_port(self, ctxt, host):
-        return self.call(ctxt, self.make_msg('get_backdoor_port'),
-                         topic=_compute_topic(self.topic, ctxt, host, None))
 
     def publish_service_capabilities(self, ctxt):
         self.fanout_cast(ctxt, self.make_msg('publish_service_capabilities'))

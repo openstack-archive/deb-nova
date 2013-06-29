@@ -59,7 +59,8 @@ class ConsoleProxyManager(manager.Manager):
         if not console_driver:
             console_driver = CONF.console_driver
         self.driver = importutils.import_object(console_driver)
-        super(ConsoleProxyManager, self).__init__(*args, **kwargs)
+        super(ConsoleProxyManager, self).__init__(service_name='console',
+                                                  *args, **kwargs)
         self.driver.host = self.host
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
@@ -132,5 +133,7 @@ class ConsoleProxyManager(manager.Manager):
             pool = self.db.console_pool_create(context, pool_info)
         return pool
 
+    # NOTE(russellb) This method can be removed in 2.0 of this API.  It is
+    # deprecated in favor of the method in the base API.
     def get_backdoor_port(self, context):
         return self.backdoor_port

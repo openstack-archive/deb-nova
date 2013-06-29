@@ -16,9 +16,9 @@
 
 from oslo.config import cfg
 
+from nova import baserpc
 from nova.conductor import manager
 from nova.conductor import rpcapi
-from nova import exception as exc
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
 from nova import utils
@@ -56,9 +56,6 @@ class LocalAPI(object):
         # nothing to wait for in the local case.
         pass
 
-    def ping(self, context, arg, timeout=None):
-        return self._manager.ping(context, arg)
-
     def instance_update(self, context, instance_uuid, **updates):
         """Perform an instance update in the database."""
         return self._manager.instance_update(context, instance_uuid,
@@ -67,18 +64,17 @@ class LocalAPI(object):
     def instance_get(self, context, instance_id):
         return self._manager.instance_get(context, instance_id)
 
-    def instance_get_by_uuid(self, context, instance_uuid):
-        return self._manager.instance_get_by_uuid(context, instance_uuid)
+    def instance_get_by_uuid(self, context, instance_uuid,
+                             columns_to_join=None):
+        return self._manager.instance_get_by_uuid(context, instance_uuid,
+                columns_to_join)
 
     def instance_destroy(self, context, instance):
         return self._manager.instance_destroy(context, instance)
 
-    def instance_get_all(self, context):
-        return self._manager.instance_get_all(context)
-
     def instance_get_all_by_host(self, context, host, columns_to_join=None):
-        return self._manager.instance_get_all_by_host(context, host,
-                                                      columns_to_join)
+        return self._manager.instance_get_all_by_host(
+            context, host, columns_to_join=columns_to_join)
 
     def instance_get_all_by_host_and_node(self, context, host, node):
         return self._manager.instance_get_all_by_host(context, host, node)
@@ -92,10 +88,6 @@ class LocalAPI(object):
                                                          sort_key,
                                                          sort_dir,
                                                          columns_to_join)
-
-    def instance_get_all_hung_in_rebooting(self, context, timeout):
-        return self._manager.instance_get_all_hung_in_rebooting(context,
-                                                                timeout)
 
     def instance_get_active_by_window_joined(self, context, begin, end=None,
                                              project_id=None, host=None):
@@ -174,9 +166,6 @@ class LocalAPI(object):
                                              bw_in, bw_out,
                                              last_ctr_in, last_ctr_out,
                                              last_refreshed)
-
-    def get_backdoor_port(self, context, host):
-        raise exc.InvalidRequest
 
     def security_group_get_by_instance(self, context, instance):
         return self._manager.security_group_get_by_instance(context, instance)
@@ -348,11 +337,20 @@ class LocalAPI(object):
         return self._manager.compute_unrescue(context, instance)
 
 
+class LocalComputeTaskAPI(object):
+    def __init__(self):
+        # TODO(danms): This needs to be something more generic for
+        # other/future users of this sort of functionality.
+        self._manager = utils.ExceptionHelper(
+                manager.ComputeTaskManager())
+
+
 class API(object):
     """Conductor API that does updates via RPC to the ConductorManager."""
 
     def __init__(self):
         self.conductor_rpcapi = rpcapi.ConductorAPI()
+        self.base_rpcapi = baserpc.BaseAPI(topic=CONF.conductor.topic)
 
     def wait_until_ready(self, context, early_timeout=10, early_attempts=10):
         '''Wait until a conductor service is up and running.
@@ -376,15 +374,13 @@ class API(object):
             # This may fail the first time around if nova-conductor wasn't
             # running when this service started.
             try:
-                self.ping(context, '1.21 GigaWatts', timeout=timeout)
+                self.base_rpcapi.ping(context, '1.21 GigaWatts',
+                                      timeout=timeout)
                 break
             except rpc_common.Timeout as e:
                 LOG.warning(_('Timed out waiting for nova-conductor. '
                                 'Is it running? Or did this service start '
                                 'before nova-conductor?'))
-
-    def ping(self, context, arg, timeout=None):
-        return self.conductor_rpcapi.ping(context, arg, timeout)
 
     def instance_update(self, context, instance_uuid, **updates):
         """Perform an instance update in the database."""
@@ -397,12 +393,11 @@ class API(object):
     def instance_get(self, context, instance_id):
         return self.conductor_rpcapi.instance_get(context, instance_id)
 
-    def instance_get_by_uuid(self, context, instance_uuid):
+    def instance_get_by_uuid(self, context, instance_uuid,
+                             columns_to_join=None):
         return self.conductor_rpcapi.instance_get_by_uuid(context,
-                                                          instance_uuid)
-
-    def instance_get_all(self, context):
-        return self.conductor_rpcapi.instance_get_all(context)
+                                                          instance_uuid,
+                                                          columns_to_join)
 
     def instance_get_all_by_host(self, context, host, columns_to_join=None):
         return self.conductor_rpcapi.instance_get_all_by_host(
@@ -418,10 +413,6 @@ class API(object):
                                     columns_to_join=None):
         return self.conductor_rpcapi.instance_get_all_by_filters(
             context, filters, sort_key, sort_dir, columns_to_join)
-
-    def instance_get_all_hung_in_rebooting(self, context, timeout):
-        return self.conductor_rpcapi.instance_get_all_hung_in_rebooting(
-            context, timeout)
 
     def instance_get_active_by_window_joined(self, context, begin, end=None,
                                              project_id=None, host=None):
@@ -508,12 +499,6 @@ class API(object):
             context, uuid, mac, start_period,
             bw_in, bw_out, last_ctr_in, last_ctr_out,
             last_refreshed)
-
-    #NOTE(mtreinish): This doesn't work on multiple conductors without any
-    # topic calculation in conductor_rpcapi. So the host param isn't used
-    # currently.
-    def get_backdoor_port(self, context, host):
-        return self.conductor_rpcapi.get_backdoor_port(context)
 
     def security_group_get_by_instance(self, context, instance):
         return self.conductor_rpcapi.security_group_get_by_instance(context,
@@ -689,3 +674,10 @@ class API(object):
 
     def compute_unrescue(self, context, instance):
         return self.conductor_rpcapi.compute_unrescue(context, instance)
+
+
+class ComputeTaskAPI(object):
+    """ComputeTask API that queues up compute tasks for nova-conductor."""
+
+    def __init__(self):
+        self.conductor_compute_rpcapi = rpcapi.ComputeTaskAPI()

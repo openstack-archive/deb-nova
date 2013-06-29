@@ -9,14 +9,11 @@ in a ``_()`` function call. For example::
 
     LOG.debug(_("block_device_mapping %s"), block_device_mapping)
 
-If you have multiple arguments, the convention is to use named parameters.
-It's common to use the ``locals()`` dict (which contains the names and values
-of the local variables in the current scope) to do the string interpolation.
-For example::
-
-    label = ...
-    sr_ref = ...
-    LOG.debug(_('Introduced %(label)s as %(sr_ref)s.') % locals())
+Do not use ``locals()`` for formatting messages because:
+1. It is not as clear as using explicit dicts.
+2. It could produce hidden errors during refactoring.
+3. Changing the name of a variable causes a change in the message.
+4. It creates a lot of otherwise unused variables.
 
 If you do not follow the project conventions, your code may cause the
 LocalizationTestCase.test_multiple_positional_format_placeholders test to fail
@@ -24,11 +21,14 @@ in nova/tests/test_localization.py.
 
 The ``_()`` function is brought into the global scope by doing::
 
-    import gettext
-    gettext.install("nova", unicode=1)
+    from nova.openstack.common import gettextutils
+    gettextutils.install('nova')
 
-In general, you shouldn't need to add these to any nova files, since the lines
-are present in ``nova/__init__.py``. However, if this code is missing, it may
-result in an error that looks like like::
+These lines are needed in any toplevel script before any nova modules are
+imported. If this code is missing, it may result in an error that looks like::
 
     NameError: name '_' is not defined
+
+The gettextutils.install() function also queries the NOVA_LOCALEDIR environment
+variable to allow overriding the default localedir with a specific custom
+location for Nova's message catalog.

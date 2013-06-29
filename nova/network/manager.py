@@ -4,6 +4,7 @@
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
+# Copyright 2013 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -65,8 +66,10 @@ from nova.network.security_group import openstack_driver
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
-from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import periodic_task
+from nova.openstack.common.rpc import common as rpc_common
+from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import quota
@@ -304,12 +307,13 @@ class NetworkManager(manager.Manager):
         l3_lib = kwargs.get("l3_lib", CONF.l3_lib)
         self.l3driver = importutils.import_object(l3_lib)
 
-        super(NetworkManager, self).__init__(*args, **kwargs)
+        super(NetworkManager, self).__init__(service_name='cells',
+                                             *args, **kwargs)
 
     def _import_ipam_lib(self, ipam_lib):
         self.ipam = importutils.import_module(ipam_lib).get_ipam_lib(self)
 
-    @lockutils.synchronized('get_dhcp', 'nova-')
+    @utils.synchronized('get_dhcp')
     def _get_dhcp_ip(self, context, network_ref, host=None):
         """Get the proper dhcp address to listen on."""
         # NOTE(vish): this is for compatibility
@@ -347,7 +351,7 @@ class NetworkManager(manager.Manager):
                 dev = self.driver.get_dev(network)
                 self.driver.update_dns(ctxt, dev, network)
 
-    @manager.periodic_task
+    @periodic_task.periodic_task
     def _disassociate_stale_fixed_ips(self, context):
         if self.timeout_fixed_ips:
             now = timeutils.utcnow()
@@ -383,21 +387,6 @@ class NetworkManager(manager.Manager):
 
         self.security_group_api.trigger_members_refresh(admin_context,
                                                         group_ids)
-        self.security_group_api.trigger_handler('security_group_members',
-                                                admin_context, group_ids)
-
-    def _do_trigger_security_group_handler(self, handler, instance_id):
-        admin_context = context.get_admin_context(read_deleted="yes")
-        if uuidutils.is_uuid_like(instance_id):
-            instance_ref = self.db.instance_get_by_uuid(admin_context,
-                                                        instance_id)
-        else:
-            instance_ref = self.db.instance_get(admin_context,
-                                                instance_id)
-        for group_name in [group['name'] for group
-                in instance_ref['security_groups']]:
-            self.security_group_api.trigger_handler(handler, admin_context,
-                    instance_ref, group_name)
 
     def get_floating_ips_by_fixed_address(self, context, fixed_address):
         # NOTE(jkoelker) This is just a stub function. Managers supporting
@@ -557,6 +546,7 @@ class NetworkManager(manager.Manager):
         self.db.virtual_interface_delete_by_instance(read_deleted_context,
                                                      instance_uuid)
 
+    @rpc_common.client_exceptions(exception.InstanceNotFound)
     def get_instance_nw_info(self, context, instance_id, rxtx_factor,
                              host, instance_uuid=None, **kwargs):
         """Creates network info list for instance.
@@ -773,6 +763,8 @@ class NetworkManager(manager.Manager):
         return self.get_instance_nw_info(context, instance_id, rxtx_factor,
                                          host)
 
+    # NOTE(russellb) This method can be removed in 2.0 of this API.  It is
+    # deprecated in favor of the method in the base API.
     def get_backdoor_port(self, context):
         """Return backdoor port for eventlet_backdoor."""
         return self.backdoor_port
@@ -849,8 +841,6 @@ class NetworkManager(manager.Manager):
                         context.elevated(), network['id'], instance_id)
                 self._do_trigger_security_group_members_refresh_for_instance(
                     instance_id)
-                self._do_trigger_security_group_handler(
-                    'instance_add_security_group', instance_id)
                 get_vif = self.db.virtual_interface_get_by_instance_and_network
                 vif = get_vif(context, instance_id, network['id'])
                 values = {'allocated': True,
@@ -891,8 +881,6 @@ class NetworkManager(manager.Manager):
 
         self._do_trigger_security_group_members_refresh_for_instance(
             instance_uuid)
-        self._do_trigger_security_group_handler(
-            'instance_remove_security_group', instance_uuid)
 
         # NOTE(vish) This db query could be removed if we pass az and name
         #            (or the whole instance object).
@@ -1042,10 +1030,11 @@ class NetworkManager(manager.Manager):
             else:
                 kwargs["network_size"] = CONF.network_size
 
-        kwargs["multi_host"] = (CONF.multi_host
-                                if kwargs["multi_host"] is None
-                                else
-                                utils.bool_from_str(kwargs["multi_host"]))
+        kwargs["multi_host"] = (
+            CONF.multi_host
+            if kwargs["multi_host"] is None
+            else strutils.bool_from_string(kwargs["multi_host"]))
+
         kwargs["vlan_start"] = kwargs.get("vlan_start") or CONF.vlan_start
         kwargs["vpn_start"] = kwargs.get("vpn_start") or CONF.vpn_start
         kwargs["dns1"] = kwargs["dns1"] or CONF.flat_network_dns
@@ -1113,13 +1102,13 @@ class NetworkManager(manager.Manager):
                         subnets_v4.append(next_subnet)
                         subnet = next_subnet
                     else:
-                        raise ValueError(_('cidr already in use'))
+                        raise exception.CidrConflict(_('cidr already in use'))
                 for used_subnet in used_subnets:
                     if subnet in used_subnet:
                         msg = _('requested cidr (%(cidr)s) conflicts with '
                                 'existing supernet (%(super)s)')
-                        raise ValueError(msg % {'cidr': subnet,
-                                                'super': used_subnet})
+                        raise exception.CidrConflict(
+                                  msg % {'cidr': subnet, 'super': used_subnet})
                     if used_subnet in subnet:
                         next_subnet = find_next(subnet)
                         if next_subnet:
@@ -1130,8 +1119,8 @@ class NetworkManager(manager.Manager):
                             msg = _('requested cidr (%(cidr)s) conflicts '
                                     'with existing smaller cidr '
                                     '(%(smaller)s)')
-                            raise ValueError(msg % {'cidr': subnet,
-                                                    'smaller': used_subnet})
+                            raise exception.CidrConflict(
+                                msg % {'cidr': subnet, 'smaller': used_subnet})
 
         networks = []
         subnets = itertools.izip_longest(subnets_v4, subnets_v6)
@@ -1343,6 +1332,10 @@ class NetworkManager(manager.Manager):
         instance = self.db.instance_get(context, instance_id)
         vifs = self.db.virtual_interface_get_by_instance(context,
                                                          instance['uuid'])
+        for vif in vifs:
+            if vif.get('network_id') is not None:
+                network = self._get_network_by_id(context, vif['network_id'])
+                vif['net_uuid'] = network['uuid']
         return [dict(vif.iteritems()) for vif in vifs]
 
     def get_instance_id_by_floating_address(self, context, address):
@@ -1393,10 +1386,14 @@ class NetworkManager(manager.Manager):
         """Returns the vifs record for the mac_address."""
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
-        return self.db.virtual_interface_get_by_address(context,
+        vif = self.db.virtual_interface_get_by_address(context,
                                                         mac_address)
+        if vif.get('network_id') is not None:
+            network = self._get_network_by_id(context, vif['network_id'])
+            vif['net_uuid'] = network['uuid']
+        return vif
 
-    @manager.periodic_task(
+    @periodic_task.periodic_task(
         spacing=CONF.dns_update_periodic_interval)
     def _periodic_update_dns(self, context):
         """Update local DNS entries of all networks on this host."""
@@ -1617,7 +1614,7 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
             # NOTE(dprince): dhcp DB queries require elevated context
             elevated = context.elevated()
             self.driver.update_dhcp(elevated, dev, network)
-            if(CONF.use_ipv6):
+            if CONF.use_ipv6:
                 self.driver.update_ra(context, dev, network)
                 gateway = utils.get_my_linklocal(dev)
                 self.db.network_update(context, network['id'],
@@ -1811,7 +1808,7 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
         return NetworkManager.create_networks(
             self, context, vpn=True, **kwargs)
 
-    @lockutils.synchronized('setup_network', 'nova-', external=True)
+    @utils.synchronized('setup_network', external=True)
     def _setup_network_on_host(self, context, network):
         """Sets up network on this host."""
         if not network['vpn_public_address']:
@@ -1839,13 +1836,13 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             # NOTE(dprince): dhcp DB queries require elevated context
             elevated = context.elevated()
             self.driver.update_dhcp(elevated, dev, network)
-            if(CONF.use_ipv6):
+            if CONF.use_ipv6:
                 self.driver.update_ra(context, dev, network)
                 gateway = utils.get_my_linklocal(dev)
                 self.db.network_update(context, network['id'],
                                        {'gateway_v6': gateway})
 
-    @lockutils.synchronized('setup_network', 'nova-', external=True)
+    @utils.synchronized('setup_network', external=True)
     def _teardown_network_on_host(self, context, network):
         if not CONF.fake_network:
             network['dhcp_server'] = self._get_dhcp_ip(context, network)

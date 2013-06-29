@@ -19,7 +19,9 @@ from oslo.config import cfg
 
 from nova.cells import messaging
 from nova.cells import utils as cells_utils
+from nova.compute import vm_states
 from nova import context
+from nova import db
 from nova import exception
 from nova.openstack.common import rpc
 from nova.openstack.common import timeutils
@@ -745,6 +747,42 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         result = response.value_or_raise()
         self.assertEqual('fake-service', result)
 
+    def test_service_update(self):
+        binary = 'nova-compute'
+        fake_service = dict(id=42, host='fake_host', binary='nova-compute',
+                            topic='compute')
+        fake_compute = dict(
+            id=7116, service_id=42, host='fake_host', vcpus=0, memory_mb=0,
+            local_gb=0, vcpus_used=0, memory_mb_used=0, local_gb_used=0,
+            hypervisor_type=0, hypervisor_version=0, hypervisor_hostname=0,
+            free_ram_mb=0, free_disk_gb=0, current_workload=0, running_vms=0,
+            cpu_info='HAL', disk_available_least=0)
+        params_to_update = {'disabled': True, 'report_count': 13}
+
+        ctxt = context.RequestContext('fake_user', 'fake_project',
+                                      is_admin=True)
+        # We use the real DB for this test, as it's too hard to reach the
+        # host_api to mock out its DB methods
+        db.service_create(ctxt, fake_service)
+        db.compute_node_create(ctxt, fake_compute)
+
+        self.mox.ReplayAll()
+
+        response = self.src_msg_runner.service_update(
+                ctxt, self.tgt_cell_name,
+                'fake_host', binary, params_to_update)
+        result = response.value_or_raise()
+        result.pop('created_at', None)
+        result.pop('updated_at', None)
+        expected_result = dict(
+            deleted=0, deleted_at=None,
+            binary=fake_service['binary'],
+            disabled=True,    # We just updated this..
+            report_count=13,  # ..and this
+            host='fake_host', id=42,
+            topic='compute')
+        self.assertEqual(expected_result, result)
+
     def test_proxy_rpc_to_manager_call(self):
         fake_topic = 'fake-topic'
         fake_rpc_message = 'fake-rpc-message'
@@ -995,8 +1033,59 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
                                          expected_instance,
                                          update_cells=False)
         self.tgt_db_inst.instance_info_cache_update(self.ctxt, 'fake_uuid',
-                                                    expected_info_cache,
-                                                    update_cells=False)
+                                                    expected_info_cache)
+        self.mox.ReplayAll()
+
+        self.src_msg_runner.instance_update_at_top(self.ctxt, fake_instance)
+
+    def test_instance_update_at_top_with_building_state(self):
+        fake_info_cache = {'id': 1,
+                           'instance': 'fake_instance',
+                           'other': 'moo'}
+        fake_sys_metadata = [{'id': 1,
+                              'key': 'key1',
+                              'value': 'value1'},
+                             {'id': 2,
+                              'key': 'key2',
+                              'value': 'value2'}]
+        fake_instance = {'id': 2,
+                         'uuid': 'fake_uuid',
+                         'security_groups': 'fake',
+                         'volumes': 'fake',
+                         'cell_name': 'fake',
+                         'name': 'fake',
+                         'metadata': 'fake',
+                         'info_cache': fake_info_cache,
+                         'system_metadata': fake_sys_metadata,
+                         'vm_state': vm_states.BUILDING,
+                         'other': 'meow'}
+        expected_sys_metadata = {'key1': 'value1',
+                                 'key2': 'value2'}
+        expected_info_cache = {'other': 'moo'}
+        expected_cell_name = 'api-cell!child-cell2!grandchild-cell1'
+        expected_instance = {'system_metadata': expected_sys_metadata,
+                             'cell_name': expected_cell_name,
+                             'other': 'meow',
+                             'vm_state': vm_states.BUILDING,
+                             'expected_vm_state': [vm_states.BUILDING, None],
+                             'uuid': 'fake_uuid'}
+
+        # To show these should not be called in src/mid-level cell
+        self.mox.StubOutWithMock(self.src_db_inst, 'instance_update')
+        self.mox.StubOutWithMock(self.src_db_inst,
+                                 'instance_info_cache_update')
+        self.mox.StubOutWithMock(self.mid_db_inst, 'instance_update')
+        self.mox.StubOutWithMock(self.mid_db_inst,
+                                 'instance_info_cache_update')
+
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'instance_update')
+        self.mox.StubOutWithMock(self.tgt_db_inst,
+                                 'instance_info_cache_update')
+        self.tgt_db_inst.instance_update(self.ctxt, 'fake_uuid',
+                                         expected_instance,
+                                         update_cells=False)
+        self.tgt_db_inst.instance_info_cache_update(self.ctxt, 'fake_uuid',
+                                                    expected_info_cache)
         self.mox.ReplayAll()
 
         self.src_msg_runner.instance_update_at_top(self.ctxt, fake_instance)

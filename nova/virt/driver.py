@@ -487,6 +487,33 @@ class ComputeDriver(object):
         """
         raise NotImplementedError()
 
+    def check_instance_shared_storage_local(self, ctxt, instance):
+        """Check if instance files located on shared storage.
+
+        This runs check on the destination host, and then calls
+        back to the source host to check the results.
+
+        :param ctxt: security context
+        :param instance: nova.db.sqlalchemy.models.Instance
+        """
+        raise NotImplementedError()
+
+    def check_instance_shared_storage_remote(self, ctxt, data):
+        """Check if instance files located on shared storage.
+
+        :param context: security context
+        :param data: result of check_instance_shared_storage_local
+        """
+        raise NotImplementedError()
+
+    def check_instance_shared_storage_cleanup(self, ctxt, data):
+        """Do cleanup on host after check_instance_shared_storage calls
+
+        :param ctxt: security context
+        :param data: result of check_instance_shared_storage_local
+        """
+        pass
+
     def check_can_live_migrate_destination(self, ctxt, instance_ref,
                                            src_compute_info, dst_compute_info,
                                            block_migration=False,
@@ -502,6 +529,7 @@ class ComputeDriver(object):
         :param dst_compute_info: Info about the receiving machine
         :param block_migration: if true, prepare for block migration
         :param disk_over_commit: if true, allow disk over commit
+        :returns: a dict containing migration info (hypervisor-dependent)
         """
         raise NotImplementedError()
 
@@ -524,6 +552,7 @@ class ComputeDriver(object):
         :param context: security context
         :param instance_ref: nova.db.sqlalchemy.models.Instance
         :param dest_check_data: result of check_can_live_migrate_destination
+        :returns: a dict containing migration info (hypervisor-dependent)
         """
         raise NotImplementedError()
 
@@ -897,7 +926,7 @@ class ComputeDriver(object):
         try:
             LOG.debug("Emitting event %s" % str(event))
             self._compute_event_callback(event)
-        except Exception, ex:
+        except Exception as ex:
             LOG.error(_("Exception dispatching event %(event)s: %(ex)s")
                         % locals())
 
@@ -929,10 +958,10 @@ def load_compute_driver(virtapi, compute_driver=None):
                                               compute_driver,
                                               virtapi)
         return utils.check_isinstance(driver, ComputeDriver)
-    except ImportError as e:
-        LOG.error(_("Unable to load the virtualization driver: %s") % (e))
+    except ImportError:
+        LOG.exception(_("Unable to load the virtualization driver"))
         sys.exit(1)
 
 
 def compute_driver_matches(match):
-    return CONF.compute_driver.endswith(match)
+    return CONF.compute_driver and CONF.compute_driver.endswith(match)

@@ -39,6 +39,8 @@ from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier
+from nova.openstack.common import periodic_task
+from nova.openstack.common.rpc import common as rpc_common
 from nova import quota
 
 
@@ -63,7 +65,8 @@ class SchedulerManager(manager.Manager):
         if not scheduler_driver:
             scheduler_driver = CONF.scheduler_driver
         self.driver = importutils.import_object(scheduler_driver)
-        super(SchedulerManager, self).__init__(*args, **kwargs)
+        super(SchedulerManager, self).__init__(service_name='scheduler',
+                                               *args, **kwargs)
 
     def post_start_hook(self):
         """After we start up and can receive messages via RPC, tell all
@@ -88,6 +91,14 @@ class SchedulerManager(manager.Manager):
         #function removed in RPC API 2.3
         pass
 
+    @rpc_common.client_exceptions(exception.NoValidHost,
+                                  exception.ComputeServiceUnavailable,
+                                  exception.InvalidHypervisorType,
+                                  exception.UnableToMigrateToSelf,
+                                  exception.DestinationHypervisorTooOld,
+                                  exception.InvalidLocalStorage,
+                                  exception.InvalidSharedStorage,
+                                  exception.MigrationPreCheckError)
     def live_migration(self, context, instance, dest,
                        block_migration, disk_over_commit):
         try:
@@ -100,7 +111,8 @@ class SchedulerManager(manager.Manager):
                 exception.UnableToMigrateToSelf,
                 exception.DestinationHypervisorTooOld,
                 exception.InvalidLocalStorage,
-                exception.InvalidSharedStorage) as ex:
+                exception.InvalidSharedStorage,
+                exception.MigrationPreCheckError) as ex:
             request_spec = {'instance_properties': {
                 'uuid': instance['uuid'], },
             }
@@ -229,9 +241,7 @@ class SchedulerManager(manager.Manager):
             notifier.notify(context, notifier.publisher_id("scheduler"),
                             'scheduler.' + method, notifier.ERROR, payload)
 
-    # NOTE (masumotok) : This method should be moved to nova.api.ec2.admin.
-    # Based on bexar design summit discussion,
-    # just put this here for bexar release.
+    # NOTE(hanlind): This method can be removed in v3.0 of the RPC API.
     def show_host_resources(self, context, host):
         """Shows the physical/usage resource given by hosts.
 
@@ -286,10 +296,12 @@ class SchedulerManager(manager.Manager):
 
         return {'resource': resource, 'usage': usage}
 
-    @manager.periodic_task
+    @periodic_task.periodic_task
     def _expire_reservations(self, context):
         QUOTAS.expire(context)
 
+    # NOTE(russellb) This method can be removed in 3.0 of this API.  It is
+    # deprecated in favor of the method in the base API.
     def get_backdoor_port(self, context):
         return self.backdoor_port
 

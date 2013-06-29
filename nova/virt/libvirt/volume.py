@@ -27,8 +27,9 @@ import urlparse
 from oslo.config import cfg
 
 from nova import exception
-from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import loopingcall
+from nova.openstack.common import processutils
 from nova import paths
 from nova.storage import linuxscsi
 from nova import utils
@@ -190,7 +191,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
     def _get_target_portals_from_iscsiadm_output(self, output):
         return [line.split()[0] for line in output.splitlines()]
 
-    @lockutils.synchronized('connect_volume', 'nova-')
+    @utils.synchronized('connect_volume')
     def connect_volume(self, connection_info, disk_info):
         """Attach the volume to instance_name."""
         conf = super(LibvirtISCSIVolumeDriver,
@@ -238,8 +239,9 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                               % (host_device))
 
             LOG.warn(_("ISCSI volume not yet found at: %(disk_dev)s. "
-                       "Will rescan & retry.  Try number: %(tries)s") %
-                     locals())
+                       "Will rescan & retry.  Try number: %(tries)s"),
+                     {'disk_dev': disk_dev,
+                      'tries': tries})
 
             # The rescan isn't documented as being necessary(?), but it helps
             self._run_iscsiadm(iscsi_properties, ("--rescan",))
@@ -250,8 +252,9 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
 
         if tries != 0:
             LOG.debug(_("Found iSCSI node %(disk_dev)s "
-                        "(after %(tries)s rescans)") %
-                      locals())
+                        "(after %(tries)s rescans)"),
+                      {'disk_dev': disk_dev,
+                       'tries': tries})
 
         if libvirt_iscsi_use_multipath:
             #we use the multipath device instead of the single path device
@@ -264,7 +267,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
         conf.source_path = host_device
         return conf
 
-    @lockutils.synchronized('connect_volume', 'nova-')
+    @utils.synchronized('connect_volume')
     def disconnect_volume(self, connection_info, disk_dev):
         """Detach the volume from instance_name."""
         iscsi_properties = connection_info['data']
@@ -331,7 +334,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
         #             volume is using the same target.
         try:
             self._run_iscsiadm(iscsi_properties, ())
-        except exception.ProcessExecutionError as exc:
+        except processutils.ProcessExecutionError as exc:
             # iscsiadm returns 21 for "No records found" after version 2.0-871
             if exc.exit_code in [21, 255]:
                 self._run_iscsiadm(iscsi_properties, ('--op', 'new'))
@@ -370,7 +373,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                 self._run_iscsiadm(iscsi_properties,
                                    ("--login",),
                                    check_exit_code=[0, 255])
-            except exception.ProcessExecutionError as err:
+            except processutils.ProcessExecutionError as err:
                 #as this might be one of many paths,
                 #only set successfull logins to startup automatically
                 if err.exit_code in [15]:
@@ -490,8 +493,7 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
 
     def _mount_nfs(self, mount_path, nfs_share, ensure=False):
         """Mount nfs export to mount path."""
-        if not self._path_exists(mount_path):
-            utils.execute('mkdir', '-p', mount_path)
+        utils.execute('mkdir', '-p', mount_path)
 
         # Construct the NFS mount command.
         nfs_cmd = ['mount', '-t', 'nfs']
@@ -501,7 +503,7 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
 
         try:
             utils.execute(*nfs_cmd, run_as_root=True)
-        except exception.ProcessExecutionError as exc:
+        except processutils.ProcessExecutionError as exc:
             if ensure and 'already mounted' in exc.message:
                 LOG.warn(_("%s is already mounted"), nfs_share)
             else:
@@ -511,14 +513,6 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
     def get_hash_str(base_str):
         """returns string that represents hash of base_str (in hex format)."""
         return hashlib.md5(base_str).hexdigest()
-
-    @staticmethod
-    def _path_exists(path):
-        """Check path."""
-        try:
-            return utils.execute('stat', path, run_as_root=True)
-        except exception.ProcessExecutionError:
-            return False
 
 
 class LibvirtAOEVolumeDriver(LibvirtBaseVolumeDriver):
@@ -556,28 +550,30 @@ class LibvirtAOEVolumeDriver(LibvirtBaseVolumeDriver):
         def _wait_for_device_discovery(aoedevpath, mount_device):
             tries = self.tries
             if os.path.exists(aoedevpath):
-                raise utils.LoopingCallDone()
+                raise loopingcall.LoopingCallDone()
 
             if self.tries >= CONF.num_aoe_discover_tries:
                 raise exception.NovaException(_("AoE device not found at %s") %
                                                 (aoedevpath))
             LOG.warn(_("AoE volume not yet found at: %(aoedevpath)s. "
-                       "Try number: %(tries)s") %
-                     locals())
+                       "Try number: %(tries)s"),
+                     {'aoedevpath': aoedevpath,
+                      'tries': tries})
 
             self._aoe_discover()
             self.tries = self.tries + 1
 
         self.tries = 0
-        timer = utils.FixedIntervalLoopingCall(_wait_for_device_discovery,
-                                               aoedevpath, mount_device)
+        timer = loopingcall.FixedIntervalLoopingCall(
+            _wait_for_device_discovery, aoedevpath, mount_device)
         timer.start(interval=2).wait()
 
         tries = self.tries
         if tries != 0:
             LOG.debug(_("Found AoE device %(aoedevpath)s "
-                        "(after %(tries)s rediscover)") %
-                      locals())
+                        "(after %(tries)s rediscover)"),
+                      {'aoedevpath': aoedevpath,
+                       'tries': tries})
 
         conf = super(LibvirtAOEVolumeDriver,
                      self).connect_volume(connection_info, mount_device)
@@ -615,14 +611,13 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
 
     def _mount_glusterfs(self, mount_path, glusterfs_share, ensure=False):
         """Mount glusterfs export to mount path."""
-        if not self._path_exists(mount_path):
-            utils.execute('mkdir', '-p', mount_path)
+        utils.execute('mkdir', '-p', mount_path)
 
         try:
             utils.execute('mount', '-t', 'glusterfs', glusterfs_share,
                           mount_path,
                           run_as_root=True)
-        except exception.ProcessExecutionError as exc:
+        except processutils.ProcessExecutionError as exc:
             if ensure and 'already mounted' in exc.message:
                 LOG.warn(_("%s is already mounted"), glusterfs_share)
             else:
@@ -632,14 +627,6 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
     def get_hash_str(base_str):
         """returns string that represents hash of base_str (in hex format)."""
         return hashlib.md5(base_str).hexdigest()
-
-    @staticmethod
-    def _path_exists(path):
-        """Check path."""
-        try:
-            return utils.execute('stat', path, run_as_root=True)
-        except exception.ProcessExecutionError:
-            return False
 
 
 class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
@@ -670,7 +657,7 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
 
         return pci_num
 
-    @lockutils.synchronized('connect_volume', 'nova-')
+    @utils.synchronized('connect_volume')
     def connect_volume(self, connection_info, disk_info):
         """Attach the volume to instance_name."""
         fc_properties = connection_info['data']
@@ -712,22 +699,23 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
         def _wait_for_device_discovery(host_devices, mount_device):
             tries = self.tries
             for device in host_devices:
-                LOG.debug(_("Looking for Fibre Channel dev %(device)s")
-                          % locals())
+                LOG.debug(_("Looking for Fibre Channel dev %(device)s"),
+                          {'device': device})
                 if os.path.exists(device):
                     self.host_device = device
                     # get the /dev/sdX device.  This is used
                     # to find the multipath device.
                     self.device_name = os.path.realpath(device)
-                    raise utils.LoopingCallDone()
+                    raise loopingcall.LoopingCallDone()
 
             if self.tries >= CONF.num_iscsi_scan_tries:
                 msg = _("Fibre Channel device not found.")
                 raise exception.NovaException(msg)
 
             LOG.warn(_("Fibre volume not yet found at: %(mount_device)s. "
-                       "Will rescan & retry.  Try number: %(tries)s") %
-                     locals())
+                       "Will rescan & retry.  Try number: %(tries)s"),
+                     {'mount_device': mount_device,
+                      'tries': tries})
 
             linuxscsi.rescan_hosts(hbas)
             self.tries = self.tries + 1
@@ -735,14 +723,16 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
         self.host_device = None
         self.device_name = None
         self.tries = 0
-        timer = utils.FixedIntervalLoopingCall(_wait_for_device_discovery,
-                                               host_devices, mount_device)
+        timer = loopingcall.FixedIntervalLoopingCall(
+            _wait_for_device_discovery, host_devices, mount_device)
         timer.start(interval=2).wait()
 
         tries = self.tries
         if self.host_device is not None and self.device_name is not None:
             LOG.debug(_("Found Fibre Channel volume %(mount_device)s "
-                        "(after %(tries)s rescans)") % locals())
+                        "(after %(tries)s rescans)"),
+                      {'mount_device': mount_device,
+                       'tries': tries})
 
         # see if the new drive is part of a multipath
         # device.  If so, we'll use the multipath device.
@@ -766,7 +756,7 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
         conf.source_path = device_path
         return conf
 
-    @lockutils.synchronized('connect_volume', 'nova-')
+    @utils.synchronized('connect_volume')
     def disconnect_volume(self, connection_info, mount_device):
         """Detach the volume from instance_name."""
         super(LibvirtFibreChannelVolumeDriver,

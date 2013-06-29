@@ -19,6 +19,8 @@ policy_data = """
 {
     "admin_api": "role:admin",
 
+    "cells_scheduler_filter:TargetCellFilter": "is_admin:True",
+
     "context_is_admin": "role:admin or role:administrator",
     "compute:create": "",
     "compute:create:attach_network": "",
@@ -31,6 +33,7 @@ policy_data = """
     "compute:update": "",
 
     "compute:get_instance_metadata": "",
+    "compute:get_all_instance_metadata": "",
     "compute:update_instance_metadata": "",
     "compute:delete_instance_metadata": "",
 
@@ -118,11 +121,13 @@ policy_data = """
     "compute_extension:createserverext": "",
     "compute_extension:deferred_delete": "",
     "compute_extension:disk_config": "",
-    "compute_extension:evacuate": "",
+    "compute_extension:evacuate": "is_admin:True",
     "compute_extension:extended_server_attributes": "",
     "compute_extension:extended_status": "",
     "compute_extension:extended_availability_zone": "",
     "compute_extension:extended_ips": "",
+    "compute_extension:extended_ips_mac": "",
+    "compute_extension:extended_vif_net": "",
     "compute_extension:fixed_ips": "",
     "compute_extension:flavor_access": "",
     "compute_extension:flavor_disabled": "",
@@ -156,6 +161,7 @@ policy_data = """
     "compute_extension:os-tenant-networks": "",
     "compute_extension:quotas:show": "",
     "compute_extension:quotas:update": "",
+    "compute_extension:quotas:delete": "",
     "compute_extension:quota_classes": "",
     "compute_extension:rescue": "",
     "compute_extension:security_group_default_rules": "",
@@ -218,13 +224,13 @@ policy_data = """
     "network:associate": "",
     "network:disassociate": "",
     "network:get_vifs_by_instance": "",
+    "network:get_vif_by_mac_address": "",
     "network:allocate_for_instance": "",
     "network:deallocate_for_instance": "",
     "network:validate_networks": "",
     "network:get_instance_uuids_by_ip_filter": "",
     "network:get_instance_id_by_floating_address": "",
     "network:setup_networks_on_host": "",
-    "network:get_backdoor_port": "",
 
     "network:get_floating_ip": "",
     "network:get_floating_ip_pools": "",

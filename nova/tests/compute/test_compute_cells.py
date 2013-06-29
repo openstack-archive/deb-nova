@@ -25,12 +25,9 @@ from nova.compute import cells_api as compute_cells_api
 from nova import db
 from nova import exception
 from nova.openstack.common import jsonutils
-from nova.openstack.common import log as logging
 from nova import quota
 from nova.tests.compute import test_compute
 
-
-LOG = logging.getLogger('nova.tests.test_compute_cells')
 
 ORIG_COMPUTE_API = None
 cfg.CONF.import_opt('enable', 'nova.cells.opts', group='cells')
@@ -148,12 +145,6 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
     def test_instance_metadata(self):
         self.skipTest("Test is incompatible with cells.")
 
-    def test_live_migrate(self):
-        self.skipTest("Test is incompatible with cells.")
-
-    def test_get_backdoor_port(self):
-        self.skipTest("Test is incompatible with cells.")
-
     def test_snapshot_given_image_uuid(self):
         self.skipTest("Test doesn't apply to API cell.")
 
@@ -189,14 +180,6 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
     @wrap_create_instance
     def test_backup(self):
         return super(CellsComputeAPITestCase, self).test_backup()
-
-    def test_detach_volume(self):
-        self.skipTest("This test is failing due to TypeError: "
-                      "detach_volume() takes exactly 3 arguments (4 given).")
-
-    def test_no_detach_volume_in_rescue_state(self):
-        self.skipTest("This test is failing due to TypeError: "
-                      "detach_volume() takes exactly 3 arguments (4 given).")
 
     def test_evacuate(self):
         self.skipTest("Test is incompatible with cells.")

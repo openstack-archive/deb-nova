@@ -53,25 +53,6 @@ class ConvertedException(webob.exc.WSGIHTTPException):
         super(ConvertedException, self).__init__()
 
 
-class ProcessExecutionError(IOError):
-    def __init__(self, stdout=None, stderr=None, exit_code=None, cmd=None,
-                 description=None):
-        self.exit_code = exit_code
-        self.stderr = stderr
-        self.stdout = stdout
-        self.cmd = cmd
-        self.description = description
-
-        if description is None:
-            description = _('Unexpected error while running command.')
-        if exit_code is None:
-            exit_code = '-'
-        message = _('%(description)s\nCommand: %(cmd)s\n'
-                    'Exit code: %(exit_code)s\nStdout: %(stdout)r\n'
-                    'Stderr: %(stderr)r') % locals()
-        IOError.__init__(self, message)
-
-
 def _cleanse_dict(original):
     """Strip all admin_password, new_pass, rescue_pass keys from a dict."""
     return dict((k, v) for k, v in original.iteritems() if not "_pass" in k)
@@ -242,6 +223,12 @@ class InvalidBDMVolume(InvalidBDM):
 
 class VolumeUnattached(Invalid):
     message = _("Volume %(volume_id)s is not attached to anything")
+
+
+class VolumeNotCreated(NovaException):
+    message = _("Volume %(volume_id)s did not finish being created"
+                " even after we waited %(seconds)s seconds or %(attempts)s"
+                " attempts.")
 
 
 class InvalidKeypair(Invalid):
@@ -444,10 +431,6 @@ class InvalidUUID(Invalid):
 
 class InvalidID(Invalid):
     message = _("Invalid ID received %(id)s.")
-
-
-class InvalidPeriodicTaskArg(Invalid):
-    message = _("Unexpected argument for periodic task creation: %(arg)s.")
 
 
 class ConstraintNotMet(NovaException):
@@ -863,15 +846,6 @@ class SchedulerHostFilterNotFound(NotFound):
     message = _("Scheduler Host Filter %(filter_name)s could not be found.")
 
 
-class SchedulerCostFunctionNotFound(NotFound):
-    message = _("Scheduler cost function %(cost_fn_str)s could"
-                " not be found.")
-
-
-class SchedulerWeightFlagNotFound(NotFound):
-    message = _("Scheduler weight flag not found: %(flag_name)s")
-
-
 class InstanceMetadataNotFound(NotFound):
     message = _("Instance %(instance_uuid)s has no metadata with "
                 "key %(metadata_key)s.")
@@ -953,6 +927,10 @@ class MigrationError(NovaException):
     message = _("Migration error") + ": %(reason)s"
 
 
+class MigrationPreCheckError(MigrationError):
+    message = _("Migration pre-check error") + ": %(reason)s"
+
+
 class MalformedRequestBody(NovaException):
     message = _("Malformed message body: %(reason)s")
 
@@ -973,10 +951,6 @@ class CannotResizeToSameFlavor(NovaException):
 
 class ResizeError(NovaException):
     message = _("Resize error: %(reason)s")
-
-
-class ImageTooLarge(NovaException):
-    message = _("Image is larger than instance type allows")
 
 
 class InstanceTypeMemoryTooSmall(NovaException):
@@ -1083,6 +1057,11 @@ class DuplicateVlan(Duplicate):
     message = _("Detected existing vlan with id %(vlan)d")
 
 
+class CidrConflict(NovaException):
+    message = _("There was a conflict when trying to complete your request.")
+    code = 409
+
+
 class InstanceNotFound(NotFound):
     message = _("Instance %(instance_id)s could not be found.")
 
@@ -1170,6 +1149,11 @@ class InstanceActionEventNotFound(NovaException):
     message = _("Event %(event)s not found for action id %(action_id)s")
 
 
+class UnexpectedVMStateError(NovaException):
+    message = _("unexpected VM state: expecting %(expected)s but "
+                "the actual state is %(actual)s")
+
+
 class CryptoCAFileNotFound(FileNotFound):
     message = _("The CA file for %(project)s could not be found")
 
@@ -1204,3 +1188,23 @@ class UnsupportedHardware(Invalid):
 
 class Base64Exception(NovaException):
     message = _("Invalid Base 64 data for file %(path)s")
+
+
+class BuildAbortException(NovaException):
+    message = _("Build of instance %(instance_uuid)s aborted: %(reason)s")
+
+
+class RescheduledException(NovaException):
+    message = _("Build of instance %(instance_uuid)s was re-scheduled: "
+                "%(reason)s")
+
+
+class ShadowTableExists(NovaException):
+    message = _("Shadow table with name %(name)s already exists.")
+
+
+class InstanceFaultRollback(NovaException):
+    def __init__(self, inner_exception=None):
+        message = _("Instance rollback performed due to: %s")
+        self.inner_exception = inner_exception
+        super(InstanceFaultRollback, self).__init__(message % inner_exception)

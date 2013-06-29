@@ -24,6 +24,7 @@ from nova.api.openstack.compute.contrib import security_groups
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
+from nova.compute import power_state
 import nova.db
 from nova import exception
 from nova.openstack.common import jsonutils
@@ -94,8 +95,8 @@ def return_server_by_uuid(context, server_uuid):
 
 
 def return_non_running_server(context, server_id):
-    return {'id': server_id, 'power_state': 0x02, 'uuid': FAKE_UUID1,
-            'host': "localhost", 'name': 'asdf'}
+    return {'id': server_id, 'power_state': power_state.SHUTDOWN,
+            'uuid': FAKE_UUID1, 'host': "localhost", 'name': 'asdf'}
 
 
 def return_security_group_by_name(context, project_id, group_name):
@@ -407,6 +408,54 @@ class TestSecurityGroups(test.TestCase):
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.delete,
                           req, self.fake_id)
 
+    def test_update_security_group(self):
+        sg = security_group_template(id=2, rules=[])
+        sg_update = security_group_template(id=2, rules=[],
+                        name='update_name', description='update_desc')
+
+        def return_security_group(context, group_id):
+            self.assertEquals(sg['id'], group_id)
+            return security_group_db(sg)
+
+        def return_update_security_group(context, group_id, values):
+            self.assertEquals(sg_update['id'], group_id)
+            self.assertEquals(sg_update['name'], values['name'])
+            self.assertEquals(sg_update['description'], values['description'])
+            return security_group_db(sg_update)
+
+        self.stubs.Set(nova.db, 'security_group_update',
+                       return_update_security_group)
+        self.stubs.Set(nova.db, 'security_group_get',
+                       return_security_group)
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups/2')
+        res_dict = self.controller.update(req, '2',
+                                          {'security_group': sg_update})
+
+        expected = {'security_group': sg_update}
+        self.assertEquals(res_dict, expected)
+
+    def test_update_security_group_name_to_default(self):
+        sg = security_group_template(id=2, rules=[], name='default')
+
+        def return_security_group(context, group_id):
+            self.assertEquals(sg['id'], group_id)
+            return security_group_db(sg)
+
+        self.stubs.Set(nova.db, 'security_group_get',
+                       return_security_group)
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups/2')
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
+                          req, '2', {'security_group': sg})
+
+    def test_update_default_security_group_fail(self):
+        sg = security_group_template()
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups/1')
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
+                          req, '1', {'security_group': sg})
+
     def test_delete_security_group_by_id(self):
         sg = security_group_template(id=1, rules=[])
 
@@ -519,8 +568,7 @@ class TestSecurityGroups(test.TestCase):
         body = dict(addSecurityGroup=dict(name="test"))
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers/1/action')
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.manager._addSecurityGroup, req, '1', body)
+        self.manager._addSecurityGroup(req, '1', body)
 
     def test_associate_already_associated_security_group_to_instance(self):
         self.stubs.Set(nova.db, 'instance_get', return_server)
@@ -614,8 +662,7 @@ class TestSecurityGroups(test.TestCase):
         body = dict(removeSecurityGroup=dict(name="test"))
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers/1/action')
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.manager._removeSecurityGroup, req, '1', body)
+        self.manager._removeSecurityGroup(req, '1', body)
 
     def test_disassociate_already_associated_security_group_to_instance(self):
         self.stubs.Set(nova.db, 'instance_get', return_server)

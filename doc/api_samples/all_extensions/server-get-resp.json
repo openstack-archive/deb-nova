@@ -15,7 +15,8 @@
                 {
                     "OS-EXT-IPS:type": "fixed",
                     "addr": "192.168.0.3",
-                    "version": 4
+                    "version": 4,
+                    "OS-EXT-IPS-MAC:mac_addr": "00:0c:29:e1:42:90"
                 }
             ]
         },

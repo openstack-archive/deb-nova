@@ -1,4 +1,4 @@
-# Copyright 2012 OpenStack Foundation
+# Copyright 2012 OpenStack Foundation.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -62,7 +62,7 @@ class PluginManager(object):
                 pluginclass = entrypoint.load()
                 plugin = pluginclass(self._service_name)
                 self.plugins.append(plugin)
-            except Exception, exc:
+            except Exception as exc:
                 LOG.error(_("Failed to load plugin %(plug)s: %(exc)s") %
                           {'plug': entrypoint, 'exc': exc})
 

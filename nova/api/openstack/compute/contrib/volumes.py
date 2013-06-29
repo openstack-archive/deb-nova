@@ -25,8 +25,8 @@ from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
 from nova.openstack.common import log as logging
+from nova.openstack.common import strutils
 from nova.openstack.common import uuidutils
-from nova import utils
 from nova import volume
 
 LOG = logging.getLogger(__name__)
@@ -187,8 +187,7 @@ class VolumeController(wsgi.Controller):
         LOG.audit(_("Delete volume with id: %s"), id, context=context)
 
         try:
-            vol = self.volume_api.get(context, id)
-            self.volume_api.delete(context, vol)
+            self.volume_api.delete(context, id)
         except exception.NotFound:
             raise exc.HTTPNotFound()
         return webob.Response(status_int=202)
@@ -330,6 +329,7 @@ class VolumeAttachmentController(wsgi.Controller):
 
     def __init__(self):
         self.compute_api = compute.API()
+        self.volume_api = volume.API()
         super(VolumeAttachmentController, self).__init__()
 
     @wsgi.serializers(xml=VolumeAttachmentsTemplate)
@@ -396,9 +396,12 @@ class VolumeAttachmentController(wsgi.Controller):
 
         self._validate_volume_id(volume_id)
 
-        msg = _("Attach volume %(volume_id)s to instance %(server_id)s"
-                " at %(device)s") % locals()
-        LOG.audit(msg, context=context)
+        LOG.audit(_("Attach volume %(volume_id)s to instance %(server_id)s "
+                    "at %(device)s"),
+                  {'volume_id': volume_id,
+                   'device': device,
+                   'server_id': server_id},
+                  context=context)
 
         try:
             instance = self.compute_api.get(context, server_id)
@@ -446,8 +449,9 @@ class VolumeAttachmentController(wsgi.Controller):
         except exception.NotFound:
             raise exc.HTTPNotFound()
 
-        bdms = self.compute_api.get_instance_bdms(context, instance)
+        volume = self.volume_api.get(context, volume_id)
 
+        bdms = self.compute_api.get_instance_bdms(context, instance)
         if not bdms:
             LOG.debug(_("Instance %s is not attached."), server_id)
             raise exc.HTTPNotFound()
@@ -455,11 +459,16 @@ class VolumeAttachmentController(wsgi.Controller):
         found = False
         try:
             for bdm in bdms:
-                if bdm['volume_id'] == volume_id:
-                    self.compute_api.detach_volume(context,
-                        volume_id=volume_id)
+                if bdm['volume_id'] != volume_id:
+                    continue
+                try:
+                    self.compute_api.detach_volume(context, instance, volume)
                     found = True
                     break
+                except exception.VolumeUnattached:
+                    # The volume is not attached.  Treat it as NotFound
+                    # by falling through.
+                    pass
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'detach_volume')
@@ -570,8 +579,7 @@ class SnapshotController(wsgi.Controller):
         LOG.audit(_("Delete snapshot with id: %s"), id, context=context)
 
         try:
-            snapshot = self.volume_api.get_snapshot(context, id)
-            self.volume_api.delete_snapshot(context, snapshot)
+            self.volume_api.delete_snapshot(context, id)
         except exception.NotFound:
             return exc.HTTPNotFound()
         return webob.Response(status_int=202)
@@ -607,29 +615,27 @@ class SnapshotController(wsgi.Controller):
 
         snapshot = body['snapshot']
         volume_id = snapshot['volume_id']
-        vol = self.volume_api.get(context, volume_id)
+
+        LOG.audit(_("Create snapshot from volume %s"), volume_id,
+                  context=context)
 
         force = snapshot.get('force', False)
-        LOG.audit(_("Create snapshot from volume %s"), volume_id,
-                context=context)
-
-        if not utils.is_valid_boolstr(force):
-            msg = _("Invalid value '%s' for force. ") % force
+        try:
+            force = strutils.bool_from_string(force, strict=True)
+        except ValueError:
+            msg = _("Invalid value '%s' for force.") % force
             raise exception.InvalidParameterValue(err=msg)
 
-        if utils.bool_from_str(force):
-            new_snapshot = self.volume_api.create_snapshot_force(context,
-                                        vol,
-                                        snapshot.get('display_name'),
-                                        snapshot.get('display_description'))
+        if force:
+            create_func = self.volume_api.create_snapshot_force
         else:
-            new_snapshot = self.volume_api.create_snapshot(context,
-                                        vol,
-                                        snapshot.get('display_name'),
-                                        snapshot.get('display_description'))
+            create_func = self.volume_api.create_snapshot
+
+        new_snapshot = create_func(context, volume_id,
+                                   snapshot.get('display_name'),
+                                   snapshot.get('display_description'))
 
         retval = _translate_snapshot_detail_view(context, new_snapshot)
-
         return {'snapshot': retval}
 
 

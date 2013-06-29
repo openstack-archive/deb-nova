@@ -159,7 +159,7 @@ class ServiceTestCase(test.TestCase):
         # pre_start_hook is called after service record is created,
         # but before RPC consumer is created
         self.manager_mock.pre_start_hook(rpc_connection=mox.IgnoreArg())
-        self.manager_mock.create_rpc_dispatcher()
+        self.manager_mock.create_rpc_dispatcher(None)
         # post_start_hook is called after RPC consumer is created.
         self.manager_mock.post_start_hook()
 
@@ -201,7 +201,6 @@ class TestLauncher(test.TestCase):
         self.service = service.WSGIService("test_service")
 
     def test_launch_app(self):
-        launcher = service.Launcher()
-        launcher.launch_server(self.service)
+        service.serve(self.service)
         self.assertNotEquals(0, self.service.port)
-        launcher.stop()
+        service._launcher.stop()

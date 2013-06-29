@@ -19,11 +19,8 @@ Scheduler host weights
 
 from oslo.config import cfg
 
-from nova.openstack.common import log as logging
-from nova.scheduler.weights import least_cost
 from nova import weights
 
-LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 
 
@@ -52,10 +49,4 @@ class HostWeightHandler(weights.BaseWeightHandler):
 
 def all_weighers():
     """Return a list of weight plugin classes found in this directory."""
-
-    if (CONF.least_cost_functions is not None or
-            CONF.compute_fill_first_cost_fn_weight is not None):
-        LOG.deprecated(_('least_cost has been deprecated in favor of '
-                'the RAM Weigher.'))
-        return least_cost.get_least_cost_weighers()
     return HostWeightHandler().get_all_classes()
