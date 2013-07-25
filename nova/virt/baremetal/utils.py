@@ -39,7 +39,7 @@ def inject_into_image(image, key, net, metadata, admin_password,
                 files, partition, use_cow)
     except Exception as e:
         LOG.warn(_("Failed to inject data into image %(image)s. "
-                   "Error: %(e)s") % locals())
+                   "Error: %(e)s"), {'image': image, 'e': e})
 
 
 def unlink_without_raise(path):
@@ -49,7 +49,8 @@ def unlink_without_raise(path):
         if e.errno == errno.ENOENT:
             return
         else:
-            LOG.warn(_("Failed to unlink %(path)s, error: %(e)s") % locals())
+            LOG.warn(_("Failed to unlink %(path)s, error: %(e)s"),
+                     {'path': path, 'e': e})
 
 
 def rmtree_without_raise(path):
@@ -57,7 +58,8 @@ def rmtree_without_raise(path):
         if os.path.isdir(path):
             shutil.rmtree(path)
     except OSError as e:
-        LOG.warn(_("Failed to remove dir %(path)s, error: %(e)s") % locals())
+        LOG.warn(_("Failed to remove dir %(path)s, error: %(e)s"),
+                 {'path': path, 'e': e})
 
 
 def write_to_file(path, contents):
@@ -73,7 +75,8 @@ def create_link_without_raise(source, link):
             return
         else:
             LOG.warn(_("Failed to create symlink from %(source)s to %(link)s"
-                       ", error: %(e)s") % locals())
+                       ", error: %(e)s"),
+                     {'source': source, 'link': link, 'e': e})
 
 
 def random_alnum(count):
@@ -81,3 +84,32 @@ def random_alnum(count):
     import string
     chars = string.ascii_uppercase + string.digits
     return "".join(random.choice(chars) for _ in range(count))
+
+
+def map_network_interfaces(network_info, use_ipv6=False):
+    # TODO(deva): fix assumption that device names begin with "eth"
+    #             and fix assumption about ordering
+    if not isinstance(network_info, list):
+        network_info = [network_info]
+
+    interfaces = []
+    for id, (network, mapping) in enumerate(network_info):
+        address_v6 = None
+        gateway_v6 = None
+        netmask_v6 = None
+        if use_ipv6:
+            address_v6 = mapping['ip6s'][0]['ip']
+            netmask_v6 = mapping['ip6s'][0]['netmask']
+            gateway_v6 = mapping['gateway_v6']
+        interface = {
+                'name': 'eth%d' % id,
+                'address': mapping['ips'][0]['ip'],
+                'gateway': mapping['gateway'],
+                'netmask': mapping['ips'][0]['netmask'],
+                'dns': ' '.join(mapping['dns']),
+                'address_v6': address_v6,
+                'gateway_v6': gateway_v6,
+                'netmask_v6': netmask_v6,
+            }
+        interfaces.append(interface)
+    return interfaces

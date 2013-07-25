@@ -22,9 +22,14 @@ from nova.scheduler.filters import extra_specs_ops
 
 LOG = logging.getLogger(__name__)
 
+_SCOPE = 'aggregate_instance_extra_specs'
+
 
 class AggregateInstanceExtraSpecsFilter(filters.BaseHostFilter):
     """AggregateInstanceExtraSpecsFilter works with InstanceType records."""
+
+    # Aggregate data and instance type does not change within a request
+    run_filter_once_per_request = True
 
     def host_passes(self, host_state, filter_properties):
         """Return a list of hosts that can create instance_type
@@ -40,20 +45,28 @@ class AggregateInstanceExtraSpecsFilter(filters.BaseHostFilter):
         metadata = db.aggregate_metadata_get_by_host(context, host_state.host)
 
         for key, req in instance_type['extra_specs'].iteritems():
-            # NOTE(jogo) any key containing a scope (scope is terminated
-            # by a `:') will be ignored by this filter. (bug 1039386)
-            if key.count(':'):
-                continue
+            # Either not scope format, or aggregate_instance_extra_specs scope
+            scope = key.split(':', 1)
+            if len(scope) > 1:
+                if scope[0] != _SCOPE:
+                    continue
+                else:
+                    del scope[0]
+            key = scope[0]
             aggregate_vals = metadata.get(key, None)
             if not aggregate_vals:
                 LOG.debug(_("%(host_state)s fails instance_type extra_specs "
-                    "requirements"), {'host_state': host_state})
+                    "requirements. Extra_spec %(key)s is not in aggregate."),
+                    {'host_state': host_state, 'key': key})
                 return False
             for aggregate_val in aggregate_vals:
                 if extra_specs_ops.match(aggregate_val, req):
                     break
             else:
                 LOG.debug(_("%(host_state)s fails instance_type extra_specs "
-                    "requirements"), {'host_state': host_state})
+                            "requirements. '%(aggregate_vals)s' do not "
+                            "match '%(req)s'"),
+                          {'host_state': host_state, 'req': req,
+                           'aggregate_vals': aggregate_vals})
                 return False
         return True

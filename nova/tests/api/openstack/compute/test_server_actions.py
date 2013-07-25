@@ -30,6 +30,7 @@ from nova.image import glance
 from nova.openstack.common import importutils
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_instance
 from nova.tests.image import fake
 from nova.tests import matchers
 from nova.tests import utils
@@ -467,7 +468,7 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertTrue('adminPass' not in body['server'])
 
     def test_rebuild_server_not_found(self):
-        def server_not_found(self, instance_id):
+        def server_not_found(self, instance_id, columns_to_join=None):
             raise exception.InstanceNotFound(instance_id=instance_id)
         self.stubs.Set(db, 'instance_get_by_uuid', server_not_found)
 
@@ -843,7 +844,8 @@ class ServerActionsControllerTest(test.TestCase):
 
         def fake_block_device_mapping_get_all_by_instance(context, inst_id):
             return [dict(volume_id=_fake_id('a'),
-                         virtual_name=None,
+                         source_type='snapshot',
+                         destination_type='volume',
                          volume_size=1,
                          device_name='vda',
                          snapshot_id=1,
@@ -992,10 +994,10 @@ class ServerActionsControllerTest(test.TestCase):
                           req, FAKE_UUID, body)
 
     def test_locked(self):
-        def fake_locked(context, instance_uuid):
-            return {"name": "foo",
-                    "uuid": FAKE_UUID,
-                    "locked": True}
+        def fake_locked(context, instance_uuid, columns_to_join=None):
+            return fake_instance.fake_db_instance(name="foo",
+                                                  uuid=FAKE_UUID,
+                                                  locked=True)
         self.stubs.Set(db, 'instance_get_by_uuid', fake_locked)
         body = dict(reboot=dict(type="HARD"))
         req = fakes.HTTPRequest.blank(self.url)

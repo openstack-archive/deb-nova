@@ -50,10 +50,12 @@
 A fake XenAPI SDK.
 """
 
+import base64
 import pickle
 import random
 import uuid
 from xml.sax import saxutils
+import zlib
 
 import pprint
 
@@ -74,7 +76,8 @@ LOG = logging.getLogger(__name__)
 def log_db_contents(msg=None):
     text = msg or ""
     content = pprint.pformat(_db_content)
-    LOG.debug(_("%(text)s: _db_content => %(content)s") % locals())
+    LOG.debug(_("%(text)s: _db_content => %(content)s"),
+              {'text': text, 'content': content})
 
 
 def reset():
@@ -198,7 +201,8 @@ def create_vbd(vm_ref, vdi_ref, userdevice=0):
 
 def after_VBD_create(vbd_ref, vbd_rec):
     """Create read-only fields and backref from VM and VDI to VBD when VBD
-    is created."""
+    is created.
+    """
     vbd_rec['currently_attached'] = False
     vbd_rec['device'] = ''
 
@@ -241,7 +245,8 @@ def create_task(name_label):
 
 def create_local_pifs():
     """Adds a PIF for each to the local database with VLAN=-1.
-       Do this one per host."""
+       Do this one per host.
+    """
     for host_ref in _db_content['host'].keys():
         _create_local_pif(host_ref)
 
@@ -249,7 +254,8 @@ def create_local_pifs():
 def create_local_srs():
     """Create an SR that looks like the one created on the local disk by
     default by the XenServer installer.  Do this one per host. Also, fake
-    the installation of an ISO SR."""
+    the installation of an ISO SR.
+    """
     for host_ref in _db_content['host'].keys():
         create_sr(name_label='Local storage',
                   type='lvm',
@@ -363,7 +369,8 @@ def check_for_session_leaks():
 
 def as_value(s):
     """Helper function for simulating XenAPI plugin responses.  It
-    escapes and wraps the given argument."""
+    escapes and wraps the given argument.
+    """
     return '<value>%s</value>' % saxutils.escape(s)
 
 
@@ -371,7 +378,8 @@ def as_json(*args, **kwargs):
     """Helper function for simulating XenAPI plugin responses for those
     that are returning JSON.  If this function is given plain arguments,
     then these are rendered as a JSON list.  If it's given keyword
-    arguments then these are rendered as a JSON dict."""
+    arguments then these are rendered as a JSON dict.
+    """
     arg = args or kwargs
     return jsonutils.dumps(arg)
 
@@ -471,9 +479,13 @@ class SessionBase(object):
             return ref
         else:
             # SR not found in db, so we create one
-            params = {}
-            params.update(locals())
-            del params['self']
+            params = {'sr_uuid': sr_uuid,
+                      'label': label,
+                      'desc': desc,
+                      'type': type,
+                      'content_type': content_type,
+                      'shared': shared,
+                      'sm_config': sm_config}
             sr_ref = _create_object('SR', params)
             _db_content['SR'][sr_ref]['uuid'] = sr_uuid
             _db_content['SR'][sr_ref]['forgotten'] = 0
@@ -553,7 +565,7 @@ class SessionBase(object):
         return 12 * 1024 * 1024 * 1024
 
     def _plugin_agent_version(self, method, args):
-        return as_json(returncode='0', message='1.0')
+        return as_json(returncode='0', message='1.0\\r\\n')
 
     def _plugin_agent_key_init(self, method, args):
         return as_json(returncode='D0', message='1')
@@ -566,6 +578,13 @@ class SessionBase(object):
 
     def _plugin_agent_resetnetwork(self, method, args):
         return as_json(returncode='0', message='success')
+
+    def _plugin_agent_agentupdate(self, method, args):
+        url = args["url"]
+        md5 = args["md5sum"]
+        message = "success with %(url)s and hash:%(md5)s" % dict(url=url,
+                                                                 md5=md5)
+        return as_json(returncode='0', message=message)
 
     def _plugin_noop(self, method, args):
         return ''
@@ -607,6 +626,12 @@ class SessionBase(object):
 
     def _plugin_xenhost_host_uptime(self, method, args):
         return jsonutils.dumps({"uptime": "fake uptime"})
+
+    def _plugin_console_get_console_log(self, method, args):
+        dom_id = args["dom_id"]
+        if dom_id == 0:
+            raise Failure('Guest does not have a console')
+        return base64.b64encode(zlib.compress("dom_id: %s" % dom_id))
 
     def host_call_plugin(self, _1, _2, plugin, method, args):
         func = getattr(self, '_plugin_%s_%s' % (plugin, method), None)
@@ -719,8 +744,8 @@ class SessionBase(object):
             if impl is not None:
 
                 def callit(*params):
-                    localname = name
-                    LOG.debug(_('Calling %(localname)s %(impl)s') % locals())
+                    LOG.debug(_('Calling %(name)s %(impl)s'),
+                              {'name': name, 'impl': impl})
                     self._check_session(params)
                     return impl(*params)
                 return callit
@@ -803,7 +828,7 @@ class SessionBase(object):
             val = params[2]
 
             if (ref in _db_content[cls] and
-                field in _db_content[cls][ref]):
+                    field in _db_content[cls][ref]):
                 _db_content[cls][ref][field] = val
                 return
 
@@ -872,7 +897,7 @@ class SessionBase(object):
 
     def _check_session(self, params):
         if (self._session is None or
-            self._session not in _db_content['session']):
+                self._session not in _db_content['session']):
             raise Failure(['HANDLE_INVALID', 'session', self._session])
         if len(params) == 0 or params[0] != self._session:
             LOG.debug(_('Raising NotImplemented'))

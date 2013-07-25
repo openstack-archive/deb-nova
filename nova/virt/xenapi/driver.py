@@ -49,6 +49,7 @@ from oslo.config import cfg
 from nova import context
 from nova import exception
 from nova.openstack.common import log as logging
+from nova import utils
 from nova.virt import driver
 from nova.virt.xenapi import host
 from nova.virt.xenapi import pool
@@ -182,18 +183,19 @@ class XenAPIDriver(driver.ComputeDriver):
         self._vmops.confirm_migration(migration, instance, network_info)
 
     def finish_revert_migration(self, instance, network_info,
-                                block_device_info=None):
-        """Finish reverting a resize, powering back on the instance."""
+                                block_device_info=None, power_on=True):
+        """Finish reverting a resize."""
         # NOTE(vish): Xen currently does not use network info.
-        self._vmops.finish_revert_migration(instance, block_device_info)
+        self._vmops.finish_revert_migration(instance, block_device_info,
+                                            power_on)
 
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance=False,
-                         block_device_info=None):
+                         block_device_info=None, power_on=True):
         """Completes a resize, turning on the migrated instance."""
         self._vmops.finish_migration(context, migration, instance, disk_info,
                                      network_info, image_meta, resize_instance,
-                                     block_device_info)
+                                     block_device_info, power_on)
 
     def snapshot(self, context, instance, image_id, update_task_state):
         """Create snapshot from a running VM instance."""
@@ -237,7 +239,8 @@ class XenAPIDriver(driver.ComputeDriver):
                                    instance_type, network_info,
                                    block_device_info=None):
         """Transfers the VHD of a running instance to another host, then shuts
-        off the instance copies over the COW disk"""
+        off the instance copies over the COW disk
+        """
         # NOTE(vish): Xen currently does not use network info.
         return self._vmops.migrate_disk_and_power_off(context, instance,
                     dest, instance_type, block_device_info)
@@ -264,7 +267,8 @@ class XenAPIDriver(driver.ComputeDriver):
         """Power off the specified instance."""
         self._vmops.power_off(instance)
 
-    def power_on(self, instance):
+    def power_on(self, context, instance, network_info,
+                 block_device_info=None):
         """Power on the specified instance."""
         self._vmops.power_on(instance)
 
@@ -306,7 +310,8 @@ class XenAPIDriver(driver.ComputeDriver):
 
     def get_all_bw_counters(self, instances):
         """Return bandwidth usage counters for each interface on each
-           running VM"""
+           running VM.
+        """
 
         # we only care about VMs that correspond to a nova-managed
         # instance:
@@ -393,6 +398,7 @@ class XenAPIDriver(driver.ComputeDriver):
         free_ram_mb = host_stats['host_memory_free_computed'] / (1024 * 1024)
         total_disk_gb = host_stats['disk_total'] / (1024 * 1024 * 1024)
         used_disk_gb = host_stats['disk_used'] / (1024 * 1024 * 1024)
+        hyper_ver = utils.convert_version_to_int(self._session.product_version)
 
         dic = {'vcpus': 0,
                'memory_mb': total_ram_mb,
@@ -401,7 +407,7 @@ class XenAPIDriver(driver.ComputeDriver):
                'memory_mb_used': total_ram_mb - free_ram_mb,
                'local_gb_used': used_disk_gb,
                'hypervisor_type': 'xen',
-               'hypervisor_version': 0,
+               'hypervisor_version': hyper_ver,
                'hypervisor_hostname': host_stats['host_hostname'],
                'cpu_info': host_stats['host_cpu_info']['cpu_count']}
 
@@ -455,13 +461,15 @@ class XenAPIDriver(driver.ComputeDriver):
 
     def get_instance_disk_info(self, instance_name):
         """Used by libvirt for live migration. We rely on xenapi
-        checks to do this for us."""
+        checks to do this for us.
+        """
         pass
 
     def pre_block_migration(self, ctxt, instance_ref, disk_info_json):
         """Used by libvirt for live migration. We rely on xenapi
         checks to do this for us. May be used in the future to
-        populate the vdi/vif maps"""
+        populate the vdi/vif maps.
+        """
         pass
 
     def live_migration(self, ctxt, instance_ref, dest,
@@ -523,29 +531,34 @@ class XenAPIDriver(driver.ComputeDriver):
         """Updates security group rules for all instances associated with a
         given security group.
 
-        Invoked when security group rules are updated."""
+        Invoked when security group rules are updated.
+        """
         return self._vmops.refresh_security_group_rules(security_group_id)
 
     def refresh_security_group_members(self, security_group_id):
         """Updates security group rules for all instances associated with a
         given security group.
 
-        Invoked when instances are added/removed to a security group."""
+        Invoked when instances are added/removed to a security group.
+        """
         return self._vmops.refresh_security_group_members(security_group_id)
 
     def refresh_instance_security_rules(self, instance):
         """Updates security group rules for specified instance.
 
         Invoked when instances are added/removed to a security group
-        or when a rule is added/removed to a security group."""
+        or when a rule is added/removed to a security group.
+        """
         return self._vmops.refresh_instance_security_rules(instance)
 
     def refresh_provider_fw_rules(self):
         return self._vmops.refresh_provider_fw_rules()
 
     def get_host_stats(self, refresh=False):
-        """Return the current state of the host. If 'refresh' is
-           True, run the update first."""
+        """Return the current state of the host.
+
+           If 'refresh' is True, run the update first.
+         """
         return self.host_state.get_host_stats(refresh=refresh)
 
     def host_power_action(self, host, action):
@@ -571,7 +584,8 @@ class XenAPIDriver(driver.ComputeDriver):
 
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
-        guest VMs evacuation."""
+        guest VMs evacuation.
+        """
         return self._host.host_maintenance_mode(host, mode)
 
     def add_to_aggregate(self, context, aggregate, host, **kwargs):
@@ -669,7 +683,8 @@ class XenAPISession(object):
 
     def _get_product_version_and_brand(self):
         """Return a tuple of (major, minor, rev) for the host version and
-        a string of the product brand"""
+        a string of the product brand.
+        """
         software_version = self._get_software_version()
 
         product_version_str = software_version.get('product_version')
@@ -745,7 +760,7 @@ class XenAPISession(object):
             LOG.debug(_("Got exception: %s"), exc)
             if (len(exc.details) == 4 and
                 exc.details[0] == 'XENAPI_PLUGIN_EXCEPTION' and
-                exc.details[2] == 'Failure'):
+                    exc.details[2] == 'Failure'):
                 params = None
                 try:
                     # FIXME(comstud): eval is evil.

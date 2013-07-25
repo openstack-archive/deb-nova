@@ -62,7 +62,7 @@ class QuotaIntegrationTestCase(test.TestCase):
         def rpc_call_wrapper(context, topic, msg, timeout=None):
             """Stub out the scheduler creating the instance entry."""
             if (topic == CONF.scheduler_topic and
-                msg['method'] == 'run_instance'):
+                    msg['method'] == 'run_instance'):
                 scheduler = scheduler_driver.Scheduler
                 instance = scheduler().create_instance_db_entry(
                         context,
@@ -95,7 +95,7 @@ class QuotaIntegrationTestCase(test.TestCase):
         for i in range(CONF.quota_instances):
             instance = self._create_instance()
             instance_uuids.append(instance['uuid'])
-        inst_type = flavors.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_flavor_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         self.assertRaises(exception.QuotaError, compute.API().create,
                                             self.context,
@@ -108,7 +108,7 @@ class QuotaIntegrationTestCase(test.TestCase):
 
     def test_too_many_cores(self):
         instance = self._create_instance(cores=4)
-        inst_type = flavors.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_flavor_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         self.assertRaises(exception.QuotaError, compute.API().create,
                                             self.context,
@@ -146,7 +146,7 @@ class QuotaIntegrationTestCase(test.TestCase):
         metadata = {}
         for i in range(CONF.quota_metadata_items + 1):
             metadata['key%s' % i] = 'value%s' % i
-        inst_type = flavors.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_flavor_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         self.assertRaises(exception.QuotaError, compute.API().create,
                                             self.context,
@@ -158,7 +158,7 @@ class QuotaIntegrationTestCase(test.TestCase):
 
     def _create_with_injected_files(self, files):
         api = compute.API()
-        inst_type = flavors.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_flavor_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         api.create(self.context, min_count=1, max_count=1,
                 instance_type=inst_type, image_href=image_uuid,
@@ -166,7 +166,7 @@ class QuotaIntegrationTestCase(test.TestCase):
 
     def test_no_injected_files(self):
         api = compute.API()
-        inst_type = flavors.get_instance_type_by_name('m1.small')
+        inst_type = flavors.get_flavor_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         api.create(self.context,
                    instance_type=inst_type,
@@ -227,7 +227,7 @@ class QuotaIntegrationTestCase(test.TestCase):
 
         timeutils.advance_time_seconds(80)
 
-        result = quota.QUOTAS.expire(self.context)
+        quota.QUOTAS.expire(self.context)
 
         assertInstancesReserved(0)
 
@@ -1475,7 +1475,7 @@ class QuotaReserveSqlAlchemyTestCase(test.TestCase):
         self.stubs.Set(sqa_api, 'get_session', fake_get_session)
         self.stubs.Set(sqa_api, '_get_quota_usages', fake_get_quota_usages)
         self.stubs.Set(sqa_api, '_quota_usage_create', fake_quota_usage_create)
-        self.stubs.Set(sqa_api, 'reservation_create', fake_reservation_create)
+        self.stubs.Set(sqa_api, '_reservation_create', fake_reservation_create)
 
         self.useFixture(test.TimeOverride())
 

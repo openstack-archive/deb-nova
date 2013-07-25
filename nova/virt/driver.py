@@ -136,7 +136,8 @@ class ComputeDriver(object):
 
     def init_host(self, host):
         """Initialize anything that is necessary for the driver to function,
-        including catching up with currently running VM's on the given host."""
+        including catching up with currently running VM's on the given host.
+        """
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
@@ -290,12 +291,14 @@ class ComputeDriver(object):
 
     def get_all_bw_counters(self, instances):
         """Return bandwidth usage counters for each interface on each
-           running VM"""
+           running VM.
+        """
         raise NotImplementedError()
 
     def get_all_volume_usage(self, context, compute_host_bdms):
         """Return usage info for volumes attached to vms on
-           a given host"""
+           a given host.-
+        """
         raise NotImplementedError()
 
     def get_host_ip_addr(self):
@@ -330,6 +333,17 @@ class ComputeDriver(object):
         """
         raise NotImplementedError()
 
+    def live_snapshot(self, context, instance, image_id, update_task_state):
+        """
+        Live-snapshots the specified instance (includes ram and proc state).
+
+        :param context: security context
+        :param instance: Instance object as returned by DB layer.
+        :param image_id: Reference to a pre-created image that will
+                         hold the snapshot.
+        """
+        raise NotImplementedError()
+
     def snapshot(self, context, instance, image_id, update_task_state):
         """
         Snapshots the specified instance.
@@ -343,14 +357,23 @@ class ComputeDriver(object):
 
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance,
-                         block_device_info=None):
-        """Completes a resize, turning on the migrated instance
+                         block_device_info=None, power_on=True):
+        """Completes a resize.
 
+        :param context: the context for the migration/resize
+        :param migration: the migrate/resize information
+        :param instance: the instance being migrated/resized
+        :param disk_info: the newly transferred disk information
         :param network_info:
            :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
         :param image_meta: image object returned by nova.image.glance that
                            defines the image from which this instance
                            was created
+        :param resize_instance: True if the instance is being resized,
+                                False otherwise
+        :param block_device_info: instance volume block device info
+        :param power_on: True if the instance should be powered on, False
+                         otherwise
         """
         raise NotImplementedError()
 
@@ -360,8 +383,17 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def finish_revert_migration(self, instance, network_info,
-                                block_device_info=None):
-        """Finish reverting a resize, powering back on the instance."""
+                                block_device_info=None, power_on=True):
+        """
+        Finish reverting a resize.
+
+        :param instance: the instance being migrated/resized
+        :param network_info:
+           :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
+        :param block_device_info: instance volume block device info
+        :param power_on: True if the instance should be powered on, False
+                         otherwise
+        """
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
@@ -404,7 +436,8 @@ class ComputeDriver(object):
         """Power off the specified instance."""
         raise NotImplementedError()
 
-    def power_on(self, instance):
+    def power_on(self, context, instance, network_info,
+                 block_device_info=None):
         """Power on the specified instance."""
         raise NotImplementedError()
 
@@ -723,7 +756,8 @@ class ComputeDriver(object):
 
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
-        guest VMs evacuation."""
+        guest VMs evacuation.
+        """
         raise NotImplementedError()
 
     def set_host_enabled(self, host, enabled):
@@ -904,7 +938,8 @@ class ComputeDriver(object):
         Register a callback to receive asynchronous event
         notifications from hypervisors. The callback will
         be invoked with a single parameter, which will be
-        an instance of the nova.virt.event.Event class."""
+        an instance of the nova.virt.event.Event class.
+        """
 
         self._compute_event_callback = callback
 
@@ -913,7 +948,8 @@ class ComputeDriver(object):
 
         Invokes the event callback registered by the
         compute manager to dispatch the event. This
-        must only be invoked from a green thread."""
+        must only be invoked from a green thread.
+        """
 
         if not self._compute_event_callback:
             LOG.debug("Discarding event %s" % str(event))
@@ -927,8 +963,8 @@ class ComputeDriver(object):
             LOG.debug("Emitting event %s" % str(event))
             self._compute_event_callback(event)
         except Exception as ex:
-            LOG.error(_("Exception dispatching event %(event)s: %(ex)s")
-                        % locals())
+            LOG.error(_("Exception dispatching event %(event)s: %(ex)s"),
+                      {'event': event, 'ex': ex})
 
 
 def load_compute_driver(virtapi, compute_driver=None):

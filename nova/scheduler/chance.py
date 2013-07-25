@@ -25,6 +25,7 @@ import random
 
 from oslo.config import cfg
 
+from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
 from nova.scheduler import driver
 
@@ -34,6 +35,10 @@ CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 
 class ChanceScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
+
+    def __init__(self, *args, **kwargs):
+        super(ChanceScheduler, self).__init__(*args, **kwargs)
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
     def _filter_hosts(self, request_spec, hosts, filter_properties):
         """Filter a list of hosts based on request_spec."""
@@ -60,9 +65,28 @@ class ChanceScheduler(driver.Scheduler):
 
     def select_hosts(self, context, request_spec, filter_properties):
         """Selects a set of random hosts."""
-        return [self._schedule(context, CONF.compute_topic,
+        hosts = [self._schedule(context, CONF.compute_topic,
             request_spec, filter_properties)
             for instance_uuid in request_spec.get('instance_uuids', [])]
+        if not hosts:
+            raise exception.NoValidHost(reason="")
+        return hosts
+
+    def select_destinations(self, context, request_spec, filter_properties):
+        """Selects random destinations."""
+        num_instances = request_spec['num_instances']
+        # NOTE(timello): Returns a list of dicts with 'host', 'nodename' and
+        # 'limits' as keys for compatibility with filter_scheduler.
+        dests = []
+        for i in range(num_instances):
+            host = self._schedule(context, CONF.compute_topic,
+                    request_spec, filter_properties)
+            host_state = dict(host=host, nodename=None, limits=None)
+            dests.append(host_state)
+
+        if len(dests) < num_instances:
+            raise exception.NoValidHost(reason='')
+        return dests
 
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,

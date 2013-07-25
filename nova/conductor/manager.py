@@ -14,19 +14,33 @@
 
 """Handles database requests from other nova services."""
 
+import copy
+
 from nova.api.ec2 import ec2utils
+from nova import block_device
+from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import api as compute_api
+from nova.compute import rpcapi as compute_rpcapi
+from nova.compute import task_states
 from nova.compute import utils as compute_utils
+from nova.compute import vm_states
+from nova.db import base
 from nova import exception
+from nova.image import glance
 from nova import manager
 from nova import network
 from nova.network.security_group import openstack_driver
 from nova import notifications
+from nova.objects import base as nova_object
+from nova.openstack.common import excutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 from nova import quota
+from nova.scheduler import rpcapi as scheduler_rpcapi
+from nova.scheduler import utils as scheduler_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -59,7 +73,7 @@ class ConductorManager(manager.Manager):
     namespace.  See the ComputeTaskManager class for details.
     """
 
-    RPC_API_VERSION = '1.49'
+    RPC_API_VERSION = '1.54'
 
     def __init__(self, *args, **kwargs):
         super(ConductorManager, self).__init__(service_name='conductor',
@@ -70,6 +84,7 @@ class ConductorManager(manager.Manager):
         self._compute_api = None
         self.compute_task_mgr = ComputeTaskManager()
         self.quotas = quota.QUOTAS
+        self.cells_rpcapi = cells_rpcapi.CellsAPI()
 
     def create_rpc_dispatcher(self, *args, **kwargs):
         kwargs['additional_apis'] = [self.compute_task_mgr]
@@ -216,11 +231,13 @@ class ConductorManager(manager.Manager):
     def bw_usage_update(self, context, uuid, mac, start_period,
                         bw_in=None, bw_out=None,
                         last_ctr_in=None, last_ctr_out=None,
-                        last_refreshed=None):
+                        last_refreshed=None,
+                        update_cells=True):
         if [bw_in, bw_out, last_ctr_in, last_ctr_out].count(None) != 4:
             self.db.bw_usage_update(context, uuid, mac, start_period,
                                     bw_in, bw_out, last_ctr_in, last_ctr_out,
-                                    last_refreshed)
+                                    last_refreshed,
+                                    update_cells=update_cells)
         usage = self.db.bw_usage_get(context, uuid, start_period, mac)
         return jsonutils.to_primitive(usage)
 
@@ -231,7 +248,7 @@ class ConductorManager(manager.Manager):
 
     def security_group_get_by_instance(self, context, instance):
         group = self.db.security_group_get_by_instance(context,
-                                                       instance['id'])
+                                                       instance['uuid'])
         return jsonutils.to_primitive(group)
 
     def security_group_rule_get_by_security_group(self, context, secgroup):
@@ -251,15 +268,25 @@ class ConductorManager(manager.Manager):
     def block_device_mapping_update_or_create(self, context, values,
                                               create=None):
         if create is None:
-            self.db.block_device_mapping_update_or_create(context, values)
+            bdm = self.db.block_device_mapping_update_or_create(context,
+                                                                values)
         elif create is True:
-            self.db.block_device_mapping_create(context, values)
+            bdm = self.db.block_device_mapping_create(context, values)
         else:
-            self.db.block_device_mapping_update(context, values['id'], values)
+            bdm = self.db.block_device_mapping_update(context,
+                                                      values['id'],
+                                                      values)
+        # NOTE:comstud): 'bdm' is always in the new format, so we
+        # account for this in cells/messaging.py
+        self.cells_rpcapi.bdm_update_or_create_at_top(context, bdm,
+                                                      create=create)
 
-    def block_device_mapping_get_all_by_instance(self, context, instance):
+    def block_device_mapping_get_all_by_instance(self, context, instance,
+                                                 legacy=True):
         bdms = self.db.block_device_mapping_get_all_by_instance(
             context, instance['uuid'])
+        if legacy:
+            bdms = block_device.legacy_mapping(bdms)
         return jsonutils.to_primitive(bdms)
 
     def block_device_mapping_destroy(self, context, bdms=None,
@@ -268,12 +295,36 @@ class ConductorManager(manager.Manager):
         if bdms is not None:
             for bdm in bdms:
                 self.db.block_device_mapping_destroy(context, bdm['id'])
+                # NOTE(comstud): bdm['id'] will be different in API cell,
+                # so we must try to destroy by device_name or volume_id.
+                # We need an instance_uuid in order to do this properly,
+                # too.
+                # I hope to clean a lot of this up in the object
+                # implementation.
+                instance_uuid = (bdm['instance_uuid'] or
+                                    (instance and instance['uuid']))
+                if not instance_uuid:
+                    continue
+                # Better to be safe than sorry.  device_name is not
+                # NULLable, however it could be an empty string.
+                if bdm['device_name']:
+                    self.cells_rpcapi.bdm_destroy_at_top(
+                            context, instance_uuid,
+                            device_name=bdm['device_name'])
+                elif bdm['volume_id']:
+                    self.cells_rpcapi.bdm_destroy_at_top(
+                            context, instance_uuid,
+                            volume_id=bdm['volume_id'])
         elif instance is not None and volume_id is not None:
             self.db.block_device_mapping_destroy_by_instance_and_volume(
                 context, instance['uuid'], volume_id)
+            self.cells_rpcapi.bdm_destroy_at_top(
+                context, instance['uuid'], volume_id=volume_id)
         elif instance is not None and device_name is not None:
             self.db.block_device_mapping_destroy_by_instance_and_device(
                 context, instance['uuid'], device_name)
+            self.cells_rpcapi.bdm_destroy_at_top(
+                context, instance['uuid'], device_name=device_name)
         else:
             # NOTE(danms): This shouldn't happen
             raise exception.Invalid(_("Invalid block_device_mapping_destroy"
@@ -315,25 +366,36 @@ class ConductorManager(manager.Manager):
                                            values)
 
     def instance_type_get(self, context, instance_type_id):
-        result = self.db.instance_type_get(context, instance_type_id)
+        result = self.db.flavor_get(context, instance_type_id)
         return jsonutils.to_primitive(result)
 
     def instance_fault_create(self, context, values):
         result = self.db.instance_fault_create(context, values)
         return jsonutils.to_primitive(result)
 
+    # NOTE(kerrin): This method can be removed in v2.0 of the RPC API.
     def vol_get_usage_by_time(self, context, start_time):
         result = self.db.vol_get_usage_by_time(context, start_time)
         return jsonutils.to_primitive(result)
 
+    # NOTE(kerrin): The last_refreshed argument is unused by this method
+    # and can be removed in v2.0 of the RPC API.
     def vol_usage_update(self, context, vol_id, rd_req, rd_bytes, wr_req,
                          wr_bytes, instance, last_refreshed=None,
                          update_totals=False):
-        self.db.vol_usage_update(context, vol_id, rd_req, rd_bytes, wr_req,
-                                 wr_bytes, instance['uuid'],
-                                 instance['project_id'], instance['user_id'],
-                                 instance['availability_zone'],
-                                 last_refreshed, update_totals)
+        vol_usage = self.db.vol_usage_update(context, vol_id,
+                                             rd_req, rd_bytes,
+                                             wr_req, wr_bytes,
+                                             instance['uuid'],
+                                             instance['project_id'],
+                                             instance['user_id'],
+                                             instance['availability_zone'],
+                                             update_totals)
+
+        # We have just updated the database, so send the notification now
+        notifier.notify(context, 'conductor.%s' % self.host, 'volume.usage',
+                        notifier.INFO,
+                        compute_utils.usage_volume_info(vol_usage))
 
     @rpc_common.client_exceptions(exception.ComputeHostNotFound,
                                   exception.HostBinaryNotFound)
@@ -454,13 +516,44 @@ class ConductorManager(manager.Manager):
         self.compute_api.stop(context, instance, do_cast)
 
     def compute_confirm_resize(self, context, instance, migration_ref):
+        if isinstance(instance, nova_object.NovaObject):
+            # NOTE(danms): Remove this at RPC API v2.0
+            instance = dict(instance.items())
         self.compute_api.confirm_resize(context, instance, migration_ref)
 
     def compute_unrescue(self, context, instance):
         self.compute_api.unrescue(context, instance)
 
+    def object_class_action(self, context, objname, objmethod,
+                            objver, args, kwargs):
+        """Perform a classmethod action on an object."""
+        objclass = nova_object.NovaObject.obj_class_from_name(objname,
+                                                              objver)
+        return getattr(objclass, objmethod)(context, *args, **kwargs)
 
-class ComputeTaskManager(object):
+    def object_action(self, context, objinst, objmethod, args, kwargs):
+        """Perform an action on an object."""
+        oldobj = copy.copy(objinst)
+        result = getattr(objinst, objmethod)(context, *args, **kwargs)
+        updates = dict()
+        # NOTE(danms): Diff the object with the one passed to us and
+        # generate a list of changes to forward back
+        for field in objinst.fields:
+            if not hasattr(objinst, nova_object.get_attrname(field)):
+                # Avoid demand-loading anything
+                continue
+            if oldobj[field] != objinst[field]:
+                updates[field] = objinst._attr_to_primitive(field)
+        # This is safe since a field named this would conflict with the
+        # method anyway
+        updates['obj_what_changed'] = objinst.obj_what_changed()
+        return updates, result
+
+    def compute_reboot(self, context, instance, reboot_type):
+        self.compute_api.reboot(context, instance, reboot_type)
+
+
+class ComputeTaskManager(base.Base):
     """Namespace for compute methods.
 
     This class presents an rpc API for nova-conductor under the 'compute_task'
@@ -470,7 +563,107 @@ class ComputeTaskManager(object):
     """
 
     RPC_API_NAMESPACE = 'compute_task'
-    RPC_API_VERSION = '1.0'
+    RPC_API_VERSION = '1.3'
 
     def __init__(self):
-        pass
+        super(ComputeTaskManager, self).__init__()
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
+        self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
+
+    @rpc_common.client_exceptions(exception.NoValidHost,
+                                  exception.ComputeServiceUnavailable,
+                                  exception.InvalidHypervisorType,
+                                  exception.UnableToMigrateToSelf,
+                                  exception.DestinationHypervisorTooOld,
+                                  exception.InvalidLocalStorage,
+                                  exception.InvalidSharedStorage,
+                                  exception.MigrationPreCheckError)
+    def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
+                  flavor, block_migration, disk_over_commit):
+        if not live or rebuild or (flavor != None):
+            raise NotImplementedError()
+
+        destination = scheduler_hint.get("host")
+        self.scheduler_rpcapi.live_migration(context, block_migration,
+                disk_over_commit, instance, destination)
+
+    def build_instances(self, context, instances, image, filter_properties,
+            admin_password, injected_files, requested_networks,
+            security_groups, block_device_mapping):
+        request_spec = scheduler_utils.build_request_spec(context, image,
+                                                          instances)
+        # NOTE(alaski): For compatibility until a new scheduler method is used.
+        request_spec.update({'block_device_mapping': block_device_mapping,
+                             'security_group': security_groups})
+        self.scheduler_rpcapi.run_instance(context, request_spec=request_spec,
+                admin_password=admin_password, injected_files=injected_files,
+                requested_networks=requested_networks, is_first_time=True,
+                filter_properties=filter_properties)
+
+    def _instance_update(self, context, instance_uuid, **kwargs):
+        (old_ref, instance_ref) = self.db.instance_update_and_get_original(
+                context, instance_uuid, kwargs)
+        notifications.send_update(context, old_ref, instance_ref, 'conductor')
+        return instance_ref
+
+    def _get_image(self, context, image_id):
+        if not image_id:
+            return None
+
+        (image_service, image_id) = glance.get_remote_image_service(context,
+                image_id)
+        return image_service.show(context, image_id)
+
+    def _delete_image(self, context, image_id):
+        (image_service, image_id) = glance.get_remote_image_service(context,
+                image_id)
+        return image_service.delete(context, image_id)
+
+    def _schedule_instances(self, context, image, filter_properties,
+            *instances):
+        request_spec = scheduler_utils.build_request_spec(context, image,
+                instances)
+        # dict(host='', nodename='', limits='')
+        hosts = self.scheduler_rpcapi.select_destinations(context,
+                request_spec, filter_properties)
+        return hosts
+
+    def unshelve_instance(self, context, instance):
+        sys_meta = instance.system_metadata
+
+        if instance.vm_state == vm_states.SHELVED:
+            instance.task_state = task_states.POWERING_ON
+            instance.save(expected_task_state=task_states.UNSHELVING)
+            self.compute_rpcapi.start_instance(context, instance)
+            snapshot_id = sys_meta.get('shelved_image_id')
+            if snapshot_id:
+                self._delete_image(context, snapshot_id)
+        elif instance.vm_state == vm_states.SHELVED_OFFLOADED:
+            try:
+                with compute_utils.EventReporter(context, self.db,
+                        'get_image_info', instance.uuid):
+                    image = self._get_image(context,
+                            sys_meta['shelved_image_id'])
+            except exception.ImageNotFound:
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_('Unshelve attempted but vm_state not SHELVED '
+                                'or SHELVED_OFFLOADED'), instance=instance)
+                    instance.vm_state = vm_states.ERROR
+                    instance.save()
+
+            hosts = self._schedule_instances(context, image, [], instance)
+            host = hosts.pop(0)['host']
+            self.compute_rpcapi.unshelve_instance(context, instance, host,
+                    image)
+        else:
+            LOG.error(_('Unshelve attempted but vm_state not SHELVED or '
+                        'SHELVED_OFFLOADED'), instance=instance)
+            instance.vm_state = vm_states.ERROR
+            instance.save()
+            return
+
+        for key in ['shelved_at', 'shelved_image_id', 'shelved_host']:
+            if key in sys_meta:
+                del(sys_meta[key])
+        instance.system_metadata = sys_meta
+        instance.save()

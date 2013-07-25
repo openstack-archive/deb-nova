@@ -117,6 +117,8 @@ VIR_FROM_REMOTE = 340
 VIR_FROM_RPC = 345
 VIR_ERR_XML_DETAIL = 350
 VIR_ERR_NO_DOMAIN = 420
+VIR_ERR_OPERATION_INVALID = 55
+VIR_ERR_OPERATION_TIMEOUT = 68
 VIR_ERR_NO_NWFILTER = 620
 VIR_ERR_SYSTEM_ERROR = 900
 VIR_ERR_INTERNAL_ERROR = 950
@@ -357,7 +359,7 @@ class Domain(object):
 
     def attachDeviceFlags(self, xml, flags):
         if (flags & VIR_DOMAIN_AFFECT_LIVE and
-            self._state != VIR_DOMAIN_RUNNING):
+                self._state != VIR_DOMAIN_RUNNING):
             raise libvirtError("AFFECT_LIVE only allowed for running domains!")
         self.attachDevice(xml)
 
@@ -618,6 +620,7 @@ class Connection(object):
         self._event_callbacks[eventid] = [callback, opaque]
 
     def getCapabilities(self):
+        """Return spoofed capabilities."""
         return '''<capabilities>
   <host>
     <uuid>cef19ce0-0ca2-11df-855d-b19fbce37686</uuid>
@@ -911,6 +914,10 @@ def virEventRunDefaultImpl():
 
 
 def virEventRegisterDefaultImpl():
+    pass
+
+
+def registerErrorHandler(handler, ctxt):
     pass
 
 

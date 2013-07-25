@@ -26,6 +26,7 @@ import os
 from lxml import etree
 from oslo.config import cfg
 
+from nova import exception
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
@@ -52,7 +53,11 @@ def get_iscsi_initiator():
     """Get iscsi initiator name for this machine."""
     # NOTE(vish) openiscsi stores initiator name in a file that
     #            needs root permission to read.
-    contents = utils.read_file_as_root('/etc/iscsi/initiatorname.iscsi')
+    try:
+        contents = utils.read_file_as_root('/etc/iscsi/initiatorname.iscsi')
+    except exception.FileNotFound:
+        return None
+
     for l in contents.split('\n'):
         if l.startswith('InitiatorName='):
             return l[l.index('=') + 1:].strip()
@@ -361,7 +366,7 @@ def remove_logical_volumes(*paths):
         execute(*lvremove, attempts=3, run_as_root=True)
 
 
-def pick_disk_driver_name(is_block_dev=False):
+def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
     """Pick the libvirt primary backend driver name
 
     If the hypervisor supports multiple backend drivers, then the name
@@ -378,7 +383,12 @@ def pick_disk_driver_name(is_block_dev=False):
         if is_block_dev:
             return "phy"
         else:
-            return "tap"
+            # 4000000 == 4.0.0
+            if hypervisor_version == 4000000:
+                return "tap"
+            else:
+                return "tap2"
+
     elif CONF.libvirt_type in ('kvm', 'qemu'):
         return "qemu"
     else:
@@ -550,7 +560,8 @@ def file_delete(path):
 def find_disk(virt_dom):
     """Find root device path for instance
 
-    May be file or device"""
+    May be file or device
+    """
     xml_desc = virt_dom.XMLDesc(0)
     domain = etree.fromstring(xml_desc)
     if CONF.libvirt_type == 'lxc':
@@ -601,7 +612,7 @@ def fetch_image(context, target, image_id, user_id, project_id):
     images.fetch_to_raw(context, image_id, target, user_id, project_id)
 
 
-def get_instance_path(instance, forceold=False):
+def get_instance_path(instance, forceold=False, relative=False):
     """Determine the correct path for instance storage.
 
     This method determines the directory name for instance storage, while
@@ -610,10 +621,16 @@ def get_instance_path(instance, forceold=False):
 
     :param instance: the instance we want a path for
     :param forceold: force the use of the pre-grizzly format
+    :param relative: if True, just the relative path is returned
 
     :returns: a path to store information about that instance
     """
     pre_grizzly_name = os.path.join(CONF.instances_path, instance['name'])
     if forceold or os.path.exists(pre_grizzly_name):
+        if relative:
+            return instance['name']
         return pre_grizzly_name
+
+    if relative:
+        return instance['uuid']
     return os.path.join(CONF.instances_path, instance['uuid'])

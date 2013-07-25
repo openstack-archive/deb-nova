@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
 #
@@ -18,9 +19,6 @@
 """
 Stubouts, mocks and fixtures for the test suite
 """
-
-import time
-import uuid
 
 from nova.compute import task_states
 from nova.compute import vm_states
@@ -63,7 +61,7 @@ def stub_out_db_instance_api(stubs):
         base_options = {
             'name': values['name'],
             'id': values['id'],
-            'uuid': uuid.uuid4(),
+            'uuid': values['uuid'],
             'reservation_id': utils.generate_uid('r'),
             'image_ref': values['image_ref'],
             'kernel_id': values['kernel_id'],
@@ -72,21 +70,21 @@ def stub_out_db_instance_api(stubs):
             'task_state': task_states.SCHEDULING,
             'user_id': values['user_id'],
             'project_id': values['project_id'],
-            'launch_time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'instance_type': values['instance_type'],
             'memory_mb': type_data['memory_mb'],
             'vcpus': type_data['vcpus'],
             'mac_addresses': [{'address': values['mac_address']}],
             'root_gb': type_data['root_gb'],
+            'node': values['node'],
             }
         return FakeModel(base_options)
 
-    def fake_instance_type_get_all(context, inactive=0, filters=None):
+    def fake_flavor_get_all(context, inactive=0, filters=None):
         return INSTANCE_TYPES.values()
 
-    def fake_instance_type_get_by_name(context, name):
+    def fake_flavor_get_by_name(context, name):
         return INSTANCE_TYPES[name]
 
     stubs.Set(db, 'instance_create', fake_instance_create)
-    stubs.Set(db, 'instance_type_get_all', fake_instance_type_get_all)
-    stubs.Set(db, 'instance_type_get_by_name', fake_instance_type_get_by_name)
+    stubs.Set(db, 'flavor_get_all', fake_flavor_get_all)
+    stubs.Set(db, 'flavor_get_by_name', fake_flavor_get_by_name)

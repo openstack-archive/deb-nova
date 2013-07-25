@@ -35,14 +35,10 @@ mute_weigher_opts = [
                 default=1000.0,
                 help='Weight value assigned to mute children.  (The value '
                      'should be positive.)'),
-         cfg.IntOpt("mute_child_interval",
-                default=300,
-                help='Number of seconds after which a lack of capability and '
-                     'capacity updates signals the child cell is to be '
-                     'treated as a mute.')
 ]
 
 CONF = cfg.CONF
+CONF.import_opt('mute_child_interval', 'nova.cells.opts', group='cells')
 CONF.register_opts(mute_weigher_opts, group='cells')
 
 
@@ -58,7 +54,8 @@ class MuteChildWeigher(weights.BaseCellWeigher):
     def _weigh_object(self, cell, weight_properties):
         """Check cell against the last_seen timestamp that indicates the time
         that the most recent capability or capacity update was received from
-        the given cell."""
+        the given cell.
+        """
 
         last_seen = cell.last_seen
         secs = CONF.cells.mute_child_interval

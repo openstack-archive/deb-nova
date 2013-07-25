@@ -23,6 +23,7 @@ from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
 from nova import exception
+from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.virt.xenapi import pool_states
@@ -48,7 +49,8 @@ class Host(object):
 
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
-        guest VMs evacuation."""
+        guest VMs evacuation.
+        """
         if not mode:
             return 'off_maintenance'
         host_list = [host_ref for host_ref in
@@ -63,15 +65,15 @@ class Host(object):
                     uuid = vm_rec['other_config'].get('nova_uuid')
                     if not uuid:
                         name = vm_rec['name_label']
-                        uuid = _uuid_find(self._virtapi, ctxt, host, name)
+                        uuid = _uuid_find(ctxt, host, name)
                         if not uuid:
-                            msg = _('Instance %(name)s running on %(host)s'
-                                    ' could not be found in the database:'
-                                    ' assuming it is a worker VM and skip'
-                                    ' ping migration to a new host')
-                            LOG.info(msg % locals())
+                            LOG.info(_('Instance %(name)s running on %(host)s'
+                                       ' could not be found in the database:'
+                                       ' assuming it is a worker VM and skip'
+                                       ' ping migration to a new host'),
+                                     {'name': name, 'host': host})
                             continue
-                    instance = self._virtapi.instance_get_by_uuid(ctxt, uuid)
+                    instance = instance_obj.Instance.get_by_uuid(ctxt, uuid)
                     vm_counter = vm_counter + 1
 
                     aggregate = self._virtapi.aggregate_get_by_host(
@@ -83,27 +85,25 @@ class Host(object):
 
                     dest = _host_find(ctxt, self._session, aggregate[0],
                                       host_ref)
-                    self._virtapi.instance_update(
-                        ctxt, instance['uuid'],
-                        {'host': dest,
-                         'task_state': task_states.MIGRATING})
+                    instance.host = dest
+                    instance.task_state = task_states.MIGRATING
+                    instance.save()
 
                     self._session.call_xenapi('VM.pool_migrate',
                                               vm_ref, host_ref, {})
                     migrations_counter = migrations_counter + 1
 
-                    self._virtapi.instance_update(
-                        ctxt, instance['uuid'],
-                        {'vm_state': vm_states.ACTIVE})
+                    instance.vm_state = vm_states.ACTIVE
+                    instance.save()
 
                     break
                 except self._session.XenAPI.Failure:
-                    LOG.exception(_('Unable to migrate VM %(vm_ref)s'
-                                    'from %(host)s') % locals())
-                    self._virtapi.instance_update(
-                        ctxt, instance['uuid'],
-                        {'host': host,
-                         'vm_state': vm_states.ACTIVE})
+                    LOG.exception(_('Unable to migrate VM %(vm_ref)s '
+                                    'from %(host)s'),
+                                  {'vm_ref': vm_ref, 'host': host})
+                    instance.host = host
+                    instance.vm_state = vm_states.ACTIVE
+                    instance.save()
 
         if vm_counter == migrations_counter:
             return 'on_maintenance'
@@ -203,15 +203,15 @@ def call_xenhost(session, method, arg_dict):
         return None
     except session.XenAPI.Failure as e:
         LOG.error(_("The call to %(method)s returned "
-                    "an error: %(e)s.") % locals())
+                    "an error: %(e)s."), {'method': method, 'e': e})
         return e.details[1]
 
 
-def _uuid_find(virtapi, context, host, name_label):
+def _uuid_find(context, host, name_label):
     """Return instance uuid by name_label."""
-    for i in virtapi.instance_get_all_by_host(context, host):
+    for i in instance_obj.InstanceList.get_by_host(context, host):
         if i.name == name_label:
-            return i['uuid']
+            return i.uuid
     return None
 
 

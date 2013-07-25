@@ -15,7 +15,7 @@
 #    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
-#    under the License
+#    under the License.
 
 import webob
 
@@ -125,7 +125,7 @@ class FloatingIPController(object):
 
         try:
             floating_ip = self.network_api.get_floating_ip(context, id)
-        except exception.NotFound:
+        except (exception.NotFound, exception.InvalidID):
             msg = _("Floating ip not found for id %s") % id
             raise webob.exc.HTTPNotFound(explanation=msg)
 
@@ -173,7 +173,7 @@ class FloatingIPController(object):
         # get the floating ip object
         try:
             floating_ip = self.network_api.get_floating_ip(context, id)
-        except exception.NotFound:
+        except (exception.NotFound, exception.InvalidID):
             msg = _("Floating ip not found for id %s") % id
             raise webob.exc.HTTPNotFound(explanation=msg)
         address = floating_ip['address']

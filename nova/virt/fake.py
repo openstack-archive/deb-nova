@@ -131,6 +131,11 @@ class FakeDriver(driver.ComputeDriver):
         fake_instance = FakeInstance(name, state)
         self.instances[name] = fake_instance
 
+    def live_snapshot(self, context, instance, name, update_task_state):
+        if instance['name'] not in self.instances:
+            raise exception.InstanceNotRunning(instance_id=instance['uuid'])
+        update_task_state(task_state=task_states.IMAGE_UPLOADING)
+
     def snapshot(self, context, instance, name, update_task_state):
         if instance['name'] not in self.instances:
             raise exception.InstanceNotRunning(instance_id=instance['uuid'])
@@ -170,7 +175,7 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def finish_revert_migration(self, instance, network_info,
-                                block_device_info=None):
+                                block_device_info=None, power_on=True):
         pass
 
     def post_live_migration_at_destination(self, context, instance,
@@ -182,7 +187,7 @@ class FakeDriver(driver.ComputeDriver):
     def power_off(self, instance):
         pass
 
-    def power_on(self, instance):
+    def power_on(self, context, instance, network_info, block_device_info):
         pass
 
     def soft_delete(self, instance):
@@ -272,13 +277,15 @@ class FakeDriver(driver.ComputeDriver):
 
     def get_all_bw_counters(self, instances):
         """Return bandwidth usage counters for each interface on each
-           running VM"""
+           running VM.
+        """
         bw = []
         return bw
 
     def get_all_volume_usage(self, context, compute_host_bdms):
         """Return usage info for volumes attached to vms on
-           a given host"""
+           a given host.
+        """
         volusage = []
         return volusage
 
@@ -368,7 +375,7 @@ class FakeDriver(driver.ComputeDriver):
 
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance,
-                         block_device_info=None):
+                         block_device_info=None, power_on=True):
         return
 
     def confirm_migration(self, migration, instance, network_info):
@@ -408,7 +415,8 @@ class FakeDriver(driver.ComputeDriver):
 
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
-        guest VMs evacuation."""
+        guest VMs evacuation.
+        """
         if not mode:
             return 'off_maintenance'
         return 'on_maintenance'
@@ -444,12 +452,6 @@ class FakeVirtAPI(virtapi.VirtAPI):
                                                    instance_uuid,
                                                    updates)
 
-    def instance_get_by_uuid(self, context, instance_uuid):
-        return db.instance_get_by_uuid(context, instance_uuid)
-
-    def instance_get_all_by_host(self, context, host):
-        return db.instance_get_all_by_host(context, host)
-
     def aggregate_get_by_host(self, context, host, key=None):
         return db.aggregate_get_by_host(context, host, key=key)
 
@@ -462,7 +464,7 @@ class FakeVirtAPI(virtapi.VirtAPI):
         return db.aggregate_metadata_delete(context, aggregate['id'], key)
 
     def security_group_get_by_instance(self, context, instance):
-        return db.security_group_get_by_instance(context, instance['id'])
+        return db.security_group_get_by_instance(context, instance['uuid'])
 
     def security_group_rule_get_by_security_group(self, context,
                                                   security_group):

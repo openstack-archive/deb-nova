@@ -67,7 +67,10 @@ class ComputeRpcAPITestCase(test.TestCase):
 
         cast_and_call = ['confirm_resize', 'stop_instance']
         if rpc_method == 'call' and method in cast_and_call:
-            kwargs['cast'] = False
+            if method == 'confirm_resize':
+                kwargs['cast'] = False
+            else:
+                kwargs['do_cast'] = False
         if 'host' in kwargs:
             host = kwargs['host']
         elif 'destination' in kwargs:
@@ -352,17 +355,21 @@ class ComputeRpcAPITestCase(test.TestCase):
                 instance=self.fake_instance, image_id='id', image_type='type',
                 backup_type='type', rotation='rotation')
 
+    def test_live_snapshot_instance(self):
+        self._test_compute_api('live_snapshot_instance', 'cast',
+                instance=self.fake_instance, image_id='id', version='2.30')
+
     def test_start_instance(self):
         self._test_compute_api('start_instance', 'cast',
-                instance=self.fake_instance)
+                instance=self.fake_instance, version='2.29')
 
     def test_stop_instance_cast(self):
         self._test_compute_api('stop_instance', 'cast',
-                instance=self.fake_instance)
+                instance=self.fake_instance, version='2.29')
 
     def test_stop_instance_call(self):
         self._test_compute_api('stop_instance', 'call',
-                instance=self.fake_instance)
+                instance=self.fake_instance, version='2.29')
 
     def test_suspend_instance(self):
         self._test_compute_api('suspend_instance', 'cast',

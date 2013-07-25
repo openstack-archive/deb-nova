@@ -27,10 +27,10 @@ MAX_SIZE = CHUNKS * CHUNK_LENGTH
 
 def extract_password(instance):
     result = ''
-    for datum in sorted(instance.get('system_metadata', []),
-                        key=lambda x: x['key']):
-        if datum['key'].startswith('password_'):
-            result += datum['value']
+    sys_meta = utils.instance_sys_meta(instance)
+    for key in sorted(sys_meta.keys()):
+        if key.startswith('password_'):
+            result += sys_meta[key]
     return result or None
 
 
@@ -49,7 +49,6 @@ def convert_password(context, password):
 
 def handle_password(req, meta_data):
     ctxt = context.get_admin_context()
-    password = meta_data.password
     if req.method == 'GET':
         return meta_data.password
     elif req.method == 'POST':

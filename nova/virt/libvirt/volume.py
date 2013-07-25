@@ -88,7 +88,10 @@ class LibvirtBaseVolumeDriver(object):
         """Connect the volume. Returns xml for libvirt."""
 
         conf = vconfig.LibvirtConfigGuestDisk()
-        conf.driver_name = virtutils.pick_disk_driver_name(self.is_block_dev)
+        conf.driver_name = virtutils.pick_disk_driver_name(
+            self.connection.get_hypervisor_version(),
+            self.is_block_dev
+        )
         conf.device_type = disk_info['type']
         conf.driver_format = "raw"
         conf.driver_cache = "none"
@@ -131,7 +134,7 @@ class LibvirtFakeVolumeDriver(LibvirtBaseVolumeDriver):
                                           disk_info)
         conf.source_type = "network"
         conf.source_protocol = "fake"
-        conf.source_host = "fake"
+        conf.source_name = "fake"
         return conf
 
 
@@ -145,13 +148,15 @@ class LibvirtNetVolumeDriver(LibvirtBaseVolumeDriver):
         conf = super(LibvirtNetVolumeDriver,
                      self).connect_volume(connection_info,
                                           disk_info)
+        netdisk_properties = connection_info['data']
         conf.source_type = "network"
         conf.source_protocol = connection_info['driver_volume_type']
-        conf.source_host = connection_info['data']['name']
-        netdisk_properties = connection_info['data']
+        conf.source_name = netdisk_properties.get('name')
+        conf.source_hosts = netdisk_properties.get('hosts', [])
+        conf.source_ports = netdisk_properties.get('ports', [])
         auth_enabled = netdisk_properties.get('auth_enabled')
         if (conf.source_protocol == 'rbd' and
-            CONF.rbd_secret_uuid):
+                CONF.rbd_secret_uuid):
             conf.auth_secret_uuid = CONF.rbd_secret_uuid
             auth_enabled = True  # Force authentication locally
             if CONF.rbd_user:
@@ -476,22 +481,24 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
         conf = super(LibvirtNFSVolumeDriver,
                      self).connect_volume(connection_info,
                                           disk_info)
-        path = self._ensure_mounted(connection_info['data']['export'])
+        options = connection_info['data'].get('options')
+        path = self._ensure_mounted(connection_info['data']['export'], options)
         path = os.path.join(path, connection_info['data']['name'])
         conf.source_type = 'file'
         conf.source_path = path
         return conf
 
-    def _ensure_mounted(self, nfs_export):
+    def _ensure_mounted(self, nfs_export, options=None):
         """
         @type nfs_export: string
+        @type options: string
         """
         mount_path = os.path.join(CONF.nfs_mount_point_base,
                                   self.get_hash_str(nfs_export))
-        self._mount_nfs(mount_path, nfs_export, ensure=True)
+        self._mount_nfs(mount_path, nfs_export, options, ensure=True)
         return mount_path
 
-    def _mount_nfs(self, mount_path, nfs_share, ensure=False):
+    def _mount_nfs(self, mount_path, nfs_share, options=None, ensure=False):
         """Mount nfs export to mount path."""
         utils.execute('mkdir', '-p', mount_path)
 
@@ -499,6 +506,8 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
         nfs_cmd = ['mount', '-t', 'nfs']
         if CONF.nfs_mount_options is not None:
             nfs_cmd.extend(['-o', CONF.nfs_mount_options])
+        if options is not None:
+            nfs_cmd.extend(options.split(' '))
         nfs_cmd.extend([nfs_share, mount_path])
 
         try:
@@ -594,29 +603,36 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
         """Connect the volume. Returns xml for libvirt."""
         conf = super(LibvirtGlusterfsVolumeDriver,
                      self).connect_volume(connection_info, mount_device)
-        path = self._ensure_mounted(connection_info['data']['export'])
+        options = connection_info['data'].get('options')
+        path = self._ensure_mounted(connection_info['data']['export'], options)
         path = os.path.join(path, connection_info['data']['name'])
         conf.source_type = 'file'
         conf.source_path = path
         return conf
 
-    def _ensure_mounted(self, glusterfs_export):
+    def _ensure_mounted(self, glusterfs_export, options=None):
         """
         @type glusterfs_export: string
+        @type options: string
         """
         mount_path = os.path.join(CONF.glusterfs_mount_point_base,
                                   self.get_hash_str(glusterfs_export))
-        self._mount_glusterfs(mount_path, glusterfs_export, ensure=True)
+        self._mount_glusterfs(mount_path, glusterfs_export,
+                              options, ensure=True)
         return mount_path
 
-    def _mount_glusterfs(self, mount_path, glusterfs_share, ensure=False):
+    def _mount_glusterfs(self, mount_path, glusterfs_share,
+                         options=None, ensure=False):
         """Mount glusterfs export to mount path."""
         utils.execute('mkdir', '-p', mount_path)
 
+        gluster_cmd = ['mount', '-t', 'glusterfs']
+        if options is not None:
+            gluster_cmd.extend(options.split(' '))
+        gluster_cmd.extend([glusterfs_share, mount_path])
+
         try:
-            utils.execute('mount', '-t', 'glusterfs', glusterfs_share,
-                          mount_path,
-                          run_as_root=True)
+            utils.execute(*gluster_cmd, run_as_root=True)
         except processutils.ProcessExecutionError as exc:
             if ensure and 'already mounted' in exc.message:
                 LOG.warn(_("%s is already mounted"), glusterfs_share)
@@ -742,6 +758,7 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
                       % {'device': mdev_info['device']})
             device_path = mdev_info['device']
             connection_info['data']['devices'] = mdev_info['devices']
+            connection_info['data']['multipath_id'] = mdev_info['id']
         else:
             # we didn't find a multipath device.
             # so we assume the kernel only sees 1 device
@@ -763,6 +780,15 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
               self).disconnect_volume(connection_info, mount_device)
         devices = connection_info['data']['devices']
 
+        # If this is a multipath device, we need to search again
+        # and make sure we remove all the devices. Some of them
+        # might not have shown up at attach time.
+        if 'multipath_id' in connection_info['data']:
+            multipath_id = connection_info['data']['multipath_id']
+            mdev_info = linuxscsi.find_multipath_device(multipath_id)
+            devices = mdev_info['devices']
+            LOG.debug("devices to remove = %s" % devices)
+
         # There may have been more than 1 device mounted
         # by the kernel for this volume.  We have to remove
         # all of them
@@ -772,7 +798,8 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
 
 class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
     """Scality SOFS Nova driver. Provide hypervisors with access
-    to sparse files on SOFS. """
+    to sparse files on SOFS.
+    """
 
     def __init__(self, connection):
         """Create back-end to SOFS and check connection."""

@@ -20,6 +20,10 @@ Global cells config options
 
 from oslo.config import cfg
 
+from nova import exception
+from nova.openstack.common import log as logging
+
+
 cells_opts = [
     cfg.BoolOpt('enable',
                 default=False,
@@ -43,6 +47,54 @@ cells_opts = [
                 default=10.0,
                 help='Percentage of cell capacity to hold in reserve. '
                      'Affects both memory and disk utilization'),
+    cfg.StrOpt('cell_type',
+               default=None,
+               help='Type of cell: api or compute'),
+    cfg.IntOpt("mute_child_interval",
+               default=300,
+               help='Number of seconds after which a lack of capability and '
+                     'capacity updates signals the child cell is to be '
+                     'treated as a mute.'),
+    cfg.IntOpt('bandwidth_update_interval',
+                default=600,
+                help='Seconds between bandwidth updates for cells.'),
 ]
 
-cfg.CONF.register_opts(cells_opts, group='cells')
+CONF = cfg.CONF
+CONF.register_opts(cells_opts, group='cells')
+
+
+# NOTE(comstud): Remove 'compute_api_class' after Havana and set a reasonable
+# default for 'cell_type'.
+_compute_opts = [
+    cfg.StrOpt('compute_api_class',
+               default='nova.compute.api.API',
+               help='The full class name of the '
+                    'compute API class to use (deprecated)'),
+]
+
+CONF.register_opts(_compute_opts)
+LOG = logging.getLogger(__name__)
+
+
+def get_cell_type():
+    """Return the cell type, 'api', 'compute', or None (if cells is disabled).
+
+    This call really exists just to support the deprecated compute_api_class
+    config option.  Otherwise, one could just access CONF.cells.enable and
+    CONF.cells.cell_type directly.
+    """
+    if not CONF.cells.enable:
+        return
+    cell_type = CONF.cells.cell_type
+    if cell_type:
+        if cell_type == 'api' or cell_type == 'compute':
+            return cell_type
+        msg = _("cell_type must be configured as 'api' or 'compute'")
+        raise exception.InvalidInput(reason=msg)
+    LOG.deprecated(_("The compute_api_class is now deprecated and "
+                     "will be removed in next release. Please set the"
+                     " cell_type option to 'api' or 'compute'"))
+    if CONF.compute_api_class == 'nova.compute.cells_api.ComputeCellsAPI':
+        return 'api'
+    return 'compute'

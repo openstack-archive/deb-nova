@@ -18,10 +18,39 @@
 
 from nova.compute import task_states
 from nova.compute import vm_mode
+from nova import exception
 from nova import test
+from nova.tests.virt.xenapi import stubs
 from nova.virt import fake
+from nova.virt.xenapi import driver as xenapi_conn
+from nova.virt.xenapi import fake as xenapi_fake
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import vmops
+
+
+class VMOpsTestBase(stubs.XenAPITestBase):
+    def setUp(self):
+        super(VMOpsTestBase, self).setUp()
+        self._setup_mock_vmops()
+        self.vms = []
+
+    def _setup_mock_vmops(self, product_brand=None, product_version=None):
+        stubs.stubout_session(self.stubs, xenapi_fake.SessionBase)
+        self._session = xenapi_conn.XenAPISession('test_url', 'root',
+                                                  'test_pass',
+                                                  fake.FakeVirtAPI())
+        self.vmops = vmops.VMOps(self._session, fake.FakeVirtAPI())
+
+    def create_vm(self, name, state="running"):
+        vm_ref = xenapi_fake.create_vm(name, state)
+        self.vms.append(vm_ref)
+        vm = xenapi_fake.get_record("VM", vm_ref)
+        return vm, vm_ref
+
+    def tearDown(self):
+        super(VMOpsTestBase, self).tearDown()
+        for vm in self.vms:
+            xenapi_fake.destroy_vm(vm)
 
 
 class VMOpsTestCase(test.TestCase):
@@ -166,3 +195,68 @@ class VMOpsTestCase(test.TestCase):
         self.assertTrue(self._vmops._is_xsm_sr_check_relaxed())
 
         self.assertEqual(self.make_plugin_call_count, 1)
+
+
+class InjectAutoDiskConfigTestCase(VMOpsTestBase):
+    def setUp(self):
+        super(InjectAutoDiskConfigTestCase, self).setUp()
+
+    def test_inject_auto_disk_config_when_present(self):
+        vm, vm_ref = self.create_vm("dummy")
+        instance = {"name": "dummy", "uuid": "1234", "auto_disk_config": True}
+        self.vmops.inject_auto_disk_config(instance, vm_ref)
+        xenstore_data = vm['xenstore_data']
+        self.assertEquals(xenstore_data['vm-data/auto-disk-config'], 'True')
+
+    def test_inject_auto_disk_config_none_as_false(self):
+        vm, vm_ref = self.create_vm("dummy")
+        instance = {"name": "dummy", "uuid": "1234", "auto_disk_config": None}
+        self.vmops.inject_auto_disk_config(instance, vm_ref)
+        xenstore_data = vm['xenstore_data']
+        self.assertEquals(xenstore_data['vm-data/auto-disk-config'], 'False')
+
+
+class GetConsoleOutputTestCase(VMOpsTestBase):
+    def setUp(self):
+        super(GetConsoleOutputTestCase, self).setUp()
+
+    def test_get_console_output_works(self):
+        self.mox.StubOutWithMock(self.vmops, '_get_dom_id')
+
+        instance = {"name": "dummy"}
+        self.vmops._get_dom_id(instance, check_rescue=True).AndReturn(42)
+        self.mox.ReplayAll()
+
+        self.assertEqual("dom_id: 42", self.vmops.get_console_output(instance))
+
+    def test_get_console_output_throws_nova_exception(self):
+        self.mox.StubOutWithMock(self.vmops, '_get_dom_id')
+
+        instance = {"name": "dummy"}
+        # dom_id=0 used to trigger exception in fake XenAPI
+        self.vmops._get_dom_id(instance, check_rescue=True).AndReturn(0)
+        self.mox.ReplayAll()
+
+        self.assertRaises(exception.NovaException,
+                self.vmops.get_console_output, instance)
+
+    def test_get_dom_id_works(self):
+        instance = {"name": "dummy"}
+        vm, vm_ref = self.create_vm("dummy")
+        self.assertEqual(vm["domid"], self.vmops._get_dom_id(instance))
+
+    def test_get_dom_id_works_with_rescue_vm(self):
+        instance = {"name": "dummy"}
+        vm, vm_ref = self.create_vm("dummy-rescue")
+        self.assertEqual(vm["domid"],
+                self.vmops._get_dom_id(instance, check_rescue=True))
+
+    def test_get_dom_id_raises_not_found(self):
+        instance = {"name": "dummy"}
+        self.create_vm("not-dummy")
+        self.assertRaises(exception.NotFound, self.vmops._get_dom_id, instance)
+
+    def test_get_dom_id_works_with_vmref(self):
+        vm, vm_ref = self.create_vm("dummy")
+        self.assertEqual(vm["domid"],
+                         self.vmops._get_dom_id(vm_ref=vm_ref))

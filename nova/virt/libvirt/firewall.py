@@ -83,7 +83,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
     def nova_dhcp_filter():
         """The standard allow-dhcp-server filter is an <ip> one, so it uses
            ebtables to allow traffic through. Without a corresponding rule in
-           iptables, it'll get blocked anyway."""
+           iptables, it'll get blocked anyway.
+        """
 
         return '''<filter name='nova-allow-dhcp-server' chain='ipv4'>
                     <uuid>891e4787-e5c0-d59b-cbd6-41bc3c6b36fc</uuid>
@@ -244,9 +245,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
                     # This happens when the instance filter is still in
                     # use (ie. when the instance has not terminated properly)
                     raise
-                LOG.debug(_('The nwfilter(%(instance_filter_name)s) '
-                            'is not found.') % locals(),
-                          instance=instance)
+                LOG.debug(_('The nwfilter(%s) is not found.'),
+                          instance_filter_name, instance=instance)
 
     def _define_filters(self, filter_name, filter_children):
         self._define_filter(self._filter_container(filter_name,
@@ -268,7 +268,9 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             except libvirt.libvirtError:
                 name = instance['name']
                 LOG.debug(_('The nwfilter(%(instance_filter_name)s) for'
-                            '%(name)s is not found.') % locals(),
+                            '%(name)s is not found.'),
+                          {'instance_filter_name': instance_filter_name,
+                           'name': name},
                           instance=instance)
                 return False
         return True

@@ -138,7 +138,8 @@ def get_device_name_for_instance(context, instance, bdms, device):
         prefix = '/dev/xvd'
 
     if req_prefix != prefix:
-        LOG.debug(_("Using %(prefix)s instead of %(req_prefix)s") % locals())
+        LOG.debug(_("Using %(prefix)s instead of %(req_prefix)s"),
+                  {'prefix': prefix, 'req_prefix': req_prefix})
 
     used_letters = set()
     for device_path in mappings.itervalues():
@@ -151,7 +152,7 @@ def get_device_name_for_instance(context, instance, bdms, device):
     # NOTE(vish): remove this when xenapi is properly setting
     #             default_ephemeral_device and default_swap_device
     if driver.compute_driver_matches('xenapi.XenAPIDriver'):
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         if instance_type['ephemeral_gb']:
             used_letters.add('b')
 
@@ -203,8 +204,7 @@ def notify_usage_exists(context, instance_ref, current_period=False,
             ignore_missing_network_data)
 
     if system_metadata is None:
-        system_metadata = utils.metadata_to_dict(
-                instance_ref['system_metadata'])
+        system_metadata = utils.instance_sys_meta(instance_ref)
 
     # add image metadata to the notification:
     image_meta = notifications.image_meta(system_metadata)
@@ -255,6 +255,26 @@ def notify_about_instance_usage(context, instance, event_suffix,
                         usage_info)
 
 
+def notify_about_aggregate_update(context, event_suffix, aggregate_payload):
+    """
+    Send a notification about aggregate update.
+
+    :param event_suffix: Event type like "create.start" or "create.end"
+    :param aggregate_payload: payload for aggregate update
+    """
+    aggregate_identifier = aggregate_payload.get('aggregate_id', None)
+    if not aggregate_identifier:
+        aggregate_identifier = aggregate_payload.get('name', None)
+        if not aggregate_identifier:
+            LOG.debug(_("No aggregate id or name specified for this "
+                        "notification and it will be ignored"))
+            return
+
+    notifier_api.notify(context, 'aggregate.%s' % aggregate_identifier,
+                        'aggregate.%s' % event_suffix, notifier_api.INFO,
+                        aggregate_payload)
+
+
 def get_nw_info_for_instance(instance):
     info_cache = instance['info_cache'] or {}
     cached_nwinfo = info_cache.get('network_info') or []
@@ -290,8 +310,13 @@ def usage_volume_info(vol_usage):
 
     tot_refreshed = vol_usage['tot_last_refreshed']
     curr_refreshed = vol_usage['curr_last_refreshed']
-    last_refreshed_time = (tot_refreshed if tot_refreshed > curr_refreshed
-                           else curr_refreshed)
+    if tot_refreshed and curr_refreshed:
+        last_refreshed_time = max(tot_refreshed, curr_refreshed)
+    elif tot_refreshed:
+        last_refreshed_time = tot_refreshed
+    else:
+        # curr_refreshed must be set
+        last_refreshed_time = curr_refreshed
 
     usage_info = dict(
           volume_id=vol_usage['volume_id'],

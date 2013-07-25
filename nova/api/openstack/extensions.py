@@ -17,6 +17,7 @@
 #    under the License.
 
 import abc
+import functools
 import os
 
 import webob.dec
@@ -297,7 +298,7 @@ class ResourceExtension(object):
 
     def __init__(self, collection, controller=None, parent=None,
                  collection_actions=None, member_actions=None,
-                 custom_routes_fn=None, inherits=None):
+                 custom_routes_fn=None, inherits=None, member_name=None):
         if not collection_actions:
             collection_actions = {}
         if not member_actions:
@@ -309,6 +310,7 @@ class ResourceExtension(object):
         self.member_actions = member_actions
         self.custom_routes_fn = custom_routes_fn
         self.inherits = inherits
+        self.member_name = member_name
 
 
 def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
@@ -391,9 +393,9 @@ def extension_authorizer(api_name, extension_name):
 def soft_extension_authorizer(api_name, extension_name):
     hard_authorize = extension_authorizer(api_name, extension_name)
 
-    def authorize(context):
+    def authorize(context, action=None):
         try:
-            hard_authorize(context)
+            hard_authorize(context, action=action)
             return True
         except exception.NotAuthorized:
             return False
@@ -409,6 +411,9 @@ class V3APIExtensionBase(object):
     define the abstract properties.
     """
     __metaclass__ = abc.ABCMeta
+
+    def __init__(self, extension_info):
+        self.extension_info = extension_info
 
     @abc.abstractmethod
     def get_resources(self):
@@ -447,3 +452,42 @@ class V3APIExtensionBase(object):
     def version(self):
         """Version of the extension."""
         pass
+
+
+def expected_errors(errors):
+    """Decorator for v3 API methods which specifies expected exceptions.
+
+    Specify which exceptions may occur when an API method is called. If an
+    unexpected exception occurs then return a 500 instead and ask the user
+    of the API to file a bug report.
+    """
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapped(*args, **kwargs):
+            try:
+                return f(*args, **kwargs)
+            except Exception as exc:
+                if isinstance(exc, webob.exc.WSGIHTTPException):
+                    if isinstance(errors, int):
+                        t_errors = (errors,)
+                    else:
+                        t_errors = errors
+                    if exc.code in t_errors:
+                        raise
+                elif isinstance(exc, exception.PolicyNotAuthorized):
+                    # Note(cyeoh): Special case to handle
+                    # PolicyNotAuthorized exceptions so every
+                    # extension method does not need to wrap authorize
+                    # calls. ResourceExceptionHandler silently
+                    # converts NotAuthorized to HTTPForbidden
+                    raise
+
+                LOG.exception(_("Unexpected exception in API method"))
+                msg = _('Unexpected API Error. Please report this at '
+                    'http://bugs.launchpad.net/nova/ and attach the Nova '
+                    'API log if possible.\n%s') % type(exc)
+                raise webob.exc.HTTPInternalServerError(explanation=msg)
+
+        return wrapped
+
+    return decorator

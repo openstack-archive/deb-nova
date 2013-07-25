@@ -197,9 +197,10 @@ def fetch_image(context, target, image_id, user_id, project_id):
     pass
 
 
-def get_instance_path(instance, forceold=False):
-    return libvirt_utils.get_instance_path(instance, forceold=forceold)
+def get_instance_path(instance, forceold=False, relative=False):
+    return libvirt_utils.get_instance_path(instance, forceold=forceold,
+                                           relative=relative)
 
 
-def pick_disk_driver_name(is_block_dev=False):
+def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
     return "qemu"

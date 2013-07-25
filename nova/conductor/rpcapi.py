@@ -16,10 +16,17 @@
 
 from oslo.config import cfg
 
+from nova.objects import base as objects_base
 from nova.openstack.common import jsonutils
+from nova.openstack.common.rpc import common as rpc_common
 import nova.openstack.common.rpc.proxy
 
 CONF = cfg.CONF
+
+rpcapi_cap_opt = cfg.StrOpt('conductor',
+        default=None,
+        help='Set a version cap for messages sent to conductor services')
+CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
 
 class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
@@ -87,15 +94,34 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
     1.47 - Added columns_to_join to instance_get_all_by_host and
                  instance_get_all_by_filters
     1.48 - Added compute_unrescue
+
+        ... Grizzly supports message version 1.48.  So, any changes to existing
+        methods in 2.x after that point should be done such that they can
+        handle the version_cap being set to 1.48.
+
     1.49 - Added columns_to_join to instance_get_by_uuid
+    1.50 - Added object_action() and object_class_action()
+    1.51 - Added the 'legacy' argument to
+           block_device_mapping_get_all_by_instance
+    1.52 - Pass instance objects for compute_confirm_resize
+    1.53 - Added compute_reboot
+    1.54 - Added 'update_cells' argument to bw_usage_update
     """
 
     BASE_RPC_API_VERSION = '1.0'
 
+    VERSION_ALIASES = {
+        'grizzly': '1.48',
+    }
+
     def __init__(self):
+        version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.conductor,
+                                               CONF.upgrade_levels.conductor)
         super(ConductorAPI, self).__init__(
             topic=CONF.conductor.topic,
-            default_version=self.BASE_RPC_API_VERSION)
+            default_version=self.BASE_RPC_API_VERSION,
+            serializer=objects_base.NovaObjectSerializer(),
+            version_cap=version_cap)
 
     def instance_update(self, context, instance_uuid, updates,
                         service=None):
@@ -114,10 +140,16 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
 
     def instance_get_by_uuid(self, context, instance_uuid,
                              columns_to_join=None):
-        msg = self.make_msg('instance_get_by_uuid',
-                            instance_uuid=instance_uuid,
-                            columns_to_join=columns_to_join)
-        return self.call(context, msg, version='1.49')
+        if self.can_send_version('1.49'):
+            version = '1.49'
+            msg = self.make_msg('instance_get_by_uuid',
+                                instance_uuid=instance_uuid,
+                                columns_to_join=columns_to_join)
+        else:
+            version = '1.2'
+            msg = self.make_msg('instance_get_by_uuid',
+                                instance_uuid=instance_uuid)
+        return self.call(context, msg, version=version)
 
     def migration_get(self, context, migration_id):
         msg = self.make_msg('migration_get', migration_id=migration_id)
@@ -191,13 +223,20 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
     def bw_usage_update(self, context, uuid, mac, start_period,
                         bw_in=None, bw_out=None,
                         last_ctr_in=None, last_ctr_out=None,
-                        last_refreshed=None):
-        msg = self.make_msg('bw_usage_update',
-                            uuid=uuid, mac=mac, start_period=start_period,
-                            bw_in=bw_in, bw_out=bw_out,
-                            last_ctr_in=last_ctr_in, last_ctr_out=last_ctr_out,
-                            last_refreshed=last_refreshed)
-        return self.call(context, msg, version='1.5')
+                        last_refreshed=None, update_cells=True):
+        msg_kwargs = dict(uuid=uuid, mac=mac, start_period=start_period,
+                          bw_in=bw_in, bw_out=bw_out, last_ctr_in=last_ctr_in,
+                          last_ctr_out=last_ctr_out,
+                          last_refreshed=last_refreshed)
+
+        if self.can_send_version('1.54'):
+            version = '1.54'
+            msg_kwargs['update_cells'] = update_cells
+        else:
+            version = '1.5'
+
+        msg = self.make_msg('bw_usage_update', **msg_kwargs)
+        return self.call(context, msg, version=version)
 
     def security_group_get_by_instance(self, context, instance):
         instance_p = jsonutils.to_primitive(instance)
@@ -227,11 +266,25 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                             values=values, create=create)
         return self.call(context, msg, version='1.12')
 
-    def block_device_mapping_get_all_by_instance(self, context, instance):
+    def block_device_mapping_get_all_by_instance(self, context, instance,
+                                                 legacy=True):
         instance_p = jsonutils.to_primitive(instance)
-        msg = self.make_msg('block_device_mapping_get_all_by_instance',
-                            instance=instance_p)
-        return self.call(context, msg, version='1.13')
+        if self.can_send_version('1.51'):
+            version = '1.51'
+            msg = self.make_msg('block_device_mapping_get_all_by_instance',
+                                instance=instance_p, legacy=legacy)
+        elif legacy:
+            # If the remote side is >= 1.51, it defaults to legacy=True.
+            # If it's older, it only understands the legacy format.
+            version = '1.13'
+            msg = self.make_msg('block_device_mapping_get_all_by_instance',
+                                instance=instance_p)
+        else:
+            # If we require new style data, but can't ask for it, then we must
+            # fail here.
+            raise rpc_common.RpcVersionCapError(version_cap=self.version_cap)
+
+        return self.call(context, msg, version=version)
 
     def block_device_mapping_destroy(self, context, bdms=None,
                                      instance=None, volume_id=None,
@@ -430,16 +483,39 @@ class ConductorAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         return self.call(context, msg, version='1.43')
 
     def compute_confirm_resize(self, context, instance, migration_ref):
-        instance_p = jsonutils.to_primitive(instance)
         migration_p = jsonutils.to_primitive(migration_ref)
-        msg = self.make_msg('compute_confirm_resize', instance=instance_p,
+        if not self.can_send_version('1.52'):
+            instance = jsonutils.to_primitive(
+                objects_base.obj_to_primitive(instance))
+            version = '1.46'
+        else:
+            version = '1.52'
+        msg = self.make_msg('compute_confirm_resize', instance=instance,
                             migration_ref=migration_p)
-        return self.call(context, msg, version='1.46')
+        return self.call(context, msg, version=version)
 
     def compute_unrescue(self, context, instance):
         instance_p = jsonutils.to_primitive(instance)
         msg = self.make_msg('compute_unrescue', instance=instance_p)
         return self.call(context, msg, version='1.48')
+
+    def object_class_action(self, context, objname, objmethod, objver,
+                            args, kwargs):
+        msg = self.make_msg('object_class_action', objname=objname,
+                            objmethod=objmethod, objver=objver,
+                            args=args, kwargs=kwargs)
+        return self.call(context, msg, version='1.50')
+
+    def object_action(self, context, objinst, objmethod, args, kwargs):
+        msg = self.make_msg('object_action', objinst=objinst,
+                            objmethod=objmethod, args=args, kwargs=kwargs)
+        return self.call(context, msg, version='1.50')
+
+    def compute_reboot(self, context, instance, reboot_type):
+        instance_p = jsonutils.to_primitive(instance)
+        msg = self.make_msg('compute_reboot', instance=instance_p,
+                            reboot_type=reboot_type)
+        return self.call(context, msg, version='1.53')
 
 
 class ComputeTaskAPI(nova.openstack.common.rpc.proxy.RpcProxy):
@@ -448,6 +524,9 @@ class ComputeTaskAPI(nova.openstack.common.rpc.proxy.RpcProxy):
     API version history:
 
     1.0 - Initial version (empty).
+    1.1 - Added unified migrate_server call.
+    1.2 - Added build_instances
+    1.3 - Added unshelve_instance
     """
 
     BASE_RPC_API_VERSION = '1.0'
@@ -456,4 +535,32 @@ class ComputeTaskAPI(nova.openstack.common.rpc.proxy.RpcProxy):
     def __init__(self):
         super(ComputeTaskAPI, self).__init__(
                 topic=CONF.conductor.topic,
-                default_version=self.BASE_RPC_API_VERSION)
+                default_version=self.BASE_RPC_API_VERSION,
+                serializer=objects_base.NovaObjectSerializer())
+
+    def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
+                  flavor, block_migration, disk_over_commit):
+        instance_p = jsonutils.to_primitive(instance)
+        flavor_p = jsonutils.to_primitive(flavor)
+        msg = self.make_msg('migrate_server', instance=instance_p,
+            scheduler_hint=scheduler_hint, live=live, rebuild=rebuild,
+            flavor=flavor_p, block_migration=block_migration,
+            disk_over_commit=disk_over_commit)
+        return self.call(context, msg, version='1.1')
+
+    def build_instances(self, context, instances, image, filter_properties,
+            admin_password, injected_files, requested_networks,
+            security_groups, block_device_mapping):
+        instances_p = [jsonutils.to_primitive(inst) for inst in instances]
+        image_p = jsonutils.to_primitive(image)
+        msg = self.make_msg('build_instances', instances=instances_p,
+                image=image_p, filter_properties=filter_properties,
+                admin_password=admin_password, injected_files=injected_files,
+                requested_networks=requested_networks,
+                security_groups=security_groups,
+                block_device_mapping=block_device_mapping)
+        self.cast(context, msg, version='1.2')
+
+    def unshelve_instance(self, context, instance):
+        msg = self.make_msg('unshelve_instance', instance=instance)
+        self.cast(context, msg, version='1.3')

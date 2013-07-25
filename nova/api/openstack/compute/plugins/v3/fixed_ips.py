@@ -22,10 +22,13 @@ from nova import exception
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-authorize = extensions.extension_authorizer('compute', 'fixed_ips')
+
+ALIAS = "os-fixed-ips"
+authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
 
 
 class FixedIPController(object):
+    @extensions.expected_errors(404)
     def show(self, req, id):
         """Return data about the given fixed ip."""
         context = req.environ['nova.context']
@@ -53,6 +56,7 @@ class FixedIPController(object):
 
         return fixed_ip_info
 
+    @extensions.expected_errors((400, 404))
     def action(self, req, id, body):
         context = req.environ['nova.context']
         authorize(context)
@@ -82,7 +86,7 @@ class FixedIPs(extensions.V3APIExtensionBase):
     """Fixed IPs support."""
 
     name = "FixedIPs"
-    alias = "os-fixed-ips"
+    alias = ALIAS
     namespace = "http://docs.openstack.org/compute/ext/fixed_ips/api/v3"
     version = 1
 

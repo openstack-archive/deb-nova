@@ -53,6 +53,7 @@ class CellsManagerClassTestCase(test.TestCase):
         self.our_cell = 'grandchild-cell1'
         self.cells_manager = fakes.get_cells_manager(self.our_cell)
         self.msg_runner = self.cells_manager.msg_runner
+        self.state_manager = fakes.get_state_manager(self.our_cell)
         self.driver = self.cells_manager.driver
         self.ctxt = 'fake_context'
 
@@ -121,6 +122,15 @@ class CellsManagerClassTestCase(test.TestCase):
         self.mox.ReplayAll()
         self.cells_manager.schedule_run_instance(self.ctxt,
                 host_sched_kwargs=host_sched_kwargs)
+
+    def test_build_instances(self):
+        build_inst_kwargs = {'instances': [1, 2]}
+        self.mox.StubOutWithMock(self.msg_runner, 'build_instances')
+        our_cell = self.msg_runner.state_manager.get_my_state()
+        self.msg_runner.build_instances(self.ctxt, our_cell, build_inst_kwargs)
+        self.mox.ReplayAll()
+        self.cells_manager.build_instances(self.ctxt,
+                build_inst_kwargs=build_inst_kwargs)
 
     def test_run_compute_api_method(self):
         # Args should just be silently passed through
@@ -504,6 +514,17 @@ class CellsManagerClassTestCase(test.TestCase):
         self.cells_manager.consoleauth_delete_tokens(self.ctxt,
                 instance_uuid=instance_uuid)
 
+    def test_get_capacities(self):
+        cell_name = 'cell_name'
+        response = {"ram_free":
+                   {"units_by_mb": {"64": 20, "128": 10}, "total_mb": 1491}}
+        self.mox.StubOutWithMock(self.state_manager,
+                                 'get_capacities')
+        self.state_manager.get_capacities(cell_name).AndReturn(response)
+        self.mox.ReplayAll()
+        self.assertEqual(response,
+                self.cells_manager.get_capacities(self.ctxt, cell_name))
+
     def test_validate_console_port(self):
         instance_uuid = 'fake-instance-uuid'
         cell_name = 'fake-cell-name'
@@ -527,3 +548,118 @@ class CellsManagerClassTestCase(test.TestCase):
                 instance_uuid=instance_uuid, console_port=console_port,
                 console_type=console_type)
         self.assertEqual('fake-response', response)
+
+    def test_bdm_update_or_create_at_top(self):
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'bdm_update_or_create_at_top')
+        self.msg_runner.bdm_update_or_create_at_top(self.ctxt,
+                                                    'fake-bdm',
+                                                    create='foo')
+        self.mox.ReplayAll()
+        self.cells_manager.bdm_update_or_create_at_top(self.ctxt,
+                                                       'fake-bdm',
+                                                       create='foo')
+
+    def test_bdm_destroy_at_top(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'bdm_destroy_at_top')
+        self.msg_runner.bdm_destroy_at_top(self.ctxt,
+                                           'fake_instance_uuid',
+                                           device_name='fake_device_name',
+                                           volume_id='fake_volume_id')
+
+        self.mox.ReplayAll()
+        self.cells_manager.bdm_destroy_at_top(self.ctxt,
+                                              'fake_instance_uuid',
+                                              device_name='fake_device_name',
+                                              volume_id='fake_volume_id')
+
+    def test_get_migrations(self):
+        filters = {'status': 'confirmed'}
+        cell1_migrations = [{'id': 123}]
+        cell2_migrations = [{'id': 456}]
+        fake_responses = [self._get_fake_response(cell1_migrations),
+                          self._get_fake_response(cell2_migrations)]
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'get_migrations')
+        self.msg_runner.get_migrations(self.ctxt, None, False, filters).\
+            AndReturn(fake_responses)
+        self.mox.ReplayAll()
+
+        response = self.cells_manager.get_migrations(self.ctxt, filters)
+
+        self.assertEqual([cell1_migrations[0], cell2_migrations[0]], response)
+
+    def test_get_migrations_for_a_given_cell(self):
+        filters = {'status': 'confirmed', 'cell_name': 'ChildCell1'}
+        target_cell = '%s%s%s' % (CONF.cells.name, '!', filters['cell_name'])
+        migrations = [{'id': 123}]
+        fake_responses = [self._get_fake_response(migrations)]
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'get_migrations')
+        self.msg_runner.get_migrations(self.ctxt, target_cell, False,
+                                           filters).AndReturn(fake_responses)
+        self.mox.ReplayAll()
+
+        response = self.cells_manager.get_migrations(self.ctxt, filters)
+        self.assertEqual(migrations, response)
+
+    def test_start_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'start_instance')
+        self.msg_runner.start_instance(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.start_instance(self.ctxt, instance='fake-instance')
+
+    def test_stop_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'stop_instance')
+        self.msg_runner.stop_instance(self.ctxt, 'fake-instance',
+                                      do_cast='meow')
+        self.mox.ReplayAll()
+        self.cells_manager.stop_instance(self.ctxt,
+                                         instance='fake-instance',
+                                         do_cast='meow')
+
+    def test_cell_create(self):
+        values = 'values'
+        response = 'created_cell'
+        self.mox.StubOutWithMock(self.state_manager,
+                                 'cell_create')
+        self.state_manager.cell_create(self.ctxt, values).\
+            AndReturn(response)
+        self.mox.ReplayAll()
+        self.assertEqual(response,
+                         self.cells_manager.cell_create(self.ctxt, values))
+
+    def test_cell_update(self):
+        cell_name = 'cell_name'
+        values = 'values'
+        response = 'updated_cell'
+        self.mox.StubOutWithMock(self.state_manager,
+                                 'cell_update')
+        self.state_manager.cell_update(self.ctxt, cell_name, values).\
+            AndReturn(response)
+        self.mox.ReplayAll()
+        self.assertEqual(response,
+                         self.cells_manager.cell_update(self.ctxt, cell_name,
+                                                        values))
+
+    def test_cell_delete(self):
+        cell_name = 'cell_name'
+        response = 1
+        self.mox.StubOutWithMock(self.state_manager,
+                                 'cell_delete')
+        self.state_manager.cell_delete(self.ctxt, cell_name).\
+            AndReturn(response)
+        self.mox.ReplayAll()
+        self.assertEqual(response,
+                         self.cells_manager.cell_delete(self.ctxt, cell_name))
+
+    def test_cell_get(self):
+        cell_name = 'cell_name'
+        response = 'cell_info'
+        self.mox.StubOutWithMock(self.state_manager,
+                                 'cell_get')
+        self.state_manager.cell_get(self.ctxt, cell_name).\
+            AndReturn(response)
+        self.mox.ReplayAll()
+        self.assertEqual(response,
+                         self.cells_manager.cell_get(self.ctxt, cell_name))

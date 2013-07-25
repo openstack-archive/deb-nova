@@ -160,7 +160,7 @@ class ResourceTracker(object):
         be done while the COMPUTE_RESOURCES_SEMAPHORE is held so the resource
         claim will not be lost if the audit process starts.
         """
-        old_instance_type = flavors.extract_instance_type(instance)
+        old_instance_type = flavors.extract_flavor(instance)
 
         return self.conductor_api.migration_create(context, instance,
                 {'dest_compute': self.host,
@@ -395,7 +395,7 @@ class ResourceTracker(object):
             # same node resize. record usage for whichever instance type the
             # instance is *not* in:
             if (instance['instance_type_id'] ==
-                migration['old_instance_type_id']):
+                    migration['old_instance_type_id']):
                 itype = self._get_instance_type(context, instance, 'new_',
                         migration['new_instance_type_id'])
             else:
@@ -536,14 +536,14 @@ class ResourceTracker(object):
     def _update_usage_from_orphans(self, resources, orphans):
         """Include orphaned instances in usage."""
         for orphan in orphans:
-            uuid = orphan['uuid']
             memory_mb = orphan['memory_mb']
 
             LOG.warn(_("Detected running orphan instance: %(uuid)s (consuming "
-                       "%(memory_mb)s MB memory") % locals())
+                       "%(memory_mb)s MB memory)"),
+                     {'uuid': orphan['uuid'], 'memory_mb': memory_mb})
 
             # just record memory usage for the orphan
-            usage = {'memory_mb': orphan['memory_mb']}
+            usage = {'memory_mb': memory_mb}
             self._update_usage(resources, usage)
 
     def _verify_resources(self, resources):
@@ -580,7 +580,7 @@ class ResourceTracker(object):
             instance_type_id = instance['instance_type_id']
 
         try:
-            return flavors.extract_instance_type(instance, prefix)
+            return flavors.extract_flavor(instance, prefix)
         except KeyError:
             return self.conductor_api.instance_type_get(context,
                     instance_type_id)

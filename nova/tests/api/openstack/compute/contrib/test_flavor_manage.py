@@ -25,7 +25,7 @@ from nova import test
 from nova.tests.api.openstack import fakes
 
 
-def fake_get_instance_type_by_flavor_id(flavorid, read_deleted='yes'):
+def fake_get_flavor_by_flavor_id(flavorid, ctxt=None, read_deleted='yes'):
     if flavorid == 'failtest':
         raise exception.NotFound("Not found sucka!")
     elif not str(flavorid) == '1234':
@@ -62,7 +62,7 @@ def fake_create(name, memory_mb, vcpus, root_gb, ephemeral_gb,
                 flavorid, swap, rxtx_factor, is_public):
     if flavorid is None:
         flavorid = 1234
-    newflavor = fake_get_instance_type_by_flavor_id(flavorid,
+    newflavor = fake_get_flavor_by_flavor_id(flavorid,
                                                     read_deleted="no")
 
     newflavor["name"] = name
@@ -81,8 +81,8 @@ class FlavorManageTest(test.TestCase):
     def setUp(self):
         super(FlavorManageTest, self).setUp()
         self.stubs.Set(flavors,
-                       "get_instance_type_by_flavor_id",
-                       fake_get_instance_type_by_flavor_id)
+                       "get_flavor_by_flavor_id",
+                       fake_get_flavor_by_flavor_id)
         self.stubs.Set(flavors, "destroy", fake_destroy)
         self.stubs.Set(flavors, "create", fake_create)
         self.flags(
@@ -191,7 +191,7 @@ class FlavorManageTest(test.TestCase):
         for key in expected["flavor"]:
             self.assertEquals(body["flavor"][key], expected["flavor"][key])
 
-    def test_instance_type_exists_exception_returns_409(self):
+    def test_flavor_exists_exception_returns_409(self):
         expected = {
             "flavor": {
                 "name": "test",
@@ -218,3 +218,18 @@ class FlavorManageTest(test.TestCase):
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 409)
+
+    def test_invalid_memory_mb(self):
+        """Check negative and decimal number can't be accepted."""
+
+        self.stubs.UnsetAll()
+        self.assertRaises(exception.InvalidInput, flavors.create, "abc",
+                          -512, 2, 1, 1, 1234, 512, 1, True)
+        self.assertRaises(exception.InvalidInput, flavors.create, "abcd",
+                          512.2, 2, 1, 1, 1234, 512, 1, True)
+        self.assertRaises(exception.InvalidInput, flavors.create, "abcde",
+                          None, 2, 1, 1, 1234, 512, 1, True)
+        self.assertRaises(exception.InvalidInput, flavors.create, "abcdef",
+                          512, 2, None, 1, 1234, 512, 1, True)
+        self.assertRaises(exception.InvalidInput, flavors.create, "abcdef",
+                          "test_memory_mb", 2, None, 1, 1234, 512, 1, True)

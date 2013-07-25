@@ -15,7 +15,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from migrate.changeset import UniqueConstraint
+import re
+
+from migrate.changeset import UniqueConstraint, ForeignKeyConstraint
 from sqlalchemy import Boolean
 from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
@@ -27,6 +29,7 @@ from sqlalchemy import func
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
+from sqlalchemy import schema
 from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.sql.expression import UpdateBase
 from sqlalchemy.sql import select
@@ -47,7 +50,8 @@ def get_table(engine, name):
     """Returns an sqlalchemy table dynamically from db.
 
     Needed because the models don't work for us in migrations
-    as models will be far out of sync with the current data."""
+    as models will be far out of sync with the current data.
+    """
     metadata = MetaData()
     metadata.bind = engine
     return Table(name, metadata, autoload=True)
@@ -69,7 +73,7 @@ def visit_insert_from_select(element, compiler, **kw):
 def _get_not_supported_column(col_name_col_instance, column_name):
     try:
         column = col_name_col_instance[column_name]
-    except Exception as e:
+    except Exception:
         msg = _("Please specify column %s in col_name_col_instance "
                 "param. It is required because column has unsupported "
                 "type by sqlite).")
@@ -81,6 +85,35 @@ def _get_not_supported_column(col_name_col_instance, column_name):
                 "of sqlalchemy.Column.")
         raise exception.NovaException(msg % column_name)
     return column
+
+
+def _get_unique_constraints_in_sqlite(migrate_engine, table_name):
+    regexp = "CONSTRAINT (\w+) UNIQUE \(([^\)]+)\)"
+
+    meta = MetaData(bind=migrate_engine)
+    table = Table(table_name, meta, autoload=True)
+
+    sql_data = migrate_engine.execute(
+        """
+            SELECT sql
+            FROM
+                sqlite_master
+            WHERE
+                type = 'table' AND
+                name = :table_name;
+        """,
+        table_name=table_name
+    ).fetchone()[0]
+
+    uniques = set([
+        schema.UniqueConstraint(
+            *[getattr(table.c, c.strip(' "'))
+              for c in cols.split(",")], name=name
+        )
+        for name, cols in re.findall(regexp, sql_data)
+    ])
+
+    return uniques
 
 
 def _drop_unique_constraint_in_sqlite(migrate_engine, table_name, uc_name,
@@ -98,8 +131,12 @@ def _drop_unique_constraint_in_sqlite(migrate_engine, table_name, uc_name,
         else:
             columns.append(column.copy())
 
+    uniques = _get_unique_constraints_in_sqlite(migrate_engine, table_name)
+    table.constraints.update(uniques)
+
     constraints = [constraint for constraint in table.constraints
-                    if not constraint.name == uc_name]
+                    if not constraint.name == uc_name and
+                    not isinstance(constraint, schema.ForeignKeyConstraint)]
 
     new_table = Table(table_name + "__tmp__", meta, *(columns + constraints))
     new_table.create()
@@ -110,12 +147,20 @@ def _drop_unique_constraint_in_sqlite(migrate_engine, table_name, uc_name,
         indexes.append(Index(index["name"],
                              *column_names,
                              unique=index["unique"]))
+    f_keys = []
+    for fk in insp.get_foreign_keys(table_name):
+        refcolumns = [fk['referred_table'] + '.' + col
+                      for col in fk['referred_columns']]
+        f_keys.append(ForeignKeyConstraint(fk['constrained_columns'],
+                      refcolumns, table=new_table, name=fk['name']))
 
     ins = InsertFromSelect(new_table, table.select())
     migrate_engine.execute(ins)
     table.drop()
 
     [index.create(migrate_engine) for index in indexes]
+    for fkey in f_keys:
+        fkey.create()
     new_table.rename(table_name)
 
 
@@ -140,15 +185,15 @@ def drop_unique_constraint(migrate_engine, table_name, uc_name, *columns,
                             are required only for columns that have unsupported
                             types by sqlite. For example BigInteger.
     """
-    if migrate_engine.name in ["mysql", "postgresql"]:
+    if migrate_engine.name == "sqlite":
+        _drop_unique_constraint_in_sqlite(migrate_engine, table_name, uc_name,
+                                          **col_name_col_instance)
+    else:
         meta = MetaData()
         meta.bind = migrate_engine
         t = Table(table_name, meta, autoload=True)
         uc = UniqueConstraint(*columns, table=t, name=uc_name)
         uc.drop()
-    else:
-        _drop_unique_constraint_in_sqlite(migrate_engine, table_name, uc_name,
-                                          **col_name_col_instance)
 
 
 def drop_old_duplicate_entries_from_table(migrate_engine, table_name,

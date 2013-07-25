@@ -20,6 +20,7 @@ The VMware API VM utility module to build SOAP object specs.
 """
 
 import copy
+
 from nova import exception
 from nova.virt.vmwareapi import vim_util
 
@@ -47,8 +48,12 @@ def get_vm_create_spec(client_factory, instance, data_store_name,
                        vif_infos, os_type="otherGuest"):
     """Builds the VM Create spec."""
     config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
-    config_spec.name = instance['name']
+    config_spec.name = instance['uuid']
     config_spec.guestId = os_type
+
+    # Allow nested ESX instances to host 64 bit VMs.
+    if os_type == "vmkernel5Guest":
+        config_spec.nestedHVEnabled = "True"
 
     vm_file_info = client_factory.create('ns0:VirtualMachineFileInfo')
     vm_file_info.vmPathName = "[" + data_store_name + "]"
@@ -74,7 +79,7 @@ def get_vm_create_spec(client_factory, instance, data_store_name,
 
     config_spec.deviceChange = device_config_spec
 
-    # add vm-uuid and iface-id.x values for Quantum
+    # add vm-uuid and iface-id.x values for Neutron
     extra_config = []
     opt = client_factory.create('ns0:OptionValue')
     opt.key = "nvp.vm-uuid"
@@ -126,8 +131,12 @@ def create_network_spec(client_factory, vif_info):
     network_spec = client_factory.create('ns0:VirtualDeviceConfigSpec')
     network_spec.operation = "add"
 
-    # Get the recommended card type for the VM based on the guest OS of the VM
-    net_device = client_factory.create('ns0:VirtualPCNet32')
+    # Keep compatible with other Hyper vif model parameter.
+    if vif_info['vif_model'] == "e1000":
+        vif_info['vif_model'] = "VirtualE1000"
+
+    vif = 'ns0:' + vif_info['vif_model']
+    net_device = client_factory.create(vif)
 
     # NOTE(asomya): Only works on ESXi if the portgroup binding is set to
     # ephemeral. Invalid configuration if set to static and the NIC does
@@ -137,7 +146,7 @@ def create_network_spec(client_factory, vif_info):
     mac_address = vif_info['mac_address']
     backing = None
     if (network_ref and
-        network_ref['type'] == "DistributedVirtualPortgroup"):
+            network_ref['type'] == "DistributedVirtualPortgroup"):
         backing_name = ''.join(['ns0:VirtualEthernetCardDistributed',
                                 'VirtualPortBackingInfo'])
         backing = client_factory.create(backing_name)
@@ -271,7 +280,7 @@ def get_rdm_disk(hardware_devices, uuid):
         if (device.__class__.__name__ == "VirtualDisk" and
             device.backing.__class__.__name__ ==
                 "VirtualDiskRawDiskMappingVer1BackingInfo" and
-            device.backing.lunUuid == uuid):
+                device.backing.lunUuid == uuid):
             return device
 
 
@@ -497,6 +506,137 @@ def get_vm_ref_from_name(session, vm_name):
         if vm.propSet[0].val == vm_name:
             return vm.obj
     return None
+
+
+def get_vm_ref_from_uuid(session, instance_uuid):
+    """Get reference to the VM with the uuid specified."""
+    vms = session._call_method(vim_util, "get_objects",
+                "VirtualMachine", ["name"])
+    for vm in vms:
+        if vm.propSet[0].val == instance_uuid:
+            return vm.obj
+
+
+def get_vm_ref(session, instance):
+    """Get reference to the VM through uuid or vm name."""
+    vm_ref = get_vm_ref_from_uuid(session, instance['uuid'])
+    if not vm_ref:
+        vm_ref = get_vm_ref_from_name(session, instance['name'])
+    if vm_ref is None:
+        raise exception.InstanceNotFound(instance_id=instance['uuid'])
+    return vm_ref
+
+
+def get_host_ref_from_id(session, host_id, property_list=None):
+    """Get a host reference object for a host_id string."""
+
+    if property_list is None:
+        property_list = ['name']
+
+    host_refs = session._call_method(
+                    vim_util, "get_objects",
+                    "HostSystem", property_list)
+
+    for ref in host_refs:
+        if ref.obj.value == host_id:
+            return ref
+
+
+def get_host_id_from_vm_ref(session, vm_ref):
+    """
+    This method allows you to find the managed object
+    ID of the host running a VM. Since vMotion can
+    change the value, you should not presume that this
+    is a value that you can cache for very long and
+    should be prepared to allow for it to change.
+
+    :param session: a vSphere API connection
+    :param vm_ref: a reference object to the running VM
+    :return: the host_id running the virtual machine
+    """
+
+    # to prevent typographical errors below
+    property_name = 'runtime.host'
+
+    # a property collector in VMware vSphere Management API
+    # is a set of local representations of remote values.
+    # property_set here, is a local representation of the
+    # properties we are querying for.
+    property_set = session._call_method(
+            vim_util, "get_object_properties",
+            None, vm_ref, vm_ref._type, [property_name])
+
+    prop = property_from_property_set(
+        property_name, property_set)
+
+    if prop is not None:
+        prop = prop.val.value
+    else:
+        # reaching here represents an impossible state
+        raise RuntimeError(
+            "Virtual Machine %s exists without a runtime.host!"
+            % (vm_ref))
+
+    return prop
+
+
+def property_from_property_set(property_name, property_set):
+    '''
+    Use this method to filter property collector results.
+
+    Because network traffic is expensive, multiple
+    VMwareAPI calls will sometimes pile-up properties
+    to be collected. That means results may contain
+    many different values for multiple purposes.
+
+    This helper will filter a list for a single result
+    and filter the properties of that result to find
+    the single value of whatever type resides in that
+    result. This could be a ManagedObjectReference ID
+    or a complex value.
+
+    :param property_name: name of property you want
+    :param property_set: all results from query
+    :return: the value of the property.
+    '''
+
+    for prop in property_set:
+        p = _property_from_propSet(prop.propSet, property_name)
+        if p is not None:
+            return p
+
+
+def _property_from_propSet(propSet, name='name'):
+    for p in propSet:
+        if p.name == name:
+            return p
+
+
+def get_host_ref_for_vm(session, instance, props):
+    """Get the ESXi host running a VM by its name."""
+
+    vm_ref = get_vm_ref(session, instance)
+    host_id = get_host_id_from_vm_ref(session, vm_ref)
+    return get_host_ref_from_id(session, host_id, props)
+
+
+def get_host_name_for_vm(session, instance):
+    """Get the ESXi host running a VM by its name."""
+    host_ref = get_host_ref_for_vm(session, instance, ['name'])
+    return get_host_name_from_host_ref(host_ref)
+
+
+def get_host_name_from_host_ref(host_ref):
+    p = _property_from_propSet(host_ref.propSet)
+    if p is not None:
+        return p.val
+
+
+def get_vm_state_from_name(session, vm_name):
+    vm_ref = get_vm_ref_from_name(session, vm_name)
+    vm_state = session._call_method(vim_util, "get_dynamic_property",
+                vm_ref, "VirtualMachine", "runtime.powerState")
+    return vm_state
 
 
 def get_cluster_ref_from_name(session, cluster_name):

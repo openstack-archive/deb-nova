@@ -32,6 +32,8 @@ from nova.compute import flavors
 from nova import conductor
 from nova import context
 from nova import network
+from nova import utils
+
 from nova.openstack.common import timeutils
 from nova.virt import netutils
 
@@ -86,7 +88,7 @@ class InstanceMetadata():
     """Instance metadata."""
 
     def __init__(self, instance, address=None, content=None, extra_md=None,
-                 conductor_api=None):
+                 conductor_api=None, network_info=None):
         """Creation of this object should basically cover all time consuming
         collection.  Methods after that should not cause time delays due to
         network operations or lengthy cpu operations.
@@ -127,9 +129,7 @@ class InstanceMetadata():
         self.address = address
 
         # expose instance metadata.
-        self.launch_metadata = {}
-        for item in instance.get('metadata', []):
-            self.launch_metadata[item['key']] = item['value']
+        self.launch_metadata = utils.instance_meta(instance)
 
         self.password = password.extract_password(instance)
 
@@ -139,7 +139,8 @@ class InstanceMetadata():
         self.files = []
 
         # get network info, and the rendered network template
-        network_info = network.API().get_instance_nw_info(ctxt, instance,
+        if network_info is None:
+            network_info = network.API().get_instance_nw_info(ctxt, instance,
                                                           conductor_api=capi)
 
         self.network_config = None
@@ -209,7 +210,7 @@ class InstanceMetadata():
             meta_data['product-codes'] = []
 
         if self._check_version('2007-08-29', version):
-            instance_type = flavors.extract_instance_type(self.instance)
+            instance_type = flavors.extract_flavor(self.instance)
             meta_data['instance-type'] = instance_type['name']
 
         if False and self._check_version('2007-10-10', version):

@@ -10,7 +10,7 @@
 #    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
-#    under the License
+#    under the License.
 
 import webob
 
@@ -40,9 +40,9 @@ class FlavorManageController(wsgi.Controller):
         authorize(context)
 
         try:
-            flavor = flavors.get_instance_type_by_flavor_id(
-                    id, read_deleted="no")
-        except exception.NotFound, e:
+            flavor = flavors.get_flavor_by_flavor_id(
+                    id, ctxt=context, read_deleted="no")
+        except exception.NotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
         flavors.destroy(flavor['name'])
@@ -76,6 +76,8 @@ class FlavorManageController(wsgi.Controller):
         except (exception.InstanceTypeExists,
                 exception.InstanceTypeIdExists) as err:
             raise webob.exc.HTTPConflict(explanation=err.format_message())
+        except exception.InvalidInput as exc:
+            raise webob.exc.HTTPBadRequest(explanation=exc.format_message())
 
         return self._view_builder.show(req, flavor)
 

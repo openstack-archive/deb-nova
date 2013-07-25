@@ -24,9 +24,9 @@ from nova.api.openstack import common
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova.cells import rpc_driver
 from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import api as compute
-from nova import db
 from nova import exception
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -52,7 +52,32 @@ def make_cell(elem):
     cap = xmlutil.SubTemplateElement(caps, xmlutil.Selector(0),
             selector=xmlutil.get_items)
     cap.text = 1
+    make_capacity(elem)
 
+
+def make_capacity(cell):
+
+    def get_units_by_mb(capacity_info):
+        return capacity_info['units_by_mb'].items()
+
+    capacity = xmlutil.SubTemplateElement(cell, 'capacities',
+                                          selector='capacities')
+
+    ram_free = xmlutil.SubTemplateElement(capacity, 'ram_free',
+                                          selector='ram_free')
+    ram_free.set('total_mb', 'total_mb')
+    unit_by_mb = xmlutil.SubTemplateElement(ram_free, 'unit_by_mb',
+                                            selector=get_units_by_mb)
+    unit_by_mb.set('mb', 0)
+    unit_by_mb.set('unit', 1)
+
+    disk_free = xmlutil.SubTemplateElement(capacity, 'disk_free',
+                                           selector='disk_free')
+    disk_free.set('total_mb', 'total_mb')
+    unit_by_mb = xmlutil.SubTemplateElement(disk_free, 'unit_by_mb',
+                                            selector=get_units_by_mb)
+    unit_by_mb.set('mb', 0)
+    unit_by_mb.set('unit', 1)
 
 cell_nsmap = {None: wsgi.XMLNS_V10}
 
@@ -86,7 +111,10 @@ class CellDeserializer(wsgi.XMLDeserializer):
         cell = {}
         cell_node = self.find_first_child_named(node, 'cell')
 
-        extract_fns = {'capabilities': self._extract_capabilities}
+        extract_fns = {
+            'capabilities': self._extract_capabilities,
+            'rpc_port': lambda child: int(self.extract_text(child)),
+        }
 
         for child in cell_node.childNodes:
             name = child.tagName
@@ -110,12 +138,41 @@ def _filter_keys(item, keys):
     return dict((k, v) for k, v in item.iteritems() if k in keys)
 
 
+def _fixup_cell_info(cell_info, keys):
+    """
+    If the transport_url is present in the cell, derive username,
+    rpc_host, and rpc_port from it.
+    """
+
+    if 'transport_url' not in cell_info:
+        return
+
+    # Disassemble the transport URL
+    transport_url = cell_info.pop('transport_url')
+    try:
+        transport = rpc_driver.parse_transport_url(transport_url)
+    except ValueError:
+        # Just go with None's
+        for key in keys:
+            cell_info.setdefault(key, None)
+        return cell_info
+
+    transport_field_map = {'rpc_host': 'hostname', 'rpc_port': 'port'}
+    for key in keys:
+        if key in cell_info:
+            continue
+
+        transport_field = transport_field_map.get(key, key)
+        cell_info[key] = transport[transport_field]
+
+
 def _scrub_cell(cell, detail=False):
     keys = ['name', 'username', 'rpc_host', 'rpc_port']
     if detail:
         keys.append('capabilities')
 
-    cell_info = _filter_keys(cell, keys)
+    cell_info = _filter_keys(cell, keys + ['transport_url'])
+    _fixup_cell_info(cell_info, keys)
     cell_info['type'] = 'parent' if cell['is_parent'] else 'child'
     return cell_info
 
@@ -123,9 +180,10 @@ def _scrub_cell(cell, detail=False):
 class Controller(object):
     """Controller for Cell resources."""
 
-    def __init__(self):
+    def __init__(self, ext_mgr):
         self.compute_api = compute.API()
         self.cells_rpcapi = cells_rpcapi.CellsAPI()
+        self.ext_mgr = ext_mgr
 
     def _get_cells(self, ctxt, req, detail=False):
         """Return all cells."""
@@ -168,12 +226,31 @@ class Controller(object):
         return dict(cell=cell)
 
     @wsgi.serializers(xml=CellTemplate)
+    def capacities(self, req, id=None):
+        """Return capacities for a given cell or all cells."""
+        # TODO(kaushikc): return capacities as a part of cell info and
+        # cells detail calls in v3, along with capabilities
+        if not self.ext_mgr.is_loaded('os-cell-capacities'):
+            raise exc.HTTPNotFound()
+
+        context = req.environ['nova.context']
+        authorize(context)
+        try:
+            capacities = self.cells_rpcapi.get_capacities(context,
+                                                          cell_name=id)
+        except exception.CellNotFound:
+            msg = (_("Cell %(id)s not found.") % {'id': id})
+            raise exc.HTTPNotFound(explanation=msg)
+
+        return dict(cell={"capacities": capacities})
+
+    @wsgi.serializers(xml=CellTemplate)
     def show(self, req, id):
         """Return data about the given cell name.  'id' is a cell name."""
         context = req.environ['nova.context']
         authorize(context)
         try:
-            cell = db.cell_get(context, id)
+            cell = self.cells_rpcapi.cell_get(context, id)
         except exception.CellNotFound:
             raise exc.HTTPNotFound()
         return dict(cell=_scrub_cell(cell))
@@ -182,7 +259,10 @@ class Controller(object):
         """Delete a child or parent cell entry.  'id' is a cell name."""
         context = req.environ['nova.context']
         authorize(context)
-        num_deleted = db.cell_delete(context, id)
+        try:
+            num_deleted = self.cells_rpcapi.cell_delete(context, id)
+        except exception.CellsUpdateUnsupported as e:
+            raise exc.HTTPForbidden(explanation=e.format_message())
         if num_deleted == 0:
             raise exc.HTTPNotFound()
         return {}
@@ -205,14 +285,47 @@ class Controller(object):
             LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
 
-    def _convert_cell_type(self, cell):
-        """Convert cell['type'] to is_parent boolean."""
+    def _normalize_cell(self, cell, existing=None):
+        """
+        Normalize input cell data.  Normalizations include:
+
+        * Converting cell['type'] to is_parent boolean.
+        * Merging existing transport URL with transport information.
+        """
+
+        # Start with the cell type conversion
         if 'type' in cell:
             self._validate_cell_type(cell['type'])
             cell['is_parent'] = cell['type'] == 'parent'
             del cell['type']
         else:
             cell['is_parent'] = False
+
+        # Now we disassemble the existing transport URL...
+        transport = {}
+        if existing and 'transport_url' in existing:
+            transport = rpc_driver.parse_transport_url(
+                existing['transport_url'])
+
+        # Copy over the input fields
+        transport_field_map = {
+            'username': 'username',
+            'password': 'password',
+            'hostname': 'rpc_host',
+            'port': 'rpc_port',
+            'virtual_host': 'rpc_virtual_host',
+        }
+        for key, input_field in transport_field_map.items():
+            # Set the default value of the field; using setdefault()
+            # lets us avoid overriding the existing transport URL
+            transport.setdefault(key, None)
+
+            # Only override the value if we're given an override
+            if input_field in cell:
+                transport[key] = cell.pop(input_field)
+
+        # Now set the transport URL
+        cell['transport_url'] = rpc_driver.unparse_transport_url(transport)
 
     @wsgi.serializers(xml=CellTemplate)
     @wsgi.deserializers(xml=CellDeserializer)
@@ -230,8 +343,11 @@ class Controller(object):
             LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
         self._validate_cell_name(cell['name'])
-        self._convert_cell_type(cell)
-        cell = db.cell_create(context, cell)
+        self._normalize_cell(cell)
+        try:
+            cell = self.cells_rpcapi.cell_create(context, cell)
+        except exception.CellsUpdateUnsupported as e:
+            raise exc.HTTPForbidden(explanation=e.format_message())
         return dict(cell=_scrub_cell(cell))
 
     @wsgi.serializers(xml=CellTemplate)
@@ -248,11 +364,23 @@ class Controller(object):
         cell.pop('id', None)
         if 'name' in cell:
             self._validate_cell_name(cell['name'])
-        self._convert_cell_type(cell)
         try:
-            cell = db.cell_update(context, id, cell)
+            # NOTE(Vek): There is a race condition here if multiple
+            #            callers are trying to update the cell
+            #            information simultaneously.  Since this
+            #            operation is administrative in nature, and
+            #            will be going away in the future, I don't see
+            #            it as much of a problem...
+            existing = self.cells_rpcapi.cell_get(context, id)
         except exception.CellNotFound:
             raise exc.HTTPNotFound()
+        self._normalize_cell(cell, existing)
+        try:
+            cell = self.cells_rpcapi.cell_update(context, id, cell)
+        except exception.CellNotFound:
+            raise exc.HTTPNotFound()
+        except exception.CellsUpdateUnsupported as e:
+            raise exc.HTTPForbidden(explanation=e.format_message())
         return dict(cell=_scrub_cell(cell))
 
     def sync_instances(self, req, body):
@@ -283,15 +411,20 @@ class Cells(extensions.ExtensionDescriptor):
     name = "Cells"
     alias = "os-cells"
     namespace = "http://docs.openstack.org/compute/ext/cells/api/v1.1"
-    updated = "2011-09-21T00:00:00+00:00"
+    updated = "2013-05-14T00:00:00+00:00"
 
     def get_resources(self):
         coll_actions = {
                 'detail': 'GET',
                 'info': 'GET',
                 'sync_instances': 'POST',
-        }
+                'capacities': 'GET',
+                }
+        memb_actions = {
+                'capacities': 'GET',
+                }
 
         res = extensions.ResourceExtension('os-cells',
-                Controller(), collection_actions=coll_actions)
+                Controller(self.ext_mgr), collection_actions=coll_actions,
+                member_actions=memb_actions)
         return [res]

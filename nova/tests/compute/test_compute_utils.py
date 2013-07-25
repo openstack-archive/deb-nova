@@ -185,7 +185,7 @@ class ComputeValidateDeviceTestCase(test.TestCase):
                 'ephemeral_gb': 10,
                 'swap': 0,
                 })
-        self.stubs.Set(flavors, 'get_instance_type',
+        self.stubs.Set(flavors, 'get_flavor',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdc')
@@ -195,7 +195,7 @@ class ComputeValidateDeviceTestCase(test.TestCase):
                 'ephemeral_gb': 0,
                 'swap': 10,
                 })
-        self.stubs.Set(flavors, 'get_instance_type',
+        self.stubs.Set(flavors, 'get_flavor',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdb')
@@ -205,7 +205,7 @@ class ComputeValidateDeviceTestCase(test.TestCase):
                 'ephemeral_gb': 10,
                 'swap': 10,
                 })
-        self.stubs.Set(flavors, 'get_instance_type',
+        self.stubs.Set(flavors, 'get_flavor',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdd')
@@ -215,7 +215,7 @@ class ComputeValidateDeviceTestCase(test.TestCase):
                 'ephemeral_gb': 0,
                 'swap': 10,
                 })
-        self.stubs.Set(flavors, 'get_instance_type',
+        self.stubs.Set(flavors, 'get_flavor',
                        lambda instance_type_id, ctxt=None: self.instance_type)
         device = self._validate_device()
         self.assertEqual(device, '/dev/xvdb')
@@ -258,12 +258,11 @@ class UsageInfoTestCase(test.TestCase):
 
     def _create_instance(self, params={}):
         """Create a test instance."""
-        instance_type = flavors.get_instance_type_by_name('m1.tiny')
-        sys_meta = flavors.save_instance_type_info({}, instance_type)
+        instance_type = flavors.get_flavor_by_name('m1.tiny')
+        sys_meta = flavors.save_flavor_info({}, instance_type)
         inst = {}
         inst['image_ref'] = 1
         inst['reservation_id'] = 'r-fakeres'
-        inst['launch_time'] = '10'
         inst['user_id'] = self.user_id
         inst['project_id'] = self.project_id
         inst['instance_type_id'] = instance_type['id']
@@ -295,7 +294,7 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], instance['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_flavor_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         for attr in ('display_name', 'created_at', 'launched_at',
                      'state', 'state_description',
@@ -331,7 +330,7 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], instance['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_flavor_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         for attr in ('display_name', 'created_at', 'launched_at',
                      'state', 'state_description',
@@ -358,7 +357,7 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], instance['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_flavor_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         for attr in ('display_name', 'created_at', 'launched_at',
                      'state', 'state_description',
@@ -394,7 +393,7 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEquals(payload['user_id'], self.user_id)
         self.assertEquals(payload['instance_id'], instance['uuid'])
         self.assertEquals(payload['instance_type'], 'm1.tiny')
-        type_id = flavors.get_instance_type_by_name('m1.tiny')['id']
+        type_id = flavors.get_flavor_by_name('m1.tiny')['id']
         self.assertEquals(str(payload['instance_type_id']), str(type_id))
         for attr in ('display_name', 'created_at', 'launched_at',
                      'state', 'state_description', 'image_meta'):
@@ -406,3 +405,37 @@ class UsageInfoTestCase(test.TestCase):
         image_ref_url = "%s/images/1" % glance.generate_glance_url()
         self.assertEquals(payload['image_ref_url'], image_ref_url)
         self.compute.terminate_instance(self.context, instance)
+
+    def test_notify_about_aggregate_update_with_id(self):
+        # Set aggregate payload
+        aggregate_payload = {'aggregate_id': 1}
+        compute_utils.notify_about_aggregate_update(self.context,
+                                                    "create.end",
+                                                    aggregate_payload)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['priority'], 'INFO')
+        self.assertEquals(msg['event_type'], 'aggregate.create.end')
+        payload = msg['payload']
+        self.assertEquals(payload['aggregate_id'], 1)
+
+    def test_notify_about_aggregate_update_with_name(self):
+        # Set aggregate payload
+        aggregate_payload = {'name': 'fakegroup'}
+        compute_utils.notify_about_aggregate_update(self.context,
+                                                    "create.start",
+                                                    aggregate_payload)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 1)
+        msg = test_notifier.NOTIFICATIONS[0]
+        self.assertEquals(msg['priority'], 'INFO')
+        self.assertEquals(msg['event_type'], 'aggregate.create.start')
+        payload = msg['payload']
+        self.assertEquals(payload['name'], 'fakegroup')
+
+    def test_notify_about_aggregate_update_without_name_id(self):
+        # Set empty aggregate payload
+        aggregate_payload = {}
+        compute_utils.notify_about_aggregate_update(self.context,
+                                                    "create.start",
+                                                    aggregate_payload)
+        self.assertEquals(len(test_notifier.NOTIFICATIONS), 0)

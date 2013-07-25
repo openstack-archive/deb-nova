@@ -30,6 +30,7 @@ try:
 except ImportError:
     import pickle
 
+import mox
 from oslo.config import cfg
 import webob
 
@@ -46,6 +47,7 @@ from nova.network import api as network_api
 from nova import test
 from nova.tests import fake_network
 from nova import utils
+from nova.virt import netutils
 
 CONF = cfg.CONF
 
@@ -71,14 +73,15 @@ INSTANCES = (
      'info_cache': {'network_info': []},
      'hostname': 'test.novadomain',
      'display_name': 'my_displayname',
+     'metadata': {}
     },
 )
 
 
 def get_default_sys_meta():
     return utils.dict_to_metadata(
-        flavors.save_instance_type_info(
-            {}, flavors.get_default_instance_type()))
+        flavors.save_flavor_info(
+            {}, flavors.get_default_flavor()))
 
 
 def return_non_existing_address(*args, **kwarg):
@@ -86,7 +89,7 @@ def return_non_existing_address(*args, **kwarg):
 
 
 def fake_InstanceMetadata(stubs, inst_data, address=None,
-    sgroups=None, content=[], extra_md={}):
+                          sgroups=None, content=[], extra_md={}):
 
     if sgroups is None:
         sgroups = [{'name': 'default'}]
@@ -188,19 +191,24 @@ class MetadataTestCase(test.TestCase):
             return [{'volume_id': 87654321,
                      'snapshot_id': None,
                      'no_device': None,
-                     'virtual_name': None,
+                     'source_type': 'volume',
+                     'destination_type': 'volume',
                      'delete_on_termination': True,
                      'device_name': '/dev/sdh'},
                     {'volume_id': None,
                      'snapshot_id': None,
                      'no_device': None,
-                     'virtual_name': 'swap',
+                     'source_type': 'blank',
+                     'destination_type': 'local',
+                     'guest_format': 'swap',
                      'delete_on_termination': None,
                      'device_name': '/dev/sdc'},
                     {'volume_id': None,
                      'snapshot_id': None,
                      'no_device': None,
-                     'virtual_name': 'ephemeral0',
+                     'source_type': 'blank',
+                     'destination_type': 'local',
+                     'guest_format': None,
                      'delete_on_termination': None,
                      'device_name': '/dev/sdb'}]
 
@@ -214,6 +222,7 @@ class MetadataTestCase(test.TestCase):
                     'ebs0': '/dev/sdh'}
 
         capi = conductor_api.LocalAPI()
+
         self.assertEqual(base._format_instance_mapping(capi, ctxt,
                          instance_ref0), block_device._DEFAULT_MAPPINGS)
         self.assertEqual(base._format_instance_mapping(capi, ctxt,
@@ -264,6 +273,34 @@ class MetadataTestCase(test.TestCase):
         self.assertTrue(md._check_version('2008-09-01', '2009-04-04'))
 
         self.assertTrue(md._check_version('2009-04-04', '2009-04-04'))
+
+    def test_InstanceMetadata_uses_passed_network_info(self):
+        network_info = {"a": "b"}
+
+        self.mox.StubOutWithMock(netutils, "get_injected_network_template")
+        netutils.get_injected_network_template(network_info).AndReturn(False)
+        self.mox.ReplayAll()
+
+        base.InstanceMetadata(INSTANCES[0], network_info=network_info)
+
+    def test_InstanceMetadata_queries_network_API_when_needed(self):
+        network_info_from_api = {"c": "d"}
+
+        self.mox.StubOutWithMock(network_api.API, "get_instance_nw_info")
+
+        network_api.API.get_instance_nw_info(
+            mox.IgnoreArg(),
+            mox.IgnoreArg(),
+            conductor_api=mox.IgnoreArg()).AndReturn(network_info_from_api)
+
+        self.mox.StubOutWithMock(netutils, "get_injected_network_template")
+
+        netutils.get_injected_network_template(
+            network_info_from_api).AndReturn(False)
+
+        self.mox.ReplayAll()
+
+        base.InstanceMetadata(INSTANCES[0])
 
 
 class OpenStackMetadataTestCase(test.TestCase):
@@ -486,7 +523,7 @@ class MetadataHandlerTestCase(test.TestCase):
                                 headers=None)
         self.assertEqual(response.status_int, 500)
 
-    def test_user_data_with_quantum_instance_id(self):
+    def test_user_data_with_neutron_instance_id(self):
         expected_instance_id = 'a-b-c-d'
 
         def fake_get_metadata(instance_id, remote_address):
@@ -500,7 +537,7 @@ class MetadataHandlerTestCase(test.TestCase):
                                 (expected_instance_id, instance_id))
 
         signed = hmac.new(
-            CONF.quantum_metadata_proxy_shared_secret,
+            CONF.neutron_metadata_proxy_shared_secret,
             expected_instance_id,
             hashlib.sha256).hexdigest()
 
@@ -514,7 +551,7 @@ class MetadataHandlerTestCase(test.TestCase):
         self.assertEqual(response.status_int, 200)
 
         # now enable the service
-        self.flags(service_quantum_metadata_proxy=True)
+        self.flags(service_neutron_metadata_proxy=True)
         response = fake_request(
             self.stubs, self.mdinst,
             relpath="/2009-04-04/user-data",
@@ -553,7 +590,7 @@ class MetadataHandlerTestCase(test.TestCase):
 
         # unexpected Instance-ID
         signed = hmac.new(
-            CONF.quantum_metadata_proxy_shared_secret,
+            CONF.neutron_metadata_proxy_shared_secret,
            'z-z-z-z',
            hashlib.sha256).hexdigest()
 

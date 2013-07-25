@@ -19,6 +19,7 @@ Test suite for PowerVMDriver.
 """
 
 import contextlib
+import os
 import paramiko
 
 from nova import context
@@ -172,14 +173,15 @@ class FakeBlockAdapter(powervm_blockdev.PowerVMLocalVolumeAdapter):
 
 
 def fake_get_powervm_operator():
-    return FakeIVMOperator(None)
+    return FakeIVMOperator(common.Connection('fake_host', 'fake_user',
+                                             'fake_password'))
 
 
 def create_instance(testcase):
     fake.stub_out_image_service(testcase.stubs)
     ctxt = context.get_admin_context()
-    instance_type = db.instance_type_get(ctxt, 1)
-    sys_meta = flavors.save_instance_type_info({}, instance_type)
+    instance_type = db.flavor_get(ctxt, 1)
+    sys_meta = flavors.save_flavor_info({}, instance_type)
     return db.instance_create(ctxt,
                     {'user_id': 'fake',
                      'project_id': 'fake',
@@ -192,6 +194,24 @@ def create_instance(testcase):
 
 class PowerVMDriverTestCase(test.TestCase):
     """Unit tests for PowerVM connection calls."""
+
+    fake_network_info = 'fake_network_info'
+    fake_create_lpar_instance_called = False
+
+    def fake_create_lpar_instance(self, instance, network_info,
+                                  host_stats=None):
+        """Stub for the _create_lpar_instance method.
+
+        This stub assumes that 'instance' is the one created in the test case
+        setUp method and 'network_info' is equal to self.fake_network_info.
+        @return: fake LPAR based on instance parameter where the name of the
+        LPAR is the uuid of the instance
+        """
+        self.fake_create_lpar_instance_called = True
+        self.assertEquals(self.instance, instance)
+        self.assertEquals(self.fake_network_info, network_info)
+        return self.powervm_connection._powervm._operator.get_lpar(
+                                                            instance['uuid'])
 
     def setUp(self):
         super(PowerVMDriverTestCase, self).setUp()
@@ -268,9 +288,12 @@ class PowerVMDriverTestCase(test.TestCase):
             self._loc_expected_task_state = expected_state
 
         loc_context = context.get_admin_context()
+        arch = 'fake_arch'
         properties = {'instance_id': self.instance['id'],
-                      'user_id': str(loc_context.user_id)}
-        sent_meta = {'name': 'fake_snap', 'is_public': False,
+                      'user_id': str(loc_context.user_id),
+                      'architecture': arch}
+        snapshot_name = 'fake_snap'
+        sent_meta = {'name': snapshot_name, 'is_public': False,
                      'status': 'creating', 'properties': properties}
         image_service = fake.FakeImageService()
         recv_meta = image_service.create(loc_context, sent_meta)
@@ -281,6 +304,12 @@ class PowerVMDriverTestCase(test.TestCase):
 
         self.assertTrue(self._loc_task_state == task_states.IMAGE_UPLOADING and
             self._loc_expected_task_state == task_states.IMAGE_PENDING_UPLOAD)
+
+        snapshot = image_service.show(context, recv_meta['id'])
+        self.assertEquals(snapshot['properties']['image_state'], 'available')
+        self.assertEquals(snapshot['properties']['architecture'], arch)
+        self.assertEquals(snapshot['status'], 'active')
+        self.assertEquals(snapshot['name'], snapshot_name)
 
     def _set_get_info_stub(self, state):
         def fake_get_instance(instance_name):
@@ -379,7 +408,9 @@ class PowerVMDriverTestCase(test.TestCase):
         expected_path = '/some/file/path/filename'
         self.assertEqual(joined_path, expected_path)
 
-    def _test_finish_revert_migration_after_crash(self, backup_made, new_made):
+    def _test_finish_revert_migration_after_crash(self, backup_made,
+                                                  new_made,
+                                                  power_on):
         inst = {'name': 'foo'}
         network_info = []
         network_info.append({'address': 'fa:89:f0:8b:9b:39'})
@@ -396,28 +427,31 @@ class PowerVMDriverTestCase(test.TestCase):
             backup_made)
 
         if backup_made:
+            self.powervm_connection._powervm._operator.set_lpar_mac_base_value(
+                    'rsz_foo', 'fa:89:f0:8b:9b:39')
             self.powervm_connection.instance_exists('foo').AndReturn(new_made)
             if new_made:
                 self.powervm_connection._powervm.destroy('foo')
             self.powervm_connection._powervm._operator.rename_lpar('rsz_foo',
                                                                    'foo')
-        self.powervm_connection._powervm._operator.set_lpar_mac_base_value(
-                'foo', 'fa:89:f0:8b:9b:39')
-        self.powervm_connection._powervm.power_on('foo')
+        if power_on:
+            self.powervm_connection._powervm.power_on('foo')
 
         self.mox.ReplayAll()
 
         self.powervm_connection.finish_revert_migration(inst, network_info,
-                                                    block_device_info=None)
+                                                    block_device_info=None,
+                                                    power_on=power_on)
 
     def test_finish_revert_migration_after_crash(self):
-        self._test_finish_revert_migration_after_crash(True, True)
+        self._test_finish_revert_migration_after_crash(True, True, True)
 
     def test_finish_revert_migration_after_crash_before_new(self):
-        self._test_finish_revert_migration_after_crash(True, False)
+        self._test_finish_revert_migration_after_crash(True, False, True)
 
     def test_finish_revert_migration_after_crash_before_backup(self):
-        self._test_finish_revert_migration_after_crash(False, False)
+        # NOTE(mriedem): tests the power_on=False case also
+        self._test_finish_revert_migration_after_crash(False, False, False)
 
     def test_migrate_volume_use_instance_name(self):
         inst_name = 'instance-00000000'
@@ -456,7 +490,7 @@ class PowerVMDriverTestCase(test.TestCase):
         expected_path = 'some/image/path/logical-vol-name_rsz.gz'
         self.assertEqual(file_path, expected_path)
 
-    def test_deploy_from_migrated_file(self):
+    def _test_deploy_from_migrated_file(self, power_on):
         instance = self.instance
         context = 'fake_context'
         network_info = []
@@ -468,9 +502,10 @@ class PowerVMDriverTestCase(test.TestCase):
         self.flags(powervm_mgr=dest)
         fake_op = self.powervm_connection._powervm
         self.deploy_from_vios_file_called = False
+        self.power_on = power_on
 
         def fake_deploy_from_vios_file(lpar, file_path, size,
-                                       decompress):
+                                       decompress, power_on):
             exp_file_path = 'some/file/path.gz'
             exp_size = 40 * 1024 ** 3
             exp_decompress = True
@@ -478,14 +513,22 @@ class PowerVMDriverTestCase(test.TestCase):
             self.assertEqual(exp_file_path, file_path)
             self.assertEqual(exp_size, size)
             self.assertEqual(exp_decompress, decompress)
+            self.assertEqual(self.power_on, power_on)
 
         self.stubs.Set(fake_op, '_deploy_from_vios_file',
                        fake_deploy_from_vios_file)
         self.powervm_connection.finish_migration(context, None,
                          instance, disk_info, network_info,
                          None, resize_instance=True,
-                         block_device_info=None)
+                         block_device_info=None,
+                         power_on=power_on)
         self.assertEqual(self.deploy_from_vios_file_called, True)
+
+    def test_deploy_from_migrated_file_power_on(self):
+        self._test_deploy_from_migrated_file(True)
+
+    def test_deploy_from_migrated_file_power_off(self):
+        self._test_deploy_from_migrated_file(False)
 
     def test_set_lpar_mac_base_value(self):
         instance = self.instance
@@ -571,6 +614,124 @@ class PowerVMDriverTestCase(test.TestCase):
         result = self.powervm_connection._get_resize_name(inst_name)
         self.assertEqual(expected_name, result)
 
+    def test_finish_migration_raises_exception(self):
+        # Tests that the finish_migration method will raise an exception
+        # if the 'root_disk_file' key is not found in the disk_info parameter.
+        self.stubs.Set(self.powervm_connection._powervm,
+                       '_create_lpar_instance', self.fake_create_lpar_instance)
+
+        self.assertRaises(exception.PowerVMUnrecognizedRootDevice,
+                          self.powervm_connection.finish_migration,
+                          context.get_admin_context(), None,
+                          self.instance, {'old_lv_size': '20'},
+                          self.fake_network_info, None, True)
+        self.assertTrue(self.fake_create_lpar_instance_called)
+
+    def test_finish_migration_successful(self):
+        # Tests a successful migration (resize) flow and asserts various
+        # methods called along the way with expected argument values.
+        fake_file_path = 'some/file/path.py'
+        disk_info = {'root_disk_file': fake_file_path,
+                     'old_lv_size': '10'}
+        fake_flavor = {'root_gb': 20}
+        fake_extract_flavor = lambda *args, **kwargs: fake_flavor
+        self.fake_deploy_from_migrated_file_called = False
+
+        def fake_deploy_from_migrated_file(lpar, file_path, size,
+                                           power_on=True):
+            self.fake_deploy_from_migrated_file_called = True
+            # assert the lpar is the one created for this test
+            self.assertEquals(self.instance['uuid'], lpar['name'])
+            self.assertEquals(fake_file_path, file_path)
+            # this tests that the 20GB fake_flavor was used
+            self.assertEqual(fake_flavor['root_gb'] * pow(1024, 3), size)
+            self.assertTrue(power_on)
+
+        self.stubs.Set(self.powervm_connection._powervm,
+                            '_create_lpar_instance',
+                            self.fake_create_lpar_instance)
+        self.stubs.Set(flavors, 'extract_flavor', fake_extract_flavor)
+        self.stubs.Set(self.powervm_connection._powervm,
+                       'deploy_from_migrated_file',
+                       fake_deploy_from_migrated_file)
+
+        self.powervm_connection.finish_migration(context.get_admin_context(),
+                                                 None, self.instance,
+                                                 disk_info,
+                                                 self.fake_network_info,
+                                                 None, True)
+        self.assertTrue(self.fake_create_lpar_instance_called)
+        self.assertTrue(self.fake_deploy_from_migrated_file_called)
+
+    def test_check_host_resources_insufficient_memory(self):
+        # Tests that the _check_host_resources method will raise an exception
+        # when the host has insufficient memory for the request.
+        host_stats = {'host_memory_free': 512,
+                      'vcpus': 12,
+                      'vcpus_used': 1}
+
+        self.assertRaises(exception.PowerVMInsufficientFreeMemory,
+                self.powervm_connection._powervm._check_host_resources,
+                self.instance, vcpus=2, mem=4096, host_stats=host_stats)
+
+    def test_check_host_resources_insufficient_vcpus(self):
+        # Tests that the _check_host_resources method will raise an exception
+        # when the host has insufficient CPU for the request.
+        host_stats = {'host_memory_free': 4096,
+                      'vcpus': 2,
+                      'vcpus_used': 1}
+
+        self.assertRaises(exception.PowerVMInsufficientCPU,
+                self.powervm_connection._powervm._check_host_resources,
+                self.instance, vcpus=12, mem=512, host_stats=host_stats)
+
+    def test_create_lpar_instance_raise_insufficient_memory(self):
+        # This test will raise an exception because we use the instance
+        # created for this test case which requires 1024 MB of memory
+        # but the host only has 512 free.
+        host_stats = {'host_memory_free': 512,
+                      'vcpus': 12,
+                      'vcpus_used': 1}
+
+        self.assertRaises(exception.PowerVMInsufficientFreeMemory,
+                self.powervm_connection._powervm._create_lpar_instance,
+                self.instance, self.fake_network_info, host_stats)
+
+    def test_create_lpar_instance_raise_insufficient_vcpus(self):
+        # This test will raise an exception because we use the instance
+        # created for this test case which requires 2 CPUs but the host only
+        # has 1 CPU free.
+        host_stats = {'host_memory_free': 4096,
+                      'vcpus': 1,
+                      'vcpus_used': 1}
+
+        self.assertRaises(exception.PowerVMInsufficientCPU,
+                self.powervm_connection._powervm._create_lpar_instance,
+                self.instance, self.fake_network_info, host_stats)
+
+    def test_confirm_migration_old_instance_destroyed(self):
+        # Tests that the source instance is destroyed when a migration
+        # is confirmed.
+        resize_name = 'rsz_instance'
+        self.fake_destroy_called = False
+
+        def fake_get_resize_name(instance_name):
+            self.assertEquals(self.instance['name'], instance_name)
+            return resize_name
+
+        def fake_destroy(instance_name, destroy_disks=True):
+            self.fake_destroy_called = True
+            self.assertEquals(resize_name, instance_name)
+            self.assertTrue(destroy_disks)
+
+        self.stubs.Set(self.powervm_connection, '_get_resize_name',
+                       fake_get_resize_name)
+        self.stubs.Set(self.powervm_connection._powervm, 'destroy',
+                       fake_destroy)
+        self.powervm_connection.confirm_migration(True, self.instance,
+                                                  self.fake_network_info)
+        self.assertTrue(self.fake_destroy_called)
+
     def test_get_host_stats(self):
         host_stats = self.powervm_connection.get_host_stats(True)
         self.assertIsNotNone(host_stats)
@@ -593,6 +754,23 @@ class PowerVMDriverTestCase(test.TestCase):
         self.assertEquals(host_stats['supported_instances'][0][0], "ppc64")
         self.assertEquals(host_stats['supported_instances'][0][1], "powervm")
         self.assertEquals(host_stats['supported_instances'][0][2], "hvm")
+
+    def test_get_host_uptime(self):
+        # Tests that the get_host_uptime method issues the proper sysstat
+        # command and parses the output correctly.
+        exp_cmd = "ioscli sysstat -short fake_user"
+        output = [("02:54PM  up 24 days,  5:41, 1 user, "
+                   "load average: 0.06, 0.03, 0.02")]
+
+        fake_op = self.powervm_connection._powervm
+        self.mox.StubOutWithMock(fake_op._operator, 'run_vios_command')
+        fake_op._operator.run_vios_command(exp_cmd).AndReturn(output)
+
+        self.mox.ReplayAll()
+
+        # the host parameter isn't used so we just pass None
+        uptime = self.powervm_connection.get_host_uptime(None)
+        self.assertEquals(output[0], uptime)
 
 
 class PowerVMDriverLparTestCase(test.TestCase):
@@ -744,3 +922,100 @@ class PowerVMLocalVolumeAdapterTestCase(test.TestCase):
                           self.powervm_adapter.create_volume_from_image,
                           self.context, self.instance, self.image_id)
         self.assertTrue(self.delete_volume_called)
+
+    def test_copy_image_file_ftp_failed(self):
+        file_path = os.tempnam('/tmp', 'image')
+        remote_path = '/mnt/openstack/images'
+        exp_remote_path = os.path.join(remote_path,
+                                       os.path.basename(file_path))
+        exp_cmd = ' '.join(['/usr/bin/rm -f', exp_remote_path])
+
+        fake_noop = lambda *args, **kwargs: None
+        fake_op = self.powervm_adapter
+        self.stubs.Set(fake_op, 'run_vios_command', fake_noop)
+        self.stubs.Set(fake_op, '_checksum_local_file', fake_noop)
+
+        self.mox.StubOutWithMock(common, 'ftp_put_command')
+        self.mox.StubOutWithMock(self.powervm_adapter,
+                                 'run_vios_command_as_root')
+        msg_args = {'ftp_cmd': 'PUT',
+                    'source_path': file_path,
+                    'dest_path': remote_path}
+        exp_exception = exception.PowerVMFTPTransferFailed(**msg_args)
+
+        common.ftp_put_command(self.connection, file_path,
+                               remote_path).AndRaise(exp_exception)
+
+        self.powervm_adapter.run_vios_command_as_root(exp_cmd).AndReturn([])
+
+        self.mox.ReplayAll()
+
+        self.assertRaises(exception.PowerVMFTPTransferFailed,
+                          self.powervm_adapter._copy_image_file,
+                          file_path, remote_path)
+
+    def test_copy_image_file_wrong_checksum(self):
+        file_path = os.tempnam('/tmp', 'image')
+        remote_path = '/mnt/openstack/images'
+        exp_remote_path = os.path.join(remote_path,
+                                       os.path.basename(file_path))
+        exp_cmd = ' '.join(['/usr/bin/rm -f', exp_remote_path])
+
+        def fake_md5sum_remote_file(remote_path):
+            return '3202937169'
+
+        def fake_checksum_local_file(source_path):
+            return '3229026618'
+
+        fake_noop = lambda *args, **kwargs: None
+        fake_op = self.powervm_adapter
+        self.stubs.Set(fake_op, 'run_vios_command', fake_noop)
+        self.stubs.Set(fake_op, '_md5sum_remote_file',
+                       fake_md5sum_remote_file)
+        self.stubs.Set(fake_op, '_checksum_local_file',
+                       fake_checksum_local_file)
+        self.stubs.Set(common, 'ftp_put_command', fake_noop)
+
+        self.mox.StubOutWithMock(self.powervm_adapter,
+                                 'run_vios_command_as_root')
+        self.powervm_adapter.run_vios_command_as_root(exp_cmd).AndReturn([])
+
+        self.mox.ReplayAll()
+
+        self.assertRaises(exception.PowerVMFileTransferFailed,
+                          self.powervm_adapter._copy_image_file,
+                          file_path, remote_path)
+
+    def test_checksum_local_file(self):
+        file_path = os.tempnam('/tmp', 'image')
+        img_file = file(file_path, 'w')
+        img_file.write('This is a test')
+        img_file.close()
+        exp_md5sum = 'ce114e4501d2f4e2dcea3e17b546f339'
+
+        self.assertEqual(self.powervm_adapter._checksum_local_file(file_path),
+                         exp_md5sum)
+        os.remove(file_path)
+
+    def test_copy_image_file_from_host_with_wrong_checksum(self):
+        local_path = 'some/tmp'
+        remote_path = os.tempnam('/mnt/openstack/images', 'image')
+
+        def fake_md5sum_remote_file(remote_path):
+            return '3202937169'
+
+        def fake_checksum_local_file(source_path):
+            return '3229026618'
+
+        fake_noop = lambda *args, **kwargs: None
+        fake_op = self.powervm_adapter
+        self.stubs.Set(fake_op, 'run_vios_command_as_root', fake_noop)
+        self.stubs.Set(fake_op, '_md5sum_remote_file',
+                       fake_md5sum_remote_file)
+        self.stubs.Set(fake_op, '_checksum_local_file',
+                       fake_checksum_local_file)
+        self.stubs.Set(common, 'ftp_get_command', fake_noop)
+
+        self.assertRaises(exception.PowerVMFileTransferFailed,
+                          self.powervm_adapter._copy_image_file_from_host,
+                          remote_path, local_path)

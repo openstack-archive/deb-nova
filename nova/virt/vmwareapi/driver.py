@@ -127,6 +127,12 @@ class Failure(Exception):
 class VMwareESXDriver(driver.ComputeDriver):
     """The ESX host connection object."""
 
+    # VMwareAPI has both ESXi and vCenter API sets.
+    # The ESXi API are a proper sub-set of the vCenter API.
+    # That is to say, nearly all valid ESXi calls are
+    # valid vCenter calls. There are some small edge-case
+    # exceptions regarding VNC, CIM, User management & SSO.
+
     def __init__(self, virtapi, read_only=False, scheme="https"):
         super(VMwareESXDriver, self).__init__(virtapi)
 
@@ -218,9 +224,32 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Power off the specified instance."""
         self._vmops.power_off(instance)
 
-    def power_on(self, instance):
+    def power_on(self, context, instance, network_info,
+                 block_device_info=None):
         """Power on the specified instance."""
-        self._vmops.power_on(instance)
+        self._vmops._power_on(instance)
+
+    def resume_state_on_host_boot(self, context, instance, network_info,
+                                  block_device_info=None):
+        """resume guest state when a host is booted."""
+        # Check if the instance is running already and avoid doing
+        # anything if it is.
+        instances = self.list_instances()
+        if instance['uuid'] not in instances:
+            LOG.warn(_('Instance cannot be found in host, or in an unknown'
+                'state.'), instance=instance)
+        else:
+            state = vm_util.get_vm_state_from_name(self._session,
+                instance['uuid'])
+            ignored_states = ['poweredon', 'suspended']
+
+            if state.lower() in ignored_states:
+                return
+        # Instance is not up and could be in an unknown state.
+        # Be as absolute as possible about getting it back into
+        # a known and running state.
+        self.reboot(context, instance, network_info, 'hard',
+            block_device_info)
 
     def poll_rebooting_instances(self, timeout, instances):
         """Poll for rebooting instances."""
@@ -296,12 +325,15 @@ class VMwareESXDriver(driver.ComputeDriver):
 
     def update_host_status(self):
         """Update the status info of the host, and return those values
-           to the calling program."""
+           to the calling program.
+        """
         return self.host_state.update_status()
 
     def get_host_stats(self, refresh=False):
-        """Return the current state of the host. If 'refresh' is
-           True, run the update first."""
+        """Return the current state of the host.
+
+           If 'refresh' is True, run the update first.
+        """
         return self.host_state.get_host_stats(refresh=refresh)
 
     def host_power_action(self, host, action):
@@ -310,7 +342,8 @@ class VMwareESXDriver(driver.ComputeDriver):
 
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
-           guest VMs evacuation."""
+           guest VMs evacuation.
+        """
         return self._host.host_maintenance_mode(host, mode)
 
     def set_host_enabled(self, host, enabled):
@@ -329,19 +362,17 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Unplug VIFs from networks."""
         self._vmops.unplug_vifs(instance, network_info)
 
-    def list_interfaces(self, instance_name):
-        """
-        Return the IDs of all the virtual network interfaces attached to the
-        specified instance, as a list.  These IDs are opaque to the caller
-        (they are only useful for giving back to this layer as a parameter to
-        interface_stats).  These IDs only need to be unique for a given
-        instance.
-        """
-        return self._vmops.list_interfaces(instance_name)
-
 
 class VMwareVCDriver(VMwareESXDriver):
     """The ESX host connection object."""
+
+    # The vCenter driver includes several additional VMware vSphere
+    # capabilities that include API that act on hosts or groups of
+    # hosts in clusters or non-cluster logical-groupings.
+    #
+    # vCenter is not a hypervisor itself, it works with multiple
+    # hypervisor host machines and their guests. This fact can
+    # subtly alter how vSphere and OpenStack interoperate.
 
     def __init__(self, virtapi, read_only=False, scheme="https"):
         super(VMwareVCDriver, self).__init__(virtapi)
@@ -383,16 +414,18 @@ class VMwareVCDriver(VMwareESXDriver):
         self._vmops.confirm_migration(migration, instance, network_info)
 
     def finish_revert_migration(self, instance, network_info,
-                                block_device_info=None):
+                                block_device_info=None, power_on=True):
         """Finish reverting a resize, powering back on the instance."""
-        self._vmops.finish_revert_migration(instance)
+        self._vmops.finish_revert_migration(instance, network_info,
+                                            block_device_info, power_on)
 
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance=False,
-                         block_device_info=None):
+                         block_device_info=None, power_on=True):
         """Completes a resize, turning on the migrated instance."""
         self._vmops.finish_migration(context, migration, instance, disk_info,
-                                     network_info, image_meta, resize_instance)
+                                     network_info, image_meta, resize_instance,
+                                     block_device_info, power_on)
 
     def live_migration(self, context, instance_ref, dest,
                        post_method, recover_method, block_migration=False,
@@ -401,6 +434,14 @@ class VMwareVCDriver(VMwareESXDriver):
         self._vmops.live_migration(context, instance_ref, dest,
                                    post_method, recover_method,
                                    block_migration)
+
+    def get_vnc_console(self, instance):
+        """Return link to instance's VNC console using vCenter logic."""
+        # In this situation, ESXi and vCenter require different
+        # API logic to create a valid VNC console connection object.
+        # In specific, vCenter does not actually run the VNC service
+        # itself. You must talk to the VNC host underneath vCenter.
+        return self._vmops.get_vnc_console_vcenter(instance)
 
 
 class VMwareAPISession(object):
@@ -573,12 +614,15 @@ class VMwareAPISession(object):
                 return
             elif task_info.state == 'success':
                 LOG.debug(_("Task [%(task_name)s] %(task_ref)s "
-                            "status: success") % locals())
+                            "status: success"),
+                          {'task_name': task_name, 'task_ref': task_ref})
                 done.send("success")
             else:
                 error_info = str(task_info.error.localizedMessage)
                 LOG.warn(_("Task [%(task_name)s] %(task_ref)s "
-                          "status: error %(error_info)s") % locals())
+                          "status: error %(error_info)s"),
+                         {'task_name': task_name, 'task_ref': task_ref,
+                          'error_info': error_info})
                 done.send_exception(exception.NovaException(error_info))
         except Exception as excep:
             LOG.warn(_("In vmwareapi:_poll_task, Got this error %s") % excep)

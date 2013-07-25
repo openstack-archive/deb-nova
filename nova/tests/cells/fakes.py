@@ -20,8 +20,8 @@ from oslo.config import cfg
 
 from nova.cells import driver
 from nova.cells import manager as cells_manager
-from nova.cells import messaging
 from nova.cells import state as cells_state
+from nova.cells import utils as cells_utils
 import nova.db
 from nova.db import base
 from nova import exception
@@ -83,7 +83,7 @@ class FakeCellState(cells_state.CellState):
         message.process()
 
 
-class FakeCellStateManager(cells_state.CellStateManager):
+class FakeCellStateManager(cells_state.CellStateManagerDB):
     def __init__(self, *args, **kwargs):
         super(FakeCellStateManager, self).__init__(*args,
                 cell_state_cls=FakeCellState, **kwargs)
@@ -113,20 +113,27 @@ class CellStubInfo(object):
         self.cells_manager.state_manager.my_cell_state.name = self.cell_name
 
 
+def _build_cell_transport_url(cur_db_id):
+    username = 'username%s' % cur_db_id
+    password = 'password%s' % cur_db_id
+    hostname = 'rpc_host%s' % cur_db_id
+    port = 3090 + cur_db_id
+    virtual_host = 'rpc_vhost%s' % cur_db_id
+
+    return 'rabbit://%s:%s@%s:%s/%s' % (username, password, hostname, port,
+                                        virtual_host)
+
+
 def _build_cell_stub_info(test_case, our_name, parent_path, children):
     cell_db_entries = []
     cur_db_id = 1
-    sep_char = messaging._PATH_CELL_SEP
+    sep_char = cells_utils.PATH_CELL_SEP
     if parent_path:
         cell_db_entries.append(
                 dict(id=cur_db_id,
                      name=parent_path.split(sep_char)[-1],
                      is_parent=True,
-                     username='username%s' % cur_db_id,
-                     password='password%s' % cur_db_id,
-                     rpc_host='rpc_host%s' % cur_db_id,
-                     rpc_port='rpc_port%s' % cur_db_id,
-                     rpc_virtual_host='rpc_vhost%s' % cur_db_id))
+                     transport_url=_build_cell_transport_url(cur_db_id)))
         cur_db_id += 1
         our_path = parent_path + sep_char + our_name
     else:
@@ -137,11 +144,8 @@ def _build_cell_stub_info(test_case, our_name, parent_path, children):
                     grandchildren)
             cell_entry = dict(id=cur_db_id,
                               name=child_name,
-                              username='username%s' % cur_db_id,
-                              password='password%s' % cur_db_id,
-                              rpc_host='rpc_host%s' % cur_db_id,
-                              rpc_port='rpc_port%s' % cur_db_id,
-                              rpc_virtual_host='rpc_vhost%s' % cur_db_id,
+                              transport_url=_build_cell_transport_url(
+                                  cur_db_id),
                               is_parent=False)
             cell_db_entries.append(cell_entry)
             cur_db_id += 1

@@ -37,7 +37,7 @@ class Host(object):
         """Reboots or shuts down the host."""
         host_mor = self._session._call_method(vim_util, "get_objects",
                                               "HostSystem")[0].obj
-        LOG.debug(_("%(action)s %(host)s") % locals())
+        LOG.debug(_("%(action)s %(host)s"), {'action': action, 'host': host})
         if action == "reboot":
             host_task = self._session._call_method(
                                     self._session._get_vim(),
@@ -57,10 +57,12 @@ class Host(object):
 
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers
-        guest VMs evacuation."""
+        guest VMs evacuation.
+        """
         host_mor = self._session._call_method(vim_util, "get_objects",
                                               "HostSystem")[0].obj
-        LOG.debug(_("Set maintenance mod on %(host)s to %(mode)s") % locals())
+        LOG.debug(_("Set maintenance mod on %(host)s to %(mode)s"),
+                  {'host': host, 'mode': mode})
         if mode:
             host_task = self._session._call_method(
                                     self._session._get_vim(),
@@ -126,8 +128,8 @@ class HostState(object):
                               "sockets": summary.hardware.numCpuPkgs,
                               "threads": summary.hardware.numCpuThreads}
                 }
-        data["disk_total"] = ds[2] / (1024 * 1024)
-        data["disk_available"] = ds[3] / (1024 * 1024)
+        data["disk_total"] = ds[2] / (1024 * 1024 * 1024)
+        data["disk_available"] = ds[3] / (1024 * 1024 * 1024)
         data["disk_used"] = data["disk_total"] - data["disk_available"]
         data["host_memory_total"] = summary.hardware.memorySize / (1024 * 1024)
         data["host_memory_free"] = data["host_memory_total"] - \
@@ -193,8 +195,8 @@ class VCState(object):
                       "sockets": summary.hardware.numCpuPkgs,
                       "threads": summary.hardware.numCpuThreads}
         }
-        data["disk_total"] = ds[2] / (1024 * 1024)
-        data["disk_available"] = ds[3] / (1024 * 1024)
+        data["disk_total"] = ds[2] / (1024 * 1024 * 1024)
+        data["disk_available"] = ds[3] / (1024 * 1024 * 1024)
         data["disk_used"] = data["disk_total"] - data["disk_available"]
         data["host_memory_total"] = summary.hardware.memorySize / (1024 * 1024)
         data["host_memory_free"] = data["host_memory_total"] -\

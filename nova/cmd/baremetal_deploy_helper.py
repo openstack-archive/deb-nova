@@ -32,6 +32,7 @@ from wsgiref import simple_server
 
 from nova import config
 from nova import context as nova_context
+from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
@@ -90,6 +91,7 @@ def make_partitions(dev, root_mb, swap_mb):
     stdin_command = ('1,%d,83;\n,%d,82;\n0,0;\n0,0;\n' % (root_mb, swap_mb))
     utils.execute('sfdisk', '-uM', dev, process_input=stdin_command,
             run_as_root=True,
+            attempts=3,
             check_exit_code=[0])
     # avoid "device is busy"
     time.sleep(3)
@@ -175,18 +177,23 @@ def work_on_disk(dev, root_mb, swap_mb, image_path):
     swap_part = "%s-part2" % dev
 
     if not is_block_device(dev):
-        LOG.warn("parent device '%s' not found", dev)
+        LOG.warn(_("parent device '%s' not found"), dev)
         return
     make_partitions(dev, root_mb, swap_mb)
     if not is_block_device(root_part):
-        LOG.warn("root device '%s' not found", root_part)
+        LOG.warn(_("root device '%s' not found"), root_part)
         return
     if not is_block_device(swap_part):
-        LOG.warn("swap device '%s' not found", swap_part)
+        LOG.warn(_("swap device '%s' not found"), swap_part)
         return
     dd(image_path, root_part)
     mkswap(swap_part)
-    root_uuid = block_uuid(root_part)
+
+    try:
+        root_uuid = block_uuid(root_part)
+    except processutils.ProcessExecutionError as err:
+        with excutils.save_and_reraise_exception():
+            LOG.error(_("Failed to detect root device UUID."))
     return root_uuid
 
 
@@ -201,11 +208,12 @@ def deploy(address, port, iqn, lun, image_path, pxe_config_path,
     login_iscsi(address, port, iqn)
     try:
         root_uuid = work_on_disk(dev, root_mb, swap_mb, image_path)
-    except processutils.ProcessExecutionError, err:
-        # Log output if there was a error
-        LOG.error("Cmd     : %s" % err.cmd)
-        LOG.error("StdOut  : %s" % err.stdout)
-        LOG.error("StdErr  : %s" % err.stderr)
+    except processutils.ProcessExecutionError as err:
+        with excutils.save_and_reraise_exception():
+            # Log output if there was a error
+            LOG.error(_("Cmd     : %s"), err.cmd)
+            LOG.error(_("StdOut  : %s"), err.stdout)
+            LOG.error(_("StdErr  : %s"), err.stderr)
     finally:
         logout_iscsi(address, port, iqn)
     switch_pxe_config(pxe_config_path, root_uuid)
@@ -241,11 +249,11 @@ class Worker(threading.Thread):
                           {'task_state': baremetal_states.DEPLOYING})
                     deploy(**params)
                 except Exception:
-                    LOG.exception(_('deployment to node %s failed') % node_id)
+                    LOG.exception(_('deployment to node %s failed'), node_id)
                     db.bm_node_update(context, node_id,
                           {'task_state': baremetal_states.DEPLOYFAIL})
                 else:
-                    LOG.info(_('deployment to node %s done') % node_id)
+                    LOG.info(_('deployment to node %s done'), node_id)
                     db.bm_node_update(context, node_id,
                           {'task_state': baremetal_states.DEPLOYDONE})
 
@@ -267,7 +275,7 @@ class BareMetalDeploy(object):
             return 'Not Implemented'
 
     def post(self, environ, start_response):
-        LOG.info("post: environ=%s", environ)
+        LOG.info(_("post: environ=%s"), environ)
         inpt = environ['wsgi.input']
         length = int(environ.get('CONTENT_LENGTH', 0))
 
@@ -280,9 +288,13 @@ class BareMetalDeploy(object):
             port = q.get('p', '3260')
             iqn = q['n']
             lun = q.get('l', '1')
+            err_msg = q.get('e')
         except KeyError as e:
             start_response('400 Bad Request', [('Content-type', 'text/plain')])
             return "parameter '%s' is not defined" % e
+
+        if err_msg:
+            LOG.error(_('Deploy agent error message: %s'), err_msg)
 
         context = nova_context.get_admin_context()
         d = db.bm_node_get(context, node_id)
@@ -304,7 +316,8 @@ class BareMetalDeploy(object):
         if not self.worker.isAlive():
             self.worker = Worker()
             self.worker.start()
-        LOG.info("request is queued: node %s, params %s", node_id, params)
+        LOG.info(_("request is queued: node %(node_id)s, params %(params)s"),
+                  {'node_id': node_id, 'params': params})
         QUEUE.put((node_id, params))
         # Requests go to Worker.run()
         start_response('200 OK', [('Content-type', 'text/plain')])

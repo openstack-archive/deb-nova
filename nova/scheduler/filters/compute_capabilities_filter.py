@@ -24,19 +24,24 @@ LOG = logging.getLogger(__name__)
 class ComputeCapabilitiesFilter(filters.BaseHostFilter):
     """HostFilter hard-coded to work with InstanceType records."""
 
+    # Instance type and host capabilities do not change within a request
+    run_filter_once_per_request = True
+
     def _satisfies_extra_specs(self, capabilities, instance_type):
         """Check that the capabilities provided by the compute service
-        satisfy the extra specs associated with the instance type"""
+        satisfy the extra specs associated with the instance type.
+        """
         if 'extra_specs' not in instance_type:
             return True
 
         for key, req in instance_type['extra_specs'].iteritems():
             # Either not scope format, or in capabilities scope
             scope = key.split(':')
-            if len(scope) > 1 and scope[0] != "capabilities":
-                continue
-            elif scope[0] == "capabilities":
-                del scope[0]
+            if len(scope) > 1:
+                if scope[0] != "capabilities":
+                    continue
+                else:
+                    del scope[0]
             cap = capabilities
             for index in range(0, len(scope)):
                 try:
@@ -45,7 +50,7 @@ class ComputeCapabilitiesFilter(filters.BaseHostFilter):
                     return False
                 if cap is None:
                     return False
-            if not extra_specs_ops.match(cap, req):
+            if not extra_specs_ops.match(str(cap), req):
                 return False
         return True
 

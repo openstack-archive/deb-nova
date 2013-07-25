@@ -69,7 +69,7 @@ class KeypairController(object):
         """
 
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='create')
 
         try:
             params = body['keypair']
@@ -94,19 +94,17 @@ class KeypairController(object):
             raise webob.exc.HTTPRequestEntityTooLarge(
                         explanation=msg,
                         headers={'Retry-After': 0})
-        except exception.InvalidKeypair:
-            msg = _("Keypair data is invalid")
-            raise webob.exc.HTTPBadRequest(explanation=msg)
-        except exception.KeyPairExists:
-            msg = _("Key pair '%s' already exists.") % name
-            raise webob.exc.HTTPConflict(explanation=msg)
+        except exception.InvalidKeypair as exc:
+            raise webob.exc.HTTPBadRequest(explanation=exc.format_message())
+        except exception.KeyPairExists as exc:
+            raise webob.exc.HTTPConflict(explanation=exc.format_message())
 
     def delete(self, req, id):
         """
         Delete a keypair with a given name
         """
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='delete')
         try:
             self.api.delete_key_pair(context, context.user_id, id)
         except exception.KeypairNotFound:
@@ -117,7 +115,7 @@ class KeypairController(object):
     def show(self, req, id):
         """Return data for the given key name."""
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='show')
 
         try:
             keypair = self.api.get_key_pair(context, context.user_id, id)
@@ -131,7 +129,7 @@ class KeypairController(object):
         List of keypairs for a user
         """
         context = req.environ['nova.context']
-        authorize(context)
+        authorize(context, action='index')
         key_pairs = self.api.get_key_pairs(context, context.user_id)
         rval = []
         for key_pair in key_pairs:

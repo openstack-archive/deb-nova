@@ -75,8 +75,7 @@ def _translate_volume_summary_view(context, vol):
     LOG.audit(_("vol=%s"), vol, context=context)
 
     if vol.get('volume_metadata'):
-        metadata = vol.get('volume_metadata')
-        d['metadata'] = dict((item['key'], item['value']) for item in metadata)
+        d['metadata'] = vol.get('volume_metadata')
     else:
         d['metadata'] = {}
 
@@ -255,7 +254,7 @@ class VolumeController(wsgi.Controller):
                 availability_zone=availability_zone
                 )
         except exception.InvalidInput as err:
-            raise exc.HTTPBadRequest(explanation=str(err))
+            raise exc.HTTPBadRequest(explanation=err.format_message())
 
         # TODO(vish): Instance should be None at db layer instead of
         #             trying to lazy load, but for now we turn it into

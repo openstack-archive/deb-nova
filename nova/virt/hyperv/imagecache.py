@@ -52,7 +52,7 @@ class ImageCache(object):
     def _get_root_vhd_size_gb(self, instance):
         try:
             # In case of resizes we need the old root disk size
-            old_instance_type = flavors.extract_instance_type(
+            old_instance_type = flavors.extract_flavor(
                 instance, prefix='old_')
             return old_instance_type['root_gb']
         except KeyError:
@@ -66,11 +66,12 @@ class ImageCache(object):
         root_vhd_size = root_vhd_size_gb * 1024 ** 3
 
         if root_vhd_size < vhd_size:
-            raise vmutils.HyperVException(_("Cannot resize the image to a "
-                                            "size smaller than the VHD max. "
-                                            "internal size: %(vhd_size)s. "
-                                            "Requested disk size: "
-                                            "%(root_vhd_size)s") % locals())
+            raise vmutils.HyperVException(
+                _("Cannot resize the image to a size smaller than the VHD "
+                  "max. internal size: %(vhd_size)s. Requested disk size: "
+                  "%(root_vhd_size)s") %
+                {'vhd_size': vhd_size, 'root_vhd_size': root_vhd_size}
+            )
         if root_vhd_size > vhd_size:
             path_parts = os.path.splitext(vhd_path)
             resized_vhd_path = '%s_%s%s' % (path_parts[0],
@@ -82,10 +83,14 @@ class ImageCache(object):
                 if not self._pathutils.exists(resized_vhd_path):
                     try:
                         LOG.debug(_("Copying VHD %(vhd_path)s to "
-                                    "%(resized_vhd_path)s") % locals())
+                                    "%(resized_vhd_path)s"),
+                                  {'vhd_path': vhd_path,
+                                   'resized_vhd_path': resized_vhd_path})
                         self._pathutils.copyfile(vhd_path, resized_vhd_path)
                         LOG.debug(_("Resizing VHD %(resized_vhd_path)s to new "
-                                    "size %(root_vhd_size)s") % locals())
+                                    "size %(root_vhd_size)s"),
+                                  {'resized_vhd_path': resized_vhd_path,
+                                   'root_vhd_size': root_vhd_size})
                         self._vhdutils.resize_vhd(resized_vhd_path,
                                                   root_vhd_size)
                     except Exception:

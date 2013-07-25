@@ -20,6 +20,7 @@
 WSGI middleware for OpenStack API controllers.
 """
 
+from oslo.config import cfg
 import routes
 import stevedore
 import webob.dec
@@ -27,13 +28,39 @@ import webob.exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova import exception
 from nova import notifications
 from nova.openstack.common import log as logging
 from nova import utils
 from nova import wsgi as base_wsgi
 
 
+api_opts = [
+        cfg.BoolOpt('enabled',
+                    default=False,
+                    help='Whether the V3 API is enabled or not'),
+        cfg.ListOpt('extensions_blacklist',
+                    default=[],
+                    help='A list of v3 API extensions to never load. '
+                    'Specify the extension aliases here.'),
+        cfg.ListOpt('extensions_whitelist',
+                    default=[],
+                    help='If the list is not empty then a v3 API extension '
+                    'will only be loaded if it exists in this list. Specify '
+                    'the extension aliases here.')
+]
+api_opts_group = cfg.OptGroup(name='osapi_v3', title='API v3 Options')
+
 LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
+CONF.register_group(api_opts_group)
+CONF.register_opts(api_opts, api_opts_group)
+
+# List of v3 API extensions which are considered to form
+# the core API and so must be present
+# TODO(cyeoh): Expand this list as the core APIs are ported to V3
+API_V3_CORE_EXTENSIONS = set(['consoles', 'extensions', 'flavors', 'ips',
+                              'limits', 'servers', 'server-metadata'])
 
 
 class FaultWrapper(base_wsgi.Middleware):
@@ -222,17 +249,57 @@ class APIRouterV3(base_wsgi.Router):
         """Simple paste factory, :class:`nova.wsgi.Router` doesn't have one."""
         return cls()
 
-    def __init__(self):
+    def __init__(self, init_only=None):
         # TODO(cyeoh): bp v3-api-extension-framework. Currently load
         # all extensions but eventually should be able to exclude
         # based on a config file
         def _check_load_extension(ext):
-            return isinstance(ext.obj, extensions.V3APIExtensionBase)
+            if (self.init_only is None or ext.obj.alias in
+                self.init_only) and isinstance(ext.obj,
+                                               extensions.V3APIExtensionBase):
+
+                # Check whitelist is either empty or if not then the extension
+                # is in the whitelist
+                if (not CONF.osapi_v3.extensions_whitelist or
+                        ext.obj.alias in CONF.osapi_v3.extensions_whitelist):
+
+                    # Check the extension is not in the blacklist
+                    if ext.obj.alias not in CONF.osapi_v3.extensions_blacklist:
+                        return self._register_extension(ext)
+                    else:
+                        LOG.warning(_("Not loading %s because it is "
+                                      "in the blacklist"), ext.obj.alias)
+                        return False
+                else:
+                    LOG.warning(
+                        _("Not loading %s because it is not in the whitelist"),
+                        ext.obj.alias)
+                    return False
+            else:
+                return False
+
+        if not CONF.osapi_v3.enabled:
+            LOG.info("V3 API has been disabled by configuration")
+            return
+
+        self.init_only = init_only
+        LOG.debug(_("v3 API Extension Blacklist: %s"),
+                  CONF.osapi_v3.extensions_blacklist)
+        LOG.debug(_("v3 API Extension Whitelist: %s"),
+                  CONF.osapi_v3.extensions_whitelist)
+
+        in_blacklist_and_whitelist = set(
+            CONF.osapi_v3.extensions_whitelist).intersection(
+                CONF.osapi_v3.extensions_blacklist)
+        if len(in_blacklist_and_whitelist) != 0:
+            LOG.warning(_("Extensions in both blacklist and whitelist: %s"),
+                        list(in_blacklist_and_whitelist))
 
         self.api_extension_manager = stevedore.enabled.EnabledExtensionManager(
             namespace=self.API_EXTENSION_NAMESPACE,
             check_func=_check_load_extension,
-            invoke_on_load=True)
+            invoke_on_load=True,
+            invoke_kwds={"extension_info": self.loaded_extension_info})
 
         mapper = PlainMapper()
         self.resources = {}
@@ -242,14 +309,31 @@ class APIRouterV3(base_wsgi.Router):
         if list(self.api_extension_manager):
             # NOTE(cyeoh): Stevedore raises an exception if there are
             # no plugins detected. I wonder if this is a bug.
-            self.api_extension_manager.map(self._register_extensions)
             self.api_extension_manager.map(self._register_resources,
                                            mapper=mapper)
             self.api_extension_manager.map(self._register_controllers)
 
+        missing_core_extensions = self.get_missing_core_extensions(
+            self.loaded_extension_info.get_extensions().keys())
+        if not self.init_only and missing_core_extensions:
+            LOG.critical(_("Missing core API extensions: %s"),
+                         missing_core_extensions)
+            raise exception.CoreAPIMissing(
+                missing_apis=missing_core_extensions)
+
         super(APIRouterV3, self).__init__(mapper)
 
-    def _register_extensions(self, ext):
+    @staticmethod
+    def get_missing_core_extensions(extensions_loaded):
+        extensions_loaded = set(extensions_loaded)
+        missing_extensions = API_V3_CORE_EXTENSIONS - extensions_loaded
+        return missing_extensions
+
+    @property
+    def loaded_extension_info(self):
+        raise NotImplementedError()
+
+    def _register_extension(self, ext):
         raise NotImplementedError()
 
     def _register_resources(self, ext, mapper):
@@ -260,7 +344,7 @@ class APIRouterV3(base_wsgi.Router):
         """
 
         handler = ext.obj
-        LOG.debug("Running _register_resources on %s", ext.obj)
+        LOG.debug(_("Running _register_resources on %s"), ext.obj)
 
         for resource in handler.get_resources():
             LOG.debug(_('Extended resource: %s'), resource.collection)
@@ -281,7 +365,14 @@ class APIRouterV3(base_wsgi.Router):
             if resource.parent:
                 kargs['parent_resource'] = resource.parent
 
-            mapper.resource(resource.collection, resource.collection,
+            # non core-API plugins use the collection name as the
+            # member name, but the core-API plugins use the
+            # singular/plural convention for member/collection names
+            if resource.member_name:
+                member_name = resource.member_name
+            else:
+                member_name = resource.collection
+            mapper.resource(member_name, resource.collection,
                             **kargs)
 
             if resource.custom_routes_fn:
@@ -295,7 +386,7 @@ class APIRouterV3(base_wsgi.Router):
         """
 
         handler = ext.obj
-        LOG.debug("Running _register_controllers on %s", ext.obj)
+        LOG.debug(_("Running _register_controllers on %s"), ext.obj)
 
         for extension in handler.get_controller_extensions():
             ext_name = extension.extension.name

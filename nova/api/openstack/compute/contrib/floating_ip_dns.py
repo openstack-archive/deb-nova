@@ -12,7 +12,7 @@
 #    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
-#    under the License
+#    under the License.
 
 import urllib
 
@@ -164,7 +164,7 @@ class FloatingIPDNSDomainController(object):
         if (scope not in ('private', 'public') or
             project and av_zone or
             scope == 'private' and project or
-            scope == 'public' and av_zone):
+                scope == 'public' and av_zone):
             raise webob.exc.HTTPUnprocessableEntity()
         if scope == 'private':
             create_dns_domain = self.network_api.create_private_dns_domain

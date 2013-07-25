@@ -93,7 +93,7 @@ class Image(object):
         pass
 
     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
-            extra_specs):
+            extra_specs, hypervisor_version):
         """Get `LibvirtConfigGuestDisk` filled for this image.
 
         :disk_dev: Disk bus device name
@@ -109,7 +109,8 @@ class Image(object):
         info.target_dev = disk_dev
         info.driver_cache = cache_mode
         info.driver_format = self.driver_format
-        driver_name = libvirt_utils.pick_disk_driver_name(self.is_block_dev)
+        driver_name = libvirt_utils.pick_disk_driver_name(hypervisor_version,
+                                                          self.is_block_dev)
         info.driver_name = driver_name
         info.source_path = self.path
 
@@ -166,7 +167,7 @@ class Image(object):
         if can_fallocate is None:
             _out, err = utils.trycmd('fallocate', '-n', '-l', '1',
                                      self.path + '.fallocate_test')
-            utils.delete_if_exists(self.path + '.fallocate_test')
+            fileutils.delete_if_exists(self.path + '.fallocate_test')
             can_fallocate = not err
             self.__class__.can_fallocate = can_fallocate
             if not can_fallocate:
@@ -215,7 +216,7 @@ class Raw(Image):
         else:
             prepare_template(target=base, *args, **kwargs)
             if not os.path.exists(self.path):
-                with utils.remove_path_on_error(self.path):
+                with fileutils.remove_path_on_error(self.path):
                     copy_raw_image(base, self.path, size)
         self.correct_format()
 
@@ -250,8 +251,34 @@ class Qcow2(Image):
             if size:
                 disk.extend(target, size)
 
+        # Download the unmodified base image unless we already have a copy.
         if not os.path.exists(base):
             prepare_template(target=base, *args, **kwargs)
+
+        legacy_backing_size = None
+        legacy_base = base
+
+        # Determine whether an existing qcow2 disk uses a legacy backing by
+        # actually looking at the image itself and parsing the output of the
+        # backing file it expects to be using.
+        if os.path.exists(self.path):
+            backing_path = libvirt_utils.get_disk_backing_file(self.path)
+            if backing_path is not None:
+                backing_file = os.path.basename(backing_path)
+                backing_parts = backing_file.rpartition('_')
+                if backing_file != backing_parts[-1] and \
+                        backing_parts[-1].isdigit():
+                    legacy_backing_size = int(backing_parts[-1])
+                    legacy_base += '_%d' % legacy_backing_size
+                    legacy_backing_size *= 1024 * 1024 * 1024
+
+        # Create the legacy backing file if necessary.
+        if legacy_backing_size:
+            if not os.path.exists(legacy_base):
+                with fileutils.remove_path_on_error(legacy_base):
+                    libvirt_utils.copy_image(base, legacy_base)
+                    disk.extend(legacy_base, legacy_backing_size)
+
         # NOTE(cfb): Having a flavor that sets the root size to 0 and having
         #            nova effectively ignore that size and use the size of the
         #            image is considered a feature at this time, not a bug.
@@ -260,7 +287,7 @@ class Qcow2(Image):
                       (base, size))
             raise exception.InstanceTypeDiskTooSmall()
         if not os.path.exists(self.path):
-            with utils.remove_path_on_error(self.path):
+            with fileutils.remove_path_on_error(self.path):
                 copy_qcow2_image(base, self.path, size)
 
     def snapshot_create(self):

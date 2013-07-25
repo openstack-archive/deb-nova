@@ -12,9 +12,11 @@
 #    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
-#
+#    under the License.
 
+import errno
 import platform
+import socket
 
 from oslo.config import cfg
 
@@ -56,10 +58,10 @@ def get_test_instance_type(context=None):
                           'ephemeral_gb': 80,
                           'swap': 1024}
     try:
-        instance_type_ref = nova.db.instance_type_create(context,
+        instance_type_ref = nova.db.flavor_create(context,
                                                          test_instance_type)
-    except exception.InstanceTypeExists:
-        instance_type_ref = nova.db.instance_type_get_by_name(context,
+    except (exception.InstanceTypeExists, exception.InstanceTypeIdExists):
+        instance_type_ref = nova.db.flavor_get_by_name(context,
                                                               'kinda.big')
     return instance_type_ref
 
@@ -72,7 +74,7 @@ def get_test_instance(context=None, instance_type=None):
         instance_type = get_test_instance_type(context)
 
     metadata = {}
-    flavors.save_instance_type_info(metadata, instance_type, '')
+    flavors.save_flavor_info(metadata, instance_type, '')
 
     test_instance = {'memory_kb': '2048000',
                      'basepath': '/some/path',
@@ -200,3 +202,15 @@ def killer_xml_body():
         'c': '&b;' * 10,
         'd': '&c;' * 9999,
     }).strip()
+
+
+def is_ipv6_supported():
+    has_ipv6_support = True
+    try:
+        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    except socket.error as e:
+        if e.errno == errno.EAFNOSUPPORT:
+            has_ipv6_support = False
+        else:
+            raise
+    return has_ipv6_support

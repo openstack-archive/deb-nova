@@ -39,7 +39,8 @@ def catch_notimplementederror(f):
 
     If a particular call makes a driver raise NotImplementedError, we
     log it so that we can extract this information afterwards to
-    automatically generate a hypervisor/feature support matrix."""
+    automatically generate a hypervisor/feature support matrix.
+    """
     def wrapped_func(self, *args, **kwargs):
         try:
             return f(self, *args, **kwargs)
@@ -59,7 +60,7 @@ class _FakeDriverBackendTestCase(object):
         # So that the _supports_direct_io does the test based
         # on the current working directory, instead of the
         # default instances_path which doesn't exist
-        self.flags(instances_path='')
+        self.flags(instances_path=self.useFixture(fixtures.TempDir()).path)
 
         # Put fakelibvirt in place
         if 'libvirt' in sys.modules:
@@ -105,7 +106,8 @@ class _FakeDriverBackendTestCase(object):
         def fake_make_drive(_self, _path):
             pass
 
-        def fake_get_instance_disk_info(_self, instance, xml=None):
+        def fake_get_instance_disk_info(_self, instance, xml=None,
+                                        block_device_info=None):
             return '[]'
 
         self.stubs.Set(nova.virt.libvirt.driver.LibvirtDriver,
@@ -147,7 +149,8 @@ class _FakeDriverBackendTestCase(object):
 class VirtDriverLoaderTestCase(_FakeDriverBackendTestCase, test.TestCase):
     """Test that ComputeManager can successfully load both
     old style and new style drivers and end up with the correct
-    final class"""
+    final class.
+    """
 
     # if your driver supports being tested in a fake way, it can go here
     #
@@ -209,6 +212,10 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.connection.list_instances()
 
     @catch_notimplementederror
+    def test_list_instance_uuids(self):
+        self.connection.list_instance_uuids()
+
+    @catch_notimplementederror
     def test_spawn(self):
         instance_ref, network_info = self._get_running_instance()
         domains = self.connection.list_instances()
@@ -232,6 +239,22 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         instance_ref, network_info = self._get_running_instance()
         self.connection.snapshot(self.ctxt, instance_ref, img_ref['id'],
                                  lambda *args, **kwargs: None)
+
+    @catch_notimplementederror
+    def test_live_snapshot_not_running(self):
+        instance_ref = test_utils.get_test_instance()
+        img_ref = self.image_service.create(self.ctxt, {'name': 'snap-1'})
+        self.assertRaises(exception.InstanceNotRunning,
+                          self.connection.live_snapshot,
+                          self.ctxt, instance_ref, img_ref['id'],
+                          lambda *args, **kwargs: None)
+
+    @catch_notimplementederror
+    def test_live_snapshot_running(self):
+        img_ref = self.image_service.create(self.ctxt, {'name': 'snap-1'})
+        instance_ref, network_info = self._get_running_instance()
+        self.connection.live_snapshot(self.ctxt, instance_ref, img_ref['id'],
+                                      lambda *args, **kwargs: None)
 
     @catch_notimplementederror
     def test_reboot(self):
@@ -305,13 +328,14 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_power_on_running(self):
         instance_ref, network_info = self._get_running_instance()
-        self.connection.power_on(instance_ref)
+        self.connection.power_on(self.ctxt, instance_ref,
+                                 network_info, None)
 
     @catch_notimplementederror
     def test_power_on_powered_off(self):
         instance_ref, network_info = self._get_running_instance()
         self.connection.power_off(instance_ref)
-        self.connection.power_on(instance_ref)
+        self.connection.power_on(self.ctxt, instance_ref, network_info, None)
 
     @catch_notimplementederror
     def test_soft_delete(self):
@@ -401,7 +425,24 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.connection.attach_volume({'driver_volume_type': 'fake'},
                                       instance_ref,
                                       '/dev/sda')
-        self.connection.power_on(instance_ref)
+
+        bdm = {
+            'root_device_name': None,
+            'swap': None,
+            'ephemerals': [],
+            'block_device_mapping': [{
+            'instance_uuid': instance_ref['uuid'],
+            'connection_info': {'driver_volume_type': 'fake'},
+            'mount_device': '/dev/sda',
+            'delete_on_termination': False,
+            'virtual_name': None,
+            'snapshot_id': None,
+            'volume_id': 'abcdedf',
+            'volume_size': None,
+            'no_device': None
+            }]
+        }
+        self.connection.power_on(self.ctxt, instance_ref, network_info, bdm)
         self.connection.detach_volume({'driver_volume_type': 'fake'},
                                       instance_ref,
                                       '/dev/sda')

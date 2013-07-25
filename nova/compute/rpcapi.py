@@ -21,8 +21,10 @@ Client side of the compute RPC API.
 from oslo.config import cfg
 
 from nova import exception
+from nova.objects import base as objects_base
 from nova.openstack.common import jsonutils
 from nova.openstack.common import rpc
+import nova.openstack.common.rpc
 import nova.openstack.common.rpc.proxy
 
 rpcapi_opts = [
@@ -33,6 +35,11 @@ rpcapi_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(rpcapi_opts)
+
+rpcapi_cap_opt = cfg.StrOpt('compute',
+        default=None,
+        help='Set a version cap for messages sent to compute services')
+CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
 
 def _compute_topic(topic, ctxt, host, instance):
@@ -165,7 +172,17 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                vnc on the correct port
         2.27 - Adds 'reservations' to terminate_instance() and
                soft_delete_instance()
+
+        ... Grizzly supports message version 2.27.  So, any changes to existing
+        methods in 2.x after that point should be done such that they can
+        handle the version_cap being set to 2.27.
+
         2.28 - Adds check_instance_shared_storage()
+        2.29 - Made start_instance() and stop_instance() take new-world
+               instance objects
+        2.30 - Adds live_snapshot_instance()
+        2.31 - Adds shelve_instance(), shelve_offload_instance, and
+               unshelve_instance()
     '''
 
     #
@@ -178,10 +195,18 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
     #
     BASE_RPC_API_VERSION = '2.0'
 
+    VERSION_ALIASES = {
+        'grizzly': '2.27',
+    }
+
     def __init__(self):
+        version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.compute,
+                                               CONF.upgrade_levels.compute)
         super(ComputeAPI, self).__init__(
                 topic=CONF.compute_topic,
-                default_version=self.BASE_RPC_API_VERSION)
+                default_version=self.BASE_RPC_API_VERSION,
+                serializer=objects_base.NovaObjectSerializer(),
+                version_cap=version_cap)
 
     def add_aggregate_host(self, ctxt, aggregate, host_param, host,
                            slave_info=None):
@@ -422,9 +447,10 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                     filter_properties=None, node=None):
         instance_p = jsonutils.to_primitive(instance)
         instance_type_p = jsonutils.to_primitive(instance_type)
+        image_p = jsonutils.to_primitive(image)
         self.cast(ctxt, self.make_msg('prep_resize',
                 instance=instance_p, instance_type=instance_type_p,
-                image=image, reservations=reservations,
+                image=image_p, reservations=reservations,
                 request_spec=request_spec,
                 filter_properties=filter_properties,
                 node=node),
@@ -571,6 +597,13 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 topic=_compute_topic(self.topic, ctxt, None, instance),
                 version='2.3')
 
+    def live_snapshot_instance(self, ctxt, instance, image_id):
+        instance_p = jsonutils.to_primitive(instance)
+        self.cast(ctxt, self.make_msg('live_snapshot_instance',
+                instance=instance_p, image_id=image_id),
+                topic=_compute_topic(self.topic, ctxt, None, instance),
+                version='2.30')
+
     def snapshot_instance(self, ctxt, instance, image_id, image_type,
             backup_type=None, rotation=None):
         instance_p = jsonutils.to_primitive(instance)
@@ -581,17 +614,17 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 topic=_compute_topic(self.topic, ctxt, None, instance))
 
     def start_instance(self, ctxt, instance):
-        instance_p = jsonutils.to_primitive(instance)
         self.cast(ctxt, self.make_msg('start_instance',
-                instance=instance_p),
-                topic=_compute_topic(self.topic, ctxt, None, instance))
+                instance=instance),
+                topic=_compute_topic(self.topic, ctxt, None, instance),
+                version='2.29')
 
-    def stop_instance(self, ctxt, instance, cast=True):
-        rpc_method = self.cast if cast else self.call
-        instance_p = jsonutils.to_primitive(instance)
+    def stop_instance(self, ctxt, instance, do_cast=True):
+        rpc_method = self.cast if do_cast else self.call
         return rpc_method(ctxt, self.make_msg('stop_instance',
-                instance=instance_p),
-                topic=_compute_topic(self.topic, ctxt, None, instance))
+                instance=instance),
+                topic=_compute_topic(self.topic, ctxt, None, instance),
+                version='2.29')
 
     def suspend_instance(self, ctxt, instance):
         instance_p = jsonutils.to_primitive(instance)
@@ -635,6 +668,24 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         self.cast(ctxt, self.make_msg('restore_instance',
                 instance=instance_p),
                 topic=_compute_topic(self.topic, ctxt, None, instance))
+
+    def shelve_instance(self, ctxt, instance, image_id=None):
+        self.cast(ctxt, self.make_msg('shelve_instance',
+            instance=instance, image_id=image_id),
+            topic=_compute_topic(self.topic, ctxt, None, instance),
+            version='2.31')
+
+    def shelve_offload_instance(self, ctxt, instance):
+        self.cast(ctxt, self.make_msg('shelve_offload_instance',
+            instance=instance),
+            topic=_compute_topic(self.topic, ctxt, None, instance),
+            version='2.31')
+
+    def unshelve_instance(self, ctxt, instance, host, image=None):
+        self.cast(ctxt, self.make_msg('unshelve_instance',
+            instance=instance, image=image),
+            topic=_compute_topic(self.topic, ctxt, host, None),
+            version='2.31')
 
 
 class SecurityGroupAPI(nova.openstack.common.rpc.proxy.RpcProxy):

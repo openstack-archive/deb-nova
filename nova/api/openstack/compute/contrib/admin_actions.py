@@ -123,7 +123,7 @@ class AdminActionsController(wsgi.Controller):
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'migrate')
-        except Exception, e:
+        except Exception as e:
             LOG.exception(_("Error in migrate %s"), e)
             raise exc.HTTPBadRequest()
         return webob.Response(status_int=202)
@@ -275,7 +275,8 @@ class AdminActionsController(wsgi.Controller):
             disk_over_commit = body["os-migrateLive"]["disk_over_commit"]
             host = body["os-migrateLive"]["host"]
         except (TypeError, KeyError):
-            msg = _("host and block_migration must be specified.")
+            msg = _("host, block_migration and disk_over_commit must "
+                    "be specified for live migration.")
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:

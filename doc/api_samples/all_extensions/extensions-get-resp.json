@@ -65,6 +65,14 @@
             "updated": "2011-11-03T00:00:00+00:00"
         },
         {
+            "alias": "os-extended-volumes",
+            "description": "Extended Volumes support.",
+            "links": [],
+            "name": "ExtendedVolumes",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_volumes/api/v1.1",
+            "updated": "2013-06-07T00:00:00+00:00"
+        },
+        {
             "alias": "OS-EXT-VIF-NET",
             "description": "Adds network id parameter to the virtual interface list.",
             "links": [],
@@ -87,6 +95,14 @@
             "name": "FlavorExtraData",
             "namespace": "http://docs.openstack.org/compute/ext/flavor_extra_data/api/v1.1",
             "updated": "2011-09-14T00:00:00+00:00"
+        },
+        {
+            "alias": "OS-SRV-USG",
+            "description": "Adds launched_at and terminated_at on Instances.",
+            "links": [],
+            "name": "ServerUsage",
+            "namespace": "http://docs.openstack.org/compute/ext/server_usage/api/v1.1",
+            "updated": "2013-04-29T00:00:00+00:00"
         },
         {
             "alias": "OS-SCH-HNT",
@@ -151,6 +167,14 @@
             "name": "Cells",
             "namespace": "http://docs.openstack.org/compute/ext/cells/api/v1.1",
             "updated": "2011-09-21T00:00:00+00:00"
+        },
+        {
+            "alias": "os-cell-capacities",
+            "description": "Adding functionality to get cell capacities.",
+            "links": [],
+            "name": "CellCapacities",
+            "namespace": "http://docs.openstack.org/compute/ext/cell_capacities/api/v1.1",
+            "updated": "2013-05-27T00:00:00+00:00"
         },
         {
             "alias": "os-certificates",
@@ -410,11 +434,11 @@
         },
         {
             "alias": "os-extended-quotas",
-            "description": "Adds ability for admins to delete quota",
+            "description": "Adds ability for admins to delete quota and optionally force the update Quota command.",
             "links": [],
             "name": "ExtendedQuotas",
-            "namespace": "http://docs.openstack.org/compute/ext/quota-delete/api/v1.1",
-            "updated": "2013-05-23T00:00:00+00:00"
+            "namespace": "http://docs.openstack.org/compute/ext/extended_quotas/api/v1.1",
+            "updated": "2013-06-09T00:00:00+00:00"
         },
         {
             "alias": "os-quota-sets",
@@ -481,6 +505,22 @@
             "updated": "2012-10-28T00:00:00-00:00"
         },
         {
+            "alias": "os-extended-services",
+            "description": "Extended services support.",
+            "links": [],
+            "name": "ExtendedServices",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_services/api/v2",
+            "updated": "2013-05-17T00:00:00-00:00"
+        },
+        {
+            "alias": "os-shelve",
+            "description": "Instance shelve mode.",
+            "links": [],
+            "name": "Shelve",
+            "namespace": "http://docs.openstack.org/compute/ext/shelve/api/v1.1",
+            "updated": "2013-04-06T00:00:00+00:00"
+        },
+        {
             "alias": "os-simple-tenant-usage",
             "description": "Simple tenant usage extension.",
             "links": [],
@@ -505,6 +545,14 @@
             "updated": "2012-07-13T00:00:00+00:00"
         },
         {
+            "alias": "os-used-limits-for-admin",
+            "description": "Provide data to admin on limited resources used by other tenants.",
+            "links": [],
+            "name": "UsedLimitsForAdmin",
+            "namespace": "http://docs.openstack.org/compute/ext/used_limits_for_admin/api/v1.1",
+            "updated": "2013-05-02T00:00:00+00:00"
+        },
+        {
             "alias": "os-user-data",
             "description": "Add user_data to the Create Server v1.1 API.",
             "links": [],
@@ -527,6 +575,14 @@
             "name": "Volumes",
             "namespace": "http://docs.openstack.org/compute/ext/volumes/api/v1.1",
             "updated": "2011-03-25T00:00:00+00:00"
+        },
+        {
+            "alias": "os-migrations",
+            "description": "Provide data on migrations.",
+            "links": [],
+            "name": "Migrations",
+            "namespace": "http://docs.openstack.org/compute/ext/migrations/api/v2.0",
+            "updated": "2013-05-30T00:00:00+00:00"
         }
     ]
 }

@@ -21,7 +21,6 @@
 
 import contextlib
 import datetime
-import errno
 import functools
 import hashlib
 import inspect
@@ -37,6 +36,7 @@ import tempfile
 import time
 from xml.sax import saxutils
 
+import eventlet
 import netaddr
 
 from oslo.config import cfg
@@ -67,9 +67,6 @@ utils_opts = [
     cfg.IntOpt('password_length',
                default=12,
                help='Length of generated instance admin passwords'),
-    cfg.BoolOpt('disable_process_locking',
-                default=False,
-                help='Whether to disable inter-process locks'),
     cfg.StrOpt('instance_usage_audit_period',
                default='month',
                help='time period to generate instance usages for.  '
@@ -96,6 +93,14 @@ BYTE_MULTIPLIERS = {
     'g': 1024 ** 3,
     'm': 1024 ** 2,
     'k': 1024,
+}
+
+# used in limits
+TIME_UNITS = {
+    'SECOND': 1,
+    'MINUTE': 60,
+    'HOUR': 3600,
+    'DAY': 84400
 }
 
 synchronized = lockutils.synchronized_with_prefix('nova-')
@@ -210,7 +215,8 @@ def last_completed_audit_period(unit=None, before=None):
 
     returns:  2 tuple of datetimes (begin, end)
               The begin timestamp of this audit period is the same as the
-              end of the previous."""
+              end of the previous.
+    """
     if not unit:
         unit = CONF.instance_usage_audit_period
 
@@ -323,6 +329,62 @@ def last_octet(address):
     return int(address.split('.')[-1])
 
 
+def get_my_ipv4_address():
+    """Run ip route/addr commands to figure out the best ipv4
+    """
+    LOCALHOST = '127.0.0.1'
+    try:
+        out = execute('ip', '-f', 'inet', '-o', 'route', 'show',
+                      run_as_root=True)
+
+        # Find the default route
+        regex_default = ('default\s*via\s*'
+                         '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
+                         '\s*dev\s*(\w*)\s*')
+        default_routes = re.findall(regex_default, out[0])
+        if not default_routes:
+            return LOCALHOST
+        gateway, iface = default_routes[0]
+
+        # Find the right subnet for the gateway/interface for
+        # the default route
+        route = ('(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})'
+              '\s*dev\s*(\w*)\s*')
+        for match in re.finditer(route, out[0]):
+            subnet = netaddr.IPNetwork(match.group(1) + "/" + match.group(2))
+            if (match.group(3) == iface and
+                    netaddr.IPAddress(gateway) in subnet):
+                try:
+                    return _get_ipv4_address_for_interface(iface)
+                except exception.NovaException:
+                    pass
+    except Exception as ex:
+        LOG.error(_("Couldn't get IPv4 : %(ex)s") % {'ex': ex})
+    return LOCALHOST
+
+
+def _get_ipv4_address_for_interface(iface):
+    """Run ip addr show for an interface and grab its ipv4 addresses
+    """
+    try:
+        out = execute('ip', '-f', 'inet', '-o', 'addr', 'show', iface,
+                      run_as_root=True)
+        regexp_address = re.compile('inet\s*'
+                                    '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
+        address = [m.group(1) for m in regexp_address.finditer(out[0])
+                   if m.group(1) != '127.0.0.1']
+        if address:
+            return address[0]
+        else:
+            msg = _('IPv4 address is not found.: %s') % out[0]
+            raise exception.NovaException(msg)
+    except Exception as ex:
+        msg = _("Couldn't get IPv4 of %(interface)s"
+                " : %(ex)s") % {'interface': iface, 'ex': ex}
+        LOG.error(msg)
+        raise exception.NovaException(msg)
+
+
 def get_my_linklocal(interface):
     try:
         if_str = execute('ip', '-f', 'inet6', '-o', 'addr', 'show', interface)
@@ -411,46 +473,6 @@ def utf8(value):
         return value.encode('utf-8')
     assert isinstance(value, str)
     return value
-
-
-def to_bytes(text, default=0):
-    """Try to turn a string into a number of bytes. Looks at the last
-    characters of the text to determine what conversion is needed to
-    turn the input text into a byte number.
-
-    Supports: B/b, K/k, M/m, G/g, T/t (or the same with b/B on the end)
-
-    """
-    # Take off everything not number 'like' (which should leave
-    # only the byte 'identifier' left)
-    mult_key_org = text.lstrip('-1234567890')
-    mult_key = mult_key_org.lower()
-    mult_key_len = len(mult_key)
-    if mult_key.endswith("b"):
-        mult_key = mult_key[0:-1]
-    try:
-        multiplier = BYTE_MULTIPLIERS[mult_key]
-        if mult_key_len:
-            # Empty cases shouldn't cause text[0:-0]
-            text = text[0:-mult_key_len]
-        return int(text) * multiplier
-    except KeyError:
-        msg = _('Unknown byte multiplier: %s') % mult_key_org
-        raise TypeError(msg)
-    except ValueError:
-        return default
-
-
-def delete_if_exists(pathname):
-    """delete a file, but ignore file not found error."""
-
-    try:
-        os.unlink(pathname)
-    except OSError as e:
-        if e.errno == errno.ENOENT:
-            return
-        else:
-            raise
 
 
 def get_from_path(items, path):
@@ -639,8 +661,11 @@ def get_shortened_ipv6_cidr(address):
 
 
 def is_valid_cidr(address):
-    """Check if the provided ipv4 or ipv6 address is a valid
-    CIDR address or not"""
+    """Check if address is valid
+
+    The provided address can be a IPv6 or a IPv4
+    CIDR address.
+    """
     try:
         # Validate the correct CIDR Address
         netaddr.IPNetwork(address)
@@ -656,15 +681,17 @@ def is_valid_cidr(address):
     ip_segment = address.split('/')
 
     if (len(ip_segment) <= 1 or
-        ip_segment[1] == ''):
+            ip_segment[1] == ''):
         return False
 
     return True
 
 
 def get_ip_version(network):
-    """Returns the IP version of a network (IPv4 or IPv6). Raises
-    AddrFormatError if invalid network."""
+    """Returns the IP version of a network (IPv4 or IPv6).
+
+    Raises AddrFormatError if invalid network.
+    """
     if netaddr.IPNetwork(network).version == 6:
         return "IPv6"
     elif netaddr.IPNetwork(network).version == 4:
@@ -735,18 +762,6 @@ def timefunc(func):
     return inner
 
 
-@contextlib.contextmanager
-def remove_path_on_error(path):
-    """Protect code that wants to operate on PATH atomically.
-    Any exception will cause PATH to be removed.
-    """
-    try:
-        yield
-    except Exception:
-        with excutils.save_and_reraise_exception():
-            delete_if_exists(path)
-
-
 def make_dev_path(dev, partition=None, base='/dev'):
     """Return a path to a particular device.
 
@@ -803,18 +818,6 @@ def read_cached_file(filename, cache_info, reload_func=None):
         if reload_func:
             reload_func(cache_info['data'])
     return cache_info['data']
-
-
-def file_open(*args, **kwargs):
-    """Open file
-
-    see built-in file() documentation for more details
-
-    Note: The reason this is kept in a separate module is to easily
-          be able to provide a stub module that doesn't alter system
-          state at all (for unit tests)
-    """
-    return file(*args, **kwargs)
 
 
 def hash_file(file_like_object):
@@ -920,14 +923,16 @@ def temporary_chown(path, owner_uid=None):
 
 @contextlib.contextmanager
 def tempdir(**kwargs):
-    tempfile.tempdir = CONF.tempdir
-    tmpdir = tempfile.mkdtemp(**kwargs)
+    argdict = kwargs.copy()
+    if 'dir' not in argdict:
+        argdict['dir'] = CONF.tempdir
+    tmpdir = tempfile.mkdtemp(**argdict)
     try:
         yield tmpdir
     finally:
         try:
             shutil.rmtree(tmpdir)
-        except OSError, e:
+        except OSError as e:
             LOG.error(_('Could not remove tmpdir: %s'), str(e))
 
 
@@ -1007,7 +1012,7 @@ def last_bytes(file_like_object, num):
 
     try:
         file_like_object.seek(-num, os.SEEK_END)
-    except IOError, e:
+    except IOError as e:
         if e.errno == 22:
             file_like_object.seek(0, os.SEEK_SET)
         else:
@@ -1030,6 +1035,13 @@ def dict_to_metadata(metadata):
     for key, value in metadata.iteritems():
         result.append(dict(key=key, value=value))
     return result
+
+
+def instance_meta(instance):
+    if isinstance(instance['metadata'], dict):
+        return instance['metadata']
+    else:
+        return metadata_to_dict(instance['metadata'])
 
 
 def instance_sys_meta(instance):
@@ -1062,7 +1074,8 @@ def get_wrapped_function(function):
 
 class ExceptionHelper(object):
     """Class to wrap another and translate the ClientExceptions raised by its
-    function calls to the actual ones"""
+    function calls to the actual ones.
+    """
 
     def __init__(self, target):
         self._target = target
@@ -1074,7 +1087,7 @@ class ExceptionHelper(object):
         def wrapper(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
-            except rpc_common.ClientException, e:
+            except rpc_common.ClientException as e:
                 raise (e._exc_info[1], None, e._exc_info[2])
         return wrapper
 
@@ -1099,3 +1112,26 @@ def check_string_length(value, name, min_length=0, max_length=None):
         msg = _("%(name)s has more than %(max_length)s "
                     "characters.") % locals()
         raise exception.InvalidInput(message=msg)
+
+
+def spawn_n(func, *args, **kwargs):
+    """Passthrough method for eventlet.spawn_n.
+
+    This utility exists so that it can be stubbed for testing without
+    interfering with the service spawns.
+    """
+    eventlet.spawn_n(func, *args, **kwargs)
+
+
+def is_none_string(val):
+    """
+    Check if a string represents a None value.
+    """
+    if not isinstance(val, basestring):
+        return False
+
+    return val.lower() == 'none'
+
+
+def convert_version_to_int(version):
+    return version[0] * 1000000 + version[1] * 1000 + version[2]

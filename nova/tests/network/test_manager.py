@@ -519,6 +519,7 @@ class FlatNetworkTestCase(test.TestCase):
 class VlanNetworkTestCase(test.TestCase):
     def setUp(self):
         super(VlanNetworkTestCase, self).setUp()
+        self.useFixture(test.SampleNetworks())
         self.network = network_manager.VlanManager(host=HOST)
         self.network.db = db
         self.context = context.RequestContext('testuser', 'testproject',
@@ -1068,7 +1069,8 @@ class VlanNetworkTestCase(test.TestCase):
 
     def test_ip_association_and_allocation_of_other_project(self):
         """Makes sure that we cannot deallocaate or disassociate
-        a public ip of other project"""
+        a public ip of other project.
+        """
 
         def network_get(_context, network_id, project_only="allow_none"):
             return networks[network_id]
@@ -1122,7 +1124,8 @@ class VlanNetworkTestCase(test.TestCase):
     def test_deallocate_fixed(self):
         """Verify that release is called properly.
 
-        Ensures https://bugs.launchpad.net/nova/+bug/973442 doesn't return"""
+        Ensures https://bugs.launchpad.net/nova/+bug/973442 doesn't return
+        """
 
         def network_get(_context, network_id, project_only="allow_none"):
             return networks[network_id]
@@ -1192,7 +1195,8 @@ class VlanNetworkTestCase(test.TestCase):
     def test_deallocate_fixed_no_vif(self):
         """Verify that deallocate doesn't raise when no vif is returned.
 
-        Ensures https://bugs.launchpad.net/nova/+bug/968457 doesn't return"""
+        Ensures https://bugs.launchpad.net/nova/+bug/968457 doesn't return
+        """
 
         def network_get(_context, network_id, project_only="allow_none"):
             return networks[network_id]
@@ -1710,7 +1714,8 @@ class CommonNetworkTestCase(test.TestCase):
                                        table_name='nat')
 
         # The expected rules that should be configured based on the fixed_range
-        expected_lines = ['[0:0] -A %s-snat -s %s -j SNAT --to-source %s -o %s'
+        expected_lines = ['[0:0] -A %s-snat -s %s -d 0.0.0.0/0 '
+                          '-j SNAT --to-source %s -o %s'
                           % (binary_name, CONF.fixed_range,
                                           CONF.routing_source_ip,
                                           CONF.public_interface),
@@ -1758,7 +1763,8 @@ class CommonNetworkTestCase(test.TestCase):
                                        table_name='nat')
 
         # The expected rules that should be configured based on the fixed_range
-        expected_lines = ['[0:0] -A %s-snat -s %s -j SNAT --to-source %s -o %s'
+        expected_lines = ['[0:0] -A %s-snat -s %s -d 0.0.0.0/0 '
+                          '-j SNAT --to-source %s -o %s'
                           % (binary_name, networks[0]['cidr'],
                                           CONF.routing_source_ip,
                                           CONF.public_interface),
@@ -1772,7 +1778,8 @@ class CommonNetworkTestCase(test.TestCase):
                           '--ctstate DNAT -j ACCEPT' % (binary_name,
                                                         networks[0]['cidr'],
                                                         networks[0]['cidr']),
-                          '[0:0] -A %s-snat -s %s -j SNAT --to-source %s -o %s'
+                          '[0:0] -A %s-snat -s %s -d 0.0.0.0/0 '
+                          '-j SNAT --to-source %s -o %s'
                           % (binary_name, networks[1]['cidr'],
                                           CONF.routing_source_ip,
                                           CONF.public_interface),
@@ -1826,10 +1833,11 @@ class CommonNetworkTestCase(test.TestCase):
                                        table_name='nat')
 
         # Add the new expected rules to the old ones
-        expected_lines += ['[0:0] -A %s-snat -s %s -j SNAT --to-source %s -o '
-                           '%s' % (binary_name, new_network['cidr'],
-                                                CONF.routing_source_ip,
-                                                CONF.public_interface),
+        expected_lines += ['[0:0] -A %s-snat -s %s -d 0.0.0.0/0 '
+                           '-j SNAT --to-source %s -o %s'
+                           % (binary_name, new_network['cidr'],
+                                           CONF.routing_source_ip,
+                                           CONF.public_interface),
                            '[0:0] -A %s-POSTROUTING -s %s -d %s/32 -j ACCEPT'
                            % (binary_name, new_network['cidr'],
                                            CONF.metadata_host),
@@ -1904,7 +1912,8 @@ class RPCAllocateTestCase(test.TestCase):
         """Test to verify bug 855030 doesn't resurface.
 
         Mekes sure _rpc_allocate_fixed_ip returns a value so the call
-        returns properly and the greenpool completes."""
+        returns properly and the greenpool completes.
+        """
         address = '10.10.10.10'
 
         def fake_allocate(*args, **kwargs):
@@ -1929,6 +1938,7 @@ class TestFloatingIPManager(floating_ips.FloatingIP,
 class AllocateTestCase(test.TestCase):
     def setUp(self):
         super(AllocateTestCase, self).setUp()
+        self.useFixture(test.SampleNetworks())
         self.conductor = self.start_service(
             'conductor', manager=CONF.conductor.manager)
         self.compute = self.start_service('compute')
@@ -2129,7 +2139,7 @@ class FloatingIPTestCase(test.TestCase):
         self.network.associate_floating_ip(ctxt, 'fl_ip', 'fix_ip', True)
 
     def test_double_deallocation(self):
-        instance_ref = db.api.instance_create(self.context,
+        instance_ref = db.instance_create(self.context,
                 {"project_id": self.project_id})
         # Run it twice to make it fault if it does not handle
         # instances without fixed networks
@@ -2142,14 +2152,14 @@ class FloatingIPTestCase(test.TestCase):
     def test_deallocation_deleted_instance(self):
         self.stubs.Set(self.network, '_teardown_network_on_host',
                        lambda *args, **kwargs: None)
-        instance = db.api.instance_create(self.context, {
+        instance = db.instance_create(self.context, {
                 'project_id': self.project_id, 'deleted': True})
-        network = db.api.network_create_safe(self.context.elevated(), {
+        network = db.network_create_safe(self.context.elevated(), {
                 'project_id': self.project_id})
         fixed = db.fixed_ip_create(self.context, {'allocated': True,
                 'instance_uuid': instance['uuid'], 'address': '10.1.1.1',
                 'network_id': network['id']})
-        db.api.floating_ip_create(self.context, {
+        db.floating_ip_create(self.context, {
                 'address': '10.10.10.10', 'instance_uuid': instance['uuid'],
                 'fixed_ip_id': fixed['id'],
                 'project_id': self.project_id})
@@ -2159,17 +2169,17 @@ class FloatingIPTestCase(test.TestCase):
     def test_deallocation_duplicate_floating_ip(self):
         self.stubs.Set(self.network, '_teardown_network_on_host',
                        lambda *args, **kwargs: None)
-        instance = db.api.instance_create(self.context, {
+        instance = db.instance_create(self.context, {
                 'project_id': self.project_id})
-        network = db.api.network_create_safe(self.context.elevated(), {
+        network = db.network_create_safe(self.context.elevated(), {
                 'project_id': self.project_id})
         fixed = db.fixed_ip_create(self.context, {'allocated': True,
                 'instance_uuid': instance['uuid'], 'address': '10.1.1.1',
                 'network_id': network['id']})
-        db.api.floating_ip_create(self.context, {
+        db.floating_ip_create(self.context, {
                 'address': '10.10.10.10',
                 'deleted': True})
-        db.api.floating_ip_create(self.context, {
+        db.floating_ip_create(self.context, {
                 'address': '10.10.10.10', 'instance_uuid': instance['uuid'],
                 'fixed_ip_id': fixed['id'],
                 'project_id': self.project_id})

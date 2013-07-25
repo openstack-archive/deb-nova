@@ -24,7 +24,8 @@ classes based on common operational needs / policies
 
 def set_vif_guest_frontend_config(conf, mac, model, driver):
     """Populate a LibvirtConfigGuestInterface instance
-    with guest frontend details"""
+    with guest frontend details.
+    """
     conf.mac_addr = mac
     if model is not None:
         conf.model = model
@@ -34,7 +35,8 @@ def set_vif_guest_frontend_config(conf, mac, model, driver):
 
 def set_vif_host_backend_bridge_config(conf, brname, tapname=None):
     """Populate a LibvirtConfigGuestInterface instance
-    with host backend details for a software bridge"""
+    with host backend details for a software bridge.
+    """
     conf.net_type = "bridge"
     conf.source_dev = brname
     if tapname:
@@ -48,7 +50,8 @@ def set_vif_host_backend_ethernet_config(conf, tapname):
     host device.
 
     NB use of this configuration is discouraged by
-    libvirt project and will mark domains as 'tainted'"""
+    libvirt project and will mark domains as 'tainted'.
+    """
 
     conf.net_type = "ethernet"
     conf.target_dev = tapname
@@ -57,7 +60,8 @@ def set_vif_host_backend_ethernet_config(conf, tapname):
 
 def set_vif_host_backend_ovs_config(conf, brname, interfaceid, tapname=None):
     """Populate a LibvirtConfigGuestInterface instance
-    with host backend details for an OpenVSwitch bridge"""
+    with host backend details for an OpenVSwitch bridge.
+    """
 
     conf.net_type = "bridge"
     conf.source_dev = brname
@@ -72,7 +76,8 @@ def set_vif_host_backend_802qbg_config(conf, devname, managerid,
                                        typeid, typeidversion,
                                        instanceid, tapname=None):
     """Populate a LibvirtConfigGuestInterface instance
-    with host backend details for an 802.1qbg device"""
+    with host backend details for an 802.1qbg device.
+    """
 
     conf.net_type = "direct"
     conf.source_dev = devname
@@ -89,7 +94,8 @@ def set_vif_host_backend_802qbg_config(conf, devname, managerid,
 def set_vif_host_backend_802qbh_config(conf, devname, profileid,
                                        tapname=None):
     """Populate a LibvirtConfigGuestInterface instance
-    with host backend details for an 802.1qbh device"""
+    with host backend details for an 802.1qbh device.
+    """
 
     conf.net_type = "direct"
     conf.source_dev = devname
@@ -100,7 +106,7 @@ def set_vif_host_backend_802qbh_config(conf, devname, profileid,
         conf.target_dev = tapname
 
 
-def set_vif_bandwidth_config(conf, extra_specs):
+def set_vif_bandwidth_config(conf, inst_type):
     """Config vif inbound/outbound bandwidth limit. parameters are
     set in instance_type_extra_specs table, key is in  the format
     quota:vif_inbound_average.
@@ -109,7 +115,7 @@ def set_vif_bandwidth_config(conf, extra_specs):
     bandwidth_items = ['vif_inbound_average', 'vif_inbound_peak',
         'vif_inbound_burst', 'vif_outbound_average', 'vif_outbound_peak',
         'vif_outbound_burst']
-    for key, value in extra_specs.iteritems():
+    for key, value in inst_type['extra_specs'].iteritems():
         scope = key.split(':')
         if len(scope) > 1 and scope[0] == 'quota':
             if scope[1] in bandwidth_items:

@@ -26,6 +26,7 @@ inline callbacks.
 import eventlet
 eventlet.monkey_patch(os=False)
 
+import copy
 import os
 import shutil
 import sys
@@ -41,6 +42,7 @@ from nova import context
 from nova import db
 from nova.db import migration
 from nova.network import manager as network_manager
+from nova.objects import base as objects_base
 from nova.openstack.common.db.sqlalchemy import session
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -61,6 +63,7 @@ CONF.register_opts(test_opts)
 CONF.import_opt('sql_connection',
                 'nova.openstack.common.db.sqlalchemy.session')
 CONF.import_opt('sqlite_db', 'nova.openstack.common.db.sqlalchemy.session')
+CONF.import_opt('enabled', 'nova.api.openstack', group='osapi_v3')
 CONF.set_override('use_stderr', False)
 
 logging.setup('nova')
@@ -87,7 +90,6 @@ class Database(fixtures.Fixture):
             if os.path.exists(testdb):
                 return
         db_migrate.db_sync()
-        self.post_migrations()
         if sql_connection == "sqlite://":
             conn = self.engine.connect()
             self._DB = "".join(line for line in conn.connection.iterdump())
@@ -107,8 +109,13 @@ class Database(fixtures.Fixture):
             shutil.copyfile(paths.state_path_rel(self.sqlite_clean_db),
                             paths.state_path_rel(self.sqlite_db))
 
-    def post_migrations(self):
-        """Any addition steps that are needed outside of the migrations."""
+
+class SampleNetworks(fixtures.Fixture):
+
+    """Create sample networks in the database."""
+
+    def setUp(self):
+        super(SampleNetworks, self).setUp()
         ctxt = context.get_admin_context()
         network = network_manager.VlanManager()
         bridge_interface = CONF.flat_interface or CONF.vlan_interface
@@ -184,7 +191,12 @@ class TestingException(Exception):
 
 
 class TestCase(testtools.TestCase):
-    """Test case base class for all unit tests."""
+    """Test case base class for all unit tests.
+
+    Due to the slowness of DB access, please consider deriving from
+    `NoDBTestCase` first.
+    """
+    USES_DB = True
 
     def setUp(self):
         """Run before each test method to initialize test environment."""
@@ -212,13 +224,23 @@ class TestCase(testtools.TestCase):
         self.log_fixture = self.useFixture(fixtures.FakeLogger())
         self.useFixture(conf_fixture.ConfFixture(CONF))
 
-        global _DB_CACHE
-        if not _DB_CACHE:
-            _DB_CACHE = Database(session, migration,
-                                    sql_connection=CONF.sql_connection,
-                                    sqlite_db=CONF.sqlite_db,
-                                    sqlite_clean_db=CONF.sqlite_clean_db)
-        self.useFixture(_DB_CACHE)
+        if self.USES_DB:
+            global _DB_CACHE
+            if not _DB_CACHE:
+                _DB_CACHE = Database(session, migration,
+                                        sql_connection=CONF.sql_connection,
+                                        sqlite_db=CONF.sqlite_db,
+                                        sqlite_clean_db=CONF.sqlite_clean_db)
+
+            self.useFixture(_DB_CACHE)
+
+        # NOTE(danms): Make sure to reset us back to non-remote objects
+        # for each test to avoid interactions. Also, backup the object
+        # registry.
+        objects_base.NovaObject.indirection_api = None
+        self._base_test_obj_backup = copy.copy(
+            objects_base.NovaObject._obj_classes)
+        self.addCleanup(self._restore_obj_registry)
 
         mox_fixture = self.useFixture(MoxStubout())
         self.mox = mox_fixture.mox
@@ -227,6 +249,10 @@ class TestCase(testtools.TestCase):
         self.useFixture(fixtures.EnvironmentVariable('http_proxy'))
         self.policy = self.useFixture(policy_fixture.PolicyFixture())
         CONF.set_override('fatal_exception_format_errors', True)
+        CONF.set_override('enabled', True, 'osapi_v3')
+
+    def _restore_obj_registry(self):
+        objects_base.NovaObject._obj_classes = self._base_test_obj_backup
 
     def _clear_attrs(self):
         # Delete attributes that don't start with _ so they don't pin
@@ -268,3 +294,12 @@ class TimeOverride(fixtures.Fixture):
         super(TimeOverride, self).setUp()
         timeutils.set_time_override()
         self.addCleanup(timeutils.clear_time_override)
+
+
+class NoDBTestCase(TestCase):
+    """
+    `NoDBTestCase` differs from TestCase in that DB access is not supported.
+    This makes tests run significantly faster. If possible, all new tests
+    should derive from this class.
+    """
+    USES_DB = False

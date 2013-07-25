@@ -18,7 +18,6 @@ Tests For Filter Scheduler.
 
 import mox
 
-from nova.compute import flavors
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
@@ -26,21 +25,20 @@ from nova.conductor import api as conductor_api
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common import rpc
 from nova.scheduler import driver
 from nova.scheduler import filter_scheduler
 from nova.scheduler import host_manager
+from nova.scheduler import utils as scheduler_utils
 from nova.scheduler import weights
-from nova import servicegroup
 from nova.tests.scheduler import fakes
 from nova.tests.scheduler import test_scheduler
 
 
-def fake_get_filtered_hosts(hosts, filter_properties):
+def fake_get_filtered_hosts(hosts, filter_properties, index):
     return list(hosts)
 
 
-def fake_get_group_filtered_hosts(hosts, filter_properties):
+def fake_get_group_filtered_hosts(hosts, filter_properties, index):
     group_hosts = filter_properties.get('group_hosts') or []
     if group_hosts:
         hosts = list(hosts)
@@ -78,6 +76,10 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         compute_utils.add_instance_fault_from_exc(fake_context,
                 mox.IsA(conductor_api.LocalAPI), new_ref,
                 mox.IsA(exception.NoValidHost), mox.IgnoreArg())
+
+        self.mox.StubOutWithMock(db, 'compute_node_get_all')
+        db.compute_node_get_all(mox.IgnoreArg()).AndReturn([])
+
         self.mox.ReplayAll()
         sched.schedule_run_instance(
                 fake_context, request_spec, None, None, None, None, {})
@@ -157,7 +159,8 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
     def test_schedule_happy_day(self):
         """Make sure there's nothing glaringly wrong with _schedule()
-        by doing a happy day pass through."""
+        by doing a happy day pass through.
+        """
 
         self.next_weight = 1.0
 
@@ -240,6 +243,10 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         request_spec = dict(instance_properties=instance_properties)
         filter_properties = {}
 
+        self.mox.StubOutWithMock(db, 'compute_node_get_all')
+        db.compute_node_get_all(mox.IgnoreArg()).AndReturn([])
+        self.mox.ReplayAll()
+
         sched._schedule(self.context, request_spec,
                 filter_properties=filter_properties)
 
@@ -254,6 +261,10 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         instance_properties = {'project_id': '12345', 'os_type': 'Linux'}
         request_spec = dict(instance_properties=instance_properties)
         filter_properties = {}
+
+        self.mox.StubOutWithMock(db, 'compute_node_get_all')
+        db.compute_node_get_all(mox.IgnoreArg()).AndReturn([])
+        self.mox.ReplayAll()
 
         sched._schedule(self.context, request_spec,
                 filter_properties=filter_properties)
@@ -271,6 +282,10 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
         retry = dict(num_attempts=1)
         filter_properties = dict(retry=retry)
+
+        self.mox.StubOutWithMock(db, 'compute_node_get_all')
+        db.compute_node_get_all(mox.IgnoreArg()).AndReturn([])
+        self.mox.ReplayAll()
 
         sched._schedule(self.context, request_spec,
                 filter_properties=filter_properties)
@@ -307,8 +322,7 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         host = "fakehost"
         node = "fakenode"
 
-        sched = fakes.FakeFilterScheduler()
-        sched._add_retry_host(filter_properties, host, node)
+        scheduler_utils._add_retry_host(filter_properties, host, node)
 
         hosts = filter_properties['retry']['hosts']
         self.assertEqual(1, len(hosts))
@@ -318,11 +332,10 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         # Test addition of certain filter props after a node is selected.
         retry = {'hosts': [], 'num_attempts': 1}
         filter_properties = {'retry': retry}
-        sched = fakes.FakeFilterScheduler()
 
         host_state = host_manager.HostState('host', 'node')
         host_state.limits['vcpus'] = 5
-        sched._post_select_populate_filter_properties(filter_properties,
+        scheduler_utils.populate_filter_properties(filter_properties,
                 host_state)
 
         self.assertEqual(['host', 'node'],
@@ -335,10 +348,22 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         sched = fakes.FakeFilterScheduler()
 
         image = 'image'
-        instance = db.instance_create(self.context, {})
+        instance = {'disable_terminate': False,
+                    'uuid': 'fakeuuid',
+                    'deleted': 0, 'info_cache': {},
+                    'created_at': None,
+                    'system_metadata': [], 'shutdown_terminate': False,
+                    'id': 1, 'security_groups': [], 'metadata': []}
 
         instance_properties = {'project_id': 'fake', 'os_type': 'Linux'}
-        instance_type = flavors.get_instance_type_by_name("m1.tiny")
+        instance_type = {
+             'memory_mb': 1024, 'root_gb': 40, 'deleted_at': None,
+             'name': u'm1.medium', 'deleted': 0, 'created_at': None,
+             'ephemeral_gb': 0, 'updated_at': None, 'disabled': False,
+             'vcpus': 2, 'extra_specs': {}, 'swap': 0,
+             'rxtx_factor': 1.0, 'is_public': True, 'flavorid': u'3',
+             'vcpu_weight': None, 'id': 1}
+
         request_spec = {'instance_properties': instance_properties,
                         'instance_type': instance_type}
         retry = {'hosts': [], 'num_attempts': 1}
@@ -364,143 +389,6 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
         self.assertEqual([['host', 'node']],
                          filter_properties['retry']['hosts'])
-
-    def test_live_migration_dest_check_service_memory_overcommit(self):
-        instance = self._live_migration_instance()
-
-        # Live-migration should work since default is to overcommit memory.
-        self.mox.StubOutWithMock(self.driver, '_live_migration_src_check')
-        self.mox.StubOutWithMock(db, 'service_get_by_compute_host')
-        self.mox.StubOutWithMock(servicegroup.API, 'service_is_up')
-        self.mox.StubOutWithMock(self.driver, '_get_compute_info')
-        self.mox.StubOutWithMock(self.driver, '_live_migration_common_check')
-        self.mox.StubOutWithMock(rpc, 'call')
-        self.mox.StubOutWithMock(self.driver.compute_rpcapi, 'live_migration')
-
-        dest = 'fake_host2'
-        block_migration = False
-        disk_over_commit = False
-
-        self.driver._live_migration_src_check(self.context, instance)
-        db.service_get_by_compute_host(self.context,
-                dest).AndReturn('fake_service3')
-        self.servicegroup_api.service_is_up('fake_service3').AndReturn(True)
-
-        self.driver._get_compute_info(self.context, dest).AndReturn(
-                                                       {'memory_mb': 2048,
-                                                        'free_disk_gb': 512,
-                                                        'local_gb_used': 512,
-                                                        'free_ram_mb': 512,
-                                                        'local_gb': 1024,
-                                                        'vcpus': 4,
-                                                        'vcpus_used': 2,
-                                                        'updated_at': None})
-
-        self.driver._live_migration_common_check(self.context, instance, dest)
-
-        rpc.call(self.context, "compute.fake_host2",
-                   {"method": 'check_can_live_migrate_destination',
-                    "namespace": None,
-                    "args": {'instance': instance,
-                             'block_migration': block_migration,
-                             'disk_over_commit': disk_over_commit},
-                    "version": compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION},
-                 None).AndReturn({})
-
-        self.driver.compute_rpcapi.live_migration(self.context,
-                host=instance['host'], instance=instance, dest=dest,
-                block_migration=block_migration, migrate_data={})
-
-        self.mox.ReplayAll()
-        result = self.driver.schedule_live_migration(self.context,
-                instance=instance, dest=dest,
-                block_migration=block_migration,
-                disk_over_commit=disk_over_commit)
-        self.assertEqual(result, None)
-
-    def test_live_migration_assert_memory_no_overcommit(self):
-        # Test that memory check passes with no memory overcommit.
-        def fake_get(context, host):
-            return {'memory_mb': 2048,
-                    'free_disk_gb': 512,
-                    'local_gb_used': 512,
-                    'free_ram_mb': 1024,
-                    'local_gb': 1024,
-                    'vcpus': 4,
-                    'vcpus_used': 2,
-                    'updated_at': None}
-
-        self.stubs.Set(self.driver, '_get_compute_info', fake_get)
-
-        self.flags(ram_allocation_ratio=1.0)
-        instance = self._live_migration_instance()
-        dest = 'fake_host2'
-        result = self.driver._assert_compute_node_has_enough_memory(
-                self.context, instance, dest)
-        self.assertEqual(result, None)
-
-    def test_live_migration_assert_memory_no_overcommit_lack_memory(self):
-        # Test that memory check fails with no memory overcommit.
-        def fake_get(context, host):
-            return {'memory_mb': 2048,
-                    'free_disk_gb': 512,
-                    'local_gb_used': 512,
-                    'free_ram_mb': 1023,
-                    'local_gb': 1024,
-                    'vcpus': 4,
-                    'vcpus_used': 2,
-                    'updated_at': None}
-
-        self.stubs.Set(self.driver, '_get_compute_info', fake_get)
-
-        self.flags(ram_allocation_ratio=1.0)
-        instance = self._live_migration_instance()
-        dest = 'fake_host2'
-        self.assertRaises(exception.MigrationError,
-                self.driver._assert_compute_node_has_enough_memory,
-                context, instance, dest)
-
-    def test_live_migration_assert_memory_overcommit(self):
-        # Test that memory check passes with memory overcommit.
-        def fake_get(context, host):
-            return {'memory_mb': 2048,
-                    'free_disk_gb': 512,
-                    'local_gb_used': 512,
-                    'free_ram_mb': -1024,
-                    'local_gb': 1024,
-                    'vcpus': 4,
-                    'vcpus_used': 2,
-                    'updated_at': None}
-
-        self.stubs.Set(self.driver, '_get_compute_info', fake_get)
-
-        self.flags(ram_allocation_ratio=2.0)
-        instance = self._live_migration_instance()
-        dest = 'fake_host2'
-        result = self.driver._assert_compute_node_has_enough_memory(
-                self.context, instance, dest)
-        self.assertEqual(result, None)
-
-    def test_live_migration_assert_memory_overcommit_lack_memory(self):
-        # Test that memory check fails with memory overcommit.
-        def fake_get(context, host):
-            return {'memory_mb': 2048,
-                    'free_disk_gb': 512,
-                    'local_gb_used': 512,
-                    'free_ram_mb': -1025,
-                    'local_gb': 1024,
-                    'vcpus': 4,
-                    'vcpus_used': 2,
-                    'updated_at': None}
-
-        self.stubs.Set(self.driver, '_get_compute_info', fake_get)
-
-        self.flags(ram_allocation_ratio=2.0)
-        instance = self._live_migration_instance()
-        dest = 'fake_host2'
-        self.assertRaises(exception.MigrationError,
-                self.driver._assert_compute_node_has_enough_memory,
-                self.context, instance, dest)
 
     def test_basic_schedule_run_instances_anti_affinity(self):
         filter_properties = {'scheduler_hints':
@@ -598,7 +486,8 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
     def test_schedule_large_host_pool(self):
         """Hosts should still be chosen if pool size
-        is larger than number of filtered hosts"""
+        is larger than number of filtered hosts.
+        """
 
         sched = fakes.FakeFilterScheduler()
 
@@ -626,7 +515,8 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
     def test_schedule_chooses_best_host(self):
         """If scheduler_host_subset_size is 1, the largest host with greatest
-        weight should be returned"""
+        weight should be returned.
+        """
 
         self.flags(scheduler_host_subset_size=1)
 
@@ -670,8 +560,10 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
     def test_select_hosts_happy_day(self):
         """select_hosts is basically a wrapper around the _select() method.
+
         Similar to the _select tests, this just does a happy path test to
-        ensure there is nothing glaringly wrong."""
+        ensure there is nothing glaringly wrong.
+        """
 
         self.next_weight = 1.0
 
@@ -707,3 +599,67 @@ class FilterSchedulerTestCase(test_scheduler.SchedulerTestCase):
         hosts = sched.select_hosts(fake_context, request_spec, {})
         self.assertEquals(len(hosts), 10)
         self.assertEquals(hosts, selected_hosts)
+
+    def test_select_hosts_no_valid_host(self):
+
+        def _return_no_host(*args, **kwargs):
+            return []
+
+        self.stubs.Set(self.driver, '_schedule', _return_no_host)
+        self.assertRaises(exception.NoValidHost,
+                          self.driver.select_hosts, self.context, {}, {})
+
+    def test_select_destinations(self):
+        """select_destinations is basically a wrapper around _schedule().
+
+        Similar to the _schedule tests, this just does a happy path test to
+        ensure there is nothing glaringly wrong.
+        """
+
+        self.next_weight = 1.0
+
+        selected_hosts = []
+        selected_nodes = []
+
+        def _fake_weigh_objects(_self, functions, hosts, options):
+            self.next_weight += 2.0
+            host_state = hosts[0]
+            selected_hosts.append(host_state.host)
+            selected_nodes.append(host_state.nodename)
+            return [weights.WeighedHost(host_state, self.next_weight)]
+
+        sched = fakes.FakeFilterScheduler()
+        fake_context = context.RequestContext('user', 'project',
+            is_admin=True)
+
+        self.stubs.Set(sched.host_manager, 'get_filtered_hosts',
+            fake_get_filtered_hosts)
+        self.stubs.Set(weights.HostWeightHandler,
+            'get_weighed_objects', _fake_weigh_objects)
+        fakes.mox_host_manager_db_calls(self.mox, fake_context)
+
+        request_spec = {'instance_type': {'memory_mb': 512, 'root_gb': 512,
+                                          'ephemeral_gb': 0,
+                                          'vcpus': 1},
+                        'instance_properties': {'project_id': 1,
+                                                'root_gb': 512,
+                                                'memory_mb': 512,
+                                                'ephemeral_gb': 0,
+                                                'vcpus': 1,
+                                                'os_type': 'Linux'},
+                        'num_instances': 1}
+        self.mox.ReplayAll()
+        dests = sched.select_destinations(fake_context, request_spec, {})
+        (host, node) = (dests[0]['host'], dests[0]['nodename'])
+        self.assertEquals(host, selected_hosts[0])
+        self.assertEquals(node, selected_nodes[0])
+
+    def test_select_destinations_no_valid_host(self):
+
+        def _return_no_host(*args, **kwargs):
+            return []
+
+        self.stubs.Set(self.driver, '_schedule', _return_no_host)
+        self.assertRaises(exception.NoValidHost,
+                self.driver.select_destinations, self.context,
+                {'num_instances': 1}, {})

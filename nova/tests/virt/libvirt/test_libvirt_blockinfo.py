@@ -33,8 +33,8 @@ class LibvirtBlockInfoTest(test.TestCase):
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.get_admin_context()
-        instance_type = db.instance_type_get(self.context, 2)
-        sys_meta = flavors.save_instance_type_info({}, instance_type)
+        instance_type = db.flavor_get(self.context, 2)
+        sys_meta = flavors.save_flavor_info({}, instance_type)
         nova.tests.image.fake.stub_out_image_service(self.stubs)
         self.test_instance = {
                 'uuid': '32dfcb37-5af1-552b-357c-be8c3aa38310',

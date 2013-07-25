@@ -18,6 +18,7 @@ import os
 import tempfile
 
 from nova import exception
+from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk.mount import loop
@@ -77,10 +78,9 @@ class VFSLocalFS(vfs.VFS):
                 raise exception.NovaException(mount.error)
             self.mount = mount
         except Exception as e:
-            LOG.debug(_("Failed to mount image %(ex)s)") %
-                      {'ex': str(e)})
-            self.teardown()
-            raise e
+            with excutils.save_and_reraise_exception():
+                LOG.debug(_("Failed to mount image %(ex)s)"), {'ex': str(e)})
+                self.teardown()
 
     def teardown(self):
         try:
@@ -99,12 +99,12 @@ class VFSLocalFS(vfs.VFS):
         self.mount = None
 
     def make_path(self, path):
-        LOG.debug(_("Make directory path=%(path)s") % locals())
+        LOG.debug(_("Make directory path=%s"), path)
         canonpath = self._canonical_path(path)
         utils.execute('mkdir', '-p', canonpath, run_as_root=True)
 
     def append_file(self, path, content):
-        LOG.debug(_("Append file path=%(path)s") % locals())
+        LOG.debug(_("Append file path=%s"), path)
         canonpath = self._canonical_path(path)
 
         args = ["-a", canonpath]
@@ -113,7 +113,7 @@ class VFSLocalFS(vfs.VFS):
         utils.execute('tee', *args, **kwargs)
 
     def replace_file(self, path, content):
-        LOG.debug(_("Replace file path=%(path)s") % locals())
+        LOG.debug(_("Replace file path=%s"), path)
         canonpath = self._canonical_path(path)
 
         args = [canonpath]
@@ -122,13 +122,13 @@ class VFSLocalFS(vfs.VFS):
         utils.execute('tee', *args, **kwargs)
 
     def read_file(self, path):
-        LOG.debug(_("Read file path=%(path)s") % locals())
+        LOG.debug(_("Read file path=%s"), path)
         canonpath = self._canonical_path(path)
 
         return utils.read_file_as_root(canonpath)
 
     def has_file(self, path):
-        LOG.debug(_("Has file path=%(path)s") % locals())
+        LOG.debug(_("Has file path=%s"), path)
         canonpath = self._canonical_path(path)
         exists, _err = utils.trycmd('readlink', '-e',
                                     canonpath,
@@ -136,13 +136,15 @@ class VFSLocalFS(vfs.VFS):
         return exists
 
     def set_permissions(self, path, mode):
-        LOG.debug(_("Set permissions path=%(path)s mode=%(mode)o") % locals())
+        LOG.debug(_("Set permissions path=%(path)s mode=%(mode)o"),
+                  {'path': path, 'mode': mode})
         canonpath = self._canonical_path(path)
         utils.execute('chmod', "%o" % mode, canonpath, run_as_root=True)
 
     def set_ownership(self, path, user, group):
         LOG.debug(_("Set permissions path=%(path)s "
-                    "user=%(user)s group=%(group)s") % locals())
+                    "user=%(user)s group=%(group)s"),
+                  {'path': path, 'user': user, 'group': group})
         canonpath = self._canonical_path(path)
         owner = None
         cmd = "chown"

@@ -20,13 +20,14 @@
 
 import os.path
 import tempfile
+import testtools
 
 import eventlet
-import httplib2
-import paste
+import requests
 
 import nova.exception
 from nova import test
+from nova.tests import utils
 import nova.wsgi
 import urllib2
 import webob
@@ -101,6 +102,7 @@ class TestWSGIServer(test.TestCase):
         server.stop()
         server.wait()
 
+    @testtools.skipIf(not utils.is_ipv6_supported(), "no ipv6 support")
     def test_start_random_port_with_ipv6(self):
         server = nova.wsgi.Server("test_random_port", None,
             host="::1", port=0)
@@ -116,16 +118,16 @@ class TestWSGIServer(test.TestCase):
         server.start()
 
         uri = "http://127.0.0.1:%d/%s" % (server.port, 10000 * 'x')
-        resp, _ = httplib2.Http().request(uri)
+        resp = requests.get(uri)
         eventlet.sleep(0)
-        self.assertNotEqual(resp.status,
-                            paste.httpexceptions.HTTPRequestURITooLong.code)
+        self.assertNotEqual(resp.status_code,
+                            requests.codes.REQUEST_URI_TOO_LARGE)
 
         uri = "http://127.0.0.1:%d/%s" % (server.port, 20000 * 'x')
-        resp, _ = httplib2.Http().request(uri)
+        resp = requests.get(uri)
         eventlet.sleep(0)
-        self.assertEqual(resp.status,
-                         paste.httpexceptions.HTTPRequestURITooLong.code)
+        self.assertEqual(resp.status_code,
+                         requests.codes.REQUEST_URI_TOO_LARGE)
         server.stop()
         server.wait()
 
@@ -198,6 +200,7 @@ class TestWSGIServerWithSSL(test.TestCase):
         fake_ssl_server.stop()
         fake_ssl_server.wait()
 
+    @testtools.skipIf(not utils.is_ipv6_supported(), "no ipv6 support")
     def test_app_using_ipv6_and_ssl(self):
         greetings = 'Hello, World!!!'
 
@@ -210,6 +213,7 @@ class TestWSGIServerWithSSL(test.TestCase):
                                   host="::1",
                                   port=0,
                                   use_ssl=True)
+
         server.start()
 
         response = urllib2.urlopen('https://[::1]:%d/' % server.port)

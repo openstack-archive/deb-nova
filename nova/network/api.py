@@ -118,7 +118,7 @@ class API(base.Base):
     """API for doing networking via the nova-network network manager.
 
     This is a pluggable module - other implementations do networking via
-    other services (such as Quantum).
+    other services (such as Neutron).
     """
     _sentinel = object()
 
@@ -279,7 +279,7 @@ class API(base.Base):
         #             this is called from compute.manager which shouldn't
         #             have db access so we do it on the other side of the
         #             rpc.
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         args = {}
         args['vpn'] = vpn
         args['requested_networks'] = requested_networks
@@ -293,7 +293,8 @@ class API(base.Base):
         return network_model.NetworkInfo.hydrate(nw_info)
 
     @wrap_check_policy
-    def deallocate_for_instance(self, context, instance):
+    def deallocate_for_instance(self, context, instance,
+                                requested_networks=None):
         """Deallocates all network structures related to instance."""
         # NOTE(vish): We can't do the floating ip deallocation here because
         #             this is called from compute.manager which shouldn't
@@ -303,24 +304,25 @@ class API(base.Base):
         args['instance_id'] = instance['uuid']
         args['project_id'] = instance['project_id']
         args['host'] = instance['host']
+        args['requested_networks'] = requested_networks
         self.network_rpcapi.deallocate_for_instance(context, **args)
 
-    # NOTE(danms): Here for quantum compatibility
+    # NOTE(danms): Here for neutron compatibility
     def allocate_port_for_instance(self, context, instance, port_id,
                                    network_id=None, requested_ip=None,
                                    conductor_api=None):
         raise NotImplementedError()
 
-    # NOTE(danms): Here for quantum compatibility
+    # NOTE(danms): Here for neutron compatibility
     def deallocate_port_for_instance(self, context, instance, port_id,
                                      conductor_api=None):
         raise NotImplementedError()
 
-    # NOTE(danms): Here for quantum compatibility
+    # NOTE(danms): Here for neutron compatibility
     def list_ports(self, *args, **kwargs):
         raise NotImplementedError()
 
-    # NOTE(danms): Here for quantum compatibility
+    # NOTE(danms): Here for neutron compatibility
     def show_port(self, *args, **kwargs):
         raise NotImplementedError()
 
@@ -329,7 +331,7 @@ class API(base.Base):
     def add_fixed_ip_to_instance(self, context, instance, network_id,
                                  conductor_api=None):
         """Adds a fixed ip to instance from specified network."""
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
@@ -342,7 +344,7 @@ class API(base.Base):
                                       conductor_api=None):
         """Removes a fixed ip from instance from specified network."""
 
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
@@ -390,7 +392,7 @@ class API(base.Base):
 
     def _get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': instance_type['rxtx_factor'],
                 'host': instance['host'],
@@ -404,6 +406,9 @@ class API(base.Base):
         """validate the networks passed at the time of creating
         the server
         """
+        if not requested_networks:
+            return
+
         return self.network_rpcapi.validate_networks(context,
                                                      requested_networks)
 
@@ -478,7 +483,8 @@ class API(base.Base):
     def setup_networks_on_host(self, context, instance, host=None,
                                                         teardown=False):
         """Setup or teardown the network structures on hosts related to
-           instance"""
+           instance.
+        """
         host = host or instance['host']
         # NOTE(tr3buchet): host is passed in cases where we need to setup
         # or teardown the networks on a host which has been migrated to/from
@@ -507,7 +513,7 @@ class API(base.Base):
     @wrap_check_policy
     def migrate_instance_start(self, context, instance, migration):
         """Start to migrate the network of an instance."""
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         args = dict(
             instance_uuid=instance['uuid'],
             rxtx_factor=instance_type['rxtx_factor'],
@@ -527,7 +533,7 @@ class API(base.Base):
     @wrap_check_policy
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         args = dict(
             instance_uuid=instance['uuid'],
             rxtx_factor=instance_type['rxtx_factor'],

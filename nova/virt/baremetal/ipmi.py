@@ -133,7 +133,7 @@ class IPMI(base.PowerManager):
             args.extend(command.split(" "))
             out, err = utils.execute(*args, attempts=3)
             LOG.debug(_("ipmitool stdout: '%(out)s', stderr: '%(err)s'"),
-                      locals())
+                      {'out': out, 'err': err})
             return out, err
         finally:
             bm_utils.unlink_without_raise(pwfile)
@@ -184,7 +184,7 @@ class IPMI(base.PowerManager):
 
     def _set_pxe_for_next_boot(self):
         try:
-            self._exec_ipmitool("chassis bootdev pxe")
+            self._exec_ipmitool("chassis bootdev pxe options=persistent")
         except Exception:
             LOG.exception(_("IPMI set next bootdev failed"))
 

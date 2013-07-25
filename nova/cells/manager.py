@@ -46,6 +46,7 @@ cell_manager_opts = [
 
 
 CONF = cfg.CONF
+CONF.import_opt('name', 'nova.cells.opts', group='cells')
 CONF.register_opts(cell_manager_opts, group='cells')
 
 
@@ -64,7 +65,7 @@ class CellsManager(manager.Manager):
 
     Scheduling requests get passed to the scheduler class.
     """
-    RPC_API_VERSION = '1.7'
+    RPC_API_VERSION = '1.13'
 
     def __init__(self, *args, **kwargs):
         # Mostly for tests.
@@ -185,6 +186,14 @@ class CellsManager(manager.Manager):
         our_cell = self.state_manager.get_my_state()
         self.msg_runner.schedule_run_instance(ctxt, our_cell,
                                               host_sched_kwargs)
+
+    def build_instances(self, ctxt, build_inst_kwargs):
+        """Pick a cell (possibly ourselves) to build new instance(s) and
+        forward the request accordingly.
+        """
+        # Target is ourselves first.
+        our_cell = self.state_manager.get_my_state()
+        self.msg_runner.build_instances(ctxt, our_cell, build_inst_kwargs)
 
     def get_cell_info_for_neighbors(self, _ctxt):
         """Return cell information for our neighbor cells."""
@@ -379,3 +388,55 @@ class CellsManager(manager.Manager):
                 instance['cell_name'], instance_uuid, console_port,
                 console_type)
         return response.value_or_raise()
+
+    def get_capacities(self, ctxt, cell_name):
+        return self.state_manager.get_capacities(cell_name)
+
+    def bdm_update_or_create_at_top(self, ctxt, bdm, create=None):
+        """BDM was created/updated in this cell.  Tell the API cells."""
+        self.msg_runner.bdm_update_or_create_at_top(ctxt, bdm, create=create)
+
+    def bdm_destroy_at_top(self, ctxt, instance_uuid, device_name=None,
+                           volume_id=None):
+        """BDM was destroyed for instance in this cell.  Tell the API cells."""
+        self.msg_runner.bdm_destroy_at_top(ctxt, instance_uuid,
+                                           device_name=device_name,
+                                           volume_id=volume_id)
+
+    def get_migrations(self, ctxt, filters):
+        """Fetch migrations applying the filters."""
+        target_cell = None
+        if "cell_name" in filters:
+            _path_cell_sep = cells_utils.PATH_CELL_SEP
+            target_cell = '%s%s%s' % (CONF.cells.name, _path_cell_sep,
+                                      filters['cell_name'])
+
+        responses = self.msg_runner.get_migrations(ctxt, target_cell,
+                                                       False, filters)
+        migrations = []
+        for response in responses:
+            migrations += response.value_or_raise()
+        return migrations
+
+    def start_instance(self, ctxt, instance):
+        """Start an instance in its cell."""
+        self.msg_runner.start_instance(ctxt, instance)
+
+    def stop_instance(self, ctxt, instance, do_cast=True):
+        """Stop an instance in its cell."""
+        response = self.msg_runner.stop_instance(ctxt, instance,
+                                                 do_cast=do_cast)
+        if not do_cast:
+            return response.value_or_raise()
+
+    def cell_create(self, ctxt, values):
+        return self.state_manager.cell_create(ctxt, values)
+
+    def cell_update(self, ctxt, cell_name, values):
+        return self.state_manager.cell_update(ctxt, cell_name, values)
+
+    def cell_delete(self, ctxt, cell_name):
+        return self.state_manager.cell_delete(ctxt, cell_name)
+
+    def cell_get(self, ctxt, cell_name):
+        return self.state_manager.cell_get(ctxt, cell_name)

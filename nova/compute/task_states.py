@@ -39,6 +39,9 @@ IMAGE_UPLOADING = 'image_uploading'
 # possible task states during backup()
 IMAGE_BACKUP = 'image_backup'
 
+# possible task states during live_snapshot()
+IMAGE_LIVE_SNAPSHOT = 'image_live_snapshot'
+
 # possible task states during set_admin_password()
 UPDATING_PASSWORD = 'updating_password'
 
@@ -106,3 +109,14 @@ SOFT_DELETING = 'soft-deleting'
 
 # possible task states during restore()
 RESTORING = 'restoring'
+
+# possible task states during shelve()
+SHELVING = 'shelving'
+SHELVING_IMAGE_PENDING_UPLOAD = 'shelving_image_pending_upload'
+SHELVING_IMAGE_UPLOADING = 'shelving_image_uploading'
+
+# possible task states during shelve_offload()
+SHELVING_OFFLOADING = 'shelving_offloading'
+
+# possible task states during unshelve()
+UNSHELVING = 'unshelving'

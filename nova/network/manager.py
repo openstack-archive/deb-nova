@@ -232,7 +232,8 @@ class RPCAllocateFixedIP(object):
 
     def deallocate_fixed_ip(self, context, address, host=None, teardown=True):
         """Call the superclass deallocate_fixed_ip if i'm the correct host
-        otherwise call to the correct host"""
+        otherwise call to the correct host
+        """
         fixed_ip = self.db.fixed_ip_get_by_address(context, address)
         network = self._get_network_by_id(context, fixed_ip['network_id'])
 
@@ -271,7 +272,7 @@ class NetworkManager(manager.Manager):
         The one at a time part is to flatten the layout to help scale
     """
 
-    RPC_API_VERSION = '1.9'
+    RPC_API_VERSION = '1.10'
 
     # If True, this manager requires VIF to create a bridge.
     SHOULD_CREATE_BRIDGE = False
@@ -561,7 +562,6 @@ class NetworkManager(manager.Manager):
             instance_id = instance_uuid
         instance_uuid = instance_id
 
-        host = kwargs.get('host')
         vifs = self.db.virtual_interface_get_by_instance(context,
                                                          instance_uuid)
         networks = {}
@@ -578,7 +578,8 @@ class NetworkManager(manager.Manager):
     def build_network_info_model(self, context, vifs, networks,
                                  rxtx_factor, instance_host):
         """Builds a NetworkInfo object containing all network information
-        for an instance"""
+        for an instance.
+        """
         nw_info = network_model.NetworkInfo()
         for vif in vifs:
             vif_dict = {'id': vif['uuid'],
@@ -919,11 +920,27 @@ class NetworkManager(manager.Manager):
                     LOG.error(msg % address)
                     return
 
+                # NOTE(cfb): Call teardown before release_dhcp to ensure
+                #            that the IP can't be re-leased after a release
+                #            packet is sent.
+                self._teardown_network_on_host(context, network)
                 # NOTE(vish): This forces a packet so that the release_fixed_ip
                 #             callback will get called by nova-dhcpbridge.
                 self.driver.release_dhcp(dev, address, vif['address'])
 
-            self._teardown_network_on_host(context, network)
+                # NOTE(yufang521247): This is probably a failed dhcp fixed ip.
+                # DHCPRELEASE packet sent to dnsmasq would not trigger
+                # dhcp-bridge to run. Thus it is better to disassociate such
+                # fixed ip here.
+                fixed_ip_ref = self.db.fixed_ip_get_by_address(context,
+                                                               address)
+                if (instance_uuid == fixed_ip_ref['instance_uuid'] and
+                        not fixed_ip_ref.get('leased')):
+                    self.db.fixed_ip_disassociate(context, address)
+
+            else:
+                # We can't try to free the IP address so just call teardown
+                self._teardown_network_on_host(context, network)
 
         # Commit the reservations
         if reservations:
@@ -1249,8 +1266,6 @@ class NetworkManager(manager.Manager):
                                                          instance['uuid'])
         for vif in vifs:
             network = self.db.network_get(context, vif['network_id'])
-            fixed_ips = self.db.fixed_ips_by_virtual_interface(context,
-                                                               vif['id'])
             if not network['multi_host']:
                 #NOTE (tr3buchet): if using multi_host, host is instance[host]
                 host = network['host']
@@ -1407,15 +1422,12 @@ class NetworkManager(manager.Manager):
         if CONF.fake_network:
             return
 
-        for network_id in network_ids:
-            network = self.db.network_get(context, network_id)
-            if not network['multi_host']:
-                continue
-            host_networks = self.db.network_get_all_by_host(context, self.host)
-            for host_network in host_networks:
-                if host_network['id'] == network_id:
-                    dev = self.driver.get_dev(network)
-                    self.driver.update_dns(context, dev, network)
+        networks = [network for network in
+                    self.db.network_get_all_by_host(context, self.host)
+                    if network['multi_host'] and network['id'] in network_ids]
+        for network in networks:
+            dev = self.driver.get_dev(network)
+            self.driver.update_dns(context, dev, network)
 
     def add_network_to_project(self, ctxt, project_id, network_uuid):
         raise NotImplementedError()

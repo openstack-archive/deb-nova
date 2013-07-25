@@ -15,6 +15,20 @@
 
 """
 Module dedicated functions/classes dealing with rate limiting requests.
+
+This module handles rate liming at a per-user level, so it should not be used
+to prevent intentional Denial of Service attacks, as we can assume a DOS can
+easily come through multiple user accounts. DOS protection should be done at a
+different layer.  Instead this module should be used to protect against
+unintentional user actions. With that in mind the limits set here should be
+high enough as to not rate-limit any intentional actions.
+
+To find good rate-limit values, check how long requests are taking (see logs)
+in your environment to assess your capabilities and multiply out to get
+figures.
+
+NOTE: As the rate-limiting here is done in memory, this only works per
+process (each process will have its own rate limiting counter).
 """
 
 import collections
@@ -33,17 +47,11 @@ from nova.api.openstack import xmlutil
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova import quota
+from nova import utils
 from nova import wsgi as base_wsgi
 
 
 QUOTAS = quota.QUOTAS
-
-
-# Convenience constants for the limits dictionary passed to Limiter().
-PER_SECOND = 1
-PER_MINUTE = 60
-PER_HOUR = 60 * 60
-PER_DAY = 60 * 60 * 24
 
 
 limits_nsmap = {None: xmlutil.XMLNS_COMMON_V10, 'atom': xmlutil.XMLNS_ATOM}
@@ -122,14 +130,7 @@ class Limit(object):
     Stores information about a limit for HTTP requests.
     """
 
-    UNITS = {
-        1: "SECOND",
-        60: "MINUTE",
-        60 * 60: "HOUR",
-        60 * 60 * 24: "DAY",
-    }
-
-    UNIT_MAP = dict([(v, k) for k, v in UNITS.items()])
+    UNITS = dict([(v, k) for k, v in utils.TIME_UNITS.items()])
 
     def __init__(self, verb, uri, regex, value, unit):
         """
@@ -223,12 +224,13 @@ class Limit(object):
 # a regular-expression to match, value and unit of measure (PER_DAY, etc.)
 
 DEFAULT_LIMITS = [
-    Limit("POST", "*", ".*", 10, PER_MINUTE),
-    Limit("POST", "*/servers", "^/servers", 50, PER_DAY),
-    Limit("PUT", "*", ".*", 10, PER_MINUTE),
-    Limit("GET", "*changes-since*", ".*changes-since.*", 3, PER_MINUTE),
-    Limit("DELETE", "*", ".*", 100, PER_MINUTE),
-    Limit("GET", "*/os-fping", "^/os-fping", 12, PER_HOUR),
+    Limit("POST", "*", ".*", 120, utils.TIME_UNITS['MINUTE']),
+    Limit("POST", "*/servers", "^/servers", 120, utils.TIME_UNITS['MINUTE']),
+    Limit("PUT", "*", ".*", 120, utils.TIME_UNITS['MINUTE']),
+    Limit("GET", "*changes-since*", ".*changes-since.*", 120,
+          utils.TIME_UNITS['MINUTE']),
+    Limit("DELETE", "*", ".*", 120, utils.TIME_UNITS['MINUTE']),
+    Limit("GET", "*/os-fping", "^/os-fping", 12, utils.TIME_UNITS['MINUTE']),
 ]
 
 
@@ -390,9 +392,9 @@ class Limiter(object):
 
             # Convert unit
             unit = unit.upper()
-            if unit not in Limit.UNIT_MAP:
+            if unit not in utils.TIME_UNITS:
                 raise ValueError("Invalid units specified")
-            unit = Limit.UNIT_MAP[unit]
+            unit = utils.TIME_UNITS[unit]
 
             # Build a limit
             result.append(Limit(verb, uri, regex, value, unit))

@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import httplib2
 import urlparse
 
 from cinderclient import exceptions as cinder_exception
@@ -76,9 +75,9 @@ class FakeHTTPClient(cinder.cinder_client.client.HTTPClient):
 
         status, body = getattr(self, callback)(**kwargs)
         if hasattr(status, 'items'):
-            return httplib2.Response(status), body
+            return status, body
         else:
-            return httplib2.Response({"status": status}), body
+            return {"status": status}, body
 
     def get_volumes_1234(self, **kw):
         volume = {'volume': _stub_volume(id='1234')}
@@ -154,7 +153,7 @@ class CinderTestCase(test.TestCase):
         self.fake_client_factory.assert_called(*args, **kwargs)
 
     def test_context_with_catalog(self):
-        volume = self.api.get(self.context, '1234')
+        self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
         self.assertEquals(
             self.fake_client_factory.client.client.management_url,
@@ -164,7 +163,7 @@ class CinderTestCase(test.TestCase):
         self.flags(
             cinder_endpoint_template='http://other_host:8776/v1/%(project_id)s'
         )
-        volume = self.api.get(self.context, '1234')
+        self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
         self.assertEquals(
             self.fake_client_factory.client.client.management_url,
@@ -184,7 +183,7 @@ class CinderTestCase(test.TestCase):
         # The True/False negation is awkward, but better for the client
         # to pass us insecure=True and we check verify_cert == False
         self.flags(cinder_api_insecure=True)
-        volume = self.api.get(self.context, '1234')
+        self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
         self.assertEquals(
             self.fake_client_factory.client.client.verify_cert, False)
@@ -192,7 +191,7 @@ class CinderTestCase(test.TestCase):
     def test_cinder_api_cacert_file(self):
         cacert = "/etc/ssl/certs/ca-certificates.crt"
         self.flags(cinder_ca_certificates_file=cacert)
-        volume = self.api.get(self.context, '1234')
+        self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
         self.assertEquals(
             self.fake_client_factory.client.client.verify_cert, cacert)
@@ -200,7 +199,7 @@ class CinderTestCase(test.TestCase):
     def test_cinder_http_retries(self):
         retries = 42
         self.flags(cinder_http_retries=retries)
-        volume = self.api.get(self.context, '1234')
+        self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
         self.assertEquals(
             self.fake_client_factory.client.client.retries, retries)

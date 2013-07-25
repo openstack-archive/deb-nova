@@ -42,7 +42,8 @@ from nova import db
 from nova import exception
 from nova.image import s3
 from nova import network
-from nova.network.security_group import quantum_driver
+from nova.network.security_group import neutron_driver
+from nova.objects import instance as instance_obj
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import quota
@@ -206,6 +207,15 @@ def _format_mappings(properties, result):
         result['blockDeviceMapping'] = mappings
 
 
+def db_to_inst_obj(context, db_instance):
+    # NOTE(danms): This is a temporary helper method for converting
+    # Instance DB objects to NovaObjects without needing to re-query.
+    inst_obj = instance_obj.Instance._from_db_object(
+        context, instance_obj.Instance(), db_instance,
+        expected_attrs=['system_metadata', 'metadata'])
+    return inst_obj
+
+
 class CloudController(object):
     """CloudController provides the critical dispatch between
  inbound API calls through the endpoint and messages
@@ -246,7 +256,7 @@ class CloudController(object):
     def describe_availability_zones(self, context, **kwargs):
         if ('zone_name' in kwargs and
             'verbose' in kwargs['zone_name'] and
-            context.is_admin):
+                context.is_admin):
             return self._describe_availability_zones_verbose(context,
                                                              **kwargs)
         else:
@@ -508,7 +518,7 @@ class CloudController(object):
                                      'userId': source_group['project_id']}]
                 else:
                     # rule is not always joined with grantee_group
-                    # for example when using quantum driver.
+                    # for example when using neutron driver.
                     source_group = self.security_group_api.get(
                         context, id=rule['group_id'])
                     r['groups'] += [{'groupName': source_group.get('name'),
@@ -619,7 +629,7 @@ class CloudController(object):
     def _validate_security_group_protocol(self, values):
         validprotocols = ['tcp', 'udp', 'icmp', '6', '17', '1']
         if 'ip_protocol' in values and \
-            values['ip_protocol'] not in validprotocols:
+                values['ip_protocol'] not in validprotocols:
             err = _('Invalid IP protocol %s.') % values['ip_protocol']
             raise exception.EC2APIError(message=err, code="400")
 
@@ -791,7 +801,6 @@ class CloudController(object):
             'detaching': 'in-use'}
 
         instance_ec2_id = None
-        instance_data = None
 
         if volume.get('instance_uuid', None):
             instance_uuid = volume['instance_uuid']
@@ -799,8 +808,7 @@ class CloudController(object):
                     instance_uuid)
 
             instance_ec2_id = ec2utils.id_to_ec2_inst_id(instance_uuid)
-            instance_data = '%s[%s]' % (instance_ec2_id,
-                                        instance['host'])
+
         v = {}
         v['volumeId'] = ec2utils.id_to_ec2_vol_id(volume['id'])
         v['status'] = valid_ec2_api_volume_status_map.get(volume['status'],
@@ -1058,14 +1066,15 @@ class CloudController(object):
         """Format InstanceBlockDeviceMappingResponseItemType."""
         root_device_type = 'instance-store'
         mapping = []
-        for bdm in db.block_device_mapping_get_all_by_instance(context,
-                                                               instance_uuid):
+        for bdm in block_device.legacy_mapping(
+            db.block_device_mapping_get_all_by_instance(context,
+                                                        instance_uuid)):
             volume_id = bdm['volume_id']
             if (volume_id is None or bdm['no_device']):
                 continue
 
             if (bdm['device_name'] == root_device_name and
-                (bdm['snapshot_id'] or bdm['volume_id'])):
+                    (bdm['snapshot_id'] or bdm['volume_id'])):
                 assert not bdm['virtual_name']
                 root_device_type = 'ebs'
 
@@ -1091,7 +1100,7 @@ class CloudController(object):
 
     @staticmethod
     def _format_instance_type(instance, result):
-        instance_type = flavors.extract_instance_type(instance)
+        instance_type = flavors.extract_flavor(instance)
         result['instanceType'] = instance_type['name']
 
     @staticmethod
@@ -1172,8 +1181,8 @@ class CloudController(object):
             i['dnsName'] = i['publicDnsName'] or i['privateDnsName']
             i['keyName'] = instance['key_name']
             i['tagSet'] = []
-            for k, v in self.compute_api.get_instance_metadata(
-                    context, instance).iteritems():
+
+            for k, v in utils.instance_meta(instance).iteritems():
                 i['tagSet'].append({'key': k, 'value': v})
 
             if context.is_admin:
@@ -1302,6 +1311,16 @@ class CloudController(object):
 
     def run_instances(self, context, **kwargs):
         min_count = int(kwargs.get('min_count', 1))
+
+        client_token = kwargs.get('client_token')
+        if client_token:
+            resv_id = self._resv_id_from_token(context, client_token)
+            if resv_id:
+                # since this client_token already corresponds to a reservation
+                # id, this returns a proper response without creating a new
+                # instance
+                return self._format_run_instances(context, resv_id)
+
         if kwargs.get('kernel_id'):
             kernel = self._get_image(context, kwargs['kernel_id'])
             kwargs['kernel_id'] = ec2utils.id_to_glance_id(context,
@@ -1325,7 +1344,7 @@ class CloudController(object):
             raise exception.EC2APIError(_('Image must be available'))
 
         (instances, resv_id) = self.compute_api.create(context,
-            instance_type=flavors.get_instance_type_by_name(
+            instance_type=flavors.get_flavor_by_name(
                 kwargs.get('instance_type', None)),
             image_href=image_uuid,
             max_count=int(kwargs.get('max_count', min_count)),
@@ -1338,21 +1357,56 @@ class CloudController(object):
             availability_zone=kwargs.get('placement', {}).get(
                                   'availability_zone'),
             block_device_mapping=kwargs.get('block_device_mapping', {}))
-        return self._format_run_instances(context, resv_id)
 
-    def _ec2_ids_to_instances(self, context, instance_id):
+        instances = self._format_run_instances(context, resv_id)
+        if instances:
+            instance_ids = [i['instanceId'] for i in instances['instancesSet']]
+            self._add_client_token(context, client_token, instance_ids)
+        return instances
+
+    def _add_client_token(self, context, client_token, instance_ids):
+        """Add client token to reservation ID mapping."""
+        if client_token:
+            self.create_tags(context, resource_id=instance_ids,
+                             tag=[{'key': 'EC2_client_token',
+                                   'value': client_token}])
+
+    def _resv_id_from_token(self, context, client_token):
+        """Get reservation ID from db."""
+        resv_id = None
+        tags = self.describe_tags(context, filter=[
+                {'name': 'key', 'value': 'EC2_client_token'},
+                ])
+
+        tagSet = tags.get('tagSet')
+
+        # work around bug #1190845
+        for tags in tagSet:
+            if tags.get('value') == client_token:
+                instances = self._ec2_ids_to_instances(
+                    context, [tags['resource_id']])
+                resv_id = instances[0]['reservation_id']
+        return resv_id
+
+    def _ec2_ids_to_instances(self, context, instance_id, objects=False):
         """Get all instances first, to prevent partial executions."""
         instances = []
+        extra = ['system_metadata', 'metadata']
         for ec2_id in instance_id:
             validate_ec2_id(ec2_id)
             instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
-            instance = self.compute_api.get(context, instance_uuid)
+            if objects:
+                instance = instance_obj.Instance.get_by_uuid(
+                    context, instance_uuid, expected_attrs=extra)
+            else:
+                instance = self.compute_api.get(context, instance_uuid)
             instances.append(instance)
         return instances
 
     def terminate_instances(self, context, instance_id, **kwargs):
         """Terminate each instance in instance_id, which is a list of ec2 ids.
-        instance_id is a kwarg so its name cannot be modified."""
+        instance_id is a kwarg so its name cannot be modified.
+        """
         previous_states = self._ec2_ids_to_instances(context, instance_id)
         LOG.debug(_("Going to start terminating instances"))
         for instance in previous_states:
@@ -1371,8 +1425,9 @@ class CloudController(object):
 
     def stop_instances(self, context, instance_id, **kwargs):
         """Stop each instances in instance_id.
-        Here instance_id is a list of instance ids"""
-        instances = self._ec2_ids_to_instances(context, instance_id)
+        Here instance_id is a list of instance ids
+        """
+        instances = self._ec2_ids_to_instances(context, instance_id, True)
         LOG.debug(_("Going to stop instances"))
         for instance in instances:
             self.compute_api.stop(context, instance)
@@ -1380,8 +1435,9 @@ class CloudController(object):
 
     def start_instances(self, context, instance_id, **kwargs):
         """Start each instances in instance_id.
-        Here instance_id is a list of instance ids"""
-        instances = self._ec2_ids_to_instances(context, instance_id)
+        Here instance_id is a list of instance ids
+        """
+        instances = self._ec2_ids_to_instances(context, instance_id, True)
         LOG.debug(_("Going to start instances"))
         for instance in instances:
             self.compute_api.start(context, instance)
@@ -1447,7 +1503,7 @@ class CloudController(object):
             if (block_device.strip_dev(bdm.get('device_name')) ==
                 block_device.strip_dev(root_device_name) and
                 ('snapshot_id' in bdm or 'volume_id' in bdm) and
-                not bdm.get('no_device')):
+                    not bdm.get('no_device')):
                 root_device_type = 'ebs'
         i['rootDeviceName'] = (root_device_name or
                                block_device.DEFAULT_ROOT_DEV_NAME)
@@ -1611,7 +1667,8 @@ class CloudController(object):
         validate_ec2_id(instance_id)
         ec2_instance_id = instance_id
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_instance_id)
-        instance = self.compute_api.get(context, instance_uuid)
+        instance = self.compute_api.get(context, instance_uuid,
+                                        want_objects=True)
 
         bdms = self.compute_api.get_instance_bdms(context, instance)
 
@@ -1641,7 +1698,8 @@ class CloudController(object):
             start_time = time.time()
             while vm_state != vm_states.STOPPED:
                 time.sleep(1)
-                instance = self.compute_api.get(context, instance_uuid)
+                instance = self.compute_api.get(context, instance_uuid,
+                                                want_objects=True)
                 vm_state = instance['vm_state']
                 # NOTE(yamahata): timeout and error. 1 hour for now for safety.
                 #                 Is it too short/long?
@@ -1690,6 +1748,7 @@ class CloudController(object):
         """
         resources = kwargs.get('resource_id', None)
         tags = kwargs.get('tag', None)
+
         if resources is None or tags is None:
             raise exception.EC2APIError(_('resource_id and tag are required'))
 
@@ -1773,7 +1832,6 @@ class CloudController(object):
         :param context: context under which the method is called
         """
         filters = kwargs.get('filter', None)
-
         search_filts = []
         if filters:
             for filter_block in filters:
@@ -1786,14 +1844,14 @@ class CloudController(object):
                         val = (val,)
                 if key_name:
                     search_block = {}
-                    if key_name == 'resource_id':
+                    if key_name in ('resource_id', 'resource-id'):
                         search_block['resource_id'] = []
                         for res_id in val:
                             search_block['resource_id'].append(
                                 ec2utils.ec2_inst_id_to_uuid(context, res_id))
                     elif key_name in ['key', 'value']:
                         search_block[key_name] = val
-                    elif key_name == 'resource_type':
+                    elif key_name in ('resource_type', 'resource-type'):
                         for res_type in val:
                             if res_type != 'instance':
                                 raise exception.EC2APIError(_
@@ -1847,15 +1905,15 @@ class CloudSecurityGroupNovaAPI(EC2SecurityGroupExceptions,
     pass
 
 
-class CloudSecurityGroupQuantumAPI(EC2SecurityGroupExceptions,
-                                   quantum_driver.SecurityGroupAPI):
+class CloudSecurityGroupNeutronAPI(EC2SecurityGroupExceptions,
+                                   neutron_driver.SecurityGroupAPI):
     pass
 
 
 def get_cloud_security_group_api():
     if cfg.CONF.security_group_api.lower() == 'nova':
         return CloudSecurityGroupNovaAPI()
-    elif cfg.CONF.security_group_api.lower() == 'quantum':
-        return CloudSecurityGroupQuantumAPI()
+    elif cfg.CONF.security_group_api.lower() in ('neutron', 'quantum'):
+        return CloudSecurityGroupNeutronAPI()
     else:
         raise NotImplementedError()

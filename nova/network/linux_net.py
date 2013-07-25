@@ -628,11 +628,12 @@ def metadata_accept():
 
 def add_snat_rule(ip_range):
     if CONF.routing_source_ip:
-        rule = '-s %s -j SNAT --to-source %s' % (ip_range,
-                                                 CONF.routing_source_ip)
-        if CONF.public_interface:
-            rule += ' -o %s' % CONF.public_interface
-        iptables_manager.ipv4['nat'].add_rule('snat', rule)
+        for dest_range in CONF.force_snat_range or ['0.0.0.0/0']:
+            rule = ('-s %s -d %s -j SNAT --to-source %s'
+                    % (ip_range, dest_range, CONF.routing_source_ip))
+            if CONF.public_interface:
+                rule += ' -o %s' % CONF.public_interface
+            iptables_manager.ipv4['nat'].add_rule('snat', rule)
         iptables_manager.apply()
 
 
@@ -896,6 +897,8 @@ def _remove_dnsmasq_accept_rules(dev):
     iptables_manager.apply()
 
 
+# NOTE(russellb) Curious why this is needed?  Check out this explanation from
+# markmc: https://bugzilla.redhat.com/show_bug.cgi?id=910619#c6
 def _add_dhcp_mangle_rule(dev):
     if not os.path.exists('/dev/vhost-net'):
         return
@@ -997,13 +1000,13 @@ def restart_dhcp(context, dev, network_ref):
         #             are not in multi_host mode.
         optsfile = _dhcp_file(dev, 'opts')
         write_to_file(optsfile, get_dhcp_opts(context, network_ref))
-        os.chmod(optsfile, 0644)
+        os.chmod(optsfile, 0o644)
 
     if network_ref['multi_host']:
         _add_dhcp_mangle_rule(dev)
 
     # Make sure dnsmasq can actually read it (it setuid()s to "nobody")
-    os.chmod(conffile, 0644)
+    os.chmod(conffile, 0o644)
 
     pid = _dnsmasq_pid_for(dev)
 
@@ -1089,7 +1092,7 @@ interface %s
     write_to_file(conffile, conf_str)
 
     # Make sure radvd can actually read it (it setuid()s to "nobody")
-    os.chmod(conffile, 0644)
+    os.chmod(conffile, 0o644)
 
     pid = _ra_pid_for(dev)
 
@@ -1255,6 +1258,18 @@ def delete_ovs_vif_port(bridge, dev):
     utils.execute('ovs-vsctl', 'del-port', bridge, dev,
                   run_as_root=True)
     delete_net_dev(dev)
+
+
+def create_ivs_vif_port(dev, iface_id, mac, instance_id):
+    utils.execute('ivs-ctl', 'add-port',
+                   dev, run_as_root=True)
+
+
+def delete_ivs_vif_port(dev):
+    utils.execute('ivs-ctl', 'del-port', dev,
+                  run_as_root=True)
+    utils.execute('ip', 'link', 'delete', dev,
+                  run_as_root=True)
 
 
 def create_tap_dev(dev, mac_address=None):
@@ -1704,8 +1719,8 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
         return dev
 
 
-# plugs interfaces using Linux Bridge when using QuantumManager
-class QuantumLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
+# plugs interfaces using Linux Bridge when using NeutronManager
+class NeutronLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
 
     BRIDGE_NAME_PREFIX = 'brq'
     GATEWAY_INTERFACE_PREFIX = 'gw-'
@@ -1763,5 +1778,8 @@ class QuantumLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
     def get_bridge(self, network):
         bridge = self.BRIDGE_NAME_PREFIX + str(network['uuid'][0:11])
         return bridge
+
+# provide compatibility with existing configs
+QuantumLinuxBridgeInterfaceDriver = NeutronLinuxBridgeInterfaceDriver
 
 iptables_manager = IptablesManager()

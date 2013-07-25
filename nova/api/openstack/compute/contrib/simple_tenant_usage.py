@@ -106,9 +106,10 @@ class SimpleTenantUsageController(object):
 
     def _get_flavor(self, context, compute_api, instance, flavors_cache):
         """Get flavor information from the instance's system_metadata,
-        allowing a fallback to lookup by-id for deleted instances only."""
+        allowing a fallback to lookup by-id for deleted instances only.
+        """
         try:
-            return flavors.extract_instance_type(instance)
+            return flavors.extract_flavor(instance)
         except KeyError:
             if not instance['deleted']:
                 # Only support the fallback mechanism for deleted instances

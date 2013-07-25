@@ -43,9 +43,11 @@ cloudpipe_opts = [
     cfg.StrOpt('vpn_image_id',
                default='0',
                help='image id used when starting up a cloudpipe vpn server'),
-    cfg.StrOpt('vpn_instance_type',
+    cfg.StrOpt('vpn_flavor',
+               # Deprecated in Havana
+               deprecated_name='vpn_instance_type',
                default='m1.tiny',
-               help=_('Instance type for vpn instances')),
+               help=_('Flavor for vpn instances')),
     cfg.StrOpt('boot_script_template',
                default=paths.basedir_def('nova/cloudpipe/bootscript.template'),
                help=_('Template for cloudpipe instance boot script')),
@@ -126,8 +128,8 @@ class CloudPipe(object):
         LOG.debug(_("Launching VPN for %s") % (context.project_id))
         key_name = self.setup_key_pair(context)
         group_name = self.setup_security_group(context)
-        instance_type = flavors.get_instance_type_by_name(
-                CONF.vpn_instance_type)
+        instance_type = flavors.get_flavor_by_name(
+                CONF.vpn_flavor)
         instance_name = '%s%s' % (context.project_id, CONF.vpn_key_suffix)
         user_data = self.get_encoded_zip(context.project_id)
         return self.compute_api.create(context,
@@ -140,13 +142,14 @@ class CloudPipe(object):
 
     def setup_security_group(self, context):
         group_name = '%s%s' % (context.project_id, CONF.vpn_key_suffix)
-        if db.security_group_exists(context, context.project_id, group_name):
-            return group_name
         group = {'user_id': context.user_id,
                  'project_id': context.project_id,
                  'name': group_name,
                  'description': 'Group for vpn'}
-        group_ref = db.security_group_create(context, group)
+        try:
+            group_ref = db.security_group_create(context, group)
+        except exception.SecurityGroupExists:
+            return group_name
         rule = {'parent_group_id': group_ref['id'],
                 'cidr': '0.0.0.0/0',
                 'protocol': 'udp',

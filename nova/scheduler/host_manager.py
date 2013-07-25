@@ -142,7 +142,7 @@ class HostState(object):
     def update_from_compute_node(self, compute):
         """Update information about a host from its compute_node info."""
         if (self.updated and compute['updated_at']
-            and self.updated > compute['updated_at']):
+                and self.updated > compute['updated_at']):
             return
         all_ram_mb = compute['memory_mb']
 
@@ -238,7 +238,7 @@ class HostState(object):
         if vm_state == vm_states.BUILDING or task_state in [
                 task_states.RESIZE_MIGRATING, task_states.REBUILDING,
                 task_states.RESIZE_PREP, task_states.IMAGE_SNAPSHOT,
-                task_states.IMAGE_BACKUP]:
+                task_states.IMAGE_LIVE_SNAPSHOT, task_states.IMAGE_BACKUP]:
             self.num_io_ops += 1
 
     def _statmap(self, stats):
@@ -294,7 +294,7 @@ class HostManager(object):
         return good_filters
 
     def get_filtered_hosts(self, hosts, filter_properties,
-            filter_class_names=None):
+            filter_class_names=None, index=0):
         """Filter hosts and return only ones passing all filters."""
 
         def _strip_ignore_hosts(host_map, hosts_to_ignore):
@@ -365,7 +365,7 @@ class HostManager(object):
             hosts = name_to_cls_map.itervalues()
 
         return self.filter_handler.get_filtered_objects(filter_classes,
-                hosts, filter_properties)
+                hosts, filter_properties, index)
 
     def get_weighed_hosts(self, hosts, weight_properties):
         """Weigh the hosts."""
@@ -377,12 +377,14 @@ class HostManager(object):
 
         if service_name != 'compute':
             LOG.debug(_('Ignoring %(service_name)s service update '
-                    'from %(host)s'), locals())
+                        'from %(host)s'), {'service_name': service_name,
+                                           'host': host})
             return
 
         state_key = (host, capabilities.get('hypervisor_hostname'))
         LOG.debug(_("Received %(service_name)s service update from "
-                    "%(state_key)s.") % locals())
+                    "%(state_key)s."), {'service_name': service_name,
+                                        'state_key': state_key})
         # Copy the capabilities, so we don't modify the original dict
         capab_copy = dict(capabilities)
         capab_copy["timestamp"] = timeutils.utcnow()  # Reported time
@@ -423,7 +425,7 @@ class HostManager(object):
         for state_key in dead_nodes:
             host, node = state_key
             LOG.info(_("Removing dead compute node %(host)s:%(node)s "
-                       "from scheduler") % locals())
+                       "from scheduler") % {'host': host, 'node': node})
             del self.host_state_map[state_key]
 
         return self.host_state_map.itervalues()

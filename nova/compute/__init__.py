@@ -16,25 +16,27 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import oslo.config.cfg
-
 # Importing full names to not pollute the namespace and cause possible
 # collisions with use of 'from nova.compute import <foo>' elsewhere.
+import nova.cells.opts
 import nova.openstack.common.importutils
 
-_compute_opts = [
-    oslo.config.cfg.StrOpt('compute_api_class',
-                           default='nova.compute.api.API',
-                           help='The full class name of the '
-                                'compute API class to use'),
-]
 
-oslo.config.cfg.CONF.register_opts(_compute_opts)
+CELL_TYPE_TO_CLS_NAME = {'api': 'nova.compute.cells_api.ComputeCellsAPI',
+                         'compute': 'nova.compute.api.API',
+                         None: 'nova.compute.api.API',
+                        }
+
+
+def _get_compute_api_class_name():
+    """Returns the name of compute API class."""
+    cell_type = nova.cells.opts.get_cell_type()
+    return CELL_TYPE_TO_CLS_NAME[cell_type]
 
 
 def API(*args, **kwargs):
     importutils = nova.openstack.common.importutils
-    class_name = oslo.config.cfg.CONF.compute_api_class
+    class_name = _get_compute_api_class_name()
     return importutils.import_object(class_name, *args, **kwargs)
 
 
@@ -44,7 +46,7 @@ def HostAPI(*args, **kwargs):
     api
     """
     importutils = nova.openstack.common.importutils
-    compute_api_class_name = oslo.config.cfg.CONF.compute_api_class
+    compute_api_class_name = _get_compute_api_class_name()
     compute_api_class = importutils.import_class(compute_api_class_name)
     class_name = compute_api_class.__module__ + ".HostAPI"
     return importutils.import_object(class_name, *args, **kwargs)
@@ -56,7 +58,7 @@ def InstanceActionAPI(*args, **kwargs):
     configured compute api.
     """
     importutils = nova.openstack.common.importutils
-    compute_api_class_name = oslo.config.cfg.CONF.compute_api_class
+    compute_api_class_name = _get_compute_api_class_name()
     compute_api_class = importutils.import_class(compute_api_class_name)
     class_name = compute_api_class.__module__ + ".InstanceActionAPI"
     return importutils.import_object(class_name, *args, **kwargs)

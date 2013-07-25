@@ -97,7 +97,7 @@ class WrapExceptionTestCase(test.TestCase):
 class NovaExceptionTestCase(test.TestCase):
     def test_default_error_msg(self):
         class FakeNovaException(exception.NovaException):
-            message = "default message"
+            msg_fmt = "default message"
 
         exc = FakeNovaException()
         self.assertEquals(unicode(exc), 'default message')
@@ -108,17 +108,19 @@ class NovaExceptionTestCase(test.TestCase):
 
     def test_default_error_msg_with_kwargs(self):
         class FakeNovaException(exception.NovaException):
-            message = "default message: %(code)s"
+            msg_fmt = "default message: %(code)s"
 
         exc = FakeNovaException(code=500)
         self.assertEquals(unicode(exc), 'default message: 500')
+        self.assertEquals(exc.message, 'default message: 500')
 
     def test_error_msg_exception_with_kwargs(self):
         class FakeNovaException(exception.NovaException):
-            message = "default message: %(mispelled_code)s"
+            msg_fmt = "default message: %(mispelled_code)s"
 
         exc = FakeNovaException(code=500, mispelled_code='blah')
         self.assertEquals(unicode(exc), 'default message: blah')
+        self.assertEquals(exc.message, 'default message: blah')
 
     def test_default_error_code(self):
         class FakeNovaException(exception.NovaException):
@@ -143,14 +145,14 @@ class NovaExceptionTestCase(test.TestCase):
 
     def test_format_message_local(self):
         class FakeNovaException(exception.NovaException):
-            message = "some message"
+            msg_fmt = "some message"
 
         exc = FakeNovaException()
         self.assertEquals(unicode(exc), exc.format_message())
 
     def test_format_message_remote(self):
         class FakeNovaException_Remote(exception.NovaException):
-            message = "some message"
+            msg_fmt = "some message"
 
             def __unicode__(self):
                 return u"print the whole trace"
@@ -161,7 +163,7 @@ class NovaExceptionTestCase(test.TestCase):
 
     def test_format_message_remote_error(self):
         class FakeNovaException_Remote(exception.NovaException):
-            message = "some message %(somearg)s"
+            msg_fmt = "some message %(somearg)s"
 
             def __unicode__(self):
                 return u"print the whole trace"
@@ -169,3 +171,17 @@ class NovaExceptionTestCase(test.TestCase):
         self.flags(fatal_exception_format_errors=False)
         exc = FakeNovaException_Remote(lame_arg='lame')
         self.assertEquals(exc.format_message(), "some message %(somearg)s")
+
+
+class ExceptionTestCase(test.TestCase):
+    @staticmethod
+    def _raise_exc(exc):
+        raise exc()
+
+    def test_exceptions_raise(self):
+        # NOTE(dprince): disable format errors since we are not passing kwargs
+        self.flags(fatal_exception_format_errors=False)
+        for name in dir(exception):
+            exc = getattr(exception, name)
+            if isinstance(exc, type):
+                self.assertRaises(exc, self._raise_exc, exc)

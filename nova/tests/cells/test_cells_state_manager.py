@@ -13,11 +13,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 """
-Tests For CellsStateManager
+Tests For CellStateManager
 """
 
 from nova.cells import state
 from nova import db
+from nova.db.sqlalchemy import models
+from nova import exception
 from nova import test
 
 
@@ -61,7 +63,7 @@ class TestCellsStateManager(test.TestCase):
         super(TestCellsStateManager, self).setUp()
 
         self.stubs.Set(db, 'compute_node_get_all', _fake_compute_node_get_all)
-        self.stubs.Set(db, 'instance_type_get_all', _fake_instance_type_all)
+        self.stubs.Set(db, 'flavor_get_all', _fake_instance_type_all)
 
     def test_capacity_no_reserve(self):
         # utilize entire cell
@@ -120,9 +122,87 @@ class TestCellsStateManager(test.TestCase):
         units = 2  # 2 on host 3
         self.assertEqual(units, cap['disk_free']['units_by_mb'][str(sz)])
 
-    def _capacity(self, reserve_percent):
+    def _get_state_manager(self, reserve_percent=0.0):
         self.flags(reserve_percent=reserve_percent, group='cells')
+        return state.CellStateManager()
 
-        mgr = state.CellStateManager()
-        my_state = mgr.get_my_state()
+    def _capacity(self, reserve_percent):
+        state_manager = self._get_state_manager(reserve_percent)
+        my_state = state_manager.get_my_state()
         return my_state.capacities
+
+
+class TestCellsGetCapacity(TestCellsStateManager):
+    def setUp(self):
+        super(TestCellsGetCapacity, self).setUp()
+        self.capacities = {"ram_free": 1234}
+        self.state_manager = self._get_state_manager()
+        cell = models.Cell(name="cell_name")
+        other_cell = models.Cell(name="other_cell_name")
+        cell.capacities = self.capacities
+        other_cell.capacities = self.capacities
+        self.stubs.Set(self.state_manager, 'child_cells',
+                        {"cell_name": cell,
+                        "other_cell_name": other_cell})
+
+    def test_get_cell_capacity_for_all_cells(self):
+        self.stubs.Set(self.state_manager.my_cell_state, 'capacities',
+                                                        self.capacities)
+        capacities = self.state_manager.get_capacities()
+        self.assertEqual({"ram_free": 3702}, capacities)
+
+    def test_get_cell_capacity_for_the_parent_cell(self):
+        self.stubs.Set(self.state_manager.my_cell_state, 'capacities',
+                                                        self.capacities)
+        capacities = self.state_manager.\
+                     get_capacities(self.state_manager.my_cell_state.name)
+        self.assertEqual({"ram_free": 3702}, capacities)
+
+    def test_get_cell_capacity_for_a_cell(self):
+        self.assertEqual(self.capacities,
+                self.state_manager.get_capacities(cell_name="cell_name"))
+
+    def test_get_cell_capacity_for_non_existing_cell(self):
+        self.assertRaises(exception.CellNotFound,
+                          self.state_manager.get_capacities,
+                          cell_name="invalid_cell_name")
+
+
+class FakeCellStateManager(object):
+    def __init__(self):
+        self.called = []
+
+    def _cell_data_sync(self, force=False):
+        self.called.append(('_cell_data_sync', force))
+
+
+class TestSyncDecorators(test.TestCase):
+    def test_sync_before(self):
+        manager = FakeCellStateManager()
+
+        def test(inst, *args, **kwargs):
+            self.assertEqual(inst, manager)
+            self.assertEqual(args, (1, 2, 3))
+            self.assertEqual(kwargs, dict(a=4, b=5, c=6))
+            return 'result'
+        wrapper = state.sync_before(test)
+
+        result = wrapper(manager, 1, 2, 3, a=4, b=5, c=6)
+
+        self.assertEqual(result, 'result')
+        self.assertEqual(manager.called, [('_cell_data_sync', False)])
+
+    def test_sync_after(self):
+        manager = FakeCellStateManager()
+
+        def test(inst, *args, **kwargs):
+            self.assertEqual(inst, manager)
+            self.assertEqual(args, (1, 2, 3))
+            self.assertEqual(kwargs, dict(a=4, b=5, c=6))
+            return 'result'
+        wrapper = state.sync_after(test)
+
+        result = wrapper(manager, 1, 2, 3, a=4, b=5, c=6)
+
+        self.assertEqual(result, 'result')
+        self.assertEqual(manager.called, [('_cell_data_sync', True)])

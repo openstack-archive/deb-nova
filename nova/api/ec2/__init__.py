@@ -158,7 +158,8 @@ class Lockout(wsgi.Middleware):
 
     There is a possible race condition where simultaneous requests could
     sneak in before the lockout hits, but this is extremely rare and would
-    only result in a couple of extra failed attempts."""
+    only result in a couple of extra failed attempts.
+    """
 
     def __init__(self, application):
         """middleware can use fake for testing."""
@@ -251,7 +252,7 @@ class EC2KeystoneAuth(wsgi.Middleware):
             project_name = result['access']['token']['tenant'].get('name')
             roles = [role['name'] for role
                      in result['access']['user']['roles']]
-        except (AttributeError, KeyError), e:
+        except (AttributeError, KeyError) as e:
             LOG.exception(_("Keystone failure: %s") % e)
             msg = _("Failure communicating with keystone")
             return ec2_error(req, request_id, "Unauthorized", msg)
@@ -487,19 +488,19 @@ class Executor(wsgi.Application):
             LOG.info(_('InstanceNotFound raised: %s'), unicode(ex),
                      context=context)
             ec2_id = ec2utils.id_to_ec2_inst_id(ex.kwargs['instance_id'])
-            message = ex.message % {'instance_id': ec2_id}
+            message = ex.msg_fmt % {'instance_id': ec2_id}
             return ec2_error(req, request_id, type(ex).__name__, message)
         except exception.VolumeNotFound as ex:
             LOG.info(_('VolumeNotFound raised: %s'), unicode(ex),
                      context=context)
             ec2_id = ec2utils.id_to_ec2_vol_id(ex.kwargs['volume_id'])
-            message = ex.message % {'volume_id': ec2_id}
+            message = ex.msg_fmt % {'volume_id': ec2_id}
             return ec2_error(req, request_id, type(ex).__name__, message)
         except exception.SnapshotNotFound as ex:
             LOG.info(_('SnapshotNotFound raised: %s'), unicode(ex),
                      context=context)
             ec2_id = ec2utils.id_to_ec2_snap_id(ex.kwargs['snapshot_id'])
-            message = ex.message % {'snapshot_id': ec2_id}
+            message = ex.msg_fmt % {'snapshot_id': ec2_id}
             return ec2_error(req, request_id, type(ex).__name__, message)
         except exception.NotFound as ex:
             LOG.info(_('NotFound raised: %s'), unicode(ex), context=context)

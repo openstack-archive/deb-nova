@@ -9,6 +9,8 @@
             "OS-EXT-STS:power_state": 1,
             "OS-EXT-STS:task_state": null,
             "OS-EXT-STS:vm_state": "active",
+            "OS-SRV-USG:launched_at": "%(timestamp)s",
+            "OS-SRV-USG:terminated_at": null,
             "accessIPv4": "",
             "accessIPv6": "",
             "addresses": {
@@ -67,7 +69,8 @@
             "status": "ACTIVE",
             "tenant_id": "openstack",
             "updated": "%(timestamp)s",
-            "user_id": "fake"
+            "user_id": "fake",
+            "os-extended-volumes:volumes_attached": []
         }
     ]
 }

@@ -18,6 +18,7 @@ import mox
 
 from nova.api.ec2 import ec2utils
 from nova.compute import flavors
+from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import conductor
@@ -29,11 +30,16 @@ from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception as exc
 from nova import notifications
+from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
+from nova.openstack.common.notifier import api as notifier_api
+from nova.openstack.common.notifier import test_notifier
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 from nova import quota
 from nova import test
+from nova.tests.compute import test_compute
+from nova.tests import fake_instance_actions
 
 
 FAKE_IMAGE_REF = 'fake-image-ref'
@@ -55,6 +61,11 @@ class _BaseTestCase(object):
         self.project_id = 'fake'
         self.context = FakeContext(self.user_id, self.project_id)
 
+        notifier_api._reset_drivers()
+        self.addCleanup(notifier_api._reset_drivers)
+        self.flags(notification_driver=[test_notifier.__name__])
+        test_notifier.NOTIFICATIONS = []
+
     def stub_out_client_exceptions(self):
         def passthru(exceptions, func, *args, **kwargs):
             return func(*args, **kwargs)
@@ -69,11 +80,10 @@ class _BaseTestCase(object):
         inst['vm_state'] = vm_states.ACTIVE
         inst['image_ref'] = FAKE_IMAGE_REF
         inst['reservation_id'] = 'r-fakeres'
-        inst['launch_time'] = '10'
         inst['user_id'] = self.user_id
         inst['project_id'] = self.project_id
         inst['host'] = 'fake_host'
-        type_id = flavors.get_instance_type_by_name(type_name)['id']
+        type_id = flavors.get_flavor_by_name(type_name)['id']
         inst['instance_type_id'] = type_id
         inst['ami_launch_index'] = 0
         inst['memory_mb'] = 0
@@ -240,9 +250,8 @@ class _BaseTestCase(object):
         self.mox.StubOutWithMock(db, 'aggregate_metadata_delete')
         db.aggregate_metadata_delete(mox.IgnoreArg(), aggregate['id'], 'fake')
         self.mox.ReplayAll()
-        result = self.conductor.aggregate_metadata_delete(self.context,
-                                                       aggregate,
-                                                       'fake')
+        self.conductor.aggregate_metadata_delete(self.context, aggregate,
+                                                 'fake')
 
     def test_aggregate_metadata_get_by_host(self):
         self.mox.StubOutWithMock(db, 'aggregate_metadata_get_by_host')
@@ -260,7 +269,7 @@ class _BaseTestCase(object):
         update_args = (self.context, 'uuid', 'mac', 0, 10, 20, 5, 10, 20)
         get_args = (self.context, 'uuid', 0, 'mac')
 
-        db.bw_usage_update(*update_args)
+        db.bw_usage_update(*update_args, update_cells=True)
         db.bw_usage_get(*get_args).AndReturn('foo')
 
         self.mox.ReplayAll()
@@ -268,10 +277,10 @@ class _BaseTestCase(object):
         self.assertEqual(result, 'foo')
 
     def test_security_group_get_by_instance(self):
-        fake_instance = {'id': 'fake-instance'}
+        fake_instance = {'uuid': 'fake-instance'}
         self.mox.StubOutWithMock(db, 'security_group_get_by_instance')
         db.security_group_get_by_instance(
-            self.context, fake_instance['id']).AndReturn('it worked')
+            self.context, fake_instance['uuid']).AndReturn('it worked')
         self.mox.ReplayAll()
         result = self.conductor.security_group_get_by_instance(self.context,
                                                                fake_instance)
@@ -315,7 +324,7 @@ class _BaseTestCase(object):
             self.context, fake_inst['uuid']).AndReturn('fake-result')
         self.mox.ReplayAll()
         result = self.conductor.block_device_mapping_get_all_by_instance(
-            self.context, fake_inst)
+            self.context, fake_inst, legacy=False)
         self.assertEqual(result, 'fake-result')
 
     def test_instance_get_active_by_window_joined(self):
@@ -351,9 +360,9 @@ class _BaseTestCase(object):
                                                   fake_instance,
                                                   fake_values)
 
-    def test_instance_type_get(self):
-        self.mox.StubOutWithMock(db, 'instance_type_get')
-        db.instance_type_get(self.context, 'fake-id').AndReturn('fake-type')
+    def test_flavor_get(self):
+        self.mox.StubOutWithMock(db, 'flavor_get')
+        db.flavor_get(self.context, 'fake-id').AndReturn('fake-type')
         self.mox.ReplayAll()
         result = self.conductor.instance_type_get(self.context, 'fake-id')
         self.assertEqual(result, 'fake-type')
@@ -369,18 +378,32 @@ class _BaseTestCase(object):
 
     def test_vol_usage_update(self):
         self.mox.StubOutWithMock(db, 'vol_usage_update')
-        inst = self._create_fake_instance({
-                'project_id': 'fake-project_id',
-                'user_id': 'fake-user_id',
-                })
-        db.vol_usage_update(self.context, 'fake-vol', 'rd-req', 'rd-bytes',
-                            'wr-req', 'wr-bytes', inst['uuid'],
-                            'fake-project_id', 'fake-user_id', 'fake-az',
-                            'fake-refr', 'fake-bool')
+        self.mox.StubOutWithMock(test_notifier, 'notify')
+        self.mox.StubOutWithMock(compute_utils, 'usage_volume_info')
+
+        fake_inst = {'uuid': 'fake-uuid',
+                     'project_id': 'fake-project',
+                     'user_id': 'fake-user',
+                     'availability_zone': 'fake-az',
+                     }
+
+        db.vol_usage_update(self.context, 'fake-vol', 22, 33, 44, 55,
+                            fake_inst['uuid'],
+                            fake_inst['project_id'],
+                            fake_inst['user_id'],
+                            fake_inst['availability_zone'],
+                            False).AndReturn('fake-usage')
+        compute_utils.usage_volume_info('fake-usage').AndReturn('fake-info')
+        notifier_api.notify(self.context,
+                            'conductor.%s' % self.conductor_manager.host,
+                            'volume.usage', notifier_api.INFO,
+                            'fake-info')
+
         self.mox.ReplayAll()
-        self.conductor.vol_usage_update(self.context, 'fake-vol', 'rd-req',
-                                        'rd-bytes', 'wr-req', 'wr-bytes',
-                                        inst, 'fake-refr', 'fake-bool')
+
+        self.conductor.vol_usage_update(self.context, 'fake-vol',
+                                        22, 33, 44, 55, fake_inst,
+                                        'fake-update-time', False)
 
     def test_compute_node_create(self):
         self.mox.StubOutWithMock(db, 'compute_node_create')
@@ -587,6 +610,13 @@ class _BaseTestCase(object):
         self.mox.ReplayAll()
         self.conductor.compute_unrescue(self.context, 'instance')
 
+    def test_compute_reboot(self):
+        self.mox.StubOutWithMock(self.conductor_manager.compute_api, 'reboot')
+        self.conductor_manager.compute_api.reboot(self.context, 'instance',
+                                                  'fake-type')
+        self.mox.ReplayAll()
+        self.conductor.compute_reboot(self.context, 'instance', 'fake-type')
+
 
 class ConductorTestCase(_BaseTestCase, test.TestCase):
     """Conductor Manager Tests."""
@@ -596,13 +626,28 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         self.conductor_manager = self.conductor
 
     def test_block_device_mapping_update_or_create(self):
-        fake_bdm = {'id': 'fake-id'}
+        fake_bdm = {'id': 'fake-id', 'device_name': 'foo'}
+        fake_bdm2 = {'id': 'fake-id', 'device_name': 'foo2'}
+        cells_rpcapi = self.conductor.cells_rpcapi
         self.mox.StubOutWithMock(db, 'block_device_mapping_create')
         self.mox.StubOutWithMock(db, 'block_device_mapping_update')
         self.mox.StubOutWithMock(db, 'block_device_mapping_update_or_create')
-        db.block_device_mapping_create(self.context, fake_bdm)
-        db.block_device_mapping_update(self.context, fake_bdm['id'], fake_bdm)
-        db.block_device_mapping_update_or_create(self.context, fake_bdm)
+        self.mox.StubOutWithMock(cells_rpcapi,
+                                 'bdm_update_or_create_at_top')
+        db.block_device_mapping_create(self.context,
+                                       fake_bdm).AndReturn(fake_bdm2)
+        cells_rpcapi.bdm_update_or_create_at_top(self.context, fake_bdm2,
+                                                 create=True)
+        db.block_device_mapping_update(self.context, fake_bdm['id'],
+                                       fake_bdm).AndReturn(fake_bdm2)
+        cells_rpcapi.bdm_update_or_create_at_top(self.context,
+                                                 fake_bdm2,
+                                                 create=False)
+        db.block_device_mapping_update_or_create(
+                self.context, fake_bdm).AndReturn(fake_bdm2)
+        cells_rpcapi.bdm_update_or_create_at_top(self.context,
+                                                 fake_bdm2,
+                                                 create=None)
         self.mox.ReplayAll()
         self.conductor.block_device_mapping_update_or_create(self.context,
                                                              fake_bdm,
@@ -614,22 +659,44 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
                                                              fake_bdm)
 
     def test_block_device_mapping_destroy(self):
-        fake_bdm = {'id': 'fake-bdm'}
-        fake_bdm2 = {'id': 'fake-bdm-2'}
+        fake_bdm = {'id': 'fake-bdm',
+                    'instance_uuid': 'fake-uuid',
+                    'device_name': 'fake-device1',
+                    'volume_id': 'fake-vol-id1'}
+        fake_bdm2 = {'id': 'fake-bdm-2',
+                     'instance_uuid': 'fake-uuid2',
+                     'device_name': '',
+                     'volume_id': 'fake-vol-id2'}
         fake_inst = {'uuid': 'fake-uuid'}
+
+        cells_rpcapi = self.conductor.cells_rpcapi
+
         self.mox.StubOutWithMock(db, 'block_device_mapping_destroy')
         self.mox.StubOutWithMock(
             db, 'block_device_mapping_destroy_by_instance_and_device')
         self.mox.StubOutWithMock(
             db, 'block_device_mapping_destroy_by_instance_and_volume')
+        self.mox.StubOutWithMock(cells_rpcapi, 'bdm_destroy_at_top')
+
         db.block_device_mapping_destroy(self.context, 'fake-bdm')
+        cells_rpcapi.bdm_destroy_at_top(self.context,
+                                        fake_bdm['instance_uuid'],
+                                        device_name=fake_bdm['device_name'])
         db.block_device_mapping_destroy(self.context, 'fake-bdm-2')
+        cells_rpcapi.bdm_destroy_at_top(self.context,
+                                        fake_bdm2['instance_uuid'],
+                                        volume_id=fake_bdm2['volume_id'])
         db.block_device_mapping_destroy_by_instance_and_device(self.context,
                                                                'fake-uuid',
                                                                'fake-device')
+        cells_rpcapi.bdm_destroy_at_top(self.context, fake_inst['uuid'],
+                                        device_name='fake-device')
         db.block_device_mapping_destroy_by_instance_and_volume(self.context,
                                                                'fake-uuid',
                                                                'fake-volume')
+        cells_rpcapi.bdm_destroy_at_top(self.context, fake_inst['uuid'],
+                                        volume_id='fake-volume')
+
         self.mox.ReplayAll()
         self.conductor.block_device_mapping_destroy(self.context,
                                                     [fake_bdm,
@@ -774,8 +841,12 @@ class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
                                                              fake_bdm)
 
     def test_block_device_mapping_destroy(self):
-        fake_bdm = {'id': 'fake-bdm'}
+        fake_bdm = {'id': 'fake-bdm',
+                    'instance_uuid': 'fake-uuid',
+                    'device_name': 'fake-device1',
+                    'volume_id': 'fake-vol-id1'}
         fake_inst = {'uuid': 'fake-uuid'}
+
         self.mox.StubOutWithMock(db, 'block_device_mapping_destroy')
         self.mox.StubOutWithMock(
             db, 'block_device_mapping_destroy_by_instance_and_device')
@@ -925,8 +996,12 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
                                                              'fake-bdm')
 
     def test_block_device_mapping_destroy(self):
-        fake_bdm = {'id': 'fake-bdm'}
+        fake_bdm = {'id': 'fake-bdm',
+                    'instance_uuid': 'fake-uuid',
+                    'device_name': 'fake-device1',
+                    'volume_id': 'fake-vol-id1'}
         fake_inst = {'uuid': 'fake-uuid'}
+
         self.mox.StubOutWithMock(db, 'block_device_mapping_destroy')
         self.mox.StubOutWithMock(
             db, 'block_device_mapping_destroy_by_instance_and_device')
@@ -1129,3 +1204,199 @@ class ConductorPolicyTest(test.TestCase):
 
         for key in keys:
             self.assertTrue(hasattr(instance, key))
+
+
+class _BaseTaskTestCase(object):
+    def setUp(self):
+        super(_BaseTaskTestCase, self).setUp()
+        self.user_id = 'fake'
+        self.project_id = 'fake'
+        self.context = FakeContext(self.user_id, self.project_id)
+        fake_instance_actions.stub_out_action_events(self.stubs)
+
+    def test_migrate_server(self):
+        self.mox.StubOutWithMock(self.conductor_manager.scheduler_rpcapi,
+                                 'live_migration')
+        self.conductor_manager.scheduler_rpcapi.live_migration(self.context,
+            'block_migration', 'disk_over_commit', 'instance', 'destination')
+        self.mox.ReplayAll()
+        self.conductor.migrate_server(self.context, 'instance',
+            {'host': 'destination'}, True, False, None, 'block_migration',
+            'disk_over_commit')
+
+    def test_migrate_server_fails_with_non_live(self):
+        self.assertRaises(NotImplementedError, self.conductor.migrate_server,
+            self.context, None, None, False, False, None, None, None)
+
+    def test_migrate_server_fails_with_rebuild(self):
+        self.assertRaises(NotImplementedError, self.conductor.migrate_server,
+            self.context, None, None, True, True, None, None, None)
+
+    def test_migrate_server_fails_with_flavor(self):
+        self.assertRaises(NotImplementedError, self.conductor.migrate_server,
+            self.context, None, None, True, False, "dummy", None, None)
+
+    def test_build_instances(self):
+        instance_type = flavors.get_default_flavor()
+        system_metadata = flavors.save_flavor_info({}, instance_type)
+        # NOTE(alaski): instance_type -> system_metadata -> instance_type
+        # loses some data (extra_specs).  This build process is using
+        # scheduler/utils:build_request_spec() which extracts flavor from
+        # system_metadata and will re-query the DB for extra_specs.. so
+        # we need to test this properly
+        expected_instance_type = flavors.extract_flavor(
+                {'system_metadata': system_metadata})
+        expected_instance_type['extra_specs'] = 'fake-specs'
+
+        self.mox.StubOutWithMock(db, 'flavor_extra_specs_get')
+        self.mox.StubOutWithMock(self.conductor_manager.scheduler_rpcapi,
+                                 'run_instance')
+
+        db.flavor_extra_specs_get(
+                self.context,
+                instance_type['flavorid']).AndReturn('fake-specs')
+        self.conductor_manager.scheduler_rpcapi.run_instance(self.context,
+                request_spec={
+                    'image': {'fake_data': 'should_pass_silently'},
+                    'instance_properties': {'system_metadata': system_metadata,
+                                            'uuid': 'fakeuuid'},
+                    'instance_type': expected_instance_type,
+                    'instance_uuids': ['fakeuuid', 'fakeuuid2'],
+                    'block_device_mapping': 'block_device_mapping',
+                    'security_group': 'security_groups',
+                    'num_instances': 2},
+                admin_password='admin_password',
+                injected_files='injected_files',
+                requested_networks='requested_networks', is_first_time=True,
+                filter_properties={})
+        self.mox.ReplayAll()
+        self.conductor.build_instances(self.context,
+                instances=[{'uuid': 'fakeuuid',
+                            'system_metadata': system_metadata},
+                           {'uuid': 'fakeuuid2'}],
+                image={'fake_data': 'should_pass_silently'},
+                filter_properties={},
+                admin_password='admin_password',
+                injected_files='injected_files',
+                requested_networks='requested_networks',
+                security_groups='security_groups',
+                block_device_mapping='block_device_mapping')
+
+    def test_unshelve_instance_on_host(self):
+        db_instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = instance_obj.Instance.get_by_uuid(self.context,
+                db_instance['uuid'], expected_attrs=['system_metadata'])
+        instance.vm_state = vm_states.SHELVED
+        instance.task_state = task_states.UNSHELVING
+        instance.save()
+        system_metadata = instance.system_metadata
+
+        self.mox.StubOutWithMock(self.conductor_manager.compute_rpcapi,
+                'start_instance')
+        self.mox.StubOutWithMock(self.conductor_manager, '_delete_image')
+        self.mox.StubOutWithMock(self.conductor_manager.compute_rpcapi,
+                'unshelve_instance')
+
+        self.conductor_manager.compute_rpcapi.start_instance(self.context,
+                instance)
+        self.conductor_manager._delete_image(self.context,
+                'fake_image_id')
+        self.mox.ReplayAll()
+
+        system_metadata['shelved_at'] = timeutils.utcnow()
+        system_metadata['shelved_image_id'] = 'fake_image_id'
+        system_metadata['shelved_host'] = 'fake-mini'
+        self.conductor_manager.unshelve_instance(self.context, instance)
+
+    def test_unshelve_instance_schedule_and_rebuild(self):
+        db_instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = instance_obj.Instance.get_by_uuid(self.context,
+                db_instance['uuid'], expected_attrs=['system_metadata'])
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        instance.save()
+        system_metadata = instance.system_metadata
+
+        self.mox.StubOutWithMock(self.conductor_manager, '_get_image')
+        self.mox.StubOutWithMock(self.conductor_manager, '_schedule_instances')
+        self.mox.StubOutWithMock(self.conductor_manager.compute_rpcapi,
+                'unshelve_instance')
+
+        self.conductor_manager._get_image(self.context,
+                'fake_image_id').AndReturn('fake_image')
+        self.conductor_manager._schedule_instances(self.context,
+                'fake_image', [], instance).AndReturn(
+                        [{'host': 'fake_host'}])
+        self.conductor_manager.compute_rpcapi.unshelve_instance(self.context,
+                instance, 'fake_host', 'fake_image')
+        self.mox.ReplayAll()
+
+        system_metadata['shelved_at'] = timeutils.utcnow()
+        system_metadata['shelved_image_id'] = 'fake_image_id'
+        system_metadata['shelved_host'] = 'fake-mini'
+        self.conductor_manager.unshelve_instance(self.context, instance)
+
+    def test_unshelve_instance_schedule_and_rebuild_volume_backed(self):
+        db_instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = instance_obj.Instance.get_by_uuid(self.context,
+                db_instance['uuid'], expected_attrs=['system_metadata'])
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        instance.save()
+        system_metadata = instance.system_metadata
+
+        self.mox.StubOutWithMock(self.conductor_manager, '_get_image')
+        self.mox.StubOutWithMock(self.conductor_manager, '_schedule_instances')
+        self.mox.StubOutWithMock(self.conductor_manager.compute_rpcapi,
+                'unshelve_instance')
+
+        self.conductor_manager._get_image(self.context,
+                'fake_image_id').AndReturn(None)
+        self.conductor_manager._schedule_instances(self.context,
+                None, [], instance).AndReturn(
+                        [{'host': 'fake_host'}])
+        self.conductor_manager.compute_rpcapi.unshelve_instance(self.context,
+                instance, 'fake_host', None)
+        self.mox.ReplayAll()
+
+        system_metadata['shelved_at'] = timeutils.utcnow()
+        system_metadata['shelved_image_id'] = 'fake_image_id'
+        system_metadata['shelved_host'] = 'fake-mini'
+        self.conductor_manager.unshelve_instance(self.context, instance)
+
+
+class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
+    """ComputeTaskManager Tests."""
+    def setUp(self):
+        super(ConductorTaskTestCase, self).setUp()
+        self.conductor = conductor_manager.ComputeTaskManager()
+        self.conductor_manager = self.conductor
+
+
+class ConductorTaskRPCAPITestCase(_BaseTaskTestCase,
+        test_compute.BaseTestCase):
+    """Conductor compute_task RPC namespace Tests."""
+    def setUp(self):
+        super(ConductorTaskRPCAPITestCase, self).setUp()
+        self.conductor_service = self.start_service(
+            'conductor', manager='nova.conductor.manager.ConductorManager')
+        self.conductor = conductor_rpcapi.ComputeTaskAPI()
+        service_manager = self.conductor_service.manager
+        self.conductor_manager = service_manager.compute_task_mgr
+
+
+class ConductorTaskAPITestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
+    """Compute task API Tests."""
+    def setUp(self):
+        super(ConductorTaskAPITestCase, self).setUp()
+        self.conductor_service = self.start_service(
+            'conductor', manager='nova.conductor.manager.ConductorManager')
+        self.conductor = conductor_api.ComputeTaskAPI()
+        service_manager = self.conductor_service.manager
+        self.conductor_manager = service_manager.compute_task_mgr
+
+
+class ConductorLocalComputeTaskAPITestCase(ConductorTaskAPITestCase):
+    """Conductor LocalComputeTaskAPI Tests."""
+    def setUp(self):
+        super(ConductorLocalComputeTaskAPITestCase, self).setUp()
+        self.conductor = conductor_api.LocalComputeTaskAPI()
+        self.conductor_manager = self.conductor._manager._target

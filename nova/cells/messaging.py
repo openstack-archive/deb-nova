@@ -36,6 +36,8 @@ from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
 from nova.db import base
 from nova import exception
+from nova.objects import base as objects_base
+from nova.objects import instance as instance_obj
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
@@ -64,7 +66,7 @@ LOG = logging.getLogger(__name__)
 
 # Separator used between cell names for the 'full cell name' and routing
 # path.
-_PATH_CELL_SEP = cells_utils._PATH_CELL_SEP
+_PATH_CELL_SEP = cells_utils.PATH_CELL_SEP
 
 
 def _reverse_path(path):
@@ -162,6 +164,7 @@ class _BaseMessage(object):
         # Each sub-class should set this when the message is inited
         self.next_hops = []
         self.resp_queue = None
+        self.serializer = objects_base.NovaObjectSerializer()
 
     def __repr__(self):
         _dict = self._to_dict()
@@ -304,6 +307,11 @@ class _BaseMessage(object):
         _dict = self._to_dict()
         # Convert context to dict.
         _dict['ctxt'] = _dict['ctxt'].to_dict()
+        # NOTE(comstud): 'method_kwargs' needs special serialization
+        # because it may contain objects.
+        method_kwargs = _dict['method_kwargs']
+        for k, v in method_kwargs.items():
+            method_kwargs[k] = self.serializer.serialize_entity(self.ctxt, v)
         return jsonutils.dumps(_dict)
 
     def source_is_us(self):
@@ -651,6 +659,10 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         """Parent cell told us to schedule new instance creation."""
         self.msg_runner.scheduler.run_instance(message, host_sched_kwargs)
 
+    def build_instances(self, message, build_inst_kwargs):
+        """Parent cell told us to schedule new instance creation."""
+        self.msg_runner.scheduler.build_instances(message, build_inst_kwargs)
+
     def run_compute_api_method(self, message, method_info):
         """Run a method in the compute api class."""
         method = method_info['method']
@@ -674,6 +686,13 @@ class _TargetedMessageMethods(_BaseMessageMethods):
                 instance = {'uuid': instance_uuid}
                 self.msg_runner.instance_destroy_at_top(message.ctxt,
                                                         instance)
+        # FIXME(comstud): This is temporary/transitional until I can
+        # work out a better way to pass full objects down.
+        EXPECTS_OBJECTS = ['start', 'stop']
+        if method in EXPECTS_OBJECTS:
+            inst_obj = instance_obj.Instance()
+            inst_obj._from_db_object(message.ctxt, inst_obj, instance)
+            instance = inst_obj
         args[0] = instance
         return fn(message.ctxt, *args, **method_info['method_kwargs'])
 
@@ -777,6 +796,36 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         return self.compute_rpcapi.validate_console_port(message.ctxt,
                 instance, console_port, console_type)
 
+    def get_migrations(self, message, filters):
+        return self.compute_api.get_migrations(message.ctxt, filters)
+
+    def _call_compute_api_with_obj(self, ctxt, instance, method, *args,
+                                   **kwargs):
+        try:
+            # NOTE(comstud): We need to refresh the instance from this
+            # cell's view in the DB.
+            instance.refresh(ctxt)
+        except exception.InstanceNotFound:
+            with excutils.save_and_reraise_exception():
+                # Must be a race condition.  Let's try to resolve it by
+                # telling the top level cells that this instance doesn't
+                # exist.
+                instance = {'uuid': instance.uuid}
+                self.msg_runner.instance_destroy_at_top(ctxt,
+                                                        instance)
+        fn = getattr(self.compute_api, method, None)
+        return fn(ctxt, instance, *args, **kwargs)
+
+    def start_instance(self, message, instance):
+        """Start an instance via compute_api.start()."""
+        self._call_compute_api_with_obj(message.ctxt, instance, 'start')
+
+    def stop_instance(self, message, instance):
+        """Stop an instance via compute_api.stop()."""
+        do_cast = not message.need_response
+        return self._call_compute_api_with_obj(message.ctxt, instance,
+                                               'stop', do_cast=do_cast)
+
 
 class _BroadcastMessageMethods(_BaseMessageMethods):
     """These are the methods that can be called as a part of a broadcast
@@ -809,12 +858,10 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
             info_cache.pop('id', None)
             info_cache.pop('instance', None)
 
-        # Fixup system_metadata (should be a dict for update, not a list)
-        if ('system_metadata' in instance and
-                isinstance(instance['system_metadata'], list)):
-            sys_metadata = dict([(md['key'], md['value'])
-                    for md in instance['system_metadata']])
-            instance['system_metadata'] = sys_metadata
+        if 'system_metadata' in instance:
+            # Make sure we have the dict form that we need for
+            # instance_update.
+            instance['system_metadata'] = utils.instance_sys_meta(instance)
 
         LOG.debug(_("Got update for instance: %(instance)s"),
                   {'instance': instance}, instance_uuid=instance_uuid)
@@ -844,7 +891,8 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
             except exception.NotFound:
                 # FIXME(comstud): Strange.  Need to handle quotas here,
                 # if we actually want this code to remain..
-                self.db.instance_create(message.ctxt, instance)
+                self.db.instance_create(message.ctxt, instance,
+                                        legacy=False)
         if info_cache:
             try:
                 self.db.instance_info_cache_update(
@@ -955,6 +1003,64 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         self.consoleauth_rpcapi.delete_tokens_for_instance(message.ctxt,
                                                            instance_uuid)
 
+    def bdm_update_or_create_at_top(self, message, bdm, create):
+        """Create or update a block device mapping in API cells.  If
+        create is True, only try to create.  If create is None, try to
+        update but fall back to create.  If create is False, only attempt
+        to update.  This maps to nova-conductor's behavior.
+        """
+        if not self._at_the_top():
+            return
+        items_to_remove = ['id']
+        for key in items_to_remove:
+            bdm.pop(key, None)
+        if create is None:
+            self.db.block_device_mapping_update_or_create(message.ctxt,
+                                                          bdm,
+                                                          legacy=False)
+            return
+        elif create is True:
+            self.db.block_device_mapping_create(message.ctxt, bdm,
+                                                legacy=False)
+            return
+        # Unfortunately this update call wants BDM ID... but we don't know
+        # what it is in this cell.  Search for it.. try matching either
+        # device_name or volume_id.
+        dev_name = bdm['device_name']
+        vol_id = bdm['volume_id']
+        instance_bdms = self.db.block_device_mapping_get_all_by_instance(
+                message.ctxt, bdm['instance_uuid'])
+        for instance_bdm in instance_bdms:
+            if dev_name and instance_bdm['device_name'] == dev_name:
+                break
+            if vol_id and instance_bdm['volume_id'] == vol_id:
+                break
+        else:
+            LOG.warn(_("No match when trying to update BDM: %(bdm)s"),
+                     dict(bdm=bdm))
+            return
+        self.db.block_device_mapping_update(message.ctxt,
+                                            instance_bdm['id'], bdm,
+                                            legacy=False)
+
+    def bdm_destroy_at_top(self, message, instance_uuid, device_name,
+                           volume_id):
+        """Destroy a block device mapping in API cells by device name
+        or volume_id.  device_name or volume_id can be None, but not both.
+        """
+        if not self._at_the_top():
+            return
+        if device_name:
+            self.db.block_device_mapping_destroy_by_instance_and_device(
+                    message.ctxt, instance_uuid, device_name)
+        elif volume_id:
+            self.db.block_device_mapping_destroy_by_instance_and_volume(
+                    message.ctxt, instance_uuid, volume_id)
+
+    def get_migrations(self, message, filters):
+        context = message.ctxt
+        return self.compute_api.get_migrations(context, filters)
+
 
 _CELL_MESSAGE_TYPE_TO_MESSAGE_CLS = {'targeted': _TargetedMessage,
                                      'broadcast': _BroadcastMessage,
@@ -1000,6 +1106,7 @@ class MessageRunner(object):
         self.our_name = CONF.cells.name
         for msg_type, cls in _CELL_MESSAGE_TYPE_TO_METHODS_CLS.iteritems():
             self.methods_by_type[msg_type] = cls(self)
+        self.serializer = objects_base.NovaObjectSerializer()
 
     def _process_message_locally(self, message):
         """Message processing will call this when its determined that
@@ -1053,16 +1160,35 @@ class MessageRunner(object):
                                 response_kwargs, direction, target_cell,
                                 response_uuid, **kwargs)
 
+    def _get_migrations_for_cell(self, ctxt, cell_name, filters):
+        method_kwargs = dict(filters=filters)
+        message = _TargetedMessage(self, ctxt, 'get_migrations',
+                                   method_kwargs, 'down', cell_name,
+                                   need_response=True)
+
+        response = message.process()
+        if response.failure and isinstance(response.value[1],
+                                           exception.CellRoutingInconsistency):
+            return []
+
+        return [response]
+
     def message_from_json(self, json_message):
         """Turns a message in JSON format into an appropriate Message
         instance.  This is called when cells receive a message from
         another cell.
         """
         message_dict = jsonutils.loads(json_message)
-        message_type = message_dict.pop('message_type')
         # Need to convert context back.
         ctxt = message_dict['ctxt']
         message_dict['ctxt'] = context.RequestContext.from_dict(ctxt)
+        # NOTE(comstud): We also need to re-serialize any objects that
+        # exist in 'method_kwargs'.
+        method_kwargs = message_dict['method_kwargs']
+        for k, v in method_kwargs.items():
+            method_kwargs[k] = self.serializer.deserialize_entity(
+                    message_dict['ctxt'], v)
+        message_type = message_dict.pop('message_type')
         message_cls = _CELL_MESSAGE_TYPE_TO_MESSAGE_CLS[message_type]
         return message_cls(self, **message_dict)
 
@@ -1129,6 +1255,15 @@ class MessageRunner(object):
         """
         method_kwargs = dict(host_sched_kwargs=host_sched_kwargs)
         message = _TargetedMessage(self, ctxt, 'schedule_run_instance',
+                                   method_kwargs, 'down', target_cell)
+        message.process()
+
+    def build_instances(self, ctxt, target_cell, build_inst_kwargs):
+        """Called by the cell scheduler to tell a child cell to build
+        instance(s).
+        """
+        method_kwargs = dict(build_inst_kwargs=build_inst_kwargs)
+        message = _TargetedMessage(self, ctxt, 'build_instances',
                                    method_kwargs, 'down', target_cell)
         message.process()
 
@@ -1330,6 +1465,67 @@ class MessageRunner(object):
                                    method_kwargs, 'down',
                                    cell_name, need_response=True)
         return message.process()
+
+    def bdm_update_or_create_at_top(self, ctxt, bdm, create=None):
+        """Update/Create a BDM at top level cell."""
+        message = _BroadcastMessage(self, ctxt,
+                                    'bdm_update_or_create_at_top',
+                                    dict(bdm=bdm, create=create),
+                                    'up', run_locally=False)
+        message.process()
+
+    def bdm_destroy_at_top(self, ctxt, instance_uuid, device_name=None,
+                           volume_id=None):
+        """Destroy a BDM at top level cell."""
+        method_kwargs = dict(instance_uuid=instance_uuid,
+                             device_name=device_name,
+                             volume_id=volume_id)
+        message = _BroadcastMessage(self, ctxt, 'bdm_destroy_at_top',
+                                    method_kwargs,
+                                    'up', run_locally=False)
+        message.process()
+
+    def get_migrations(self, ctxt, cell_name, run_locally, filters):
+        """Fetch all migrations applying the filters for a given cell or all
+        cells.
+        """
+        method_kwargs = dict(filters=filters)
+        if cell_name:
+            return self._get_migrations_for_cell(ctxt, cell_name, filters)
+
+        message = _BroadcastMessage(self, ctxt, 'get_migrations',
+                                    method_kwargs, 'down',
+                                    run_locally=run_locally,
+                                    need_response=True)
+        return message.process()
+
+    def _instance_action(self, ctxt, instance, method, extra_kwargs=None,
+                         need_response=False):
+        """Call instance_<method> in correct cell for instance."""
+        cell_name = instance.cell_name
+        if not cell_name:
+            LOG.warn(_("No cell_name for %(method)s() from API"),
+                     dict(method=method), instance=instance)
+            return
+        method_kwargs = {'instance': instance}
+        if extra_kwargs:
+            method_kwargs.update(extra_kwargs)
+        message = _TargetedMessage(self, ctxt, method, method_kwargs,
+                                   'down', cell_name,
+                                   need_response=need_response)
+        return message.process()
+
+    def start_instance(self, ctxt, instance):
+        """Start an instance in its cell."""
+        self._instance_action(ctxt, instance, 'start_instance')
+
+    def stop_instance(self, ctxt, instance, do_cast=True):
+        """Stop an instance in its cell."""
+        if do_cast:
+            self._instance_action(ctxt, instance, 'stop_instance')
+        else:
+            return self._instance_action(ctxt, instance, 'stop_instance',
+                                         need_response=True)
 
     @staticmethod
     def get_message_types():

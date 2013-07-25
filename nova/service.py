@@ -117,7 +117,8 @@ class Service(service.Service):
 
     A service takes a manager and enables rpc by listening to queues based
     on topic. It also periodically runs tasks on the manager and reports
-    it state to the database services table."""
+    it state to the database services table.
+    """
 
     def __init__(self, host, binary, topic, manager, report_interval=None,
                  periodic_enable=None, periodic_fuzzy_delay=None,
@@ -285,7 +286,7 @@ class Service(service.Service):
         """Perform basic config checks before starting processing."""
         # Make sure the tempdir exists and is writable
         try:
-            with utils.tempdir() as tmpdir:
+            with utils.tempdir():
                 pass
         except Exception as e:
             LOG.error(_('Temporary directory is invalid: %s'), e)

@@ -33,6 +33,7 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova import context
 from nova import db
+from nova import exception
 from nova.image import glance
 from nova import test
 from nova.tests import fake_network
@@ -89,7 +90,7 @@ class HyperVAPITestCase(test.TestCase):
         self._setup_stubs()
 
         self.flags(instances_path=r'C:\Hyper-V\test\instances',
-                   network_api_class='nova.network.quantumv2.api.API')
+                   network_api_class='nova.network.neutronv2.api.API')
 
         self._conn = driver_hyperv.HyperVDriver(None)
 
@@ -327,6 +328,19 @@ class HyperVAPITestCase(test.TestCase):
 
         self.assertEquals(info["state"], power_state.RUNNING)
 
+    def test_get_info_instance_not_found(self):
+        # Tests that InstanceNotFound is raised if the instance isn't found
+        # from the vmutils.vm_exists method.
+        self._instance_data = self._get_instance_data()
+
+        m = vmutils.VMUtils.vm_exists(mox.Func(self._check_instance_name))
+        m.AndReturn(False)
+
+        self._mox.ReplayAll()
+        self.assertRaises(exception.InstanceNotFound, self._conn.get_info,
+                          self._instance_data)
+        self._mox.VerifyAll()
+
     def test_spawn_cow_image(self):
         self._test_spawn_instance(True)
 
@@ -495,13 +509,24 @@ class HyperVAPITestCase(test.TestCase):
                                    constants.HYPERV_VM_STATE_DISABLED)
 
     def test_power_on(self):
-        self._test_vm_state_change(self._conn.power_on,
-                                   constants.HYPERV_VM_STATE_DISABLED,
-                                   constants.HYPERV_VM_STATE_ENABLED)
+        self._instance_data = self._get_instance_data()
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
+                                                              spectacular=True)
+        vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
+                                     constants.HYPERV_VM_STATE_ENABLED)
+        self._mox.ReplayAll()
+        self._conn.power_on(self._context, self._instance_data, network_info)
+        self._mox.VerifyAll()
 
     def test_power_on_already_running(self):
-        self._test_vm_state_change(self._conn.power_on, None,
-                                   constants.HYPERV_VM_STATE_ENABLED)
+        self._instance_data = self._get_instance_data()
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
+                                                              spectacular=True)
+        vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
+                                     constants.HYPERV_VM_STATE_ENABLED)
+        self._mox.ReplayAll()
+        self._conn.power_on(self._context, self._instance_data, network_info)
+        self._mox.VerifyAll()
 
     def test_reboot(self):
 
@@ -1063,7 +1088,7 @@ class HyperVAPITestCase(test.TestCase):
         else:
             flavor = 'm1.small'
 
-        instance_type = db.instance_type_get_by_name(self._context, flavor)
+        instance_type = db.flavor_get_by_name(self._context, flavor)
 
         if not size_exception:
             fake_root_vhd_path = 'C:\\FakePath\\root.vhd'
@@ -1159,7 +1184,7 @@ class HyperVAPITestCase(test.TestCase):
                           instance_type, network_info)
         self._mox.VerifyAll()
 
-    def test_finish_migration(self):
+    def _test_finish_migration(self, power_on):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
         instance['system_metadata'] = {}
@@ -1198,13 +1223,20 @@ class HyperVAPITestCase(test.TestCase):
         self._set_vm_name(instance['name'])
         self._setup_create_instance_mocks(None, False)
 
-        vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
-                                     constants.HYPERV_VM_STATE_ENABLED)
+        if power_on:
+            vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
+                                         constants.HYPERV_VM_STATE_ENABLED)
 
         self._mox.ReplayAll()
         self._conn.finish_migration(self._context, None, instance, "",
-                                    network_info, None, False, None)
+                                    network_info, None, False, None, power_on)
         self._mox.VerifyAll()
+
+    def test_finish_migration_power_on(self):
+        self._test_finish_migration(True)
+
+    def test_finish_migration_power_off(self):
+        self._test_finish_migration(False)
 
     def test_confirm_migration(self):
         self._instance_data = self._get_instance_data()
@@ -1218,7 +1250,7 @@ class HyperVAPITestCase(test.TestCase):
         self._conn.confirm_migration(None, instance, network_info)
         self._mox.VerifyAll()
 
-    def test_finish_revert_migration(self):
+    def _test_finish_revert_migration(self, power_on):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
         network_info = fake_network.fake_get_instance_nw_info(
@@ -1246,9 +1278,17 @@ class HyperVAPITestCase(test.TestCase):
         self._set_vm_name(instance['name'])
         self._setup_create_instance_mocks(None, False)
 
-        vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
-                                     constants.HYPERV_VM_STATE_ENABLED)
+        if power_on:
+            vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
+                                         constants.HYPERV_VM_STATE_ENABLED)
 
         self._mox.ReplayAll()
-        self._conn.finish_revert_migration(instance, network_info, None)
+        self._conn.finish_revert_migration(instance, network_info, None,
+                                           power_on)
         self._mox.VerifyAll()
+
+    def test_finish_revert_migration_power_on(self):
+        self._test_finish_revert_migration(True)
+
+    def test_finish_revert_migration_power_off(self):
+        self._test_finish_revert_migration(False)

@@ -33,7 +33,9 @@ extensions = ['sphinx.ext.autodoc',
               'sphinx.ext.coverage',
               'sphinx.ext.pngmath',
               'sphinx.ext.ifconfig',
-              'sphinx.ext.graphviz']
+              'sphinx.ext.graphviz',
+              'oslo.sphinx',
+              ]
 
 todo_include_todos = True
 
@@ -164,8 +166,8 @@ man_pages = [
 
 # The theme to use for HTML and HTML Help pages.  Major themes that come with
 # Sphinx are currently 'default' and 'sphinxdoc'.
-html_theme_path = ["."]
-html_theme = '_theme'
+# html_theme_path = ["."]
+# html_theme = '_theme'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -250,7 +252,7 @@ htmlhelp_basename = 'novadoc'
 # [howto/manual]).
 latex_documents = [
     ('index', 'Nova.tex', u'Nova Documentation',
-     u'Anso Labs, LLC', 'manual'),
+     u'OpenStack Foundation', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of

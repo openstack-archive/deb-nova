@@ -25,13 +25,21 @@ messging module.
 from oslo.config import cfg
 
 from nova import exception
+from nova.objects import base as objects_base
 from nova.openstack.common import jsonutils
+from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import proxy as rpc_proxy
 
 
+LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 CONF.import_opt('enable', 'nova.cells.opts', group='cells')
 CONF.import_opt('topic', 'nova.cells.opts', group='cells')
+
+rpcapi_cap_opt = cfg.StrOpt('cells',
+        default=None,
+        help='Set a version cap for messages sent to local cells services')
+CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
 
 class CellsAPI(rpc_proxy.RpcProxy):
@@ -49,13 +57,33 @@ class CellsAPI(rpc_proxy.RpcProxy):
         1.5 - Adds actions_get(), action_get_by_request_id(), and
               action_events_get()
         1.6 - Adds consoleauth_delete_tokens() and validate_console_port()
+
+        ... Grizzly supports message version 1.6.  So, any changes to existing
+        methods in 2.x after that point should be done such that they can
+        handle the version_cap being set to 1.6.
+
         1.7 - Adds service_update()
+        1.8 - Adds build_instances(), deprecates schedule_run_instance()
+        1.9 - Adds get_capacities()
+        1.10 - Adds bdm_update_or_create_at_top(), and bdm_destroy_at_top()
+        1.11 - Adds get_migrations()
+        1.12 - Adds instance_start() and instance_stop()
+        1.13 - Adds cell_create(), cell_update(), cell_delete(), and
+               cell_get()
     '''
     BASE_RPC_API_VERSION = '1.0'
 
+    VERSION_ALIASES = {
+        'grizzly': '1.6'
+    }
+
     def __init__(self):
+        version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.cells,
+                                               CONF.upgrade_levels.cells)
         super(CellsAPI, self).__init__(topic=CONF.cells.topic,
-                default_version=self.BASE_RPC_API_VERSION)
+                default_version=self.BASE_RPC_API_VERSION,
+                serializer=objects_base.NovaObjectSerializer(),
+                version_cap=version_cap)
 
     def cast_compute_api_method(self, ctxt, cell_name, method,
             *args, **kwargs):
@@ -79,10 +107,23 @@ class CellsAPI(rpc_proxy.RpcProxy):
                                              method_info=method_info,
                                              call=True))
 
+    # NOTE(alaski): Deprecated and should be removed later.
     def schedule_run_instance(self, ctxt, **kwargs):
         """Schedule a new instance for creation."""
         self.cast(ctxt, self.make_msg('schedule_run_instance',
                                       host_sched_kwargs=kwargs))
+
+    def build_instances(self, ctxt, **kwargs):
+        """Build instances."""
+        build_inst_kwargs = kwargs
+        instances = build_inst_kwargs['instances']
+        instances_p = [jsonutils.to_primitive(inst) for inst in instances]
+        build_inst_kwargs['instances'] = instances_p
+        build_inst_kwargs['image'] = jsonutils.to_primitive(
+                build_inst_kwargs['image'])
+        self.cast(ctxt, self.make_msg('build_instances',
+            build_inst_kwargs=build_inst_kwargs),
+                version='1.8')
 
     def instance_update_at_top(self, ctxt, instance):
         """Update instance at API level."""
@@ -278,3 +319,90 @@ class CellsAPI(rpc_proxy.RpcProxy):
                               console_port=console_port,
                               console_type=console_type),
                 version='1.6')
+
+    def get_capacities(self, ctxt, cell_name=None):
+        return self.call(ctxt,
+                         self.make_msg('get_capacities', cell_name=cell_name),
+                         version='1.9')
+
+    def bdm_update_or_create_at_top(self, ctxt, bdm, create=None):
+        """Create or update a block device mapping in API cells.  If
+        create is True, only try to create.  If create is None, try to
+        update but fall back to create.  If create is False, only attempt
+        to update.  This maps to nova-conductor's behavior.
+        """
+        if not CONF.cells.enable:
+            return
+        try:
+            self.cast(ctxt, self.make_msg('bdm_update_or_create_at_top',
+                                          bdm=bdm, create=create),
+                      version='1.10')
+        except Exception:
+            LOG.exception(_("Failed to notify cells of BDM update/create."))
+
+    def bdm_destroy_at_top(self, ctxt, instance_uuid, device_name=None,
+                           volume_id=None):
+        """Broadcast upwards that a block device mapping was destroyed.
+        One of device_name or volume_id should be specified.
+        """
+        if not CONF.cells.enable:
+            return
+        try:
+            self.cast(ctxt, self.make_msg('bdm_destroy_at_top',
+                                          instance_uuid=instance_uuid,
+                                          device_name=device_name,
+                                          volume_id=volume_id),
+                      version='1.10')
+        except Exception:
+            LOG.exception(_("Failed to notify cells of BDM destroy."))
+
+    def get_migrations(self, ctxt, filters):
+        """Get all migrations applying the filters."""
+        return self.call(ctxt, self.make_msg('get_migrations',
+                                             filters=filters), version='1.11')
+
+    def start_instance(self, ctxt, instance):
+        """Start an instance in its cell.
+
+        This method takes a new-world instance object.
+        """
+        if not CONF.cells.enable:
+            return
+        self.cast(ctxt,
+                  self.make_msg('start_instance', instance=instance),
+                  version='1.12')
+
+    def stop_instance(self, ctxt, instance, do_cast=True):
+        """Stop an instance in its cell.
+
+        This method takes a new-world instance object.
+        """
+        if not CONF.cells.enable:
+            return
+        method = do_cast and self.cast or self.call
+        return method(ctxt,
+                      self.make_msg('stop_instance', instance=instance,
+                                    do_cast=do_cast),
+                      version='1.12')
+
+    def cell_create(self, ctxt, values):
+        return self.call(ctxt,
+                         self.make_msg('cell_create', values=values),
+                         version='1.13')
+
+    def cell_update(self, ctxt, cell_name, values):
+        return self.call(ctxt,
+                         self.make_msg('cell_update',
+                                       cell_name=cell_name,
+                                       values=values),
+                         version='1.13')
+
+    def cell_delete(self, ctxt, cell_name):
+        return self.call(ctxt,
+                         self.make_msg('cell_delete', cell_name=cell_name),
+                         version='1.13')
+
+    def cell_get(self, ctxt, cell_name):
+        return self.call(ctxt,
+                         self.make_msg('cell_get', cell_name=cell_name),
+                         version='1.13')
