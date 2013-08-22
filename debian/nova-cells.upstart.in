@@ -11,7 +11,7 @@ pre-start script
 	chown nova:root /var/run/nova/
 
 	mkdir -p /var/lock/nova
-	chown nova:Root /var/lock nova
+	chown nova:root /var/lock nova
 end script
 
 exec start-stop-daemon --start --chuid nova --exec /usr/bin/nova-cells -- --config-file=/etc/nova/nova.conf
