@@ -1,14 +1,14 @@
 # Danish translation nova.
-# Copyright (C) 2012 nova & nedenstående oversættere.
+# Copyright (C) 2013 nova & nedenstående oversættere.
 # This file is distributed under the same license as the nova package.
-# Joe Hansen <joedalton2@yahoo.dk>, 2012.
+# Joe Hansen <joedalton2@yahoo.dk>, 2012, 2013.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2013-05-23 16:12+0800\n"
-"PO-Revision-Date: 2012-07-05 23:51+0200\n"
+"PO-Revision-Date: 2013-08-17 23:51+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
 "Language: \n"
@@ -36,7 +36,7 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:3001
 msgid "Auth server hostname:"
-msgstr ""
+msgstr "Værtsnavn for authserver:"
 
 #. Type: string
 #. Description
@@ -45,24 +45,26 @@ msgid ""
 "Please specify the URL of your Nova authentication server. Typically this is "
 "also the URL of your OpenStack Identity Service (Keystone)."
 msgstr ""
+"Angiv venligst adressen for din Novagodkendelsesserver. Typisk er dette også "
+"adresesn for din OpenStack Identity Service (Keystone)."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:4001
 msgid "Auth server tenant name:"
-msgstr ""
+msgstr "Tenantnavn for authserver:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:5001
 msgid "Auth server username:"
-msgstr ""
+msgstr "Brugernavn for authserver:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:6001
 msgid "Auth server password:"
-msgstr ""
+msgstr "Adgangskode for authserver:"
 
 #. Type: boolean
 #. Description
@@ -118,7 +120,7 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:8001
 msgid "API to activate:"
-msgstr ""
+msgstr "API at aktivere:"
 
 #. Type: multiselect
 #. Description
@@ -127,6 +129,8 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
+"Openstack Nova understøtter forskellige API-tjenester, hver af dem binder "
+"på en forskellig port. Vælg hvilken nova-api skal understøtte."
 
 #. Type: multiselect
 #. Description
@@ -137,12 +141,16 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
+"Hvis det er en beregningsknude, som du opstætter, så skal du kun køre "
+"metadata-API-serveren. Hvis du kører Cinder, så skal du ikke bruge "
+"osapi_volume (du kan ikke køre osapi_volume og cinder-api på den samme "
+"server: de binder på den samme port)."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
 msgid "Value for my_ip:"
-msgstr ""
+msgstr "Værdi for my_ip:"
 
 #. Type: string
 #. Description
@@ -150,12 +158,13 @@ msgstr ""
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr ""
+"Indtast IP-adressen som bliver sat i my_ip-direktivet i nova.conf."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
 msgid "Ip address of your rabbitmq host:"
-msgstr ""
+msgstr "IP-adresse for din rabbitmq-vært:"
 
 #. Type: string
 #. Description
@@ -166,6 +175,10 @@ msgid ""
 "127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
 "then enter the IP address of your proxy-node host."
 msgstr ""
+"Indtast IP-adressen som vil blive sat i rabbitmq_host-direktivet i nova."
+"conf. Hvis du installerer openstack-proxy-node, så er standarden 127.0.0.1 "
+"sikkert fin. Hvis du installerer openstack-compute-node, så indtast "
+"IP-adressen for din proxy-node-vært."
 
 #. Type: string
 #. Description
@@ -240,7 +253,7 @@ msgstr ""
 #. Description
 #: ../nova-api.templates:1001
 msgid "Register Nova in the keystone endpoint catalog?"
-msgstr ""
+msgstr "Registrer Nova i keystone endpoint-kataloget?"
 
 #. Type: boolean
 #. Description
@@ -250,6 +263,9 @@ msgid ""
 "accessible. This is done using \"keystone service-create\" and \"keystone "
 "endpoint-create\". Select if you want to run these commands now."
 msgstr ""
+"Hver Openstacktjeneste (hver API) skal registreres for at kunne tilgås. "
+"Dette gøres med brug af »keystone service-create« og »keystone endpoint-"
+"create«. Vælg om du ønsker at køre disse kommandoer nu."
 
 #. Type: boolean
 #. Description
@@ -258,12 +274,14 @@ msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using the Keystone auth token."
 msgstr ""
+"Bemærk at du skal bruge en op og kørende keystoneserver til at forbinde til "
+"med brug af Keystone auth-symbolet."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:2001
 msgid "Keystone IP address:"
-msgstr ""
+msgstr "IP-adresse for keystone:"
 
 #. Type: string
 #. Description
@@ -272,12 +290,14 @@ msgid ""
 "Enter the IP address of your keystone server, so that nova-api can contact "
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
+"Indtast IP-adressen for din keystone-server, så at nova-api kan kontakte "
+"Keystone for at udføre Novatjenesten og slutpunktsoprettelse."
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:3001
 msgid "Keystone Auth Token:"
-msgstr ""
+msgstr "Authsymbol for keystone:"
 
 #. Type: password
 #. Description
@@ -286,12 +306,14 @@ msgid ""
 "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
 "token."
 msgstr ""
+"For at konfigurere si slutpunkt i Keystone, skal nova-api bruge "
+"authsymbolet for Keystone."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
 msgid "Nova endpoint IP address:"
-msgstr ""
+msgstr "IP-adresse for Novaslutpunkt:"
 
 #. Type: string
 #. Description
@@ -300,6 +322,8 @@ msgid ""
 "Enter the IP address that will be used to contact Nova (eg: the Nova "
 "endpoint IP address)."
 msgstr ""
+"Indtast IP-adressen som vil blive brugt til at kontakte Nova (f.eks. "
+"IP-adressen for Novaslutpunktet)."
 
 #. Type: string
 #. Description
@@ -309,12 +333,15 @@ msgid ""
 "service, so if you are installing a public cloud, this should be a public IP "
 "address."
 msgstr ""
+"Denne IP-adresse skal være tilgængelig fra klienterne, som vil brug denne "
+"tjeneste, så hvis du installerer en offentlig sky, skal dette være en "
+"offentlig IP-adresse."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:5001
 msgid "Name of the region to register:"
-msgstr ""
+msgstr "Navn på regionen der skal registreres:"
 
 #. Type: string
 #. Description
@@ -324,12 +351,15 @@ msgid ""
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
 msgstr ""
+"Openstack kan bruges med tilgængelighedszoner, hvor hver region "
+"repræsenterer et sted. Indtast venligst zonen du ønsker at bruge "
+"når du registrerer slutpunktet."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
 msgid "Type of console daemon to start at boot time:"
-msgstr ""
+msgstr "Konsoldæmonens type som skal igangsættes ved opstart:"
 
 #. Type: select
 #. Description
@@ -341,11 +371,15 @@ msgid ""
 "sockets in your browser, and that is a feature only very modern browsers "
 "have support for."
 msgstr ""
+"Nova Console understøtter 4 konsoltyper. En er specifik for Xen og kaldes "
+"XVP (Xen VNC Proxy), og en dæmon understøtter KVM. Mens SPICE-protokollen "
+"normalt er hurtigere end VNC, så kræver den også understøttelse for "
+"netsokler i din browser, og det er en funktion som kun meget moderne "
+"browsere har understøttelse for."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
-#, fuzzy
-#| msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
-msgstr "Dette kan senere redigeres i /etc/nova/nova-compute.conf."
+msgstr "Dette kan senere redigeres i /etc/default/nova-consoleproxy."
+

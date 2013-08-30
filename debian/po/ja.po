@@ -1,0 +1,376 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the nova package.
+# victory <victory.deb@gmail.com>, 2013.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: nova\n"
+"Report-Msgid-Bugs-To: nova@packages.debian.org\n"
+"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"PO-Revision-Date: 2013-04-11 23:32+0900\n"
+"Last-Translator: victory <victory.deb@gmail.com>\n"
+"Language-Team: Japanese <debian-japanese@lists.debian.org>\n"
+"Language: ja\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid "Start nova services at boot?"
+msgstr "ブート時に nova サービスを起動しますか?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:2001
+msgid ""
+"Please choose whether you want to start Nova services when the machine is "
+"booted up."
+msgstr ""
+"マシンがブートしたときに Nova サービスを開始させるかどうか選択してください。"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:3001
+msgid "Auth server hostname:"
+msgstr "認証サーバのホスト名:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:3001
+msgid ""
+"Please specify the URL of your Nova authentication server. Typically this is "
+"also the URL of your OpenStack Identity Service (Keystone)."
+msgstr ""
+"Nova 認証サーバの URL を指定してください。これは通常 OpenStack Identity "
+"Service (Keystone) の URL にもなります。"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:4001
+msgid "Auth server tenant name:"
+msgstr "認証サーバの管理用アカウント (tenant) 名"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:5001
+msgid "Auth server username:"
+msgstr "認証サーバのユーザ名:"
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:6001
+msgid "Auth server password:"
+msgstr "認証サーバのパスワード:"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid "Set up a database for Nova?"
+msgstr "Nova 用のデータベースを準備しますか?"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+"No database has been set up for Nova to use. If you want to set one up now, "
+"please make sure you have all needed information:"
+msgstr ""
+"Nova で利用するデータベースは用意されていません。ここで用意する場合は、必要な"
+"情報がすべて揃っているか確認してください:"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+" * the host name of the database server (which must allow TCP\n"
+"   connections from this machine);\n"
+" * a username and password to access the database;\n"
+" * the type of database management software you want to use."
+msgstr ""
+" * データベースサーバのホスト名 (このマシンからの\n"
+"   TCP 接続を許可しなければなりません)\n"
+" * データベースにアクセスするためのユーザ名とパスワード\n"
+" * 使いたいデータベース管理ソフトウェアの種類。"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+"If you don't choose this option, no database will be set up and Nova will "
+"use regular SQLite support."
+msgstr ""
+"ここで選択しない場合はデータベースの用意は行われず、Nova は標準の SQLite を利"
+"用します。"
+
+#. Type: boolean
+#. Description
+#: ../nova-common.templates:7001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-common\"."
+msgstr ""
+"この設定は後で「dpkg-reconfigure -plow nova-common」を実行することにより変更"
+"できます。"
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid "API to activate:"
+msgstr "有効化する API:"
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid ""
+"Openstack Nova supports different API services, each of them binding on a "
+"different port. Select which one nova-api should support."
+msgstr ""
+"Openstack Nova はそれぞれ別のポートを担当する別々の API サービスをサポートして"
+"います。nova-api でどれをサポートするか選択してください。"
+
+#. Type: multiselect
+#. Description
+#: ../nova-common.templates:8001
+msgid ""
+"If it is a compute node that you are setting-up, then you only need to run "
+"the metadata API server. If you run Cinder, then you don't need osapi_volume "
+"(you cannot run osapi_volume and cinder-api on the same server: they bind on "
+"the same port)."
+msgstr ""
+"ここで設定しているのが計算ノードであれば、実行する必要があるのはメタデータ "
+"API サーバだけです。Cinder を実行する場合は osapi_volume は不要です "
+"(osapi_volume と cinder-api を同一サーバ上で使うことはできません: 同一ポートを"
+"使うためです)。"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid "Value for my_ip:"
+msgstr "my_ip の値:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid ""
+"Enter the IP address that will be set in the my_ip directive of nova.conf."
+msgstr ""
+"nova.conf の my_ip ディレクティブでセットするIPアドレスを入力してください。"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "Ip address of your rabbitmq host:"
+msgstr "rabbitmq ホストのIPアドレス:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid ""
+"Enter the IP address that will be set in the rabbitmq_host directive of nova."
+"conf. If you are installing openstack-proxy-node, then the default to use "
+"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
+"then enter the IP address of your proxy-node host."
+msgstr ""
+"nova.conf の rabbitmq_host ディレクティブでセットするIPアドレスを入力してくだ"
+"さい。ここで openstack のプロキシノードをインストールしている場合は恐らくデ"
+"フォルトの 127.0.0.1 を使えばいいでしょう。openstack の計算ノードをインストー"
+"ルしている場合はプロキシノードのIPアドレスを入力してください。"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid "Address of the XenAPI dom0:"
+msgstr "XenAPI dom0 のアドレス:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"Nova Compute Xen needs to know the address of the server running XenAPI. You "
+"can enter an IP address, or a fully qualified domain name if it resolves "
+"correctly."
+msgstr ""
+"Nova Compute Xen は XenAPI を実行するサーバのアドレスを知っている必要がありま"
+"す。IP アドレスか、正常に名前の解決ができる場合は完全修飾ドメイン名を入力でき"
+"ます。"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:2001
+msgid ""
+"This may be a server running Citrix XenServer, the CentOS Xen Cloud Platform "
+"(XCP) appliance installed from an ISO image, or even the Kronos Project's "
+"XCP (available in Debian and Ubuntu as the package xcp-xapi)."
+msgstr ""
+"これには Citrix XenServer や ISO イメージからインストールした CentOS Xen クラ"
+"ウド基盤 (XCP) appliance、さらには Kronos プロジェクトの XCP (Debian 及び "
+"Ubuntu ではパッケージ xcp-xapi で利用可能) が動作しているサーバを使えます。"
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:2001 ../nova-compute-xen.templates:3001
+#: ../nova-compute-xen.templates:4001
+msgid "This can later be edited in /etc/nova/nova-compute.conf."
+msgstr "これには後で /etc/nova/nova-compute.conf を編集する方法もあります。"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Username to connect to XenAPI:"
+msgstr "XenAPI への接続に使うユーザ名:"
+
+#. Type: string
+#. Description
+#: ../nova-compute-xen.templates:3001
+msgid "Please enter the username used to connect to your XenAPI (XCP server)."
+msgstr "XenAPI (XCP サーバ) への接続に使うユーザ名を入力してください。"
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Password to connect to XenAPI:"
+msgstr "XenAPI への接続に使うパスワード:"
+
+#. Type: password
+#. Description
+#: ../nova-compute-xen.templates:4001
+msgid "Please enter the password used to connect to your XenAPI (XCP server)."
+msgstr "XenAPI (XCP サーバ) への接続に使うパスワードを入力してください。"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:1001
+msgid "Register Nova in the keystone endpoint catalog?"
+msgstr "Nova を Keystone の端末リストに登録しますか?"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:1001
+msgid ""
+"Each Openstack services (each API) should be registered in order to be "
+"accessible. This is done using \"keystone service-create\" and \"keystone "
+"endpoint-create\". Select if you want to run these commands now."
+msgstr ""
+"OpenStack のサービスごと (API ごと) に、アクセスできるようにするため登録すべき"
+"です。「keystone service-create」と「keystone endpoint-create」を使って登録す"
+"ることができます。ここで自動的に行うことができます。"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:1001
+msgid ""
+"Note that you will need to have an up and running keystone server on which "
+"to connect using the Keystone auth token."
+msgstr ""
+"Keystone 認証文字列を使って接続する先の Keystone サーバが必要なことに注意して"
+"ください。"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:2001
+msgid "Keystone IP address:"
+msgstr "Keystone の IP アドレス:"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:2001
+msgid ""
+"Enter the IP address of your keystone server, so that nova-api can contact "
+"Keystone to do the Nova service and endpoint creation."
+msgstr ""
+"Keystone サーバの IP アドレスを入力してください。それにより nova-api は "
+"Keystone と通信し、Nova サービスや端末の作成ができるようになります。"
+
+#. Type: password
+#. Description
+#: ../nova-api.templates:3001
+msgid "Keystone Auth Token:"
+msgstr "Keystone 認証文字列:"
+
+#. Type: password
+#. Description
+#: ../nova-api.templates:3001
+msgid ""
+"To configure its endpoint in Keystone, nova-api needs the Keystone auth "
+"token."
+msgstr ""
+"Keystone で端末を設定するには、nova-api は Keystone 認証文字列を必要とします。"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:4001
+msgid "Nova endpoint IP address:"
+msgstr "Nova 端末の IP アドレス:"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:4001
+msgid ""
+"Enter the IP address that will be used to contact Nova (eg: the Nova "
+"endpoint IP address)."
+msgstr ""
+"Nova への通信に利用する IP アドレス (例えば Nova 端末の IP アドレス) を入力し"
+"てください。"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:4001
+msgid ""
+"This IP address should be accessible from the clients that will use this "
+"service, so if you are installing a public cloud, this should be a public IP "
+"address."
+msgstr ""
+"この IP アドレスはこのサービスを利用するクライアントからアクセスできないといけ"
+"ないので、パブリッククラウドをインストールしている場合、これは公開 IP アドレス"
+"を使うようにしてください。"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:5001
+msgid "Name of the region to register:"
+msgstr "登録する領域の名前:"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:5001
+msgid ""
+"Openstack can be used using availability zones, with each region "
+"representing a location. Please enter the zone that you wish to use when "
+"registering the endpoint."
+msgstr ""
+"OpenStack は位置を示す各領域による利用可能区分を利用することができます。端末の"
+"登録時に利用したい区分を入力してください。"
+
+#. Type: select
+#. Description
+#: ../nova-consoleproxy.templates:1001
+msgid "Type of console daemon to start at boot time:"
+msgstr "ブート時に開始するコンソールデーモンの種類:"
+
+#. Type: select
+#. Description
+#: ../nova-consoleproxy.templates:1001
+msgid ""
+"Nova Console supports 3 types of consoles. One is specific to Xen, called "
+"XVP (Xen VNC Proxy), and the other daemon supports KVM. While the SPICE "
+"protocol is normally faster than VNC, it also requires support for web "
+"sockets in your browser, and that is a feature only very modern browsers "
+"have support for."
+msgstr ""
+"Nova Console は3種類のコンソールをサポートしています。1つは Xen 専用の XVP "
+"(Xen VNC Proxy) でもう1つは KVM をサポートするデーモンです。SPICE プロトコルは"
+"通常 VNC よりも高速ですが、これにはかなり新しいブラウザしかサポートしていない"
+"機能であるウェブソケットを、ブラウザがサポートしていることを要求します。"
+
+#. Type: select
+#. Description
+#: ../nova-consoleproxy.templates:1001
+msgid "This can later be edited in /etc/default/nova-consoleproxy."
+msgstr "これには後で /etc/default/nova-consoleproxy を編集する方法もあります。"
