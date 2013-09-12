@@ -32,11 +32,11 @@ from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import vm_states
-from nova.conductor import api as conductor_api
 from nova import context
 from nova import crypto
 from nova import db
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -53,7 +53,7 @@ from nova.virt.xenapi import agent
 from nova.virt.xenapi import driver as xenapi_conn
 from nova.virt.xenapi import fake as xenapi_fake
 from nova.virt.xenapi import host
-from nova.virt.xenapi.imageupload import glance
+from nova.virt.xenapi.image import glance
 from nova.virt.xenapi import pool
 from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
@@ -75,6 +75,7 @@ IMAGE_RAMDISK = '3'
 IMAGE_RAW = '4'
 IMAGE_VHD = '5'
 IMAGE_ISO = '6'
+IMAGE_IPXE_ISO = '7'
 
 IMAGE_FIXTURES = {
     IMAGE_MACHINE: {
@@ -106,6 +107,12 @@ IMAGE_FIXTURES = {
         'image_meta': {'name': 'fakeiso', 'size': 0,
                        'disk_format': 'iso',
                        'container_format': 'bare'},
+    },
+    IMAGE_IPXE_ISO: {
+        'image_meta': {'name': 'fake_ipxe_iso', 'size': 0,
+                       'disk_format': 'iso',
+                       'container_format': 'bare',
+                       'properties': {'ipxe_boot': 'true'}},
     },
 }
 
@@ -146,7 +153,7 @@ def get_fake_device_info():
     return fake
 
 
-def stub_vm_utils_with_vdi_attached_here(function, should_return=True):
+def stub_vm_utils_with_vdi_attached_here(function):
     """
     vm_utils.with_vdi_attached_here needs to be stubbed out because it
     calls down to the filesystem to attach a vdi. This provides a
@@ -162,19 +169,13 @@ def stub_vm_utils_with_vdi_attached_here(function, should_return=True):
         def fake_image_download(*args, **kwargs):
             pass
 
-        def fake_is_vdi_pv(*args, **kwargs):
-            return should_return
-
         orig_vdi_attached_here = vm_utils.vdi_attached_here
         orig_image_download = fake_image._FakeImageService.download
-        orig_is_vdi_pv = vm_utils._is_vdi_pv
         try:
             vm_utils.vdi_attached_here = fake_vdi_attached_here
             fake_image._FakeImageService.download = fake_image_download
-            vm_utils._is_vdi_pv = fake_is_vdi_pv
             return function(self, *args, **kwargs)
         finally:
-            vm_utils._is_vdi_pv = orig_is_vdi_pv
             fake_image._FakeImageService.download = orig_image_download
             vm_utils.vdi_attached_here = orig_vdi_attached_here
 
@@ -321,20 +322,20 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
                                    'Dom0IptablesFirewallDriver',
                    xenapi_connection_url='test_url',
                    xenapi_connection_password='test_pass',)
-        xenapi_fake.create_local_srs()
-        xenapi_fake.create_local_pifs()
         db_fakes.stub_out_db_instance_api(self.stubs)
-        xenapi_fake.create_network('fake', CONF.flat_network_bridge)
+        xenapi_fake.create_network('fake', 'fake_br1')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         stubs.stubout_get_this_vm_uuid(self.stubs)
-        stubs.stubout_is_vdi_pv(self.stubs)
         stubs.stub_out_vm_methods(self.stubs)
         fake_processutils.stub_out_processutils_execute(self.stubs)
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
         self.conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
+        self.conn._session.is_local_connection = False
 
+        self.stubs.Set(fake.FakeVirtAPI, 'instance_update',
+                       lambda *args, **kwargs: ('fake-oldref', 'fake-newref'))
         fake_image.stub_out_image_service(self.stubs)
         set_image_fixtures()
         stubs.stubout_image_service_download(self.stubs)
@@ -584,12 +585,13 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.vm_info = vm_info
         self.vm = vm
 
-    def check_vm_record(self, conn, check_injection=False):
-        # Check that m1.large above turned into the right thing.
-        instance_type = db.flavor_get_by_name(conn, 'm1.large')
+    def check_vm_record(self, conn, instance_type_id, check_injection):
+        instance_type = db.flavor_get(conn, instance_type_id)
         mem_kib = long(instance_type['memory_mb']) << 10
         mem_bytes = str(mem_kib << 10)
         vcpus = instance_type['vcpus']
+        vcpu_weight = instance_type['vcpu_weight']
+
         self.assertEquals(self.vm_info['max_mem'], mem_kib)
         self.assertEquals(self.vm_info['mem'], mem_kib)
         self.assertEquals(self.vm['memory_static_max'], mem_bytes)
@@ -597,6 +599,11 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.assertEquals(self.vm['memory_dynamic_min'], mem_bytes)
         self.assertEquals(self.vm['VCPUs_max'], str(vcpus))
         self.assertEquals(self.vm['VCPUs_at_startup'], str(vcpus))
+        if vcpu_weight == None:
+            self.assertEquals(self.vm['VCPUs_params'], {})
+        else:
+            self.assertEquals(self.vm['VCPUs_params'],
+                              {'weight': str(vcpu_weight)})
 
         # Check that the VM is running according to Nova
         self.assertEquals(self.vm_info['state'], power_state.RUNNING)
@@ -606,7 +613,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
         if check_injection:
             xenstore_data = self.vm['xenstore_data']
-            self.assertEquals(xenstore_data['vm-data/hostname'], 'test')
+            self.assertFalse('vm-data/hostname' in xenstore_data)
             key = 'vm-data/networking/DEADBEEF0001'
             xenstore_value = xenstore_data[key]
             tcpip_data = ast.literal_eval(xenstore_value)
@@ -614,11 +621,11 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
                               {'broadcast': '192.168.1.255',
                                'dns': ['192.168.1.4', '192.168.1.3'],
                                'gateway': '192.168.1.1',
-                               'gateway_v6': 'fe80::def',
+                               'gateway_v6': '2001:db8:0:1::1',
                                'ip6s': [{'enabled': '1',
                                          'ip': '2001:db8:0:1::1',
                                          'netmask': 64,
-                                         'gateway': 'fe80::def'}],
+                                         'gateway': '2001:db8:0:1::1'}],
                                'ips': [{'enabled': '1',
                                         'ip': '192.168.1.100',
                                         'netmask': '255.255.255.0',
@@ -724,8 +731,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         else:
             instance = db.instance_get(self.context, instance_id)
 
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         if empty_dns:
             # NOTE(tr3buchet): this is a terrible way to do this...
             network_info[0]['network']['subnets'][0]['dns'] = []
@@ -736,9 +742,55 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.conn.spawn(self.context, instance, image_meta, injected_files,
                         'herp', network_info, block_device_info)
         self.create_vm_record(self.conn, os_type, instance['name'])
-        self.check_vm_record(self.conn, check_injection)
+        self.check_vm_record(self.conn, instance_type_id, check_injection)
         self.assertTrue(instance['os_type'])
         self.assertTrue(instance['architecture'])
+
+    def test_spawn_ipxe_iso_success(self):
+        self.mox.StubOutWithMock(vm_utils, 'get_sr_path')
+        vm_utils.get_sr_path(mox.IgnoreArg()).AndReturn('/sr/path')
+
+        self.flags(xenapi_ipxe_network_name='test1',
+                   xenapi_ipxe_boot_menu_url='http://boot.example.com',
+                   xenapi_ipxe_mkisofs_cmd='/root/mkisofs')
+        self.mox.StubOutWithMock(self.conn._session, 'call_plugin_serialized')
+        self.conn._session.call_plugin_serialized(
+            'ipxe', 'inject', '/sr/path', mox.IgnoreArg(),
+            'http://boot.example.com', '192.168.1.100', '255.255.255.0',
+            '192.168.1.1', '192.168.1.3', '/root/mkisofs')
+
+        self.mox.ReplayAll()
+        self._test_spawn(IMAGE_IPXE_ISO, None, None)
+
+    def test_spawn_ipxe_iso_no_network_name(self):
+        self.flags(xenapi_ipxe_network_name=None,
+                   xenapi_ipxe_boot_menu_url='http://boot.example.com')
+
+        # call_plugin_serialized shouldn't be called
+        self.mox.StubOutWithMock(self.conn._session, 'call_plugin_serialized')
+
+        self.mox.ReplayAll()
+        self._test_spawn(IMAGE_IPXE_ISO, None, None)
+
+    def test_spawn_ipxe_iso_no_boot_menu_url(self):
+        self.flags(xenapi_ipxe_network_name='test1',
+                   xenapi_ipxe_boot_menu_url=None)
+
+        # call_plugin_serialized shouldn't be called
+        self.mox.StubOutWithMock(self.conn._session, 'call_plugin_serialized')
+
+        self.mox.ReplayAll()
+        self._test_spawn(IMAGE_IPXE_ISO, None, None)
+
+    def test_spawn_ipxe_iso_unknown_network_name(self):
+        self.flags(xenapi_ipxe_network_name='test2',
+                   xenapi_ipxe_boot_menu_url='http://boot.example.com')
+
+        # call_plugin_serialized shouldn't be called
+        self.mox.StubOutWithMock(self.conn._session, 'call_plugin_serialized')
+
+        self.mox.ReplayAll()
+        self._test_spawn(IMAGE_IPXE_ISO, None, None)
 
     def test_spawn_empty_dns(self):
         # Test spawning with an empty dns list.
@@ -803,10 +855,9 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         # No additional VMs should be found.
         self.assertEqual(start_vms, end_vms)
 
-    @stub_vm_utils_with_vdi_attached_here
     def test_spawn_raw_glance(self):
         self._test_spawn(IMAGE_RAW, None, None)
-        self.check_vm_params_for_linux()
+        self.check_vm_params_for_windows()
 
     def test_spawn_vhd_glance_linux(self):
         self._test_spawn(IMAGE_VHD, None, None,
@@ -815,7 +866,8 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
     def test_spawn_vhd_glance_windows(self):
         self._test_spawn(IMAGE_VHD, None, None,
-                         os_type="windows", architecture="i386")
+                         os_type="windows", architecture="i386",
+                         instance_type_id=5)
         self.check_vm_params_for_windows()
 
     def test_spawn_iso_glance(self):
@@ -999,18 +1051,47 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
                        '_plugin_agent_inject_file', fake_inject_file)
 
         def fake_encrypt_text(sshkey, new_pass):
-            self.assertEqual("fake_keydata", sshkey)
+            self.assertEqual("ssh-rsa fake_keydata", sshkey)
             return "fake"
 
         self.stubs.Set(crypto, 'ssh_encrypt_text', fake_encrypt_text)
 
         expected_data = ('\n# The following ssh key was injected by '
-                         'Nova\nfake_keydata\n')
+                         'Nova\nssh-rsa fake_keydata\n')
 
         injected_files = [('/root/.ssh/authorized_keys', expected_data)]
         self._test_spawn(IMAGE_VHD, None, None,
                          os_type="linux", architecture="x86-64",
-                         key_data='fake_keydata')
+                         key_data='ssh-rsa fake_keydata')
+        self.assertEquals(actual_injected_files, injected_files)
+
+    def test_spawn_ssh_key_injection_non_rsa(self):
+        # Test spawning with key_data on an instance.  Should use
+        # agent file injection.
+        self.flags(xenapi_use_agent_default=True)
+        actual_injected_files = []
+
+        def fake_inject_file(self, method, args):
+            path = base64.b64decode(args['b64_path'])
+            contents = base64.b64decode(args['b64_contents'])
+            actual_injected_files.append((path, contents))
+            return jsonutils.dumps({'returncode': '0', 'message': 'success'})
+
+        self.stubs.Set(stubs.FakeSessionForVMTests,
+                       '_plugin_agent_inject_file', fake_inject_file)
+
+        def fake_encrypt_text(sshkey, new_pass):
+            raise NotImplementedError("Should not be called")
+
+        self.stubs.Set(crypto, 'ssh_encrypt_text', fake_encrypt_text)
+
+        expected_data = ('\n# The following ssh key was injected by '
+                         'Nova\nssh-dsa fake_keydata\n')
+
+        injected_files = [('/root/.ssh/authorized_keys', expected_data)]
+        self._test_spawn(IMAGE_VHD, None, None,
+                         os_type="linux", architecture="x86-64",
+                         key_data='ssh-dsa fake_keydata')
         self.assertEquals(actual_injected_files, injected_files)
 
     def test_spawn_injected_files(self):
@@ -1187,10 +1268,8 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
     def test_poll_rebooting_instances(self):
         self.mox.StubOutWithMock(compute_api.API, 'reboot')
-        self.mox.StubOutWithMock(conductor_api.API, 'compute_reboot')
-        conductor_api.API.compute_reboot(mox.IgnoreArg(), mox.IgnoreArg(),
-                                         mox.IgnoreArg())
-        # mox will detect if compute_api.API.reboot is called unexpectedly
+        compute_api.API.reboot(mox.IgnoreArg(), mox.IgnoreArg(),
+                               mox.IgnoreArg())
         self.mox.ReplayAll()
         instance = self._create_instance()
         instances = [instance]
@@ -1373,8 +1452,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
         instance = create_instance_with_system_metadata(self.context,
                                                         instance_values)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         image_meta = {'id': IMAGE_VHD,
                       'disk_format': 'vhd'}
         if spawn:
@@ -1433,8 +1511,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                                    'Dom0IptablesFirewallDriver')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         db_fakes.stub_out_db_instance_api(self.stubs)
-        xenapi_fake.create_network('fake', CONF.flat_network_bridge)
-        xenapi_fake.create_local_srs()
+        xenapi_fake.create_network('fake', 'fake_br1')
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
@@ -1557,8 +1634,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                               product_brand='XenServer')
 
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         base = xenapi_fake.create_vdi('hurr', 'fake')
         base_uuid = xenapi_fake.get_record('VDI', base)['uuid']
@@ -1600,8 +1676,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                               product_brand='XenServer')
 
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
@@ -1630,8 +1705,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.stubs.Set(stubs.FakeSessionForVMTests,
                        "VDI_resize_online", fake_vdi_resize)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
@@ -1647,8 +1721,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.stubs.Set(stubs.FakeSessionForVMTests,
                        "VDI_resize_online", fake_vdi_resize)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         # Resize instance would be determined by the compute call
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
@@ -1878,9 +1951,8 @@ class XenAPIDetermineIsPVTestCase(test.TestCase):
     def test_linux_vhd(self):
         self.assert_pv_status(vm_utils.ImageType.DISK_VHD, 'linux', True)
 
-    @stub_vm_utils_with_vdi_attached_here
     def test_raw(self):
-        self.assert_pv_status(vm_utils.ImageType.DISK_RAW, 'linux', True)
+        self.assert_pv_status(vm_utils.ImageType.DISK_RAW, 'linux', False)
 
     def test_disk(self):
         self.assert_pv_status(vm_utils.ImageType.DISK, None, True)
@@ -1888,9 +1960,8 @@ class XenAPIDetermineIsPVTestCase(test.TestCase):
     def test_iso(self):
         self.assert_pv_status(vm_utils.ImageType.DISK_ISO, None, False)
 
-    @stub_vm_utils_with_vdi_attached_here
     def test_none(self):
-        self.assert_pv_status(None, None, True)
+        self.assert_pv_status(None, None, False)
 
 
 class CompareVersionTestCase(test.TestCase):
@@ -1925,7 +1996,8 @@ class XenAPIHostTestCase(stubs.XenAPITestBase):
         self.flags(xenapi_connection_url='test_url',
                    xenapi_connection_password='test_pass')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
-        xenapi_fake.create_local_srs()
+        self.context = context.get_admin_context()
+        self.flags(use_local=True, group='conductor')
         self.conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
     def test_host_state(self):
@@ -1971,10 +2043,18 @@ class XenAPIHostTestCase(stubs.XenAPITestBase):
                                False, 'off_maintenance')
 
     def test_set_enable_host_enable(self):
+        values = _create_service_entries(self.context, values={'nova':
+            ['host']})
         self._test_host_action(self.conn.set_host_enabled, True, 'enabled')
+        service = db.service_get_by_args(self.context, 'host', 'nova-compute')
+        self.assertEquals(service.disabled, False)
 
     def test_set_enable_host_disable(self):
+        values = _create_service_entries(self.context, values={'nova':
+            ['host']})
         self._test_host_action(self.conn.set_host_enabled, False, 'disabled')
+        service = db.service_get_by_args(self.context, 'host', 'nova-compute')
+        self.assertEquals(service.disabled, True)
 
     def test_get_host_uptime(self):
         result = self.conn.get_host_uptime('host')
@@ -2245,12 +2325,12 @@ class XenAPIBWCountersTestCase(stubs.XenAPITestBase):
     def _fake_list_vms(cls, session):
         return cls.FAKE_VMS.iteritems()
 
-    @classmethod
-    def _fake_fetch_bandwidth_mt(cls, session):
+    @staticmethod
+    def _fake_fetch_bandwidth_mt(session):
         return {}
 
-    @classmethod
-    def _fake_fetch_bandwidth(cls, session):
+    @staticmethod
+    def _fake_fetch_bandwidth(session):
         return {'42':
                     {'0': {'bw_in': 21024, 'bw_out': 22048},
                      '1': {'bw_in': 231337, 'bw_out': 221212121}},
@@ -2264,7 +2344,7 @@ class XenAPIBWCountersTestCase(stubs.XenAPITestBase):
                      dict(name='test2', uuid='4-5-6')]
 
         self.stubs.Set(vm_utils, 'fetch_bandwidth',
-                       XenAPIBWCountersTestCase._fake_fetch_bandwidth)
+                       self._fake_fetch_bandwidth)
         result = self.conn.get_all_bw_counters(instances)
         self.assertEqual(len(result), 4)
         self.assertIn(dict(uuid='1-2-3',
@@ -2292,7 +2372,7 @@ class XenAPIBWCountersTestCase(stubs.XenAPITestBase):
         instances = [dict(name='instance-0001', uuid='1-2-3-4-5')]
 
         self.stubs.Set(vm_utils, 'fetch_bandwidth',
-                       XenAPIBWCountersTestCase._fake_fetch_bandwidth_mt)
+                       self._fake_fetch_bandwidth_mt)
         result = self.conn.get_all_bw_counters(instances)
         self.assertEqual(result, [])
 
@@ -2364,8 +2444,6 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
                    instance_name_template='%d',
                    firewall_driver='nova.virt.xenapi.firewall.'
                                    'Dom0IptablesFirewallDriver')
-        xenapi_fake.create_local_srs()
-        xenapi_fake.create_local_pifs()
         self.user_id = 'mappin'
         self.project_id = 'fake'
         stubs.stubout_session(self.stubs, stubs.FakeSessionForFirewallTests,
@@ -2475,15 +2553,14 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         instance_ref = db.instance_get(admin_ctxt, instance_ref['id'])
         src_instance_ref = db.instance_get(admin_ctxt, src_instance_ref['id'])
 
-        network_model = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                      1, spectacular=True)
+        network_model = fake_network.fake_get_instance_nw_info(self.stubs, 1)
 
-        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
-                                      lambda *a, **kw: network_model)
+        from nova.compute import utils as compute_utils
+        self.stubs.Set(compute_utils, 'get_nw_info_for_instance',
+                       lambda instance: network_model)
 
-        network_info = network_model.legacy()
-        self.fw.prepare_instance_filter(instance_ref, network_info)
-        self.fw.apply_instance_filter(instance_ref, network_info)
+        self.fw.prepare_instance_filter(instance_ref, network_model)
+        self.fw.apply_instance_filter(instance_ref, network_model)
 
         self._validate_security_group()
         # Extra test for TCP acceptance rules
@@ -2522,6 +2599,8 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         network_info = _get_instance_nw_info(self.stubs,
                                              networks_count,
                                              ipv4_addr_per_network)
+        network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = \
+            '1.1.1.1'
         ipv4_len = len(self.fw.iptables.ipv4['filter'].rules)
         ipv6_len = len(self.fw.iptables.ipv6['filter'].rules)
         inst_ipv4, inst_ipv6 = self.fw.instance_rules(instance_ref,
@@ -2638,14 +2717,17 @@ class XenAPISRSelectionTestCase(stubs.XenAPITestBase):
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass',
                                             fake.FakeVirtAPI())
+        # This test is only guaranteed if there is one host in the pool
+        self.assertEqual(len(xenapi_fake.get_all('host')), 1)
         host_ref = xenapi_fake.get_all('host')[0]
-        local_sr = xenapi_fake.create_sr(
-                              name_label='Fake Storage',
-                              type='lvm',
-                              other_config={'i18n-original-value-name_label':
-                                            'Local storage',
-                                            'i18n-key': 'local-storage'},
-                              host_ref=host_ref)
+        pbd_refs = xenapi_fake.get_all('PBD')
+        for pbd_ref in pbd_refs:
+            pbd_rec = xenapi_fake.get_record('PBD', pbd_ref)
+            if pbd_rec['host'] != host_ref:
+                continue
+            sr_rec = xenapi_fake.get_record('SR', pbd_rec['SR'])
+            if sr_rec['other_config']['i18n-key'] == 'local-storage':
+                local_sr = pbd_rec['SR']
         expected = vm_utils.safe_find_sr(session)
         self.assertEqual(local_sr, expected)
 
@@ -2669,7 +2751,7 @@ class XenAPISRSelectionTestCase(stubs.XenAPITestBase):
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         session = xenapi_conn.XenAPISession('test_url', 'root', 'test_pass',
                                             fake.FakeVirtAPI())
-        pool_ref = xenapi_fake.create_pool('')
+        pool_ref = session.call_xenapi('pool.get_all')[0]
         expected = vm_utils.safe_find_sr(session)
         self.assertEqual(session.call_xenapi('pool.get_default_SR', pool_ref),
                          expected)
@@ -3073,7 +3155,6 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBase):
                    host='host')
         db_fakes.stub_out_db_instance_api(self.stubs)
         self.context = context.get_admin_context()
-        xenapi_fake.create_local_pifs()
 
     def test_live_migration_calls_vmops(self):
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
@@ -3092,7 +3173,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBase):
         # ensure method is present
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         self.conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        self.conn.pre_live_migration(None, None, None, None)
+        self.conn.pre_live_migration(None, None, None, None, None)
 
     def test_post_live_migration_at_destination(self):
         # ensure method is present
@@ -3466,7 +3547,12 @@ class XenAPIInjectMetadataTestCase(stubs.XenAPITestBase):
 
         self.xenstore = dict(persist={}, ephem={})
 
+        self.called_fake_get_vm_opaque_ref = False
+
         def fake_get_vm_opaque_ref(inst, instance):
+            self.called_fake_get_vm_opaque_ref = True
+            if instance["uuid"] == "not_found":
+                raise exception.NotFound
             self.assertEqual(instance, {'uuid': 'fake'})
             return 'vm_ref'
 
@@ -3623,17 +3709,41 @@ class XenAPIInjectMetadataTestCase(stubs.XenAPITestBase):
                     },
                 })
 
+    def test_change_instance_metadata_not_found(self):
+        instance = {'uuid': 'not_found'}
+        self.conn._vmops.change_instance_metadata(instance, "fake_diff")
+        self.assertTrue(self.called_fake_get_vm_opaque_ref)
+
 
 class XenAPISessionTestCase(test.TestCase):
     def _get_mock_xapisession(self, software_version):
-        class XcpXapiSession(xenapi_conn.XenAPISession):
+        class MockXapiSession(xenapi_conn.XenAPISession):
             def __init__(_ignore):
                 "Skip the superclass's dirty init"
 
             def _get_software_version(_ignore):
                 return software_version
 
-        return XcpXapiSession()
+        return MockXapiSession()
+
+    def test_local_session(self):
+        session = self._get_mock_xapisession({})
+        session.is_local_connection = True
+        session.XenAPI = self.mox.CreateMockAnything()
+        session.XenAPI.xapi_local().AndReturn("local_connection")
+
+        self.mox.ReplayAll()
+        self.assertEqual("local_connection",
+                         session._create_session("unix://local"))
+
+    def test_remote_session(self):
+        session = self._get_mock_xapisession({})
+        session.is_local_connection = False
+        session.XenAPI = self.mox.CreateMockAnything()
+        session.XenAPI.Session("url").AndReturn("remote_connection")
+
+        self.mox.ReplayAll()
+        self.assertEqual("remote_connection", session._create_session("url"))
 
     def test_get_product_version_product_brand_does_not_fail(self):
         session = self._get_mock_xapisession({
@@ -3651,17 +3761,51 @@ class XenAPISessionTestCase(test.TestCase):
                 })
 
         self.assertEquals(
-            (None, None),
+            ((1, 6, 0), None),
             session._get_product_version_and_brand()
         )
 
     def test_get_product_version_product_brand_xs_6(self):
         session = self._get_mock_xapisession({
                     'product_brand': 'XenServer',
-                    'product_version': '6.0.50'
+                    'product_version': '6.0.50',
+                    'platform_version': '0.0.1'
                 })
 
         self.assertEquals(
             ((6, 0, 50), 'XenServer'),
             session._get_product_version_and_brand()
         )
+
+
+class XenAPIFakeTestCase(test.TestCase):
+    def test_query_matches(self):
+        record = {'a': '1', 'b': '2', 'c_d': '3'}
+
+        tests = {'field "a"="1"': True,
+                 'field "b"="2"': True,
+                 'field "b"="4"': False,
+                 'not field "b"="4"': True,
+                 'field "a"="1" and field "b"="4"': False,
+                 'field "a"="1" or field "b"="4"': True,
+                 'field "c__d"="3"': True,
+                 'field \'b\'=\'2\'': True,
+                 }
+
+        for query in tests.keys():
+            expected = tests[query]
+            fail_msg = "for test '%s'" % query
+            self.assertEqual(xenapi_fake._query_matches(record, query),
+                             expected, fail_msg)
+
+    def test_query_bad_format(self):
+        record = {'a': '1', 'b': '2', 'c': '3'}
+
+        tests = ['"a"="1" or "b"="4"',
+                 'a=1',
+                 ]
+
+        for query in tests:
+            fail_msg = "for test '%s'" % query
+            self.assertFalse(xenapi_fake._query_matches(record, query),
+                             fail_msg)

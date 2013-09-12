@@ -23,13 +23,11 @@ their attributes like VDIs, VIFs, as well as their lookup functions.
 
 import contextlib
 import os
-import pkg_resources
 import re
 import time
 import urllib
 import urlparse
 import uuid
-from xml.dom import minidom
 from xml.parsers import expat
 
 from eventlet import greenthread
@@ -41,17 +39,21 @@ from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
-from nova.image import glance
+from nova.network import model as network_model
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
+from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
+from nova.openstack.common import xmlutils
 from nova import utils
 from nova.virt import configdrive
 from nova.virt.disk import api as disk
 from nova.virt.disk.vfs import localfs as vfsimpl
 from nova.virt.xenapi import agent
+from nova.virt.xenapi.image import utils as image_utils
 from nova.virt.xenapi import volume_utils
 
 
@@ -64,6 +66,10 @@ xenapi_vm_utils_opts = [
                      ' images, `some` will only cache images that have the'
                      ' image_property `cache_in_nova=True`, and `none` turns'
                      ' off caching entirely'),
+    cfg.IntOpt('xenapi_image_compression_level',
+               help='Compression level for images, e.g., 9 for gzip -9.'
+                    ' Range is 1-9, 9 being most compressed but most CPU'
+                    ' intensive on dom0.'),
     cfg.StrOpt('default_os_type',
                default='linux',
                help='Default OS type'),
@@ -74,10 +80,11 @@ xenapi_vm_utils_opts = [
                default=16 * 1024 * 1024,
                help='Maximum size in bytes of kernel or ramdisk images'),
     cfg.StrOpt('sr_matching_filter',
-               default='other-config:i18n-key=local-storage',
+               default='default-sr:true',
                help='Filter for finding the SR to be used to install guest '
-                    'instances on. The default value is the Local Storage in '
-                    'default XenServer/XCP installations. To select an SR '
+                    'instances on. To use the Local Storage in default '
+                    'XenServer/XCP installations set this flag to '
+                    'other-config:i18n-key=local-storage. To select an SR '
                     'with a different matching criteria, you could set it to '
                     'other-config:my_favorite_sr=true. On the other hand, to '
                     'fall back on the Default SR, as displayed by XenCenter, '
@@ -95,35 +102,14 @@ xenapi_vm_utils_opts = [
                default='none',
                help='Whether or not to download images via Bit Torrent '
                     '(all|some|none).'),
-    cfg.StrOpt('xenapi_torrent_base_url',
-               default=None,
-               help='Base URL for torrent files.'),
-    cfg.FloatOpt('xenapi_torrent_seed_chance',
-                 default=1.0,
-                 help='Probability that peer will become a seeder.'
-                      ' (1.0 = 100%)'),
-    cfg.IntOpt('xenapi_torrent_seed_duration',
-               default=3600,
-               help='Number of seconds after downloading an image via'
-                    ' BitTorrent that it should be seeded for other peers.'),
-    cfg.IntOpt('xenapi_torrent_max_last_accessed',
-               default=86400,
-               help='Cached torrent files not accessed within this number of'
-                    ' seconds can be reaped'),
-    cfg.IntOpt('xenapi_torrent_listen_port_start',
-               default=6881,
-               help='Beginning of port range to listen on'),
-    cfg.IntOpt('xenapi_torrent_listen_port_end',
-               default=6891,
-               help='End of port range to listen on'),
-    cfg.IntOpt('xenapi_torrent_download_stall_cutoff',
-               default=600,
-               help='Number of seconds a download can remain at the same'
-                    ' progress percentage w/o being considered a stall'),
-    cfg.IntOpt('xenapi_torrent_max_seeder_processes_per_host',
-               default=1,
-               help='Maximum number of seeder processes to run concurrently'
-                    ' within a given dom0. (-1 = no limit)')
+    cfg.StrOpt('xenapi_ipxe_network_name',
+               help='Name of network to use for booting iPXE ISOs'),
+    cfg.StrOpt('xenapi_ipxe_boot_menu_url',
+               help='URL to the iPXE boot menu'),
+    cfg.StrOpt('xenapi_ipxe_mkisofs_cmd',
+               default='mkisofs',
+               help='Name and optionally path of the tool used for '
+                    'ISO image creation'),
     ]
 
 CONF = cfg.CONF
@@ -147,6 +133,11 @@ MBR_SIZE_BYTES = MBR_SIZE_SECTORS * SECTOR_SIZE
 KERNEL_DIR = '/boot/guest'
 MAX_VDI_CHAIN_SIZE = 16
 PROGRESS_INTERVAL_SECONDS = 300
+
+# Fudge factor to allow for the VHD chain to be slightly larger than
+# the partitioned space. Otherwise, legitimate images near their
+# maximum allowed size can fail on build with InstanceDiskTypeTooSmall.
+VHD_SIZE_CHECK_FUDGE_FACTOR_GB = 10
 
 
 class ImageType(object):
@@ -184,7 +175,7 @@ class ImageType(object):
 
     @classmethod
     def to_string(cls, image_type):
-        return dict(zip(ImageType._ids, ImageType._strs)).get(image_type)
+        return dict(zip(cls._ids, ImageType._strs)).get(image_type)
 
     @classmethod
     def get_role(cls, image_type_id):
@@ -216,6 +207,11 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
     instance_type = flavors.extract_flavor(instance)
     mem = str(long(instance_type['memory_mb']) * 1024 * 1024)
     vcpus = str(instance_type['vcpus'])
+
+    vcpu_weight = instance_type['vcpu_weight']
+    vcpu_params = {}
+    if vcpu_weight is not None:
+        vcpu_params = {"weight": str(vcpu_weight)}
 
     rec = {
         'actions_after_crash': 'destroy',
@@ -250,7 +246,7 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
         'user_version': '0',
         'VCPUs_at_startup': vcpus,
         'VCPUs_max': vcpus,
-        'VCPUs_params': {},
+        'VCPUs_params': vcpu_params,
         'xenstore_data': {'allowvssprovider': 'false'}}
 
     # Complete VM configuration record according to the image type
@@ -580,7 +576,8 @@ def _safe_copy_vdi(session, sr_ref, instance, vdi_to_copy_ref):
         with snapshot_attached_here(
                 session, instance, vm_ref, label) as vdi_uuids:
             imported_vhds = session.call_plugin_serialized(
-                'workarounds', 'safe_copy_vdis', sr_path=get_sr_path(session),
+                'workarounds', 'safe_copy_vdis',
+                sr_path=get_sr_path(session, sr_ref=sr_ref),
                 vdi_uuids=vdi_uuids, uuid_stack=_make_uuid_stack())
 
     root_uuid = imported_vhds['root']['uuid']
@@ -675,15 +672,34 @@ def snapshot_attached_here(session, instance, vm_ref, label, *args):
         safe_destroy_vdis(session, [snapshot_ref])
 
 
-def get_sr_path(session):
+def get_sr_path(session, sr_ref=None):
     """Return the path to our storage repository
 
     This is used when we're dealing with VHDs directly, either by taking
     snapshots or by restoring an image in the DISK_VHD format.
     """
-    sr_ref = safe_find_sr(session)
+    if sr_ref is None:
+        sr_ref = safe_find_sr(session)
+    host_ref = session.get_xenapi_host()
+    pbd_rec = session.call_xenapi("PBD.get_all_records_where",
+                                  'field "host"="%s" and '
+                                  'field "SR"="%s"' % (host_ref, sr_ref))
+
+    # NOTE(bobball): There can only be one PBD for a host/SR pair, but path is
+    # not always present - older versions of XS do not set it.
+    pbd_ref = pbd_rec.keys()[0]
+    device_config = pbd_rec[pbd_ref]['device_config']
+    if 'path' in device_config:
+        return device_config['path']
+
     sr_rec = session.call_xenapi("SR.get_record", sr_ref)
     sr_uuid = sr_rec["uuid"]
+    if sr_rec["type"] not in ["ext", "nfs"]:
+        raise exception.NovaException(
+            _("Only file-based SRs (ext/NFS) are supported by this feature."
+              "  SR %(uuid)s is of type %(type)s") %
+            {"uuid": sr_uuid, "type": sr_rec["type"]})
+
     return os.path.join(CONF.xenapi_sr_base_path, sr_uuid)
 
 
@@ -825,6 +841,38 @@ def try_auto_configure_disk(session, vdi_ref, new_gb):
         LOG.warn(msg % e)
 
 
+def _make_partition(session, dev, partition_start, partition_end):
+    dev_path = utils.make_dev_path(dev)
+
+    # NOTE(bobball) If this runs in Dom0, parted will error trying
+    # to re-read the partition table and return a generic error
+    utils.execute('parted', '--script', dev_path,
+                  'mklabel', 'msdos', run_as_root=True,
+                  check_exit_code=not session.is_local_connection)
+
+    utils.execute('parted', '--script', dev_path,
+                  'mkpart', 'primary',
+                  partition_start,
+                  partition_end,
+                  run_as_root=True,
+                  check_exit_code=not session.is_local_connection)
+
+    partition_path = utils.make_dev_path(dev, partition=1)
+    if session.is_local_connection:
+        # Need to refresh the partitions
+        utils.trycmd('kpartx', '-a', dev_path,
+                     run_as_root=True,
+                     discard_warnings=True)
+
+        # Sometimes the partition gets created under /dev/mapper, depending
+        # on the setup in dom0.
+        mapper_path = '/dev/mapper/%s' % os.path.basename(partition_path)
+        if os.path.exists(mapper_path):
+            return mapper_path
+
+    return partition_path
+
+
 def _generate_disk(session, instance, vm_ref, userdevice, name_label,
                    disk_type, size_mb, fs_type):
     """
@@ -849,19 +897,12 @@ def _generate_disk(session, instance, vm_ref, userdevice, name_label,
         # 2. Attach VDI to compute worker (VBD hotplug)
         with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
             # 3. Create partition
-            dev_path = utils.make_dev_path(dev)
-            utils.execute('parted', '--script', dev_path,
-                          'mklabel', 'msdos', run_as_root=True)
-
             partition_start = 0
             partition_end = size_mb
-            utils.execute('parted', '--script', dev_path,
-                          'mkpart', 'primary',
-                          str(partition_start),
-                          str(partition_end),
-                          run_as_root=True)
 
-            partition_path = utils.make_dev_path(dev, partition=1)
+            partition_path = _make_partition(session, dev,
+                                             "%d" % partition_start,
+                                             "%d" % partition_end)
 
             if fs_type == 'linux-swap':
                 utils.execute('mkswap', partition_path, run_as_root=True)
@@ -1023,8 +1064,10 @@ def _create_cached_image(context, session, instance, name_label,
 
     if CONF.use_cow_images and sr_type == 'ext':
         new_vdi_ref = _clone_vdi(session, cache_vdi_ref)
-    else:
+    elif sr_type == 'ext':
         new_vdi_ref = _safe_copy_vdi(session, sr_ref, instance, cache_vdi_ref)
+    else:
+        new_vdi_ref = session.call_xenapi("VDI.copy", cache_vdi_ref, sr_ref)
 
     session.call_xenapi('VDI.remove_from_other_config',
                         new_vdi_ref, 'image-id')
@@ -1100,36 +1143,6 @@ def _fetch_image(context, session, instance, name_label, image_id, image_type):
     return vdis
 
 
-def _fetch_using_dom0_plugin_with_retry(context, session, image_id,
-                                        plugin_name, params, callback=None):
-    max_attempts = CONF.glance_num_retries + 1
-    sleep_time = 0.5
-    for attempt_num in xrange(1, max_attempts + 1):
-        LOG.info(_('download_vhd %(image_id)s, attempt '
-                   '%(attempt_num)d/%(max_attempts)d, params: %(params)s'),
-                 {'image_id': image_id, 'attempt_num': attempt_num,
-                  'max_attempts': max_attempts, 'params': params})
-
-        try:
-            if callback:
-                callback(params)
-
-            return session.call_plugin_serialized(
-                    plugin_name, 'download_vhd', **params)
-        except session.XenAPI.Failure as exc:
-            _type, _method, error = exc.details[:3]
-            if error == 'RetryableError':
-                LOG.error(_('download_vhd failed: %r') %
-                          (exc.details[3:],))
-            else:
-                raise
-
-        time.sleep(sleep_time)
-        sleep_time = min(2 * sleep_time, 15)
-
-    raise exception.CouldNotFetchImage(image_id=image_id)
-
-
 def _make_uuid_stack():
     # NOTE(sirp): The XenAPI plugins run under Python 2.4
     # which does not have the `uuid` module. To work around this,
@@ -1160,6 +1173,29 @@ def _image_uses_bittorrent(context, instance):
     return bittorrent
 
 
+def _default_download_handler():
+    # TODO(sirp):  This should be configurable like upload_handler
+    return importutils.import_object(
+            'nova.virt.xenapi.image.glance.GlanceStore')
+
+
+def _choose_download_handler(context, instance):
+    if _image_uses_bittorrent(context, instance):
+        return importutils.import_object(
+                'nova.virt.xenapi.image.bittorrent.BittorrentStore')
+    else:
+        return _default_download_handler()
+
+
+def get_compression_level():
+    level = CONF.xenapi_image_compression_level
+    if level is not None and (level < 1 or level > 9):
+        LOG.warn(_("Invalid value '%d' for xenapi_image_compression_level"),
+                 level)
+        return None
+    return level
+
+
 def _fetch_vhd_image(context, session, instance, image_id):
     """Tell glance to download an image and put the VHDs into the SR
 
@@ -1168,23 +1204,24 @@ def _fetch_vhd_image(context, session, instance, image_id):
     LOG.debug(_("Asking xapi to fetch vhd image %s"), image_id,
               instance=instance)
 
-    params = {'image_id': image_id,
-              'uuid_stack': _make_uuid_stack(),
-              'sr_path': get_sr_path(session)}
+    handler = _choose_download_handler(context, instance)
 
-    if (_image_uses_bittorrent(context, instance) and
-            _add_torrent_url(instance, image_id, params)):
+    try:
+        vdis = handler.download_image(context, session, instance, image_id)
+    except Exception as e:
+        default_handler = _default_download_handler()
 
-        plugin_name = 'bittorrent'
-        callback = None
-        _add_bittorrent_params(image_id, params)
-    else:
-        plugin_name = 'glance'
-        callback = _generate_glance_callback(context)
+        if handler == default_handler:
+            raise
 
-    vdis = _fetch_using_dom0_plugin_with_retry(
-            context, session, image_id, plugin_name, params,
-            callback=callback)
+        LOG.exception(_("Download handler '%(handler)s' raised an"
+                        " exception, falling back to default handler"
+                        " '%(default_handler)s'") %
+                        {'handler': handler,
+                         'default_handler': default_handler})
+
+        vdis = default_handler.download_image(
+                context, session, instance, image_id)
 
     sr_ref = safe_find_sr(session)
     _scan_sr(session, sr_ref)
@@ -1200,89 +1237,6 @@ def _fetch_vhd_image(context, session, instance, image_id):
                 destroy_vdi(session, vdi_ref)
 
     return vdis
-
-
-def _generate_glance_callback(context):
-    glance_api_servers = glance.get_api_servers()
-
-    def pick_glance(params):
-        g_host, g_port, g_use_ssl = glance_api_servers.next()
-        params['glance_host'] = g_host
-        params['glance_port'] = g_port
-        params['glance_use_ssl'] = g_use_ssl
-        params['auth_token'] = getattr(context, 'auth_token', None)
-
-    return pick_glance
-
-
-_TORRENT_URL_FN = None  # driver function to determine torrent URL to use
-
-
-def _lookup_torrent_url_fn():
-    """Load a "fetcher" func to get the right torrent URL via entrypoints."""
-    namespace = "nova.virt.xenapi.vm_utils"
-    name = "torrent_url"
-
-    eps = pkg_resources.iter_entry_points(namespace)
-    eps = [ep for ep in eps if ep.name == name]
-
-    x = len(eps)
-
-    if x == 0:
-        LOG.debug(_("No torrent URL fetcher extension found."))
-        return None
-    elif x > 1:
-        raise RuntimeError(_("Multiple torrent URL fetcher extension found.  "
-                             "Failing."))
-
-    ep = eps[0]
-    LOG.debug(_("Loading torrent URL fetcher from entry points %(ep)s"),
-              {'ep': ep})
-    fn = ep.load()
-    return fn
-
-
-def _add_torrent_url(instance, image_id, params):
-    """Add the torrent URL associated with the given image.
-
-    :param instance: instance ref
-    :param image_id: unique id of image
-    :param params: BT params dict
-    :returns: True if the URL could be obtained
-    """
-    global _TORRENT_URL_FN
-    if not _TORRENT_URL_FN:
-        fn = _lookup_torrent_url_fn()
-        if fn is None:
-            LOG.debug(_("No torrent URL fetcher installed."))
-            _TORRENT_URL_FN = get_torrent_url  # default
-        else:
-            _TORRENT_URL_FN = fn
-
-    try:
-        url = _TORRENT_URL_FN(instance, image_id)
-        params['torrent_url'] = url
-        return True
-    except Exception:
-        LOG.exception(_("Failed to get torrent URL for image %s") % image_id)
-        return False  # fall back to using glance
-
-
-def get_torrent_url(instance, image_id):
-    return urlparse.urljoin(CONF.xenapi_torrent_base_url,
-                            "%s.torrent" % image_id)
-
-
-def _add_bittorrent_params(image_id, params):
-    params['torrent_seed_duration'] = CONF.xenapi_torrent_seed_duration
-    params['torrent_seed_chance'] = CONF.xenapi_torrent_seed_chance
-    params['torrent_max_last_accessed'] = CONF.xenapi_torrent_max_last_accessed
-    params['torrent_listen_port_start'] = CONF.xenapi_torrent_listen_port_start
-    params['torrent_listen_port_end'] = CONF.xenapi_torrent_listen_port_end
-    params['torrent_download_stall_cutoff'] = \
-            CONF.xenapi_torrent_download_stall_cutoff
-    params['torrent_max_seeder_processes_per_host'] = \
-            CONF.xenapi_torrent_max_seeder_processes_per_host
 
 
 def _get_vdi_chain_size(session, vdi_uuid):
@@ -1306,9 +1260,10 @@ def _get_vdi_chain_size(session, vdi_uuid):
 
 def _check_vdi_size(context, session, instance, vdi_uuid):
     instance_type = flavors.extract_flavor(instance)
-    allowed_size = instance_type['root_gb'] * (1024 ** 3)
+    allowed_size = (instance_type['root_gb'] +
+                    VHD_SIZE_CHECK_FUDGE_FACTOR_GB) * (1024 ** 3)
 
-    if not allowed_size:
+    if not instance_type['root_gb']:
         # root_gb=0 indicates that we're disabling size checks
         return
 
@@ -1347,10 +1302,13 @@ def _fetch_disk_image(context, session, instance, name_label, image_id,
     else:
         sr_ref = safe_find_sr(session)
 
-    image_service, image_id = glance.get_remote_image_service(
-            context, image_id)
-    meta = image_service.show(context, image_id)
-    virtual_size = int(meta['size'])
+    glance_image = image_utils.GlanceImage(context, image_id)
+    if glance_image.is_raw_tgz():
+        image = image_utils.RawTGZImage(glance_image)
+    else:
+        image = image_utils.RawImage(glance_image)
+
+    virtual_size = image.get_size()
     vdi_size = virtual_size
     LOG.debug(_("Size for image %(image_id)s: %(virtual_size)d"),
               {'image_id': image_id, 'virtual_size': virtual_size},
@@ -1375,9 +1333,8 @@ def _fetch_disk_image(context, session, instance, name_label, image_id,
         vdi_uuid = session.call_xenapi("VDI.get_uuid", vdi_ref)
 
         with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
-            stream_func = lambda f: image_service.download(
-                    context, image_id, f)
-            _stream_disk(stream_func, image_type, virtual_size, dev)
+            _stream_disk(
+                session, image.stream_to, image_type, virtual_size, dev)
 
         if image_type in (ImageType.KERNEL, ImageType.RAMDISK):
             # We need to invoke a plugin for copying the
@@ -1430,24 +1387,27 @@ def determine_disk_image_type(image_meta):
     disk_format = image_meta['disk_format']
 
     disk_format_map = {
-        'ami': 'DISK',
-        'aki': 'KERNEL',
-        'ari': 'RAMDISK',
-        'raw': 'DISK_RAW',
-        'vhd': 'DISK_VHD',
-        'iso': 'DISK_ISO',
+        'ami': ImageType.DISK,
+        'aki': ImageType.KERNEL,
+        'ari': ImageType.RAMDISK,
+        'raw': ImageType.DISK_RAW,
+        'vhd': ImageType.DISK_VHD,
+        'iso': ImageType.DISK_ISO,
     }
 
     try:
-        image_type_str = disk_format_map[disk_format]
+        image_type = disk_format_map[disk_format]
     except KeyError:
         raise exception.InvalidDiskFormat(disk_format=disk_format)
 
-    image_type = getattr(ImageType, image_type_str)
-
     image_ref = image_meta['id']
+
+    params = {
+        'image_type_str': ImageType.to_string(image_type),
+        'image_ref': image_ref
+    }
     LOG.debug(_("Detected %(image_type_str)s format for image %(image_ref)s"),
-              {'image_type_str': image_type_str, 'image_ref': image_ref})
+              params)
 
     return image_type
 
@@ -1457,21 +1417,15 @@ def determine_is_pv(session, vdi_ref, disk_image_type, os_type):
     Determine whether the VM will use a paravirtualized kernel or if it
     will use hardware virtualization.
 
-        1. Glance (VHD): then we use `os_type`, raise if not set
+        1. Glance (VHD): if `os_type` is windows, HVM, otherwise PV
 
-        2. Glance (DISK_RAW): use Pygrub to figure out if pv kernel is
-           available
+        2. Glance (DISK_RAW): HVM
 
-        3. Glance (DISK): pv is assumed
+        3. Glance (DISK): PV
 
-        4. Glance (DISK_ISO): no pv is assumed
+        4. Glance (DISK_ISO): HVM
 
-        5. Boot From Volume - without image metadata (None): attempt to
-           use Pygrub to figure out if the volume stores a PV VM or a
-           HVM one. Log a warning, because there may be cases where the
-           volume is RAW (in which case using pygrub is fine) and cases
-           where the content of the volume is VHD, and pygrub might not
-           work as expected.
+        5. Boot From Volume - without image metadata (None): use HVM
            NOTE: if disk_image_type is not specified, instances launched
            from remote volumes will have to include kernel and ramdisk
            because external kernel and ramdisk will not be fetched.
@@ -1486,8 +1440,7 @@ def determine_is_pv(session, vdi_ref, disk_image_type, os_type):
             is_pv = True
     elif disk_image_type == ImageType.DISK_RAW:
         # 2. RAW
-        with vdi_attached_here(session, vdi_ref, read_only=True) as dev:
-            is_pv = _is_vdi_pv(dev)
+        is_pv = False
     elif disk_image_type == ImageType.DISK:
         # 3. Disk
         is_pv = True
@@ -1495,11 +1448,7 @@ def determine_is_pv(session, vdi_ref, disk_image_type, os_type):
         # 4. ISO
         is_pv = False
     elif not disk_image_type:
-        LOG.warning(_("Image format is None: trying to determine PV status "
-                      "using pygrub; if instance with vdi %s does not boot "
-                      "correctly, try with image metadata.") % vdi_ref)
-        with vdi_attached_here(session, vdi_ref, read_only=True) as dev:
-            is_pv = _is_vdi_pv(dev)
+        is_pv = False
     else:
         raise exception.NovaException(_("Unknown image format %s") %
                                       disk_image_type)
@@ -1612,7 +1561,7 @@ def compile_diagnostics(record):
         vm_uuid = record["uuid"]
         xml = _get_rrd(_get_rrd_server(), vm_uuid)
         if xml:
-            rrd = minidom.parseString(xml)
+            rrd = xmlutils.safe_minidom_parse_string(xml)
             for i, node in enumerate(rrd.firstChild.childNodes):
                 # Provide the last update of the information
                 if node.localName == 'lastupdate':
@@ -1691,12 +1640,14 @@ def _find_sr(session):
                     return sr_ref
     elif filter_criteria == 'default-sr' and filter_pattern == 'true':
         pool_ref = session.call_xenapi('pool.get_all')[0]
-        return session.call_xenapi('pool.get_default_SR', pool_ref)
+        sr_ref = session.call_xenapi('pool.get_default_SR', pool_ref)
+        if sr_ref:
+            return sr_ref
     # No SR found!
-    LOG.warning(_("XenAPI is unable to find a Storage Repository to "
-                  "install guest instances on. Please check your "
-                  "configuration and/or configure the flag "
-                  "'sr_matching_filter'"))
+    LOG.error(_("XenAPI is unable to find a Storage Repository to "
+                "install guest instances on. Please check your "
+                "configuration (e.g. set a default SR for the pool) "
+                "and/or configure the flag 'sr_matching_filter'."))
     return None
 
 
@@ -1994,7 +1945,14 @@ def _get_sys_hypervisor_uuid():
         return f.readline().strip()
 
 
-def get_this_vm_uuid():
+def get_this_vm_uuid(session):
+    if session and session.is_local_connection:
+        # UUID is the control domain running on this host
+        host_ref = session.get_xenapi_host()
+        vms = session.call_xenapi("VM.get_all_records_where",
+                                  'field "is_control_domain"="true" and '
+                                  'field "resident_on"="%s"' % host_ref)
+        return vms[vms.keys()[0]]['uuid']
     try:
         return _get_sys_hypervisor_uuid()
     except IOError:
@@ -2009,28 +1967,7 @@ def get_this_vm_uuid():
 
 
 def _get_this_vm_ref(session):
-    return session.call_xenapi("VM.get_by_uuid", get_this_vm_uuid())
-
-
-def _is_vdi_pv(dev):
-    LOG.debug(_("Running pygrub against %s"), dev)
-    dev_path = utils.make_dev_path(dev)
-    try:
-        out, err = utils.execute('pygrub', '-qn', dev_path, run_as_root=True)
-        for line in out:
-            # try to find kernel string
-            m = re.search('(?<=kernel:)/.*(?:>)', line)
-            if m and m.group(0).find('xen') != -1:
-                LOG.debug(_("Found Xen kernel %s") % m.group(0))
-                return True
-        LOG.debug(_("No Xen kernel found.  Booting HVM."))
-    except processutils.ProcessExecutionError:
-        LOG.exception(_("Error while executing pygrub! Please, ensure the "
-                        "binary is installed correctly, and available in your "
-                        "PATH; on some Linux distros, pygrub may be installed "
-                        "in /usr/lib/xen-X.Y/bin/pygrub. Attempting to boot "
-                        "in HVM mode."))
-    return False
+    return session.call_xenapi("VM.get_by_uuid", get_this_vm_uuid(session))
 
 
 def _get_partitions(dev):
@@ -2055,11 +1992,11 @@ def _get_partitions(dev):
     return partitions
 
 
-def _stream_disk(image_service_func, image_type, virtual_size, dev):
+def _stream_disk(session, image_service_func, image_type, virtual_size, dev):
     offset = 0
     if image_type == ImageType.DISK:
         offset = MBR_SIZE_BYTES
-        _write_partition(virtual_size, dev)
+        _write_partition(session, virtual_size, dev)
 
     dev_path = utils.make_dev_path(dev)
 
@@ -2069,7 +2006,7 @@ def _stream_disk(image_service_func, image_type, virtual_size, dev):
             image_service_func(f)
 
 
-def _write_partition(virtual_size, dev):
+def _write_partition(session, virtual_size, dev):
     dev_path = utils.make_dev_path(dev)
     primary_first = MBR_SIZE_SECTORS
     primary_last = MBR_SIZE_SECTORS + (virtual_size / SECTOR_SIZE) - 1
@@ -2082,12 +2019,7 @@ def _write_partition(virtual_size, dev):
     def execute(*cmd, **kwargs):
         return utils.execute(*cmd, **kwargs)
 
-    execute('parted', '--script', dev_path, 'mklabel', 'msdos',
-            run_as_root=True)
-    execute('parted', '--script', dev_path, 'mkpart', 'primary',
-            '%ds' % primary_first,
-            '%ds' % primary_last,
-            run_as_root=True)
+    _make_partition(session, dev, "%ds" % primary_first, "%ds" % primary_last)
 
     LOG.debug(_('Writing partition table %s done.'), dev_path)
 
@@ -2224,7 +2156,7 @@ def _copy_partition(session, src_ref, dst_ref, partition, virtual_size):
         with vdi_attached_here(session, dst_ref, read_only=False) as dst:
             dst_path = utils.make_dev_path(dst, partition=partition)
 
-            _write_partition(virtual_size, dst)
+            _write_partition(session, virtual_size, dst)
 
             if CONF.xenapi_sparse_copy:
                 _sparse_copy(src_path, dst_path, virtual_size)
@@ -2280,11 +2212,11 @@ def _prepare_injectables(inst, network_info):
     prepares the ssh key and the network configuration file to be
     injected into the disk image
     """
-    #do the import here - Cheetah.Template will be loaded
-    #only if injection is performed
-    from Cheetah import Template as t
-    template = t.Template
-    template_data = open(CONF.injected_network_template).read()
+    #do the import here - Jinja2 will be loaded only if injection is performed
+    import jinja2
+    tmpl_path, tmpl_file = os.path.split(CONF.injected_network_template)
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path))
+    template = env.get_template(tmpl_file)
 
     metadata = inst['metadata']
     key = str(inst['key_data'])
@@ -2367,9 +2299,8 @@ def _prepare_injectables(inst, network_info):
             interfaces_info.append(interface_info)
 
         if interfaces_info:
-            net = str(template(template_data,
-                                searchList=[{'interfaces': interfaces_info,
-                                            'use_ipv6': CONF.use_ipv6}]))
+            net = template.render({'interfaces': interfaces_info,
+                                   'use_ipv6': CONF.use_ipv6})
     return key, net, metadata
 
 
@@ -2377,7 +2308,7 @@ def ensure_correct_host(session):
     """Ensure we're connected to the host we're running on. This is the
     required configuration for anything that uses vdi_attached_here.
     """
-    this_vm_uuid = get_this_vm_uuid()
+    this_vm_uuid = get_this_vm_uuid(session)
 
     try:
         session.call_xenapi('VM.get_by_uuid', this_vm_uuid)
@@ -2412,3 +2343,64 @@ def vm_ref_or_raise(session, instance_name):
     if vm_ref is None:
         raise exception.InstanceNotFound(instance_id=instance_name)
     return vm_ref
+
+
+def handle_ipxe_iso(session, instance, cd_vdi, network_info):
+    """iPXE ISOs are a mechanism to allow the customer to roll their own
+    image.
+
+    To use this feature, a service provider needs to configure the
+    appropriate Nova flags, roll an iPXE ISO, then distribute that image
+    to customers via Glance.
+
+    NOTE: `mkisofs` is not present by default in the Dom0, so the service
+    provider can either add that package manually to Dom0 or include the
+    `mkisofs` binary in the image itself.
+    """
+    boot_menu_url = CONF.xenapi_ipxe_boot_menu_url
+    if not boot_menu_url:
+        LOG.warn(_('xenapi_ipxe_boot_menu_url not set, user will have to'
+                   ' enter URL manually...'), instance=instance)
+        return
+
+    network_name = CONF.xenapi_ipxe_network_name
+    if not network_name:
+        LOG.warn(_('xenapi_ipxe_network_name not set, user will have to'
+                   ' enter IP manually...'), instance=instance)
+        return
+
+    network = None
+    for vif in network_info:
+        if vif['network']['label'] == network_name:
+            network = vif['network']
+            break
+
+    if not network:
+        LOG.warn(_("Unable to find network matching '%(network_name)s', user"
+                   " will have to enter IP manually...") %
+                 {'network_name': network_name}, instance=instance)
+        return
+
+    sr_path = get_sr_path(session)
+
+    # Unpack IPv4 network info
+    subnet = [sn for sn in network['subnets']
+              if sn['version'] == 4][0]
+    ip = subnet['ips'][0]
+
+    ip_address = ip['address']
+    netmask = network_model.get_netmask(ip, subnet)
+    gateway = subnet['gateway']['address']
+    dns = subnet['dns'][0]['address']
+
+    try:
+        session.call_plugin_serialized("ipxe", "inject", sr_path,
+                cd_vdi['uuid'], boot_menu_url, ip_address, netmask,
+                gateway, dns, CONF.xenapi_ipxe_mkisofs_cmd)
+    except session.XenAPI.Failure as exc:
+        _type, _method, error = exc.details[:3]
+        if error == 'CommandNotFound':
+            LOG.warn(_("ISO creation tool '%s' does not exist.") %
+                     CONF.xenapi_ipxe_mkisofs_cmd, instance=instance)
+        else:
+            raise

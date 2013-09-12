@@ -134,12 +134,40 @@ class SimpleTenantUsageTest(test.TestCase):
         future = NOW + datetime.timedelta(hours=HOURS)
         self._test_verify_index(START, future)
 
+    def test_verify_index_with_invalid_time_format(self):
+        req = webob.Request.blank(
+                    '/v3/os-simple-tenant-usage?start=%s&end=%s' %
+                    ('aa', 'bb'))
+        req.method = "GET"
+        req.headers["content-type"] = "application/json"
+
+        res = req.get_response(fakes.wsgi_app_v3(
+                               fake_auth_context=self.admin_context,
+                               init_only=('os-simple-tenant-usage',
+                               'servers')))
+        self.assertEqual(res.status_int, 400)
+
     def test_verify_show(self):
         self._test_verify_show(START, STOP)
 
     def test_verify_show_future_end_time(self):
         future = NOW + datetime.timedelta(hours=HOURS)
         self._test_verify_show(START, future)
+
+    def test_verify_show_with_invalid_time_format(self):
+        tenant_id = 0
+        req = webob.Request.blank(
+                  '/v3/os-simple-tenant-usage/'
+                  'faketenant_%s?start=%s&end=%s' %
+                  (tenant_id, 'aa', 'bb'))
+        req.method = "GET"
+        req.headers["content-type"] = "application/json"
+
+        res = req.get_response(fakes.wsgi_app_v3(
+                               fake_auth_context=self.user_context,
+                               init_only=('os-simple-tenant-usage',
+                               'servers')))
+        self.assertEqual(res.status_int, 400)
 
     def _get_tenant_usages(self, detailed=''):
         req = webob.Request.blank(
@@ -427,7 +455,7 @@ class SimpleTenantUsageControllerTest(test.TestCase):
         self.compute_api = FakeComputeAPI()
         self.context = None
 
-        now = datetime.datetime.now()
+        now = timeutils.utcnow()
         self.baseinst = dict(display_name='foo',
                              launched_at=now - datetime.timedelta(1),
                              terminated_at=now,

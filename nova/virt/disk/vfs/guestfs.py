@@ -18,6 +18,7 @@ from eventlet import tpool
 import guestfs
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt.disk.vfs import api as vfs
 from nova.virt.libvirt import driver as libvirt_driver
@@ -85,11 +86,25 @@ class VFSGuestFS(vfs.VFS):
                 _("No mount points found in %(root)s of %(imgfile)s") %
                 {'root': root, 'imgfile': self.imgfile})
 
-        mounts.sort(key=lambda mount: mount[1])
+        # the root directory must be mounted first
+        mounts.sort(key=lambda mount: mount[0])
+
+        root_mounted = False
         for mount in mounts:
             LOG.debug(_("Mounting %(dev)s at %(dir)s") %
                       {'dev': mount[1], 'dir': mount[0]})
-            self.handle.mount_options("", mount[1], mount[0])
+            try:
+                self.handle.mount_options("", mount[1], mount[0])
+                root_mounted = True
+            except RuntimeError as e:
+                msg = _("Error mounting %(device)s to %(dir)s in image"
+                        " %(imgfile)s with libguestfs (%(e)s)") % \
+                      {'imgfile': self.imgfile, 'device': mount[1],
+                       'dir': mount[0], 'e': e}
+                if root_mounted:
+                    LOG.debug(msg)
+                else:
+                    raise exception.NovaException(msg)
 
     def setup(self):
         LOG.debug(_("Setting up appliance for %(imgfile)s %(imgfmt)s") %

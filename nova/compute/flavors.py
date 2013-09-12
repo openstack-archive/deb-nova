@@ -29,8 +29,10 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.openstack.common.db import exception as db_exc
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
+from nova.pci import pci_request
 from nova import utils
 
 flavor_opts = [
@@ -38,7 +40,8 @@ flavor_opts = [
                # Deprecated in Havana
                deprecated_name='default_instance_type',
                default='m1.small',
-               help='default flavor to use, testing only'),
+               help='default flavor to use for the EC2 API only. The Nova API '
+               'does not support a default flavor.'),
 ]
 
 CONF = cfg.CONF
@@ -46,7 +49,7 @@ CONF.register_opts(flavor_opts)
 
 LOG = logging.getLogger(__name__)
 
-INVALID_NAME_REGEX = re.compile("[^\w\.\- ]")
+VALID_NAME_OR_ID_REGEX = re.compile("^[\w\.\- ]*$")
 
 
 def _int_or_none(val):
@@ -87,26 +90,47 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb=0, flavorid=None,
     utils.check_string_length(name, 'name', min_length=1, max_length=255)
 
     # ensure name does not contain any special characters
-    invalid_name = INVALID_NAME_REGEX.search(name)
-    if invalid_name:
+    valid_name = VALID_NAME_OR_ID_REGEX.search(name)
+    if not valid_name:
         msg = _("names can only contain [a-zA-Z0-9_.- ]")
+        raise exception.InvalidInput(reason=msg)
+
+    # NOTE(vish): Internally, flavorid is stored as a string but it comes
+    #             in through json as an integer, so we convert it here.
+    flavorid = unicode(flavorid)
+
+    # ensure leading/trailing whitespaces not present.
+    if flavorid.strip() != flavorid:
+        msg = _("id cannot contain leading and/or trailing whitespace(s)")
+        raise exception.InvalidInput(reason=msg)
+
+    # ensure flavor id does not exceed 255 characters
+    utils.check_string_length(flavorid, 'id', min_length=1,
+                              max_length=255)
+
+    # ensure flavor id does not contain any special characters
+    valid_flavor_id = VALID_NAME_OR_ID_REGEX.search(flavorid)
+    if not valid_flavor_id:
+        msg = _("id can only contain [a-zA-Z0-9_.- ]")
         raise exception.InvalidInput(reason=msg)
 
     # Some attributes are positive ( > 0) integers
     for option in ['memory_mb', 'vcpus']:
         try:
-            assert int(str(kwargs[option])) > 0
+            if int(str(kwargs[option])) <= 0:
+                raise ValueError()
             kwargs[option] = int(kwargs[option])
-        except (ValueError, AssertionError, TypeError):
+        except (ValueError, TypeError):
             msg = _("'%s' argument must be a positive integer") % option
             raise exception.InvalidInput(reason=msg)
 
     # Some attributes are non-negative ( >= 0) integers
     for option in ['root_gb', 'ephemeral_gb', 'swap']:
         try:
-            assert int(str(kwargs[option])) >= 0
+            if int(str(kwargs[option])) < 0:
+                raise ValueError()
             kwargs[option] = int(kwargs[option])
-        except (ValueError, AssertionError, TypeError):
+        except (ValueError, TypeError):
             msg = _("'%s' argument must be an integer greater than or"
                     " equal to 0") % option
             raise exception.InvalidInput(reason=msg)
@@ -114,16 +138,14 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb=0, flavorid=None,
     # rxtx_factor should be a positive float
     try:
         kwargs['rxtx_factor'] = float(kwargs['rxtx_factor'])
-        assert kwargs['rxtx_factor'] > 0
-    except (ValueError, AssertionError):
+        if kwargs['rxtx_factor'] <= 0:
+            raise ValueError()
+    except ValueError:
         msg = _("'rxtx_factor' argument must be a positive float")
         raise exception.InvalidInput(reason=msg)
 
     kwargs['name'] = name
-    # NOTE(vish): Internally, flavorid is stored as a string but it comes
-    #             in through json as an integer, so we convert it here.
-    kwargs['flavorid'] = unicode(flavorid)
-
+    kwargs['flavorid'] = flavorid
     # ensure is_public attribute is boolean
     try:
         kwargs['is_public'] = strutils.bool_from_string(
@@ -141,15 +163,16 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb=0, flavorid=None,
 def destroy(name):
     """Marks flavor as deleted."""
     try:
-        assert name is not None
+        if not name:
+            raise ValueError()
         db.flavor_destroy(context.get_admin_context(), name)
-    except (AssertionError, exception.NotFound):
+    except (ValueError, exception.NotFound):
         LOG.exception(_('Instance type %s not found for deletion') % name)
         raise exception.InstanceTypeNotFoundByName(instance_type_name=name)
 
 
 def get_all_flavors(ctxt=None, inactive=False, filters=None):
-    """Get all non-deleted flavors.
+    """Get all non-deleted flavors as a dict.
 
     Pass true as argument if you want deleted flavors returned also.
     """
@@ -163,6 +186,20 @@ def get_all_flavors(ctxt=None, inactive=False, filters=None):
     for inst_type in inst_types:
         inst_type_dict[inst_type['name']] = inst_type
     return inst_type_dict
+
+
+def get_all_flavors_sorted_list(ctxt=None, inactive=False, filters=None,
+                                sort_key='flavorid', sort_dir='asc',
+                                limit=None, marker=None):
+    """Get all non-deleted flavors as a sorted list.
+
+    Pass true as argument if you want deleted flavors returned also.
+    """
+    if ctxt is None:
+        ctxt = context.get_admin_context()
+
+    return db.flavor_get_all(ctxt, filters=filters, sort_key=sort_key,
+                             sort_dir=sort_dir, limit=limit, marker=marker)
 
 
 def get_default_flavor():
@@ -260,6 +297,7 @@ def save_flavor_info(metadata, instance_type, prefix=''):
     for key in system_metadata_flavor_props.keys():
         to_key = '%sinstance_type_%s' % (prefix, key)
         metadata[to_key] = instance_type[key]
+    pci_request.save_flavor_pci_info(metadata, instance_type, prefix)
     return metadata
 
 
@@ -272,4 +310,5 @@ def delete_flavor_info(metadata, *prefixes):
         for prefix in prefixes:
             to_key = '%sinstance_type_%s' % (prefix, key)
             del metadata[to_key]
+    pci_request.delete_flavor_pci_info(metadata, *prefixes)
     return metadata

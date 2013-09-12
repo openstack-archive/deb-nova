@@ -83,6 +83,10 @@ class AvailabilityZoneTestCases(test.TestCase):
         return db.aggregate_host_delete(self.context,
                                         aggregate['id'], service['host'])
 
+    def test_rest_availability_zone_reset_cache(self):
+        az.reset_cache()
+        self.assertEqual(az._get_cache().get('cache'), None)
+
     def test_set_availability_zone_compute_service(self):
         """Test for compute service get right availability zone."""
         service = self._create_service_with_topic('compute', self.host)
@@ -101,6 +105,16 @@ class AvailabilityZoneTestCases(test.TestCase):
         self.assertEquals(new_service['availability_zone'],
                           self.availability_zone)
 
+        self._destroy_service(service)
+
+    def test_set_availability_zone_unicode_key(self):
+        """Test set availability zone cache key is unicode."""
+        service = self._create_service_with_topic('network', self.host)
+        services = db.service_get_all(self.context)
+        new_service = az.set_availability_zones(self.context, services)[0]
+        self.assertEquals(type(services[0]['host']), unicode)
+        cached_key = az._make_cache_key(services[0]['host'])
+        self.assertEquals(type(cached_key), str)
         self._destroy_service(service)
 
     def test_set_availability_zone_not_compute_service(self):
@@ -157,8 +171,11 @@ class AvailabilityZoneTestCases(test.TestCase):
     def test_get_availability_zones(self):
         """Test get_availability_zones."""
 
-        # get_availability_zones returns two lists, zones with at least one
-        # enabled services, and zones with no enabled services.
+        # When the param get_only_available of get_availability_zones is set
+        # to default False, it returns two lists, zones with at least one
+        # enabled services, and zones with no enabled services,
+        # when get_only_available is set to True, only return a list of zones
+        # with at least one enabled servies.
         # Use the following test data:
         #
         # zone         host        enabled
@@ -191,6 +208,10 @@ class AvailabilityZoneTestCases(test.TestCase):
 
         self.assertEquals(zones, ['nova-test', 'nova-test2'])
         self.assertEquals(not_zones, ['nova-test3', 'nova'])
+
+        zones = az.get_availability_zones(self.context, True)
+
+        self.assertEquals(zones, ['nova-test', 'nova-test2'])
 
     def test_get_instance_availability_zone_default_value(self):
         """Test get right availability zone by given an instance."""

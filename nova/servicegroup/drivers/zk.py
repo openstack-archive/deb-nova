@@ -20,6 +20,7 @@ import eventlet
 from oslo.config import cfg
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
@@ -31,7 +32,6 @@ zookeeper = importutils.try_import('zookeeper')
 
 zk_driver_opts = [
     cfg.StrOpt('address',
-               default=None,
                help='The ZooKeeper addresses for servicegroup service in the '
                     'format of host1:port,host2:port,host3:port'),
     cfg.IntOpt('recv_timeout',

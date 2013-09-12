@@ -43,6 +43,8 @@ from oslo.config import cfg
 
 from nova import exception
 from nova.openstack.common import excutils
+from nova.openstack.common import gettextutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
@@ -50,7 +52,7 @@ from nova.openstack.common import processutils
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 
-notify_decorator = 'nova.openstack.common.notifier.api.notify_decorator'
+notify_decorator = 'nova.notifications.notify_decorator'
 
 monkey_patch_opts = [
     cfg.BoolOpt('monkey_patch',
@@ -76,12 +78,12 @@ utils_opts = [
                help='Path to the rootwrap configuration file to use for '
                     'running commands as root'),
     cfg.StrOpt('tempdir',
-               default=None,
                help='Explicitly specify the temporary working directory'),
 ]
 CONF = cfg.CONF
 CONF.register_opts(monkey_patch_opts)
 CONF.register_opts(utils_opts)
+CONF.import_opt('network_api_class', 'nova.network')
 
 LOG = logging.getLogger(__name__)
 
@@ -103,7 +105,16 @@ TIME_UNITS = {
     'DAY': 84400
 }
 
+
+_IS_NEUTRON_ATTEMPTED = False
+_IS_NEUTRON = False
+
 synchronized = lockutils.synchronized_with_prefix('nova-')
+
+SM_IMAGE_PROP_PREFIX = "image_"
+SM_INHERITABLE_KEYS = (
+    'min_ram', 'min_disk', 'disk_format', 'container_format',
+)
 
 
 def vpn_ping(address, port, timeout=0.05, session_id=None):
@@ -155,17 +166,21 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
         return server_sess
 
 
+def get_root_helper():
+    return 'sudo nova-rootwrap %s' % CONF.rootwrap_config
+
+
 def execute(*cmd, **kwargs):
     """Convenience wrapper around oslo's execute() method."""
     if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
-        kwargs['root_helper'] = 'sudo nova-rootwrap %s' % CONF.rootwrap_config
+        kwargs['root_helper'] = get_root_helper()
     return processutils.execute(*cmd, **kwargs)
 
 
 def trycmd(*args, **kwargs):
     """Convenience wrapper around oslo's trycmd() method."""
     if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
-        kwargs['root_helper'] = 'sudo nova-rootwrap %s' % CONF.rootwrap_config
+        kwargs['root_helper'] = get_root_helper()
     return processutils.trycmd(*args, **kwargs)
 
 
@@ -398,7 +413,7 @@ def get_my_linklocal(interface):
             raise exception.NovaException(msg)
     except Exception as ex:
         msg = _("Couldn't get Link Local IP of %(interface)s"
-                " :%(ex)s") % locals()
+                " :%(ex)s") % {'interface': interface, 'ex': ex}
         raise exception.NovaException(msg)
 
 
@@ -471,6 +486,8 @@ def utf8(value):
     """
     if isinstance(value, unicode):
         return value.encode('utf-8')
+    elif isinstance(value, gettextutils.Message):
+        return unicode(value).encode('utf-8')
     assert isinstance(value, str)
     return value
 
@@ -706,10 +723,10 @@ def monkey_patch():
     using CONF.monkey_patch_modules.
     The format is "Module path:Decorator function".
     Example:
-      'nova.api.ec2.cloud:nova.openstack.common.notifier.api.notify_decorator'
+      'nova.api.ec2.cloud:nova.notifications.notify_decorator'
 
     Parameters of the decorator is as follows.
-    (See nova.openstack.common.notifier.api.notify_decorator)
+    (See nova.notifications.notify_decorator)
 
     name - name of the function
     function - object of the function
@@ -1045,6 +1062,8 @@ def instance_meta(instance):
 
 
 def instance_sys_meta(instance):
+    if not instance.get('system_metadata'):
+        return {}
     if isinstance(instance['system_metadata'], dict):
         return instance['system_metadata']
     else:
@@ -1104,14 +1123,40 @@ def check_string_length(value, name, min_length=0, max_length=None):
         raise exception.InvalidInput(message=msg)
 
     if len(value) < min_length:
-        msg = _("%(name)s has less than %(min_length)s "
-                    "characters.") % locals()
+        msg = _("%(name)s has a minimum character requirement of "
+                "%(min_length)s.") % {'name': name, 'min_length': min_length}
         raise exception.InvalidInput(message=msg)
 
     if max_length and len(value) > max_length:
         msg = _("%(name)s has more than %(max_length)s "
-                    "characters.") % locals()
+                "characters.") % {'name': name, 'max_length': max_length}
         raise exception.InvalidInput(message=msg)
+
+
+def validate_integer(value, name, min_value=None, max_value=None):
+    """Make sure that value is a valid integer, potentially within range."""
+    try:
+        value = int(str(value))
+    except ValueError:
+        msg = _('%(value_name)s must be an integer')
+        raise exception.InvalidInput(reason=(
+            msg % {'value_name': name}))
+
+    if min_value is not None:
+        if value < min_value:
+            msg = _('%(value_name)s must be >= %(min_value)d')
+            raise exception.InvalidInput(
+                reason=(msg % {'value_name': name,
+                               'min_value': min_value}))
+    if max_value is not None:
+        if value > max_value:
+            msg = _('%(value_name)s must be <= %(max_value)d')
+            raise exception.InvalidInput(
+                reason=(
+                    msg % {'value_name': name,
+                           'max_value': max_value})
+            )
+    return value
 
 
 def spawn_n(func, *args, **kwargs):
@@ -1135,3 +1180,78 @@ def is_none_string(val):
 
 def convert_version_to_int(version):
     return version[0] * 1000000 + version[1] * 1000 + version[2]
+
+
+def is_neutron():
+    global _IS_NEUTRON_ATTEMPTED
+    global _IS_NEUTRON
+
+    if _IS_NEUTRON_ATTEMPTED:
+        return _IS_NEUTRON
+
+    try:
+        # compatibility with Folsom/Grizzly configs
+        cls_name = CONF.network_api_class
+        if cls_name == 'nova.network.quantumv2.api.API':
+            cls_name = 'nova.network.neutronv2.api.API'
+        _IS_NEUTRON_ATTEMPTED = True
+
+        from nova.network.neutronv2 import api as neutron_api
+        _IS_NEUTRON = issubclass(importutils.import_class(cls_name),
+                                 neutron_api.API)
+    except ImportError:
+        _IS_NEUTRON = False
+
+    return _IS_NEUTRON
+
+
+def reset_is_neutron():
+    global _IS_NEUTRON_ATTEMPTED
+    global _IS_NEUTRON
+
+    _IS_NEUTRON_ATTEMPTED = False
+    _IS_NEUTRON = False
+
+
+def is_auto_disk_config_disabled(auto_disk_config_raw):
+    auto_disk_config_disabled = False
+    if auto_disk_config_raw is not None:
+        adc_lowered = auto_disk_config_raw.strip().lower()
+        if adc_lowered == "disabled":
+            auto_disk_config_disabled = True
+    return auto_disk_config_disabled
+
+
+def get_auto_disk_config_from_instance(instance=None, sys_meta=None):
+    if sys_meta is None:
+        sys_meta = instance_sys_meta(instance)
+    return sys_meta.get("image_auto_disk_config")
+
+
+def get_auto_disk_config_from_image_props(image_properties):
+    return image_properties.get("auto_disk_config")
+
+
+def get_system_metadata_from_image(image_meta, instance_type=None):
+    system_meta = {}
+    prefix_format = SM_IMAGE_PROP_PREFIX + '%s'
+
+    for key, value in image_meta.get('properties', {}).iteritems():
+        new_value = unicode(value)[:255]
+        system_meta[prefix_format % key] = new_value
+
+    for key in SM_INHERITABLE_KEYS:
+        value = image_meta.get(key)
+
+        if key == 'min_disk' and instance_type:
+            if image_meta.get('disk_format') == 'vhd':
+                value = instance_type['root_gb']
+            else:
+                value = max(value, instance_type['root_gb'])
+
+        if value is None:
+            continue
+
+        system_meta[prefix_format % key] = value
+
+    return system_meta

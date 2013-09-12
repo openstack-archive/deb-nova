@@ -65,7 +65,7 @@ class CellsManager(manager.Manager):
 
     Scheduling requests get passed to the scheduler class.
     """
-    RPC_API_VERSION = '1.13'
+    RPC_API_VERSION = '1.24'
 
     def __init__(self, *args, **kwargs):
         # Mostly for tests.
@@ -261,6 +261,18 @@ class CellsManager(manager.Manager):
         cells_utils.add_cell_to_service(service, response.cell_name)
         return service
 
+    def get_host_uptime(self, ctxt, host_name):
+        """
+        Return host uptime for a compute host in a certain cell
+
+        :param host_name: fully qualified hostname. It should be in format of
+         parent!child@host_id
+        """
+        cell_name, host_name = cells_utils.split_cell_and_item(host_name)
+        response = self.msg_runner.get_host_uptime(ctxt, cell_name,
+                                                   host_name)
+        return response.value_or_raise()
+
     def service_update(self, ctxt, host_name, binary, params_to_update):
         """
         Used to enable/disable a service. For compute services, setting to
@@ -418,6 +430,14 @@ class CellsManager(manager.Manager):
             migrations += response.value_or_raise()
         return migrations
 
+    def instance_update_from_api(self, ctxt, instance, expected_vm_state,
+                        expected_task_state, admin_state_reset):
+        """Update an instance in its cell."""
+        self.msg_runner.instance_update_from_api(ctxt, instance,
+                                                 expected_vm_state,
+                                                 expected_task_state,
+                                                 admin_state_reset)
+
     def start_instance(self, ctxt, instance):
         """Start an instance in its cell."""
         self.msg_runner.start_instance(ctxt, instance)
@@ -440,3 +460,70 @@ class CellsManager(manager.Manager):
 
     def cell_get(self, ctxt, cell_name):
         return self.state_manager.cell_get(ctxt, cell_name)
+
+    def reboot_instance(self, ctxt, instance, reboot_type):
+        """Reboot an instance in its cell."""
+        self.msg_runner.reboot_instance(ctxt, instance, reboot_type)
+
+    def pause_instance(self, ctxt, instance):
+        """Pause an instance in its cell."""
+        self.msg_runner.pause_instance(ctxt, instance)
+
+    def unpause_instance(self, ctxt, instance):
+        """Unpause an instance in its cell."""
+        self.msg_runner.unpause_instance(ctxt, instance)
+
+    def suspend_instance(self, ctxt, instance):
+        """Suspend an instance in its cell."""
+        self.msg_runner.suspend_instance(ctxt, instance)
+
+    def resume_instance(self, ctxt, instance):
+        """Resume an instance in its cell."""
+        self.msg_runner.resume_instance(ctxt, instance)
+
+    def terminate_instance(self, ctxt, instance):
+        """Delete an instance in its cell."""
+        self.msg_runner.terminate_instance(ctxt, instance)
+
+    def soft_delete_instance(self, ctxt, instance):
+        """Soft-delete an instance in its cell."""
+        self.msg_runner.soft_delete_instance(ctxt, instance)
+
+    def resize_instance(self, ctxt, instance, flavor,
+                        extra_instance_updates):
+        """Resize an instance in its cell."""
+        self.msg_runner.resize_instance(ctxt, instance,
+                                        flavor, extra_instance_updates)
+
+    def live_migrate_instance(self, ctxt, instance, block_migration,
+                              disk_over_commit, host_name):
+        """Live migrate an instance in its cell."""
+        self.msg_runner.live_migrate_instance(ctxt, instance,
+                                              block_migration,
+                                              disk_over_commit,
+                                              host_name)
+
+    def revert_resize(self, ctxt, instance):
+        """Revert a resize for an instance in its cell."""
+        self.msg_runner.revert_resize(ctxt, instance)
+
+    def confirm_resize(self, ctxt, instance):
+        """Confirm a resize for an instance in its cell."""
+        self.msg_runner.confirm_resize(ctxt, instance)
+
+    def reset_network(self, ctxt, instance):
+        """Reset networking for an instance in its cell."""
+        self.msg_runner.reset_network(ctxt, instance)
+
+    def inject_network_info(self, ctxt, instance):
+        """Inject networking for an instance in its cell."""
+        self.msg_runner.inject_network_info(ctxt, instance)
+
+    def snapshot_instance(self, ctxt, instance, image_id):
+        """Snapshot an instance in its cell."""
+        self.msg_runner.snapshot_instance(ctxt, instance, image_id)
+
+    def backup_instance(self, ctxt, instance, image_id, backup_type, rotation):
+        """Backup an instance in its cell."""
+        self.msg_runner.backup_instance(ctxt, instance, image_id,
+                                        backup_type, rotation)

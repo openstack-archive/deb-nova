@@ -35,6 +35,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.image import glance
+from nova.openstack.common.gettextutils import _
 from nova import test
 from nova.tests import fake_network
 from nova.tests.image import fake as fake_image
@@ -50,10 +51,13 @@ from nova.virt.hyperv import driver as driver_hyperv
 from nova.virt.hyperv import hostutils
 from nova.virt.hyperv import livemigrationutils
 from nova.virt.hyperv import networkutils
+from nova.virt.hyperv import networkutilsv2
 from nova.virt.hyperv import pathutils
+from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vhdutils
+from nova.virt.hyperv import vhdutilsv2
 from nova.virt.hyperv import vmutils
-from nova.virt.hyperv import volumeops
+from nova.virt.hyperv import vmutilsv2
 from nova.virt.hyperv import volumeutils
 from nova.virt.hyperv import volumeutilsv2
 from nova.virt import images
@@ -86,11 +90,14 @@ class HyperVAPITestCase(test.TestCase):
         self._instance_volume_disks = []
         self._test_vm_name = None
         self._test_instance_dir = 'C:\\FakeInstancesPath\\instance-0000001'
+        self._check_min_windows_version_satisfied = True
 
         self._setup_stubs()
 
         self.flags(instances_path=r'C:\Hyper-V\test\instances',
                    network_api_class='nova.network.neutronv2.api.API')
+        self.flags(force_volumeutils_v1=True, group='hyperv')
+        self.flags(force_hyperv_utils_v1=True, group='hyperv')
 
         self._conn = driver_hyperv.HyperVDriver(None)
 
@@ -114,6 +121,11 @@ class HyperVAPITestCase(test.TestCase):
         self.stubs.Set(glance, 'get_remote_image_service',
                        fake_get_remote_image_service)
 
+        def fake_check_min_windows_version(fake_self, major, minor):
+            return self._check_min_windows_version_satisfied
+        self.stubs.Set(hostutils.HostUtils, 'check_min_windows_version',
+                       fake_check_min_windows_version)
+
         def fake_sleep(ms):
             pass
         self.stubs.Set(time, 'sleep', fake_sleep)
@@ -121,10 +133,6 @@ class HyperVAPITestCase(test.TestCase):
         def fake_vmutils__init__(self, host='.'):
             pass
         vmutils.VMUtils.__init__ = fake_vmutils__init__
-
-        def fake_get_volume_utils(self):
-            return volumeutils.VolumeUtils()
-        volumeops.VolumeOps._get_volume_utils = fake_get_volume_utils
 
         self.stubs.Set(pathutils, 'PathUtils', fake.PathUtils)
         self._mox.StubOutWithMock(fake.PathUtils, 'open')
@@ -161,6 +169,8 @@ class HyperVAPITestCase(test.TestCase):
         self._mox.StubOutWithMock(vmutils.VMUtils, 'get_vm_storage_paths')
         self._mox.StubOutWithMock(vmutils.VMUtils,
                                   'get_controller_volume_paths')
+        self._mox.StubOutWithMock(vmutils.VMUtils,
+                                  'enable_vm_metrics_collection')
 
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'create_differencing_vhd')
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'reconnect_parent_vhd')
@@ -169,6 +179,8 @@ class HyperVAPITestCase(test.TestCase):
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'get_vhd_info')
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'resize_vhd')
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'validate_vhd')
+        self._mox.StubOutWithMock(vhdutils.VHDUtils, 'get_vhd_format')
+        self._mox.StubOutWithMock(vhdutils.VHDUtils, 'create_dynamic_vhd')
 
         self._mox.StubOutWithMock(hostutils.HostUtils, 'get_cpus_info')
         self._mox.StubOutWithMock(hostutils.HostUtils,
@@ -182,6 +194,8 @@ class HyperVAPITestCase(test.TestCase):
                                   'get_external_vswitch')
         self._mox.StubOutWithMock(networkutils.NetworkUtils,
                                   'create_vswitch_port')
+        self._mox.StubOutWithMock(networkutils.NetworkUtils,
+                                  'vswitch_port_needed')
 
         self._mox.StubOutWithMock(livemigrationutils.LiveMigrationUtils,
                                   'live_migrate_vm')
@@ -203,6 +217,8 @@ class HyperVAPITestCase(test.TestCase):
                                   'logout_storage_target')
         self._mox.StubOutWithMock(volumeutils.VolumeUtils,
                                   'execute_log_out')
+        self._mox.StubOutWithMock(volumeutils.VolumeUtils,
+                                  'get_iscsi_initiator')
 
         self._mox.StubOutWithMock(volumeutilsv2.VolumeUtilsV2,
                                   'login_storage_target')
@@ -267,6 +283,8 @@ class HyperVAPITestCase(test.TestCase):
                           tot_hdd_b / 1024 ** 3 - free_hdd_b / 1024 ** 3)
         self.assertEquals(dic['hypervisor_version'],
                           windows_version.replace('.', ''))
+        self.assertEquals(dic['supported_instances'],
+                '[["i686", "hyperv", "hvm"], ["x86_64", "hyperv", "hvm"]]')
 
     def test_get_host_stats(self):
         tot_mem_kb = 2000000L
@@ -344,8 +362,18 @@ class HyperVAPITestCase(test.TestCase):
     def test_spawn_cow_image(self):
         self._test_spawn_instance(True)
 
+    def test_spawn_cow_image_vhdx(self):
+        self._test_spawn_instance(True, vhd_format=constants.DISK_FORMAT_VHDX)
+
     def test_spawn_no_cow_image(self):
         self._test_spawn_instance(False)
+
+    def test_spawn_dynamic_memory(self):
+        CONF.set_override('dynamic_memory_ratio', 2.0, 'hyperv')
+        self._test_spawn_instance()
+
+    def test_spawn_no_cow_image_vhdx(self):
+        self._test_spawn_instance(False, vhd_format=constants.DISK_FORMAT_VHDX)
 
     def _setup_spawn_config_drive_mocks(self, use_cdrom):
         im = instance_metadata.InstanceMetadata(mox.IgnoreArg(),
@@ -414,7 +442,7 @@ class HyperVAPITestCase(test.TestCase):
         self._test_spawn_instance(expected_ide_disks=expected_ide_disks,
                                   expected_ide_dvds=expected_ide_dvds)
 
-    def test_spawn_nova_net_vif(self):
+    def _test_spawn_nova_net_vif(self, with_port):
         self.flags(network_api_class='nova.network.api.API')
         # Reinstantiate driver, as the VIF plugin is loaded during __init__
         self._conn = driver_hyperv.HyperVDriver(None)
@@ -427,14 +455,27 @@ class HyperVAPITestCase(test.TestCase):
                 CONF.hyperv.vswitch_name)
             m.AndReturn(fake_vswitch_path)
 
-            m = networkutils.NetworkUtils.create_vswitch_port(
-                fake_vswitch_path, mox.IsA(str))
-            m.AndReturn(fake_vswitch_port)
+            m = networkutils.NetworkUtils.vswitch_port_needed()
+            m.AndReturn(with_port)
+
+            if with_port:
+                m = networkutils.NetworkUtils.create_vswitch_port(
+                    fake_vswitch_path, mox.IsA(str))
+                m.AndReturn(fake_vswitch_port)
+                vswitch_conn_data = fake_vswitch_port
+            else:
+                vswitch_conn_data = fake_vswitch_path
 
             vmutils.VMUtils.set_nic_connection(mox.IsA(str), mox.IsA(str),
-                                               fake_vswitch_port)
+                                               vswitch_conn_data)
 
         self._test_spawn_instance(setup_vif_mocks_func=setup_vif_mocks)
+
+    def test_spawn_nova_net_vif_with_port(self):
+        self._test_spawn_nova_net_vif(True)
+
+    def test_spawn_nova_net_vif_without_port(self):
+        self._test_spawn_nova_net_vif(False)
 
     def test_spawn_nova_net_vif_no_vswitch_exception(self):
         self.flags(network_api_class='nova.network.api.API')
@@ -449,6 +490,14 @@ class HyperVAPITestCase(test.TestCase):
         self.assertRaises(vmutils.HyperVException, self._test_spawn_instance,
                           setup_vif_mocks_func=setup_vif_mocks,
                           with_exception=True)
+
+    def test_spawn_with_metrics_collection(self):
+        self.flags(enable_instance_metrics_collection=True, group='hyperv')
+        self._test_spawn_instance(False)
+
+    def test_spawn_with_ephemeral_storage(self):
+        self._test_spawn_instance(True, expected_ide_disks=2,
+                                  ephemeral_storage=True)
 
     def _check_instance_name(self, vm_name):
         return vm_name == self._instance_data['name']
@@ -510,8 +559,7 @@ class HyperVAPITestCase(test.TestCase):
 
     def test_power_on(self):
         self._instance_data = self._get_instance_data()
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
                                      constants.HYPERV_VM_STATE_ENABLED)
         self._mox.ReplayAll()
@@ -520,8 +568,7 @@ class HyperVAPITestCase(test.TestCase):
 
     def test_power_on_already_running(self):
         self._instance_data = self._get_instance_data()
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
                                      constants.HYPERV_VM_STATE_ENABLED)
         self._mox.ReplayAll()
@@ -530,8 +577,7 @@ class HyperVAPITestCase(test.TestCase):
 
     def test_reboot(self):
 
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         self._instance_data = self._get_instance_data()
 
         vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
@@ -569,6 +615,11 @@ class HyperVAPITestCase(test.TestCase):
         self._conn.destroy(self._instance_data, None)
         self._mox.VerifyAll()
 
+    def test_live_migration_unsupported_os(self):
+        self._check_min_windows_version_satisfied = False
+        self._conn = driver_hyperv.HyperVDriver(None)
+        self._test_live_migration(unsupported_os=True)
+
     def test_live_migration_without_volumes(self):
         self._test_live_migration()
 
@@ -579,14 +630,15 @@ class HyperVAPITestCase(test.TestCase):
         self._test_live_migration(test_failure=True)
 
     def _test_live_migration(self, test_failure=False,
-                             with_volumes=False):
+                             with_volumes=False,
+                             unsupported_os=False):
         dest_server = 'fake_server'
 
         instance_data = self._get_instance_data()
         instance_name = instance_data['name']
 
         fake_post_method = self._mox.CreateMockAnything()
-        if not test_failure:
+        if not test_failure and not unsupported_os:
             fake_post_method(self._context, instance_data, dest_server,
                              False)
 
@@ -606,27 +658,32 @@ class HyperVAPITestCase(test.TestCase):
         else:
             fake_scsi_paths = {}
 
-        m = livemigrationutils.LiveMigrationUtils.live_migrate_vm(
-            instance_data['name'], dest_server)
-        if test_failure:
-            m.AndRaise(vmutils.HyperVException('Simulated failure'))
+        if not unsupported_os:
+            m = livemigrationutils.LiveMigrationUtils.live_migrate_vm(
+                instance_data['name'], dest_server)
+            if test_failure:
+                m.AndRaise(vmutils.HyperVException('Simulated failure'))
 
-        if with_volumes:
-            m.AndReturn([(fake_target_iqn, fake_target_lun)])
-            volumeutils.VolumeUtils.logout_storage_target(fake_target_iqn)
-        else:
-            m.AndReturn([])
+            if with_volumes:
+                m.AndReturn([(fake_target_iqn, fake_target_lun)])
+                volumeutils.VolumeUtils.logout_storage_target(fake_target_iqn)
+            else:
+                m.AndReturn([])
 
         self._mox.ReplayAll()
         try:
+            hyperv_exception_raised = False
+            unsupported_os_exception_raised = False
             self._conn.live_migration(self._context, instance_data,
                                       dest_server, fake_post_method,
                                       fake_recover_method)
-            exception_raised = False
         except vmutils.HyperVException:
-            exception_raised = True
+            hyperv_exception_raised = True
+        except NotImplementedError:
+            unsupported_os_exception_raised = True
 
-        self.assertTrue(not test_failure ^ exception_raised)
+        self.assertTrue(not test_failure ^ hyperv_exception_raised)
+        self.assertTrue(not unsupported_os ^ unsupported_os_exception_raised)
         self._mox.VerifyAll()
 
     def test_pre_live_migration_cow_image(self):
@@ -645,8 +702,7 @@ class HyperVAPITestCase(test.TestCase):
         instance = db.instance_create(self._context, instance_data)
         instance['system_metadata'] = {}
 
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         m = livemigrationutils.LiveMigrationUtils.check_live_migration_config()
         m.AndReturn(True)
@@ -656,11 +712,7 @@ class HyperVAPITestCase(test.TestCase):
                                                                   None)
             m.AndReturn(False)
 
-            m = vhdutils.VHDUtils.get_vhd_info(mox.Func(self._check_img_path))
-            m.AndReturn({'MaxInternalSize': 1024})
-
-            fake.PathUtils.copyfile(mox.IsA(str), mox.IsA(str))
-            vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object))
+            self._setup_get_cached_image_mocks(cow)
 
         if with_volumes:
             block_device_info = db_fakes.get_fake_block_device_info(
@@ -684,7 +736,7 @@ class HyperVAPITestCase(test.TestCase):
 
         self._mox.ReplayAll()
         self._conn.pre_live_migration(self._context, instance,
-                                      block_device_info, network_info)
+                                      block_device_info, None, network_info)
         self._mox.VerifyAll()
 
         if cow:
@@ -796,17 +848,20 @@ class HyperVAPITestCase(test.TestCase):
                                                self._project_id,
                                                self._user_id)
 
-    def _spawn_instance(self, cow, block_device_info=None):
+    def _spawn_instance(self, cow, block_device_info=None,
+                        ephemeral_storage=False):
         self.flags(use_cow_images=cow)
 
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
         instance['system_metadata'] = {}
 
+        if ephemeral_storage:
+            instance['ephemeral_gb'] = 1
+
         image = db_fakes.get_fake_image_data(self._project_id, self._user_id)
 
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs,
-                                                              spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         self._conn.spawn(self._context, instance, image,
                          injected_files=[], admin_password=None,
@@ -829,11 +884,22 @@ class HyperVAPITestCase(test.TestCase):
 
     def _setup_create_instance_mocks(self, setup_vif_mocks_func=None,
                                      boot_from_volume=False,
-                                     block_device_info=None):
+                                     block_device_info=None,
+                                     admin_permissions=True,
+                                     ephemeral_storage=False):
         vmutils.VMUtils.create_vm(mox.Func(self._check_vm_name), mox.IsA(int),
-                                  mox.IsA(int), mox.IsA(bool))
+                                  mox.IsA(int), mox.IsA(bool),
+                                  CONF.hyperv.dynamic_memory_ratio)
 
         if not boot_from_volume:
+            m = vmutils.VMUtils.attach_ide_drive(mox.Func(self._check_vm_name),
+                                                 mox.IsA(str),
+                                                 mox.IsA(int),
+                                                 mox.IsA(int),
+                                                 mox.IsA(str))
+            m.WithSideEffects(self._add_ide_disk).InAnyOrder()
+
+        if ephemeral_storage:
             m = vmutils.VMUtils.attach_ide_drive(mox.Func(self._check_vm_name),
                                                  mox.IsA(str),
                                                  mox.IsA(int),
@@ -861,18 +927,55 @@ class HyperVAPITestCase(test.TestCase):
         if setup_vif_mocks_func:
             setup_vif_mocks_func()
 
+        if CONF.hyperv.enable_instance_metrics_collection:
+            vmutils.VMUtils.enable_vm_metrics_collection(
+                mox.Func(self._check_vm_name))
+
     def _set_vm_name(self, vm_name):
         self._test_vm_name = vm_name
 
     def _check_vm_name(self, vm_name):
         return vm_name == self._test_vm_name
 
+    def _setup_check_admin_permissions_mocks(self, admin_permissions=True):
+        self._mox.StubOutWithMock(vmutils.VMUtils,
+                                  'check_admin_permissions')
+        m = vmutils.VMUtils.check_admin_permissions()
+        if admin_permissions:
+            m.AndReturn(None)
+        else:
+            m.AndRaise(vmutils.HyperVAuthorizationException(_(
+                                                'Simulated failure')))
+
+    def _setup_get_cached_image_mocks(self, cow=True,
+                                      vhd_format=constants.DISK_FORMAT_VHD):
+        m = vhdutils.VHDUtils.get_vhd_format(
+            mox.Func(self._check_img_path))
+        m.AndReturn(vhd_format)
+
+        def check_img_path_with_ext(image_path):
+            return image_path == self._fetched_image + '.' + vhd_format.lower()
+
+        fake.PathUtils.rename(mox.Func(self._check_img_path),
+                              mox.Func(check_img_path_with_ext))
+
+        if cow and vhd_format == constants.DISK_FORMAT_VHD:
+            m = vhdutils.VHDUtils.get_vhd_info(
+                mox.Func(check_img_path_with_ext))
+            m.AndReturn({'MaxInternalSize': 1024})
+
+            fake.PathUtils.copyfile(mox.IsA(str), mox.IsA(str))
+            vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object))
+
     def _setup_spawn_instance_mocks(self, cow, setup_vif_mocks_func=None,
                                     with_exception=False,
                                     block_device_info=None,
                                     boot_from_volume=False,
                                     config_drive=False,
-                                    use_cdrom=False):
+                                    use_cdrom=False,
+                                    admin_permissions=True,
+                                    vhd_format=constants.DISK_FORMAT_VHD,
+                                    ephemeral_storage=False):
         m = vmutils.VMUtils.vm_exists(mox.IsA(str))
         m.WithSideEffects(self._set_vm_name).AndReturn(False)
 
@@ -889,21 +992,29 @@ class HyperVAPITestCase(test.TestCase):
             m = fake.PathUtils.get_instance_dir(mox.Func(self._check_vm_name))
             m.AndReturn(self._test_instance_dir)
 
-            m = vhdutils.VHDUtils.get_vhd_info(mox.Func(self._check_img_path))
-            m.AndReturn({'MaxInternalSize': 1024})
+            self._setup_get_cached_image_mocks(cow, vhd_format)
 
             if cow:
-                fake.PathUtils.copyfile(mox.IsA(str), mox.IsA(str))
-                vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object))
                 vhdutils.VHDUtils.create_differencing_vhd(mox.IsA(str),
                                                           mox.IsA(str))
             else:
-                vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object))
                 fake.PathUtils.copyfile(mox.IsA(str), mox.IsA(str))
+                m = vhdutils.VHDUtils.get_vhd_info(mox.IsA(str))
+                m.AndReturn({'MaxInternalSize': 1024})
+                vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object))
+
+        self._setup_check_admin_permissions_mocks(
+                                          admin_permissions=admin_permissions)
+        if ephemeral_storage:
+            m = fake.PathUtils.get_instance_dir(mox.Func(self._check_vm_name))
+            m.AndReturn(self._test_instance_dir)
+            vhdutils.VHDUtils.create_dynamic_vhd(mox.IsA(str), mox.IsA(int),
+                                                 mox.IsA(str))
 
         self._setup_create_instance_mocks(setup_vif_mocks_func,
                                           boot_from_volume,
-                                          block_device_info)
+                                          block_device_info,
+                                          ephemeral_storage=ephemeral_storage)
 
         if config_drive:
             self._setup_spawn_config_drive_mocks(use_cdrom)
@@ -922,21 +1033,28 @@ class HyperVAPITestCase(test.TestCase):
                              setup_vif_mocks_func=None,
                              with_exception=False,
                              config_drive=False,
-                             use_cdrom=False):
+                             use_cdrom=False,
+                             admin_permissions=True,
+                             vhd_format=constants.DISK_FORMAT_VHD,
+                             ephemeral_storage=False):
         self._setup_spawn_instance_mocks(cow,
                                          setup_vif_mocks_func,
                                          with_exception,
                                          config_drive=config_drive,
-                                         use_cdrom=use_cdrom)
+                                         use_cdrom=use_cdrom,
+                                         admin_permissions=admin_permissions,
+                                         vhd_format=vhd_format,
+                                         ephemeral_storage=ephemeral_storage)
 
         self._mox.ReplayAll()
-        self._spawn_instance(cow)
+        self._spawn_instance(cow, ephemeral_storage=ephemeral_storage)
         self._mox.VerifyAll()
 
         self.assertEquals(len(self._instance_ide_disks), expected_ide_disks)
         self.assertEquals(len(self._instance_ide_dvds), expected_ide_dvds)
 
-        vhd_path = os.path.join(self._test_instance_dir, 'root.vhd')
+        vhd_path = os.path.join(self._test_instance_dir, 'root.' +
+                                vhd_format.lower())
         self.assertEquals(vhd_path, self._instance_ide_disks[0])
 
     def _mock_get_mounted_disk_from_lun(self, target_iqn, target_lun,
@@ -996,6 +1114,90 @@ class HyperVAPITestCase(test.TestCase):
                                                         fake_free_slot,
                                                         fake_mounted_disk)
         m.WithSideEffects(self._add_volume_disk)
+
+    def _test_util_class_version(self, v1_class, v2_class,
+                                 get_instance_action, is_hyperv_2012,
+                                 force_v1_flag, force_utils_v1):
+        self._check_min_windows_version_satisfied = is_hyperv_2012
+        CONF.set_override(force_v1_flag, force_v1_flag, 'hyperv')
+        self._conn = driver_hyperv.HyperVDriver(None)
+
+        instance = get_instance_action()
+        is_v1 = isinstance(instance, v1_class)
+        # v2_class can inherit from v1_class
+        is_v2 = isinstance(instance, v2_class)
+
+        self.assertTrue((is_hyperv_2012 and not force_v1_flag) ^
+                        (is_v1 and not is_v2))
+
+    def test_volumeutils_version_hyperv_2012(self):
+        self._test_util_class_version(volumeutils.VolumeUtils,
+                                      volumeutilsv2.VolumeUtilsV2,
+                                      lambda: utilsfactory.get_volumeutils(),
+                                      True, 'force_volumeutils_v1', False)
+
+    def test_volumeutils_version_hyperv_2012_force_v1(self):
+        self._test_util_class_version(volumeutils.VolumeUtils,
+                                      volumeutilsv2.VolumeUtilsV2,
+                                      lambda: utilsfactory.get_volumeutils(),
+                                      True, 'force_volumeutils_v1', True)
+
+    def test_volumeutils_version_hyperv_2008R2(self):
+        self._test_util_class_version(volumeutils.VolumeUtils,
+                                      volumeutilsv2.VolumeUtilsV2,
+                                      lambda: utilsfactory.get_volumeutils(),
+                                      False, 'force_volumeutils_v1', False)
+
+    def test_vmutils_version_hyperv_2012(self):
+        self._test_util_class_version(vmutils.VMUtils, vmutilsv2.VMUtilsV2,
+                                      lambda: utilsfactory.get_vmutils(),
+                                      True, 'force_hyperv_utils_v1', False)
+
+    def test_vmutils_version_hyperv_2012_force_v1(self):
+        self._test_util_class_version(vmutils.VMUtils, vmutilsv2.VMUtilsV2,
+                                      lambda: utilsfactory.get_vmutils(),
+                                      True, 'force_hyperv_utils_v1', True)
+
+    def test_vmutils_version_hyperv_2008R2(self):
+        self._test_util_class_version(vmutils.VMUtils, vmutilsv2.VMUtilsV2,
+                                      lambda: utilsfactory.get_vmutils(),
+                                      False, 'force_hyperv_utils_v1', False)
+
+    def test_vhdutils_version_hyperv_2012(self):
+        self._test_util_class_version(vhdutils.VHDUtils,
+                                      vhdutilsv2.VHDUtilsV2,
+                                      lambda: utilsfactory.get_vhdutils(),
+                                      True, 'force_hyperv_utils_v1', False)
+
+    def test_vhdutils_version_hyperv_2012_force_v1(self):
+        self._test_util_class_version(vhdutils.VHDUtils,
+                                      vhdutilsv2.VHDUtilsV2,
+                                      lambda: utilsfactory.get_vhdutils(),
+                                      True, 'force_hyperv_utils_v1', True)
+
+    def test_vhdutils_version_hyperv_2008R2(self):
+        self._test_util_class_version(vhdutils.VHDUtils,
+                                      vhdutilsv2.VHDUtilsV2,
+                                      lambda: utilsfactory.get_vhdutils(),
+                                      False, 'force_hyperv_utils_v1', False)
+
+    def test_networkutils_version_hyperv_2012(self):
+        self._test_util_class_version(networkutils.NetworkUtils,
+                                      networkutilsv2.NetworkUtilsV2,
+                                      lambda: utilsfactory.get_networkutils(),
+                                      True, 'force_hyperv_utils_v1', False)
+
+    def test_networkutils_version_hyperv_2012_force_v1(self):
+        self._test_util_class_version(networkutils.NetworkUtils,
+                                      networkutilsv2.NetworkUtilsV2,
+                                      lambda: utilsfactory.get_networkutils(),
+                                      True, 'force_hyperv_utils_v1', True)
+
+    def test_networkutils_version_hyperv_2008R2(self):
+        self._test_util_class_version(networkutils.NetworkUtils,
+                                      networkutilsv2.NetworkUtilsV2,
+                                      lambda: utilsfactory.get_networkutils(),
+                                      False, 'force_hyperv_utils_v1', False)
 
     def test_attach_volume(self):
         instance_data = self._get_instance_data()
@@ -1067,13 +1269,34 @@ class HyperVAPITestCase(test.TestCase):
 
         self.assertEquals(len(self._instance_volume_disks), 1)
 
+    def test_get_volume_connector(self):
+        self._instance_data = self._get_instance_data()
+        instance = db.instance_create(self._context, self._instance_data)
+
+        fake_my_ip = "fake_ip"
+        fake_host = "fake_host"
+        fake_initiator = "fake_initiator"
+
+        self.flags(my_ip=fake_my_ip)
+        self.flags(host=fake_host)
+
+        m = volumeutils.VolumeUtils.get_iscsi_initiator()
+        m.AndReturn(fake_initiator)
+
+        self._mox.ReplayAll()
+        data = self._conn.get_volume_connector(instance)
+        self._mox.VerifyAll()
+
+        self.assertEquals(fake_my_ip, data.get('ip'))
+        self.assertEquals(fake_host, data.get('host'))
+        self.assertEquals(fake_initiator, data.get('initiator'))
+
     def _setup_test_migrate_disk_and_power_off_mocks(self, same_host=False,
                                                      copy_exception=False,
                                                      size_exception=False):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
-        network_info = fake_network.fake_get_instance_nw_info(
-            self.stubs, spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         instance['root_gb'] = 10
 
@@ -1184,12 +1407,11 @@ class HyperVAPITestCase(test.TestCase):
                           instance_type, network_info)
         self._mox.VerifyAll()
 
-    def _test_finish_migration(self, power_on):
+    def _test_finish_migration(self, power_on, ephemeral_storage=False):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
         instance['system_metadata'] = {}
-        network_info = fake_network.fake_get_instance_nw_info(
-            self.stubs, spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         m = basevolumeutils.BaseVolumeUtils.volume_in_mapping(mox.IsA(str),
                                                               None)
@@ -1209,9 +1431,6 @@ class HyperVAPITestCase(test.TestCase):
         m.AndReturn({'ParentPath': fake_parent_vhd_path,
                      'MaxInternalSize': 1})
 
-        m = fake.PathUtils.exists(mox.IsA(str))
-        m.AndReturn(True)
-
         vhdutils.VHDUtils.reconnect_parent_vhd(mox.IsA(str), mox.IsA(str))
 
         m = vhdutils.VHDUtils.get_vhd_info(mox.IsA(str))
@@ -1220,8 +1439,15 @@ class HyperVAPITestCase(test.TestCase):
         m = fake.PathUtils.exists(mox.IsA(str))
         m.AndReturn(True)
 
+        m = fake.PathUtils.get_instance_dir(mox.IsA(str))
+        if ephemeral_storage:
+            return m.AndReturn(self._test_instance_dir)
+        else:
+            m.AndReturn(None)
+
         self._set_vm_name(instance['name'])
-        self._setup_create_instance_mocks(None, False)
+        self._setup_create_instance_mocks(None, False,
+                                          ephemeral_storage=ephemeral_storage)
 
         if power_on:
             vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
@@ -1238,11 +1464,13 @@ class HyperVAPITestCase(test.TestCase):
     def test_finish_migration_power_off(self):
         self._test_finish_migration(False)
 
+    def test_finish_migration_with_ephemeral_storage(self):
+        self._test_finish_migration(False, ephemeral_storage=True)
+
     def test_confirm_migration(self):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
-        network_info = fake_network.fake_get_instance_nw_info(
-            self.stubs, spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         pathutils.PathUtils.get_instance_migr_revert_dir(instance['name'],
                                                          remove_dir=True)
@@ -1250,11 +1478,10 @@ class HyperVAPITestCase(test.TestCase):
         self._conn.confirm_migration(None, instance, network_info)
         self._mox.VerifyAll()
 
-    def _test_finish_revert_migration(self, power_on):
+    def _test_finish_revert_migration(self, power_on, ephemeral_storage=False):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
-        network_info = fake_network.fake_get_instance_nw_info(
-            self.stubs, spectacular=True)
+        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         fake_revert_path = ('C:\\FakeInstancesPath\\%s\\_revert' %
                             instance['name'])
@@ -1275,8 +1502,15 @@ class HyperVAPITestCase(test.TestCase):
         m = fake.PathUtils.get_instance_dir(mox.IsA(str))
         m.AndReturn(self._test_instance_dir)
 
+        m = fake.PathUtils.get_instance_dir(mox.IsA(str))
+        if ephemeral_storage:
+            m.AndReturn(self._test_instance_dir)
+        else:
+            m.AndReturn(None)
+
         self._set_vm_name(instance['name'])
-        self._setup_create_instance_mocks(None, False)
+        self._setup_create_instance_mocks(None, False,
+                                          ephemeral_storage=ephemeral_storage)
 
         if power_on:
             vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
@@ -1292,3 +1526,12 @@ class HyperVAPITestCase(test.TestCase):
 
     def test_finish_revert_migration_power_off(self):
         self._test_finish_revert_migration(False)
+
+    def test_spawn_no_admin_permissions(self):
+        self.assertRaises(vmutils.HyperVAuthorizationException,
+                          self._test_spawn_instance,
+                          with_exception=True,
+                          admin_permissions=False)
+
+    def test_finish_revert_migration_with_ephemeral_storage(self):
+        self._test_finish_revert_migration(False, ephemeral_storage=True)

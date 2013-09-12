@@ -19,6 +19,7 @@ from oslo.config import cfg
 from nova import baserpc
 from nova.conductor import manager
 from nova.conductor import rpcapi
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
 from nova import utils
@@ -109,21 +110,9 @@ class LocalAPI(object):
     def instance_fault_create(self, context, values):
         return self._manager.instance_fault_create(context, values)
 
-    def migration_get(self, context, migration_id):
-        return self._manager.migration_get(context, migration_id)
-
-    def migration_get_unconfirmed_by_dest_compute(self, context,
-                                                  confirm_window,
-                                                  dest_compute):
-        return self._manager.migration_get_unconfirmed_by_dest_compute(
-            context, confirm_window, dest_compute)
-
     def migration_get_in_progress_by_host_and_node(self, context, host, node):
         return self._manager.migration_get_in_progress_by_host_and_node(
             context, host, node)
-
-    def migration_create(self, context, instance, values):
-        return self._manager.migration_create(context, instance, values)
 
     def migration_update(self, context, migration, status):
         return self._manager.migration_update(context, migration, status)
@@ -318,29 +307,23 @@ class LocalAPI(object):
                                                              instance,
                                                              migration)
 
-    def quota_commit(self, context, reservations, project_id=None):
+    def quota_commit(self, context, reservations, project_id=None,
+                     user_id=None):
         return self._manager.quota_commit(context, reservations,
-                                          project_id=project_id)
+                                          project_id=project_id,
+                                          user_id=user_id)
 
-    def quota_rollback(self, context, reservations, project_id=None):
+    def quota_rollback(self, context, reservations, project_id=None,
+                       user_id=None):
         return self._manager.quota_rollback(context, reservations,
-                                            project_id=project_id)
+                                            project_id=project_id,
+                                            user_id=user_id)
 
     def get_ec2_ids(self, context, instance):
         return self._manager.get_ec2_ids(context, instance)
 
-    def compute_stop(self, context, instance, do_cast=True):
-        return self._manager.compute_stop(context, instance, do_cast)
-
-    def compute_confirm_resize(self, context, instance, migration_ref):
-        return self._manager.compute_confirm_resize(context, instance,
-                                                    migration_ref)
-
     def compute_unrescue(self, context, instance):
         return self._manager.compute_unrescue(context, instance)
-
-    def compute_reboot(self, context, instance, reboot_type):
-        return self._manager.compute_reboot(context, instance, reboot_type)
 
 
 class LocalComputeTaskAPI(object):
@@ -350,21 +333,34 @@ class LocalComputeTaskAPI(object):
         self._manager = utils.ExceptionHelper(
                 manager.ComputeTaskManager())
 
-    def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
-                  flavor, block_migration, disk_over_commit):
-        return self._manager.migrate_server(context, instance, scheduler_hint,
-            live, rebuild, flavor, block_migration, disk_over_commit)
+    def resize_instance(self, context, instance, extra_instance_updates,
+                        scheduler_hint, flavor, reservations):
+        # NOTE(comstud): 'extra_instance_updates' is not used here but is
+        # needed for compatibility with the cells_rpcapi version of this
+        # method.
+        self._manager.migrate_server(
+            context, instance, scheduler_hint, False, False, flavor,
+            None, None, reservations)
+
+    def live_migrate_instance(self, context, instance, host_name,
+                              block_migration, disk_over_commit):
+        scheduler_hint = {'host': host_name}
+        self._manager.migrate_server(
+            context, instance, scheduler_hint, True, False, None,
+            block_migration, disk_over_commit, None)
 
     def build_instances(self, context, instances, image,
             filter_properties, admin_password, injected_files,
-            requested_networks, security_groups, block_device_mapping):
+            requested_networks, security_groups, block_device_mapping,
+            legacy_bdm=True):
         utils.spawn_n(self._manager.build_instances, context,
                 instances=instances, image=image,
                 filter_properties=filter_properties,
                 admin_password=admin_password, injected_files=injected_files,
                 requested_networks=requested_networks,
                 security_groups=security_groups,
-                block_device_mapping=block_device_mapping)
+                block_device_mapping=block_device_mapping,
+                legacy_bdm=legacy_bdm)
 
     def unshelve_instance(self, context, instance):
         utils.spawn_n(self._manager.unshelve_instance, context,
@@ -420,22 +416,33 @@ class ComputeTaskAPI(object):
     def __init__(self):
         self.conductor_compute_rpcapi = rpcapi.ComputeTaskAPI()
 
-    def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
-                  flavor, block_migration, disk_over_commit):
-        return self.conductor_compute_rpcapi.migrate_server(context, instance,
-            scheduler_hint, live, rebuild, flavor, block_migration,
-            disk_over_commit)
+    def resize_instance(self, context, instance, extra_instance_updates,
+                        scheduler_hint, flavor, reservations):
+        # NOTE(comstud): 'extra_instance_updates' is not used here but is
+        # needed for compatibility with the cells_rpcapi version of this
+        # method.
+        self.conductor_compute_rpcapi.migrate_server(
+            context, instance, scheduler_hint, False, False, flavor,
+            None, None, reservations)
+
+    def live_migrate_instance(self, context, instance, host_name,
+                              block_migration, disk_over_commit):
+        scheduler_hint = {'host': host_name}
+        self.conductor_compute_rpcapi.migrate_server(
+            context, instance, scheduler_hint, True, False, None,
+            block_migration, disk_over_commit, None)
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
-            security_groups, block_device_mapping):
+            security_groups, block_device_mapping, legacy_bdm=True):
         self.conductor_compute_rpcapi.build_instances(context,
                 instances=instances, image=image,
                 filter_properties=filter_properties,
                 admin_password=admin_password, injected_files=injected_files,
                 requested_networks=requested_networks,
                 security_groups=security_groups,
-                block_device_mapping=block_device_mapping)
+                block_device_mapping=block_device_mapping,
+                legacy_bdm=legacy_bdm)
 
     def unshelve_instance(self, context, instance):
         self.conductor_compute_rpcapi.unshelve_instance(context,

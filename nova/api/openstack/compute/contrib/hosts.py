@@ -22,6 +22,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
@@ -335,7 +336,7 @@ class HostController(object):
         except exception.AdminRequired:
             msg = _("Describe-resource is admin only functionality")
             raise webob.exc.HTTPForbidden(explanation=msg)
-        compute_node = service['compute_node'][0]
+        compute_node = service['compute_node']
         instances = self.api.instance_get_all_by_host(context, host_name)
         resources = [self._get_total_resources(host_name, compute_node)]
         resources.append(self._get_used_now_resources(host_name,

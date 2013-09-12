@@ -94,7 +94,8 @@ class ChanceSchedulerTestCase(test_scheduler.SchedulerTestCase):
         compute_rpcapi.ComputeAPI.run_instance(ctxt, host='host3',
                 instance=instance1, requested_networks=None,
                 injected_files=None, admin_password=None, is_first_time=None,
-                request_spec=request_spec, filter_properties={})
+                request_spec=request_spec, filter_properties={},
+                legacy_bdm_in_spec=False)
 
         # instance 2
         ctxt.elevated().AndReturn(ctxt_elevated)
@@ -105,11 +106,12 @@ class ChanceSchedulerTestCase(test_scheduler.SchedulerTestCase):
         compute_rpcapi.ComputeAPI.run_instance(ctxt, host='host1',
                 instance=instance2, requested_networks=None,
                 injected_files=None, admin_password=None, is_first_time=None,
-                request_spec=request_spec, filter_properties={})
+                request_spec=request_spec, filter_properties={},
+                legacy_bdm_in_spec=False)
 
         self.mox.ReplayAll()
         self.driver.schedule_run_instance(ctxt, request_spec,
-                None, None, None, None, {})
+                None, None, None, None, {}, False)
 
     def test_basic_schedule_run_instance_no_hosts(self):
         ctxt = context.RequestContext('fake', 'fake', False)
@@ -136,31 +138,7 @@ class ChanceSchedulerTestCase(test_scheduler.SchedulerTestCase):
 
         self.mox.ReplayAll()
         self.driver.schedule_run_instance(
-                ctxt, request_spec, None, None, None, None, {})
-
-    def test_schedule_prep_resize_doesnt_update_host(self):
-        fake_context = context.RequestContext('user', 'project',
-                is_admin=True)
-
-        def _return_host(*args, **kwargs):
-            return 'host2'
-
-        self.stubs.Set(self.driver, '_schedule', _return_host)
-
-        info = {'called': 0}
-
-        def _fake_instance_update_db(*args, **kwargs):
-            # This should not be called
-            info['called'] = 1
-
-        self.stubs.Set(driver, 'instance_update_db',
-                _fake_instance_update_db)
-
-        instance = {'uuid': 'fake-uuid', 'host': 'host1'}
-
-        self.driver.schedule_prep_resize(fake_context, {}, {}, {},
-                instance, {}, None)
-        self.assertEqual(info['called'], 0)
+                ctxt, request_spec, None, None, None, None, {}, False)
 
     def test_select_hosts(self):
         ctxt = context.RequestContext('fake', 'fake', False)

@@ -49,7 +49,7 @@ import math
 import re
 import uuid
 
-from eventlet import greenpool
+import eventlet
 import netaddr
 from oslo.config import cfg
 
@@ -63,7 +63,10 @@ from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
 from nova.network.security_group import openstack_driver
+from nova.objects import instance as instance_obj
+from nova.objects import instance_info_cache as info_cache_obj
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -78,12 +81,9 @@ from nova import utils
 
 LOG = logging.getLogger(__name__)
 
-QUOTAS = quota.QUOTAS
-
 
 network_opts = [
     cfg.StrOpt('flat_network_bridge',
-               default=None,
                help='Bridge for simple network instances'),
     cfg.StrOpt('flat_network_dns',
                default='8.8.4.4',
@@ -92,13 +92,11 @@ network_opts = [
                 default=False,
                 help='Whether to attempt to inject network setup into guest'),
     cfg.StrOpt('flat_interface',
-               default=None,
                help='FlatDhcp will bridge into this interface if set'),
     cfg.IntOpt('vlan_start',
                default=100,
                help='First VLAN for private networks'),
     cfg.StrOpt('vlan_interface',
-               default=None,
                help='vlans will bridge into this interface if set'),
     cfg.IntOpt('num_networks',
                default=1,
@@ -112,20 +110,12 @@ network_opts = [
     cfg.IntOpt('network_size',
                default=256,
                help='Number of addresses in each private subnet'),
-    # TODO(mathrock): Deprecate in Grizzly, remove in Havana
-    cfg.StrOpt('fixed_range',
-               default='10.0.0.0/8',
-               help='DEPRECATED - Fixed IP address block.'
-                    'If set to an empty string, the subnet range(s) will be '
-                    'automatically determined and configured.'),
     cfg.StrOpt('fixed_range_v6',
                default='fd00::/48',
                help='Fixed IPv6 address block'),
     cfg.StrOpt('gateway',
-               default=None,
                help='Default IPv4 gateway'),
     cfg.StrOpt('gateway_v6',
-               default=None,
                help='Default IPv6 gateway'),
     cfg.IntOpt('cnt_vpn_clients',
                default=0,
@@ -148,7 +138,7 @@ network_opts = [
                      'deleted in VLAN network mode with multi hosted '
                      'networks'),
     cfg.BoolOpt('force_dhcp_release',
-                default=False,
+                default=True,
                 help='If True, send a dhcp release on instance termination'),
     cfg.BoolOpt('share_dhcp_address',
                 default=False,
@@ -190,7 +180,7 @@ class RPCAllocateFixedIP(object):
     def _allocate_fixed_ips(self, context, instance_id, host, networks,
                             **kwargs):
         """Calls allocate_fixed_ip once for each network."""
-        green_pool = greenpool.GreenPool()
+        green_threads = []
 
         vpn = kwargs.get('vpn')
         requested_networks = kwargs.get('requested_networks')
@@ -211,16 +201,18 @@ class RPCAllocateFixedIP(object):
                 host = self.network_rpcapi.set_network_host(context, network)
             if host != self.host:
                 # need to call allocate_fixed_ip to correct network host
-                green_pool.spawn_n(self.network_rpcapi._rpc_allocate_fixed_ip,
+                green_threads.append(eventlet.spawn(
+                        self.network_rpcapi._rpc_allocate_fixed_ip,
                         context, instance_id, network['id'], address, vpn,
-                        host)
+                        host))
             else:
                 # i am the correct host, run here
                 self.allocate_fixed_ip(context, instance_id, network,
                                        vpn=vpn, address=address)
 
         # wait for all of the allocates (if any) to finish
-        green_pool.waitall()
+        for gt in green_threads:
+            gt.wait()
 
     def _rpc_allocate_fixed_ip(self, context, instance_id, network_id,
                                **kwargs):
@@ -308,7 +300,9 @@ class NetworkManager(manager.Manager):
         l3_lib = kwargs.get("l3_lib", CONF.l3_lib)
         self.l3driver = importutils.import_object(l3_lib)
 
-        super(NetworkManager, self).__init__(service_name='cells',
+        self.quotas = quota.QUOTAS
+
+        super(NetworkManager, self).__init__(service_name='network',
                                              *args, **kwargs)
 
     def _import_ipam_lib(self, ipam_lib):
@@ -377,14 +371,25 @@ class NetworkManager(manager.Manager):
         # NOTE(francois.charlier): the instance may have been deleted already
         # thus enabling `read_deleted`
         admin_context = context.get_admin_context(read_deleted='yes')
-        if uuidutils.is_uuid_like(instance_id):
-            instance_ref = self.db.instance_get_by_uuid(admin_context,
-                                                        instance_id)
-        else:
-            instance_ref = self.db.instance_get(admin_context, instance_id)
+        instance = instance_obj.Instance.get_by_uuid(admin_context,
+                                                     instance_id)
 
-        groups = instance_ref['security_groups']
-        group_ids = [group['id'] for group in groups]
+        try:
+            # NOTE(vish): We need to make sure the instance info cache has been
+            #             updated with new ip info before we trigger the
+            #             security group refresh. This is somewhat ineffecient
+            #             but avoids doing some dangerous refactoring for a
+            #             bug fix.
+            nw_info = self.get_instance_nw_info(admin_context, instance_id,
+                                                None, None)
+            ic = info_cache_obj.InstanceInfoCache.new(admin_context,
+                                                      instance_id)
+            ic.network_info = nw_info
+            ic.save(update_cells=False)
+        except exception.InstanceInfoCacheNotFound:
+            pass
+        groups = instance.security_groups
+        group_ids = [group.id for group in groups]
 
         self.security_group_api.trigger_members_refresh(admin_context,
                                                         group_ids)
@@ -485,8 +490,8 @@ class NetworkManager(manager.Manager):
                                         requested_networks=requested_networks)
         networks_list = [self._get_network_dict(network)
                                  for network in networks]
-        LOG.debug(_('networks retrieved for instance: |%(networks_list)s|'),
-                  locals(), context=context, instance_uuid=instance_uuid)
+        LOG.debug(_('networks retrieved for instance: |%s|'),
+                  networks_list, context=context, instance_uuid=instance_uuid)
 
         try:
             self._allocate_mac_addresses(context, instance_uuid, networks,
@@ -789,15 +794,18 @@ class NetworkManager(manager.Manager):
                                     instance_uuid=instance_id, ip=address)
 
     def _validate_instance_zone_for_dns_domain(self, context, instance):
-        # FIXME(vish): The zone isn't usually set in the instance so I
-        #              believe this code needs to be changed.
-        instance_zone = instance.get('availability_zone')
         if not self.instance_dns_domain:
             return True
-
         instance_domain = self.instance_dns_domain
-        domainref = self.db.dnsdomain_get(context, instance_zone)
+
+        domainref = self.db.dnsdomain_get(context, instance_domain)
+        if domainref is None:
+            LOG.warn(_('instance-dns-zone not found |%s|.'),
+                     instance_domain, instance=instance)
+            return True
         dns_zone = domainref.availability_zone
+
+        instance_zone = instance.get('availability_zone')
         if dns_zone and (dns_zone != instance_zone):
             LOG.warn(_('instance-dns-zone is |%(domain)s|, '
                        'which is in availability zone |%(zone)s|. '
@@ -822,11 +830,10 @@ class NetworkManager(manager.Manager):
         # Check the quota; can't put this in the API because we get
         # called into from other places
         try:
-            reservations = QUOTAS.reserve(context, fixed_ips=1)
+            reservations = self.quotas.reserve(context, fixed_ips=1)
         except exception.OverQuota:
-            pid = context.project_id
-            LOG.warn(_("Quota exceeded for %(pid)s, tried to allocate "
-                       "fixed IP") % locals())
+            LOG.warn(_("Quota exceeded for %s, tried to allocate "
+                       "fixed IP"), context.project_id)
             raise exception.FixedIpLimitExceeded()
 
         try:
@@ -840,13 +847,13 @@ class NetworkManager(manager.Manager):
                 else:
                     address = self.db.fixed_ip_associate_pool(
                         context.elevated(), network['id'], instance_id)
-                self._do_trigger_security_group_members_refresh_for_instance(
-                    instance_id)
                 get_vif = self.db.virtual_interface_get_by_instance_and_network
                 vif = get_vif(context, instance_id, network['id'])
                 values = {'allocated': True,
                           'virtual_interface_id': vif['id']}
                 self.db.fixed_ip_update(context, address, values)
+                self._do_trigger_security_group_members_refresh_for_instance(
+                    instance_id)
 
             # NOTE(vish) This db query could be removed if we pass az and name
             #            (or the whole instance object).
@@ -860,12 +867,12 @@ class NetworkManager(manager.Manager):
                     instance_id, address, "A", self.instance_dns_domain)
             self._setup_network_on_host(context, network)
 
-            QUOTAS.commit(context, reservations)
+            self.quotas.commit(context, reservations)
             return address
 
         except Exception:
             with excutils.save_and_reraise_exception():
-                QUOTAS.rollback(context, reservations)
+                self.quotas.rollback(context, reservations)
 
     def deallocate_fixed_ip(self, context, address, host=None, teardown=True):
         """Returns a fixed ip to the pool."""
@@ -874,7 +881,7 @@ class NetworkManager(manager.Manager):
         vif_id = fixed_ip_ref['virtual_interface_id']
 
         try:
-            reservations = QUOTAS.reserve(context, fixed_ips=-1)
+            reservations = self.quotas.reserve(context, fixed_ips=-1)
         except Exception:
             reservations = None
             LOG.exception(_("Failed to update usages deallocating "
@@ -944,11 +951,11 @@ class NetworkManager(manager.Manager):
 
         # Commit the reservations
         if reservations:
-            QUOTAS.commit(context, reservations)
+            self.quotas.commit(context, reservations)
 
     def lease_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is leased."""
-        LOG.debug(_('Leased IP |%(address)s|'), locals(), context=context)
+        LOG.debug(_('Leased IP |%s|'), address, context=context)
         fixed_ip = self.db.fixed_ip_get_by_address(context, address)
 
         if fixed_ip['instance_uuid'] is None:
@@ -966,7 +973,7 @@ class NetworkManager(manager.Manager):
 
     def release_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is released."""
-        LOG.debug(_('Released IP |%(address)s|'), locals(), context=context)
+        LOG.debug(_('Released IP |%s|'), address, context=context)
         fixed_ip = self.db.fixed_ip_get_by_address(context, address)
 
         if fixed_ip['instance_uuid'] is None:
@@ -1102,6 +1109,7 @@ class NetworkManager(manager.Manager):
                 nets = self.db.network_get_all(context)
             except exception.NoNetworksFound:
                 nets = []
+            num_used_nets = len(nets)
             used_subnets = [netaddr.IPNetwork(net['cidr']) for net in nets]
 
             def find_next(subnet):
@@ -1174,9 +1182,17 @@ class NetworkManager(manager.Manager):
 
                 net['netmask_v6'] = str(subnet_v6._prefixlen)
 
-            if kwargs.get('vpn', False):
-                # this bit here is for vlan-manager
-                vlan = kwargs['vlan_start'] + index
+            if CONF.network_manager == 'nova.network.manager.VlanManager':
+                vlan = kwargs.get('vlan', None)
+                if not vlan:
+                    index_vlan = index + num_used_nets
+                    vlan = kwargs['vlan_start'] + index_vlan
+                    used_vlans = [x['vlan'] for x in nets]
+                    if vlan in used_vlans:
+                        # That vlan is used, try to get another one
+                        used_vlans.sort()
+                        vlan = used_vlans[-1] + 1
+
                 net['vpn_private_address'] = str(subnet_v4[2])
                 net['dhcp_start'] = str(subnet_v4[3])
                 net['vlan'] = vlan
@@ -1184,7 +1200,8 @@ class NetworkManager(manager.Manager):
 
                 # NOTE(vish): This makes ports unique across the cloud, a more
                 #             robust solution would be to make them uniq per ip
-                net['vpn_public_port'] = kwargs['vpn_start'] + index
+                index_vpn = index + num_used_nets
+                net['vpn_public_port'] = kwargs['vpn_start'] + index_vpn
 
             # None if network with cidr or cidr_v6 already exists
             network = self.db.network_create_safe(context, net)
@@ -1254,7 +1271,7 @@ class NetworkManager(manager.Manager):
     def setup_networks_on_host(self, context, instance_id, host,
                                teardown=False):
         """calls setup/teardown on network hosts for an instance."""
-        green_pool = greenpool.GreenPool()
+        green_threads = []
 
         if teardown:
             call_func = self._teardown_network_on_host
@@ -1275,12 +1292,13 @@ class NetworkManager(manager.Manager):
                 call_func(context, network)
             else:
                 # i'm not the right host, run call on correct host
-                green_pool.spawn_n(
+                green_threads.append(eventlet.spawn(
                         self.network_rpcapi.rpc_setup_network_on_host, context,
-                        network['id'], teardown, host)
+                        network['id'], teardown, host))
 
         # wait for all of the setups (if any) to finish
-        green_pool.waitall()
+        for gt in green_threads:
+            gt.wait()
 
     def rpc_setup_network_on_host(self, context, network_id, teardown):
         if teardown:
@@ -1604,12 +1622,9 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
         """Do any initialization that needs to be run if this is a
         standalone service.
         """
-        if not CONF.fixed_range:
-            ctxt = context.get_admin_context()
-            networks = self.db.network_get_all_by_host(ctxt, self.host)
-            self.l3driver.initialize(fixed_range=False, networks=networks)
-        else:
-            self.l3driver.initialize(fixed_range=CONF.fixed_range)
+        ctxt = context.get_admin_context()
+        networks = self.db.network_get_all_by_host(ctxt, self.host)
+        self.l3driver.initialize(fixed_range=False, networks=networks)
         super(FlatDHCPManager, self).init_host()
         self.init_host_floating_ips()
 
@@ -1617,8 +1632,7 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
         """Sets up network on this host."""
         network['dhcp_server'] = self._get_dhcp_ip(context, network)
 
-        if not CONF.fixed_range:
-            self.l3driver.initialize_network(network.get('cidr'))
+        self.l3driver.initialize_network(network.get('cidr'))
         self.l3driver.initialize_gateway(network)
 
         if not CONF.fake_network:
@@ -1677,17 +1691,22 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
     DHCP = True
     required_create_args = ['bridge_interface']
 
+    def __init__(self, network_driver=None, *args, **kwargs):
+        super(VlanManager, self).__init__(network_driver=network_driver,
+                                          *args, **kwargs)
+        # NOTE(cfb) VlanManager doesn't enforce quotas on fixed IP addresses
+        #           because a project is assigned an entire network.
+        self.quotas = quota.QuotaEngine(
+                quota_driver_class='nova.quota.NoopQuotaDriver')
+
     def init_host(self):
         """Do any initialization that needs to be run if this is a
         standalone service.
         """
 
-        if not CONF.fixed_range:
-            ctxt = context.get_admin_context()
-            networks = self.db.network_get_all_by_host(ctxt, self.host)
-            self.l3driver.initialize(fixed_range=False, networks=networks)
-        else:
-            self.l3driver.initialize(fixed_range=CONF.fixed_range)
+        ctxt = context.get_admin_context()
+        networks = self.db.network_get_all_by_host(ctxt, self.host)
+        self.l3driver.initialize(fixed_range=False, networks=networks)
         NetworkManager.init_host(self)
         self.init_host_floating_ips()
 
@@ -1711,14 +1730,16 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
                 address = self.db.fixed_ip_associate_pool(context,
                                                           network['id'],
                                                           instance_id)
-            self._do_trigger_security_group_members_refresh_for_instance(
-                                                                   instance_id)
 
         vif = self.db.virtual_interface_get_by_instance_and_network(
             context, instance_id, network['id'])
         values = {'allocated': True,
                   'virtual_interface_id': vif['id']}
         self.db.fixed_ip_update(context, address, values)
+
+        if not kwargs.get('vpn', None):
+            self._do_trigger_security_group_members_refresh_for_instance(
+                                                                   instance_id)
 
         # NOTE(vish) This db query could be removed if we pass az and name
         #            (or the whole instance object).
@@ -1832,8 +1853,7 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             address = network['vpn_public_address']
         network['dhcp_server'] = self._get_dhcp_ip(context, network)
 
-        if not CONF.fixed_range:
-            self.l3driver.initialize_network(network.get('cidr'))
+        self.l3driver.initialize_network(network.get('cidr'))
         self.l3driver.initialize_gateway(network)
 
         # NOTE(vish): only ensure this forward if the address hasn't been set

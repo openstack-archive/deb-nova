@@ -27,8 +27,10 @@ from nova.compute import flavors
 from nova.compute import rpcapi as compute_rpcapi
 from nova import db
 from nova import exception
+from nova import notifier
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.openstack.common.notifier import api as notifier
+from nova.pci import pci_request
 from nova.scheduler import driver
 from nova.scheduler import scheduler_options
 from nova.scheduler import utils as scheduler_utils
@@ -59,11 +61,12 @@ class FilterScheduler(driver.Scheduler):
         super(FilterScheduler, self).__init__(*args, **kwargs)
         self.options = scheduler_options.SchedulerOptions()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
+        self.notifier = notifier.get_notifier('scheduler')
 
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,
-                              filter_properties):
+                              filter_properties, legacy_bdm_in_spec):
         """This method is called from nova.compute.api to provision
         an instance.  We first create a build plan (a list of WeightedHosts)
         and then provision.
@@ -71,8 +74,7 @@ class FilterScheduler(driver.Scheduler):
         Returns a list of the instances created.
         """
         payload = dict(request_spec=request_spec)
-        notifier.notify(context, notifier.publisher_id("scheduler"),
-                        'scheduler.run_instance.start', notifier.INFO, payload)
+        self.notifier.info(context, 'scheduler.run_instance.start', payload)
 
         instance_uuids = request_spec.get('instance_uuids')
         LOG.info(_("Attempting to build %(num_instances)d instance(s) "
@@ -112,7 +114,8 @@ class FilterScheduler(driver.Scheduler):
                                          requested_networks,
                                          injected_files, admin_password,
                                          is_first_time,
-                                         instance_uuid=instance_uuid)
+                                         instance_uuid=instance_uuid,
+                                         legacy_bdm_in_spec=legacy_bdm_in_spec)
             except Exception as ex:
                 # NOTE(vish): we don't reraise the exception here to make sure
                 #             that all instances in the request get set to
@@ -124,35 +127,7 @@ class FilterScheduler(driver.Scheduler):
             retry = filter_properties.get('retry', {})
             retry['hosts'] = []
 
-        notifier.notify(context, notifier.publisher_id("scheduler"),
-                        'scheduler.run_instance.end', notifier.INFO, payload)
-
-    def schedule_prep_resize(self, context, image, request_spec,
-                             filter_properties, instance, instance_type,
-                             reservations):
-        """Select a target for resize.
-
-        Selects a target host for the instance, post-resize, and casts
-        the prep_resize operation to it.
-        """
-
-        weighed_hosts = self._schedule(context, request_spec,
-                filter_properties, [instance['uuid']])
-        if not weighed_hosts:
-            raise exception.NoValidHost(reason="")
-        weighed_host = weighed_hosts.pop(0)
-
-        scheduler_utils.populate_filter_properties(filter_properties,
-                weighed_host.obj)
-
-        # context is not serializable
-        filter_properties.pop('context', None)
-
-        # Forward off to the host
-        self.compute_rpcapi.prep_resize(context, image, instance,
-                instance_type, weighed_host.obj.host, reservations,
-                request_spec=request_spec, filter_properties=filter_properties,
-                node=weighed_host.obj.nodename)
+        self.notifier.info(context, 'scheduler.run_instance.end', payload)
 
     def select_hosts(self, context, request_spec, filter_properties):
         """Selects a filtered set of hosts."""
@@ -180,16 +155,16 @@ class FilterScheduler(driver.Scheduler):
 
     def _provision_resource(self, context, weighed_host, request_spec,
             filter_properties, requested_networks, injected_files,
-            admin_password, is_first_time, instance_uuid=None):
+            admin_password, is_first_time, instance_uuid=None,
+            legacy_bdm_in_spec=True):
         """Create the requested resource in this Zone."""
         # NOTE(vish): add our current instance back into the request spec
         request_spec['instance_uuids'] = [instance_uuid]
         payload = dict(request_spec=request_spec,
                        weighted_host=weighed_host.to_dict(),
                        instance_id=instance_uuid)
-        notifier.notify(context, notifier.publisher_id("scheduler"),
-                        'scheduler.run_instance.scheduled', notifier.INFO,
-                        payload)
+        self.notifier.info(context,
+                           'scheduler.run_instance.scheduled', payload)
 
         # Update the metadata if necessary
         scheduler_hints = filter_properties.get('scheduler_hints') or {}
@@ -200,19 +175,28 @@ class FilterScheduler(driver.Scheduler):
             values.update({'group': group})
             values = {'system_metadata': values}
 
-        updated_instance = driver.instance_update_db(context,
-                instance_uuid, extra_values=values)
+        try:
+            updated_instance = driver.instance_update_db(context,
+                    instance_uuid, extra_values=values)
 
-        scheduler_utils.populate_filter_properties(filter_properties,
-                weighed_host.obj)
+        except exception.InstanceNotFound:
+            LOG.warning(_("Instance disappeared during scheduling"),
+                        context=context, instance_uuid=instance_uuid)
 
-        self.compute_rpcapi.run_instance(context, instance=updated_instance,
-                host=weighed_host.obj.host,
-                request_spec=request_spec, filter_properties=filter_properties,
-                requested_networks=requested_networks,
-                injected_files=injected_files,
-                admin_password=admin_password, is_first_time=is_first_time,
-                node=weighed_host.obj.nodename)
+        else:
+            scheduler_utils.populate_filter_properties(filter_properties,
+                    weighed_host.obj)
+
+            self.compute_rpcapi.run_instance(context,
+                    instance=updated_instance,
+                    host=weighed_host.obj.host,
+                    request_spec=request_spec,
+                    filter_properties=filter_properties,
+                    requested_networks=requested_networks,
+                    injected_files=injected_files,
+                    admin_password=admin_password, is_first_time=is_first_time,
+                    node=weighed_host.obj.nodename,
+                    legacy_bdm_in_spec=legacy_bdm_in_spec)
 
     def _get_configuration_options(self):
         """Fetch options dictionary. Broken out for testing."""
@@ -227,6 +211,10 @@ class FilterScheduler(driver.Scheduler):
         os_type = request_spec['instance_properties']['os_type']
         filter_properties['project_id'] = project_id
         filter_properties['os_type'] = os_type
+        pci_requests = pci_request.get_pci_requests_from_flavor(
+            request_spec.get('instance_type') or {})
+        if pci_requests:
+            filter_properties['pci_requests'] = pci_requests
 
     def _max_attempts(self):
         max_attempts = CONF.scheduler_max_attempts
@@ -260,12 +248,14 @@ class FilterScheduler(driver.Scheduler):
         request. If maximum retries is exceeded, raise NoValidHost.
         """
         max_attempts = self._max_attempts()
-        retry = filter_properties.pop('retry', {})
+        force_hosts = filter_properties.get('force_hosts', [])
+        force_nodes = filter_properties.get('force_nodes', [])
 
-        if max_attempts == 1:
+        if max_attempts == 1 or force_hosts or force_nodes:
             # re-scheduling is disabled.
             return
 
+        retry = filter_properties.pop('retry', {})
         # retry is enabled, update attempt count:
         if retry:
             retry['num_attempts'] += 1

@@ -45,6 +45,7 @@ from nova.openstack.common import timeutils
 from nova import quota
 from nova.tests import fake_network
 from nova.tests.glance import stubs as glance_stubs
+from nova.tests.objects import test_keypair
 from nova import utils
 from nova import wsgi
 
@@ -106,7 +107,7 @@ def wsgi_app_v3(inner_app_v3=None, fake_auth_context=None,
         inner_app_v3 = compute.APIRouterV3(init_only)
 
     if use_no_auth:
-        api_v3 = openstack_api.FaultWrapper(auth.NoAuthMiddleware(
+        api_v3 = openstack_api.FaultWrapper(auth.NoAuthMiddlewareV3(
               limits.RateLimitingMiddleware(inner_app_v3)))
     else:
         if fake_auth_context is not None:
@@ -126,11 +127,13 @@ def wsgi_app_v3(inner_app_v3=None, fake_auth_context=None,
 
 def stub_out_key_pair_funcs(stubs, have_key_pair=True):
     def key_pair(context, user_id):
-        return [dict(name='key', public_key='public_key')]
+        return [dict(test_keypair.fake_keypair,
+                     name='key', public_key='public_key')]
 
     def one_key_pair(context, user_id, name):
         if name == 'key':
-            return dict(name='key', public_key='public_key')
+            return dict(test_keypair.fake_keypair,
+                        name='key', public_key='public_key')
         else:
             raise exc.KeypairNotFound(user_id=user_id, name=name)
 
@@ -208,8 +211,7 @@ class stub_out_compute_api_backup(object):
 
 
 def stub_out_nw_api_get_instance_nw_info(stubs, num_networks=1, func=None):
-    fake_network.stub_out_nw_api_get_instance_nw_info(stubs,
-                                                      spectacular=True)
+    fake_network.stub_out_nw_api_get_instance_nw_info(stubs)
 
 
 def stub_out_nw_api_get_floating_ips_by_fixed_address(stubs, func=None):
@@ -240,7 +242,7 @@ def stub_out_nw_api(stubs, cls=None, private=None, publics=None):
     if cls is None:
         cls = Fake
     stubs.Set(network_api, 'API', cls)
-    fake_network.stub_out_nw_api_get_instance_nw_info(stubs, spectacular=True)
+    fake_network.stub_out_nw_api_get_instance_nw_info(stubs)
 
 
 def _make_image_fixtures():
@@ -331,8 +333,8 @@ class FakeRequestContext(context.RequestContext):
 
 class HTTPRequest(os_wsgi.Request):
 
-    @classmethod
-    def blank(cls, *args, **kwargs):
+    @staticmethod
+    def blank(*args, **kwargs):
         kwargs['base_url'] = 'http://localhost/v2'
         use_admin_context = kwargs.pop('use_admin_context', False)
         out = os_wsgi.Request.blank(*args, **kwargs)
@@ -343,8 +345,8 @@ class HTTPRequest(os_wsgi.Request):
 
 class HTTPRequestV3(os_wsgi.Request):
 
-    @classmethod
-    def blank(cls, *args, **kwargs):
+    @staticmethod
+    def blank(*args, **kwargs):
         kwargs['base_url'] = 'http://localhost/v3'
         use_admin_context = kwargs.pop('use_admin_context', False)
         out = os_wsgi.Request.blank(*args, **kwargs)
@@ -469,9 +471,9 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
                   power_state=None, nw_cache=None, metadata=None,
                   security_groups=None, root_device_name=None,
                   limit=None, marker=None,
-                  launched_at=datetime.datetime.utcnow(),
-                  terminated_at=datetime.datetime.utcnow(),
-                  availability_zone=''):
+                  launched_at=timeutils.utcnow(),
+                  terminated_at=timeutils.utcnow(),
+                  availability_zone='', locked_by=None, cleaned=False):
 
     if user_id is None:
         user_id = 'fake_user'
@@ -545,7 +547,8 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "availability_zone": availability_zone,
         "display_name": display_name or server_name,
         "display_description": "",
-        "locked": False,
+        "locked": locked_by != None,
+        "locked_by": locked_by,
         "metadata": metadata,
         "access_ip_v4": access_ipv4,
         "access_ip_v6": access_ipv6,
@@ -558,13 +561,15 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "security_groups": security_groups,
         "root_device_name": root_device_name,
         "system_metadata": utils.dict_to_metadata(sys_meta),
+        "pci_devices": [],
         "vm_mode": "",
         "default_swap_device": "",
         "default_ephemeral_device": "",
         "launched_on": "",
         "cell_name": "",
         "architecture": "",
-        "os_type": ""}
+        "os_type": "",
+        "cleaned": cleaned}
 
     instance.update(info_cache)
     instance['info_cache']['instance_uuid'] = instance['uuid']
@@ -611,18 +616,6 @@ def stub_volume_create(self, context, size, name, description, snapshot,
     return vol
 
 
-def stub_volume_create_from_image(self, context, size, name, description,
-                                  snapshot, volume_type, metadata,
-                                  availability_zone):
-    vol = stub_volume('1')
-    vol['status'] = 'creating'
-    vol['size'] = size
-    vol['display_name'] = name
-    vol['display_description'] = description
-    vol['availability_zone'] = 'nova'
-    return vol
-
-
 def stub_volume_update(self, context, *args, **param):
     pass
 
@@ -645,8 +638,8 @@ def stub_volume_get_all(context, search_opts=None):
             stub_volume(102, project_id='superduperfake')]
 
 
-def stub_volume_get_all_by_project(self, context, search_opts=None):
-    return [stub_volume_get(self, context, '1')]
+def stub_volume_check_attach(self, context, *args, **param):
+    pass
 
 
 def stub_snapshot(id, **kwargs):
@@ -670,9 +663,18 @@ def stub_snapshot_create(self, context, volume_id, name, description):
                          display_description=description)
 
 
+def stub_compute_volume_snapshot_create(self, context, volume_id, create_info):
+    return {'snapshot': {'id': 100, 'volumeId': volume_id}}
+
+
 def stub_snapshot_delete(self, context, snapshot_id):
     if snapshot_id == '-1':
         raise exc.NotFound
+
+
+def stub_compute_volume_snapshot_delete(self, context, volume_id, snapshot_id,
+        delete_info):
+    pass
 
 
 def stub_snapshot_get(self, context, snapshot_id):
@@ -690,3 +692,8 @@ def stub_snapshot_get_all(self, context):
 def stub_bdm_get_all_by_instance(context, instance_uuid):
     return [{'source_type': 'volume', 'volume_id': 'volume_id1'},
             {'source_type': 'volume', 'volume_id': 'volume_id2'}]
+
+
+def fake_get_available_languages(domain):
+    existing_translations = ['en_GB', 'en_AU', 'de', 'zh_CN', 'en_US']
+    return existing_translations

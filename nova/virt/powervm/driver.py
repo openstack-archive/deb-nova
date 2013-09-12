@@ -21,6 +21,7 @@ from oslo.config import cfg
 
 from nova.compute import flavors
 from nova.image import glance
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt.powervm import exception
@@ -33,13 +34,10 @@ powervm_opts = [
                default='ivm',
                help='PowerVM manager type (ivm, hmc)'),
     cfg.StrOpt('powervm_mgr',
-               default=None,
                help='PowerVM manager host or ip'),
     cfg.StrOpt('powervm_mgr_user',
-               default=None,
                help='PowerVM manager user name'),
     cfg.StrOpt('powervm_mgr_passwd',
-               default=None,
                help='PowerVM manager user password',
                secret=True),
     cfg.StrOpt('powervm_img_remote_path',
@@ -63,10 +61,6 @@ class PowerVMDriver(driver.ComputeDriver):
     def __init__(self, virtapi):
         super(PowerVMDriver, self).__init__(virtapi)
         self._powervm = operator.PowerVMOperator()
-
-    @property
-    def host_state(self):
-        pass
 
     def init_host(self, host):
         """Initialize anything that is necessary for the driver to function,
@@ -96,6 +90,9 @@ class PowerVMDriver(driver.ComputeDriver):
         return self._powervm.get_host_uptime(host)
 
     def plug_vifs(self, instance, network_info):
+        """Plug VIFs into networks."""
+        LOG.debug(_('Network injection is not supported by the '
+                    'PowerVM driver.'), instance)
         pass
 
     def macs_for_instance(self, instance):
@@ -123,7 +120,13 @@ class PowerVMDriver(driver.ComputeDriver):
         :param bad_volumes_callback: Function to handle any bad volumes
             encountered
         """
-        pass
+        if reboot_type == 'SOFT':
+            LOG.debug(_('Soft reboot is not supported for PowerVM.'),
+                      instance=instance)
+            return
+
+        self.power_off(instance)
+        self.power_on(context, instance, network_info, block_device_info)
 
     def get_host_ip_addr(self):
         """Retrieves the IP address of the hypervisor host."""
@@ -178,19 +181,23 @@ class PowerVMDriver(driver.ComputeDriver):
 
     def pause(self, instance):
         """Pause the specified instance."""
-        pass
+        msg = _("pause is not supported for PowerVM")
+        raise NotImplementedError(msg)
 
     def unpause(self, instance):
         """Unpause paused VM instance."""
-        pass
+        msg = _("unpause is not supported for PowerVM")
+        raise NotImplementedError(msg)
 
     def suspend(self, instance):
         """suspend the specified instance."""
-        pass
+        raise NotImplementedError(_("Suspend is not supported by the"
+                                    "PowerVM driver."))
 
     def resume(self, instance, network_info, block_device_info=None):
         """resume the specified instance."""
-        pass
+        raise NotImplementedError(_("Resume is not supported by the"
+                                    "PowerVM driver."))
 
     def power_off(self, instance):
         """Power off the specified instance."""
@@ -207,24 +214,8 @@ class PowerVMDriver(driver.ComputeDriver):
 
     def host_power_action(self, host, action):
         """Reboots, shuts down or powers up the host."""
-        pass
-
-    def legacy_nwinfo(self):
-        """
-        Indicate if the driver requires the legacy network_info format.
-        """
-        return False
-
-    def manage_image_cache(self, context, all_instances):
-        """
-        Manage the driver's local image cache.
-
-        Some drivers chose to cache images for instances on disk. This method
-        is an opportunity to do management of that cache which isn't directly
-        related to other calls into the driver. The prime example is to clean
-        the cache and remove images which are no longer of interest.
-        """
-        pass
+        raise NotImplementedError(_("Host power action is not supported by the"
+                                    "PowerVM driver."))
 
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    instance_type, network_info,
@@ -340,3 +331,16 @@ class PowerVMDriver(driver.ComputeDriver):
 
         if power_on:
             self._powervm.power_on(instance['name'])
+
+    def add_to_aggregate(self, context, aggregate, host, **kwargs):
+        """Add a compute host to an aggregate."""
+        pass
+
+    def remove_from_aggregate(self, context, aggregate, host, **kwargs):
+        """Remove a compute host from an aggregate."""
+        pass
+
+    def undo_aggregate_operation(self, context, op, aggregate,
+                                  host, set_error=True):
+        """Undo for Resource Pools."""
+        pass

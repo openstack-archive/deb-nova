@@ -19,11 +19,16 @@ import random
 import re
 import time
 
+from eventlet import timeout as eventlet_timeout
 from oslo.config import cfg
 
 from nova.compute import power_state
+from nova import exception as n_exc
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import loopingcall
 from nova.openstack.common import processutils
 from nova.virt.powervm import blockdev
 from nova.virt.powervm import command
@@ -131,12 +136,14 @@ class PowerVMOperator(object):
                'hypervisor_version': data['hypervisor_version'],
                'hypervisor_hostname': self._operator.get_hostname(),
                'cpu_info': ','.join(data['cpu_info']),
-               'disk_available_least': data['disk_total']}
+               'disk_available_least': data['disk_total'],
+               'supported_instances': jsonutils.dumps(
+                   data['supported_instances'])}
         return dic
 
     def get_host_stats(self, refresh=False):
         """Return currently known host stats."""
-        if refresh:
+        if refresh or not self._host_stats:
             self._update_host_stats()
         return self._host_stats
 
@@ -316,7 +323,8 @@ class PowerVMOperator(object):
             raise exception.PowerVMLPARInstanceCleanupFailed(
                                                   instance_name=instance_name)
 
-    def power_off(self, instance_name, timeout=30):
+    def power_off(self, instance_name,
+                  timeout=constants.POWERVM_LPAR_OPERATION_TIMEOUT):
         self._operator.stop_lpar(instance_name, timeout)
 
     def power_on(self, instance_name):
@@ -476,6 +484,40 @@ class BaseOperator(object):
         self._connection = common.check_connection(self._connection,
                                                    self.connection_data)
 
+    def _poll_for_lpar_status(self, instance_name, status, operation,
+                            timeout=constants.POWERVM_LPAR_OPERATION_TIMEOUT):
+        """Polls until the LPAR with the given name reaches the given status.
+
+        :param instance_name: LPAR instance name
+        :param status: Poll until the given LPAR status is reached
+        :param operation: The operation being performed, e.g. 'stop_lpar'
+        :param timeout: The number of seconds to wait.
+        :raises: PowerVMLPARInstanceNotFound
+        :raises: PowerVMLPAROperationTimeout
+        :raises: InvalidParameterValue
+        """
+        # make sure it's a valid status
+        if (status == constants.POWERVM_NOSTATE or
+                not status in constants.POWERVM_POWER_STATE):
+            msg = _("Invalid LPAR state: %s") % status
+            raise n_exc.InvalidParameterValue(err=msg)
+
+        # raise the given timeout exception if the loop call doesn't complete
+        # in the specified timeout
+        timeout_exception = exception.PowerVMLPAROperationTimeout(
+                                                operation=operation,
+                                                instance_name=instance_name)
+        with eventlet_timeout.Timeout(timeout, timeout_exception):
+            def _wait_for_lpar_status(instance_name, status):
+                """Called at an interval until the status is reached."""
+                lpar_obj = self.get_lpar(instance_name)
+                if lpar_obj['state'] == status:
+                    raise loopingcall.LoopingCallDone()
+
+            timer = loopingcall.FixedIntervalLoopingCall(_wait_for_lpar_status,
+                                                         instance_name, status)
+            timer.start(interval=1).wait()
+
     def get_lpar(self, instance_name, resource_type='lpar'):
         """Return a LPAR object by its instance name.
 
@@ -511,15 +553,22 @@ class BaseOperator(object):
         self.run_vios_command(self.command.mksyscfg('-r lpar -i "%s"' %
                                                     conf_data))
 
-    def start_lpar(self, instance_name):
+    def start_lpar(self, instance_name,
+                   timeout=constants.POWERVM_LPAR_OPERATION_TIMEOUT):
         """Start a LPAR instance.
 
         :param instance_name: LPAR instance name
+        :param timeout: value in seconds for specifying
+                        how long to wait for the LPAR to start
         """
         self.run_vios_command(self.command.chsysstate('-r lpar -o on -n %s'
                                                  % instance_name))
+        # poll instance until running or raise exception
+        self._poll_for_lpar_status(instance_name, constants.POWERVM_RUNNING,
+                                   'start_lpar', timeout)
 
-    def stop_lpar(self, instance_name, timeout=30):
+    def stop_lpar(self, instance_name,
+                  timeout=constants.POWERVM_LPAR_OPERATION_TIMEOUT):
         """Stop a running LPAR.
 
         :param instance_name: LPAR instance name
@@ -531,19 +580,8 @@ class BaseOperator(object):
         self.run_vios_command(cmd)
 
         # poll instance until stopped or raise exception
-        lpar_obj = self.get_lpar(instance_name)
-        wait_inc = 1  # seconds to wait between status polling
-        start_time = time.time()
-        while lpar_obj['state'] != 'Not Activated':
-            curr_time = time.time()
-            # wait up to (timeout) seconds for shutdown
-            if (curr_time - start_time) > timeout:
-                raise exception.PowerVMLPAROperationTimeout(
-                        operation='stop_lpar',
-                        instance_name=instance_name)
-
-            time.sleep(wait_inc)
-            lpar_obj = self.get_lpar(instance_name)
+        self._poll_for_lpar_status(instance_name, constants.POWERVM_SHUTDOWN,
+                                   'stop_lpar', timeout)
 
     def remove_lpar(self, instance_name):
         """Removes a LPAR.
@@ -687,7 +725,7 @@ class BaseOperator(object):
 
         error_text = stderr.strip()
         if error_text:
-            LOG.debug(_("Found error stream for command \"%(cmd)s\": "
+            LOG.warn(_("Found error stream for command \"%(cmd)s\": "
                         "%(error_text)s"),
                       {'cmd': cmd, 'error_text': error_text})
 
@@ -704,7 +742,7 @@ class BaseOperator(object):
 
         error_text = stderr.read()
         if error_text:
-            LOG.debug(_("Found error stream for command \"%(command)s\":"
+            LOG.warn(_("Found error stream for command \"%(command)s\":"
                         " %(error_text)s"),
                       {'command': command, 'error_text': error_text})
 
@@ -793,7 +831,7 @@ class BaseOperator(object):
 
         :param file_path: absolute path to file to be removed
         """
-        command = 'rm %s' % file_path
+        command = 'rm -f %s' % file_path
         self.run_vios_command_as_root(command)
 
     def set_lpar_mac_base_value(self, instance_name, mac):

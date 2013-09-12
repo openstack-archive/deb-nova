@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright 2013 IBM Corp.
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -25,6 +26,8 @@ import webob
 
 from nova.api.openstack import xmlutil
 from nova import exception
+from nova.openstack.common import gettextutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import wsgi
@@ -174,6 +177,12 @@ class Request(webob.Request):
             raise exception.InvalidContentType(content_type=content_type)
 
         return content_type
+
+    def best_match_language(self):
+        """Determine language for returned response."""
+        return self.accept_language.best_match(
+                gettextutils.get_available_languages('nova'),
+                default_match='en_US')
 
 
 class ActionDispatcher(object):
@@ -924,7 +933,7 @@ class Resource(wsgi.Application):
                     "%(body)s") % {'action': action,
                                    'body': unicode(body, 'utf-8')}
             LOG.debug(msg)
-        LOG.debug(_("Calling method %s") % meth)
+        LOG.debug(_("Calling method %s") % str(meth))
 
         # Now, deserialize the request body...
         try:
@@ -1165,6 +1174,7 @@ class Fault(webob.exc.HTTPException):
             409: "conflictingRequest",
             413: "overLimit",
             415: "badMediaType",
+            429: "overLimit",
             501: "notImplemented",
             503: "serviceUnavailable"}
 
@@ -1178,6 +1188,8 @@ class Fault(webob.exc.HTTPException):
     @webob.dec.wsgify(RequestClass=Request)
     def __call__(self, req):
         """Generate a WSGI response based on the exception passed to ctor."""
+
+        user_locale = req.best_match_language()
         # Replace the body with fault details.
         code = self.wrapped_exc.status_int
         fault_name = self._fault_names.get(code, "computeFault")
@@ -1185,11 +1197,13 @@ class Fault(webob.exc.HTTPException):
         LOG.debug(_("Returning %(code)s to user: %(explanation)s"),
                   {'code': code, 'explanation': explanation})
 
+        explanation = gettextutils.get_localized_message(explanation,
+                                                         user_locale)
         fault_data = {
             fault_name: {
                 'code': code,
                 'message': explanation}}
-        if code == 413:
+        if code == 413 or code == 429:
             retry = self.wrapped_exc.headers.get('Retry-After', None)
             if retry:
                 fault_data[fault_name]['retryAfter'] = retry
@@ -1215,17 +1229,17 @@ class Fault(webob.exc.HTTPException):
         return self.wrapped_exc.__str__()
 
 
-class OverLimitFault(webob.exc.HTTPException):
+class RateLimitFault(webob.exc.HTTPException):
     """
     Rate-limited request response.
     """
 
     def __init__(self, message, details, retry_time):
         """
-        Initialize new `OverLimitFault` with relevant information.
+        Initialize new `RateLimitFault` with relevant information.
         """
-        hdrs = OverLimitFault._retry_after(retry_time)
-        self.wrapped_exc = webob.exc.HTTPRequestEntityTooLarge(headers=hdrs)
+        hdrs = RateLimitFault._retry_after(retry_time)
+        self.wrapped_exc = webob.exc.HTTPTooManyRequests(headers=hdrs)
         self.content = {
             "overLimit": {
                 "code": self.wrapped_exc.status_int,
@@ -1248,8 +1262,18 @@ class OverLimitFault(webob.exc.HTTPException):
         Return the wrapped exception with a serialized body conforming to our
         error format.
         """
+        user_locale = request.best_match_language()
         content_type = request.best_match_content_type()
         metadata = {"attributes": {"overLimit": ["code", "retryAfter"]}}
+
+        self.content['overLimit']['message'] = \
+                gettextutils.get_localized_message(
+                        self.content['overLimit']['message'],
+                        user_locale)
+        self.content['overLimit']['details'] = \
+                gettextutils.get_localized_message(
+                        self.content['overLimit']['details'],
+                        user_locale)
 
         xml_serializer = XMLDictSerializer(metadata, XMLNS_V11)
         serializer = {

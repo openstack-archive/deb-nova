@@ -62,7 +62,7 @@ def stubout_session(stubs, cls, product_version=(5, 6, 2),
 
 
 def stubout_get_this_vm_uuid(stubs):
-    def f():
+    def f(session):
         vms = [rec['uuid'] for ref, rec
                in fake.get_all_records('VM').iteritems()
                if rec['is_control_domain']]
@@ -81,12 +81,6 @@ def stubout_stream_disk(stubs):
     def fake_stream_disk(*args, **kwargs):
         pass
     stubs.Set(vm_utils, '_stream_disk', fake_stream_disk)
-
-
-def stubout_is_vdi_pv(stubs):
-    def f(_1):
-        return False
-    stubs.Set(vm_utils, '_is_vdi_pv', f)
 
 
 def stubout_determine_is_pv_objectstore(stubs):

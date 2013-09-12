@@ -20,13 +20,12 @@ import abc
 
 from oslo.config import cfg
 
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.virt.hyperv import networkutils
-from nova.virt.hyperv import vmutils
+from nova.virt.hyperv import utilsfactory
 
 hyperv_opts = [
     cfg.StrOpt('vswitch_name',
-               default=None,
                help='External virtual switch Name, '
                     'if not provided, the first external virtual '
                     'switch is used'),
@@ -64,8 +63,8 @@ class HyperVNovaNetworkVIFDriver(HyperVBaseVIFDriver):
     """Nova network VIF driver."""
 
     def __init__(self):
-        self._vmutils = vmutils.VMUtils()
-        self._netutils = networkutils.NetworkUtils()
+        self._vmutils = utilsfactory.get_vmutils()
+        self._netutils = utilsfactory.get_networkutils()
 
     def plug(self, instance, vif):
         vswitch_path = self._netutils.get_external_vswitch(
@@ -73,9 +72,13 @@ class HyperVNovaNetworkVIFDriver(HyperVBaseVIFDriver):
 
         vm_name = instance['name']
         LOG.debug(_('Creating vswitch port for instance: %s') % vm_name)
-        vswitch_port = self._netutils.create_vswitch_port(vswitch_path,
-                                                          vm_name)
-        self._vmutils.set_nic_connection(vm_name, vif['id'], vswitch_port)
+        if self._netutils.vswitch_port_needed():
+            vswitch_data = self._netutils.create_vswitch_port(vswitch_path,
+                                                              vm_name)
+        else:
+            vswitch_data = vswitch_path
+
+        self._vmutils.set_nic_connection(vm_name, vif['id'], vswitch_data)
 
     def unplug(self, instance, vif):
         #TODO(alepilotti) Not implemented

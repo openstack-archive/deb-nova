@@ -19,6 +19,8 @@
 
 """Utility methods for working with WSGI servers."""
 
+from __future__ import print_function
+
 import os.path
 import socket
 import sys
@@ -35,6 +37,7 @@ import webob.exc
 
 from nova import exception
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 # Raise the default from 8192 to accommodate large tokens
@@ -52,14 +55,11 @@ wsgi_opts = [
                  'into it: client_ip, date_time, request_line, status_code, '
                  'body_length, wall_seconds.'),
     cfg.StrOpt('ssl_ca_file',
-               default=None,
                help="CA certificate file to use to verify "
                     "connecting clients"),
     cfg.StrOpt('ssl_cert_file',
-                    default=None,
                     help="SSL certificate of API server"),
     cfg.StrOpt('ssl_key_file',
-                    default=None,
                     help="SSL private key of API server"),
     cfg.IntOpt('tcp_keepidle',
                default=600,
@@ -370,15 +370,15 @@ class Debug(Middleware):
 
     @webob.dec.wsgify(RequestClass=Request)
     def __call__(self, req):
-        print ('*' * 40) + ' REQUEST ENVIRON'
+        print(('*' * 40) + ' REQUEST ENVIRON')
         for key, value in req.environ.items():
-            print key, '=', value
-        print
+            print(key, '=', value)
+        print()
         resp = req.get_response(self.application)
 
-        print ('*' * 40) + ' RESPONSE HEADERS'
+        print(('*' * 40) + ' RESPONSE HEADERS')
         for (key, value) in resp.headers.iteritems():
-            print key, '=', value
+            print(key, '=', value)
         print
 
         resp.app_iter = self.print_generator(resp.app_iter)
@@ -388,12 +388,12 @@ class Debug(Middleware):
     @staticmethod
     def print_generator(app_iter):
         """Iterator that prints the contents of a wrapper string."""
-        print ('*' * 40) + ' BODY'
+        print(('*' * 40) + ' BODY')
         for part in app_iter:
             sys.stdout.write(part)
             sys.stdout.flush()
             yield part
-        print
+        print()
 
 
 class Router(object):

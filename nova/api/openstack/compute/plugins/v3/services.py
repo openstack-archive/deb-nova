@@ -22,6 +22,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova import servicegroup
 from nova import utils
 
@@ -113,6 +114,7 @@ class ServiceController(object):
 
         return True
 
+    @extensions.expected_errors(())
     @wsgi.serializers(xml=ServicesIndexTemplate)
     def index(self, req):
         """
@@ -122,6 +124,7 @@ class ServiceController(object):
 
         return {'services': services}
 
+    @extensions.expected_errors((400, 404))
     @wsgi.serializers(xml=ServiceUpdateTemplate)
     def update(self, req, id, body):
         """Enable/Disable scheduling for a service."""
@@ -146,7 +149,10 @@ class ServiceController(object):
                     'status': status,
                 },
             }
-            status_detail = {'disabled': disabled}
+            status_detail = {
+                'disabled': disabled,
+                'disabled_reason': None,
+            }
             if id == "disable-log-reason":
                 reason = body['service']['disabled_reason']
                 if not self._is_valid_as_reason(reason):

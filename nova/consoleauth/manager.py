@@ -25,6 +25,7 @@ from oslo.config import cfg
 from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import rpcapi as compute_rpcapi
 from nova import manager
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
@@ -80,11 +81,17 @@ class ConsoleAuthManager(manager.Manager):
         self.mc.set(token.encode('UTF-8'), data, CONF.console_token_ttl)
         if instance_uuid is not None:
             tokens = self._get_tokens_for_instance(instance_uuid)
+            # Remove the expired tokens from cache.
+            for tok in tokens:
+                token_str = self.mc.get(tok.encode('UTF-8'))
+                if not token_str:
+                    tokens.remove(tok)
             tokens.append(token)
             self.mc.set(instance_uuid.encode('UTF-8'),
                         jsonutils.dumps(tokens))
 
-        LOG.audit(_("Received Token: %(token)s, %(token_dict)s)"), locals())
+        LOG.audit(_("Received Token: %(token)s, %(token_dict)s"),
+                  {'token': token, 'token_dict': token_dict})
 
     def _validate_token(self, context, token):
         instance_uuid = token['instance_uuid']
@@ -108,7 +115,8 @@ class ConsoleAuthManager(manager.Manager):
     def check_token(self, context, token):
         token_str = self.mc.get(token.encode('UTF-8'))
         token_valid = (token_str is not None)
-        LOG.audit(_("Checking Token: %(token)s, %(token_valid)s)"), locals())
+        LOG.audit(_("Checking Token: %(token)s, %(token_valid)s"),
+                  {'token': token, 'token_valid': token_valid})
         if token_valid:
             token = jsonutils.loads(token_str)
             if self._validate_token(context, token):

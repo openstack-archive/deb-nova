@@ -57,7 +57,9 @@ from oslo.config import cfg
 
 from nova import baserpc
 from nova.db import base
+from nova import notifier
 from nova.objects import base as objects_base
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import periodic_task
 from nova.openstack.common.rpc import dispatcher as rpc_dispatcher
@@ -79,6 +81,7 @@ class Manager(base.Base, periodic_task.PeriodicTasks):
         self.host = host
         self.backdoor_port = None
         self.service_name = service_name
+        self.notifier = notifier.get_notifier(self.service_name, self.host)
         super(Manager, self).__init__(db_driver)
 
     def create_rpc_dispatcher(self, backdoor_port=None, additional_apis=None):
@@ -108,7 +111,7 @@ class Manager(base.Base, periodic_task.PeriodicTasks):
         """
         pass
 
-    def pre_start_hook(self, **kwargs):
+    def pre_start_hook(self):
         """Hook to provide the manager the ability to do additional
         start-up work before any RPC queues/consumers are created. This is
         called after other initialization has succeeded and a service
@@ -151,13 +154,14 @@ class SchedulerDependentManager(Manager):
             capabilities = [capabilities]
         self.last_capabilities = capabilities
 
-    @periodic_task.periodic_task
     def publish_service_capabilities(self, context):
         """Pass data back to the scheduler.
 
         Called at a periodic interval. And also called via rpc soon after
         the start of the scheduler.
         """
+        #NOTE(jogo): this is now deprecated, unused and can be removed in
+        #V3.0 of compute  RPCAPI
         if self.last_capabilities:
             LOG.debug(_('Notifying Schedulers of capabilities ...'))
             self.scheduler_rpcapi.update_service_capabilities(context,

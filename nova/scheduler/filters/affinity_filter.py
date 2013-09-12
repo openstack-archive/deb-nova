@@ -18,6 +18,7 @@
 import netaddr
 
 from nova.compute import api as compute
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -86,7 +87,7 @@ class SimpleCIDRAffinityFilter(AffinityFilter):
 
         affinity_cidr = scheduler_hints.get('cidr', '/24')
         affinity_host_addr = scheduler_hints.get('build_near_host_ip')
-        host_ip = host_state.capabilities.get('host_ip')
+        host_ip = host_state.host_ip
         if affinity_host_addr:
             affinity_net = netaddr.IPNetwork(str.join('', (affinity_host_addr,
                                                            affinity_cidr)))

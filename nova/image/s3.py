@@ -34,6 +34,7 @@ from nova.api.ec2 import ec2utils
 import nova.cert.rpcapi
 from nova import exception
 from nova.image import glance
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
@@ -47,7 +48,7 @@ s3_opts = [
                help='parent dir for tempdir used for image decryption'),
     cfg.StrOpt('s3_host',
                default='$my_ip',
-               help='hostname or ip for openstack to use when accessing '
+               help='hostname or ip for OpenStack to use when accessing '
                     'the s3 api'),
     cfg.IntOpt('s3_port',
                default=3333,

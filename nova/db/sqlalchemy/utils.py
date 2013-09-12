@@ -39,6 +39,7 @@ from sqlalchemy.types import NullType
 
 from nova.db.sqlalchemy import api as db
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 
@@ -272,7 +273,7 @@ def check_shadow_table(migrate_engine, table_name):
     for name, column in shadow_columns.iteritems():
         if name not in columns:
             raise exception.NovaException(
-                _("Extra column %(table)%.%(column)s in shadow table")
+                _("Extra column %(table)s.%(column)s in shadow table")
                         % {'column': name, 'table': shadow_table.name})
     return True
 

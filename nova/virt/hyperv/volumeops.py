@@ -24,12 +24,11 @@ import time
 from oslo.config import cfg
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt import driver
-from nova.virt.hyperv import hostutils
+from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vmutils
-from nova.virt.hyperv import volumeutils
-from nova.virt.hyperv import volumeutilsv2
 
 LOG = logging.getLogger(__name__)
 
@@ -40,13 +39,11 @@ hyper_volumeops_opts = [
     cfg.IntOpt('volume_attach_retry_interval',
                default=5,
                help='Interval between volume attachment attempts, in seconds'),
-    cfg.BoolOpt('force_volumeutils_v1',
-                default=False,
-                help='Force volumeutils v1'),
 ]
 
 CONF = cfg.CONF
 CONF.register_opts(hyper_volumeops_opts, 'hyperv')
+CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('my_ip', 'nova.netconf')
 
 
@@ -56,18 +53,11 @@ class VolumeOps(object):
     """
 
     def __init__(self):
-        self._hostutils = hostutils.HostUtils()
-        self._vmutils = vmutils.VMUtils()
-        self._volutils = self._get_volume_utils()
+        self._hostutils = utilsfactory.get_hostutils()
+        self._vmutils = utilsfactory.get_vmutils()
+        self._volutils = utilsfactory.get_volumeutils()
         self._initiator = None
         self._default_root_device = 'vda'
-
-    def _get_volume_utils(self):
-        if(not CONF.hyperv.force_volumeutils_v1 and
-           self._hostutils.get_windows_version() >= 6.2):
-            return volumeutilsv2.VolumeUtilsV2()
-        else:
-            return volumeutils.VolumeUtils()
 
     def ebs_root_in_block_devices(self, block_device_info):
         return self._volutils.volume_in_mapping(self._default_root_device,
@@ -194,6 +184,7 @@ class VolumeOps(object):
                          instance=instance)
         return {
             'ip': CONF.my_ip,
+            'host': CONF.host,
             'initiator': self._initiator,
         }
 

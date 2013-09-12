@@ -31,6 +31,7 @@ from nova.cells import state as cells_state
 from nova.cells import utils as cells_utils
 from nova import compute
 from nova.compute import rpcapi as compute_rpcapi
+from nova.compute import task_states
 from nova.compute import vm_states
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
@@ -39,6 +40,7 @@ from nova import exception
 from nova.objects import base as objects_base
 from nova.objects import instance as instance_obj
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -799,6 +801,19 @@ class _TargetedMessageMethods(_BaseMessageMethods):
     def get_migrations(self, message, filters):
         return self.compute_api.get_migrations(message.ctxt, filters)
 
+    def instance_update_from_api(self, message, instance,
+                                 expected_vm_state,
+                                 expected_task_state,
+                                 admin_state_reset):
+        """Update an instance in this cell."""
+        if not admin_state_reset:
+            # NOTE(comstud): We don't want to nuke this cell's view
+            # of vm_state and task_state unless it's a forced reset
+            # via admin API.
+            instance.obj_reset_changes(['vm_state', 'task_state'])
+        instance.save(message.ctxt, expected_vm_state=expected_vm_state,
+                      expected_task_state=expected_task_state)
+
     def _call_compute_api_with_obj(self, ctxt, instance, method, *args,
                                    **kwargs):
         try:
@@ -825,6 +840,91 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         do_cast = not message.need_response
         return self._call_compute_api_with_obj(message.ctxt, instance,
                                                'stop', do_cast=do_cast)
+
+    def reboot_instance(self, message, instance, reboot_type):
+        """Reboot an instance via compute_api.reboot()."""
+        self._call_compute_api_with_obj(message.ctxt, instance, 'reboot',
+                                        reboot_type=reboot_type)
+
+    def suspend_instance(self, message, instance):
+        """Suspend an instance via compute_api.suspend()."""
+        self._call_compute_api_with_obj(message.ctxt, instance, 'suspend')
+
+    def resume_instance(self, message, instance):
+        """Resume an instance via compute_api.suspend()."""
+        self._call_compute_api_with_obj(message.ctxt, instance, 'resume')
+
+    def get_host_uptime(self, message, host_name):
+        return self.host_api.get_host_uptime(message.ctxt, host_name)
+
+    def terminate_instance(self, message, instance):
+        self._call_compute_api_with_obj(message.ctxt, instance, 'delete')
+
+    def soft_delete_instance(self, message, instance):
+        self._call_compute_api_with_obj(message.ctxt, instance, 'soft_delete')
+
+    def pause_instance(self, message, instance):
+        """Pause an instance via compute_api.pause()."""
+        self._call_compute_api_with_obj(message.ctxt, instance, 'pause')
+
+    def unpause_instance(self, message, instance):
+        """Unpause an instance via compute_api.pause()."""
+        self._call_compute_api_with_obj(message.ctxt, instance, 'unpause')
+
+    def resize_instance(self, message, instance, flavor,
+                        extra_instance_updates):
+        """Resize an instance via compute_api.resize()."""
+        self._call_compute_api_with_obj(message.ctxt, instance, 'resize',
+                                        flavor_id=flavor['id'],
+                                        **extra_instance_updates)
+
+    def live_migrate_instance(self, message, instance, block_migration,
+                              disk_over_commit, host_name):
+        """Live migrate an instance via compute_api.live_migrate()."""
+        self._call_compute_api_with_obj(message.ctxt, instance,
+                                        'live_migrate', block_migration,
+                                        disk_over_commit, host_name)
+
+    def revert_resize(self, message, instance):
+        """Revert a resize for an instance in its cell."""
+        self._call_compute_api_with_obj(message.ctxt, instance,
+                                        'revert_resize')
+
+    def confirm_resize(self, message, instance):
+        """Confirm a resize for an instance in its cell."""
+        self._call_compute_api_with_obj(message.ctxt, instance,
+                                        'confirm_resize')
+
+    def reset_network(self, message, instance):
+        """Reset networking for an instance in its cell."""
+        self._call_compute_api_with_obj(message.ctxt, instance,
+                                        'reset_network')
+
+    def inject_network_info(self, message, instance):
+        """Inject networking for an instance in its cell."""
+        self._call_compute_api_with_obj(message.ctxt, instance,
+                                        'inject_network_info')
+
+    def snapshot_instance(self, message, instance, image_id):
+        """Snapshot an instance in its cell."""
+        instance.refresh()
+        instance.task_state = task_states.IMAGE_SNAPSHOT
+        instance.save(expected_task_state=None)
+        self.compute_rpcapi.snapshot_instance(message.ctxt,
+                                              instance,
+                                              image_id)
+
+    def backup_instance(self, message, instance, image_id,
+                        backup_type, rotation):
+        """Backup an instance in its cell."""
+        instance.refresh()
+        instance.task_state = task_states.IMAGE_BACKUP
+        instance.save(expected_task_state=None)
+        self.compute_rpcapi.backup_instance(message.ctxt,
+                                            instance,
+                                            image_id,
+                                            backup_type,
+                                            rotation)
 
 
 class _BroadcastMessageMethods(_BaseMessageMethods):
@@ -1342,6 +1442,14 @@ class MessageRunner(object):
                                   need_response=True)
         return message.process()
 
+    def get_host_uptime(self, ctxt, cell_name, host_name):
+        method_kwargs = dict(host_name=host_name)
+        message = _TargetedMessage(self, ctxt,
+                                   'get_host_uptime',
+                                   method_kwargs, 'down', cell_name,
+                                   need_response=True)
+        return message.process()
+
     def service_update(self, ctxt, cell_name, host_name, binary,
                        params_to_update):
         """
@@ -1515,6 +1623,24 @@ class MessageRunner(object):
                                    need_response=need_response)
         return message.process()
 
+    def instance_update_from_api(self, ctxt, instance,
+                                expected_vm_state, expected_task_state,
+                                admin_state_reset):
+        """Update an instance object in its cell."""
+        cell_name = instance.cell_name
+        if not cell_name:
+            LOG.warn(_("No cell_name for instance update from API"),
+                     instance=instance)
+            return
+        method_kwargs = {'instance': instance,
+                         'expected_vm_state': expected_vm_state,
+                         'expected_task_state': expected_task_state,
+                         'admin_state_reset': admin_state_reset}
+        message = _TargetedMessage(self, ctxt, 'instance_update_from_api',
+                                   method_kwargs, 'down',
+                                   cell_name)
+        message.process()
+
     def start_instance(self, ctxt, instance):
         """Start an instance in its cell."""
         self._instance_action(ctxt, instance, 'start_instance')
@@ -1526,6 +1652,81 @@ class MessageRunner(object):
         else:
             return self._instance_action(ctxt, instance, 'stop_instance',
                                          need_response=True)
+
+    def reboot_instance(self, ctxt, instance, reboot_type):
+        """Reboot an instance in its cell."""
+        extra_kwargs = dict(reboot_type=reboot_type)
+        self._instance_action(ctxt, instance, 'reboot_instance',
+                              extra_kwargs=extra_kwargs)
+
+    def suspend_instance(self, ctxt, instance):
+        """Suspend an instance in its cell."""
+        self._instance_action(ctxt, instance, 'suspend_instance')
+
+    def resume_instance(self, ctxt, instance):
+        """Resume an instance in its cell."""
+        self._instance_action(ctxt, instance, 'resume_instance')
+
+    def terminate_instance(self, ctxt, instance):
+        self._instance_action(ctxt, instance, 'terminate_instance')
+
+    def soft_delete_instance(self, ctxt, instance):
+        self._instance_action(ctxt, instance, 'soft_delete_instance')
+
+    def pause_instance(self, ctxt, instance):
+        """Pause an instance in its cell."""
+        self._instance_action(ctxt, instance, 'pause_instance')
+
+    def unpause_instance(self, ctxt, instance):
+        """Unpause an instance in its cell."""
+        self._instance_action(ctxt, instance, 'unpause_instance')
+
+    def resize_instance(self, ctxt, instance, flavor,
+                       extra_instance_updates):
+        """Resize an instance in its cell."""
+        extra_kwargs = dict(flavor=flavor,
+                            extra_instance_updates=extra_instance_updates)
+        self._instance_action(ctxt, instance, 'resize_instance',
+                              extra_kwargs=extra_kwargs)
+
+    def live_migrate_instance(self, ctxt, instance, block_migration,
+                              disk_over_commit, host_name):
+        """Live migrate an instance in its cell."""
+        extra_kwargs = dict(block_migration=block_migration,
+                            disk_over_commit=disk_over_commit,
+                            host_name=host_name)
+        self._instance_action(ctxt, instance, 'live_migrate_instance',
+                              extra_kwargs=extra_kwargs)
+
+    def revert_resize(self, ctxt, instance):
+        """Revert a resize for an instance in its cell."""
+        self._instance_action(ctxt, instance, 'revert_resize')
+
+    def confirm_resize(self, ctxt, instance):
+        """Confirm a resize for an instance in its cell."""
+        self._instance_action(ctxt, instance, 'confirm_resize')
+
+    def reset_network(self, ctxt, instance):
+        """Reset networking for an instance in its cell."""
+        self._instance_action(ctxt, instance, 'reset_network')
+
+    def inject_network_info(self, ctxt, instance):
+        """Inject networking for an instance in its cell."""
+        self._instance_action(ctxt, instance, 'inject_network_info')
+
+    def snapshot_instance(self, ctxt, instance, image_id):
+        """Snapshot an instance in its cell."""
+        extra_kwargs = dict(image_id=image_id)
+        self._instance_action(ctxt, instance, 'snapshot_instance',
+                              extra_kwargs=extra_kwargs)
+
+    def backup_instance(self, ctxt, instance, image_id, backup_type,
+                        rotation):
+        """Backup an instance in its cell."""
+        extra_kwargs = dict(image_id=image_id, backup_type=backup_type,
+                            rotation=rotation)
+        self._instance_action(ctxt, instance, 'backup_instance',
+                              extra_kwargs=extra_kwargs)
 
     @staticmethod
     def get_message_types():

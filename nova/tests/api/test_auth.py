@@ -14,8 +14,10 @@
 
 import json
 import webob
+import webob.exc
 
 import nova.api.auth
+from nova.openstack.common.gettextutils import _
 from nova import test
 
 
@@ -76,11 +78,10 @@ class TestKeystoneMiddlewareRoles(test.TestCase):
             context = req.environ['nova.context']
 
             if "knight" in context.roles and "bad" not in context.roles:
-                return webob.Response(status=_("200 Role Match"))
+                return webob.Response(status="200 Role Match")
             elif context.roles == ['']:
-                return webob.Response(status=_("200 No Roles"))
+                return webob.Response(status="200 No Roles")
             else:
-                raise Exception(context.roles)
                 raise webob.exc.HTTPBadRequest(_("unexpected role header"))
 
         self.middleware = nova.api.auth.NovaKeystoneContext(role_check_app)

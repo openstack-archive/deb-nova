@@ -23,11 +23,11 @@ import platform
 
 from oslo.config import cfg
 
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.virt.hyperv import constants
-from nova.virt.hyperv import hostutils
-from nova.virt.hyperv import pathutils
+from nova.virt.hyperv import utilsfactory
 
 CONF = cfg.CONF
 CONF.import_opt('my_ip', 'nova.netconf')
@@ -37,8 +37,8 @@ LOG = logging.getLogger(__name__)
 class HostOps(object):
     def __init__(self):
         self._stats = None
-        self._hostutils = hostutils.HostUtils()
-        self._pathutils = pathutils.PathUtils()
+        self._hostutils = utilsfactory.get_hostutils()
+        self._pathutils = utilsfactory.get_pathutils()
 
     def _get_cpu_info(self):
         """Get the CPU information.
@@ -127,7 +127,11 @@ class HostOps(object):
                'hypervisor_version': self._get_hypervisor_version(),
                'hypervisor_hostname': platform.node(),
                'vcpus_used': 0,
-               'cpu_info': jsonutils.dumps(cpu_info)}
+               'cpu_info': jsonutils.dumps(cpu_info),
+                'supported_instances': jsonutils.dumps(
+                    [('i686', 'hyperv', 'hvm'),
+                    ('x86_64', 'hyperv', 'hvm')])
+               }
 
         return dic
 

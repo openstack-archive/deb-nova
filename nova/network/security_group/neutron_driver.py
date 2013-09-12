@@ -28,7 +28,9 @@ from nova.compute import api as compute_api
 from nova import exception
 from nova.network import neutronv2
 from nova.network.security_group import security_group_base
+from nova.objects import security_group
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import uuidutils
 from nova import utils
@@ -60,6 +62,8 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 # as this error code could be related to bad input or over
                 # quota
                 raise exc.HTTPBadRequest()
+            elif e.status_code == 409:
+                self.raise_over_quota(e.message)
             raise exc_info[0], exc_info[1], exc_info[2]
         return self._convert_to_nova_security_group_format(security_group)
 
@@ -195,10 +199,14 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 body).get('security_group_rules')
         except n_exc.NeutronClientException as e:
             exc_info = sys.exc_info()
-            if e.status_code == 409:
+            if e.status_code == 404:
                 LOG.exception(_("Neutron Error getting security group %s"),
                               name)
                 self.raise_not_found(e.message)
+            elif e.status_code == 409:
+                LOG.exception(_("Neutron Error adding rules to security "
+                                "group %s"), name)
+                self.raise_over_quota(e.message)
             else:
                 LOG.exception(_("Neutron Error:"))
                 raise exc_info[0], exc_info[1], exc_info[2]
@@ -459,4 +467,5 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
     def populate_security_groups(self, instance, security_groups):
         # Setting to emply list since we do not want to populate this field
         # in the nova database if using the neutron driver
-        instance['security_groups'] = []
+        instance['security_groups'] = security_group.SecurityGroupList()
+        instance['security_groups'].objects = []

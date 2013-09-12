@@ -22,49 +22,52 @@ Classes for making VMware VI SOAP calls.
 
 import httplib
 
-try:
-    import suds
-except ImportError:
-    suds = None
-
 from oslo.config import cfg
+import suds
 
+from nova.openstack.common.gettextutils import _
+from nova import utils
 from nova.virt.vmwareapi import error_util
 
 RESP_NOT_XML_ERROR = 'Response is "text/html", not "text/xml"'
 CONN_ABORT_ERROR = 'Software caused connection abort'
 ADDRESS_IN_USE_ERROR = 'Address already in use'
 
-vmwareapi_wsdl_loc_opt = cfg.StrOpt('vmwareapi_wsdl_loc',
-        default=None,
+vmwareapi_wsdl_loc_opt = cfg.StrOpt('wsdl_location',
+        deprecated_name='vmwareapi_wsdl_loc',
+        deprecated_group='DEFAULT',
         help='Optional VIM Service WSDL Location '
              'e.g http://<server>/vimService.wsdl. '
              'Optional over-ride to default location for bug work-arounds')
 
 CONF = cfg.CONF
-CONF.register_opt(vmwareapi_wsdl_loc_opt)
+CONF.register_opt(vmwareapi_wsdl_loc_opt, 'vmware')
 
 
-if suds:
+def get_moref(value, type):
+    """Get managed object reference."""
+    moref = suds.sudsobject.Property(value)
+    moref._type = type
+    return moref
 
-    class VIMMessagePlugin(suds.plugin.MessagePlugin):
 
-        def addAttributeForValue(self, node):
-            # suds does not handle AnyType properly.
-            # VI SDK requires type attribute to be set when AnyType is used
-            if node.name == 'value':
-                node.set('xsi:type', 'xsd:string')
+class VIMMessagePlugin(suds.plugin.MessagePlugin):
+    def addAttributeForValue(self, node):
+        # suds does not handle AnyType properly.
+        # VI SDK requires type attribute to be set when AnyType is used
+        if node.name == 'value':
+            node.set('xsi:type', 'xsd:string')
 
-        def marshalled(self, context):
-            """suds will send the specified soap envelope.
-            Provides the plugin with the opportunity to prune empty
-            nodes and fixup nodes before sending it to the server.
-            """
-            # suds builds the entire request object based on the wsdl schema.
-            # VI SDK throws server errors if optional SOAP nodes are sent
-            # without values, e.g. <test/> as opposed to <test>test</test>
-            context.envelope.prune()
-            context.envelope.walk(self.addAttributeForValue)
+    def marshalled(self, context):
+        """suds will send the specified soap envelope.
+        Provides the plugin with the opportunity to prune empty
+        nodes and fixup nodes before sending it to the server.
+        """
+        # suds builds the entire request object based on the wsdl schema.
+        # VI SDK throws server errors if optional SOAP nodes are sent
+        # without values, e.g. <test/> as opposed to <test>test</test>
+        context.envelope.prune()
+        context.envelope.walk(self.addAttributeForValue)
 
 
 class Vim:
@@ -105,11 +108,11 @@ class Vim:
         :return: string to WSDL location for vSphere WS Management API
         """
         # optional WSDL location over-ride for work-arounds
-        wsdl_url = CONF.vmwareapi_wsdl_loc
-        if wsdl_url is None:
-            # calculate default WSDL location if no override supplied
-            wsdl_url = '%s://%s/sdk/vimService.wsdl' % (protocol, host_name)
-        return wsdl_url
+        if CONF.vmware.wsdl_location:
+            return CONF.vmware.wsdl_location
+
+        # calculate default WSDL location if no override supplied
+        return Vim.get_soap_url(protocol, host_name) + "/vimService.wsdl"
 
     @staticmethod
     def get_soap_url(protocol, host_name):
@@ -122,6 +125,8 @@ class Vim:
         :param host_name: localhost or other vSphere server name
         :return: the url to the active vSphere WS Management API
         """
+        if utils.is_valid_ipv6(host_name):
+            return '%s://[%s]/sdk' % (protocol, host_name)
         return '%s://%s/sdk' % (protocol, host_name)
 
     def get_service_content(self):

@@ -20,7 +20,6 @@ import contextlib
 import json
 import webob
 from webob import exc
-from xml.dom import minidom
 
 from nova.api.openstack import common
 from nova.api.openstack import extensions
@@ -31,6 +30,8 @@ from nova.compute import api as compute_api
 from nova import exception
 from nova.network.security_group import neutron_driver
 from nova.network.security_group import openstack_driver
+from nova.openstack.common.gettextutils import _
+from nova.openstack.common import xmlutils
 from nova.virt import netutils
 
 
@@ -545,7 +546,7 @@ class SecurityGroupsOutputController(wsgi.Controller):
                     servers[0][key] = req_obj['server'].get(
                         key, [{'name': 'default'}])
                 except ValueError:
-                    root = minidom.parseString(req.body)
+                    root = xmlutils.safe_minidom_parse_string(req.body)
                     sg_root = root.getElementsByTagName(key)
                     groups = []
                     if sg_root:

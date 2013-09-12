@@ -30,18 +30,20 @@ import netaddr
 from oslo.config import cfg
 
 from nova import block_device
+from nova import compute
 from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import vm_mode
 from nova.compute import vm_states
-from nova import conductor
 from nova import context as nova_context
 from nova import exception
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova import utils
 from nova.virt import configdrive
@@ -65,8 +67,8 @@ xenapi_vmops_opts = [
                default='nova.virt.xenapi.vif.XenAPIBridgeDriver',
                help='The XenAPI VIF driver using XenServer Network APIs.'),
     cfg.StrOpt('xenapi_image_upload_handler',
-                default='nova.virt.xenapi.imageupload.glance.GlanceStore',
-                help='Object Store Driver used to handle image uploads.'),
+                default='nova.virt.xenapi.image.glance.GlanceStore',
+                help='Dom0 plugin driver used to handle image uploads.'),
     ]
 
 CONF = cfg.CONF
@@ -112,7 +114,7 @@ def cmp_version(a, b):
     return len(a) - len(b)
 
 
-def make_step_decorator(context, instance, instance_update):
+def make_step_decorator(context, instance, update_instance_progress):
     """Factory to create a decorator that records instance progress as a series
     of discrete steps.
 
@@ -140,10 +142,8 @@ def make_step_decorator(context, instance, instance_update):
 
     def bump_progress():
         step_info['current'] += 1
-        progress = round(float(step_info['current']) /
-                         step_info['total'] * 100)
-        LOG.debug(_("Updating progress to %d"), progress, instance=instance)
-        instance_update(context, instance['uuid'], {'progress': progress})
+        update_instance_progress(context, instance,
+                                 step_info['current'], step_info['total'])
 
     def step_decorator(f):
         step_info['total'] += 1
@@ -164,7 +164,7 @@ class VMOps(object):
     Management class for VM-related tasks
     """
     def __init__(self, session, virtapi):
-        self.conductor_api = conductor.API()
+        self.compute_api = compute.API()
         self._session = session
         self._virtapi = virtapi
         self._volumeops = volumeops.VolumeOps(self._session)
@@ -180,6 +180,24 @@ class VMOps(object):
                   CONF.xenapi_image_upload_handler)
         self.image_upload_handler = importutils.import_object(
                                 CONF.xenapi_image_upload_handler)
+
+    def _create_kernel_and_ramdisk(self, instance, context, name_label):
+        kernel_file = None
+        ramdisk_file = None
+
+        if instance['kernel_id']:
+            vdis = vm_utils.create_kernel_image(context, self._session,
+                    instance, name_label, instance['kernel_id'],
+                    vm_utils.ImageType.KERNEL)
+            kernel_file = vdis['kernel'].get('file')
+
+        if instance['ramdisk_id']:
+            vdis = vm_utils.create_kernel_image(context, self._session,
+                    instance, name_label, instance['ramdisk_id'],
+                    vm_utils.ImageType.RAMDISK)
+            ramdisk_file = vdis['ramdisk'].get('file')
+
+        return (kernel_file, ramdisk_file)
 
     def agent_enabled(self, instance):
         if CONF.xenapi_disable_agent:
@@ -276,21 +294,10 @@ class VMOps(object):
         if resize_instance:
             self._resize_instance(instance, root_vdi)
 
-        # Check if kernel and ramdisk are external
-        kernel_file = None
-        ramdisk_file = None
-
         name_label = instance['name']
-        if instance['kernel_id']:
-            vdis = vm_utils.create_kernel_image(context, self._session,
-                        instance, name_label, instance['kernel_id'],
-                        vm_utils.ImageType.KERNEL)
-            kernel_file = vdis['kernel'].get('file')
-        if instance['ramdisk_id']:
-            vdis = vm_utils.create_kernel_image(context, self._session,
-                        instance, name_label, instance['ramdisk_id'],
-                        vm_utils.ImageType.RAMDISK)
-            ramdisk_file = vdis['ramdisk'].get('file')
+
+        kernel_file, ramdisk_file = self._create_kernel_and_ramdisk(
+            instance, context, name_label)
 
         disk_image_type = vm_utils.determine_disk_image_type(image_meta)
         vm_ref = self._create_vm(context, instance, instance['name'],
@@ -357,7 +364,7 @@ class VMOps(object):
             name_label = instance['name']
 
         step = make_step_decorator(context, instance,
-                                   self._virtapi.instance_update)
+                                   self._update_instance_progress)
 
         @step
         def determine_disk_image_type_step(undo_mgr):
@@ -379,20 +386,8 @@ class VMOps(object):
 
         @step
         def create_kernel_ramdisk_step(undo_mgr):
-            kernel_file = None
-            ramdisk_file = None
-
-            if instance['kernel_id']:
-                vdis = vm_utils.create_kernel_image(context, self._session,
-                        instance, name_label, instance['kernel_id'],
-                        vm_utils.ImageType.KERNEL)
-                kernel_file = vdis['kernel'].get('file')
-
-            if instance['ramdisk_id']:
-                vdis = vm_utils.create_kernel_image(context, self._session,
-                        instance, name_label, instance['ramdisk_id'],
-                        vm_utils.ImageType.RAMDISK)
-                ramdisk_file = vdis['ramdisk'].get('file')
+            kernel_file, ramdisk_file = self._create_kernel_and_ramdisk(
+                instance, context, name_label)
 
             def undo_create_kernel_ramdisk():
                 if kernel_file or ramdisk_file:
@@ -418,6 +413,20 @@ class VMOps(object):
 
         @step
         def attach_disks_step(undo_mgr, vm_ref, vdis, disk_image_type):
+            try:
+                ipxe_boot = strutils.bool_from_string(
+                        image_meta['properties']['ipxe_boot'])
+            except KeyError:
+                ipxe_boot = False
+
+            if ipxe_boot:
+                if 'iso' in vdis:
+                    vm_utils.handle_ipxe_iso(
+                        self._session, instance, vdis['iso'], network_info)
+                else:
+                    LOG.warning(_('ipxe_boot is True but no ISO image found'),
+                                instance=instance)
+
             self._attach_disks(instance, vm_ref, name_label, vdis,
                                disk_image_type, admin_password,
                                injected_files)
@@ -693,8 +702,7 @@ class VMOps(object):
             # Inject files, if necessary
             if injected_files:
                 # Inject any files, if specified
-                for path, contents in injected_files:
-                    agent.inject_file(path, contents)
+                agent.inject_files(injected_files)
 
             # Set admin password, if necessary
             if admin_password and not no_agent:
@@ -703,13 +711,7 @@ class VMOps(object):
             # Reset network config
             agent.resetnetwork()
 
-        # Set VCPU weight
-        instance_type = flavors.extract_flavor(instance)
-        vcpu_weight = instance_type['vcpu_weight']
-        if vcpu_weight is not None:
-            LOG.debug(_("Setting VCPU weight"), instance=instance)
-            self._session.call_xenapi('VM.add_to_VCPUs_params', vm_ref,
-                                      'weight', str(vcpu_weight))
+        self.remove_hostname(instance, vm_ref)
 
     def _get_vm_opaque_ref(self, instance, check_rescue=False):
         """Get xapi OpaqueRef from a db record.
@@ -755,11 +757,8 @@ class VMOps(object):
            coalesce together, so, we must wait for this coalescing to occur to
            get a stable representation of the data on disk.
 
-        3. Push-to-data-store: Once coalesced, we call a plugin on the
-           XenServer that will bundle the VHDs together and then push the
-           bundle. Depending on the configured value of
-           'xenapi_image_upload_handler', image data may be pushed to
-           Glance or the specified data store.
+        3. Push-to-data-store: Once coalesced, we call
+           'xenapi_image_upload_handler' to upload the images.
 
         """
         vm_ref = self._get_vm_opaque_ref(instance)
@@ -828,7 +827,7 @@ class VMOps(object):
     def _migrate_disk_resizing_down(self, context, instance, dest,
                                     instance_type, vm_ref, sr_path):
         step = make_step_decorator(context, instance,
-                                   self._virtapi.instance_update)
+                                   self._update_instance_progress)
 
         @step
         def fake_step_to_match_resizing_up():
@@ -1100,15 +1099,15 @@ class VMOps(object):
     def inject_instance_metadata(self, instance, vm_ref):
         """Inject instance metadata into xenstore."""
         @utils.synchronized('xenstore-' + instance['uuid'])
-        def store_meta(topdir, data_list):
-            for item in data_list:
-                key = self._sanitize_xenstore_key(item['key'])
-                value = item['value'] or ''
+        def store_meta(topdir, data_dict):
+            for key, value in data_dict.items():
+                key = self._sanitize_xenstore_key(key)
+                value = value or ''
                 self._add_to_param_xenstore(vm_ref, '%s/%s' % (topdir, key),
                                             jsonutils.dumps(value))
 
         # Store user metadata
-        store_meta('vm-data/user-metadata', instance['metadata'])
+        store_meta('vm-data/user-metadata', utils.instance_meta(instance))
 
     def inject_auto_disk_config(self, instance, vm_ref):
         """Inject instance's auto_disk_config attribute into xenstore."""
@@ -1122,7 +1121,17 @@ class VMOps(object):
 
     def change_instance_metadata(self, instance, diff):
         """Apply changes to instance metadata to xenstore."""
-        vm_ref = self._get_vm_opaque_ref(instance)
+        try:
+            vm_ref = self._get_vm_opaque_ref(instance)
+        except exception.NotFound:
+            # NOTE(johngarbutt) race conditions mean we can still get here
+            # during operations where the VM is not present, like resize.
+            # Skip the update when not possible, as the updated metadata will
+            # get added when the VM is being booted up at the end of the
+            # resize or rebuild.
+            LOG.warn(_("Unable to update metadata, VM not found."),
+                     instance=instance, exc_info=True)
+            return
 
         def process_change(location, change):
             if change[0] == '-':
@@ -1403,7 +1412,7 @@ class VMOps(object):
 
         for instance in instances:
             LOG.info(_("Automatically hard rebooting"), instance=instance)
-            self.conductor_api.compute_reboot(ctxt, instance, "HARD")
+            self.compute_api.reboot(ctxt, instance, "HARD")
 
     def get_info(self, instance, vm_ref=None):
         """Return data about VM instance."""
@@ -1618,6 +1627,10 @@ class VMOps(object):
         LOG.debug(_("Injecting hostname to xenstore"), instance=instance)
         self._add_to_param_xenstore(vm_ref, 'vm-data/hostname', hostname)
 
+    def remove_hostname(self, instance, vm_ref):
+        LOG.debug(_("Removing hostname from xenstore"), instance=instance)
+        self._remove_from_param_xenstore(vm_ref, 'vm-data/hostname')
+
     def _write_to_xenstore(self, instance, path, value, vm_ref=None):
         """
         Writes the passed value to the xenstore record for the given VM
@@ -1667,7 +1680,6 @@ class VMOps(object):
                           {'method': method, 'args': args, 'e': e},
                           instance=instance)
                 return {'returncode': 'error', 'message': err_msg}
-            return None
 
     def _get_dom_id(self, instance=None, vm_ref=None, check_rescue=False):
         vm_ref = vm_ref or self._get_vm_opaque_ref(instance, check_rescue)

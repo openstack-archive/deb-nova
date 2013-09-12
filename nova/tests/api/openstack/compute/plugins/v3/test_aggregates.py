@@ -118,6 +118,18 @@ class AggregateTestCase(test.TestCase):
                                      {"name": "test",
                                       "foo": "nova1"}})
 
+    def test_create_with_null_name(self):
+        self.assertRaises(exc.HTTPBadRequest, self.controller.create,
+                          self.req, {"aggregate":
+                                     {"name": "",
+                                      "availability_zone": "nova1"}})
+
+    def test_create_with_name_too_long(self):
+        self.assertRaises(exc.HTTPBadRequest, self.controller.create,
+                          self.req, {"aggregate":
+                                     {"name": "x" * 256,
+                                      "availability_zone": "nova1"}})
+
     def test_create_with_extra_invalid_arg(self):
         self.assertRaises(exc.HTTPBadRequest, self.controller.create,
                           self.req, dict(name="test",
@@ -200,6 +212,16 @@ class AggregateTestCase(test.TestCase):
         self.assertRaises(exc.HTTPBadRequest, self.controller.update,
                           self.req, "2", body=test_metadata)
 
+    def test_update_with_null_name(self):
+        test_metadata = {"aggregate": {"name": ""}}
+        self.assertRaises(exc.HTTPBadRequest, self.controller.update,
+                          self.req, "2", body=test_metadata)
+
+    def test_update_with_name_too_long(self):
+        test_metadata = {"aggregate": {"name": "x" * 256}}
+        self.assertRaises(exc.HTTPBadRequest, self.controller.update,
+                          self.req, "2", body=test_metadata)
+
     def test_update_with_bad_aggregate(self):
         test_metadata = {"aggregate": {"name": "test_name"}}
 
@@ -267,6 +289,7 @@ class AggregateTestCase(test.TestCase):
             self.assertEqual("1", aggregate, "aggregate")
             self.assertEqual("host1", host, "host")
             stub_remove_host_from_aggregate.called = True
+            return {}
         self.stubs.Set(self.controller.api,
                        "remove_host_from_aggregate",
                        stub_remove_host_from_aggregate)

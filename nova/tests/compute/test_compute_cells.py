@@ -23,7 +23,6 @@ from oslo.config import cfg
 from nova.compute import api as compute_api
 from nova.compute import cells_api as compute_cells_api
 from nova import db
-from nova import exception
 from nova.openstack.common import jsonutils
 from nova import quota
 from nova.tests.compute import test_compute
@@ -145,42 +144,6 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
     def test_instance_metadata(self):
         self.skipTest("Test is incompatible with cells.")
 
-    def test_snapshot_given_image_uuid(self):
-        self.skipTest("Test doesn't apply to API cell.")
-
-    @wrap_create_instance
-    def test_snapshot(self):
-        return super(CellsComputeAPITestCase, self).test_snapshot()
-
-    @wrap_create_instance
-    def test_snapshot_image_metadata_inheritance(self):
-        return super(CellsComputeAPITestCase,
-                self).test_snapshot_image_metadata_inheritance()
-
-    @wrap_create_instance
-    def test_snapshot_minram_mindisk(self):
-        return super(CellsComputeAPITestCase,
-                self).test_snapshot_minram_mindisk()
-
-    @wrap_create_instance
-    def test_snapshot_minram_mindisk_VHD(self):
-        return super(CellsComputeAPITestCase,
-                self).test_snapshot_minram_mindisk_VHD()
-
-    @wrap_create_instance
-    def test_snapshot_minram_mindisk_img_missing_minram(self):
-        return super(CellsComputeAPITestCase,
-                self).test_snapshot_minram_mindisk_img_missing_minram()
-
-    @wrap_create_instance
-    def test_snapshot_minram_mindisk_no_image(self):
-        return super(CellsComputeAPITestCase,
-                self).test_snapshot_minram_mindisk_no_image()
-
-    @wrap_create_instance
-    def test_backup(self):
-        return super(CellsComputeAPITestCase, self).test_backup()
-
     def test_evacuate(self):
         self.skipTest("Test is incompatible with cells.")
 
@@ -188,30 +151,24 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
         cells_rpcapi = self.compute_api.cells_rpcapi
         self.mox.StubOutWithMock(cells_rpcapi,
                                  'instance_delete_everywhere')
-        self.mox.StubOutWithMock(self.compute_api,
-                                 '_cast_to_cells')
-        inst = self._create_fake_instance()
-        exc = exception.InstanceUnknownCell(instance_uuid=inst['uuid'])
-        self.compute_api._cast_to_cells(self.context, inst,
-                                        'delete').AndRaise(exc)
+        inst = self._create_fake_instance_obj()
         cells_rpcapi.instance_delete_everywhere(self.context,
                 inst, 'hard')
         self.mox.ReplayAll()
+        self.stubs.Set(self.compute_api.network_api, 'deallocate_for_instance',
+                       lambda *a, **kw: None)
         self.compute_api.delete(self.context, inst)
 
     def test_soft_delete_instance_no_cell(self):
         cells_rpcapi = self.compute_api.cells_rpcapi
         self.mox.StubOutWithMock(cells_rpcapi,
                                  'instance_delete_everywhere')
-        self.mox.StubOutWithMock(self.compute_api,
-                                 '_cast_to_cells')
-        inst = self._create_fake_instance()
-        exc = exception.InstanceUnknownCell(instance_uuid=inst['uuid'])
-        self.compute_api._cast_to_cells(self.context, inst,
-                                        'soft_delete').AndRaise(exc)
+        inst = self._create_fake_instance_obj()
         cells_rpcapi.instance_delete_everywhere(self.context,
                 inst, 'soft')
         self.mox.ReplayAll()
+        self.stubs.Set(self.compute_api.network_api, 'deallocate_for_instance',
+                       lambda *a, **kw: None)
         self.compute_api.soft_delete(self.context, inst)
 
     def test_get_migrations(self):

@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright 2013 IBM Corp.
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -23,6 +24,7 @@ import webob.exc
 
 from nova.api.openstack import common
 from nova.api.openstack import wsgi
+from nova.openstack.common import gettextutils
 from nova.openstack.common import jsonutils
 from nova import test
 
@@ -86,6 +88,33 @@ class TestFaults(test.TestCase):
             self.assertEqual(response.content_type, "application/json")
             self.assertEqual(expected, actual)
 
+    def test_429_fault_json(self):
+        # Test fault serialized to JSON via file-extension and/or header.
+        requests = [
+            webob.Request.blank('/.json'),
+            webob.Request.blank('/', headers={"Accept": "application/json"}),
+        ]
+
+        for request in requests:
+            exc = webob.exc.HTTPTooManyRequests
+            # NOTE(aloga): we intentionally pass an integer for the
+            # 'Retry-After' header. It should be then converted to a str
+            fault = wsgi.Fault(exc(explanation='sorry',
+                        headers={'Retry-After': 4}))
+            response = request.get_response(fault)
+
+            expected = {
+                "overLimit": {
+                    "message": "sorry",
+                    "code": 429,
+                    "retryAfter": "4",
+                },
+            }
+            actual = jsonutils.loads(response.body)
+
+            self.assertEqual(response.content_type, "application/json")
+            self.assertEqual(expected, actual)
+
     def test_raise(self):
         # Ensure the ability to raise :class:`Fault` in WSGI-ified methods.
         @webob.dec.wsgify
@@ -110,6 +139,22 @@ class TestFaults(test.TestCase):
         self.assertEqual(resp.status_int, 403)
         self.assertTrue('resizeNotAllowed' not in resp.body)
         self.assertTrue('forbidden' in resp.body)
+
+    def test_raise_localize_explanation(self):
+        msgid = "String with params: %s"
+        params = ('blah', )
+        lazy_gettext = gettextutils._
+        expl = lazy_gettext(msgid) % params
+
+        @webob.dec.wsgify
+        def raiser(req):
+            raise wsgi.Fault(webob.exc.HTTPNotFound(explanation=expl))
+
+        req = webob.Request.blank('/.xml')
+        resp = req.get_response(raiser)
+        self.assertEqual(resp.content_type, "application/xml")
+        self.assertEqual(resp.status_int, 404)
+        self.assertTrue((msgid % params) in resp.body)
 
     def test_fault_has_status_int(self):
         # Ensure the status_int is set correctly on faults.
@@ -179,6 +224,31 @@ class FaultsXMLSerializationTestV11(test.TestCase):
 
         expected = minidom.parseString(self._prepare_xml("""
                 <overLimit code="413" xmlns="%s">
+                    <message>sorry</message>
+                    <retryAfter>4</retryAfter>
+                </overLimit>
+            """) % common.XML_NS_V11)
+
+        self.assertEqual(expected.toxml(), actual.toxml())
+
+    def test_429_fault(self):
+        metadata = {'attributes': {"overLimit": 'code'}}
+        serializer = wsgi.XMLDictSerializer(metadata=metadata,
+                                            xmlns=common.XML_NS_V11)
+
+        fixture = {
+            "overLimit": {
+                "message": "sorry",
+                "code": 429,
+                "retryAfter": 4,
+            },
+        }
+
+        output = serializer.serialize(fixture)
+        actual = minidom.parseString(self._prepare_xml(output))
+
+        expected = minidom.parseString(self._prepare_xml("""
+                <overLimit code="429" xmlns="%s">
                     <message>sorry</message>
                     <retryAfter>4</retryAfter>
                 </overLimit>

@@ -47,6 +47,12 @@ def stub_out_db_instance_api(stubs):
         def __getattr__(self, name):
             return self.values[name]
 
+        def get(self, attr):
+            try:
+                return self.__getattr__(attr)
+            except KeyError:
+                return None
+
         def __getitem__(self, key):
             if key in self.values:
                 return self.values[key]
@@ -77,7 +83,8 @@ def stub_out_db_instance_api(stubs):
             'root_gb': type_data['root_gb'],
             'node': values['node'],
             }
-        return FakeModel(base_options)
+
+        return base_options
 
     def fake_flavor_get_all(context, inactive=0, filters=None):
         return INSTANCE_TYPES.values()

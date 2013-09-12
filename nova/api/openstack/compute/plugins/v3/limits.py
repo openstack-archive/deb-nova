@@ -31,6 +31,7 @@ from nova.api.openstack.compute.views import limits as limits_views
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova import quota
@@ -39,6 +40,7 @@ from nova import wsgi as base_wsgi
 
 
 QUOTAS = quota.QUOTAS
+LIMITS_PREFIX = "limits."
 
 
 limits_nsmap = {None: xmlutil.XMLNS_COMMON_V10, 'atom': xmlutil.XMLNS_ATOM}
@@ -210,10 +212,9 @@ DEFAULT_LIMITS = [
     Limit("POST", "*", ".*", 10, utils.TIME_UNITS['MINUTE']),
     Limit("POST", "*/servers", "^/servers", 50, utils.TIME_UNITS['DAY']),
     Limit("PUT", "*", ".*", 10, utils.TIME_UNITS['MINUTE']),
-    Limit("GET", "*changes-since*", ".*changes-since.*", 3,
+    Limit("GET", "*changes_since*", ".*changes_since.*", 3,
           utils.TIME_UNITS['MINUTE']),
     Limit("DELETE", "*", ".*", 100, utils.TIME_UNITS['MINUTE']),
-    Limit("GET", "*/os-fping", "^/os-fping", 12, utils.TIME_UNITS['HOUR']),
 ]
 
 
@@ -272,7 +273,7 @@ class RateLimitingMiddleware(base_wsgi.Middleware):
         if delay:
             msg = _("This request was rate-limited.")
             retry = time.time() + delay
-            return wsgi.OverLimitFault(msg, error, retry)
+            return wsgi.RateLimitFault(msg, error, retry)
 
         req.environ["nova.limits"] = self._limiter.get_limits(username)
 
@@ -295,8 +296,8 @@ class Limiter(object):
 
         # Pick up any per-user limit information
         for key, value in kwargs.items():
-            if key.startswith('user:'):
-                username = key[5:]
+            if key.startswith(LIMITS_PREFIX):
+                username = key[len(LIMITS_PREFIX):]
                 self.levels[username] = self.parse_limits(value)
 
     def get_limits(self, username=None):

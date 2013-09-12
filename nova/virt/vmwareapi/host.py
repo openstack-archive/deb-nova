@@ -19,6 +19,7 @@ Management class for host-related functions (start, reboot, etc).
 """
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
@@ -35,8 +36,7 @@ class Host(object):
 
     def host_power_action(self, host, action):
         """Reboots or shuts down the host."""
-        host_mor = self._session._call_method(vim_util, "get_objects",
-                                              "HostSystem")[0].obj
+        host_mor = vm_util.get_host_ref(self._session)
         LOG.debug(_("%(action)s %(host)s"), {'action': action, 'host': host})
         if action == "reboot":
             host_task = self._session._call_method(
@@ -59,8 +59,7 @@ class Host(object):
         """Start/Stop host maintenance window. On start, it triggers
         guest VMs evacuation.
         """
-        host_mor = self._session._call_method(vim_util, "get_objects",
-                                              "HostSystem")[0].obj
+        host_mor = vm_util.get_host_ref(self._session)
         LOG.debug(_("Set maintenance mod on %(host)s to %(mode)s"),
                   {'host': host, 'mode': mode})
         if mode:
@@ -96,15 +95,14 @@ class HostState(object):
         """Return the current state of the host. If 'refresh' is
         True, run the update first.
         """
-        if refresh:
+        if refresh or not self._stats:
             self.update_status()
         return self._stats
 
     def update_status(self):
         """Update the current state of the host.
         """
-        host_mor = self._session._call_method(vim_util, "get_objects",
-                                              "HostSystem")[0].obj
+        host_mor = vm_util.get_host_ref(self._session)
         summary = self._session._call_method(vim_util,
                                              "get_dynamic_property",
                                              host_mor,
@@ -160,7 +158,7 @@ class VCState(object):
         """Return the current state of the host. If 'refresh' is
         True, run the update first.
         """
-        if refresh:
+        if refresh or not self._stats:
             self.update_status()
         return self._stats
 

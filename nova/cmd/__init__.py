@@ -34,4 +34,4 @@ import eventlet
 eventlet.monkey_patch(os=False)
 
 from nova.openstack.common import gettextutils
-gettextutils.install('nova')
+gettextutils.enable_lazy()

@@ -27,14 +27,19 @@ from nova.compute import power_state
 from nova import context as nova_context
 from nova import exception
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import paths
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import db
+from nova.virt.baremetal import pxe
 from nova.virt import driver
 from nova.virt import firewall
 from nova.virt.libvirt import imagecache
+
+LOG = logging.getLogger(__name__)
 
 opts = [
     cfg.BoolOpt('inject_password',
@@ -77,6 +82,7 @@ CONF = cfg.CONF
 CONF.register_group(baremetal_group)
 CONF.register_opts(opts, baremetal_group)
 CONF.import_opt('host', 'nova.netconf')
+CONF.import_opt('my_ip', 'nova.netconf')
 
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     firewall.__name__,
@@ -163,9 +169,6 @@ class BareMetalDriver(driver.ComputeDriver):
     def get_hypervisor_version(self):
         # TODO(deva): define the version properly elsewhere
         return 1
-
-    def legacy_nwinfo(self):
-        return True
 
     def list_instances(self):
         l = []
@@ -414,6 +417,9 @@ class BareMetalDriver(driver.ComputeDriver):
                'hypervisor_version': self.get_hypervisor_version(),
                'hypervisor_hostname': str(node['uuid']),
                'cpu_info': 'baremetal cpu',
+               'supported_instances':
+                        jsonutils.dumps(self.supported_instances),
+               'stats': self.extra_specs
                }
         return dic
 
@@ -480,12 +486,12 @@ class BareMetalDriver(driver.ComputeDriver):
             for pif in pifs:
                 if pif['vif_uuid']:
                     db.bm_interface_set_vif_uuid(context, pif['id'], None)
-        for (network, mapping) in network_info:
-            self.vif_driver.plug(instance, (network, mapping))
+        for vif in network_info:
+            self.vif_driver.plug(instance, vif)
 
     def _unplug_vifs(self, instance, network_info):
-        for (network, mapping) in network_info:
-            self.vif_driver.unplug(instance, (network, mapping))
+        for vif in network_info:
+            self.vif_driver.unplug(instance, vif)
 
     def manage_image_cache(self, context, all_instances):
         """Manage the local cache of images."""
@@ -499,3 +505,23 @@ class BareMetalDriver(driver.ComputeDriver):
         context = nova_context.get_admin_context()
         return [str(n['uuid']) for n in
                 db.bm_node_get_all(context, service_host=CONF.host)]
+
+    def dhcp_options_for_instance(self, instance):
+        # NOTE(deva): This only works for PXE driver currently.
+        try:
+            bootfile_path = pxe.get_pxe_config_file_path(instance)
+        except AttributeError as ex:
+            # NOTE: not all drivers are going to support PXE boot capability
+            LOG.exception(_("Exception no pxe bootfile-name path: %s"),
+                          unicode(ex))
+            return None
+
+        opts = [{'opt_name': 'bootfile-name',
+                 'opt_value': bootfile_path},
+                {'opt_name': 'server-ip-address',
+                 'opt_value': CONF.my_ip},
+                {'opt_name': 'tftp-server',
+                 'opt_value': CONF.my_ip}
+               ]
+
+        return opts

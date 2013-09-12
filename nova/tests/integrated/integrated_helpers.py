@@ -29,6 +29,7 @@ import nova.image.glance
 from nova.openstack.common import log as logging
 from nova import service
 from nova import test
+from nova.tests import cast_as_call
 from nova.tests import fake_crypto
 import nova.tests.image.fake
 from nova.tests.integrated.api import client
@@ -71,6 +72,7 @@ class _IntegratedTestBase(test.TestCase):
         f = self._get_flags()
         self.flags(**f)
         self.flags(verbose=True)
+        self.flags(periodic_enable=False)
 
         self.useFixture(test.ReplaceModule('crypto', fake_crypto))
         nova.tests.image.fake.stub_out_image_service(self.stubs)
@@ -81,25 +83,32 @@ class _IntegratedTestBase(test.TestCase):
         self.conductor = self.start_service('conductor',
                 manager=CONF.conductor.manager)
         self.compute = self.start_service('compute')
-        self.scheduler = self.start_service('cert')
+        self.cert = self.start_service('cert')
+        self.consoleauth = self.start_service('consoleauth')
         self.network = self.start_service('network')
         self.scheduler = self.start_service('scheduler')
         self.cells = self.start_service('cells', manager=CONF.cells.manager)
 
         self._start_api_service()
 
-        self.api = client.TestOpenStackClient('fake', 'fake', self.auth_url)
+        self.api = self._get_test_client()
+
+        self.useFixture(cast_as_call.CastAsCall(self.stubs))
 
     def tearDown(self):
         self.osapi.stop()
         nova.tests.image.fake.FakeImageService_reset()
         super(_IntegratedTestBase, self).tearDown()
 
+    def _get_test_client(self):
+        return client.TestOpenStackClient('fake', 'fake', self.auth_url)
+
     def _start_api_service(self):
         self.osapi = service.WSGIService("osapi_compute")
         self.osapi.start()
-        self.auth_url = 'http://%s:%s/v2' % (self.osapi.host, self.osapi.port)
-        LOG.warn(self.auth_url)
+        self.auth_url = 'http://%(host)s:%(port)s/%(api_version)s' % ({
+            'host': self.osapi.host, 'port': self.osapi.port,
+            'api_version': self._api_version})
 
     def _get_flags(self):
         """An opportunity to setup flags, before the services are started."""
@@ -132,19 +141,20 @@ class _IntegratedTestBase(test.TestCase):
         image = self.api.get_images()[0]
         LOG.debug("Image: %s" % image)
 
-        if 'imageRef' in image:
-            image_href = image['imageRef']
+        if self._image_ref_parameter in image:
+            image_href = image[self._image_ref_parameter]
         else:
             image_href = image['id']
             image_href = 'http://fake.server/%s' % image_href
 
         # We now have a valid imageId
-        server['imageRef'] = image_href
+        server[self._image_ref_parameter] = image_href
 
         # Set a valid flavorId
         flavor = self.api.get_flavors()[0]
         LOG.debug("Using flavor: %s" % flavor)
-        server['flavorRef'] = 'http://fake.server/%s' % flavor['id']
+        server[self._flavor_ref_parameter] = ('http://fake.server/%s'
+                                              % flavor['id'])
 
         # Set a valid server name
         server_name = self.get_unused_server_name()

@@ -17,6 +17,7 @@
 from oslo.config import cfg
 
 from nova import db
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -98,8 +99,7 @@ class AggregateRamFilter(BaseRamFilter):
         try:
             ratio = float(min(aggregate_vals))
         except ValueError as e:
-            LOG.warning(_("Could not decode ram_allocation_ratio: "
-                            "'%(e)s'") % locals())
+            LOG.warning(_("Could not decode ram_allocation_ratio: '%s'"), e)
             ratio = CONF.ram_allocation_ratio
 
         return ratio

@@ -12,11 +12,15 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from nova.cells import opts as cells_opts
+from nova.cells import rpcapi as cells_rpcapi
 from nova import db
+from nova import exception
 from nova import notifications
 from nova.objects import base
 from nova.objects import instance_fault
 from nova.objects import instance_info_cache
+from nova.objects import pci_device
 from nova.objects import security_group
 from nova.objects import utils as obj_utils
 from nova import utils
@@ -27,21 +31,31 @@ from oslo.config import cfg
 CONF = cfg.CONF
 
 
+# These are fields that can be specified as expected_attrs but are
+# also joined often by default.
+INSTANCE_OPTIONAL_COMMON_FIELDS = ['metadata', 'system_metadata']
 # These are fields that can be specified as expected_attrs
-INSTANCE_OPTIONAL_FIELDS = ['metadata', 'system_metadata', 'fault']
+INSTANCE_OPTIONAL_FIELDS = (INSTANCE_OPTIONAL_COMMON_FIELDS +
+                            ['fault', 'pci_devices'])
 # These are fields that are always joined by the db right now
 INSTANCE_IMPLIED_FIELDS = ['info_cache', 'security_groups']
 # These are fields that are optional but don't translate to db columns
 INSTANCE_OPTIONAL_NON_COLUMNS = ['fault']
 # These are all fields that most query calls load by default
-INSTANCE_DEFAULT_FIELDS = INSTANCE_OPTIONAL_FIELDS + INSTANCE_IMPLIED_FIELDS
+INSTANCE_DEFAULT_FIELDS = (INSTANCE_OPTIONAL_COMMON_FIELDS +
+                           INSTANCE_IMPLIED_FIELDS)
 
 
 class Instance(base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added info_cache
     # Version 1.2: Added security_groups
-    VERSION = '1.2'
+    # Version 1.3: Added expected_vm_state and admin_state_reset to
+    #              save()
+    # Version 1.4: Added locked_by and deprecated locked
+    # Version 1.5: Added cleaned
+    # Version 1.6: Added pci_devices
+    VERSION = '1.6'
 
     fields = {
         'id': int,
@@ -86,7 +100,11 @@ class Instance(base.NovaObject):
         'display_description': obj_utils.str_or_none,
 
         'launched_on': obj_utils.str_or_none,
+
+        # NOTE(jdillaman): locked deprecated in favor of locked_by,
+        # to be removed in Icehouse
         'locked': bool,
+        'locked_by': obj_utils.str_or_none,
 
         'os_type': obj_utils.str_or_none,
         'architecture': obj_utils.str_or_none,
@@ -121,9 +139,33 @@ class Instance(base.NovaObject):
         'fault': obj_utils.nested_object_or_none(
             instance_fault.InstanceFault),
 
+        'cleaned': bool,
+
+        'pci_devices': obj_utils.nested_object_or_none(
+            pci_device.PciDeviceList),
         }
 
     obj_extra_fields = ['name']
+
+    def __init__(self, *args, **kwargs):
+        super(Instance, self).__init__(*args, **kwargs)
+        self.obj_reset_changes()
+
+    def obj_reset_changes(self, fields=None):
+        super(Instance, self).obj_reset_changes(fields)
+        self._orig_system_metadata = (dict(self.system_metadata) if
+                                      'system_metadata' in self else {})
+        self._orig_metadata = (dict(self.metadata) if
+                               'metadata' in self else {})
+
+    def obj_what_changed(self):
+        changes = super(Instance, self).obj_what_changed()
+        if 'metadata' in self and self.metadata != self._orig_metadata:
+            changes.add('metadata')
+        if 'system_metadata' in self and (self.system_metadata !=
+                                          self._orig_system_metadata):
+            changes.add('system_metadata')
+        return changes
 
     @property
     def name(self):
@@ -164,6 +206,8 @@ class Instance(base.NovaObject):
     _attr_info_cache_to_primitive = obj_utils.obj_serializer('info_cache')
     _attr_security_groups_to_primitive = obj_utils.obj_serializer(
         'security_groups')
+    _attr_pci_devices_to_primitive = obj_utils.obj_serializer(
+        'pci_devices')
 
     _attr_scheduled_at_from_primitive = obj_utils.dt_deserializer
     _attr_launched_at_from_primitive = obj_utils.dt_deserializer
@@ -173,6 +217,11 @@ class Instance(base.NovaObject):
         return base.NovaObject.obj_from_primitive(val)
 
     def _attr_security_groups_from_primitive(self, val):
+        return base.NovaObject.obj_from_primitive(val)
+
+    def _attr_pci_devices_from_primitive(self, val):
+        if val is None:
+            return None
         return base.NovaObject.obj_from_primitive(val)
 
     @staticmethod
@@ -189,26 +238,38 @@ class Instance(base.NovaObject):
                 continue
             elif field == 'deleted':
                 instance.deleted = db_inst['deleted'] == db_inst['id']
+            elif field == 'cleaned':
+                instance.cleaned = db_inst['cleaned'] == 1
             else:
                 instance[field] = db_inst[field]
 
         if 'metadata' in expected_attrs:
-            instance['metadata'] = utils.metadata_to_dict(db_inst['metadata'])
+            instance['metadata'] = utils.instance_meta(db_inst)
         if 'system_metadata' in expected_attrs:
-            instance['system_metadata'] = utils.metadata_to_dict(
-                db_inst['system_metadata'])
+            instance['system_metadata'] = utils.instance_sys_meta(db_inst)
         if 'fault' in expected_attrs:
             instance['fault'] = (
                 instance_fault.InstanceFault.get_latest_for_instance(
                     context, instance.uuid))
-        # NOTE(danms): info_cache and security_groups are almost always joined
-        # in the DB layer right now, so check to see if they're filled instead
-        # of looking at expected_attrs
-        if db_inst['info_cache']:
+
+        if 'pci_devices' in expected_attrs:
+            if db_inst['pci_devices'] is None:
+                pci_devices = None
+            else:
+                pci_devices = pci_device._make_pci_list(
+                        context, pci_device.PciDeviceList(),
+                        db_inst['pci_devices'])
+            instance['pci_devices'] = pci_devices
+
+        # NOTE(danms): info_cache and security_groups are almost
+        # always joined in the DB layer right now, so check to see if
+        # they are asked for and are present in the resulting object
+        if 'info_cache' in expected_attrs and db_inst.get('info_cache'):
             instance['info_cache'] = instance_info_cache.InstanceInfoCache()
             instance_info_cache.InstanceInfoCache._from_db_object(
                     context, instance['info_cache'], db_inst['info_cache'])
-        if db_inst['security_groups']:
+        if ('security_groups' in expected_attrs and
+                db_inst.get('security_groups') is not None):
             instance['security_groups'] = security_group.SecurityGroupList()
             security_group._make_secgroup_list(context,
                                                instance['security_groups'],
@@ -226,6 +287,8 @@ class Instance(base.NovaObject):
             columns_to_join.append('metadata')
         if 'system_metadata' in attrs:
             columns_to_join.append('system_metadata')
+        if 'pci_devices' in attrs:
+            columns_to_join.append('pci_devices')
         # NOTE(danms): The DB API currently always joins info_cache and
         # security_groups for get operations, so don't add them to the
         # list of columns
@@ -234,22 +297,63 @@ class Instance(base.NovaObject):
     @base.remotable_classmethod
     def get_by_uuid(cls, context, uuid, expected_attrs=None):
         if expected_attrs is None:
-            expected_attrs = []
+            expected_attrs = ['info_cache', 'security_groups']
         columns_to_join = cls._attrs_to_columns(expected_attrs)
         db_inst = db.instance_get_by_uuid(context, uuid,
                                           columns_to_join=columns_to_join)
-        return Instance._from_db_object(context, cls(), db_inst,
-                                        expected_attrs)
+        return cls._from_db_object(context, cls(), db_inst,
+                                   expected_attrs)
 
     @base.remotable_classmethod
     def get_by_id(cls, context, inst_id, expected_attrs=None):
         if expected_attrs is None:
-            expected_attrs = []
+            expected_attrs = ['info_cache', 'security_groups']
         columns_to_join = cls._attrs_to_columns(expected_attrs)
         db_inst = db.instance_get(context, inst_id,
                                   columns_to_join=columns_to_join)
-        return Instance._from_db_object(context, cls(), db_inst,
-                                        expected_attrs)
+        return cls._from_db_object(context, cls(), db_inst,
+                                   expected_attrs)
+
+    @base.remotable
+    def create(self, context):
+        if self.obj_attr_is_set('id'):
+            raise exception.ObjectActionError(action='create',
+                                              reason='already created')
+        updates = {}
+        for attr in self.obj_what_changed() - set(['id']):
+            updates[attr] = self[attr]
+        expected_attrs = [attr for attr in INSTANCE_DEFAULT_FIELDS
+                          if attr in updates]
+        if 'security_groups' in updates:
+            updates['security_groups'] = [x.name for x in
+                                          updates['security_groups']]
+        if 'info_cache' in updates:
+            updates['info_cache'] = {
+                'network_info': updates['info_cache'].network_info.json()
+                }
+        db_inst = db.instance_create(context, updates)
+        Instance._from_db_object(context, self, db_inst, expected_attrs)
+
+    @base.remotable
+    def destroy(self, context):
+        if not self.obj_attr_is_set('id'):
+            raise exception.ObjectActionError(action='destroy',
+                                              reason='already destroyed')
+        if not self.obj_attr_is_set('uuid'):
+            raise exception.ObjectActionError(action='destroy',
+                                              reason='no uuid')
+        if not self.obj_attr_is_set('host') or not self.host:
+            # NOTE(danms): If our host is not set, avoid a race
+            constraint = db.constraint(host=db.equal_any(None))
+        else:
+            constraint = None
+
+        try:
+            db.instance_destroy(context, self.uuid, constraint=constraint)
+        except exception.ConstraintNotMet:
+            raise exception.ObjectActionError(action='destroy',
+                                              reason='host changed')
+        delattr(self, base.get_attrname('id'))
 
     def _save_info_cache(self, context):
         self.info_cache.save(context)
@@ -262,8 +366,15 @@ class Instance(base.NovaObject):
         # NOTE(danms): I don't think we need to worry about this, do we?
         pass
 
+    def _save_pci_devices(self, context):
+        # NOTE(yjiang5): All devices held by PCI tracker, only PCI tracker
+        # permitted to update the DB. all change to devices from here will
+        # be dropped.
+        pass
+
     @base.remotable
-    def save(self, context, expected_task_state=None):
+    def save(self, context, expected_vm_state=None,
+             expected_task_state=None, admin_state_reset=False):
         """Save updates to this instance
 
         Column-wise updates will be made based on the result of
@@ -273,7 +384,34 @@ class Instance(base.NovaObject):
         :param context: Security context
         :param expected_task_state: Optional tuple of valid task states
                                     for the instance to be in.
+        :param expected_vm_state: Optional tuple of valid vm states
+                                  for the instance to be in.
+        :param admin_state_reset: True if admin API is forcing setting
+                                  of task_state/vm_state.
         """
+
+        cell_type = cells_opts.get_cell_type()
+        if cell_type == 'api' and self.cell_name:
+            # NOTE(comstud): We need to stash a copy of ourselves
+            # before any updates are applied.  When we call the save
+            # methods on nested objects, we will lose any changes to
+            # them.  But we need to make sure child cells can tell
+            # what is changed.
+            #
+            # We also need to nuke any updates to vm_state and task_state
+            # unless admin_state_reset is True.  compute cells are
+            # authoritative for their view of vm_state and task_state.
+            stale_instance = self.obj_clone()
+
+            def _handle_cell_update_from_api():
+                cells_api = cells_rpcapi.CellsAPI()
+                cells_api.instance_update_from_api(context, stale_instance,
+                        expected_vm_state,
+                        expected_task_state,
+                        admin_state_reset)
+        else:
+            stale_instance = None
+
         updates = {}
         changes = self.obj_what_changed()
         for field in self.fields:
@@ -282,27 +420,48 @@ class Instance(base.NovaObject):
                 getattr(self, '_save_%s' % field)(context)
             elif field in changes:
                 updates[field] = self[field]
+
+        if not updates:
+            if stale_instance:
+                _handle_cell_update_from_api()
+            return
+
+        # Cleaned needs to be turned back into an int here
+        if 'cleaned' in updates:
+            if updates['cleaned']:
+                updates['cleaned'] = 1
+            else:
+                updates['cleaned'] = 0
+
         if expected_task_state is not None:
             updates['expected_task_state'] = expected_task_state
+        if expected_vm_state is not None:
+            updates['expected_vm_state'] = expected_vm_state
 
-        if updates:
-            old_ref, inst_ref = db.instance_update_and_get_original(context,
-                                                                    self.uuid,
-                                                                    updates)
-            expected_attrs = []
-            for attr in INSTANCE_OPTIONAL_FIELDS:
-                if hasattr(self, base.get_attrname(attr)):
-                    expected_attrs.append(attr)
-            Instance._from_db_object(context, self, inst_ref, expected_attrs)
-            if 'vm_state' in changes or 'task_state' in changes:
-                notifications.send_update(context, old_ref, inst_ref)
+        expected_attrs = []
+        for attr in INSTANCE_OPTIONAL_FIELDS + INSTANCE_IMPLIED_FIELDS:
+            if hasattr(self, base.get_attrname(attr)):
+                expected_attrs.append(attr)
 
+        old_ref, inst_ref = db.instance_update_and_get_original(
+                context, self.uuid, updates, update_cells=False,
+                columns_to_join=self._attrs_to_columns(expected_attrs))
+
+        if stale_instance:
+            _handle_cell_update_from_api()
+        elif cell_type == 'compute':
+            cells_api = cells_rpcapi.CellsAPI()
+            cells_api.instance_update_at_top(context, inst_ref)
+
+        self._from_db_object(context, self, inst_ref, expected_attrs)
+        if 'vm_state' in changes or 'task_state' in changes:
+            notifications.send_update(context, old_ref, inst_ref)
         self.obj_reset_changes()
 
     @base.remotable
     def refresh(self, context):
         extra = []
-        for field in INSTANCE_OPTIONAL_FIELDS:
+        for field in INSTANCE_OPTIONAL_FIELDS + INSTANCE_IMPLIED_FIELDS:
             if hasattr(self, base.get_attrname(field)):
                 extra.append(field)
         current = self.__class__.get_by_uuid(context, uuid=self.uuid,
@@ -323,17 +482,28 @@ class Instance(base.NovaObject):
             extra.append('info_cache')
         elif attrname == 'security_groups':
             extra.append('security_groups')
+        elif attrname == 'pci_devices':
+            extra.append('pci_devices')
         elif attrname == 'fault':
             extra.append('fault')
 
         if not extra:
-            raise Exception('Cannot load "%s" from instance' % attrname)
+            raise exception.ObjectActionError(
+                action='obj_load_attr',
+                reason='attribute %s not lazy-loadable' % attrname)
 
         # NOTE(danms): This could be optimized to just load the bits we need
         instance = self.__class__.get_by_uuid(self._context,
                                               uuid=self.uuid,
                                               expected_attrs=extra)
-        self[attrname] = instance[attrname]
+
+        # NOTE(danms): Never allow us to recursively-load
+        if hasattr(instance, base.get_attrname(attrname)):
+            self[attrname] = instance[attrname]
+        else:
+            raise exception.ObjectActionError(
+                action='obj_load_attr',
+                reason='loading %s requires recursion' % attrname)
 
 
 def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):

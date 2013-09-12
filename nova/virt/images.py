@@ -29,6 +29,7 @@ from oslo.config import cfg
 from nova import exception
 from nova.image import glance
 from nova.openstack.common import fileutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 from nova import utils
@@ -164,7 +165,7 @@ class QemuImgInfo(object):
 
 def qemu_img_info(path):
     """Return an object containing the parsed output from qemu-img info."""
-    if not os.path.exists(path):
+    if not os.path.exists(path) and CONF.libvirt_images_type != 'rbd':
         return QemuImgInfo()
 
     out, err = utils.execute('env', 'LC_ALL=C', 'LANG=C',
@@ -186,8 +187,7 @@ def fetch(context, image_href, path, _user_id, _project_id):
     (image_service, image_id) = glance.get_remote_image_service(context,
                                                                 image_href)
     with fileutils.remove_path_on_error(path):
-        with open(path, "wb") as image_file:
-            image_service.download(context, image_id, image_file)
+        image_service.download(context, image_id, dst_path=path)
 
 
 def fetch_to_raw(context, image_href, path, user_id, project_id):

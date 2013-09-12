@@ -79,6 +79,8 @@ class NetworkRpcAPITestCase(test.TestCase):
         retval = getattr(rpcapi, method)(ctxt, **kwargs)
 
         self.assertEqual(retval, expected_retval)
+        self.assertIsNotNone(self.fake_args)
+        self.assertIsNotNone(self.fake_kwargs)
         expected_args = [ctxt, expected_topic, expected_msg]
         for arg, expected_arg in zip(self.fake_args, expected_args):
             try:
@@ -93,6 +95,8 @@ class NetworkRpcAPITestCase(test.TestCase):
                     if actual_args and required_args:
                         self.assertThat(required_args,
                                         matchers.IsSubDictOf(actual_args))
+                else:
+                    raise
 
     def test_get_all_networks(self):
         self._test_network_api('get_all_networks', rpc_method='call')

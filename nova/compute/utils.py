@@ -16,6 +16,7 @@
 
 """Compute-related Utilities and helpers."""
 
+import itertools
 import re
 import string
 import traceback
@@ -27,8 +28,10 @@ from nova.compute import flavors
 from nova import exception
 from nova.network import model as network_model
 from nova import notifications
+from nova import notifier as notify
+from nova.objects import instance as instance_obj
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log
-from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common import timeutils
 from nova import utils
 from nova.virt import driver
@@ -43,18 +46,28 @@ def add_instance_fault_from_exc(context, conductor,
     """Adds the specified fault to the database."""
 
     code = 500
-    message = fault.__class__.__name__
 
     if hasattr(fault, "kwargs"):
         code = fault.kwargs.get('code', 500)
-        # get the message from the exception that was thrown
-        # if that does not exist, use the name of the exception class itself
-        message = fault.kwargs.get('value', message)
 
-    details = unicode(fault)
+    # get the message from the exception that was thrown
+    # if that does not exist, use the name of the exception class itself
+    try:
+        message = fault.format_message()
+    # These exception handlers are broad so we don't fail to log the fault
+    # just because there is an unexpected error retrieving the message
+    except Exception:
+        try:
+            message = unicode(fault)
+        except Exception:
+            message = None
+    if not message:
+        message = fault.__class__.__name__
+    details = ''
+
     if exc_info and code == 500:
         tb = exc_info[2]
-        details += '\n' + ''.join(traceback.format_tb(tb))
+        details += ''.join(traceback.format_tb(tb))
 
     values = {
         'instance_uuid': instance['uuid'],
@@ -110,12 +123,45 @@ def pack_action_event_finish(context, instance_uuid, event_name, exc_val=None,
 def get_device_name_for_instance(context, instance, bdms, device):
     """Validates (or generates) a device name for instance.
 
+    This method is a wrapper for get_next_device_name that gets the list
+    of used devices and the root device from a block device mapping.
+    """
+    mappings = block_device.instance_block_mapping(instance, bdms)
+    return get_next_device_name(instance, mappings.values(),
+                                mappings['root'], device)
+
+
+def default_device_names_for_instance(instance, root_device_name,
+                                      update_function, *block_device_lists):
+    """Generate missing device names for an instance."""
+
+    dev_list = [bdm['device_name']
+                for bdm in itertools.chain(*block_device_lists)
+                if bdm['device_name']]
+    if root_device_name not in dev_list:
+        dev_list.append(root_device_name)
+
+    for bdm in itertools.chain(*block_device_lists):
+        dev = bdm.get('device_name')
+        if not dev:
+            dev = get_next_device_name(instance, dev_list,
+                                       root_device_name)
+            bdm['device_name'] = dev
+            if update_function:
+                update_function(bdm)
+            dev_list.append(dev)
+
+
+def get_next_device_name(instance, device_name_list,
+                         root_device_name=None, device=None):
+    """Validates (or generates) a device name for instance.
+
     If device is not set, it will generate a unique device appropriate
-    for the instance. It uses the block device mapping table to find
-    valid device names. If the device name is valid but applicable to
-    a different backend (for example /dev/vdc is specified but the
-    backend uses /dev/xvdc), the device name will be converted to the
-    appropriate format.
+    for the instance. It uses the root_device_name (if provided) and
+    the list of used devices to find valid device names. If the device
+    name is valid but applicable to a different backend (for example
+    /dev/vdc is specified but the backend uses /dev/xvdc), the device
+    name will be converted to the appropriate format.
     """
     req_prefix = None
     req_letter = None
@@ -126,12 +172,13 @@ def get_device_name_for_instance(context, instance, bdms, device):
         except (TypeError, AttributeError, ValueError):
             raise exception.InvalidDevicePath(path=device)
 
-    mappings = block_device.instance_block_mapping(instance, bdms)
+    if not root_device_name:
+        root_device_name = block_device.DEFAULT_ROOT_DEV_NAME
 
     try:
-        prefix = block_device.match_device(mappings['root'])[0]
+        prefix = block_device.match_device(root_device_name)[0]
     except (TypeError, AttributeError, ValueError):
-        raise exception.InvalidDevicePath(path=mappings['root'])
+        raise exception.InvalidDevicePath(path=root_device_name)
 
     # NOTE(vish): remove this when xenapi is setting default_root_device
     if driver.compute_driver_matches('xenapi.XenAPIDriver'):
@@ -142,7 +189,7 @@ def get_device_name_for_instance(context, instance, bdms, device):
                   {'prefix': prefix, 'req_prefix': req_prefix})
 
     used_letters = set()
-    for device_path in mappings.itervalues():
+    for device_path in device_name_list:
         letter = block_device.strip_prefix(device_path)
         # NOTE(vish): delete numbers in case we have something like
         #             /dev/sda1
@@ -165,8 +212,7 @@ def get_device_name_for_instance(context, instance, bdms, device):
     if req_letter in used_letters:
         raise exception.DevicePathInUse(path=device)
 
-    device_name = prefix + req_letter
-    return device_name
+    return prefix + req_letter
 
 
 def _get_unused_letter(used_letters):
@@ -179,11 +225,13 @@ def _get_unused_letter(used_letters):
     return letters[0]
 
 
-def notify_usage_exists(context, instance_ref, current_period=False,
+def notify_usage_exists(notifier, context, instance_ref, current_period=False,
                         ignore_missing_network_data=True,
                         system_metadata=None, extra_usage_info=None):
     """Generates 'exists' notification for an instance for usage auditing
     purposes.
+
+    :param notifier: a messaging.Notifier
 
     :param current_period: if True, this will generate a usage for the
         current usage period; if False, this will generate a usage for the
@@ -216,29 +264,24 @@ def notify_usage_exists(context, instance_ref, current_period=False,
     if extra_usage_info:
         extra_info.update(extra_usage_info)
 
-    notify_about_instance_usage(context, instance_ref, 'exists',
+    notify_about_instance_usage(notifier, context, instance_ref, 'exists',
             system_metadata=system_metadata, extra_usage_info=extra_info)
 
 
-def notify_about_instance_usage(context, instance, event_suffix,
+def notify_about_instance_usage(notifier, context, instance, event_suffix,
                                 network_info=None, system_metadata=None,
-                                extra_usage_info=None, host=None):
+                                extra_usage_info=None):
     """
     Send a notification about an instance.
 
+    :param notifier: a messaging.Notifier
     :param event_suffix: Event type like "delete.start" or "exists"
     :param network_info: Networking information, if provided.
     :param system_metadata: system_metadata DB entries for the instance,
         if provided.
     :param extra_usage_info: Dictionary containing extra values to add or
         override in the notification.
-    :param host: Compute host for the instance, if specified.  Default is
-        CONF.host
     """
-
-    if not host:
-        host = CONF.host
-
     if not extra_usage_info:
         extra_usage_info = {}
 
@@ -246,13 +289,11 @@ def notify_about_instance_usage(context, instance, event_suffix,
             network_info, system_metadata, **extra_usage_info)
 
     if event_suffix.endswith("error"):
-        level = notifier_api.ERROR
+        method = notifier.error
     else:
-        level = notifier_api.INFO
+        method = notifier.info
 
-    notifier_api.notify(context, 'compute.%s' % host,
-                        'compute.instance.%s' % event_suffix, level,
-                        usage_info)
+    method(context, 'compute.instance.%s' % event_suffix, usage_info)
 
 
 def notify_about_aggregate_update(context, event_suffix, aggregate_payload):
@@ -270,15 +311,21 @@ def notify_about_aggregate_update(context, event_suffix, aggregate_payload):
                         "notification and it will be ignored"))
             return
 
-    notifier_api.notify(context, 'aggregate.%s' % aggregate_identifier,
-                        'aggregate.%s' % event_suffix, notifier_api.INFO,
-                        aggregate_payload)
+    notifier = notify.get_notifier(service='aggregate',
+                                   host=aggregate_identifier)
+
+    notifier.info(context, 'aggregate.%s' % event_suffix, aggregate_payload)
 
 
 def get_nw_info_for_instance(instance):
+    if isinstance(instance, instance_obj.Instance):
+        return instance.info_cache.network_info
+    # FIXME(comstud): Transitional while we convert to objects.
     info_cache = instance['info_cache'] or {}
-    cached_nwinfo = info_cache.get('network_info') or []
-    return network_model.NetworkInfo.hydrate(cached_nwinfo)
+    nw_info = info_cache.get('network_info') or []
+    if not isinstance(nw_info, network_model.NetworkInfo):
+        nw_info = network_model.NetworkInfo.hydrate(nw_info)
+    return nw_info
 
 
 def has_audit_been_run(context, conductor, host, timestamp=None):

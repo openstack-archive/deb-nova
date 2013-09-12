@@ -20,12 +20,13 @@
 import os
 import signal
 
-from Cheetah import Template
+import jinja2
 from oslo.config import cfg
 
 from nova import context
 from nova import db
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import paths
@@ -107,11 +108,12 @@ class XVPConsoleProxy(object):
             self._xvp_stop()
             return
         conf_data = {'multiplex_port': CONF.console_xvp_multiplex_port,
-                     'pools': pools,
-                     'pass_encode': self.fix_console_password}
-        config = str(Template.Template(self.xvpconf_template,
-                                       searchList=[conf_data]))
-        self._write_conf(config)
+                     'pools': pools}
+        tmpl_path, tmpl_file = os.path.split(CONF.injected_network_template)
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path))
+        env.filters['pass_encode'] = self.fix_console_password
+        template = env.get_template(tmpl_file)
+        self._write_conf(template.render(conf_data))
         self._xvp_restart()
 
     def _write_conf(self, config):

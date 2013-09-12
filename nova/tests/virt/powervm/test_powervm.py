@@ -19,11 +19,13 @@ Test suite for PowerVMDriver.
 """
 
 import contextlib
+import mock
 import os
 import paramiko
 
 from nova import context
 from nova import db
+from nova import exception as n_exc
 from nova import test
 
 from nova.compute import flavors
@@ -36,17 +38,18 @@ from nova.tests.image import fake
 from nova.virt import images
 from nova.virt.powervm import blockdev as powervm_blockdev
 from nova.virt.powervm import common
+from nova.virt.powervm import constants
 from nova.virt.powervm import driver as powervm_driver
 from nova.virt.powervm import exception
 from nova.virt.powervm import lpar
 from nova.virt.powervm import operator as powervm_operator
 
 
-def fake_lpar(instance_name):
+def fake_lpar(instance_name, state=constants.POWERVM_RUNNING):
     return lpar.LPAR(name=instance_name,
                      lpar_id=1, desired_mem=1024,
                      max_mem=2048, max_procs=2,
-                     uptime=939395, state='Running')
+                     uptime=939395, state=state)
 
 
 def fake_ssh_connect(connection):
@@ -121,9 +124,6 @@ class FakeIVMOperator(powervm_operator.IVMOperator):
         return 'fake-powervm'
 
     def rename_lpar(self, old, new):
-        pass
-
-    def _remove_file(self, file_path):
         pass
 
     def set_lpar_mac_base_value(self, instance_name, mac):
@@ -503,10 +503,10 @@ class PowerVMDriverTestCase(test.TestCase):
         fake_op = self.powervm_connection._powervm
         self.deploy_from_vios_file_called = False
         self.power_on = power_on
+        exp_file_path = 'some/file/path.gz'
 
         def fake_deploy_from_vios_file(lpar, file_path, size,
                                        decompress, power_on):
-            exp_file_path = 'some/file/path.gz'
             exp_size = 40 * 1024 ** 3
             exp_decompress = True
             self.deploy_from_vios_file_called = True
@@ -517,11 +517,18 @@ class PowerVMDriverTestCase(test.TestCase):
 
         self.stubs.Set(fake_op, '_deploy_from_vios_file',
                        fake_deploy_from_vios_file)
-        self.powervm_connection.finish_migration(context, None,
-                         instance, disk_info, network_info,
-                         None, resize_instance=True,
-                         block_device_info=None,
-                         power_on=power_on)
+
+        # mock out the rm -f command call to vios
+        with mock.patch.object(self.powervm_connection._powervm._operator,
+                               'run_vios_command_as_root',
+                               return_value=[]) as run_vios_cmd:
+            self.powervm_connection.finish_migration(context, None,
+                             instance, disk_info, network_info,
+                             None, resize_instance=True,
+                             block_device_info=None,
+                             power_on=power_on)
+            run_vios_cmd.assert_called_once_with('rm -f %s' % exp_file_path)
+
         self.assertEqual(self.deploy_from_vios_file_called, True)
 
     def test_deploy_from_migrated_file_power_on(self):
@@ -755,6 +762,24 @@ class PowerVMDriverTestCase(test.TestCase):
         self.assertEquals(host_stats['supported_instances'][0][1], "powervm")
         self.assertEquals(host_stats['supported_instances'][0][2], "hvm")
 
+    def test_get_available_resource(self):
+        res = self.powervm_connection.get_available_resource(nodename='fake')
+        self.assertIsNotNone(res)
+        self.assertEquals(8.0, res.pop('vcpus'))
+        self.assertEquals(65536, res.pop('memory_mb'))
+        self.assertEquals((10168 / 1024), res.pop('local_gb'))
+        self.assertEquals(1.7, round(res.pop('vcpus_used'), 1))
+        self.assertEquals((65536 - 46336), res.pop('memory_mb_used'))
+        self.assertEquals(0, res.pop('local_gb_used'))
+        self.assertEquals('powervm', res.pop('hypervisor_type'))
+        self.assertEquals('7.1', res.pop('hypervisor_version'))
+        self.assertEquals('fake-powervm', res.pop('hypervisor_hostname'))
+        self.assertEquals('ppc64,powervm,3940', res.pop('cpu_info'))
+        self.assertEquals(10168, res.pop('disk_available_least'))
+        self.assertEquals('[["ppc64", "powervm", "hvm"]]',
+                res.pop('supported_instances'))
+        self.assertEquals(0, len(res), 'Did not test all keys.')
+
     def test_get_host_uptime(self):
         # Tests that the get_host_uptime method issues the proper sysstat
         # command and parses the output correctly.
@@ -772,6 +797,94 @@ class PowerVMDriverTestCase(test.TestCase):
         uptime = self.powervm_connection.get_host_uptime(None)
         self.assertEquals(output[0], uptime)
 
+    def test_add_to_aggregate(self):
+        # Simple test to make sure the unimplemented method passes.
+        self.powervm_connection.add_to_aggregate(context.get_admin_context(),
+                                                 aggregate={'name': 'foo'},
+                                                 host='fake')
+
+    def test_remove_from_aggregate(self):
+        # Simple test to make sure the unimplemented method passes.
+        self.powervm_connection.remove_from_aggregate(
+                    context.get_admin_context(), aggregate={'name': 'foo'},
+                    host='fake')
+
+    def test_undo_aggregate_operation(self):
+        # Simple test to make sure the unimplemented method passes.
+        def fake_operation(*args, **kwargs):
+            pass
+
+        self.powervm_connection.undo_aggregate_operation(
+                    context.get_admin_context(), op=fake_operation,
+                    aggregate={'name': 'foo'}, host='fake')
+
+    def test_plug_vifs(self):
+        # Check to make sure the method passes (does nothing) since
+        # it simply passes in the powervm driver but it raises a
+        # NotImplementedError in the base driver class.
+        self.powervm_connection.plug_vifs(self.instance, None)
+
+    def test_manage_image_cache(self):
+        # Check to make sure the method passes (does nothing) since
+        # it's not implemented in the powervm driver and it passes
+        # in the driver base class.
+        self.powervm_connection.manage_image_cache(context.get_admin_context(),
+                                                   True)
+
+    def test_init_host(self):
+        # Check to make sure the method passes (does nothing) since
+        # it simply passes in the powervm driver but it raises a
+        # NotImplementedError in the base driver class.
+        self.powervm_connection.init_host(host='fake')
+
+    def test_pause(self):
+        # Check to make sure the method raises NotImplementedError.
+        self.assertRaises(NotImplementedError, self.powervm_connection.pause,
+                          instance=None)
+
+    def test_unpause(self):
+        # Check to make sure the method raises NotImplementedError.
+        self.assertRaises(NotImplementedError, self.powervm_connection.unpause,
+                          instance=None)
+
+    def test_suspend(self):
+        # Check to make sure the method raises NotImplementedError.
+        self.assertRaises(NotImplementedError, self.powervm_connection.suspend,
+                          instance=None)
+
+    def test_resume(self):
+        # Check to make sure the method raises NotImplementedError.
+        self.assertRaises(NotImplementedError, self.powervm_connection.resume,
+                          instance=None, network_info=None)
+
+    def test_host_power_action(self):
+        # Check to make sure the method raises NotImplementedError.
+        self.assertRaises(NotImplementedError,
+                          self.powervm_connection.host_power_action,
+                          host='fake', action='die!')
+
+    def test_soft_reboot(self):
+        # Tests that soft reboot is a no-op (mock out the power_off/power_on
+        # methods to ensure they aren't called)
+        self.mox.StubOutWithMock(self.powervm_connection._powervm, 'power_off')
+        self.mox.StubOutWithMock(self.powervm_connection._powervm, 'power_on')
+        self.mox.ReplayAll()
+        self.powervm_connection.reboot(context.get_admin_context(),
+                                       self.instance, network_info=None,
+                                       reboot_type='SOFT')
+
+    def test_hard_reboot(self):
+        # Tests that hard reboot is performed by stopping the lpar and then
+        # starting it.
+        self.mox.StubOutWithMock(self.powervm_connection._powervm, 'power_off')
+        self.powervm_connection._powervm.power_off(self.instance['name'])
+        self.mox.StubOutWithMock(self.powervm_connection._powervm, 'power_on')
+        self.powervm_connection._powervm.power_on(self.instance['name'])
+        self.mox.ReplayAll()
+        self.powervm_connection.reboot(context.get_admin_context(),
+                                       self.instance, network_info=None,
+                                       reboot_type='HARD')
+
 
 class PowerVMDriverLparTestCase(test.TestCase):
     """Unit tests for PowerVM connection calls."""
@@ -788,7 +901,8 @@ class PowerVMDriverLparTestCase(test.TestCase):
         exp_mac_str = mac[:-2].replace(':', '')
 
         exp_cmd = ('chsyscfg -r lpar -i "name=%(inst_name)s, '
-                   'virtual_eth_mac_base_value=%(exp_mac_str)s"') % locals()
+                'virtual_eth_mac_base_value=%(exp_mac_str)s"'
+                % {'inst_name': inst_name, 'exp_mac_str': exp_mac_str})
 
         fake_op = self.powervm_connection._powervm
         self.mox.StubOutWithMock(fake_op._operator, 'run_vios_command')
@@ -1019,3 +1133,82 @@ class PowerVMLocalVolumeAdapterTestCase(test.TestCase):
         self.assertRaises(exception.PowerVMFileTransferFailed,
                           self.powervm_adapter._copy_image_file_from_host,
                           remote_path, local_path)
+
+
+class IVMOperatorTestCase(test.TestCase):
+    """Tests the IVMOperator class."""
+
+    def setUp(self):
+        super(IVMOperatorTestCase, self).setUp()
+        ivm_connection = common.Connection('fake_host', 'fake_user',
+                                           'fake_password')
+        self.ivm_operator = powervm_operator.IVMOperator(ivm_connection)
+
+    def test_start_lpar(self):
+        instance_name = 'fake'
+        self.mox.StubOutWithMock(self.ivm_operator, 'run_vios_command')
+        self.ivm_operator.run_vios_command('chsysstate -r lpar -o on -n %s' %
+                                           instance_name)
+        self.mox.StubOutWithMock(self.ivm_operator, 'get_lpar')
+        lpar1 = fake_lpar(instance_name)
+        self.ivm_operator.get_lpar(instance_name).AndReturn(lpar1)
+        self.mox.ReplayAll()
+        self.ivm_operator.start_lpar(instance_name)
+
+    def test_start_lpar_timeout(self):
+        instance_name = 'fake'
+        # mock the remote command call
+        self.mox.StubOutWithMock(self.ivm_operator, 'run_vios_command')
+        self.ivm_operator.run_vios_command('chsysstate -r lpar -o on -n %s' %
+                                           instance_name)
+        self.mox.StubOutWithMock(self.ivm_operator, 'get_lpar')
+        # the lpar is stopped and the timeout is less than the looping call
+        # interval so we timeout
+        lpar1 = fake_lpar(instance_name, state=constants.POWERVM_SHUTDOWN)
+        self.ivm_operator.get_lpar(instance_name).AndReturn(lpar1)
+        self.mox.ReplayAll()
+        self.assertRaises(exception.PowerVMLPAROperationTimeout,
+                          self.ivm_operator.start_lpar,
+                          instance_name=instance_name, timeout=0.5)
+
+    def test_stop_lpar(self):
+        instance_name = 'fake'
+        # mock the remote command call
+        self.mox.StubOutWithMock(self.ivm_operator, 'run_vios_command')
+        self.ivm_operator.run_vios_command('chsysstate -r lpar -o shutdown '
+                                           '--immed -n %s' % instance_name)
+        self.mox.StubOutWithMock(self.ivm_operator, 'get_lpar')
+        # the first time we check, the lpar is still running
+        lpar1 = fake_lpar(instance_name)
+        self.ivm_operator.get_lpar(instance_name).AndReturn(lpar1)
+        # the second time we check, the lpar is stopped
+        lpar2 = fake_lpar(instance_name, constants.POWERVM_SHUTDOWN)
+        self.ivm_operator.get_lpar(instance_name).AndReturn(lpar2)
+        self.mox.ReplayAll()
+        self.ivm_operator.stop_lpar(instance_name)
+
+    def test_stop_lpar_timeout(self):
+        instance_name = 'fake'
+        # mock the remote command call
+        self.mox.StubOutWithMock(self.ivm_operator, 'run_vios_command')
+        self.ivm_operator.run_vios_command('chsysstate -r lpar -o shutdown '
+                                           '--immed -n %s' % instance_name)
+        self.mox.StubOutWithMock(self.ivm_operator, 'get_lpar')
+        # the lpar is running and the timeout is less than the looping call
+        # interval so we timeout
+        lpar1 = fake_lpar(instance_name)
+        self.ivm_operator.get_lpar(instance_name).AndReturn(lpar1)
+        self.mox.ReplayAll()
+        self.assertRaises(exception.PowerVMLPAROperationTimeout,
+                          self.ivm_operator.stop_lpar,
+                          instance_name=instance_name, timeout=0.5)
+
+    def test_poll_for_lpar_status_no_state(self):
+        self.assertRaises(n_exc.InvalidParameterValue,
+                          self.ivm_operator._poll_for_lpar_status,
+                          'fake', constants.POWERVM_NOSTATE, 'test')
+
+    def test_poll_for_lpar_status_bad_state(self):
+        self.assertRaises(n_exc.InvalidParameterValue,
+                          self.ivm_operator._poll_for_lpar_status,
+                          'fake', 'bad-lpar-state-value', 'test')

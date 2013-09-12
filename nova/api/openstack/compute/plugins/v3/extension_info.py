@@ -19,6 +19,7 @@ import webob.exc
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 
@@ -82,6 +83,7 @@ class ExtensionInfoController(object):
                           alias)
         return discoverable_extensions
 
+    @extensions.expected_errors(())
     @wsgi.serializers(xml=ExtensionsTemplate)
     def index(self, req):
         context = req.environ['nova.context']
@@ -94,6 +96,7 @@ class ExtensionInfoController(object):
             extensions.append(self._translate(ext))
         return dict(extensions=extensions)
 
+    @extensions.expected_errors(404)
     @wsgi.serializers(xml=ExtensionTemplate)
     def show(self, req, id):
         context = req.environ['nova.context']

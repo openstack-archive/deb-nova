@@ -21,6 +21,7 @@ from oslo.config import cfg
 
 from nova import context as nova_context
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
@@ -46,7 +47,6 @@ opts = [
                default='',
                help='password for virtual power host_user'),
     cfg.StrOpt('virtual_power_host_key',
-               default=None,
                help='ssh key for virtual power host_user'),
 
 ]
@@ -194,7 +194,11 @@ class VirtualPowerManager(base.PowerManager):
         LOG.debug("Checking if %s is running" % self._node_name)
 
         if not self._check_for_node():
-            return False
+            err_msg = _('Node "%(name)s" with MAC address %(mac)s not found.')
+            LOG.error(err_msg, {'name': self._node_name,
+                                'mac': self._mac_addresses})
+            # in our case the _node_name is the the node_id
+            raise exception.NodeNotFound(node_id=self._node_name)
 
         cmd = self._vp_cmd.list_running_cmd
         running_node_list = self._run_command(cmd)

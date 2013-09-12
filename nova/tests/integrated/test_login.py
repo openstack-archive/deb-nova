@@ -16,7 +16,9 @@
 #    under the License.
 
 
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova.tests.integrated.api import client
 from nova.tests.integrated import integrated_helpers
 
 
@@ -24,8 +26,14 @@ LOG = logging.getLogger(__name__)
 
 
 class LoginTest(integrated_helpers._IntegratedTestBase):
+    _api_version = 'v2'
+
     def test_login(self):
         # Simple check - we list flavors - so we know we're logged in.
         flavors = self.api.get_flavors()
         for flavor in flavors:
             LOG.debug(_("flavor: %s") % flavor)
+
+
+class LoginTestV3(client.TestOpenStackClientV3Mixin, LoginTest):
+    _api_version = 'v3'

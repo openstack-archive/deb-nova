@@ -102,7 +102,8 @@ class TestNeutronClient(test.TestCase):
             endpoint_url=CONF.neutron_url,
             token=my_context.auth_token,
             timeout=CONF.neutron_url_timeout,
-            insecure=False).AndReturn(None)
+            insecure=False,
+            ca_cert=None).AndReturn(None)
         self.mox.ReplayAll()
         neutronv2.get_client(my_context)
 
@@ -124,7 +125,8 @@ class TestNeutronClient(test.TestCase):
             endpoint_url=CONF.neutron_url,
             auth_strategy=None,
             timeout=CONF.neutron_url_timeout,
-            insecure=False).AndReturn(None)
+            insecure=False,
+            ca_cert=None).AndReturn(None)
         self.mox.ReplayAll()
         neutronv2.get_client(my_context)
 
@@ -142,6 +144,11 @@ class TestNeutronv2Base(test.TestCase):
                          'display_name': 'test_instance',
                          'availability_zone': 'nova',
                          'host': 'some_host',
+                         'security_groups': []}
+        self.instance2 = {'project_id': '9d049e4b60b64716978ab415e6fbd5c0',
+                         'uuid': str(uuid.uuid4()),
+                         'display_name': 'test_instance2',
+                         'availability_zone': 'nova',
                          'security_groups': []}
         self.nets1 = [{'id': 'my_netid1',
                       'name': 'my_netname1',
@@ -162,7 +169,7 @@ class TestNeutronv2Base(test.TestCase):
 
         self.port_address = '10.0.1.2'
         self.port_data1 = [{'network_id': 'my_netid1',
-                           'device_id': 'device_id1',
+                           'device_id': self.instance2['uuid'],
                            'device_owner': 'compute:nova',
                            'id': 'my_portid1',
                            'fixed_ips': [{'ip_address': self.port_address,
@@ -173,14 +180,16 @@ class TestNeutronv2Base(test.TestCase):
                              'floating_ip_address': '172.0.1.2'}]
         self.dhcp_port_data1 = [{'fixed_ips': [{'ip_address': '10.0.1.9',
                                                'subnet_id': 'my_subid1'}]}]
+        self.port_address2 = '10.0.2.2'
         self.port_data2 = []
         self.port_data2.append(self.port_data1[0])
         self.port_data2.append({'network_id': 'my_netid2',
-                                'device_id': 'device_id2',
+                                'device_id': self.instance['uuid'],
                                 'device_owner': 'compute:nova',
                                 'id': 'my_portid2',
-                                'fixed_ips': [{'ip_address': '10.0.2.2',
-                                               'subnet_id': 'my_subid2'}],
+                                'fixed_ips':
+                                        [{'ip_address': self.port_address2,
+                                          'subnet_id': 'my_subid2'}],
                                 'mac_address': 'my_mac2', })
         self.float_data2 = []
         self.float_data2.append(self.float_data1[0])
@@ -250,6 +259,13 @@ class TestNeutronv2Base(test.TestCase):
         api = neutronapi.API()
         self.mox.StubOutWithMock(api, '_get_instance_nw_info')
         has_portbinding = False
+        has_extra_dhcp_opts = False
+        # Note: (dkehn) this option check should be removed as soon as support
+        # in neutron released, see https://bugs.launchpad.net/nova/+bug/1214162
+        if (cfg.CONF.dhcp_options_enabled == True and kwargs.get(
+                'dhcp_options', None) != None):
+            has_extra_dhcp_opts = True
+            dhcp_options = kwargs.get('dhcp_options')
         if kwargs.get('portbinding'):
             has_portbinding = True
             api.extensions[constants.PORTBINDING_EXT] = 1
@@ -276,8 +292,11 @@ class TestNeutronv2Base(test.TestCase):
                 if port_id:
                     self.moxed_client.show_port(port_id).AndReturn(
                         {'port': {'id': 'my_portid1',
-                         'network_id': 'my_netid1',
-                         'mac_address': 'my_mac1'}})
+                                  'network_id': 'my_netid1',
+                                  'mac_address': 'my_mac1',
+                                  'device_id': kwargs.get('_device') and
+                                               self.instance2['uuid'] or ''}})
+
                     ports['my_netid1'] = self.port_data1[0]
                     id = 'my_netid1'
                     if macs is not None:
@@ -345,6 +364,8 @@ class TestNeutronv2Base(test.TestCase):
                     port_req_body['port']['binding:host_id'] = (
                         self.instance.get('host'))
                 res_port = {'port': {'id': 'fake'}}
+                if has_extra_dhcp_opts:
+                    port_req_body['port']['extra_dhcp_opts'] = dhcp_options
                 if kwargs.get('_break') == 'mac' + net_id:
                     self.mox.ReplayAll()
                     return api
@@ -704,13 +725,16 @@ class TestNeutronv2(TestNeutronv2Base):
                 self.moxed_client.create_port(
                     MyComparator(port_req_body)).AndReturn({'port': port})
             else:
+                NeutronOverQuota = exceptions.NeutronClientException(
+                            message="Quota exceeded for resources: ['port']",
+                            status_code=409)
                 self.moxed_client.create_port(
-                    MyComparator(port_req_body)).AndRaise(
-                        Exception("fail to create port"))
+                    MyComparator(port_req_body)).AndRaise(NeutronOverQuota)
             index += 1
         self.moxed_client.delete_port('portid_' + self.nets2[0]['id'])
         self.mox.ReplayAll()
-        self.assertRaises(NEUTRON_CLIENT_EXCEPTION, api.allocate_for_instance,
+        self.assertRaises(exception.PortLimitExceeded,
+                          api.allocate_for_instance,
                           self.context, self.instance)
 
     def test_allocate_for_instance_ex2(self):
@@ -764,6 +788,17 @@ class TestNeutronv2(TestNeutronv2Base):
         self._returned_nw_info = self.port_data1 + [new_port]
         nw_info = self._allocate_for_instance()
         self.assertEqual(nw_info, [new_port])
+
+    def test_allocate_for_instance_port_in_use(self):
+        # If a port is already in use, an exception should be raised.
+        requested_networks = [(None, None, 'my_portid1')]
+        api = self._stub_allocate_for_instance(
+            requested_networks=requested_networks,
+            _break='pre_list_networks',
+            _device=True)
+        self.assertRaises(exception.PortInUse,
+                          api.allocate_for_instance, self.context,
+                          self.instance, requested_networks=requested_networks)
 
     def _deallocate_for_instance(self, number):
         port_data = number == 1 and self.port_data1 or self.port_data2
@@ -935,6 +970,85 @@ class TestNeutronv2(TestNeutronv2Base):
                           api.validate_networks,
                           self.context, requested_networks)
 
+    def test_validate_networks_port_not_found(self):
+        # Verify that the correct exception is thrown when a non existent
+        # port is passed to validate_networks.
+
+        requested_networks = [('my_netid1', None, '3123-ad34-bc43-32332ca33e')]
+
+        NeutronNotFound = neutronv2.exceptions.NeutronClientException(
+                                                            status_code=404)
+        self.moxed_client.show_port(requested_networks[0][2]).AndRaise(
+                                                        NeutronNotFound)
+        self.mox.ReplayAll()
+        # Expected call from setUp.
+        neutronv2.get_client(None)
+        api = neutronapi.API()
+        self.assertRaises(exception.PortNotFound,
+                          api.validate_networks,
+                          self.context, requested_networks)
+
+    def test_validate_networks_port_in_use(self):
+        requested_networks = [(None, None, self.port_data3[0]['id'])]
+        self.moxed_client.show_port(self.port_data3[0]['id']).\
+            AndReturn({'port': self.port_data3[0]})
+
+        self.mox.ReplayAll()
+
+        api = neutronapi.API()
+        self.assertRaises(exception.PortInUse,
+                          api.validate_networks,
+                          self.context, requested_networks)
+
+    def test_validate_networks_ports_in_same_network(self):
+        port_a = self.port_data3[0]
+        port_b = self.port_data1[0]
+        self.assertEqual(port_a['network_id'], port_b['network_id'])
+        for port in [port_a, port_b]:
+            port['device_id'] = None
+            port['device_owner'] = None
+
+        requested_networks = [(None, None, port_a['id']),
+                              (None, None, port_b['id'])]
+        self.moxed_client.show_port(port_a['id']).AndReturn({'port': port_a})
+        self.moxed_client.show_port(port_b['id']).AndReturn({'port': port_b})
+
+        self.mox.ReplayAll()
+
+        api = neutronapi.API()
+        self.assertRaises(exception.NetworkDuplicated,
+                          api.validate_networks,
+                          self.context, requested_networks)
+
+    def test_validate_networks_ports_not_in_same_network(self):
+        port_a = self.port_data3[0]
+        port_b = self.port_data2[1]
+        self.assertNotEqual(port_a['network_id'], port_b['network_id'])
+        for port in [port_a, port_b]:
+            port['device_id'] = None
+            port['device_owner'] = None
+
+        requested_networks = [(None, None, port_a['id']),
+                              (None, None, port_b['id'])]
+        self.moxed_client.show_port(port_a['id']).AndReturn({'port': port_a})
+        self.moxed_client.show_port(port_b['id']).AndReturn({'port': port_b})
+
+        search_opts = dict(id=[port_a['network_id'], port_b['network_id']],
+                           tenant_id=self.context.project_id,
+                           shared=False)
+        self.moxed_client.list_networks(
+            **search_opts).AndReturn({'networks': self.nets2})
+
+        search_opts = dict(id=[port_a['network_id'], port_b['network_id']],
+                           shared=True)
+        self.moxed_client.list_networks(
+            **search_opts).AndReturn({'networks': []})
+
+        self.mox.ReplayAll()
+
+        api = neutronapi.API()
+        api.validate_networks(self.context, requested_networks)
+
     def _mock_list_ports(self, port_data=None):
         if port_data is None:
             port_data = self.port_data2
@@ -950,8 +1064,8 @@ class TestNeutronv2(TestNeutronv2Base):
         filters = {'ip': '^10\\.0\\.1\\.2$'}
         api = neutronapi.API()
         result = api.get_instance_uuids_by_ip_filter(self.context, filters)
-        self.assertEquals('device_id1', result[0]['instance_uuid'])
-        self.assertEquals('device_id2', result[1]['instance_uuid'])
+        self.assertEquals(self.instance2['uuid'], result[0]['instance_uuid'])
+        self.assertEquals(self.instance['uuid'], result[1]['instance_uuid'])
 
     def test_get_fixed_ip_by_address_fails_for_no_ports(self):
         address = self._mock_list_ports(port_data=[])
@@ -964,7 +1078,7 @@ class TestNeutronv2(TestNeutronv2Base):
         address = self._mock_list_ports(port_data=self.port_data1)
         api = neutronapi.API()
         result = api.get_fixed_ip_by_address(self.context, address)
-        self.assertEquals('device_id1', result['instance_uuid'])
+        self.assertEquals(self.instance2['uuid'], result['instance_uuid'])
 
     def test_get_fixed_ip_by_address_fails_for_more_than_1_port(self):
         address = self._mock_list_ports()
@@ -1083,6 +1197,18 @@ class TestNeutronv2(TestNeutronv2Base):
         self.assertRaises(exception.FloatingIpNotFoundForAddress,
                           api.get_floating_ip_by_address,
                           self.context, address)
+
+    def test_get_floating_ip_by_id_not_found(self):
+        api = neutronapi.API()
+        NeutronNotFound = neutronv2.exceptions.NeutronClientException(
+            status_code=404)
+        floating_ip_id = self.fip_unassociated['id']
+        self.moxed_client.show_floatingip(floating_ip_id).\
+            AndRaise(NeutronNotFound)
+        self.mox.ReplayAll()
+        self.assertRaises(exception.FloatingIpNotFound,
+                          api.get_floating_ip,
+                          self.context, floating_ip_id)
 
     def test_get_floating_ip_by_address_multiple_found(self):
         api = neutronapi.API()
@@ -1205,37 +1331,67 @@ class TestNeutronv2(TestNeutronv2Base):
         self.assertRaises(exception.FloatingIpAssociated,
                           api.release_floating_ip, self.context, address)
 
-    def _setup_mock_for_refresh_cache(self, api):
+    def _setup_mock_for_refresh_cache(self, api, instances):
         nw_info = self.mox.CreateMock(model.NetworkInfo)
-        nw_info.json()
         self.mox.StubOutWithMock(api, '_get_instance_nw_info')
-        api._get_instance_nw_info(mox.IgnoreArg(), self.instance).\
-            AndReturn(nw_info)
         self.mox.StubOutWithMock(api.db, 'instance_info_cache_update')
-        api.db.instance_info_cache_update(mox.IgnoreArg(),
-                                          self.instance['uuid'],
-                                          mox.IgnoreArg())
+        for instance in instances:
+            nw_info.json()
+            api._get_instance_nw_info(mox.IgnoreArg(), instance).\
+                AndReturn(nw_info)
+            api.db.instance_info_cache_update(mox.IgnoreArg(),
+                                              instance['uuid'],
+                                              mox.IgnoreArg())
 
     def test_associate_floating_ip(self):
         api = neutronapi.API()
-        address = self.fip_associated['floating_ip_address']
-        fixed_address = self.fip_associated['fixed_ip_address']
-        fip_id = self.fip_associated['id']
+        address = self.fip_unassociated['floating_ip_address']
+        fixed_address = self.port_address2
+        fip_id = self.fip_unassociated['id']
 
         search_opts = {'device_owner': 'compute:nova',
                        'device_id': self.instance['uuid']}
         self.moxed_client.list_ports(**search_opts).\
             AndReturn({'ports': [self.port_data2[1]]})
         self.moxed_client.list_floatingips(floating_ip_address=address).\
-            AndReturn({'floatingips': [self.fip_associated]})
+            AndReturn({'floatingips': [self.fip_unassociated]})
         self.moxed_client.update_floatingip(
             fip_id, {'floatingip': {'port_id': self.fip_associated['port_id'],
                                     'fixed_ip_address': fixed_address}})
-        self._setup_mock_for_refresh_cache(api)
+        self._setup_mock_for_refresh_cache(api, [self.instance])
 
         self.mox.ReplayAll()
         api.associate_floating_ip(self.context, self.instance,
                                   address, fixed_address)
+
+    def test_reassociate_floating_ip(self):
+        api = neutronapi.API()
+        address = self.fip_associated['floating_ip_address']
+        old_fixed_address = self.fip_associated['fixed_ip_address']
+        new_fixed_address = self.port_address
+        fip_id = self.fip_associated['id']
+
+        search_opts = {'device_owner': 'compute:nova',
+                       'device_id': self.instance2['uuid']}
+        self.moxed_client.list_ports(**search_opts).\
+            AndReturn({'ports': [self.port_data2[0]]})
+        self.moxed_client.list_floatingips(floating_ip_address=address).\
+            AndReturn({'floatingips': [self.fip_associated]})
+        self.moxed_client.update_floatingip(
+            fip_id, {'floatingip': {'port_id': 'my_portid1',
+                                    'fixed_ip_address': new_fixed_address}})
+        self.moxed_client.show_port(self.fip_associated['port_id']).\
+                AndReturn({'port': self.port_data2[1]})
+        self.mox.StubOutWithMock(api.db, 'instance_get_by_uuid')
+        api.db.instance_get_by_uuid(mox.IgnoreArg(),
+                                   self.instance['uuid']).\
+             AndReturn(self.instance)
+        self._setup_mock_for_refresh_cache(api, [self.instance,
+                                                 self.instance2])
+
+        self.mox.ReplayAll()
+        api.associate_floating_ip(self.context, self.instance2,
+                                  address, new_fixed_address)
 
     def test_associate_floating_ip_not_found_fixed_ip(self):
         api = neutronapi.API()
@@ -1261,14 +1417,14 @@ class TestNeutronv2(TestNeutronv2Base):
             AndReturn({'floatingips': [self.fip_associated]})
         self.moxed_client.update_floatingip(
             fip_id, {'floatingip': {'port_id': None}})
-        self._setup_mock_for_refresh_cache(api)
+        self._setup_mock_for_refresh_cache(api, [self.instance])
 
         self.mox.ReplayAll()
         api.disassociate_floating_ip(self.context, self.instance, address)
 
     def test_add_fixed_ip_to_instance(self):
         api = neutronapi.API()
-        self._setup_mock_for_refresh_cache(api)
+        self._setup_mock_for_refresh_cache(api, [self.instance])
         network_id = 'my_netid1'
         search_opts = {'network_id': network_id}
         self.moxed_client.list_subnets(
@@ -1295,7 +1451,7 @@ class TestNeutronv2(TestNeutronv2Base):
 
     def test_remove_fixed_ip_from_instance(self):
         api = neutronapi.API()
-        self._setup_mock_for_refresh_cache(api)
+        self._setup_mock_for_refresh_cache(api, [self.instance])
         address = '10.0.0.3'
         zone = 'compute:%s' % self.instance['availability_zone']
         search_opts = {'device_id': self.instance['uuid'],
@@ -1551,3 +1707,31 @@ class TestNeutronv2Portbinding(TestNeutronv2Base):
         self.assertRaises(NEUTRON_CLIENT_EXCEPTION,
                           api.migrate_instance_finish,
                           self.context, self.instance, None)
+
+
+class TestNeutronv2ExtraDhcpOpts(TestNeutronv2Base):
+    def setUp(self):
+        super(TestNeutronv2ExtraDhcpOpts, self).setUp()
+        neutronv2.get_client(mox.IgnoreArg()).MultipleTimes().AndReturn(
+            self.moxed_client)
+
+    def test_allocate_for_instance_1_with_extra_dhcp_opts_turned_off(self):
+        # Note: (dkehn) this option check should be removed as soon as support
+        # in neutron released, see https://bugs.launchpad.net/nova/+bug/1214162
+        CONF.set_override('dhcp_options_enabled', True)
+        self._allocate_for_instance(1, extra_dhcp_opts=False)
+        CONF.set_override('dhcp_options_enabled', False)
+
+    def test_allocate_for_instance_extradhcpopts(self):
+        # Note: (dkehn) this option check should be removed as soon as support
+        # in neutron released, see https://bugs.launchpad.net/nova/+bug/1214162
+        CONF.set_override('dhcp_options_enabled', True)
+        dhcp_opts = [{'opt_name': 'bootfile-name',
+                          'opt_value': 'pxelinux.0'},
+                         {'opt_name': 'tftp-server',
+                          'opt_value': '123.123.123.123'},
+                         {'opt_name': 'server-ip-address',
+                          'opt_value': '123.123.123.456'}]
+
+        self._allocate_for_instance(1, dhcp_options=dhcp_opts)
+        CONF.set_override('dhcp_options_enabled', False)

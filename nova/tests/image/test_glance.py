@@ -23,6 +23,8 @@ import random
 import tempfile
 import time
 
+import mox
+
 import glanceclient.exc
 from oslo.config import cfg
 
@@ -33,6 +35,7 @@ from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests.glance import stubs as glance_stubs
 from nova.tests import matchers
+import nova.virt.libvirt.utils as lv_utils
 
 CONF = cfg.CONF
 
@@ -110,6 +113,22 @@ class TestGlanceImageService(test.TestCase):
         client = glance_stubs.StubGlanceClient()
         self.service = self._create_image_service(client)
         self.context = context.RequestContext('fake', 'fake', auth_token=True)
+        self.mox = mox.Mox()
+        self.files_to_clean = []
+
+    def tearDown(self):
+        super(TestGlanceImageService, self).tearDown()
+        self.mox.UnsetStubs()
+        for f in self.files_to_clean:
+            try:
+                os.unlink(f)
+            except Exception:
+                pass
+
+    def _get_tempfile(self):
+        (outfd, config_filename) = tempfile.mkstemp(prefix='nova_glance_tests')
+        self.files_to_clean.append(config_filename)
+        return (outfd, config_filename)
 
     def _create_image_service(self, client):
         def _fake_create_glance_client(context, host, port, use_ssl, version):
@@ -471,14 +490,16 @@ class TestGlanceImageService(test.TestCase):
         # When retries are disabled, we should get an exception
         self.flags(glance_num_retries=0)
         self.assertRaises(exception.GlanceConnectionFailed,
-                service.download, self.context, image_id, writer)
+                service.download, self.context, image_id, data=writer)
 
         # Now lets enable retries. No exception should happen now.
         tries = [0]
         self.flags(glance_num_retries=1)
-        service.download(self.context, image_id, writer)
+        service.download(self.context, image_id, data=writer)
 
     def test_download_file_url(self):
+        self.flags(allowed_direct_url_schemes=['file'])
+
         class MyGlanceStubClient(glance_stubs.StubGlanceClient):
             """A client that returns a file url."""
 
@@ -496,14 +517,12 @@ class TestGlanceImageService(test.TestCase):
 
         client = MyGlanceStubClient()
         (outfd, tmpfname) = tempfile.mkstemp(prefix='directURLdst')
-        writer = os.fdopen(outfd, 'w')
+        os.close(outfd)
 
         service = self._create_image_service(client)
         image_id = 1  # doesn't matter
 
-        self.flags(allowed_direct_url_schemes=['file'])
-        service.download(self.context, image_id, writer)
-        writer.close()
+        service.download(self.context, image_id, dst_path=tmpfname)
 
         # compare the two files
         rc = filecmp.cmp(tmpfname, client.s_tmpfname)
@@ -511,6 +530,155 @@ class TestGlanceImageService(test.TestCase):
                         (tmpfname, client.s_tmpfname))
         os.remove(client.s_tmpfname)
         os.remove(tmpfname)
+
+    def test_download_module_filesystem_match(self):
+
+        mountpoint = '/'
+        fs_id = 'someid'
+        desc = {'id': fs_id, 'mountpoint': mountpoint}
+
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            outer_test = self
+
+            def get(self, image_id):
+                return type('GlanceLocations', (object,),
+                            {'locations': [
+                                {'url': 'file:///' + os.devnull,
+                                 'metadata': desc}]})
+
+            def data(self, image_id):
+                self.outer_test.fail('This should not be called because the '
+                                     'transfer module should have intercepted '
+                                     'it.')
+
+        self.mox.StubOutWithMock(lv_utils, 'copy_image')
+
+        image_id = 1  # doesn't matter
+        client = MyGlanceStubClient()
+        self.flags(allowed_direct_url_schemes=['file'])
+        self.flags(group='image_file_url', filesystems=['gluster'])
+        service = self._create_image_service(client)
+        #NOTE(Jbresnah) The following options must be added after the module
+        # has added the specific groups.
+        self.flags(group='image_file_url:gluster', id=fs_id)
+        self.flags(group='image_file_url:gluster', mountpoint=mountpoint)
+
+        dest_file = os.devnull
+        lv_utils.copy_image(mox.IgnoreArg(), dest_file)
+
+        self.mox.ReplayAll()
+        service.download(self.context, image_id, dst_path=dest_file)
+        self.mox.VerifyAll()
+
+    def test_download_module_no_filesystem_match(self):
+        mountpoint = '/'
+        fs_id = 'someid'
+        desc = {'id': fs_id, 'mountpoint': mountpoint}
+        some_data = "sfxvdwjer"
+
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            outer_test = self
+
+            def get(self, image_id):
+                return type('GlanceLocations', (object,),
+                            {'locations': [
+                                {'url': 'file:///' + os.devnull,
+                                 'metadata': desc}]})
+
+            def data(self, image_id):
+                return some_data
+
+        def _fake_copyfile(source, dest):
+            self.fail('This should not be called because a match should not '
+                      'have been found.')
+        self.stubs.Set(lv_utils, 'copy_image', _fake_copyfile)
+
+        image_id = 1  # doesn't matter
+        client = MyGlanceStubClient()
+        self.flags(allowed_direct_url_schemes=['file'])
+        self.flags(group='image_file_url', filesystems=['gluster'])
+        service = self._create_image_service(client)
+        #NOTE(Jbresnah) The following options must be added after the module
+        # has added the specific groups.
+        self.flags(group='image_file_url:gluster', id='someotherid')
+        self.flags(group='image_file_url:gluster', mountpoint=mountpoint)
+
+        service.download(self.context, image_id,
+                         dst_path=os.devnull,
+                         data=None)
+
+    def test_download_module_mountpoints(self):
+        glance_mount = '/glance/mount/point'
+        _, data_filename = self._get_tempfile()
+        nova_mount = os.path.dirname(data_filename)
+        source_path = os.path.basename(data_filename)
+        file_url = 'file://%s' % os.path.join(glance_mount, source_path)
+        file_system_id = 'test_FS_ID'
+        file_system_desc = {'id': file_system_id, 'mountpoint': glance_mount}
+
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            outer_test = self
+
+            def get(self, image_id):
+                return type('GlanceLocations', (object,),
+                            {'locations': [{'url': file_url,
+                                            'metadata': file_system_desc}]})
+
+            def data(self, image_id):
+                self.outer_test.fail('This should not be called because the '
+                                     'transfer module should have intercepted '
+                                     'it.')
+
+        self.copy_called = False
+
+        def _fake_copyfile(source, dest):
+            self.assertEqual(source, data_filename)
+            self.copy_called = True
+        self.stubs.Set(lv_utils, 'copy_image', _fake_copyfile)
+
+        self.flags(allowed_direct_url_schemes=['file'])
+        self.flags(group='image_file_url', filesystems=['gluster'])
+        image_id = 1  # doesn't matter
+        client = MyGlanceStubClient()
+        service = self._create_image_service(client)
+        self.flags(group='image_file_url:gluster', id=file_system_id)
+        self.flags(group='image_file_url:gluster', mountpoint=nova_mount)
+
+        service.download(self.context, image_id, dst_path=os.devnull)
+        self.assertTrue(self.copy_called)
+
+    def test_download_module_file_bad_module(self):
+        _, data_filename = self._get_tempfile()
+        file_url = 'applesauce://%s' % data_filename
+        data_called = False
+
+        class MyGlanceStubClient(glance_stubs.StubGlanceClient):
+            data_called = False
+
+            def get(self, image_id):
+                return type('GlanceLocations', (object,),
+                            {'locations': [{'url': file_url,
+                                            'metadata': {}}]})
+
+            def data(self, image_id):
+                self.data_called = True
+                return "someData"
+
+        self.flags(allowed_direct_url_schemes=['applesauce'])
+
+        self.mox.StubOutWithMock(lv_utils, 'copy_image')
+        self.flags(allowed_direct_url_schemes=['file'])
+        image_id = 1  # doesn't matter
+        client = MyGlanceStubClient()
+        service = self._create_image_service(client)
+
+        # by not calling copyfileobj in the file download module we verify
+        # that the requirements were not met for its use
+        self.mox.ReplayAll()
+        service.download(self.context, image_id, dst_path=os.devnull)
+        self.mox.VerifyAll()
+
+        self.assertTrue(client.data_called)
 
     def test_client_forbidden_converts_to_imagenotauthed(self):
         class MyGlanceStubClient(glance_stubs.StubGlanceClient):
@@ -521,9 +689,8 @@ class TestGlanceImageService(test.TestCase):
         client = MyGlanceStubClient()
         service = self._create_image_service(client)
         image_id = 1  # doesn't matter
-        writer = NullWriter()
         self.assertRaises(exception.ImageNotAuthorized, service.download,
-                          self.context, image_id, writer)
+                          self.context, image_id, dst_path=os.devnull)
 
     def test_client_httpforbidden_converts_to_imagenotauthed(self):
         class MyGlanceStubClient(glance_stubs.StubGlanceClient):
@@ -534,9 +701,8 @@ class TestGlanceImageService(test.TestCase):
         client = MyGlanceStubClient()
         service = self._create_image_service(client)
         image_id = 1  # doesn't matter
-        writer = NullWriter()
         self.assertRaises(exception.ImageNotAuthorized, service.download,
-                          self.context, image_id, writer)
+                          self.context, image_id, dst_path=os.devnull)
 
     def test_client_notfound_converts_to_imagenotfound(self):
         class MyGlanceStubClient(glance_stubs.StubGlanceClient):
@@ -547,9 +713,8 @@ class TestGlanceImageService(test.TestCase):
         client = MyGlanceStubClient()
         service = self._create_image_service(client)
         image_id = 1  # doesn't matter
-        writer = NullWriter()
         self.assertRaises(exception.ImageNotFound, service.download,
-                          self.context, image_id, writer)
+                          self.context, image_id, dst_path=os.devnull)
 
     def test_client_httpnotfound_converts_to_imagenotfound(self):
         class MyGlanceStubClient(glance_stubs.StubGlanceClient):
@@ -560,9 +725,8 @@ class TestGlanceImageService(test.TestCase):
         client = MyGlanceStubClient()
         service = self._create_image_service(client)
         image_id = 1  # doesn't matter
-        writer = NullWriter()
         self.assertRaises(exception.ImageNotFound, service.download,
-                          self.context, image_id, writer)
+                          self.context, image_id, dst_path=os.devnull)
 
     def test_glance_client_image_id(self):
         fixture = self._make_fixture(name='test image')
@@ -606,6 +770,34 @@ class TestGlanceClientWrapper(test.TestCase):
         def _fake_sleep(secs):
             pass
         self.stubs.Set(time, 'sleep', _fake_sleep)
+
+    def test_headers_passed_glanceclient(self):
+        auth_token = 'auth_token'
+        ctxt = context.RequestContext('fake', 'fake', auth_token=auth_token)
+        fake_host = 'host4'
+        fake_port = 9295
+        fake_use_ssl = False
+
+        def _get_fake_glanceclient(version, endpoint, **params):
+            fake_client = glance_stubs.StubGlanceClient(version,
+                                       endpoint, **params)
+            self.assertTrue(fake_client.auth_token is not None)
+            self.assertTrue(fake_client.identity_headers is not None)
+            self.assertEquals(fake_client.identity_header['X-Auth_Token'],
+                              auth_token)
+            self.assertEquals(fake_client.identity_header['X-User-Id'], 'fake')
+            self.assertEquals(fake_client.identity_header['X-Roles'], None)
+            self.assertEquals(fake_client.identity_header['X-Tenant-Id'], None)
+            self.assertEquals(fake_client.
+                              identity_header['X-Service-Catalog'], None)
+            self.assertEquals(fake_client.
+                              identity_header['X-Identity-Status'],
+                              'Confirmed')
+
+        self.stubs.Set(glanceclient.Client, '__init__',
+                       _get_fake_glanceclient)
+
+        glance._create_glance_client(ctxt, fake_host, fake_port, fake_use_ssl)
 
     def test_static_client_without_retries(self):
         self.flags(glance_num_retries=0)

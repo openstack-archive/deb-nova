@@ -29,7 +29,7 @@ import inspect
 
 from oslo.config import cfg
 
-from nova.openstack.common.gettextutils import _
+from nova.openstack.common.gettextutils import _  # noqa
 from nova.openstack.common import importutils
 from nova.openstack.common import local
 from nova.openstack.common import log as logging
@@ -56,8 +56,7 @@ rpc_opts = [
                help='Seconds to wait before a cast expires (TTL). '
                     'Only supported by impl_zmq.'),
     cfg.ListOpt('allowed_rpc_exception_modules',
-                default=['nova.openstack.common.exception',
-                         'nova.exception',
+                default=['nova.exception',
                          'cinder.exception',
                          'exceptions',
                          ],

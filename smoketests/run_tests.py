@@ -55,7 +55,8 @@ To run a single test module:
 
 """
 
-import gettext
+from __future__ import print_function
+
 import os
 import sys
 import unittest
@@ -69,13 +70,14 @@ if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
     sys.path.insert(0, possible_topdir)
 
 
-gettext.install('nova', unicode=1)
-
 from nose import config
 from nose import core
 from nose import result
 
 from smoketests import flags
+
+from nova.openstack.common.gettextutils import _
+
 FLAGS = flags.FLAGS
 
 
@@ -295,9 +297,9 @@ class NovaTestRunner(core.TextTestRunner):
 
 if __name__ == '__main__':
     if not os.getenv('EC2_ACCESS_KEY'):
-        print _('Missing EC2 environment variables. Please '
+        print(_('Missing EC2 environment variables. Please '
                 'source the appropriate novarc file before '
-                'running this test.')
+                'running this test.'))
         sys.exit(1)
 
     argv = FLAGS(sys.argv)

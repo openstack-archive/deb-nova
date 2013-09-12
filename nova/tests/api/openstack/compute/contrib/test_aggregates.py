@@ -118,6 +118,18 @@ class AggregateTestCase(test.TestCase):
                                      {"name": "test",
                                       "foo": "nova1"}})
 
+    def test_create_with_null_name(self):
+        self.assertRaises(exc.HTTPBadRequest, self.controller.create,
+                          self.req, {"aggregate":
+                                     {"name": "",
+                                      "availability_zone": "nova1"}})
+
+    def test_create_with_name_too_long(self):
+        self.assertRaises(exc.HTTPBadRequest, self.controller.create,
+                          self.req, {"aggregate":
+                                     {"name": "x" * 256,
+                                      "availability_zone": "nova1"}})
+
     def test_create_with_extra_invalid_arg(self):
         self.assertRaises(exc.HTTPBadRequest, self.controller.create,
                           self.req, dict(name="test",
@@ -200,6 +212,16 @@ class AggregateTestCase(test.TestCase):
         self.assertRaises(exc.HTTPBadRequest, self.controller.update,
                           self.req, "2", body=test_metadata)
 
+    def test_update_with_null_name(self):
+        test_metadata = {"aggregate": {"name": ""}}
+        self.assertRaises(exc.HTTPBadRequest, self.controller.update,
+                          self.req, "2", body=test_metadata)
+
+    def test_update_with_name_too_long(self):
+        test_metadata = {"aggregate": {"name": "x" * 256}}
+        self.assertRaises(exc.HTTPBadRequest, self.controller.update,
+                          self.req, "2", body=test_metadata)
+
     def test_update_with_bad_aggregate(self):
         test_metadata = {"aggregate": {"name": "test_name"}}
 
@@ -210,6 +232,11 @@ class AggregateTestCase(test.TestCase):
 
         self.assertRaises(exc.HTTPNotFound, self.controller.update,
                 self.req, "2", body=test_metadata)
+
+    def test_invalid_action(self):
+        body = {"append_host": {"host": "host1"}}
+        self.assertRaises(exc.HTTPBadRequest,
+                          self.controller.action, self.req, "1", body=body)
 
     def test_add_host(self):
         def stub_add_host_to_aggregate(context, aggregate, host):
@@ -261,12 +288,25 @@ class AggregateTestCase(test.TestCase):
         self.assertRaises(exc.HTTPBadRequest, self.controller.action,
                 self.req, "1", body={"add_host": {"asdf": "asdf"}})
 
+    def test_add_host_raises_key_error(self):
+        def stub_add_host_to_aggregate(context, aggregate, host):
+            raise KeyError
+        self.stubs.Set(self.controller.api, "add_host_to_aggregate",
+                       stub_add_host_to_aggregate)
+        #NOTE(mtreinish) The check for a KeyError here is to ensure that
+        # if add_host_to_aggregate() raises a KeyError it propogates. At
+        # one point the api code would mask the error as a HTTPBadRequest.
+        # This test is to ensure that this doesn't occur again.
+        self.assertRaises(KeyError, self.controller.action, self.req, "1",
+                         body={"add_host": {"host": "host1"}})
+
     def test_remove_host(self):
         def stub_remove_host_from_aggregate(context, aggregate, host):
             self.assertEqual(context, self.context, "context")
             self.assertEqual("1", aggregate, "aggregate")
             self.assertEqual("host1", host, "host")
             stub_remove_host_from_aggregate.called = True
+            return {}
         self.stubs.Set(self.controller.api,
                        "remove_host_from_aggregate",
                        stub_remove_host_from_aggregate)

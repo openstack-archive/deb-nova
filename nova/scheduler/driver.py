@@ -31,9 +31,10 @@ from nova.conductor import api as conductor_api
 from nova import db
 from nova import exception
 from nova import notifications
+from nova import notifier
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import timeutils
 from nova import servicegroup
 
@@ -77,8 +78,8 @@ def handle_schedule_error(context, ex, instance_uuid, request_spec):
                    method='run_instance',
                    reason=ex)
 
-    notifier.notify(context, notifier.publisher_id("scheduler"),
-                    'scheduler.run_instance', notifier.ERROR, payload)
+    notifier.get_notifier('scheduler').error(context,
+                                             'scheduler.run_instance', payload)
 
 
 def instance_update_db(context, instance_uuid, extra_values=None):
@@ -143,17 +144,10 @@ class Scheduler(object):
                 for member in members
                 if member.get('host') is not None]
 
-    def schedule_prep_resize(self, context, image, request_spec,
-                             filter_properties, instance, instance_type,
-                             reservations):
-        """Must override schedule_prep_resize method for scheduler to work."""
-        msg = _("Driver must implement schedule_prep_resize")
-        raise NotImplementedError(msg)
-
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,
-                              filter_properties):
+                              filter_properties, legacy_bdm_in_spec):
         """Must override schedule_run_instance method for scheduler to work."""
         msg = _("Driver must implement schedule_run_instance")
         raise NotImplementedError(msg)

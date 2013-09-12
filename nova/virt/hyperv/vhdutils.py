@@ -20,6 +20,8 @@ import sys
 if sys.platform == 'win32':
     import wmi
 
+from nova.openstack.common.gettextutils import _
+from nova.virt.hyperv import constants
 from nova.virt.hyperv import vmutils
 from xml.etree import ElementTree
 
@@ -36,6 +38,17 @@ class VHDUtils(object):
 
         (job_path, ret_val) = image_man_svc.ValidateVirtualHardDisk(
             Path=vhd_path)
+        self._vmutils.check_ret_val(ret_val, job_path)
+
+    def create_dynamic_vhd(self, path, max_internal_size, format):
+        if format != constants.DISK_FORMAT_VHD:
+            raise vmutils.HyperVException(_("Unsupported disk format: %s") %
+                                          format)
+
+        image_man_svc = self._conn.Msvm_ImageManagementService()[0]
+
+        (job_path, ret_val) = image_man_svc.CreateDynamicVirtualHardDisk(
+            Path=path, MaxInternalSize=max_internal_size)
         self._vmutils.check_ret_val(ret_val, job_path)
 
     def create_differencing_vhd(self, path, parent_path):
@@ -96,3 +109,16 @@ class VHDUtils(object):
                 vhd_info_dict[name] = int(value_text)
 
         return vhd_info_dict
+
+    def get_vhd_format(self, path):
+        with open(path, 'rb') as f:
+            signature = f.read(8)
+        if signature == 'vhdxfile':
+            return constants.DISK_FORMAT_VHDX
+        elif signature == 'conectix':
+            return constants.DISK_FORMAT_VHD
+        else:
+            raise vmutils.HyperVException(_('Unsupported virtual disk format'))
+
+    def get_best_supported_vhd_format(self):
+        return constants.DISK_FORMAT_VHD

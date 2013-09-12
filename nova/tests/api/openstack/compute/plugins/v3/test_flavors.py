@@ -22,6 +22,8 @@ import urlparse
 
 from nova.api.openstack.compute.plugins.v3 import flavors
 from nova.api.openstack import xmlutil
+from nova.openstack.common import jsonutils
+
 import nova.compute.flavors
 from nova import context
 from nova import db
@@ -40,12 +42,18 @@ FAKE_FLAVORS = {
         "name": 'flavor 1',
         "memory_mb": '256',
         "root_gb": '10',
+        "swap": '512',
+        "ephemeral_gb": '1',
+        "disabled": False,
     },
     'flavor 2': {
         "flavorid": '2',
         "name": 'flavor 2',
         "memory_mb": '512',
         "root_gb": '20',
+        "swap": '1024',
+        "ephemeral_gb": '10',
+        "disabled": True,
     },
 }
 
@@ -54,30 +62,44 @@ def fake_flavor_get_by_flavor_id(flavorid):
     return FAKE_FLAVORS['flavor %s' % flavorid]
 
 
-def fake_flavor_get_all(inactive=False, filters=None):
+def fake_get_all_flavors_sorted_list(context=None, inactive=False,
+                                     filters=None, sort_key='flavorid',
+                                     sort_dir='asc', limit=None, marker=None):
     def reject_min(db_attr, filter_attr):
         return (filter_attr in filters and
                 int(flavor[db_attr]) < int(filters[filter_attr]))
 
     filters = filters or {}
-    output = {}
+    res = []
     for (flavor_name, flavor) in FAKE_FLAVORS.items():
         if reject_min('memory_mb', 'min_memory_mb'):
             continue
         elif reject_min('root_gb', 'min_root_gb'):
             continue
 
-        output[flavor_name] = flavor
+        res.append(flavor)
+
+    res = sorted(res, key=lambda item: item[sort_key])
+    output = []
+    marker_found = True if marker is None else False
+    for flavor in res:
+        if not marker_found and marker == flavor['flavorid']:
+            marker_found = True
+        elif marker_found:
+            if limit is None or len(output) < int(limit):
+                output.append(flavor)
 
     return output
 
 
-def empty_flavor_get_all(inactive=False, filters=None):
-    return {}
+def empty_get_all_flavors_sorted_list(context=None, inactive=False,
+                                      filters=None, sort_key='flavorid',
+                                      sort_dir='asc', limit=None, marker=None):
+    return []
 
 
 def return_flavor_not_found(flavor_id):
-    raise exception.InstanceTypeNotFound(instance_type_id=flavor_id)
+    raise exception.FlavorNotFound(flavor_id=flavor_id)
 
 
 class FlavorsTest(test.TestCase):
@@ -86,8 +108,8 @@ class FlavorsTest(test.TestCase):
         self.flags(osapi_compute_extension=[])
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
-        self.stubs.Set(nova.compute.flavors, "get_all_flavors",
-                       fake_flavor_get_all)
+        self.stubs.Set(nova.compute.flavors, "get_all_flavors_sorted_list",
+                       fake_get_all_flavors_sorted_list)
         self.stubs.Set(nova.compute.flavors,
                        "get_flavor_by_flavor_id",
                        fake_flavor_get_by_flavor_id)
@@ -112,6 +134,9 @@ class FlavorsTest(test.TestCase):
                 "ram": "256",
                 "disk": "10",
                 "vcpus": "",
+                "swap": '512',
+                "ephemeral": "1",
+                "disabled": False,
                 "links": [
                     {
                         "rel": "self",
@@ -138,6 +163,9 @@ class FlavorsTest(test.TestCase):
                 "ram": "256",
                 "disk": "10",
                 "vcpus": "",
+                "swap": '512',
+                "ephemeral": "1",
+                "disabled": False,
                 "links": [
                     {
                         "rel": "self",
@@ -304,6 +332,9 @@ class FlavorsTest(test.TestCase):
                     "ram": "256",
                     "disk": "10",
                     "vcpus": "",
+                    "swap": '512',
+                    "ephemeral": "1",
+                    "disabled": False,
                     "links": [
                         {
                             "rel": "self",
@@ -321,6 +352,9 @@ class FlavorsTest(test.TestCase):
                     "ram": "512",
                     "disk": "20",
                     "vcpus": "",
+                    "swap": '1024',
+                    "ephemeral": "10",
+                    "disabled": True,
                     "links": [
                         {
                             "rel": "self",
@@ -337,8 +371,8 @@ class FlavorsTest(test.TestCase):
         self.assertEqual(flavor, expected)
 
     def test_get_empty_flavor_list(self):
-        self.stubs.Set(nova.compute.flavors, "get_all_flavors",
-                       empty_flavor_get_all)
+        self.stubs.Set(nova.compute.flavors, "get_all_flavors_sorted_list",
+                       empty_get_all_flavors_sorted_list)
 
         req = fakes.HTTPRequestV3.blank('/flavors')
         flavors = self.controller.index(req)
@@ -346,8 +380,8 @@ class FlavorsTest(test.TestCase):
         self.assertEqual(flavors, expected)
 
     def test_get_flavor_list_filter_min_ram(self):
-        # Flavor lists may be filtered by minRam.
-        req = fakes.HTTPRequestV3.blank('/flavors?minRam=512')
+        # Flavor lists may be filtered by min_ram.
+        req = fakes.HTTPRequestV3.blank('/flavors?min_ram=512')
         flavor = self.controller.index(req)
         expected = {
             "flavors": [
@@ -370,14 +404,14 @@ class FlavorsTest(test.TestCase):
         self.assertEqual(flavor, expected)
 
     def test_get_flavor_list_filter_invalid_min_ram(self):
-        # Ensure you cannot list flavors with invalid minRam param.
-        req = fakes.HTTPRequestV3.blank('/flavors?minRam=NaN')
+        # Ensure you cannot list flavors with invalid min_ram param.
+        req = fakes.HTTPRequestV3.blank('/flavors?min_ram=NaN')
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.index, req)
 
     def test_get_flavor_list_filter_min_disk(self):
-        # Flavor lists may be filtered by minDisk.
-        req = fakes.HTTPRequestV3.blank('/flavors?minDisk=20')
+        # Flavor lists may be filtered by min_disk.
+        req = fakes.HTTPRequestV3.blank('/flavors?min_disk=20')
         flavor = self.controller.index(req)
         expected = {
             "flavors": [
@@ -400,17 +434,17 @@ class FlavorsTest(test.TestCase):
         self.assertEqual(flavor, expected)
 
     def test_get_flavor_list_filter_invalid_min_disk(self):
-        # Ensure you cannot list flavors with invalid minDisk param.
-        req = fakes.HTTPRequestV3.blank('/flavors?minDisk=NaN')
+        # Ensure you cannot list flavors with invalid min_disk param.
+        req = fakes.HTTPRequestV3.blank('/flavors?min_disk=NaN')
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.index, req)
 
     def test_get_flavor_list_detail_min_ram_and_min_disk(self):
-        """Tests that filtering work on flavor details and that minRam and
-        minDisk filters can be combined
+        """Tests that filtering work on flavor details and that min_ram and
+        min_disk filters can be combined
         """
         req = fakes.HTTPRequestV3.blank('/flavors/detail'
-                                        '?minRam=256&minDisk=20')
+                                        '?min_ram=256&min_disk=20')
         flavor = self.controller.detail(req)
         expected = {
             "flavors": [
@@ -420,6 +454,9 @@ class FlavorsTest(test.TestCase):
                     "ram": "512",
                     "disk": "20",
                     "vcpus": "",
+                    "swap": '1024',
+                    "ephemeral": "10",
+                    "disabled": True,
                     "links": [
                         {
                             "rel": "self",
@@ -436,6 +473,62 @@ class FlavorsTest(test.TestCase):
         self.assertEqual(flavor, expected)
 
 
+class FlavorDisabledTest(test.TestCase):
+    content_type = 'application/json'
+
+    def setUp(self):
+        super(FlavorDisabledTest, self).setUp()
+        fakes.stub_out_nw_api(self.stubs)
+
+        #def fake_flavor_get_all(*args, **kwargs):
+        #    return FAKE_FLAVORS
+        #
+        self.stubs.Set(nova.compute.flavors, "get_all_flavors_sorted_list",
+                       fake_get_all_flavors_sorted_list)
+        self.stubs.Set(nova.compute.flavors,
+                       "get_flavor_by_flavor_id",
+                       fake_flavor_get_by_flavor_id)
+
+    def _make_request(self, url):
+        req = webob.Request.blank(url)
+        req.headers['Accept'] = self.content_type
+        app = fakes.wsgi_app_v3(init_only=('servers', 'flavors',
+                                           'os-flavor-disabled'))
+        return req.get_response(app)
+
+    def _get_flavor(self, body):
+        return jsonutils.loads(body).get('flavor')
+
+    def _get_flavors(self, body):
+        return jsonutils.loads(body).get('flavors')
+
+    def assertFlavorDisabled(self, flavor, disabled):
+        self.assertEqual(str(flavor.get('disabled')), disabled)
+
+    def test_show(self):
+        res = self._make_request('/v3/flavors/1')
+        self.assertEqual(res.status_int, 200, res.body)
+        self.assertFlavorDisabled(self._get_flavor(res.body), 'False')
+
+    def test_detail(self):
+        res = self._make_request('/v3/flavors/detail')
+
+        self.assertEqual(res.status_int, 200, res.body)
+        flavors = self._get_flavors(res.body)
+        self.assertFlavorDisabled(flavors[0], 'False')
+        self.assertFlavorDisabled(flavors[1], 'True')
+
+
+class FlavorDisabledXmlTest(FlavorDisabledTest):
+    content_type = 'application/xml'
+
+    def _get_flavor(self, body):
+        return etree.XML(body)
+
+    def _get_flavors(self, body):
+        return etree.XML(body).getchildren()
+
+
 class FlavorsXMLSerializationTest(test.TestCase):
     def _create_flavor(self):
         id = 0
@@ -448,6 +541,8 @@ class FlavorsXMLSerializationTest(test.TestCase):
                 "disk": "10",
                 "vcpus": "",
                 "swap": "512",
+                "ephemeral": "512",
+                "disabled": False,
                 "links": [
                     {
                         "rel": "self",
@@ -690,6 +785,7 @@ class ParseIsPublicTest(test.TestCase):
 
     def test_string_none(self):
         self.assertPublic(None, 'none')
+        self.assertPublic(None, 'None')
 
     def test_other(self):
         self.assertRaises(

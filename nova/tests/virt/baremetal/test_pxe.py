@@ -69,7 +69,7 @@ class BareMetalPXETestCase(bm_db_base.BMDBTestCase):
         self.context = utils.get_test_admin_context()
         self.test_block_device_info = None,
         self.instance = utils.get_test_instance()
-        self.test_network_info = utils.get_test_network_info(),
+        self.test_network_info = utils.get_test_network_info()
         self.node_info = bm_db_utils.new_bm_node(
                 service_host='test_host',
                 cpus=4,
@@ -174,7 +174,7 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
                 group='baremetal',
             )
         net = utils.get_test_network_info()
-        net[0][1]['ips'][0]['ip'] = '1.2.3.4'
+        net[0]['network']['subnets'][0]['ips'][0]['address'] = '1.2.3.4'
         config = pxe.build_network_config(net)
         self.assertIn('iface eth0 inet dhcp', config)
         self.assertNotIn('address 1.2.3.4', config)
@@ -186,10 +186,38 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
                 group='baremetal',
             )
         net = utils.get_test_network_info()
-        net[0][1]['ips'][0]['ip'] = '1.2.3.4'
+        net[0]['network']['subnets'][0]['ips'][0]['address'] = '1.2.3.4'
         config = pxe.build_network_config(net)
         self.assertIn('iface eth0 inet static', config)
         self.assertIn('address 1.2.3.4', config)
+
+    def test_build_network_config_static_parameters(self):
+        self.flags(use_ipv6=True)
+        self.flags(
+                net_config_template='$pybasedir/nova/virt/baremetal/'
+                                    'net-static.ubuntu.template',
+                group='baremetal'
+            )
+
+        net = utils.get_test_network_info()
+        net[0]['network']['subnets'][0]['cidr'] = '10.1.1.0/24'
+        net[0]['network']['subnets'][0]['gateway']['address'] = '10.1.1.1'
+        net[0]['network']['subnets'][0]['dns'][0]['address'] = '10.1.1.2'
+        net[0]['network']['subnets'][0]['dns'][1]['address'] = '10.1.1.3'
+
+        net[0]['network']['subnets'][1]['cidr'] = 'fc00::/7'
+        net[0]['network']['subnets'][1]['ips'][0]['address'] = 'fc00::1'
+        net[0]['network']['subnets'][1]['gateway']['address'] = 'fc00::2'
+        config = pxe.build_network_config(net)
+
+        self.assertIn('iface eth0 inet static', config)
+        self.assertIn('gateway 10.1.1.1', config)
+        self.assertIn('dns-nameservers 10.1.1.2 10.1.1.3', config)
+
+        self.assertIn('iface eth0 inet6 static', config)
+        self.assertIn('address fc00::1', config)
+        self.assertIn('netmask 7', config)
+        self.assertIn('gateway fc00::2', config)
 
     def test_image_dir_path(self):
         self.assertEqual(

@@ -23,12 +23,14 @@ Class for PXE bare-metal nodes.
 import datetime
 import os
 
+import jinja2
 from oslo.config import cfg
 
 from nova.compute import flavors
 from nova import exception
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import fileutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
 from nova.openstack.common import timeutils
@@ -69,16 +71,6 @@ CONF = cfg.CONF
 CONF.register_group(baremetal_group)
 CONF.register_opts(pxe_opts, baremetal_group)
 CONF.import_opt('use_ipv6', 'nova.netconf')
-
-CHEETAH = None
-
-
-def _get_cheetah():
-    global CHEETAH
-    if CHEETAH is None:
-        from Cheetah import Template
-        CHEETAH = Template.Template
-    return CHEETAH
 
 
 def build_pxe_network_config(network_info):
@@ -123,26 +115,20 @@ def build_pxe_config(deployment_id, deployment_key, deployment_iscsi_iqn,
             'pxe_append_params': CONF.baremetal.pxe_append_params,
             'pxe_network_config': network_config,
             }
-    cheetah = _get_cheetah()
-    pxe_config = str(cheetah(
-            open(CONF.baremetal.pxe_config_template).read(),
-            searchList=[{'pxe_options': pxe_options,
-                         'ROOT': '${ROOT}',
-            }]))
-    return pxe_config
+    tmpl_path, tmpl_file = os.path.split(CONF.baremetal.pxe_config_template)
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path))
+    template = env.get_template(tmpl_file)
+    return template.render({'pxe_options': pxe_options,
+                            'ROOT': '${ROOT}'})
 
 
 def build_network_config(network_info):
     interfaces = bm_utils.map_network_interfaces(network_info, CONF.use_ipv6)
-    cheetah = _get_cheetah()
-    network_config = str(cheetah(
-            open(CONF.baremetal.net_config_template).read(),
-            searchList=[
-                {'interfaces': interfaces,
-                 'use_ipv6': CONF.use_ipv6,
-                }
-            ]))
-    return network_config
+    tmpl_path, tmpl_file = os.path.split(CONF.baremetal.net_config_template)
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path))
+    template = env.get_template(tmpl_file)
+    return template.render({'interfaces': interfaces,
+                            'use_ipv6': CONF.use_ipv6})
 
 
 def get_deploy_aki_id(instance_type):

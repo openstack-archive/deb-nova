@@ -19,6 +19,7 @@
 A Hyper-V Nova Compute driver.
 """
 
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt.hyperv import hostops
@@ -115,7 +116,7 @@ class HyperVDriver(driver.ComputeDriver):
                                               block_migration, migrate_data)
 
     def pre_live_migration(self, context, instance, block_device_info,
-                           network_info, migrate_data=None):
+                           network_info, disk, migrate_data=None):
         self._livemigrationops.pre_live_migration(context, instance,
                                                   block_device_info,
                                                   network_info)
@@ -191,6 +192,3 @@ class HyperVDriver(driver.ComputeDriver):
     def get_console_output(self, instance):
         LOG.debug(_("get_console_output called"), instance=instance)
         return ''
-
-    def legacy_nwinfo(self):
-        return False

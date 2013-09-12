@@ -20,7 +20,6 @@ import datetime
 import inspect
 import json
 import os
-import re
 import urllib
 import uuid as uuid_lib
 
@@ -31,13 +30,15 @@ from oslo.config import cfg
 from nova.api.metadata import password
 from nova.api.openstack.compute.contrib import coverage_ext
 from nova.api.openstack.compute.contrib import fping
-from nova.api.openstack.compute.extensions import ExtensionManager as ext_mgr
+from nova.api.openstack.compute import extensions
 # Import extensions to pull in osapi_compute_extension CONF option used below.
 from nova.cells import rpcapi as cells_rpcapi
 from nova.cells import state
 from nova.cloudpipe import pipelib
 from nova.compute import api as compute_api
+from nova.compute import cells_api as cells_api
 from nova.compute import manager as compute_manager
+from nova.conductor import manager as conductor_manager
 from nova import context
 from nova import db
 from nova.db.sqlalchemy import models
@@ -48,7 +49,6 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 import nova.quota
-from nova.scheduler import manager as scheduler_manager
 from nova.servicegroup import api as service_group_api
 from nova import test
 from nova.tests.api.openstack.compute.contrib import test_coverage_ext
@@ -60,6 +60,7 @@ from nova.tests import fake_instance_actions
 from nova.tests import fake_network
 from nova.tests import fake_utils
 from nova.tests.image import fake
+from nova.tests.integrated import api_samples_test_base
 from nova.tests.integrated import integrated_helpers
 from nova.tests import utils as test_utils
 from nova.tests.virt.baremetal.db import base as bm_db_base
@@ -74,18 +75,13 @@ CONF.import_opt('vpn_image_id', 'nova.cloudpipe.pipelib')
 CONF.import_opt('osapi_compute_link_prefix', 'nova.api.openstack.common')
 CONF.import_opt('osapi_glance_link_prefix', 'nova.api.openstack.common')
 CONF.import_opt('enable', 'nova.cells.opts', group='cells')
+CONF.import_opt('cell_type', 'nova.cells.opts', group='cells')
 CONF.import_opt('db_check_interval', 'nova.cells.state', group='cells')
 LOG = logging.getLogger(__name__)
 
 
-class NoMatch(test.TestingException):
-    pass
-
-
-class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
-    ctype = 'json'
-    all_extensions = False
-    extension_name = None
+class ApiSampleTestBaseV2(api_samples_test_base.ApiSampleTestBase):
+    _api_version = 'v2'
 
     def setUp(self):
         extends = []
@@ -97,295 +93,14 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                 extends = [self.extends_name]
             ext = [self.extension_name] if self.extension_name else []
             self.flags(osapi_compute_extension=ext + extends)
-        super(ApiSampleTestBase, self).setUp()
-        self.useFixture(test.SampleNetworks())
+        super(ApiSampleTestBaseV2, self).setUp()
+        self.useFixture(test.SampleNetworks(host=self.network.host))
         fake_network.stub_compute_with_ips(self.stubs)
         fake_utils.stub_out_utils_spawn_n(self.stubs)
         self.generate_samples = os.getenv('GENERATE_SAMPLES') is not None
 
-    def _pretty_data(self, data):
-        if self.ctype == 'json':
-            data = jsonutils.dumps(jsonutils.loads(data), sort_keys=True,
-                    indent=4)
 
-        else:
-            if data is None:
-                # Likely from missing XML file.
-                return ""
-            xml = etree.XML(data)
-            data = etree.tostring(xml, encoding="UTF-8",
-                    xml_declaration=True, pretty_print=True)
-        return '\n'.join(line.rstrip() for line in data.split('\n')).strip()
-
-    def _objectify(self, data):
-        if not data:
-            return {}
-        if self.ctype == 'json':
-            # NOTE(vish): allow non-quoted replacements to survive json
-            data = re.sub(r'([^"])%\((.+)\)s([^"])', r'\1"%(int:\2)s"\3', data)
-            return jsonutils.loads(data)
-        else:
-            def to_dict(node):
-                ret = {}
-                if node.items():
-                    ret.update(dict(node.items()))
-                if node.text:
-                    ret['__content__'] = node.text
-                if node.tag:
-                    ret['__tag__'] = node.tag
-                if node.nsmap:
-                    ret['__nsmap__'] = node.nsmap
-                for element in node:
-                    ret.setdefault(node.tag, [])
-                    ret[node.tag].append(to_dict(element))
-                return ret
-            return to_dict(etree.fromstring(data))
-
-    @classmethod
-    def _get_sample_path(cls, name, dirname, suffix=''):
-        parts = [dirname]
-        parts.append('api_samples')
-        if cls.all_extensions:
-            parts.append('all_extensions')
-        if cls.extension_name:
-            alias = importutils.import_class(cls.extension_name).alias
-            parts.append(alias)
-        parts.append(name + "." + cls.ctype + suffix)
-        return os.path.join(*parts)
-
-    @classmethod
-    def _get_sample(cls, name):
-        dirname = os.path.dirname(os.path.abspath(__file__))
-        dirname = os.path.normpath(os.path.join(dirname, "../../../doc"))
-        return cls._get_sample_path(name, dirname)
-
-    @classmethod
-    def _get_template(cls, name):
-        dirname = os.path.dirname(os.path.abspath(__file__))
-        return cls._get_sample_path(name, dirname, suffix='.tpl')
-
-    def _read_template(self, name):
-        template = self._get_template(name)
-        with open(template) as inf:
-            return inf.read().strip()
-
-    def _write_template(self, name, data):
-        with open(self._get_template(name), 'w') as outf:
-            outf.write(data)
-
-    def _write_sample(self, name, data):
-        with open(self._get_sample(name), 'w') as outf:
-            outf.write(data)
-
-    def _compare_result(self, subs, expected, result, result_str):
-        matched_value = None
-        if isinstance(expected, dict):
-            if not isinstance(result, dict):
-                raise NoMatch(_('%(result_str)s: %(result)s is not a dict.')
-                              % locals())
-            ex_keys = sorted(expected.keys())
-            res_keys = sorted(result.keys())
-            if ex_keys != res_keys:
-                ex_delta = []
-                res_delta = []
-                for key in ex_keys:
-                    if key not in res_keys:
-                        ex_delta.append(key)
-                for key in res_keys:
-                    if key not in ex_keys:
-                        res_delta.append(key)
-                raise NoMatch(
-                        _('Dictionary key mismatch:\n'
-                        'Extra key(s) in template:\n%(ex_delta)s\n'
-                        'Extra key(s) in %(result_str)s:\n%(res_delta)s\n')
-                        % locals())
-            for key in ex_keys:
-                res = self._compare_result(subs, expected[key], result[key],
-                                           result_str)
-                matched_value = res or matched_value
-        elif isinstance(expected, list):
-            if not isinstance(result, list):
-                raise NoMatch(
-                     _('%(result_str)s: %(result)s is not a list.') % locals())
-
-            expected = expected[:]
-            extra = []
-            for res_obj in result:
-                for i, ex_obj in enumerate(expected):
-                    try:
-                        matched_value = self._compare_result(subs, ex_obj,
-                                                             res_obj,
-                                                             result_str)
-                        del expected[i]
-                        break
-                    except NoMatch:
-                        pass
-                else:
-                    extra.append(res_obj)
-
-            error = []
-            if expected:
-                error.append(_('Extra list items in template:'))
-                error.extend([repr(o) for o in expected])
-
-            if extra:
-                error.append(_('Extra list items in %(result_str)s:')
-                             % locals())
-                error.extend([repr(o) for o in extra])
-
-            if error:
-                raise NoMatch('\n'.join(error))
-        elif isinstance(expected, basestring) and '%' in expected:
-            # NOTE(vish): escape stuff for regex
-            for char in '[]<>?':
-                expected = expected.replace(char, '\\%s' % char)
-            # NOTE(vish): special handling of subs that are not quoted. We are
-            #             expecting an int but we had to pass in a string
-            #             so the json would parse properly.
-            if expected.startswith("%(int:"):
-                result = str(result)
-                expected = expected.replace('int:', '')
-            expected = expected % subs
-            expected = '^%s$' % expected
-            match = re.match(expected, result)
-            if not match:
-                raise NoMatch(
-                    _('Values do not match:\n'
-                    'Template: %(expected)s\n%(result_str)s: %(result)s')
-                    % locals())
-            try:
-                matched_value = match.group('id')
-            except IndexError:
-                if match.groups():
-                    matched_value = match.groups()[0]
-        else:
-            if isinstance(expected, basestring):
-                # NOTE(danms): Ignore whitespace in this comparison
-                expected = expected.strip()
-                result = result.strip()
-            if expected != result:
-                raise NoMatch(
-                        _('Values do not match:\n'
-                        'Template: %(expected)s\n%(result_str)s: %(result)s')
-                        % locals())
-        return matched_value
-
-    def generalize_subs(self, subs, vanilla_regexes):
-        """Give the test a chance to modify subs after the server response
-        was verified, and before the on-disk doc/api_samples file is checked.
-        This may be needed by some tests to convert exact matches expected
-        from the server into pattern matches to verify what is in the
-        sample file.
-
-        If there are no changes to be made, subs is returned unharmed.
-        """
-        return subs
-
-    def _verify_response(self, name, subs, response, exp_code):
-        self.assertEqual(response.status, exp_code)
-        response_data = response.read()
-        response_data = self._pretty_data(response_data)
-        if not os.path.exists(self._get_template(name)):
-            self._write_template(name, response_data)
-            template_data = response_data
-        else:
-            template_data = self._read_template(name)
-
-        if (self.generate_samples and
-                not os.path.exists(self._get_sample(name))):
-            self._write_sample(name, response_data)
-            sample_data = response_data
-        else:
-            with file(self._get_sample(name)) as sample:
-                sample_data = sample.read()
-
-        try:
-            template_data = self._objectify(template_data)
-            response_data = self._objectify(response_data)
-            response_result = self._compare_result(subs, template_data,
-                                                   response_data, "Response")
-            # NOTE(danms): replace some of the subs with patterns for the
-            # doc/api_samples check, which won't have things like the
-            # correct compute host name. Also let the test do some of its
-            # own generalization, if necessary
-            vanilla_regexes = self._get_regexes()
-            subs['compute_host'] = vanilla_regexes['host_name']
-            subs['id'] = vanilla_regexes['id']
-            subs = self.generalize_subs(subs, vanilla_regexes)
-            sample_data = self._objectify(sample_data)
-            self._compare_result(subs, template_data, sample_data, "Sample")
-            return response_result
-        except NoMatch:
-            raise
-
-    def _get_host(self):
-        return 'http://openstack.example.com'
-
-    def _get_glance_host(self):
-        return 'http://glance.openstack.example.com'
-
-    def _get_regexes(self):
-        if self.ctype == 'json':
-            text = r'(\\"|[^"])*'
-        else:
-            text = r'[^<]*'
-        return {
-            # NOTE(treinish): Could result in a false positive, but it
-            # shouldn't be an issue for this case.
-            'timestamp': '\d{4}-[0,1]\d-[0-3]\d[ ,T]'
-                         '\d{2}:\d{2}:\d{2}'
-                         '(Z|(\+|-)\d{2}:\d{2}|\.\d{6}|)',
-            'password': '[0-9a-zA-Z]{1,12}',
-            'ip': '[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}',
-            'ip6': '([0-9a-zA-Z]{1,4}:){1,7}:?[0-9a-zA-Z]{1,4}',
-            'id': '(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}'
-                  '-[0-9a-f]{4}-[0-9a-f]{12})',
-            'uuid': '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}'
-                    '-[0-9a-f]{4}-[0-9a-f]{12}',
-            'reservation_id': 'r-[0-9a-zA-Z]{8}',
-            'private_key': '-----BEGIN RSA PRIVATE KEY-----'
-                           '[a-zA-Z0-9\n/+=]*'
-                           '-----END RSA PRIVATE KEY-----',
-            'public_key': 'ssh-rsa[ a-zA-Z0-9/+=]*'
-                          'Generated by Nova',
-            'fingerprint': '([0-9a-f]{2}:){15}[0-9a-f]{2}',
-#            '[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:'
-#                           '[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:'
-#                           '[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:'
-#                           '[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}',
-            'host': self._get_host(),
-            'host_name': '[0-9a-z]{32}',
-            'glance_host': self._get_glance_host(),
-            'compute_host': self.compute.host,
-            'text': text,
-            'int': '[0-9]+',
-        }
-
-    def _get_response(self, url, method, body=None, strip_version=False):
-        headers = {}
-        headers['Content-Type'] = 'application/' + self.ctype
-        headers['Accept'] = 'application/' + self.ctype
-        return self.api.api_request(url, body=body, method=method,
-                headers=headers, strip_version=strip_version)
-
-    def _do_get(self, url, strip_version=False):
-        return self._get_response(url, 'GET', strip_version=strip_version)
-
-    def _do_post(self, url, name, subs, method='POST'):
-        body = self._read_template(name) % subs
-        sample = self._get_sample(name)
-        if self.generate_samples and not os.path.exists(sample):
-                self._write_sample(name, body)
-        return self._get_response(url, method, body)
-
-    def _do_put(self, url, name, subs):
-        return self._do_post(url, name, subs, method='PUT')
-
-    def _do_delete(self, url):
-        return self._get_response(url, 'DELETE')
-
-
-class ApiSamplesTrap(ApiSampleTestBase):
+class ApiSamplesTrap(ApiSampleTestBaseV2):
     """Make sure extensions don't get added without tests."""
 
     all_extensions = True
@@ -438,7 +153,7 @@ class ApiSamplesTrap(ApiSampleTestBase):
         self.assertEqual(missing_tests, [])
 
 
-class VersionsSampleJsonTest(ApiSampleTestBase):
+class VersionsSampleJsonTest(ApiSampleTestBaseV2):
     def test_versions_get(self):
         response = self._do_get('', strip_version=True)
         subs = self._get_regexes()
@@ -449,7 +164,7 @@ class VersionsSampleXmlTest(VersionsSampleJsonTest):
     ctype = 'xml'
 
 
-class ServersSampleBase(ApiSampleTestBase):
+class ServersSampleBase(ApiSampleTestBaseV2):
     def _post_server(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
@@ -599,7 +314,7 @@ class ServersIpsXmlTest(ServersIpsJsonTest):
     ctype = 'xml'
 
 
-class ExtensionsSampleJsonTest(ApiSampleTestBase):
+class ExtensionsSampleJsonTest(ApiSampleTestBaseV2):
     all_extensions = True
 
     def test_extensions_get(self):
@@ -612,7 +327,7 @@ class ExtensionsSampleXmlTest(ExtensionsSampleJsonTest):
     ctype = 'xml'
 
 
-class FlavorsSampleJsonTest(ApiSampleTestBase):
+class FlavorsSampleJsonTest(ApiSampleTestBaseV2):
 
     def test_flavors_get(self):
         response = self._do_get('flavors/1')
@@ -629,7 +344,7 @@ class FlavorsSampleXmlTest(FlavorsSampleJsonTest):
     ctype = 'xml'
 
 
-class HostsSampleJsonTest(ApiSampleTestBase):
+class HostsSampleJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.hosts.Hosts"
 
     def test_host_startup(self):
@@ -676,7 +391,7 @@ class FlavorsSampleAllExtensionXmlTest(FlavorsSampleXmlTest):
     all_extensions = True
 
 
-class ImagesSampleJsonTest(ApiSampleTestBase):
+class ImagesSampleJsonTest(ApiSampleTestBaseV2):
     def test_images_list(self):
         # Get api sample of images get list request.
         response = self._do_get('images')
@@ -744,7 +459,7 @@ class ImagesSampleXmlTest(ImagesSampleJsonTest):
     ctype = 'xml'
 
 
-class LimitsSampleJsonTest(ApiSampleTestBase):
+class LimitsSampleJsonTest(ApiSampleTestBaseV2):
     def test_limits_get(self):
         response = self._do_get('limits')
         subs = self._get_regexes()
@@ -755,7 +470,7 @@ class LimitsSampleXmlTest(LimitsSampleJsonTest):
     ctype = 'xml'
 
 
-class CoverageExtJsonTests(ApiSampleTestBase):
+class CoverageExtJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.coverage_ext."
                       "Coverage_ext")
 
@@ -927,7 +642,7 @@ class ServerStartStopXmlTest(ServerStartStopJsonTest):
     ctype = 'xml'
 
 
-class UserDataJsonTest(ApiSampleTestBase):
+class UserDataJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.user_data.User_data"
 
     def test_user_data_post(self):
@@ -948,7 +663,7 @@ class UserDataXmlTest(UserDataJsonTest):
     ctype = 'xml'
 
 
-class FlavorsExtraDataJsonTest(ApiSampleTestBase):
+class FlavorsExtraDataJsonTest(ApiSampleTestBaseV2):
     extension_name = ('nova.api.openstack.compute.contrib.flavorextradata.'
                       'Flavorextradata')
 
@@ -994,7 +709,7 @@ class FlavorsExtraDataXmlTest(FlavorsExtraDataJsonTest):
     ctype = 'xml'
 
 
-class FlavorRxtxJsonTest(ApiSampleTestBase):
+class FlavorRxtxJsonTest(ApiSampleTestBaseV2):
     extension_name = ('nova.api.openstack.compute.contrib.flavor_rxtx.'
                       'Flavor_rxtx')
 
@@ -1037,7 +752,7 @@ class FlavorRxtxXmlTest(FlavorRxtxJsonTest):
     ctype = 'xml'
 
 
-class FlavorSwapJsonTest(ApiSampleTestBase):
+class FlavorSwapJsonTest(ApiSampleTestBaseV2):
     extension_name = ('nova.api.openstack.compute.contrib.flavor_swap.'
                       'Flavor_swap')
 
@@ -1185,7 +900,7 @@ class SecurityGroupDefaultRulesSampleXmlTest(
     ctype = 'xml'
 
 
-class SchedulerHintsJsonTest(ApiSampleTestBase):
+class SchedulerHintsJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.scheduler_hints."
                      "Scheduler_hints")
 
@@ -1253,7 +968,7 @@ class ExtendedServerAttributesXmlTest(ExtendedServerAttributesJsonTest):
     ctype = 'xml'
 
 
-class FloatingIpsJsonTest(ApiSampleTestBase):
+class FloatingIpsJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib." \
         "floating_ips.Floating_ips"
 
@@ -1351,7 +1066,7 @@ class ExtendedFloatingIpsXmlTest(ExtendedFloatingIpsJsonTest):
     ctype = 'xml'
 
 
-class FloatingIpsBulkJsonTest(ApiSampleTestBase):
+class FloatingIpsBulkJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib." \
         "floating_ips_bulk.Floating_ips_bulk"
 
@@ -1421,7 +1136,7 @@ class FloatingIpsBulkXmlTest(FloatingIpsBulkJsonTest):
     ctype = 'xml'
 
 
-class KeyPairsSampleJsonTest(ApiSampleTestBase):
+class KeyPairsSampleJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.keypairs.Keypairs"
 
     def generalize_subs(self, subs, vanilla_regexes):
@@ -1575,7 +1290,7 @@ class VirtualInterfacesXmlTest(VirtualInterfacesJsonTest):
     ctype = 'xml'
 
 
-class CloudPipeSampleJsonTest(ApiSampleTestBase):
+class CloudPipeSampleJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.cloudpipe.Cloudpipe"
 
     def setUp(self):
@@ -1624,7 +1339,7 @@ class CloudPipeSampleXmlTest(CloudPipeSampleJsonTest):
     ctype = "xml"
 
 
-class CloudPipeUpdateJsonTest(ApiSampleTestBase):
+class CloudPipeUpdateJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib"
                       ".cloudpipe_update.Cloudpipe_update")
 
@@ -1649,7 +1364,7 @@ class CloudPipeUpdateXmlTest(CloudPipeUpdateJsonTest):
     ctype = "xml"
 
 
-class AgentsJsonTest(ApiSampleTestBase):
+class AgentsJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.agents.Agents"
 
     def _get_flags(self):
@@ -1749,7 +1464,7 @@ class AgentsXmlTest(AgentsJsonTest):
     ctype = "xml"
 
 
-class FixedIpJsonTest(ApiSampleTestBase):
+class FixedIpJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.fixed_ips.Fixed_ips"
 
     def _get_flags(self):
@@ -1901,7 +1616,7 @@ class AggregatesSampleXmlTest(AggregatesSampleJsonTest):
     ctype = 'xml'
 
 
-class CertificatesSamplesJsonTest(ApiSampleTestBase):
+class CertificatesSamplesJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.certificates."
                       "Certificates")
 
@@ -1921,7 +1636,7 @@ class CertificatesSamplesXmlTest(CertificatesSamplesJsonTest):
     ctype = 'xml'
 
 
-class UsedLimitsSamplesJsonTest(ApiSampleTestBase):
+class UsedLimitsSamplesJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.used_limits."
                       "Used_limits")
 
@@ -1936,7 +1651,7 @@ class UsedLimitsSamplesXmlTest(UsedLimitsSamplesJsonTest):
     ctype = "xml"
 
 
-class UsedLimitsForAdminSamplesJsonTest(ApiSampleTestBase):
+class UsedLimitsForAdminSamplesJsonTest(ApiSampleTestBaseV2):
     extends_name = ("nova.api.openstack.compute.contrib.used_limits."
                     "Used_limits")
     extension_name = (
@@ -1988,7 +1703,7 @@ class MultipleCreateXmlTest(MultipleCreateJsonTest):
     ctype = 'xml'
 
 
-class ServicesJsonTest(ApiSampleTestBase):
+class ServicesJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.services.Services"
 
     def setUp(self):
@@ -2044,7 +1759,8 @@ class ServicesJsonTest(ApiSampleTestBase):
         Return a list of all running services with the disable reason
         information if that exists.
         """
-        self.stubs.Set(ext_mgr, "is_loaded", self.fake_load)
+        self.stubs.Set(extensions.ExtensionManager, "is_loaded",
+                self.fake_load)
         response = self._do_get('os-services')
         self.assertEqual(response.status, 200)
         subs = {'binary': 'nova-compute',
@@ -2058,7 +1774,8 @@ class ServicesJsonTest(ApiSampleTestBase):
 
     def test_service_disable_log_reason(self):
         """Disable an existing service and log the reason."""
-        self.stubs.Set(ext_mgr, "is_loaded", self.fake_load)
+        self.stubs.Set(extensions.ExtensionManager, "is_loaded",
+                self.fake_load)
         subs = {"host": "host1",
                 'binary': 'nova-compute',
                 'disabled_reason': 'test2'}
@@ -2072,7 +1789,7 @@ class ServicesXmlTest(ServicesJsonTest):
     ctype = 'xml'
 
 
-class ExtendedServicesJsonTest(ApiSampleTestBase):
+class ExtendedServicesJsonTest(ApiSampleTestBaseV2):
     """
     This extension is extending the functionalities of the
     Services extension so the funcionalities introduced by this extension
@@ -2095,12 +1812,17 @@ class SimpleTenantUsageSampleJsonTest(ServersSampleBase):
     def setUp(self):
         """setUp method for simple tenant usage."""
         super(SimpleTenantUsageSampleJsonTest, self).setUp()
+
+        started = timeutils.utcnow()
+        now = started + datetime.timedelta(hours=1)
+
+        timeutils.set_time_override(started)
         self._post_server()
-        timeutils.set_time_override(timeutils.utcnow() +
-                                    datetime.timedelta(hours=1))
+        timeutils.set_time_override(now)
+
         self.query = {
-            'start': str(timeutils.utcnow() - datetime.timedelta(hours=1)),
-            'end': str(timeutils.utcnow())
+            'start': str(started),
+            'end': str(now)
         }
 
     def tearDown(self):
@@ -2241,7 +1963,7 @@ class AdminActionsSamplesJsonTest(ServersSampleBase):
             # NOTE(maurosr): I've added this simple stub cause backup action
             # was trapped in infinite loop during fetch image phase since the
             # fake Image Service always returns the same set of images
-            return None
+            return []
 
         self.stubs.Set(fake._FakeImageService, 'detail', image_details)
 
@@ -2251,13 +1973,15 @@ class AdminActionsSamplesJsonTest(ServersSampleBase):
 
     def test_post_live_migrate_server(self):
         # Get api samples to server live migrate request.
-        def fake_live_migration(self, context, instance, dest,
-                                block_migration, disk_over_commit):
-            return
+        def fake_live_migrate(_self, context, instance, scheduler_hint,
+                              block_migration, disk_over_commit):
+            self.assertEqual(self.uuid, instance["uuid"])
+            host = scheduler_hint["host"]
+            self.assertEqual(self.compute.host, host)
 
-        self.stubs.Set(scheduler_manager.SchedulerManager,
-                       'live_migration',
-                       fake_live_migration)
+        self.stubs.Set(conductor_manager.ComputeTaskManager,
+                       '_live_migrate',
+                       fake_live_migrate)
 
         def fake_get_compute(context, host):
             service = dict(host=host,
@@ -2353,7 +2077,7 @@ class DeferredDeleteSampleXmlTests(DeferredDeleteSampleJsonTests):
         ctype = 'xml'
 
 
-class QuotasSampleJsonTests(ApiSampleTestBase):
+class QuotasSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.quotas.Quotas"
 
     def test_show_quotas(self):
@@ -2379,7 +2103,7 @@ class QuotasSampleXmlTests(QuotasSampleJsonTests):
     ctype = "xml"
 
 
-class ExtendedQuotasSampleJsonTests(ApiSampleTestBase):
+class ExtendedQuotasSampleJsonTests(ApiSampleTestBaseV2):
     extends_name = "nova.api.openstack.compute.contrib.quotas.Quotas"
     extension_name = ("nova.api.openstack.compute.contrib"
                       ".extended_quotas.Extended_quotas")
@@ -2400,6 +2124,40 @@ class ExtendedQuotasSampleJsonTests(ApiSampleTestBase):
 
 
 class ExtendedQuotasSampleXmlTests(ExtendedQuotasSampleJsonTests):
+    ctype = "xml"
+
+
+class UserQuotasSampleJsonTests(ApiSampleTestBaseV2):
+    extends_name = "nova.api.openstack.compute.contrib.quotas.Quotas"
+    extension_name = ("nova.api.openstack.compute.contrib"
+                      ".user_quotas.User_quotas")
+
+    def fake_load(self, *args):
+        return True
+
+    def test_show_quotas_for_user(self):
+        # Get api sample to show quotas for user.
+        response = self._do_get('os-quota-sets/fake_tenant?user_id=1')
+        self._verify_response('user-quotas-show-get-resp', {}, response, 200)
+
+    def test_delete_quotas_for_user(self):
+        # Get api sample to delete quota for user.
+        self.stubs.Set(extensions.ExtensionManager, "is_loaded",
+                self.fake_load)
+        response = self._do_delete('os-quota-sets/fake_tenant?user_id=1')
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
+
+    def test_update_quotas_for_user(self):
+        # Get api sample to update quotas for user.
+        response = self._do_put('os-quota-sets/fake_tenant?user_id=1',
+                                'user-quotas-update-post-req',
+                                {})
+        return self._verify_response('user-quotas-update-post-resp', {},
+                                     response, 200)
+
+
+class UserQuotasSampleXmlTests(UserQuotasSampleJsonTests):
     ctype = "xml"
 
 
@@ -2565,7 +2323,7 @@ class ExtendedVIFNetSampleXmlTests(ExtendedIpsSampleJsonTests):
         ctype = 'xml'
 
 
-class FlavorManageSampleJsonTests(ApiSampleTestBase):
+class FlavorManageSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.flavormanage."
                       "Flavormanage")
 
@@ -2696,7 +2454,7 @@ class DiskConfigXmlTest(DiskConfigJsonTest):
         ctype = 'xml'
 
 
-class OsNetworksJsonTests(ApiSampleTestBase):
+class OsNetworksJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.os_tenant_networks"
                       ".Os_tenant_networks")
 
@@ -2743,7 +2501,7 @@ class OsNetworksXmlTests(OsNetworksJsonTests):
         self.assertEqual(response.status, 202)
 
 
-class NetworksJsonTests(ApiSampleTestBase):
+class NetworksJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib"
                       ".os_networks.Os_networks")
 
@@ -2796,7 +2554,7 @@ class NetworksXmlTests(NetworksJsonTests):
     ctype = 'xml'
 
 
-class NetworksAssociateJsonTests(ApiSampleTestBase):
+class NetworksAssociateJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib"
                                      ".networks_associate.Networks_associate")
 
@@ -2849,7 +2607,7 @@ class NetworksAssociateXmlTests(NetworksAssociateJsonTests):
     ctype = 'xml'
 
 
-class FlavorDisabledSampleJsonTests(ApiSampleTestBase):
+class FlavorDisabledSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.flavor_disabled."
                       "Flavor_disabled")
 
@@ -2872,7 +2630,7 @@ class FlavorDisabledSampleXmlTests(FlavorDisabledSampleJsonTests):
     ctype = "xml"
 
 
-class QuotaClassesSampleJsonTests(ApiSampleTestBase):
+class QuotaClassesSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.quota_classes."
                       "Quota_classes")
     set_id = 'test_class'
@@ -2897,7 +2655,7 @@ class QuotaClassesSampleXmlTests(QuotaClassesSampleJsonTests):
     ctype = "xml"
 
 
-class CellsSampleJsonTest(ApiSampleTestBase):
+class CellsSampleJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.cells.Cells"
 
     def setUp(self):
@@ -2954,7 +2712,7 @@ class CellsSampleXmlTest(CellsSampleJsonTest):
     ctype = 'xml'
 
 
-class CellsCapacitySampleJsonTest(ApiSampleTestBase):
+class CellsCapacitySampleJsonTest(ApiSampleTestBaseV2):
     extends_name = ("nova.api.openstack.compute.contrib.cells.Cells")
     extension_name = ("nova.api.openstack.compute.contrib."
                          "cell_capacities.Cell_capacities")
@@ -3002,7 +2760,7 @@ class CellsCapacitySampleXmlTest(CellsCapacitySampleJsonTest):
     ctype = 'xml'
 
 
-class BareMetalNodesJsonTest(ApiSampleTestBase, bm_db_base.BMDBTestCase):
+class BareMetalNodesJsonTest(ApiSampleTestBaseV2, bm_db_base.BMDBTestCase):
     extension_name = ('nova.api.openstack.compute.contrib.baremetal_nodes.'
                       'Baremetal_nodes')
 
@@ -3084,7 +2842,31 @@ class BareMetalNodesXmlTest(BareMetalNodesJsonTest):
     ctype = 'xml'
 
 
-class FloatingIPPoolsSampleJsonTests(ApiSampleTestBase):
+class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
+    extension_name = ('nova.api.openstack.compute.contrib.'
+                      'block_device_mapping_v2_boot.'
+                      'Block_device_mapping_v2_boot')
+
+    def _get_flags(self):
+        f = super(BlockDeviceMappingV2BootJsonTest, self)._get_flags()
+        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
+        # We need the volumes extension as well
+        f['osapi_compute_extension'].append(
+            'nova.api.openstack.compute.contrib.volumes.Volumes')
+        return f
+
+    def test_servers_post_with_bdm_v2(self):
+        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
+        self.stubs.Set(cinder.API, 'check_attach',
+                       fakes.stub_volume_check_attach)
+        return self._post_server()
+
+
+class BlockDeviceMappingV2BootXmlTest(BlockDeviceMappingV2BootJsonTest):
+    ctype = 'xml'
+
+
+class FloatingIPPoolsSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.floating_ip_pools."
                       "Floating_ip_pools")
 
@@ -3112,18 +2894,31 @@ class FloatingIPPoolsSampleXmlTests(FloatingIPPoolsSampleJsonTests):
 class MultinicSampleJsonTest(ServersSampleBase):
     extension_name = "nova.api.openstack.compute.contrib.multinic.Multinic"
 
+    def _disable_instance_dns_manager(self):
+        # NOTE(markmc): it looks like multinic and instance_dns_manager are
+        #               incompatible. See:
+        #               https://bugs.launchpad.net/nova/+bug/1213251
+        self.flags(
+            instance_dns_manager='nova.network.noop_dns_driver.NoopDNSDriver')
+
     def setUp(self):
+        self._disable_instance_dns_manager()
         super(MultinicSampleJsonTest, self).setUp()
         self.uuid = self._post_server()
 
-    def test_add_fixed_ip(self):
+    def _add_fixed_ip(self):
         subs = {"networkId": 1}
         response = self._do_post('servers/%s/action' % (self.uuid),
                                  'multinic-add-fixed-ip-req', subs)
         self.assertEqual(response.status, 202)
 
+    def test_add_fixed_ip(self):
+        self._add_fixed_ip()
+
     def test_remove_fixed_ip(self):
-        subs = {"ip": "10.0.0.2"}
+        self._add_fixed_ip()
+
+        subs = {"ip": "10.0.0.4"}
         response = self._do_post('servers/%s/action' % (self.uuid),
                                  'multinic-remove-fixed-ip-req', subs)
         self.assertEqual(response.status, 202)
@@ -3133,7 +2928,7 @@ class MultinicSampleXmlTest(MultinicSampleJsonTest):
     ctype = "xml"
 
 
-class InstanceUsageAuditLogJsonTest(ApiSampleTestBase):
+class InstanceUsageAuditLogJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib."
                       "instance_usage_audit_log.Instance_usage_audit_log")
 
@@ -3157,7 +2952,7 @@ class InstanceUsageAuditLogXmlTest(InstanceUsageAuditLogJsonTest):
     ctype = "xml"
 
 
-class FlavorExtraSpecsSampleJsonTests(ApiSampleTestBase):
+class FlavorExtraSpecsSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.flavorextraspecs."
                       "Flavorextraspecs")
 
@@ -3270,7 +3065,7 @@ class EvacuateJsonTest(ServersSampleBase):
         uuid = self._post_server()
 
         req_subs = {
-            'host': 'TargetHost',
+            'host': self.compute.host,
             "adminPass": "MySecretPass",
             "onSharedStorage": 'False'
         }
@@ -3279,8 +3074,18 @@ class EvacuateJsonTest(ServersSampleBase):
             """Simulate validation of instance host is down."""
             return False
 
+        def fake_service_get_by_compute_host(self, context, host):
+            """Simulate that given host is a valid host."""
+            return {
+                    'host_name': host,
+                    'service': 'compute',
+                    'zone': 'nova'
+                    }
+
         self.stubs.Set(service_group_api.API, 'service_is_up',
                        fake_service_is_up)
+        self.stubs.Set(compute_api.HostAPI, 'service_get_by_compute_host',
+                       fake_service_get_by_compute_host)
 
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-evacuate-req', req_subs)
@@ -3292,7 +3097,7 @@ class EvacuateXmlTest(EvacuateJsonTest):
     ctype = 'xml'
 
 
-class FloatingIpDNSJsonTest(ApiSampleTestBase):
+class FloatingIpDNSJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.floating_ip_dns."
                       "Floating_ip_dns")
 
@@ -3373,7 +3178,7 @@ class FloatingIpDNSXmlTest(FloatingIpDNSJsonTest):
     ctype = 'xml'
 
 
-class InstanceActionsSampleJsonTest(ApiSampleTestBase):
+class InstanceActionsSampleJsonTest(ApiSampleTestBaseV2):
     extension_name = ('nova.api.openstack.compute.contrib.instance_actions.'
                       'Instance_actions')
 
@@ -3440,7 +3245,7 @@ class InstanceActionsSampleXmlTest(InstanceActionsSampleJsonTest):
         ctype = 'xml'
 
 
-class ImageSizeSampleJsonTests(ApiSampleTestBase):
+class ImageSizeSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib"
                       ".image_size.Image_size")
 
@@ -3498,7 +3303,7 @@ class ConfigDriveSampleXmlTest(ConfigDriveSampleJsonTest):
     ctype = 'xml'
 
 
-class FlavorAccessSampleJsonTests(ApiSampleTestBase):
+class FlavorAccessSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.flavor_access."
                       "Flavor_access")
 
@@ -3581,7 +3386,7 @@ class FlavorAccessSampleXmlTests(FlavorAccessSampleJsonTests):
     ctype = 'xml'
 
 
-class HypervisorsSampleJsonTests(ApiSampleTestBase):
+class HypervisorsSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.hypervisors."
                       "Hypervisors")
 
@@ -3626,6 +3431,40 @@ class HypervisorsSampleJsonTests(ApiSampleTestBase):
 
 
 class HypervisorsSampleXmlTests(HypervisorsSampleJsonTests):
+    ctype = "xml"
+
+
+class HypervisorsCellsSampleJsonTests(ApiSampleTestBaseV2):
+    extension_name = ("nova.api.openstack.compute.contrib.hypervisors."
+                      "Hypervisors")
+
+    def setUp(self):
+        self.flags(enable=True, cell_type='api', group='cells')
+        super(HypervisorsCellsSampleJsonTests, self).setUp()
+
+    def test_hypervisor_uptime(self):
+        fake_hypervisor = {'service': {'host': 'fake-mini'}, 'id': 1,
+                           'hypervisor_hostname': 'fake-mini'}
+
+        def fake_get_host_uptime(self, context, hyp):
+            return (" 08:32:11 up 93 days, 18:25, 12 users,  load average:"
+                    " 0.20, 0.12, 0.14")
+
+        def fake_compute_node_get(self, context, hyp):
+            return fake_hypervisor
+
+        self.stubs.Set(cells_api.HostAPI, 'compute_node_get',
+                       fake_compute_node_get)
+
+        self.stubs.Set(cells_api.HostAPI,
+                       'get_host_uptime', fake_get_host_uptime)
+        hypervisor_id = fake_hypervisor['id']
+        response = self._do_get('os-hypervisors/%s/uptime' % hypervisor_id)
+        subs = {'hypervisor_id': hypervisor_id}
+        self._verify_response('hypervisors-uptime-resp', subs, response, 200)
+
+
+class HypervisorsCellsSampleXmlTests(HypervisorsCellsSampleJsonTests):
     ctype = "xml"
 
 
@@ -3799,7 +3638,7 @@ class AttachInterfacesSampleXmlTest(AttachInterfacesSampleJsonTest):
     ctype = 'xml'
 
 
-class SnapshotsSampleJsonTests(ApiSampleTestBase):
+class SnapshotsSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.volumes.Volumes"
 
     create_subs = {
@@ -3861,33 +3700,48 @@ class SnapshotsSampleXmlTests(SnapshotsSampleJsonTests):
     ctype = "xml"
 
 
-class VolumeAttachmentsSampleJsonTest(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib.volumes.Volumes")
+class AssistedVolumeSnapshotsJsonTest(ApiSampleTestBaseV2):
+    """Assisted volume snapshots."""
+    extension_name = ("nova.api.openstack.compute.contrib."
+                      "assisted_volume_snapshots.Assisted_volume_snapshots")
 
-    def test_attach_volume_to_server(self):
-        device_name = '/dev/vdd'
-        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
-        self.stubs.Set(cinder.API, 'check_attach', lambda *a, **k: None)
-        self.stubs.Set(cinder.API, 'reserve_volume', lambda *a, **k: None)
-        self.stubs.Set(compute_manager.ComputeManager,
-                       "reserve_block_device_name",
-                       lambda *a, **k: device_name)
+    def _create_assisted_snapshot(self, subs):
+        self.stubs.Set(compute_api.API, 'volume_snapshot_create',
+                       fakes.stub_compute_volume_snapshot_create)
 
-        volume = fakes.stub_volume_get(None, context.get_admin_context(),
-                                       'a26887c6-c47b-4654-abb5-dfadf7d3f803')
+        response = self._do_post("os-assisted-volume-snapshots",
+                                 "snapshot-create-assisted-req",
+                                 subs)
+        return response
+
+    def test_snapshots_create_assisted(self):
         subs = {
-            'volume_id': volume['id'],
-            'device': device_name
+            'snapshot_name': 'snap-001',
+            'description': 'Daily backup',
+            'volume_id': '521752a6-acf6-4b2d-bc7a-119f9148cd8c'
         }
-        server_id = self._post_server()
-        response = self._do_post('servers/%s/os-volume_attachments'
-                                 % server_id,
-                                 'attach-volume-to-server-req', subs)
-
         subs.update(self._get_regexes())
-        self._verify_response('attach-volume-to-server-resp', subs,
-                              response, 200)
+        response = self._create_assisted_snapshot(subs)
+        self._verify_response("snapshot-create-assisted-resp",
+                              subs, response, 200)
 
+    def test_snapshots_delete_assisted(self):
+        self.stubs.Set(compute_api.API, 'volume_snapshot_delete',
+                       fakes.stub_compute_volume_snapshot_delete)
+        snapshot_id = '100'
+        response = self._do_delete(
+                'os-assisted-volume-snapshots/%s?delete_info='
+                '{"volume_id":"521752a6-acf6-4b2d-bc7a-119f9148cd8c"}'
+                % snapshot_id)
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.read(), '')
+
+
+class AssistedVolumeSnapshotsXmlTest(AssistedVolumeSnapshotsJsonTest):
+    ctype = "xml"
+
+
+class VolumeAttachmentsSampleBase(ServersSampleBase):
     def _stub_compute_api_get_instance_bdms(self, server_id):
 
         def fake_compute_api_get_instance_bdms(self, context, instance):
@@ -3906,10 +3760,42 @@ class VolumeAttachmentsSampleJsonTest(ServersSampleBase):
 
     def _stub_compute_api_get(self):
 
-        def fake_compute_api_get(self, context, instance_id):
+        def fake_compute_api_get(self, context, instance_id,
+                                 want_objects=False):
             return {'uuid': instance_id}
 
         self.stubs.Set(compute_api.API, 'get', fake_compute_api_get)
+
+
+class VolumeAttachmentsSampleJsonTest(VolumeAttachmentsSampleBase):
+    extension_name = ("nova.api.openstack.compute.contrib.volumes.Volumes")
+
+    def test_attach_volume_to_server(self):
+        device_name = '/dev/vdd'
+        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
+        self.stubs.Set(cinder.API, 'check_attach', lambda *a, **k: None)
+        self.stubs.Set(cinder.API, 'reserve_volume', lambda *a, **k: None)
+        self.stubs.Set(compute_manager.ComputeManager,
+                       "reserve_block_device_name",
+                       lambda *a, **k: device_name)
+        self.stubs.Set(compute_manager.ComputeManager,
+                       'attach_volume',
+                       lambda *a, **k: None)
+
+        volume = fakes.stub_volume_get(None, context.get_admin_context(),
+                                       'a26887c6-c47b-4654-abb5-dfadf7d3f803')
+        subs = {
+            'volume_id': volume['id'],
+            'device': device_name
+        }
+        server_id = self._post_server()
+        response = self._do_post('servers/%s/os-volume_attachments'
+                                 % server_id,
+                                 'attach-volume-to-server-req', subs)
+
+        subs.update(self._get_regexes())
+        self._verify_response('attach-volume-to-server-resp', subs,
+                              response, 200)
 
     def test_list_volume_attachments(self):
         server_id = self._post_server()
@@ -3947,6 +3833,35 @@ class VolumeAttachmentsSampleJsonTest(ServersSampleBase):
 
 
 class VolumeAttachmentsSampleXmlTest(VolumeAttachmentsSampleJsonTest):
+    ctype = 'xml'
+
+
+class VolumeAttachUpdateSampleJsonTest(VolumeAttachmentsSampleBase):
+    extends_name = ("nova.api.openstack.compute.contrib.volumes.Volumes")
+    extension_name = ("nova.api.openstack.compute.contrib."
+                      "volume_attachment_update.Volume_attachment_update")
+
+    def test_volume_attachment_update(self):
+        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
+        subs = {
+            'volume_id': 'a26887c6-c47b-4654-abb5-dfadf7d3f805',
+            'device': '/dev/sdd'
+        }
+        server_id = self._post_server()
+        attach_id = 'a26887c6-c47b-4654-abb5-dfadf7d3f803'
+        self._stub_compute_api_get_instance_bdms(server_id)
+        self._stub_compute_api_get()
+        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
+        self.stubs.Set(compute_api.API, 'swap_volume', lambda *a, **k: None)
+        response = self._do_put('servers/%s/os-volume_attachments/%s'
+                                % (server_id, attach_id),
+                                'update-volume-req',
+                                subs)
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), '')
+
+
+class VolumeAttachUpdateSampleXmlTest(VolumeAttachUpdateSampleJsonTest):
     ctype = 'xml'
 
 
@@ -4059,7 +3974,7 @@ class VolumesSampleXmlTest(VolumesSampleJsonTest):
     ctype = 'xml'
 
 
-class MigrationsSamplesJsonTest(ApiSampleTestBase):
+class MigrationsSamplesJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.migrations."
                       "Migrations")
 

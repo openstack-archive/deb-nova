@@ -65,7 +65,7 @@ class BareMetalTileraTestCase(bm_db_base.BMDBTestCase):
         self.context = utils.get_test_admin_context()
         self.test_block_device_info = None,
         self.instance = utils.get_test_instance()
-        self.test_network_info = utils.get_test_network_info(),
+        self.test_network_info = utils.get_test_network_info()
         self.node_info = bm_db_utils.new_bm_node(
                 service_host='test_host',
                 cpus=4,
@@ -121,7 +121,7 @@ class TileraClassMethodsTestCase(BareMetalTileraTestCase):
                 group='baremetal',
             )
         net = utils.get_test_network_info()
-        net[0][1]['ips'][0]['ip'] = '1.2.3.4'
+        net[0]['network']['subnets'][0]['ips'][0]['address'] = '1.2.3.4'
         config = tilera.build_network_config(net)
         self.assertIn('iface eth0 inet dhcp', config)
         self.assertNotIn('address 1.2.3.4', config)
@@ -133,7 +133,7 @@ class TileraClassMethodsTestCase(BareMetalTileraTestCase):
                 group='baremetal',
             )
         net = utils.get_test_network_info()
-        net[0][1]['ips'][0]['ip'] = '1.2.3.4'
+        net[0]['network']['subnets'][0]['ips'][0]['address'] = '1.2.3.4'
         config = tilera.build_network_config(net)
         self.assertIn('iface eth0 inet static', config)
         self.assertIn('address 1.2.3.4', config)

@@ -15,18 +15,22 @@
 """Nova common internal object model"""
 
 import collections
+import copy
 
 from nova import context
 from nova import exception
 from nova.objects import utils as obj_utils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
-import nova.openstack.common.rpc.dispatcher
-import nova.openstack.common.rpc.proxy
 import nova.openstack.common.rpc.serializer
 
 
 LOG = logging.getLogger('object')
+
+
+class NotSpecifiedSentinel:
+    pass
 
 
 def get_attrname(name):
@@ -35,8 +39,18 @@ def get_attrname(name):
 
 
 def make_class_properties(cls):
-    # NOTE(danms): Inherit NovaObject's base fields only
-    cls.fields.update(NovaObject.fields)
+    # NOTE(danms/comstud): Inherit fields from super classes.
+    # mro() returns the current class first and returns 'object' last, so
+    # those can be skipped.  Also be careful to not overwrite any fields
+    # that already exist.  And make sure each cls has its own copy of
+    # fields and that it is not sharing the dict with a super class.
+    cls.fields = dict(cls.fields)
+    for supercls in cls.mro()[1:-1]:
+        if not hasattr(supercls, 'fields'):
+            continue
+        for field, typefn in supercls.fields.items():
+            if field not in cls.fields:
+                cls.fields[field] = typefn
     for name, typefn in cls.fields.iteritems():
 
         def getter(self, name=name):
@@ -173,9 +187,7 @@ class NovaObject(object):
     #            'baz': lambda x: str(x).ljust(8),
     #          }
     #
-    # NOTE(danms): The base NovaObject class' fields will be inherited
-    # by subclasses, but that is a special case. Objects inheriting from
-    # other objects will not receive this merging of fields contents.
+    # NOTE(danms): These fields will be inherited by all subclasses.
     fields = {
         'created_at': obj_utils.datetime_or_str_or_none,
         'updated_at': obj_utils.datetime_or_str_or_none,
@@ -278,6 +290,10 @@ class NovaObject(object):
         else:
             return getattr(self, attribute)
 
+    def obj_clone(self):
+        """Create a copy."""
+        return copy.deepcopy(self)
+
     def obj_to_primitive(self):
         """Simple base-case dehydration.
 
@@ -285,7 +301,7 @@ class NovaObject(object):
         """
         primitive = dict()
         for name in self.fields:
-            if hasattr(self, get_attrname(name)):
+            if self.obj_attr_is_set(name):
                 primitive[name] = self._attr_to_primitive(name)
         obj = {'nova_object.name': self.obj_name(),
                'nova_object.namespace': 'nova',
@@ -302,7 +318,7 @@ class NovaObject(object):
         be useful for future load operations.
         """
         raise NotImplementedError(
-            _("Cannot load '%(attrname)s' in the base class") % locals())
+            _("Cannot load '%s' in the base class") % attrname)
 
     def save(self, context):
         """Save the changed fields back to the store.
@@ -326,6 +342,20 @@ class NovaObject(object):
         else:
             self._changed_fields.clear()
 
+    def obj_attr_is_set(self, attrname):
+        """Test object to see if attrname is present.
+
+        Returns True if the named attribute has a value set, or
+        False if not. Raises AttributeError if attrname is not
+        a valid attribute for this object.
+        """
+        if (attrname not in self.fields and
+                attrname not in self.obj_extra_fields):
+            raise AttributeError(
+                _("%(objname)s object has no attribute '%(attrname)s'") %
+                {'objname': self.obj_name(), 'attrname': attrname})
+        return hasattr(self, get_attrname(attrname))
+
     # dictish syntactic sugar
     def iteritems(self):
         """For backwards-compatibility with dict-based objects.
@@ -333,7 +363,7 @@ class NovaObject(object):
         NOTE(danms): May be removed in the future.
         """
         for name in self.fields.keys() + self.obj_extra_fields:
-            if (hasattr(self, get_attrname(name)) or
+            if (self.obj_attr_is_set(name) or
                     name in self.obj_extra_fields):
                 yield name, getattr(self, name)
 
@@ -358,14 +388,23 @@ class NovaObject(object):
 
         NOTE(danms): May be removed in the future.
         """
-        return hasattr(self, get_attrname(name))
+        try:
+            return self.obj_attr_is_set(name)
+        except AttributeError:
+            return False
 
-    def get(self, key, value=None):
+    def get(self, key, value=NotSpecifiedSentinel):
         """For backwards-compatibility with dict-based objects.
 
         NOTE(danms): May be removed in the future.
         """
-        return self[key]
+        if key not in self.fields:
+            raise AttributeError("'%s' object has no attribute '%s'" % (
+                    self.__class__, key))
+        if value != NotSpecifiedSentinel and not self.obj_attr_is_set(key):
+            return value
+        else:
+            return self[key]
 
     def update(self, updates):
         """For backwards-compatibility with dict-base objects.
@@ -489,3 +528,26 @@ def obj_to_primitive(obj):
         return result
     else:
         return obj
+
+
+def obj_make_list(context, list_obj, item_cls, db_list, **extra_args):
+    """Construct an object list from a list of primitives.
+
+    This calls item_cls._from_db_object() on each item of db_list, and
+    adds the resulting object to list_obj.
+
+    :param:context: Request contextr
+    :param:list_obj: An ObjectListBase object
+    :param:item_cls: The NovaObject class of the objects within the list
+    :param:db_list: The list of primitives to convert to objects
+    :param:extra_args: Extra arguments to pass to _from_db_object()
+    :returns: list_obj
+    """
+    list_obj.objects = []
+    for db_item in db_list:
+        item = item_cls._from_db_object(context, item_cls(), db_item,
+                                        **extra_args)
+        list_obj.objects.append(item)
+    list_obj._context = context
+    list_obj.obj_reset_changes()
+    return list_obj

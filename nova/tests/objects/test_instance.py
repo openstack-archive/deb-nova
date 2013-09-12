@@ -13,13 +13,17 @@
 #    under the License.
 
 import datetime
+
 import iso8601
+import mox
 import netaddr
 
-from nova import context
+from nova.cells import rpcapi as cells_rpcapi
 from nova import db
-from nova.objects import base
+from nova import exception
+from nova.network import model as network_model
 from nova.objects import instance
+from nova.objects import instance_info_cache
 from nova.objects import security_group
 from nova.openstack.common import timeutils
 from nova import test
@@ -35,6 +39,7 @@ class _TestInstanceObject(object):
         fake_instance = fakes.stub_instance(id=2,
                                             access_ipv4='1.2.3.4',
                                             access_ipv6='::1')
+        fake_instance['cell_name'] = 'api!child'
         fake_instance['scheduled_at'] = None
         fake_instance['terminated_at'] = None
         fake_instance['deleted_at'] = None
@@ -46,6 +51,9 @@ class _TestInstanceObject(object):
         fake_instance['deleted'] = False
         fake_instance['info_cache']['instance_uuid'] = fake_instance['uuid']
         fake_instance['security_groups'] = None
+        fake_instance['pci_devices'] = []
+        fake_instance['user_id'] = self.context.user_id
+        fake_instance['project_id'] = self.context.project_id
         return fake_instance
 
     def test_datetime_deserialization(self):
@@ -91,56 +99,51 @@ class _TestInstanceObject(object):
         self.assertEqual(inst2.access_ip_v6, netaddr.IPAddress('::1'))
 
     def test_get_without_expected(self):
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
-        db.instance_get_by_uuid(ctxt, 'uuid', columns_to_join=[]
+        db.instance_get_by_uuid(self.context, 'uuid', columns_to_join=[]
                                 ).AndReturn(self.fake_instance)
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, 'uuid')
+        inst = instance.Instance.get_by_uuid(self.context, 'uuid')
         # Make sure these weren't loaded
         for attr in instance.INSTANCE_OPTIONAL_FIELDS:
-            attrname = base.get_attrname(attr)
-            self.assertFalse(hasattr(inst, attrname))
+            self.assertFalse(inst.obj_attr_is_set(attr))
         self.assertRemotes()
 
     def test_get_with_expected(self):
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         db.instance_get_by_uuid(
-            ctxt, 'uuid',
-            columns_to_join=['metadata', 'system_metadata']
+            self.context, 'uuid',
+            columns_to_join=['metadata', 'system_metadata', 'pci_devices']
             ).AndReturn(self.fake_instance)
         self.mox.ReplayAll()
         inst = instance.Instance.get_by_uuid(
-            ctxt, 'uuid', expected_attrs=instance.INSTANCE_OPTIONAL_FIELDS)
+            self.context, 'uuid',
+            expected_attrs=instance.INSTANCE_OPTIONAL_FIELDS)
         for attr in instance.INSTANCE_OPTIONAL_FIELDS:
-            attrname = base.get_attrname(attr)
-            self.assertTrue(hasattr(inst, attrname))
+            self.assertTrue(inst.obj_attr_is_set(attr))
         self.assertRemotes()
 
     def test_get_by_id(self):
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get')
-        db.instance_get(ctxt, 'instid', columns_to_join=[]
+        db.instance_get(self.context, 'instid', columns_to_join=[]
                         ).AndReturn(self.fake_instance)
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_id(ctxt, 'instid')
+        inst = instance.Instance.get_by_id(self.context, 'instid')
         self.assertEqual(inst.uuid, self.fake_instance['uuid'])
         self.assertRemotes()
 
     def test_load(self):
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         fake_uuid = self.fake_instance['uuid']
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
                                 ).AndReturn(self.fake_instance)
         fake_inst2 = dict(self.fake_instance,
                           system_metadata=[{'key': 'foo', 'value': 'bar'}])
-        db.instance_get_by_uuid(ctxt, fake_uuid,
+        db.instance_get_by_uuid(self.context, fake_uuid,
                                 columns_to_join=['system_metadata']
                                 ).AndReturn(fake_inst2)
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, fake_uuid)
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
         self.assertFalse(hasattr(inst, '_system_metadata'))
         sys_meta = inst.system_metadata
         self.assertEqual(sys_meta, {'foo': 'bar'})
@@ -150,15 +153,19 @@ class _TestInstanceObject(object):
         self.assertEqual(sys_meta2, {'foo': 'bar'})
         self.assertRemotes()
 
+    def test_load_invalid(self):
+        inst = instance.Instance()
+        self.assertRaises(exception.ObjectActionError,
+                          inst.obj_load_attr, 'foo')
+
     def test_get_remote(self):
         # isotime doesn't have microseconds and is always UTC
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         fake_instance = self.fake_instance
-        db.instance_get_by_uuid(ctxt, 'fake-uuid', columns_to_join=[]
+        db.instance_get_by_uuid(self.context, 'fake-uuid', columns_to_join=[]
                                 ).AndReturn(fake_instance)
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, 'fake-uuid')
+        inst = instance.Instance.get_by_uuid(self.context, 'fake-uuid')
         self.assertEqual(inst.id, fake_instance['id'])
         self.assertEqual(inst.launched_at, fake_instance['launched_at'])
         self.assertEqual(str(inst.access_ip_v4),
@@ -168,76 +175,166 @@ class _TestInstanceObject(object):
         self.assertRemotes()
 
     def test_refresh(self):
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         fake_uuid = self.fake_instance['uuid']
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
                                 ).AndReturn(dict(self.fake_instance,
                                                  host='orig-host'))
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
                                 ).AndReturn(dict(self.fake_instance,
                                                  host='new-host'))
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, fake_uuid)
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
         self.assertEqual(inst.host, 'orig-host')
         inst.refresh()
         self.assertEqual(inst.host, 'new-host')
         self.assertRemotes()
         self.assertEqual(set([]), inst.obj_what_changed())
 
-    def test_save(self):
-        ctxt = context.get_admin_context()
-        fake_inst = dict(self.fake_instance, host='oldhost')
-        fake_uuid = fake_inst['uuid']
+    def _save_test_helper(self, cell_type, save_kwargs):
+        """Common code for testing save() for cells/non-cells."""
+        if cell_type:
+            self.flags(enable=True, cell_type=cell_type, group='cells')
+        else:
+            self.flags(enable=False, group='cells')
+
+        old_ref = dict(self.fake_instance, host='oldhost', user_data='old',
+                       vm_state='old', task_state='old')
+        fake_uuid = old_ref['uuid']
+
+        expected_updates = dict(vm_state='meow', task_state='wuff',
+                                user_data='new')
+
+        new_ref = dict(old_ref, host='newhost', **expected_updates)
+        exp_vm_state = save_kwargs.get('expected_vm_state')
+        exp_task_state = save_kwargs.get('expected_task_state')
+        admin_reset = save_kwargs.get('admin_state_reset', False)
+        if exp_vm_state:
+            expected_updates['expected_vm_state'] = exp_vm_state
+        if exp_task_state:
+            expected_updates['expected_task_state'] = exp_task_state
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(db, 'instance_info_cache_update')
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
-                                ).AndReturn(fake_inst)
+        cells_api_mock = self.mox.CreateMock(cells_rpcapi.CellsAPI)
+        self.mox.StubOutWithMock(cells_api_mock,
+                                 'instance_update_at_top')
+        self.mox.StubOutWithMock(cells_api_mock,
+                                 'instance_update_from_api')
+        self.mox.StubOutWithMock(cells_rpcapi, 'CellsAPI',
+                                 use_mock_anything=True)
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
+                                ).AndReturn(old_ref)
         db.instance_update_and_get_original(
-            ctxt, fake_uuid, {'user_data': 'foo'}).AndReturn(
-                (fake_inst, dict(fake_inst, host='newhost')))
+                self.context, fake_uuid, expected_updates,
+                update_cells=False,
+                columns_to_join=[]).AndReturn((old_ref, new_ref))
+        if cell_type == 'api':
+            cells_rpcapi.CellsAPI().AndReturn(cells_api_mock)
+            cells_api_mock.instance_update_from_api(
+                    self.context, mox.IsA(instance.Instance),
+                    exp_vm_state, exp_task_state, admin_reset)
+        elif cell_type == 'compute':
+            cells_rpcapi.CellsAPI().AndReturn(cells_api_mock)
+            cells_api_mock.instance_update_at_top(self.context, new_ref)
+
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, fake_uuid)
-        inst.user_data = 'foo'
-        inst.save()
-        self.assertEqual(inst.host, 'newhost')
+
+        inst = instance.Instance.get_by_uuid(self.context, old_ref['uuid'])
+        self.assertEqual('old', inst.task_state)
+        self.assertEqual('old', inst.vm_state)
+        self.assertEqual('old', inst.user_data)
+        inst.vm_state = 'meow'
+        inst.task_state = 'wuff'
+        inst.user_data = 'new'
+        inst.save(**save_kwargs)
+        self.assertEqual('newhost', inst.host)
+        self.assertEqual('meow', inst.vm_state)
+        self.assertEqual('wuff', inst.task_state)
+        self.assertEqual('new', inst.user_data)
+        self.assertEqual(set([]), inst.obj_what_changed())
+
+    def test_save(self):
+        self._save_test_helper(None, {})
+
+    def test_save_in_api_cell(self):
+        self._save_test_helper('api', {})
+
+    def test_save_in_compute_cell(self):
+        self._save_test_helper('compute', {})
+
+    def test_save_exp_vm_state(self):
+        self._save_test_helper(None, {'expected_vm_state': ['meow']})
+
+    def test_save_exp_task_state(self):
+        self._save_test_helper(None, {'expected_task_state': ['meow']})
+
+    def test_save_exp_vm_state_api_cell(self):
+        self._save_test_helper('api', {'expected_vm_state': ['meow']})
+
+    def test_save_exp_task_state_api_cell(self):
+        self._save_test_helper('api', {'expected_task_state': ['meow']})
+
+    def test_save_exp_task_state_api_cell_admin_reset(self):
+        self._save_test_helper('api', {'admin_state_reset': True})
 
     def test_get_deleted(self):
-        ctxt = context.get_admin_context()
         fake_inst = dict(self.fake_instance, id=123, deleted=123)
         fake_uuid = fake_inst['uuid']
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
                                 ).AndReturn(fake_inst)
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, fake_uuid)
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
         # NOTE(danms): Make sure it's actually a bool
         self.assertEqual(inst.deleted, True)
 
+    def test_get_not_cleaned(self):
+        fake_inst = dict(self.fake_instance, id=123, cleaned=None)
+        fake_uuid = fake_inst['uuid']
+        self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
+                                ).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
+        # NOTE(mikal): Make sure it's actually a bool
+        self.assertEqual(inst.cleaned, False)
+
+    def test_get_cleaned(self):
+        fake_inst = dict(self.fake_instance, id=123, cleaned=1)
+        fake_uuid = fake_inst['uuid']
+        self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
+                                ).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
+        # NOTE(mikal): Make sure it's actually a bool
+        self.assertEqual(inst.cleaned, True)
+
     def test_with_info_cache(self):
-        ctxt = context.get_admin_context()
         fake_inst = dict(self.fake_instance)
         fake_uuid = fake_inst['uuid']
-        fake_inst['info_cache'] = {'network_info': 'foo',
+        nwinfo1 = network_model.NetworkInfo.hydrate([{'address': 'foo'}])
+        nwinfo2 = network_model.NetworkInfo.hydrate([{'address': 'bar'}])
+        nwinfo1_json = nwinfo1.json()
+        nwinfo2_json = nwinfo2.json()
+        fake_inst['info_cache'] = {'network_info': nwinfo1_json,
                                    'instance_uuid': fake_uuid}
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(db, 'instance_info_cache_update')
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
                                 ).AndReturn(fake_inst)
-        db.instance_info_cache_update(ctxt, fake_uuid,
-                                      {'network_info': 'bar'})
+        db.instance_info_cache_update(self.context, fake_uuid,
+                                      {'network_info': nwinfo2_json})
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, fake_uuid)
-        self.assertEqual(inst.info_cache.network_info,
-                         fake_inst['info_cache']['network_info'])
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
+        self.assertEqual(inst.info_cache.network_info, nwinfo1)
         self.assertEqual(inst.info_cache.instance_uuid, fake_uuid)
-        inst.info_cache.network_info = 'bar'
+        inst.info_cache.network_info = nwinfo2
         inst.save()
 
     def test_with_security_groups(self):
-        ctxt = context.get_admin_context()
         fake_inst = dict(self.fake_instance)
         fake_uuid = fake_inst['uuid']
         fake_inst['security_groups'] = [
@@ -253,12 +350,12 @@ class _TestInstanceObject(object):
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(db, 'security_group_update')
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
                                 ).AndReturn(fake_inst)
-        db.security_group_update(ctxt, 1, {'description': 'changed'}
+        db.security_group_update(self.context, 1, {'description': 'changed'}
                                  ).AndReturn(fake_inst['security_groups'][0])
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, fake_uuid)
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
         self.assertEqual(len(inst.security_groups), 2)
         for index, group in enumerate(fake_inst['security_groups']):
             for key in group:
@@ -271,20 +368,94 @@ class _TestInstanceObject(object):
         inst.save()
         self.assertEqual(inst.security_groups.obj_what_changed(), set())
 
+    def test_with_empty_security_groups(self):
+        fake_inst = dict(self.fake_instance, security_groups=[])
+        fake_uuid = fake_inst['uuid']
+        self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
+                                ).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid)
+        self.assertEqual(0, len(inst.security_groups))
+
+    def test_with_empty_pci_devices(self):
+        fake_inst = dict(self.fake_instance, pci_devices=[])
+        fake_uuid = fake_inst['uuid']
+        self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
+        db.instance_get_by_uuid(self.context, fake_uuid,
+                                columns_to_join=['pci_devices']
+                                ).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid,
+            ['pci_devices'])
+        self.assertEqual(len(inst.pci_devices), 0)
+
+    def test_with_none_pci_devices(self):
+        fake_inst = dict(self.fake_instance, pci_devices=None)
+        fake_uuid = fake_inst['uuid']
+        self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
+        db.instance_get_by_uuid(self.context, fake_uuid,
+                                columns_to_join=['pci_devices']
+                                ).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid,
+            ['pci_devices'])
+        self.assertEqual(None, inst.pci_devices)
+
+    def test_with_pci_devices(self):
+        fake_inst = dict(self.fake_instance)
+        fake_uuid = fake_inst['uuid']
+        fake_inst['pci_devices'] = [
+            {'created_at': None,
+             'updated_at': None,
+             'deleted_at': None,
+             'deleted': None,
+             'id': 2,
+             'compute_node_id': 1,
+             'address': 'a1',
+             'product_id': 'p1',
+             'vendor_id': 'v1',
+             'status': 'allocated',
+             'instance_uuid': fake_uuid,
+             'extra_info': '{}'},
+            {
+             'created_at': None,
+             'updated_at': None,
+             'deleted_at': None,
+             'deleted': None,
+             'id': 1,
+             'compute_node_id': 1,
+             'address': 'a',
+             'product_id': 'p',
+             'vendor_id': 'v',
+             'status': 'allocated',
+             'instance_uuid': fake_uuid,
+             'extra_info': '{}'},
+            ]
+        self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
+        db.instance_get_by_uuid(self.context, fake_uuid,
+                                columns_to_join=['pci_devices']
+                                ).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid,
+            ['pci_devices'])
+        self.assertEqual(len(inst.pci_devices), 2)
+        self.assertEqual(inst.pci_devices[0].instance_uuid, fake_uuid)
+        self.assertEqual(inst.pci_devices[1].instance_uuid, fake_uuid)
+
     def test_with_fault(self):
-        ctxt = context.get_admin_context()
         fake_inst = dict(self.fake_instance)
         fake_uuid = fake_inst['uuid']
         fake_faults = [dict(x, instance_uuid=fake_uuid)
                        for x in test_instance_fault.fake_faults['fake-uuid']]
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         self.mox.StubOutWithMock(db, 'instance_fault_get_by_instance_uuids')
-        db.instance_get_by_uuid(ctxt, fake_uuid, columns_to_join=[]
+        db.instance_get_by_uuid(self.context, fake_uuid, columns_to_join=[]
                                 ).AndReturn(self.fake_instance)
-        db.instance_fault_get_by_instance_uuids(ctxt, [fake_uuid]).AndReturn(
-            {fake_uuid: fake_faults})
+        db.instance_fault_get_by_instance_uuids(
+            self.context, [fake_uuid]).AndReturn({fake_uuid: fake_faults})
         self.mox.ReplayAll()
-        inst = instance.Instance.get_by_uuid(ctxt, fake_uuid,
+        inst = instance.Instance.get_by_uuid(self.context, fake_uuid,
                                              expected_attrs=['fault'])
         self.assertEqual(fake_faults[0], dict(inst.fault.items()))
         self.assertRemotes()
@@ -297,6 +468,120 @@ class _TestInstanceObject(object):
                          {'uuid': 'fake-uuid',
                           'name': 'foo',
                           }.items())
+
+    def _test_metadata_change_tracking(self, which):
+        inst = instance.Instance()
+        inst.uuid = 'fake-uuid'
+        setattr(inst, which, {})
+        inst.obj_reset_changes()
+        getattr(inst, which)['foo'] = 'bar'
+        self.assertEqual(set([which]), inst.obj_what_changed())
+        inst.obj_reset_changes()
+        self.assertEqual(set(), inst.obj_what_changed())
+
+    def test_metadata_change_tracking(self):
+        self._test_metadata_change_tracking('metadata')
+
+    def test_system_metadata_change_tracking(self):
+        self._test_metadata_change_tracking('system_metadata')
+
+    def test_create_stubbed(self):
+        self.mox.StubOutWithMock(db, 'instance_create')
+        vals = {'host': 'foo-host',
+                'memory_mb': 128,
+                'system_metadata': {'foo': 'bar'}}
+        fake_inst = fake_instance.fake_db_instance(**vals)
+        db.instance_create(self.context, vals).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance()
+        inst.host = 'foo-host'
+        inst.memory_mb = 128
+        inst.system_metadata = {'foo': 'bar'}
+        inst.create(self.context)
+
+    def test_create(self):
+        self.mox.StubOutWithMock(db, 'instance_create')
+        db.instance_create(self.context, {}).AndReturn(self.fake_instance)
+        self.mox.ReplayAll()
+        inst = instance.Instance()
+        inst.create(self.context)
+        self.assertEqual(self.fake_instance['id'], inst.id)
+
+    def test_create_with_values(self):
+        inst1 = instance.Instance()
+        values = {'user_id': self.context.user_id,
+                  'project_id': self.context.project_id,
+                  'host': 'foo-host'}
+        inst1.update(values)
+        inst1.create(self.context)
+        self.assertEqual(inst1.host, 'foo-host')
+        inst2 = instance.Instance.get_by_uuid(self.context, inst1.uuid)
+        self.assertEqual(inst2.host, 'foo-host')
+
+    def test_recreate_fails(self):
+        inst = instance.Instance()
+        values = {'user_id': self.context.user_id,
+                  'project_id': self.context.project_id,
+                  'host': 'foo-host'}
+        inst.update(values)
+        inst.create(self.context)
+        self.assertRaises(exception.ObjectActionError, inst.create,
+                          self.context)
+
+    def test_create_with_special_things(self):
+        self.mox.StubOutWithMock(db, 'instance_create')
+        fake_inst = fake_instance.fake_db_instance()
+        db.instance_create(self.context,
+                           {'host': 'foo-host',
+                            'security_groups': ['foo', 'bar'],
+                            'info_cache': {'network_info': '[]'},
+                            }
+                           ).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance()
+        inst.host = 'foo-host'
+        secgroups = security_group.SecurityGroupList()
+        secgroups.objects = []
+        for name in ('foo', 'bar'):
+            secgroup = security_group.SecurityGroup()
+            secgroup.name = name
+            secgroups.objects.append(secgroup)
+        inst.security_groups = secgroups
+        inst.info_cache = instance_info_cache.InstanceInfoCache()
+        inst.info_cache.network_info = []
+        inst.create(self.context)
+
+    def test_destroy_stubbed(self):
+        self.mox.StubOutWithMock(db, 'instance_destroy')
+        db.instance_destroy(self.context, 'fake-uuid', constraint=None)
+        self.mox.ReplayAll()
+        inst = instance.Instance()
+        inst.id = 1
+        inst.uuid = 'fake-uuid'
+        inst.host = 'foo'
+        inst.destroy(self.context)
+
+    def test_destroy(self):
+        values = {'user_id': self.context.user_id,
+                  'project_id': self.context.project_id}
+        db_inst = db.instance_create(self.context, values)
+        inst = instance.Instance()
+        inst.id = db_inst['id']
+        inst.uuid = db_inst['uuid']
+        inst.destroy(self.context)
+        self.assertRaises(exception.InstanceNotFound,
+                          db.instance_get_by_uuid, self.context,
+                          db_inst['uuid'])
+
+    def test_destroy_host_constraint(self):
+        values = {'user_id': self.context.user_id,
+                  'project_id': self.context.project_id,
+                  'host': 'foo'}
+        db_inst = db.instance_create(self.context, values)
+        inst = instance.Instance.get_by_uuid(self.context, db_inst['uuid'])
+        inst.host = None
+        self.assertRaises(exception.ObjectActionError,
+                          inst.destroy)
 
 
 class TestInstanceObject(test_objects._LocalTest,
@@ -322,7 +607,7 @@ class _TestInstanceListObject(object):
         fake_instance['launched_at'] = (
             fake_instance['launched_at'].replace(
                 tzinfo=iso8601.iso8601.Utc(), microsecond=0))
-        fake_instance['info_cache'] = {'network_info': 'foo',
+        fake_instance['info_cache'] = {'network_info': '[]',
                                        'instance_uuid': fake_instance['uuid']}
         fake_instance['security_groups'] = []
         fake_instance['deleted'] = 0
@@ -332,15 +617,15 @@ class _TestInstanceListObject(object):
 
     def test_get_all_by_filters(self):
         fakes = [self.fake_instance(1), self.fake_instance(2)]
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_all_by_filters')
-        db.instance_get_all_by_filters(ctxt, {'foo': 'bar'}, 'uuid', 'asc',
-                                       limit=None, marker=None,
+        db.instance_get_all_by_filters(self.context, {'foo': 'bar'}, 'uuid',
+                                       'asc', limit=None, marker=None,
                                        columns_to_join=['metadata']).AndReturn(
                                            fakes)
         self.mox.ReplayAll()
         inst_list = instance.InstanceList.get_by_filters(
-            ctxt, {'foo': 'bar'}, 'uuid', 'asc', expected_attrs=['metadata'])
+            self.context, {'foo': 'bar'}, 'uuid', 'asc',
+            expected_attrs=['metadata'])
 
         for i in range(0, len(fakes)):
             self.assertTrue(isinstance(inst_list.objects[i],
@@ -348,33 +633,52 @@ class _TestInstanceListObject(object):
             self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
         self.assertRemotes()
 
+    def test_get_all_by_filters_works_for_cleaned(self):
+        fakes = [self.fake_instance(1),
+                 self.fake_instance(2, updates={'deleted': 2,
+                                                'cleaned': None})]
+        self.context.read_deleted = 'yes'
+        self.mox.StubOutWithMock(db, 'instance_get_all_by_filters')
+        db.instance_get_all_by_filters(self.context,
+                                       {'deleted': True, 'cleaned': False},
+                                       'uuid', 'asc', limit=None, marker=None,
+                                       columns_to_join=['metadata']).AndReturn(
+                                           [fakes[1]])
+        self.mox.ReplayAll()
+        inst_list = instance.InstanceList.get_by_filters(
+            self.context, {'deleted': True, 'cleaned': False}, 'uuid', 'asc',
+            expected_attrs=['metadata'])
+
+        self.assertEqual(1, len(inst_list))
+        self.assertTrue(isinstance(inst_list.objects[0], instance.Instance))
+        self.assertEqual(inst_list.objects[0].uuid, fakes[1]['uuid'])
+        self.assertRemotes()
+
     def test_get_by_host(self):
         fakes = [self.fake_instance(1),
                  self.fake_instance(2)]
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_all_by_host')
-        db.instance_get_all_by_host(ctxt, 'foo',
+        db.instance_get_all_by_host(self.context, 'foo',
                                     columns_to_join=None).AndReturn(fakes)
         self.mox.ReplayAll()
-        inst_list = instance.InstanceList.get_by_host(ctxt, 'foo')
+        inst_list = instance.InstanceList.get_by_host(self.context, 'foo')
         for i in range(0, len(fakes)):
             self.assertTrue(isinstance(inst_list.objects[i],
                                        instance.Instance))
             self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
-            self.assertEqual(inst_list.objects[i]._context, ctxt)
+            self.assertEqual(inst_list.objects[i]._context, self.context)
         self.assertEqual(inst_list.obj_what_changed(), set())
         self.assertRemotes()
 
     def test_get_by_host_and_node(self):
         fakes = [self.fake_instance(1),
                  self.fake_instance(2)]
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_all_by_host_and_node')
-        db.instance_get_all_by_host_and_node(ctxt, 'foo', 'bar').AndReturn(
-            fakes)
+        db.instance_get_all_by_host_and_node(self.context, 'foo', 'bar'
+                                             ).AndReturn(fakes)
         self.mox.ReplayAll()
-        inst_list = instance.InstanceList.get_by_host_and_node(ctxt, 'foo',
-                                                               'bar')
+        inst_list = instance.InstanceList.get_by_host_and_node(self.context,
+                                                               'foo', 'bar')
         for i in range(0, len(fakes)):
             self.assertTrue(isinstance(inst_list.objects[i],
                                        instance.Instance))
@@ -384,14 +688,13 @@ class _TestInstanceListObject(object):
     def test_get_by_host_and_not_type(self):
         fakes = [self.fake_instance(1),
                  self.fake_instance(2)]
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_all_by_host_and_not_type')
-        db.instance_get_all_by_host_and_not_type(ctxt, 'foo',
+        db.instance_get_all_by_host_and_not_type(self.context, 'foo',
                                                  type_id='bar').AndReturn(
                                                      fakes)
         self.mox.ReplayAll()
-        inst_list = instance.InstanceList.get_by_host_and_not_type(ctxt, 'foo',
-                                                                   'bar')
+        inst_list = instance.InstanceList.get_by_host_and_not_type(
+            self.context, 'foo', 'bar')
         for i in range(0, len(fakes)):
             self.assertTrue(isinstance(inst_list.objects[i],
                                        instance.Instance))
@@ -402,12 +705,12 @@ class _TestInstanceListObject(object):
         fakes = [self.fake_instance(1),
                  self.fake_instance(2)]
         dt = timeutils.isotime()
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_get_all_hung_in_rebooting')
-        db.instance_get_all_hung_in_rebooting(ctxt, dt).AndReturn(
+        db.instance_get_all_hung_in_rebooting(self.context, dt).AndReturn(
             fakes)
         self.mox.ReplayAll()
-        inst_list = instance.InstanceList.get_hung_in_rebooting(ctxt, dt)
+        inst_list = instance.InstanceList.get_hung_in_rebooting(self.context,
+                                                                dt)
         for i in range(0, len(fakes)):
             self.assertTrue(isinstance(inst_list.objects[i],
                                        instance.Instance))
@@ -415,7 +718,6 @@ class _TestInstanceListObject(object):
         self.assertRemotes()
 
     def test_with_fault(self):
-        ctxt = context.get_admin_context()
         fake_insts = [
             fake_instance.fake_db_instance(uuid='fake-uuid', host='host'),
             fake_instance.fake_db_instance(uuid='fake-inst2', host='host'),
@@ -423,12 +725,13 @@ class _TestInstanceListObject(object):
         fake_faults = test_instance_fault.fake_faults
         self.mox.StubOutWithMock(db, 'instance_get_all_by_host')
         self.mox.StubOutWithMock(db, 'instance_fault_get_by_instance_uuids')
-        db.instance_get_all_by_host(ctxt, 'host', columns_to_join=[]
+        db.instance_get_all_by_host(self.context, 'host', columns_to_join=[]
                                     ).AndReturn(fake_insts)
         db.instance_fault_get_by_instance_uuids(
-            ctxt, [x['uuid'] for x in fake_insts]).AndReturn(fake_faults)
+            self.context, [x['uuid'] for x in fake_insts]
+            ).AndReturn(fake_faults)
         self.mox.ReplayAll()
-        instances = instance.InstanceList.get_by_host(ctxt, 'host',
+        instances = instance.InstanceList.get_by_host(self.context, 'host',
                                                       expected_attrs=['fault'])
         self.assertEqual(2, len(instances))
         self.assertEqual(fake_faults['fake-uuid'][0],
@@ -436,7 +739,6 @@ class _TestInstanceListObject(object):
         self.assertEqual(None, instances[1].fault)
 
     def test_fill_faults(self):
-        ctxt = context.get_admin_context()
         self.mox.StubOutWithMock(db, 'instance_fault_get_by_instance_uuids')
 
         inst1 = instance.Instance()
@@ -460,12 +762,12 @@ class _TestInstanceListObject(object):
                        }
                       ]}
 
-        db.instance_fault_get_by_instance_uuids(ctxt,
+        db.instance_fault_get_by_instance_uuids(self.context,
                                                 [x.uuid for x in insts],
                                                 ).AndReturn(db_faults)
         self.mox.ReplayAll()
         inst_list = instance.InstanceList()
-        inst_list._context = ctxt
+        inst_list._context = self.context
         inst_list.objects = insts
         faulty = inst_list.fill_faults()
         self.assertEqual(faulty, ['uuid1'])

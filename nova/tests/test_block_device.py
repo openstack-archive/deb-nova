@@ -136,6 +136,37 @@ class TestBlockDeviceDict(test.TestCase):
 
         BDM = block_device.BlockDeviceDict
 
+        self.api_mapping = [
+            {'id': 1, 'instance_uuid': 'fake-instance',
+             'device_name': '/dev/sdb1',
+             'source_type': 'blank',
+             'destination_type': 'local',
+             'delete_on_termination': True,
+             'guest_format': 'swap',
+             'boot_index': -1},
+            {'id': 2, 'instance_uuid': 'fake-instance',
+             'device_name': '/dev/sdc1',
+             'source_type': 'blank',
+             'destination_type': 'local',
+             'delete_on_termination': True,
+             'boot_index': -1},
+            {'id': 3, 'instance_uuid': 'fake-instance',
+             'device_name': '/dev/sda1',
+             'source_type': 'volume',
+             'destination_type': 'volume',
+             'uuid': 'fake-volume-id-1',
+             'boot_index': 0},
+            {'id': 4, 'instance_uuid': 'fake-instance',
+             'device_name': '/dev/sda2',
+             'source_type': 'snapshot',
+             'destination_type': 'volume',
+             'uuid': 'fake-snapshot-id-1',
+             'boot_index': -1},
+            {'id': 5, 'instance_uuid': 'fake-instance',
+             'no_device': True,
+             'device_name': '/dev/vdc'},
+        ]
+
         self.new_mapping = [
             BDM({'id': 1, 'instance_uuid': 'fake-instance',
                  'device_name': '/dev/sdb1',
@@ -154,9 +185,9 @@ class TestBlockDeviceDict(test.TestCase):
                  'device_name': '/dev/sda1',
                  'source_type': 'volume',
                  'destination_type': 'volume',
-                 'volume_id': 'fake-folume-id-1',
+                 'volume_id': 'fake-volume-id-1',
                  'connection_info': "{'fake': 'connection_info'}",
-                 'boot_index': -1}),
+                 'boot_index': 0}),
             BDM({'id': 4, 'instance_uuid': 'fake-instance',
                  'device_name': '/dev/sda2',
                  'source_type': 'snapshot',
@@ -181,7 +212,7 @@ class TestBlockDeviceDict(test.TestCase):
              'virtual_name': 'ephemeral0'},
             {'id': 3, 'instance_uuid': 'fake-instance',
              'device_name': '/dev/sda1',
-             'volume_id': 'fake-folume-id-1',
+             'volume_id': 'fake-volume-id-1',
              'connection_info': "{'fake': 'connection_info'}"},
             {'id': 4, 'instance_uuid': 'fake-instance',
              'device_name': '/dev/sda2',
@@ -193,11 +224,40 @@ class TestBlockDeviceDict(test.TestCase):
              'device_name': '/dev/vdc'},
         ]
 
+        self.new_mapping_source_image = [
+            BDM({'id': 6, 'instance_uuid': 'fake-instance',
+                 'device_name': '/dev/sda3',
+                 'source_type': 'image',
+                 'destination_type': 'volume',
+                 'connection_info': "{'fake': 'connection_info'}",
+                 'volume_id': 'fake-volume-id-3',
+                 'boot_index': -1}),
+            BDM({'id': 7, 'instance_uuid': 'fake-instance',
+                 'device_name': '/dev/sda4',
+                 'source_type': 'image',
+                 'destination_type': 'local',
+                 'connection_info': "{'fake': 'connection_info'}",
+                 'image_id': 'fake-image-id-2',
+                 'boot_index': -1}),
+        ]
+
+        self.legacy_mapping_source_image = [
+            {'id': 6, 'instance_uuid': 'fake-instance',
+             'device_name': '/dev/sda3',
+             'connection_info': "{'fake': 'connection_info'}",
+             'volume_id': 'fake-volume-id-3'},
+        ]
+
     def test_init(self):
+        def fake_validate(obj, dct):
+            pass
+
         self.stubs.Set(block_device.BlockDeviceDict, '_fields',
                        set(['field1', 'field2']))
         self.stubs.Set(block_device.BlockDeviceDict, '_db_only_fields',
                        set(['db_field1', 'db_field2']))
+        self.stubs.Set(block_device.BlockDeviceDict, '_validate',
+                       fake_validate)
 
         # Make sure db fields are not picked up if they are not
         # in the original dict
@@ -225,17 +285,98 @@ class TestBlockDeviceDict(test.TestCase):
         self.assertFalse('db_field1' in dev_dict)
         self.assertFalse('db_field2'in dev_dict)
 
-        # Assert basic validation works
-        # NOTE (ndipanov):  Move to separate test once we have
-        #                   more complex validations in place
+    def test_validate(self):
         self.assertRaises(exception.InvalidBDMFormat,
                           block_device.BlockDeviceDict,
-                          {'field1': 'foo', 'bogus_field': 'lame_val'})
+                          {'bogus_field': 'lame_val'})
+
+        lame_bdm = dict(self.new_mapping[2])
+        del lame_bdm['source_type']
+        self.assertRaises(exception.InvalidBDMFormat,
+                          block_device.BlockDeviceDict,
+                          lame_bdm)
+
+        lame_bdm['no_device'] = True
+        block_device.BlockDeviceDict(lame_bdm)
+
+        lame_dev_bdm = dict(self.new_mapping[2])
+        lame_dev_bdm['device_name'] = "not a valid name"
+        self.assertRaises(exception.InvalidBDMFormat,
+                          block_device.BlockDeviceDict,
+                          lame_dev_bdm)
+
+        lame_dev_bdm['device_name'] = ""
+        self.assertRaises(exception.InvalidBDMFormat,
+                          block_device.BlockDeviceDict,
+                          lame_dev_bdm)
+
+        cool_volume_size_bdm = dict(self.new_mapping[2])
+        cool_volume_size_bdm['volume_size'] = '42'
+        cool_volume_size_bdm = block_device.BlockDeviceDict(
+            cool_volume_size_bdm)
+        self.assertEquals(cool_volume_size_bdm['volume_size'], 42)
+
+        lame_volume_size_bdm = dict(self.new_mapping[2])
+        lame_volume_size_bdm['volume_size'] = 'some_non_int_string'
+        self.assertRaises(exception.InvalidBDMFormat,
+                          block_device.BlockDeviceDict,
+                          lame_volume_size_bdm)
+
+        truthy_bdm = dict(self.new_mapping[2])
+        truthy_bdm['delete_on_termination'] = '1'
+        truthy_bdm = block_device.BlockDeviceDict(truthy_bdm)
+        self.assertEquals(truthy_bdm['delete_on_termination'], True)
+
+        verbose_bdm = dict(self.new_mapping[2])
+        verbose_bdm['boot_index'] = 'first'
+        self.assertRaises(exception.InvalidBDMFormat,
+                          block_device.BlockDeviceDict,
+                          verbose_bdm)
 
     def test_from_legacy(self):
         for legacy, new in zip(self.legacy_mapping, self.new_mapping):
             self.assertThat(
                 block_device.BlockDeviceDict.from_legacy(legacy),
+                matchers.IsSubDictOf(new))
+
+    def test_from_legacy_mapping(self):
+        def _get_image_bdms(bdms):
+            return [bdm for bdm in bdms if bdm['source_type'] == 'image']
+
+        def _get_bootable_bdms(bdms):
+            return [bdm for bdm in bdms if bdm['boot_index'] >= 0]
+
+        new_no_img = block_device.from_legacy_mapping(self.legacy_mapping)
+        self.assertEquals(len(_get_image_bdms(new_no_img)), 0)
+
+        for new, expected in zip(new_no_img, self.new_mapping):
+            self.assertThat(new, matchers.IsSubDictOf(expected))
+
+        new_with_img = block_device.from_legacy_mapping(
+            self.legacy_mapping, 'fake_image_ref')
+        image_bdms = _get_image_bdms(new_with_img)
+        boot_bdms = _get_bootable_bdms(new_with_img)
+        self.assertEquals(len(image_bdms), 1)
+        self.assertEquals(len(boot_bdms), 1)
+        self.assertEquals(image_bdms[0]['boot_index'], 0)
+        self.assertEquals(boot_bdms[0]['source_type'], 'image')
+
+        new_with_img_and_root = block_device.from_legacy_mapping(
+            self.legacy_mapping, 'fake_image_ref', 'sda1')
+        image_bdms = _get_image_bdms(new_with_img_and_root)
+        boot_bdms = _get_bootable_bdms(new_with_img_and_root)
+        self.assertEquals(len(image_bdms), 0)
+        self.assertEquals(len(boot_bdms), 1)
+        self.assertEquals(boot_bdms[0]['boot_index'], 0)
+        self.assertEquals(boot_bdms[0]['source_type'], 'volume')
+
+    def test_from_api(self):
+        for api, new in zip(self.api_mapping, self.new_mapping):
+            new['connection_info'] = None
+            if new['snapshot_id']:
+                new['volume_id'] = None
+            self.assertThat(
+                block_device.BlockDeviceDict.from_api(api),
                 matchers.IsSubDictOf(new))
 
     def test_legacy(self):
@@ -245,6 +386,20 @@ class TestBlockDeviceDict(test.TestCase):
                 matchers.IsSubDictOf(new.legacy()))
 
     def test_legacy_mapping(self):
+        got_legacy = block_device.legacy_mapping(self.new_mapping)
+
+        for legacy, expected in zip(got_legacy, self.legacy_mapping):
+            self.assertThat(expected, matchers.IsSubDictOf(legacy))
+
+    def test_legacy_source_image(self):
+        for legacy, new in zip(self.legacy_mapping_source_image,
+                               self.new_mapping_source_image):
+            if new['destination_type'] == 'volume':
+                self.assertThat(legacy, matchers.IsSubDictOf(new.legacy()))
+            else:
+                self.assertRaises(exception.InvalidBDMForLegacy, new.legacy)
+
+    def test_legacy_mapping_source_image(self):
         got_legacy = block_device.legacy_mapping(self.new_mapping)
 
         for legacy, expected in zip(got_legacy, self.legacy_mapping):

@@ -15,6 +15,7 @@
 #   under the License.
 
 """The Extended Volumes API extension."""
+import webob
 from webob import exc
 
 from nova.api.openstack import common
@@ -23,6 +24,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import uuidutils
 from nova import volume
@@ -30,10 +32,12 @@ from nova import volume
 ALIAS = "os-extended-volumes"
 LOG = logging.getLogger(__name__)
 authorize = extensions.soft_extension_authorizer('compute', 'v3:' + ALIAS)
-authorize_attach = extensions.soft_extension_authorizer('compute',
-                                                        'v3:%s:attach' % ALIAS)
-authorize_detach = extensions.soft_extension_authorizer('compute',
-                                                        'v3:%s:detach' % ALIAS)
+authorize_attach = extensions.extension_authorizer('compute',
+                                                   'v3:%s:attach' % ALIAS)
+authorize_detach = extensions.extension_authorizer('compute',
+                                                   'v3:%s:detach' % ALIAS)
+authorize_swap = extensions.extension_authorizer('compute',
+                                                 'v3:%s:swap' % ALIAS)
 
 
 class ExtendedVolumesController(wsgi.Controller):
@@ -47,6 +51,58 @@ class ExtendedVolumesController(wsgi.Controller):
         volume_ids = [bdm['volume_id'] for bdm in bdms if bdm['volume_id']]
         key = "%s:volumes_attached" % ExtendedVolumes.alias
         server[key] = [{'id': volume_id} for volume_id in volume_ids]
+
+    @extensions.expected_errors((400, 404, 409))
+    @wsgi.action('swap_volume_attachment')
+    def swap(self, req, server_id, body):
+        context = req.environ['nova.context']
+        authorize_swap(context)
+
+        try:
+            old_volume_id = body['swap_volume_attachment']['old_volume_id']
+            self._validate_volume_id(old_volume_id)
+            old_volume = self.volume_api.get(context, old_volume_id)
+
+            new_volume_id = body['swap_volume_attachment']['new_volume_id']
+            self._validate_volume_id(new_volume_id)
+            new_volume = self.volume_api.get(context, new_volume_id)
+        except exception.VolumeNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except KeyError:
+            raise exc.HTTPBadRequest("The request body is invalid")
+
+        try:
+            instance = self.compute_api.get(context, server_id,
+                                            want_objects=True)
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+
+        bdms = self.compute_api.get_instance_bdms(context, instance)
+        found = False
+        try:
+            for bdm in bdms:
+                if bdm['volume_id'] != old_volume_id:
+                    continue
+                try:
+                    self.compute_api.swap_volume(context, instance, old_volume,
+                                                 new_volume)
+                    found = True
+                    break
+                except exception.VolumeUnattached:
+                    # The volume is not attached.  Treat it as NotFound
+                    # by falling through.
+                    pass
+                except exception.InvalidVolume as e:
+                    raise exc.HTTPBadRequest(explanation=e.format_message())
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                                                              'swap_volume')
+
+        if not found:
+            raise exc.HTTPNotFound("The volume was either invalid or not "
+                                   "attached to the instance.")
+        else:
+            return webob.Response(status_int=202)
 
     @wsgi.extends
     def show(self, req, resp_obj, id):
@@ -79,6 +135,7 @@ class ExtendedVolumesController(wsgi.Controller):
                     "not in proper format (%s)") % volume_id
             raise exc.HTTPBadRequest(explanation=msg)
 
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(202)
     @wsgi.action('attach')
     def attach(self, req, id, body):
@@ -89,7 +146,12 @@ class ExtendedVolumesController(wsgi.Controller):
         if not self.is_valid_body(body, 'attach'):
             raise exc.HTTPBadRequest(_("The request body invalid"))
 
-        volume_id = body['attach']['volume_id']
+        try:
+            volume_id = body['attach']['volume_id']
+        except KeyError:
+            raise exc.HTTPBadRequest(_("Could not find volume_id from request"
+                                       "parameter"))
+
         device = body['attach'].get('device')
 
         self._validate_volume_id(volume_id)
@@ -115,6 +177,7 @@ class ExtendedVolumesController(wsgi.Controller):
         except exception.InvalidDevicePath as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(202)
     @wsgi.action('detach')
     def detach(self, req, id, body):
@@ -122,7 +185,14 @@ class ExtendedVolumesController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize_detach(context)
 
-        volume_id = body['detach']['volume_id']
+        if not self.is_valid_body(body, 'detach'):
+            raise exc.HTTPBadRequest(_("The request body invalid"))
+        try:
+            volume_id = body['detach']['volume_id']
+        except KeyError:
+            raise exc.HTTPBadRequest(_("Could not find volume_id from request"
+                                       "parameter"))
+        self._validate_volume_id(volume_id)
         LOG.audit(_("Detach volume %(volume_id)s from "
                     "instance %(server_id)s"),
                   {"volume_id": volume_id,

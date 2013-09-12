@@ -25,6 +25,7 @@ from oslo.config import cfg
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.virt.xenapi import pool_states
@@ -248,7 +249,7 @@ class ResourcePool(object):
             "url": sender_url,
             "user": CONF.xenapi_connection_username,
             "passwd": CONF.xenapi_connection_password,
-            "compute_uuid": vm_utils.get_this_vm_uuid(),
+            "compute_uuid": vm_utils.get_this_vm_uuid(None),
             "xenhost_uuid": self._host_uuid,
         }
 

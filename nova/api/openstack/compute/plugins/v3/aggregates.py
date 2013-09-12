@@ -15,14 +15,17 @@
 
 """The Aggregate admin API extension."""
 
+import datetime
+
 from webob import exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.compute import api as compute_api
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-
+from nova import utils
 
 ALIAS = "os-aggregates"
 LOG = logging.getLogger(__name__)
@@ -57,7 +60,8 @@ class AggregateController(wsgi.Controller):
         context = _get_context(req)
         authorize(context)
         aggregates = self.api.get_aggregate_list(context)
-        return {'aggregates': aggregates}
+        return {'aggregates': [self._marshall_aggregate(a)['aggregate']
+                               for a in aggregates]}
 
     @wsgi.response(201)
     def create(self, req, body):
@@ -76,6 +80,11 @@ class AggregateController(wsgi.Controller):
             raise exc.HTTPBadRequest()
 
         try:
+            utils.check_string_length(name, "Aggregate name", 1, 255)
+        except exception.InvalidInput as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
+
+        try:
             aggregate = self.api.create_aggregate(context, name, avail_zone)
         except exception.AggregateNameExists as e:
             raise exc.HTTPConflict(explanation=e.format_message())
@@ -90,7 +99,7 @@ class AggregateController(wsgi.Controller):
         try:
             aggregate = self.api.get_aggregate(context, id)
         except exception.AggregateNotFound:
-            msg = _("Cannot show aggregate: %s"), id
+            msg = _("Cannot show aggregate: %s") % id
             raise exc.HTTPNotFound(explanation=msg)
         return self._marshall_aggregate(aggregate)
 
@@ -114,10 +123,17 @@ class AggregateController(wsgi.Controller):
                 msg = _("Invalid key %s in request body.") % key
                 raise exc.HTTPBadRequest(explanation=msg)
 
+        if 'name' in updates:
+            try:
+                utils.check_string_length(updates['name'], "Aggregate name", 1,
+                                          255)
+            except exception.InvalidInput as e:
+                raise exc.HTTPBadRequest(explanation=e.format_message())
+
         try:
             aggregate = self.api.update_aggregate(context, id, updates)
         except exception.AggregateNotFound:
-            msg = _('Cannot update aggregate: %s'), id
+            msg = _('Cannot update aggregate: %s') % id
             raise exc.HTTPNotFound(explanation=msg)
 
         return self._marshall_aggregate(aggregate)
@@ -130,7 +146,7 @@ class AggregateController(wsgi.Controller):
         try:
             self.api.delete_aggregate(context, id)
         except exception.AggregateNotFound:
-            msg = _('Cannot delete aggregate: %s'), id
+            msg = _('Cannot delete aggregate: %s') % id
             raise exc.HTTPNotFound(explanation=msg)
 
     @wsgi.action('add_host')
@@ -197,7 +213,13 @@ class AggregateController(wsgi.Controller):
         return self._marshall_aggregate(aggregate)
 
     def _marshall_aggregate(self, aggregate):
-        return {"aggregate": aggregate}
+        _aggregate = {}
+        for key, value in aggregate.items():
+            # NOTE(danms): The original API specified non-TZ-aware timestamps
+            if isinstance(value, datetime.datetime):
+                value = value.replace(tzinfo=None)
+            _aggregate[key] = value
+        return {"aggregate": _aggregate}
 
 
 class Aggregates(extensions.V3APIExtensionBase):

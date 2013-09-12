@@ -304,6 +304,24 @@ class CellsManagerClassTestCase(test.TestCase):
                 host_name=cell_and_host)
         self.assertEqual(expected_response, response)
 
+    def test_get_host_uptime(self):
+        fake_cell = 'parent!fake-cell'
+        fake_host = 'fake-host'
+        fake_cell_and_host = cells_utils.cell_with_item(fake_cell, fake_host)
+        host_uptime = (" 08:32:11 up 93 days, 18:25, 12 users,  load average:"
+                       " 0.20, 0.12, 0.14")
+        fake_response = messaging.Response(fake_cell, host_uptime, False)
+
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'get_host_uptime')
+        self.msg_runner.get_host_uptime(self.ctxt, fake_cell, fake_host).\
+            AndReturn(fake_response)
+        self.mox.ReplayAll()
+
+        response = self.cells_manager.get_host_uptime(self.ctxt,
+                                                      fake_cell_and_host)
+        self.assertEqual(host_uptime, response)
+
     def test_service_update(self):
         fake_cell = 'fake-cell'
         fake_response = messaging.Response(
@@ -603,6 +621,20 @@ class CellsManagerClassTestCase(test.TestCase):
         response = self.cells_manager.get_migrations(self.ctxt, filters)
         self.assertEqual(migrations, response)
 
+    def test_instance_update_from_api(self):
+        self.mox.StubOutWithMock(self.msg_runner,
+                                 'instance_update_from_api')
+        self.msg_runner.instance_update_from_api(self.ctxt,
+                                                 'fake-instance',
+                                                 'exp_vm', 'exp_task',
+                                                 'admin_reset')
+        self.mox.ReplayAll()
+        self.cells_manager.instance_update_from_api(
+                self.ctxt, instance='fake-instance',
+                expected_vm_state='exp_vm',
+                expected_task_state='exp_task',
+                admin_state_reset='admin_reset')
+
     def test_start_instance(self):
         self.mox.StubOutWithMock(self.msg_runner, 'start_instance')
         self.msg_runner.start_instance(self.ctxt, 'fake-instance')
@@ -663,3 +695,106 @@ class CellsManagerClassTestCase(test.TestCase):
         self.mox.ReplayAll()
         self.assertEqual(response,
                          self.cells_manager.cell_get(self.ctxt, cell_name))
+
+    def test_reboot_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'reboot_instance')
+        self.msg_runner.reboot_instance(self.ctxt, 'fake-instance',
+                                        'HARD')
+        self.mox.ReplayAll()
+        self.cells_manager.reboot_instance(self.ctxt,
+                                           instance='fake-instance',
+                                           reboot_type='HARD')
+
+    def test_suspend_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'suspend_instance')
+        self.msg_runner.suspend_instance(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.suspend_instance(self.ctxt,
+                                            instance='fake-instance')
+
+    def test_resume_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'resume_instance')
+        self.msg_runner.resume_instance(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.resume_instance(self.ctxt,
+                                           instance='fake-instance')
+
+    def test_terminate_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'terminate_instance')
+        self.msg_runner.terminate_instance(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.terminate_instance(self.ctxt,
+                                              instance='fake-instance')
+
+    def test_soft_delete_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'soft_delete_instance')
+        self.msg_runner.soft_delete_instance(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.soft_delete_instance(self.ctxt,
+                                                instance='fake-instance')
+
+    def test_resize_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'resize_instance')
+        self.msg_runner.resize_instance(self.ctxt, 'fake-instance',
+                                       'fake-flavor', 'fake-updates')
+        self.mox.ReplayAll()
+        self.cells_manager.resize_instance(
+                self.ctxt, instance='fake-instance', flavor='fake-flavor',
+                extra_instance_updates='fake-updates')
+
+    def test_live_migrate_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'live_migrate_instance')
+        self.msg_runner.live_migrate_instance(self.ctxt, 'fake-instance',
+                                              'fake-block', 'fake-commit',
+                                              'fake-host')
+        self.mox.ReplayAll()
+        self.cells_manager.live_migrate_instance(
+                self.ctxt, instance='fake-instance',
+                block_migration='fake-block', disk_over_commit='fake-commit',
+                host_name='fake-host')
+
+    def test_revert_resize(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'revert_resize')
+        self.msg_runner.revert_resize(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.revert_resize(self.ctxt, instance='fake-instance')
+
+    def test_confirm_resize(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'confirm_resize')
+        self.msg_runner.confirm_resize(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.confirm_resize(self.ctxt, instance='fake-instance')
+
+    def test_reset_network(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'reset_network')
+        self.msg_runner.reset_network(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.reset_network(self.ctxt, instance='fake-instance')
+
+    def test_inject_network_info(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'inject_network_info')
+        self.msg_runner.inject_network_info(self.ctxt, 'fake-instance')
+        self.mox.ReplayAll()
+        self.cells_manager.inject_network_info(self.ctxt,
+                                               instance='fake-instance')
+
+    def test_snapshot_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'snapshot_instance')
+        self.msg_runner.snapshot_instance(self.ctxt, 'fake-instance',
+                                          'fake-id')
+        self.mox.ReplayAll()
+        self.cells_manager.snapshot_instance(self.ctxt,
+                                             instance='fake-instance',
+                                             image_id='fake-id')
+
+    def test_backup_instance(self):
+        self.mox.StubOutWithMock(self.msg_runner, 'backup_instance')
+        self.msg_runner.backup_instance(self.ctxt, 'fake-instance',
+                                        'fake-id', 'backup-type',
+                                        'rotation')
+        self.mox.ReplayAll()
+        self.cells_manager.backup_instance(self.ctxt,
+                                           instance='fake-instance',
+                                           image_id='fake-id',
+                                           backup_type='backup-type',
+                                           rotation='rotation')

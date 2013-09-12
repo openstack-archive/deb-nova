@@ -12,366 +12,292 @@
 #   License for the specific language governing permissions and limitations
 #   under the License.
 
-import datetime
-import uuid
-
-from oslo.config import cfg
 import webob
 
-from nova.api.openstack import compute
+from nova.api.openstack import common
 from nova.api.openstack.compute.contrib import admin_actions
-from nova.compute import api as compute_api
 from nova.compute import vm_states
-from nova.conductor import api as conductor_api
-from nova import context
+import nova.context
 from nova import exception
+from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
+from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_instance
 
 
-CONF = cfg.CONF
-
-INSTANCE = {
-             "id": 1,
-             "name": "fake",
-             "display_name": "test_server",
-             "uuid": "abcd",
-             "user_id": 'fake_user_id',
-             "tenant_id": 'fake_tenant_id',
-             "created_at": datetime.datetime(2010, 10, 10, 12, 0, 0),
-             "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
-             "launched_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
-             "security_groups": [{"id": 1, "name": "test"}],
-             "progress": 0,
-             "image_ref": 'http://foo.com/123',
-             "fixed_ips": [],
-             "instance_type": {"flavorid": '124'},
-        }
-
-
-def fake_compute_api(*args, **kwargs):
-    return True
-
-
-def fake_compute_api_raises_invalid_state(*args, **kwargs):
-    raise exception.InstanceInvalidState(attr='fake_attr',
-            state='fake_state', method='fake_method',
-            instance_uuid='fake')
-
-
-def fake_compute_api_get(self, context, instance_id):
-    return {'id': 1, 'uuid': instance_id, 'vm_state': vm_states.ACTIVE,
-            'task_state': None, 'launched_at': timeutils.utcnow()}
-
-
-class AdminActionsTest(test.TestCase):
-
-    _actions = ('pause', 'unpause', 'suspend', 'resume', 'migrate',
-                'resetNetwork', 'injectNetworkInfo', 'lock', 'unlock')
-
-    _methods = ('pause', 'unpause', 'suspend', 'resume', 'resize',
-                'reset_network', 'inject_network_info', 'lock', 'unlock')
-
-    _actions_that_check_state = (
-            # action, method
-            ('pause', 'pause'),
-            ('unpause', 'unpause'),
-            ('suspend', 'suspend'),
-            ('resume', 'resume'),
-            ('migrate', 'resize'))
-
+class CommonMixin(object):
     def setUp(self):
-        super(AdminActionsTest, self).setUp()
-        self.stubs.Set(compute_api.API, 'get', fake_compute_api_get)
-        self.UUID = uuid.uuid4()
-        for _method in self._methods:
-            self.stubs.Set(compute_api.API, _method, fake_compute_api)
+        super(CommonMixin, self).setUp()
+        self.controller = admin_actions.AdminActionsController()
+        self.compute_api = self.controller.compute_api
+        self.context = nova.context.RequestContext('fake', 'fake')
+
+        def _fake_controller(*args, **kwargs):
+            return self.controller
+
+        self.stubs.Set(admin_actions, 'AdminActionsController',
+                       _fake_controller)
+
         self.flags(
             osapi_compute_extension=[
                 'nova.api.openstack.compute.contrib.select_extensions'],
             osapi_compute_ext_list=['Admin_actions'])
 
-    def test_admin_api_actions(self):
-        app = fakes.wsgi_app(init_only=('servers',))
-        for _action in self._actions:
-            req = webob.Request.blank('/v2/fake/servers/%s/action' %
-                    self.UUID)
-            req.method = 'POST'
-            req.body = jsonutils.dumps({_action: None})
-            req.content_type = 'application/json'
-            res = req.get_response(app)
-            self.assertEqual(res.status_int, 202)
+        self.app = fakes.wsgi_app(init_only=('servers',),
+                                  fake_auth_context=self.context)
+        self.mox.StubOutWithMock(self.compute_api, 'get')
 
-    def test_admin_api_actions_raise_conflict_on_invalid_state(self):
-        app = fakes.wsgi_app(init_only=('servers',))
+    def _make_request(self, url, body):
+        req = webob.Request.blank('/v2/fake' + url)
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.content_type = 'application/json'
+        return req.get_response(self.app)
 
-        for _action, _method in self._actions_that_check_state:
-            self.stubs.Set(compute_api.API, _method,
-                fake_compute_api_raises_invalid_state)
+    def _stub_instance_get(self, uuid=None):
+        if uuid is None:
+            uuid = uuidutils.generate_uuid()
+        instance = fake_instance.fake_db_instance(
+                id=1, uuid=uuid, vm_state=vm_states.ACTIVE,
+                task_state=None, launched_at=timeutils.utcnow())
+        instance = instance_obj.Instance._from_db_object(
+                self.context, instance_obj.Instance(), instance)
+        self.compute_api.get(self.context, uuid,
+                             want_objects=True).AndReturn(instance)
+        return instance
 
-            req = webob.Request.blank('/v2/fake/servers/%s/action' %
-                    self.UUID)
-            req.method = 'POST'
-            req.body = jsonutils.dumps({_action: None})
-            req.content_type = 'application/json'
-            res = req.get_response(app)
-            self.assertEqual(res.status_int, 409)
-            self.assertIn("Cannot \'%(_action)s\' while instance" % locals(),
-                    res.body)
+    def _stub_instance_get_failure(self, exc_info, uuid=None):
+        if uuid is None:
+            uuid = uuidutils.generate_uuid()
+        self.compute_api.get(self.context, uuid,
+                             want_objects=True).AndRaise(exc_info)
+        return uuid
+
+    def _test_non_existing_instance(self, action, body_map=None):
+        uuid = uuidutils.generate_uuid()
+        self._stub_instance_get_failure(
+                exception.InstanceNotFound(instance_id=uuid), uuid=uuid)
+
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % uuid,
+                                 {action: body_map.get(action)})
+        self.assertEqual(404, res.status_int)
+        # Do these here instead of tearDown because this method is called
+        # more than once for the same test case
+        self.mox.VerifyAll()
+        self.mox.UnsetStubs()
+
+    def _test_action(self, action, body=None, method=None):
+        if method is None:
+            method = action
+
+        instance = self._stub_instance_get()
+        getattr(self.compute_api, method)(self.context, instance)
+
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % instance['uuid'],
+                                 {action: None})
+        self.assertEqual(202, res.status_int)
+        # Do these here instead of tearDown because this method is called
+        # more than once for the same test case
+        self.mox.VerifyAll()
+        self.mox.UnsetStubs()
+
+    def _test_invalid_state(self, action, method=None, body_map=None,
+                            compute_api_args_map=None):
+        if method is None:
+            method = action
+        if body_map is None:
+            body_map = {}
+        if compute_api_args_map is None:
+            compute_api_args_map = {}
+
+        instance = self._stub_instance_get()
+
+        args, kwargs = compute_api_args_map.get(action, ((), {}))
+
+        getattr(self.compute_api, method)(self.context, instance,
+                                          *args, **kwargs).AndRaise(
+                exception.InstanceInvalidState(
+                    attr='vm_state', instance_uuid=instance['uuid'],
+                    state='foo', method=method))
+
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % instance['uuid'],
+                                 {action: body_map.get(action)})
+        self.assertEqual(409, res.status_int)
+        self.assertIn("Cannot \'%s\' while instance" % action, res.body)
+        # Do these here instead of tearDown because this method is called
+        # more than once for the same test case
+        self.mox.VerifyAll()
+        self.mox.UnsetStubs()
+
+
+class AdminActionsTest(CommonMixin, test.TestCase):
+    def test_actions(self):
+        actions = ['pause', 'unpause', 'suspend', 'resume', 'migrate',
+                   'resetNetwork', 'injectNetworkInfo', 'lock',
+                   'unlock']
+        method_translations = {'migrate': 'resize',
+                               'resetNetwork': 'reset_network',
+                               'injectNetworkInfo': 'inject_network_info'}
+
+        for action in actions:
+            method = method_translations.get(action)
+            self.mox.StubOutWithMock(self.compute_api, method or action)
+            self._test_action(action, method=method)
+            # Re-mock this.
+            self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def test_actions_raise_conflict_on_invalid_state(self):
+        actions = ['pause', 'unpause', 'suspend', 'resume', 'migrate']
+        method_translations = {'migrate': 'resize'}
+
+        for action in actions:
+            method = method_translations.get(action)
+            self.mox.StubOutWithMock(self.compute_api, method or action)
+            self._test_invalid_state(action, method=method)
+            # Re-mock this.
+            self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def test_actions_with_non_existed_instance(self):
+        actions = ['pause', 'unpause', 'suspend', 'resume',
+                   'resetNetwork', 'injectNetworkInfo', 'lock',
+                   'unlock', 'os-resetState']
+        body_map = {'os-resetState': {'state': 'active'}}
+        for action in actions:
+            self._test_non_existing_instance(action,
+                                             body_map=body_map)
+            # Re-mock this.
+            self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def _test_migrate_exception(self, exc_info, expected_result):
+        self.mox.StubOutWithMock(self.compute_api, 'resize')
+        instance = self._stub_instance_get()
+        self.compute_api.resize(self.context, instance).AndRaise(exc_info)
+
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % instance['uuid'],
+                                 {'migrate': None})
+        self.assertEqual(expected_result, res.status_int)
 
     def test_migrate_live_enabled(self):
-        ctxt = context.get_admin_context()
-        ctxt.user_id = 'fake'
-        ctxt.project_id = 'fake'
-        ctxt.is_admin = True
-        app = fakes.wsgi_app(fake_auth_context=ctxt, init_only=('servers',))
-        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
-        req.method = 'POST'
-        req.body = jsonutils.dumps({
-            'os-migrateLive': {
-                'host': 'hostname',
-                'block_migration': False,
-                'disk_over_commit': False,
-            }
-        })
-        req.content_type = 'application/json'
+        self.mox.StubOutWithMock(self.compute_api, 'live_migrate')
+        instance = self._stub_instance_get()
+        self.compute_api.live_migrate(self.context, instance, False,
+                                      False, 'hostname')
 
-        def fake_update(inst, context, instance,
-                        task_state, expected_task_state):
-            return None
+        self.mox.ReplayAll()
 
-        def fake_migrate_server(self, context, instance,
-                scheduler_hint, live, rebuild, flavor,
-                block_migration, disk_over_commit):
-            return None
-
-        self.stubs.Set(compute_api.API, 'update', fake_update)
-        self.stubs.Set(conductor_api.ComputeTaskAPI,
-                       'migrate_server',
-                       fake_migrate_server)
-
-        res = req.get_response(app)
-        self.assertEqual(res.status_int, 202)
+        res = self._make_request('/servers/%s/action' % instance['uuid'],
+                                 {'os-migrateLive':
+                                  {'host': 'hostname',
+                                   'block_migration': False,
+                                   'disk_over_commit': False}})
+        self.assertEqual(202, res.status_int)
 
     def test_migrate_live_missing_dict_param(self):
-        ctxt = context.get_admin_context()
-        ctxt.user_id = 'fake'
-        ctxt.project_id = 'fake'
-        ctxt.is_admin = True
-        app = fakes.wsgi_app(fake_auth_context=ctxt, init_only=('servers',))
-        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
-        req.method = 'POST'
-        req.body = jsonutils.dumps({
-            'os-migrateLive': {
-                'dummy': 'hostname',
-                'block_migration': False,
-                'disk_over_commit': False,
-            }
-        })
-        req.content_type = 'application/json'
-        res = req.get_response(app)
-        self.assertEqual(res.status_int, 400)
+        body = {'os-migrateLive': {'dummy': 'hostname',
+                                   'block_migration': False,
+                                   'disk_over_commit': False}}
+        res = self._make_request('/servers/FAKE/action', body)
+        self.assertEqual(400, res.status_int)
+
+    def _test_migrate_live_failed_with_exception(self, fake_exc,
+                                                 uuid=None):
+        self.mox.StubOutWithMock(self.compute_api, 'live_migrate')
+
+        instance = self._stub_instance_get(uuid=uuid)
+        self.compute_api.live_migrate(self.context, instance, False,
+                                      False, 'hostname').AndRaise(fake_exc)
+
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % instance.uuid,
+                                 {'os-migrateLive':
+                                  {'host': 'hostname',
+                                   'block_migration': False,
+                                   'disk_over_commit': False}})
+        self.assertEqual(400, res.status_int)
+        self.assertIn(unicode(fake_exc), res.body)
 
     def test_migrate_live_compute_service_unavailable(self):
-        ctxt = context.get_admin_context()
-        ctxt.user_id = 'fake'
-        ctxt.project_id = 'fake'
-        ctxt.is_admin = True
-        app = fakes.wsgi_app(fake_auth_context=ctxt, init_only=('servers',))
-        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
-        req.method = 'POST'
-        req.body = jsonutils.dumps({
-            'os-migrateLive': {
-                'host': 'hostname',
-                'block_migration': False,
-                'disk_over_commit': False,
-            }
-        })
-        req.content_type = 'application/json'
-
-        def fake_update(inst, context, instance,
-                        task_state, expected_task_state):
-            return None
-
-        def fake_migrate_server(self, context, instance,
-                scheduler_hint, live, rebuild, flavor,
-                block_migration, disk_over_commit):
-            raise exception.ComputeServiceUnavailable(host='host')
-
-        self.stubs.Set(compute_api.API, 'update', fake_update)
-        self.stubs.Set(conductor_api.ComputeTaskAPI,
-                       'migrate_server',
-                       fake_migrate_server)
-
-        res = req.get_response(app)
-        self.assertEqual(res.status_int, 400)
-        self.assertIn(
-            unicode(exception.ComputeServiceUnavailable(host='host')),
-            res.body)
+        self._test_migrate_live_failed_with_exception(
+            exception.ComputeServiceUnavailable(host='host'))
 
     def test_migrate_live_invalid_hypervisor_type(self):
-        ctxt = context.get_admin_context()
-        ctxt.user_id = 'fake'
-        ctxt.project_id = 'fake'
-        ctxt.is_admin = True
-        app = fakes.wsgi_app(fake_auth_context=ctxt, init_only=('servers',))
-        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
-        req.method = 'POST'
-        req.body = jsonutils.dumps({
-            'os-migrateLive': {
-                'host': 'hostname',
-                'block_migration': False,
-                'disk_over_commit': False,
-            }
-        })
-        req.content_type = 'application/json'
-
-        def fake_update(inst, context, instance,
-                        task_state, expected_task_state):
-            return None
-
-        def fake_migrate_server(self, context, instance,
-                scheduler_hint, live, rebuild, flavor,
-                block_migration, disk_over_commit):
-            raise exception.InvalidHypervisorType()
-
-        self.stubs.Set(compute_api.API, 'update', fake_update)
-        self.stubs.Set(conductor_api.ComputeTaskAPI,
-                       'migrate_server',
-                       fake_migrate_server)
-
-        res = req.get_response(app)
-        self.assertEqual(res.status_int, 400)
-        self.assertIn(
-            unicode(exception.InvalidHypervisorType()),
-            res.body)
+        self._test_migrate_live_failed_with_exception(
+            exception.InvalidHypervisorType())
 
     def test_migrate_live_unable_to_migrate_to_self(self):
-        ctxt = context.get_admin_context()
-        ctxt.user_id = 'fake'
-        ctxt.project_id = 'fake'
-        ctxt.is_admin = True
-        app = fakes.wsgi_app(fake_auth_context=ctxt, init_only=('servers',))
-        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
-        req.method = 'POST'
-        req.body = jsonutils.dumps({
-            'os-migrateLive': {
-                'host': 'hostname',
-                'block_migration': False,
-                'disk_over_commit': False,
-            }
-        })
-        req.content_type = 'application/json'
-
-        def fake_update(inst, context, instance,
-                        task_state, expected_task_state):
-            return None
-
-        def fake_migrate_server(self, context, instance,
-                scheduler_hint, live, rebuild, flavor,
-                block_migration, disk_over_commit):
-            raise exception.UnableToMigrateToSelf(self.UUID, host='host')
-
-        self.stubs.Set(compute_api.API, 'update', fake_update)
-        self.stubs.Set(conductor_api.ComputeTaskAPI,
-                       'migrate_server',
-                       fake_migrate_server)
-
-        res = req.get_response(app)
-        self.assertEqual(res.status_int, 400)
-        self.assertIn(
-            unicode(exception.UnableToMigrateToSelf(self.UUID, host='host')),
-            res.body)
+        uuid = uuidutils.generate_uuid()
+        self._test_migrate_live_failed_with_exception(
+                exception.UnableToMigrateToSelf(instance_id=uuid,
+                                                host='host'),
+                uuid=uuid)
 
     def test_migrate_live_destination_hypervisor_too_old(self):
-        ctxt = context.get_admin_context()
-        ctxt.user_id = 'fake'
-        ctxt.project_id = 'fake'
-        ctxt.is_admin = True
-        app = fakes.wsgi_app(fake_auth_context=ctxt, init_only=('servers',))
-        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
-        req.method = 'POST'
-        req.body = jsonutils.dumps({
-            'os-migrateLive': {
-                'host': 'hostname',
-                'block_migration': False,
-                'disk_over_commit': False,
-            }
-        })
-        req.content_type = 'application/json'
+        self._test_migrate_live_failed_with_exception(
+            exception.DestinationHypervisorTooOld())
 
-        def fake_update(inst, context, instance,
-                        task_state, expected_task_state):
-            return None
+    def test_unlock_not_authorized(self):
+        self.mox.StubOutWithMock(self.compute_api, 'unlock')
 
-        def fake_migrate_server(self, context, instance,
-                scheduler_hint, live, rebuild, flavor,
-                block_migration, disk_over_commit):
-            raise exception.DestinationHypervisorTooOld()
+        instance = self._stub_instance_get()
 
-        self.stubs.Set(compute_api.API, 'update', fake_update)
-        self.stubs.Set(conductor_api.ComputeTaskAPI,
-                       'migrate_server',
-                       fake_migrate_server)
+        self.compute_api.unlock(self.context, instance).AndRaise(
+                exception.PolicyNotAuthorized(action='unlock'))
 
-        res = req.get_response(app)
-        self.assertEqual(res.status_int, 400)
-        self.assertIn(
-            unicode(exception.DestinationHypervisorTooOld()),
-            res.body)
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % instance['uuid'],
+                                 {'unlock': None})
+        self.assertEqual(403, res.status_int)
 
 
-class CreateBackupTests(test.TestCase):
-
+class CreateBackupTests(CommonMixin, test.TestCase):
     def setUp(self):
         super(CreateBackupTests, self).setUp()
+        self.mox.StubOutWithMock(common,
+                                 'check_img_metadata_properties_quota')
+        self.mox.StubOutWithMock(self.compute_api,
+                                 'backup')
 
-        self.stubs.Set(compute_api.API, 'get', fake_compute_api_get)
-        self.backup_stubs = fakes.stub_out_compute_api_backup(self.stubs)
-        self.app = compute.APIRouter(init_only=('servers',))
-        self.uuid = uuid.uuid4()
-
-    def _get_request(self, body):
-        url = '/fake/servers/%s/action' % self.uuid
-        req = fakes.HTTPRequest.blank(url)
-        req.method = 'POST'
-        req.content_type = 'application/json'
-        req.body = jsonutils.dumps(body)
-        return req
+    def _make_url(self, uuid):
+        return '/servers/%s/action' % uuid
 
     def test_create_backup_with_metadata(self):
+        metadata = {'123': 'asdf'}
         body = {
             'createBackup': {
                 'name': 'Backup 1',
                 'backup_type': 'daily',
                 'rotation': 1,
-                'metadata': {'123': 'asdf'},
+                'metadata': metadata,
             },
         }
 
-        request = self._get_request(body)
-        response = request.get_response(self.app)
+        image = dict(id='fake-image-id', status='ACTIVE', name='Backup 1',
+                     properties=metadata)
 
-        self.assertEqual(response.status_int, 202)
-        self.assertTrue(response.headers['Location'])
+        common.check_img_metadata_properties_quota(self.context, metadata)
+        instance = self._stub_instance_get()
+        self.compute_api.backup(self.context, instance, 'Backup 1',
+                                'daily', 1,
+                                extra_properties=metadata).AndReturn(image)
 
-    def test_create_backup_with_too_much_metadata(self):
-        body = {
-            'createBackup': {
-                'name': 'Backup 1',
-                'backup_type': 'daily',
-                'rotation': 1,
-                'metadata': {'123': 'asdf'},
-            },
-        }
-        for num in range(CONF.quota_metadata_items + 1):
-            body['createBackup']['metadata']['foo%i' % num] = "bar"
+        self.mox.ReplayAll()
 
-        request = self._get_request(body)
-        response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 413)
+        res = self._make_request(self._make_url(instance['uuid']), body)
+        self.assertEqual(202, res.status_int)
+        self.assertIn('fake-image-id', res.headers['Location'])
 
     def test_create_backup_no_name(self):
         # Name is required for backups.
@@ -381,10 +307,8 @@ class CreateBackupTests(test.TestCase):
                 'rotation': 1,
             },
         }
-
-        request = self._get_request(body)
-        response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 400)
+        res = self._make_request(self._make_url('fake'), body)
+        self.assertEqual(400, res.status_int)
 
     def test_create_backup_no_rotation(self):
         # Rotation is required for backup requests.
@@ -394,10 +318,8 @@ class CreateBackupTests(test.TestCase):
                 'backup_type': 'daily',
             },
         }
-
-        request = self._get_request(body)
-        response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 400)
+        res = self._make_request(self._make_url('fake'), body)
+        self.assertEqual(400, res.status_int)
 
     def test_create_backup_negative_rotation(self):
         """Rotation must be greater than or equal to zero
@@ -410,10 +332,8 @@ class CreateBackupTests(test.TestCase):
                 'rotation': -1,
             },
         }
-
-        request = self._get_request(body)
-        response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 400)
+        res = self._make_request(self._make_url('fake'), body)
+        self.assertEqual(400, res.status_int)
 
     def test_create_backup_no_backup_type(self):
         # Backup Type (daily or weekly) is required for backup requests.
@@ -423,17 +343,13 @@ class CreateBackupTests(test.TestCase):
                 'rotation': 1,
             },
         }
-
-        request = self._get_request(body)
-        response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 400)
+        res = self._make_request(self._make_url('fake'), body)
+        self.assertEqual(400, res.status_int)
 
     def test_create_backup_bad_entity(self):
         body = {'createBackup': 'go'}
-
-        request = self._get_request(body)
-        response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 400)
+        res = self._make_request(self._make_url('fake'), body)
+        self.assertEqual(400, res.status_int)
 
     def test_create_backup_rotation_is_zero(self):
         # The happy path for creating backups if rotation is zero.
@@ -445,11 +361,19 @@ class CreateBackupTests(test.TestCase):
             },
         }
 
-        request = self._get_request(body)
-        response = request.get_response(self.app)
+        image = dict(id='fake-image-id', status='ACTIVE', name='Backup 1',
+                     properties={})
+        common.check_img_metadata_properties_quota(self.context, {})
+        instance = self._stub_instance_get()
+        self.compute_api.backup(self.context, instance, 'Backup 1',
+                                'daily', 0,
+                                extra_properties={}).AndReturn(image)
 
-        self.assertEqual(response.status_int, 202)
-        self.assertFalse('Location' in response.headers)
+        self.mox.ReplayAll()
+
+        res = self._make_request(self._make_url(instance['uuid']), body)
+        self.assertEqual(202, res.status_int)
+        self.assertNotIn('Location', res.headers)
 
     def test_create_backup_rotation_is_positive(self):
         # The happy path for creating backups if rotation is positive.
@@ -461,83 +385,126 @@ class CreateBackupTests(test.TestCase):
             },
         }
 
-        request = self._get_request(body)
-        response = request.get_response(self.app)
+        image = dict(id='fake-image-id', status='ACTIVE', name='Backup 1',
+                     properties={})
+        common.check_img_metadata_properties_quota(self.context, {})
+        instance = self._stub_instance_get()
+        self.compute_api.backup(self.context, instance, 'Backup 1',
+                                'daily', 1,
+                                extra_properties={}).AndReturn(image)
 
-        self.assertEqual(response.status_int, 202)
-        self.assertTrue(response.headers['Location'])
+        self.mox.ReplayAll()
+
+        res = self._make_request(self._make_url(instance['uuid']), body)
+        self.assertEqual(202, res.status_int)
+        self.assertIn('fake-image-id', res.headers['Location'])
 
     def test_create_backup_raises_conflict_on_invalid_state(self):
-        body = {
+        body_map = {
             'createBackup': {
                 'name': 'Backup 1',
                 'backup_type': 'daily',
                 'rotation': 1,
             },
         }
+        args_map = {
+            'createBackup': (
+                ('Backup 1', 'daily', 1), {'extra_properties': {}}
+            ),
+        }
+        common.check_img_metadata_properties_quota(self.context, {})
+        self._test_invalid_state('createBackup', method='backup',
+                                 body_map=body_map,
+                                 compute_api_args_map=args_map)
 
-        self.stubs.Set(compute_api.API, 'backup',
-                fake_compute_api_raises_invalid_state)
-
-        request = self._get_request(body)
-        response = request.get_response(self.app)
-        self.assertEqual(response.status_int, 409)
+    def test_create_backup_with_non_existed_instance(self):
+        body_map = {
+            'createBackup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+        common.check_img_metadata_properties_quota(self.context, {})
+        self._test_non_existing_instance('createBackup',
+                                         body_map=body_map)
 
 
 class ResetStateTests(test.TestCase):
     def setUp(self):
         super(ResetStateTests, self).setUp()
 
-        self.exists = True
-        self.kwargs = None
-        self.uuid = uuid.uuid4()
+        self.uuid = uuidutils.generate_uuid()
 
-        def fake_get(inst, context, instance_id):
-            if self.exists:
-                return dict(id=1, uuid=instance_id, vm_state=vm_states.ACTIVE)
-            raise exception.InstanceNotFound(instance_id=instance_id)
-
-        def fake_update(inst, context, instance, **kwargs):
-            self.kwargs = kwargs
-
-        self.stubs.Set(compute_api.API, 'get', fake_get)
-        self.stubs.Set(compute_api.API, 'update', fake_update)
         self.admin_api = admin_actions.AdminActionsController()
+        self.compute_api = self.admin_api.compute_api
 
         url = '/fake/servers/%s/action' % self.uuid
         self.request = fakes.HTTPRequest.blank(url)
+        self.context = self.request.environ['nova.context']
 
     def test_no_state(self):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.admin_api._reset_state,
-                          self.request, 'inst_id',
+                          self.request, self.uuid,
                           {"os-resetState": None})
 
     def test_bad_state(self):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.admin_api._reset_state,
-                          self.request, 'inst_id',
+                          self.request, self.uuid,
                           {"os-resetState": {"state": "spam"}})
 
     def test_no_instance(self):
-        self.exists = False
+        self.mox.StubOutWithMock(self.compute_api, 'get')
+        exc = exception.InstanceNotFound(instance_id='inst_id')
+        self.compute_api.get(self.context, self.uuid,
+                             want_objects=True).AndRaise(exc)
+
+        self.mox.ReplayAll()
+
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.admin_api._reset_state,
-                          self.request, 'inst_id',
+                          self.request, self.uuid,
                           {"os-resetState": {"state": "active"}})
 
+    def _setup_mock(self, expected):
+        instance = instance_obj.Instance()
+        instance.uuid = self.uuid
+        instance.vm_state = 'fake'
+        instance.task_state = 'fake'
+        instance.obj_reset_changes()
+
+        self.mox.StubOutWithMock(instance, 'save')
+        self.mox.StubOutWithMock(self.compute_api, 'get')
+
+        def check_state(admin_state_reset=True):
+            self.assertEqual(set(expected.keys()),
+                             instance.obj_what_changed())
+            for k, v in expected.items():
+                self.assertEqual(v, getattr(instance, k),
+                                 "Instance.%s doesn't match" % k)
+            instance.obj_reset_changes()
+
+        self.compute_api.get(self.context, instance.uuid,
+                             want_objects=True).AndReturn(instance)
+        instance.save(admin_state_reset=True).WithSideEffects(check_state)
+
     def test_reset_active(self):
+        self._setup_mock(dict(vm_state=vm_states.ACTIVE,
+                              task_state=None))
+        self.mox.ReplayAll()
+
         body = {"os-resetState": {"state": "active"}}
-        result = self.admin_api._reset_state(self.request, 'inst_id', body)
+        result = self.admin_api._reset_state(self.request, self.uuid, body)
 
         self.assertEqual(result.status_int, 202)
-        self.assertEqual(self.kwargs, dict(vm_state=vm_states.ACTIVE,
-                                           task_state=None))
 
     def test_reset_error(self):
+        self._setup_mock(dict(vm_state=vm_states.ERROR,
+                              task_state=None))
+        self.mox.ReplayAll()
         body = {"os-resetState": {"state": "error"}}
-        result = self.admin_api._reset_state(self.request, 'inst_id', body)
+        result = self.admin_api._reset_state(self.request, self.uuid, body)
 
         self.assertEqual(result.status_int, 202)
-        self.assertEqual(self.kwargs, dict(vm_state=vm_states.ERROR,
-                                           task_state=None))

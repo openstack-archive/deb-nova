@@ -27,15 +27,17 @@ from nova.api.openstack.compute import ips
 from nova.api.openstack.compute.views import servers as views_servers
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova import block_device
 from nova import compute
 from nova.compute import flavors
 from nova import exception
-from nova.openstack.common import importutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
+from nova import policy
 from nova import utils
 
 
@@ -219,6 +221,11 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         if block_device_mapping is not None:
             server["block_device_mapping"] = block_device_mapping
 
+        block_device_mapping_v2 = self._extract_block_device_mapping_v2(
+            server_node)
+        if block_device_mapping_v2 is not None:
+            server["block_device_mapping_v2"] = block_device_mapping_v2
+
         # NOTE(vish): Support this incorrect version because it was in the code
         #             base for a while and we don't want to accidentally break
         #             anyone that might be using it.
@@ -260,6 +267,21 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
             return block_device_mapping
         else:
             return None
+
+    def _extract_block_device_mapping_v2(self, server_node):
+        """Marshal the new block_device_mappings."""
+        node = self.find_first_child_named(server_node,
+                                           "block_device_mapping_v2")
+        if node:
+            block_device_mapping = []
+            for child in self.extract_elements(node):
+                if child.nodeName != "mapping":
+                    continue
+                block_device_mapping.append(
+                    dict((attr, child.getAttribute(attr))
+                        for attr in block_device.bdm_new_api_fields
+                        if child.getAttribute(attr)))
+            return block_device_mapping
 
     def _extract_scheduler_hints(self, server_node):
         """Marshal the scheduler hints attribute of a parsed request."""
@@ -463,7 +485,6 @@ class Controller(wsgi.Controller):
         super(Controller, self).__init__(**kwargs)
         self.compute_api = compute.API()
         self.ext_mgr = ext_mgr
-        self.neutron_attempted = False
 
     @wsgi.serializers(xml=MinimalServersTemplate)
     def index(self, req):
@@ -494,13 +515,17 @@ class Controller(wsgi.Controller):
                 self._get_server_search_options())
 
         # Verify search by 'status' contains a valid status.
-        # Convert it to filter by vm_state for compute_api.
+        # Convert it to filter by vm_state or task_state for compute_api.
         status = search_opts.pop('status', None)
         if status is not None:
-            state = common.vm_state_from_status(status)
-            if state is None:
+            vm_state, task_state = common.task_and_vm_state_from_status(status)
+            if not vm_state and not task_state:
                 return {'servers': []}
-            search_opts['vm_state'] = state
+            search_opts['vm_state'] = vm_state
+            # When we search by vm state, task state will return 'default'.
+            # So we don't need task_state search_opt.
+            if 'default' not in task_state:
+                search_opts['task_state'] = task_state
 
         if 'changes-since' in search_opts:
             try:
@@ -580,41 +605,6 @@ class Controller(wsgi.Controller):
     def _validate_server_name(self, value):
         self._check_string_length(value, 'Server name', max_length=255)
 
-    def _validate_int_value(self, str_value, str_name,
-            min_value=None, max_value=None):
-        try:
-            value = int(str(str_value))
-        except ValueError:
-            msg = _('%(value_name)s must be an integer')
-            raise exc.HTTPBadRequest(explanation=msg % (
-                {'value_name': str_name}))
-
-        if min_value is not None:
-            if value < min_value:
-                msg = _('%(value_name)s must be >= %(min_value)d')
-                raise exc.HTTPBadRequest(explanation=msg % (
-                    {'value_name': str_name,
-                     'min_value': min_value}))
-        if max_value is not None:
-            if value > max_value:
-                msg = _('%{value_name}s must be <= %(max_value)d')
-                raise exc.HTTPBadRequest(explanation=msg % (
-                    {'value_name': str_name,
-                     'max_value': max_value}))
-        return value
-
-    def _validate_block_device(self, bd):
-        self._check_string_length(bd['device_name'],
-                'Device name', max_length=255)
-
-        if ' ' in bd['device_name']:
-            msg = _("Device name cannot include spaces.")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        if 'volume_size' in bd:
-            self._validate_int_value(bd['volume_size'], 'volume_size',
-                                     min_value=0)
-
     def _get_injected_files(self, personality):
         """Create a list of injected files from the personality attribute.
 
@@ -640,27 +630,6 @@ class Controller(wsgi.Controller):
             injected_files.append((path, contents))
         return injected_files
 
-    def _is_neutron_v2(self):
-        # NOTE(dprince): neutronclient is not a requirement
-        if self.neutron_attempted:
-            return self.have_neutron
-
-        try:
-            # compatibility with Folsom/Grizzly configs
-            cls_name = CONF.network_api_class
-            if cls_name == 'nova.network.quantumv2.api.API':
-                cls_name = 'nova.network.neutronv2.api.API'
-            self.neutron_attempted = True
-
-            from nova.network.neutronv2 import api as neutron_api
-            self.have_neutron = issubclass(
-                importutils.import_class(cls_name),
-                neutron_api.API)
-        except ImportError:
-            self.have_neutron = False
-
-        return self.have_neutron
-
     def _get_requested_networks(self, requested_networks):
         """Create a list of requested networks from the networks attribute."""
         networks = []
@@ -669,7 +638,7 @@ class Controller(wsgi.Controller):
                 port_id = network.get('port', None)
                 if port_id:
                     network_uuid = None
-                    if not self._is_neutron_v2():
+                    if not utils.is_neutron():
                         # port parameter is only for neutron v2.0
                         msg = _("Unknown argment : port")
                         raise exc.HTTPBadRequest(explanation=msg)
@@ -699,7 +668,7 @@ class Controller(wsgi.Controller):
 
                 # For neutronv2, requestd_networks
                 # should be tuple of (network_uuid, fixed_ip, port_id)
-                if self._is_neutron_v2():
+                if utils.is_neutron():
                     networks.append((network_uuid, address, port_id))
                 else:
                     # check if the network id is already present in the list,
@@ -812,7 +781,7 @@ class Controller(wsgi.Controller):
 
         requested_networks = None
         if (self.ext_mgr.is_loaded('os-networks')
-                or self._is_neutron_v2()):
+                or utils.is_neutron()):
             requested_networks = server_dict.get('networks')
 
         if requested_networks is not None:
@@ -851,16 +820,44 @@ class Controller(wsgi.Controller):
             availability_zone = server_dict.get('availability_zone')
 
         block_device_mapping = None
+        block_device_mapping_v2 = None
+        legacy_bdm = True
         if self.ext_mgr.is_loaded('os-volumes'):
             block_device_mapping = server_dict.get('block_device_mapping', [])
             for bdm in block_device_mapping:
-                # Ignore empty volume size
-                if 'volume_size' in bdm and not bdm['volume_size']:
-                    del bdm['volume_size']
-                self._validate_block_device(bdm)
+                try:
+                    block_device.validate_device_name(bdm.get("device_name"))
+                    block_device.validate_and_default_volume_size(bdm)
+                except exception.InvalidBDMFormat as e:
+                    raise exc.HTTPBadRequest(explanation=e.format_message())
+
                 if 'delete_on_termination' in bdm:
                     bdm['delete_on_termination'] = strutils.bool_from_string(
                         bdm['delete_on_termination'])
+
+            if self.ext_mgr.is_loaded('os-block-device-mapping-v2-boot'):
+                # Consider the new data format for block device mapping
+                block_device_mapping_v2 = server_dict.get(
+                    'block_device_mapping_v2', [])
+                # NOTE (ndipanov):  Disable usage of both legacy and new
+                #                   block device format in the same request
+                if block_device_mapping and block_device_mapping_v2:
+                    expl = _('Using different block_device_mapping syntaxes '
+                             'is not allowed in the same request.')
+                    raise exc.HTTPBadRequest(explanation=expl)
+
+                # Assume legacy format
+                legacy_bdm = not bool(block_device_mapping_v2)
+
+                try:
+                    block_device_mapping_v2 = [
+                        block_device.BlockDeviceDict.from_api(bdm_dict)
+                        for bdm_dict in block_device_mapping_v2]
+                except exception.InvalidBDMFormat as e:
+                    raise exc.HTTPBadRequest(explanation=e.format_message())
+
+        block_device_mapping = (block_device_mapping or
+                                block_device_mapping_v2)
 
         ret_resv_id = False
         # min_count and max_count are optional.  If they exist, they may come
@@ -874,10 +871,13 @@ class Controller(wsgi.Controller):
             min_count = server_dict.get('min_count', 1)
             max_count = server_dict.get('max_count', min_count)
 
-        min_count = self._validate_int_value(min_count, "min_count",
-                                             min_value=1)
-        max_count = self._validate_int_value(max_count, "max_count",
-                                             min_value=1)
+        try:
+            min_count = utils.validate_integer(
+                min_count, "min_count", min_value=1)
+            max_count = utils.validate_integer(
+                max_count, "max_count", min_value=1)
+        except exception.InvalidInput as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         if min_count > max_count:
             msg = _('min_count must be <= max_count')
@@ -893,7 +893,8 @@ class Controller(wsgi.Controller):
 
         try:
             _get_inst_type = flavors.get_flavor_by_flavor_id
-            inst_type = _get_inst_type(flavor_id, read_deleted="no")
+            inst_type = _get_inst_type(flavor_id, ctxt=context,
+                                       read_deleted="no")
 
             (instances, resv_id) = self.compute_api.create(context,
                             inst_type,
@@ -915,7 +916,8 @@ class Controller(wsgi.Controller):
                             config_drive=config_drive,
                             block_device_mapping=block_device_mapping,
                             auto_disk_config=auto_disk_config,
-                            scheduler_hints=scheduler_hints)
+                            scheduler_hints=scheduler_hints,
+                            legacy_bdm=legacy_bdm)
         except exception.QuotaError as error:
             raise exc.HTTPRequestEntityTooLarge(
                 explanation=error.format_message(),
@@ -948,8 +950,12 @@ class Controller(wsgi.Controller):
                 exception.InstanceTypeNotFound,
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
-                exception.SecurityGroupNotFound) as error:
+                exception.PortNotFound,
+                exception.SecurityGroupNotFound,
+                exception.InvalidBDM) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
+        except exception.PortInUse as error:
+            raise exc.HTTPConflict(explanation=error.format_message())
 
         # If the caller wanted a reservation_id, return it
         if ret_resv_id:
@@ -969,7 +975,13 @@ class Controller(wsgi.Controller):
     def _delete(self, context, req, instance_uuid):
         instance = self._get_server(context, req, instance_uuid)
         if CONF.reclaim_instance_interval:
-            self.compute_api.soft_delete(context, instance)
+            try:
+                self.compute_api.soft_delete(context, instance)
+            except exception.InstanceInvalidState:
+                # Note(yufang521247): instance which has never been active
+                # is not allowed to be soft_deleted. Thus we have to call
+                # delete() to clean up the instance.
+                self.compute_api.delete(context, instance)
         else:
             self.compute_api.delete(context, instance)
 
@@ -1018,15 +1030,12 @@ class Controller(wsgi.Controller):
             instance = self.compute_api.get(ctxt, id,
                                             want_objects=True)
             req.cache_db_instance(instance)
-            self.compute_api.update(ctxt, instance, **update_dict)
+            policy.enforce(ctxt, 'compute:update', instance)
+            instance.update(update_dict)
+            instance.save()
         except exception.NotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
-
-        # FIXME(danms): Until compute_api.update() is object-aware,
-        # we need to apply the updates to the instance object so
-        # that views will return the new data
-        instance.update(update_dict)
 
         return self._view_builder.show(req, instance)
 
@@ -1164,8 +1173,12 @@ class Controller(wsgi.Controller):
         """
         image_ref = data['server'].get('imageRef')
         bdm = data['server'].get('block_device_mapping')
+        bdm_v2 = data['server'].get('block_device_mapping_v2')
 
-        if not image_ref and bdm and self.ext_mgr.is_loaded('os-volumes'):
+        if (not image_ref and (
+                (bdm and self.ext_mgr.is_loaded('os-volumes')) or
+                (bdm_v2 and
+                 self.ext_mgr.is_loaded('os-block-device-mapping-v2-boot')))):
             return ''
         else:
             image_href = self._image_ref_from_req_data(data)
@@ -1362,8 +1375,17 @@ class Controller(wsgi.Controller):
             if self.compute_api.is_volume_backed_instance(context, instance,
                                                           bdms):
                 img = instance['image_ref']
-                src_image = self.compute_api.image_service.show(context, img)
-                image_meta = dict(src_image)
+                if not img:
+                    # NOTE(Vincent Hou) The private method
+                    # _get_bdm_image_metadata only works, when boot
+                    # device is set to 'vda'. It needs to be fixed later,
+                    # but tentatively we use it here.
+                    image_meta = {'properties': self.compute_api.
+                                    _get_bdm_image_metadata(context, bdms)}
+                else:
+                    src_image = self.compute_api.image_service.\
+                                                show(context, img)
+                    image_meta = dict(src_image)
 
                 image = self.compute_api.snapshot_volume_backed(
                                                        context,

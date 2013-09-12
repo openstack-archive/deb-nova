@@ -176,6 +176,7 @@ class ExtensionControllerTest(ExtensionTestCase):
         self.ext_list = [
             "AdminActions",
             "Aggregates",
+            "AssistedVolumeSnapshots",
             "AvailabilityZone",
             "Agents",
             "Certificates",
@@ -229,6 +230,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "UsedLimits",
             "UserData",
             "VirtualInterfaces",
+            "VolumeAttachmentUpdate",
             "Volumes",
             ]
         self.ext_list.sort()

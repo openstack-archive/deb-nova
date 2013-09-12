@@ -17,14 +17,15 @@
 
 import webob
 
-from nova.api.openstack import common
 from nova.api.openstack.compute.views import flavors as flavors_view
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova.compute import flavors
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import strutils
+from nova import utils
 
 
 def make_flavor(elem, detailed=False):
@@ -36,6 +37,8 @@ def make_flavor(elem, detailed=False):
         elem.set('vcpus', xmlutil.EmptyStringSelector('vcpus'))
         # NOTE(vish): this was originally added without a namespace
         elem.set('swap', xmlutil.EmptyStringSelector('swap'))
+        elem.set('ephemeral', xmlutil.EmptyStringSelector('ephemeral'))
+        elem.set('disabled')
 
     xmlutil.make_links(elem, 'links')
 
@@ -69,14 +72,16 @@ class FlavorsTemplate(xmlutil.TemplateBuilder):
 class FlavorsController(wsgi.Controller):
     """Flavor controller for the OpenStack API."""
 
-    _view_builder_class = flavors_view.ViewBuilder
+    _view_builder_class = flavors_view.V3ViewBuilder
 
+    @extensions.expected_errors(400)
     @wsgi.serializers(xml=MinimalFlavorsTemplate)
     def index(self, req):
         """Return all flavors in brief."""
         limited_flavors = self._get_flavors(req)
         return self._view_builder.index(req, limited_flavors)
 
+    @extensions.expected_errors(400)
     @wsgi.serializers(xml=FlavorsTemplate)
     def detail(self, req):
         """Return all flavors in detail."""
@@ -84,14 +89,15 @@ class FlavorsController(wsgi.Controller):
         req.cache_db_flavors(limited_flavors)
         return self._view_builder.detail(req, limited_flavors)
 
+    @extensions.expected_errors(404)
     @wsgi.serializers(xml=FlavorTemplate)
     def show(self, req, id):
         """Return data about the given flavor id."""
         try:
             flavor = flavors.get_flavor_by_flavor_id(id)
             req.cache_db_flavor(flavor)
-        except exception.NotFound:
-            raise webob.exc.HTTPNotFound()
+        except exception.FlavorNotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
         return self._view_builder.show(req, flavor)
 
@@ -101,7 +107,7 @@ class FlavorsController(wsgi.Controller):
         if is_public is None:
             # preserve default value of showing only public flavors
             return True
-        elif is_public == 'none':
+        elif utils.is_none_string(is_public):
             return None
         else:
             try:
@@ -113,6 +119,10 @@ class FlavorsController(wsgi.Controller):
     def _get_flavors(self, req):
         """Helper function that returns a list of flavor dicts."""
         filters = {}
+        sort_key = req.params.get('sort_key') or 'flavorid'
+        sort_dir = req.params.get('sort_dir') or 'asc'
+        limit = req.params.get('limit') or None
+        marker = req.params.get('marker') or None
 
         context = req.environ['nova.context']
         if context.is_admin:
@@ -123,25 +133,25 @@ class FlavorsController(wsgi.Controller):
             filters['is_public'] = True
             filters['disabled'] = False
 
-        if 'minRam' in req.params:
+        if 'min_ram' in req.params:
             try:
-                filters['min_memory_mb'] = int(req.params['minRam'])
+                filters['min_memory_mb'] = int(req.params['min_ram'])
             except ValueError:
-                msg = _('Invalid minRam filter [%s]') % req.params['minRam']
+                msg = _('Invalid min_ram filter [%s]') % req.params['min_ram']
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        if 'minDisk' in req.params:
+        if 'min_disk' in req.params:
             try:
-                filters['min_root_gb'] = int(req.params['minDisk'])
+                filters['min_root_gb'] = int(req.params['min_disk'])
             except ValueError:
-                msg = _('Invalid minDisk filter [%s]') % req.params['minDisk']
+                msg = (_('Invalid min_disk filter [%s]') %
+                       req.params['min_disk'])
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        limited_flavors = flavors.get_all_flavors(context, filters=filters)
-        flavors_list = limited_flavors.values()
-        sorted_flavors = sorted(flavors_list,
-                                key=lambda item: item['flavorid'])
-        limited_flavors = common.limited_by_marker(sorted_flavors, req)
+        limited_flavors = flavors.get_all_flavors_sorted_list(context,
+            filters=filters, sort_key=sort_key, sort_dir=sort_dir,
+            limit=limit, marker=marker)
+
         return limited_flavors
 
 

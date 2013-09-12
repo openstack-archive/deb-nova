@@ -1,4 +1,4 @@
-#    Copyright 2012 IBM Corp.
+#    Copyright 2013 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -24,6 +24,7 @@ from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+from nova.conductor.tasks import live_migrate
 from nova.db import base
 from nova import exception
 from nova.image import glance
@@ -32,10 +33,12 @@ from nova import network
 from nova.network.security_group import openstack_driver
 from nova import notifications
 from nova.objects import base as nova_object
+from nova.objects import instance as instance_obj
+from nova.objects import migration as migration_obj
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 from nova import quota
@@ -73,7 +76,7 @@ class ConductorManager(manager.Manager):
     namespace.  See the ComputeTaskManager class for details.
     """
 
-    RPC_API_VERSION = '1.54'
+    RPC_API_VERSION = '1.58'
 
     def __init__(self, *args, **kwargs):
         super(ConductorManager, self).__init__(service_name='conductor',
@@ -120,7 +123,8 @@ class ConductorManager(manager.Manager):
         for key, value in updates.iteritems():
             if key not in allowed_updates:
                 LOG.error(_("Instance update attempted for "
-                            "'%(key)s' on %(instance_uuid)s") % locals())
+                            "'%(key)s' on %(instance_uuid)s"),
+                          {'key': key, 'instance_uuid': instance_uuid})
                 raise KeyError("unexpected update keyword '%s'" % key)
             if key in datetime_fields and isinstance(value, basestring):
                 updates[key] = timeutils.parse_strtime(value)
@@ -156,12 +160,16 @@ class ConductorManager(manager.Manager):
                                                       columns_to_join)
         return jsonutils.to_primitive(result)
 
+    # NOTE(comstud): This method is now deprecated and can be removed in
+    # version v2.0 of the RPC API
     @rpc_common.client_exceptions(exception.MigrationNotFound)
     def migration_get(self, context, migration_id):
         migration_ref = self.db.migration_get(context.elevated(),
                                               migration_id)
         return jsonutils.to_primitive(migration_ref)
 
+    # NOTE(comstud): This method is now deprecated and can be removed in
+    # version v2.0 of the RPC API
     def migration_get_unconfirmed_by_dest_compute(self, context,
                                                   confirm_window,
                                                   dest_compute):
@@ -175,6 +183,7 @@ class ConductorManager(manager.Manager):
             context, host, node)
         return jsonutils.to_primitive(migrations)
 
+    # NOTE(comstud): This method can be removed in v2.0 of the RPC API.
     def migration_create(self, context, instance, values):
         values.update({'instance_uuid': instance['uuid'],
                        'source_compute': instance['host'],
@@ -393,9 +402,8 @@ class ConductorManager(manager.Manager):
                                              update_totals)
 
         # We have just updated the database, so send the notification now
-        notifier.notify(context, 'conductor.%s' % self.host, 'volume.usage',
-                        notifier.INFO,
-                        compute_utils.usage_volume_info(vol_usage))
+        self.notifier.info(context, 'volume.usage',
+                           compute_utils.usage_volume_info(vol_usage))
 
     @rpc_common.client_exceptions(exception.ComputeHostNotFound,
                                   exception.HostBinaryNotFound)
@@ -474,7 +482,8 @@ class ConductorManager(manager.Manager):
     def notify_usage_exists(self, context, instance, current_period=False,
                             ignore_missing_network_data=True,
                             system_metadata=None, extra_usage_info=None):
-        compute_utils.notify_usage_exists(context, instance, current_period,
+        compute_utils.notify_usage_exists(self.notifier, context, instance,
+                                          current_period,
                                           ignore_missing_network_data,
                                           system_metadata, extra_usage_info)
 
@@ -490,11 +499,15 @@ class ConductorManager(manager.Manager):
     def network_migrate_instance_finish(self, context, instance, migration):
         self.network_api.migrate_instance_finish(context, instance, migration)
 
-    def quota_commit(self, context, reservations, project_id=None):
-        quota.QUOTAS.commit(context, reservations, project_id=project_id)
+    def quota_commit(self, context, reservations, project_id=None,
+                     user_id=None):
+        quota.QUOTAS.commit(context, reservations, project_id=project_id,
+                            user_id=user_id)
 
-    def quota_rollback(self, context, reservations, project_id=None):
-        quota.QUOTAS.rollback(context, reservations, project_id=project_id)
+    def quota_rollback(self, context, reservations, project_id=None,
+                       user_id=None):
+        quota.QUOTAS.rollback(context, reservations, project_id=project_id,
+                              user_id=user_id)
 
     def get_ec2_ids(self, context, instance):
         ec2_ids = {}
@@ -512,14 +525,31 @@ class ConductorManager(manager.Manager):
 
         return ec2_ids
 
+    # NOTE(danms): This method is now deprecated and can be removed in
+    # version v2.0 of the RPC API
     def compute_stop(self, context, instance, do_cast=True):
+        # NOTE(mriedem): Clients using an interface before 1.43 will be sending
+        # dicts so we need to handle that here since compute/api::stop()
+        # requires an object.
+        if isinstance(instance, dict):
+            instance = instance_obj.Instance._from_db_object(
+                                context, instance_obj.Instance(), instance)
         self.compute_api.stop(context, instance, do_cast)
 
+    # NOTE(comstud): This method is now deprecated and can be removed in
+    # version v2.0 of the RPC API
     def compute_confirm_resize(self, context, instance, migration_ref):
-        if isinstance(instance, nova_object.NovaObject):
-            # NOTE(danms): Remove this at RPC API v2.0
-            instance = dict(instance.items())
-        self.compute_api.confirm_resize(context, instance, migration_ref)
+        if isinstance(instance, dict):
+            attrs = ['metadata', 'system_metadata', 'info_cache',
+                     'security_groups']
+            instance = instance_obj.Instance._from_db_object(
+                                context, instance_obj.Instance(), instance,
+                                expected_attrs=attrs)
+        if isinstance(migration_ref, dict):
+            migration_ref = migration_obj.Migration._from_db_object(
+                                context.elevated(), migration_ref)
+        self.compute_api.confirm_resize(context, instance,
+                                        migration=migration_ref)
 
     def compute_unrescue(self, context, instance):
         self.compute_api.unrescue(context, instance)
@@ -539,16 +569,19 @@ class ConductorManager(manager.Manager):
         # NOTE(danms): Diff the object with the one passed to us and
         # generate a list of changes to forward back
         for field in objinst.fields:
-            if not hasattr(objinst, nova_object.get_attrname(field)):
+            if not objinst.obj_attr_is_set(field):
                 # Avoid demand-loading anything
                 continue
-            if oldobj[field] != objinst[field]:
+            if (not oldobj.obj_attr_is_set(field) or
+                    oldobj[field] != objinst[field]):
                 updates[field] = objinst._attr_to_primitive(field)
         # This is safe since a field named this would conflict with the
         # method anyway
         updates['obj_what_changed'] = objinst.obj_what_changed()
         return updates, result
 
+    # NOTE(danms): This method is now deprecated and can be removed in
+    # v2.0 of the RPC API
     def compute_reboot(self, context, instance, reboot_type):
         self.compute_api.reboot(context, instance, reboot_type)
 
@@ -563,12 +596,14 @@ class ComputeTaskManager(base.Base):
     """
 
     RPC_API_NAMESPACE = 'compute_task'
-    RPC_API_VERSION = '1.3'
+    RPC_API_VERSION = '1.6'
 
     def __init__(self):
         super(ComputeTaskManager, self).__init__()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
+        self.image_service = glance.get_default_image_service()
+        self.quotas = quota.QUOTAS
 
     @rpc_common.client_exceptions(exception.NoValidHost,
                                   exception.ComputeServiceUnavailable,
@@ -579,17 +614,126 @@ class ComputeTaskManager(base.Base):
                                   exception.InvalidSharedStorage,
                                   exception.MigrationPreCheckError)
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
-                  flavor, block_migration, disk_over_commit):
-        if not live or rebuild or (flavor != None):
+            flavor, block_migration, disk_over_commit, reservations=None):
+        if instance and not isinstance(instance, instance_obj.Instance):
+            # NOTE(danms): Until v2 of the RPC API, we need to tolerate
+            # old-world instance objects here
+            attrs = ['metadata', 'system_metadata', 'info_cache',
+                     'security_groups']
+            instance = instance_obj.Instance._from_db_object(
+                context, instance_obj.Instance(), instance,
+                expected_attrs=attrs)
+        if live and not rebuild and not flavor:
+            self._live_migrate(context, instance, scheduler_hint,
+                               block_migration, disk_over_commit)
+        elif not live and not rebuild and flavor:
+            instance_uuid = instance['uuid']
+            with compute_utils.EventReporter(context, ConductorManager(),
+                                         'cold_migrate', instance_uuid):
+                self._cold_migrate(context, instance, flavor,
+                                   scheduler_hint['filter_properties'],
+                                   reservations)
+        else:
             raise NotImplementedError()
 
+    def _cold_migrate(self, context, instance, flavor, filter_properties,
+                      reservations):
+        image_ref = instance.image_ref
+        if image_ref:
+            image = self._get_image(context, image_ref)
+        else:
+            image = {}
+
+        request_spec = scheduler_utils.build_request_spec(
+            context, image, [instance], instance_type=flavor)
+
+        try:
+            hosts = self.scheduler_rpcapi.select_destinations(
+                    context, request_spec, filter_properties)
+            host_state = hosts[0]
+        except exception.NoValidHost as ex:
+            vm_state = instance['vm_state']
+            if not vm_state:
+                vm_state = vm_states.ACTIVE
+            updates = {'vm_state': vm_state, 'task_state': None}
+            self._set_vm_state_and_notify(context, 'migrate_server',
+                                          updates, ex, request_spec)
+            if reservations:
+                self.quotas.rollback(context, reservations)
+
+            LOG.warning(_("No valid host found for cold migrate"))
+            return
+
+        try:
+            scheduler_utils.populate_filter_properties(filter_properties,
+                                                       host_state)
+            # context is not serializable
+            filter_properties.pop('context', None)
+
+            # TODO(timello): originally, instance_type in request_spec
+            # on compute.api.resize does not have 'extra_specs', so we
+            # remove it for now to keep tests backward compatibility.
+            request_spec['instance_type'].pop('extra_specs')
+
+            (host, node) = (host_state['host'], host_state['nodename'])
+            self.compute_rpcapi.prep_resize(
+                context, image, instance,
+                flavor, host,
+                reservations, request_spec=request_spec,
+                filter_properties=filter_properties, node=node)
+        except Exception as ex:
+            with excutils.save_and_reraise_exception():
+                updates = {'vm_state': vm_states.ERROR,
+                            'task_state': None}
+                self._set_vm_state_and_notify(context, 'migrate_server',
+                                              updates, ex, request_spec)
+                if reservations:
+                    self.quotas.rollback(context, reservations)
+
+    def _set_vm_state_and_notify(self, context, method, updates, ex,
+                                 request_spec):
+        scheduler_utils.set_vm_state_and_notify(
+                context, 'compute_task', method, updates,
+                ex, request_spec, self.db)
+
+    def _live_migrate(self, context, instance, scheduler_hint,
+                      block_migration, disk_over_commit):
         destination = scheduler_hint.get("host")
-        self.scheduler_rpcapi.live_migration(context, block_migration,
-                disk_over_commit, instance, destination)
+        try:
+            live_migrate.execute(context, instance, destination,
+                             block_migration, disk_over_commit)
+        except (exception.NoValidHost,
+                exception.ComputeServiceUnavailable,
+                exception.InvalidHypervisorType,
+                exception.UnableToMigrateToSelf,
+                exception.DestinationHypervisorTooOld,
+                exception.InvalidLocalStorage,
+                exception.InvalidSharedStorage,
+                exception.MigrationPreCheckError) as ex:
+            with excutils.save_and_reraise_exception():
+                #TODO(johngarbutt) - eventually need instance actions here
+                request_spec = {'instance_properties': {
+                    'uuid': instance['uuid'], },
+                }
+                scheduler_utils.set_vm_state_and_notify(context,
+                        'compute_task', 'migrate_server',
+                        dict(vm_state=instance['vm_state'],
+                             task_state=None,
+                             expected_task_state=task_states.MIGRATING,),
+                        ex, request_spec, self.db)
+        except Exception as ex:
+            with excutils.save_and_reraise_exception():
+                request_spec = {'instance_properties': {
+                    'uuid': instance['uuid'], },
+                }
+                scheduler_utils.set_vm_state_and_notify(context,
+                        'compute_task', 'migrate_server',
+                        {'vm_state': vm_states.ERROR},
+                        ex, request_spec, self.db)
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
-            security_groups, block_device_mapping):
+            security_groups, block_device_mapping, legacy_bdm=True):
         request_spec = scheduler_utils.build_request_spec(context, image,
                                                           instances)
         # NOTE(alaski): For compatibility until a new scheduler method is used.
@@ -598,21 +742,13 @@ class ComputeTaskManager(base.Base):
         self.scheduler_rpcapi.run_instance(context, request_spec=request_spec,
                 admin_password=admin_password, injected_files=injected_files,
                 requested_networks=requested_networks, is_first_time=True,
-                filter_properties=filter_properties)
-
-    def _instance_update(self, context, instance_uuid, **kwargs):
-        (old_ref, instance_ref) = self.db.instance_update_and_get_original(
-                context, instance_uuid, kwargs)
-        notifications.send_update(context, old_ref, instance_ref, 'conductor')
-        return instance_ref
+                filter_properties=filter_properties,
+                legacy_bdm_in_spec=legacy_bdm)
 
     def _get_image(self, context, image_id):
         if not image_id:
             return None
-
-        (image_service, image_id) = glance.get_remote_image_service(context,
-                image_id)
-        return image_service.show(context, image_id)
+        return self.image_service.show(context, image_id)
 
     def _delete_image(self, context, image_id):
         (image_service, image_id) = glance.get_remote_image_service(context,

@@ -2,6 +2,7 @@
 
 # Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
+# Copyright 2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -29,16 +30,18 @@ from nova import db
 from nova.image import glance
 from nova import network
 from nova.network import model as network_model
+from nova import notifier as notify
+from nova.openstack.common import context as common_context
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log
-from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common import timeutils
 from nova import utils
 
 LOG = log.getLogger(__name__)
 
 notify_opts = [
-    cfg.StrOpt('notify_on_state_change', default=None,
+    cfg.StrOpt('notify_on_state_change',
         help='If set, send compute.instance.update notifications on instance '
              'state changes.  Valid values are None for no notifications, '
              '"vm_state" for notifications on VM state changes, or '
@@ -52,6 +55,40 @@ notify_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(notify_opts)
+CONF.import_opt('default_notification_level',
+                'nova.openstack.common.notifier.api')
+CONF.import_opt('default_publisher_id',
+                'nova.openstack.common.notifier.api')
+
+
+def notify_decorator(name, fn):
+    """Decorator for notify which is used from utils.monkey_patch().
+
+        :param name: name of the function
+        :param function: - object of the function
+        :returns: function -- decorated function
+
+    """
+    def wrapped_func(*args, **kwarg):
+        body = {}
+        body['args'] = []
+        body['kwarg'] = {}
+        for arg in args:
+            body['args'].append(arg)
+        for key in kwarg:
+            body['kwarg'][key] = kwarg[key]
+
+        ctxt = common_context.get_context_from_function_and_args(
+            fn, args, kwarg)
+
+        notifier = notify.get_notifier(publisher_id=(CONF.default_publisher_id
+                                                     or CONF.host))
+        method = notifier.getattr(CONF.default_notification_level.lower(),
+                                  'info')
+        method(ctxt, name, body)
+
+        return fn(*args, **kwarg)
+    return wrapped_func
 
 
 def send_api_fault(url, status, exception):
@@ -62,10 +99,7 @@ def send_api_fault(url, status, exception):
 
     payload = {'url': url, 'exception': str(exception), 'status': status}
 
-    publisher_id = notifier_api.publisher_id("api")
-
-    notifier_api.notify(None, publisher_id, 'api.fault', notifier_api.ERROR,
-                        payload)
+    notify.get_notifier('api').error(None, 'api.fault', payload)
 
 
 def send_update(context, old_instance, new_instance, service=None, host=None):
@@ -191,10 +225,8 @@ def _send_instance_update_notification(context, instance, old_vm_state=None,
     if old_display_name:
         payload["old_display_name"] = old_display_name
 
-    publisher_id = notifier_api.publisher_id(service, host)
-
-    notifier_api.notify(context, publisher_id, 'compute.instance.update',
-            notifier_api.INFO, payload)
+    notify.get_notifier(service, host).info(context,
+                                            'compute.instance.update', payload)
 
 
 def audit_period_bounds(current_period=False):
@@ -221,18 +253,19 @@ def bandwidth_usage(instance_ref, audit_start,
     """Get bandwidth usage information for the instance for the
     specified audit period.
     """
-
     admin_context = nova.context.get_admin_context(read_deleted='yes')
 
-    if (instance_ref.get('info_cache') and
-            instance_ref['info_cache'].get('network_info') is not None):
-
-        cached_info = instance_ref['info_cache']['network_info']
-        nw_info = network_model.NetworkInfo.hydrate(cached_info)
-    else:
+    def _get_nwinfo_old_skool():
+        """Support for getting network info without objects."""
+        if (instance_ref.get('info_cache') and
+                instance_ref['info_cache'].get('network_info') is not None):
+            cached_info = instance_ref['info_cache']['network_info']
+            if isinstance(cached_info, network_model.NetworkInfo):
+                return cached_info
+            return network_model.NetworkInfo.hydrate(cached_info)
         try:
-            nw_info = network.API().get_instance_nw_info(admin_context,
-                    instance_ref)
+            return network.API().get_instance_nw_info(admin_context,
+                                                      instance_ref)
         except Exception:
             try:
                 with excutils.save_and_reraise_exception():
@@ -242,6 +275,16 @@ def bandwidth_usage(instance_ref, audit_start,
                 if ignore_missing_network_data:
                     return
                 raise
+
+    # FIXME(comstud): Temporary as we transition to objects.  This import
+    # is here to avoid circular imports.
+    from nova.objects import instance as instance_obj
+    if isinstance(instance_ref, instance_obj.Instance):
+        nw_info = instance_ref.info_cache.network_info
+        if nw_info is None:
+            nw_info = network_model.NetworkInfo()
+    else:
+        nw_info = _get_nwinfo_old_skool()
 
     macs = [vif['address'] for vif in nw_info]
     uuids = [instance_ref["uuid"]]

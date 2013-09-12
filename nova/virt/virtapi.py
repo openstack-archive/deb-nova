@@ -90,3 +90,19 @@ class VirtAPI(object):
         :param instance_type_id: the id of the instance type in question
         """
         raise NotImplementedError()
+
+    def block_device_mapping_get_all_by_instance(self, context, instance,
+                                                 legacy=True):
+        """Get block device mappings for an instance
+        :param context: security context
+        :param instance: the instance we're getting bdms for
+        :param legacy: get bdm info in legacy format (or not)
+        """
+        raise NotImplementedError()
+
+    def block_device_mapping_update(self, context, bdm_id, bdm_values):
+        """Update the databse for the passed block device mapping
+        :param context: security context
+        :param bdm: the block device mapping dict
+        """
+        raise NotImplementedError()

@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
@@ -22,7 +23,12 @@ The VMware API VM utility module to build SOAP object specs.
 import copy
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
+from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import vim_util
+
+
+LOG = logging.getLogger(__name__)
 
 
 def build_datastore_path(datastore_name, path):
@@ -145,7 +151,13 @@ def create_network_spec(client_factory, vif_info):
     network_name = vif_info['network_name']
     mac_address = vif_info['mac_address']
     backing = None
-    if (network_ref and
+    if network_ref and network_ref['type'] == 'OpaqueNetwork':
+        backing_name = ''.join(['ns0:VirtualEthernetCard',
+                                'OpaqueNetworkBackingInfo'])
+        backing = client_factory.create(backing_name)
+        backing.opaqueNetworkId = network_ref['network-id']
+        backing.opaqueNetworkType = network_ref['network-type']
+    elif (network_ref and
             network_ref['type'] == "DistributedVirtualPortgroup"):
         backing_name = ''.join(['ns0:VirtualEthernetCardDistributed',
                                 'VirtualPortBackingInfo'])
@@ -217,6 +229,29 @@ def get_vmdk_attach_config_spec(client_factory,
     return config_spec
 
 
+def get_cdrom_attach_config_spec(client_factory,
+                                 datastore,
+                                 file_path,
+                                 cdrom_unit_number):
+    """Builds and returns the cdrom attach config spec."""
+    config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+
+    device_config_spec = []
+    # For IDE devices, there are these two default controllers created in the
+    # VM having keys 200 and 201
+    controller_key = 200
+    virtual_device_config_spec = create_virtual_cdrom_spec(client_factory,
+                                                           datastore,
+                                                           controller_key,
+                                                           file_path,
+                                                           cdrom_unit_number)
+
+    device_config_spec.append(virtual_device_config_spec)
+
+    config_spec.deviceChange = device_config_spec
+    return config_spec
+
+
 def get_vmdk_detach_config_spec(client_factory, device):
     """Builds the vmdk detach config spec."""
     config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
@@ -228,6 +263,20 @@ def get_vmdk_detach_config_spec(client_factory, device):
     device_config_spec.append(virtual_device_config_spec)
 
     config_spec.deviceChange = device_config_spec
+    return config_spec
+
+
+def get_vm_extra_config_spec(client_factory, extra_opts):
+    """Builds extra spec fields from a dictionary."""
+    config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+    # add the key value pairs
+    extra_config = []
+    for key, value in extra_opts.iteritems():
+        opt = client_factory.create('ns0:OptionValue')
+        opt.key = key
+        opt.value = value
+        extra_config.append(opt)
+        config_spec.extraConfig = extra_config
     return config_spec
 
 
@@ -311,6 +360,39 @@ def get_rdm_create_spec(client_factory, device, adapter_type="lsiLogic",
     create_vmdk_spec.diskType = disk_type
     create_vmdk_spec.device = device
     return create_vmdk_spec
+
+
+def create_virtual_cdrom_spec(client_factory,
+                              datastore,
+                              controller_key,
+                              file_path,
+                              cdrom_unit_number):
+    """Builds spec for the creation of a new Virtual CDROM to the VM."""
+    config_spec = client_factory.create(
+        'ns0:VirtualDeviceConfigSpec')
+    config_spec.operation = "add"
+
+    cdrom = client_factory.create('ns0:VirtualCdrom')
+
+    cdrom_device_backing = client_factory.create(
+        'ns0:VirtualCdromIsoBackingInfo')
+    cdrom_device_backing.datastore = datastore
+    cdrom_device_backing.fileName = file_path
+
+    cdrom.backing = cdrom_device_backing
+    cdrom.controllerKey = controller_key
+    cdrom.unitNumber = cdrom_unit_number
+    cdrom.key = -1
+
+    connectable_spec = client_factory.create('ns0:VirtualDeviceConnectInfo')
+    connectable_spec.startConnected = True
+    connectable_spec.allowGuestControl = False
+    connectable_spec.connected = True
+
+    cdrom.connectable = connectable_spec
+
+    config_spec.device = cdrom
+    return config_spec
 
 
 def create_virtual_disk_spec(client_factory, controller_key,
@@ -498,23 +580,64 @@ def search_datastore_spec(client_factory, file_name):
     return search_spec
 
 
+def _get_token(results):
+    """Get the token from the property results."""
+    return getattr(results, 'token', None)
+
+
+def _get_reference_for_value(results, value):
+    for object in results.objects:
+        if object.obj.value == value:
+            return object
+
+
+def _get_object_for_value(results, value):
+    for object in results.objects:
+        if object.propSet[0].val == value:
+            return object.obj
+
+
+def _get_object_from_results(session, results, value, func):
+    while results:
+        token = _get_token(results)
+        object = func(results, value)
+        if object:
+            if token:
+                session._call_method(vim_util,
+                                     "cancel_retrieve",
+                                     token)
+            return object
+
+        if token:
+            results = session._call_method(vim_util,
+                                           "continue_to_get_objects",
+                                           token)
+        else:
+            return None
+
+
+def _cancel_retrieve_if_necessary(session, results):
+    token = _get_token(results)
+    if token:
+        results = session._call_method(vim_util,
+                                       "cancel_retrieve",
+                                       token)
+
+
 def get_vm_ref_from_name(session, vm_name):
     """Get reference to the VM with the name specified."""
     vms = session._call_method(vim_util, "get_objects",
                 "VirtualMachine", ["name"])
-    for vm in vms:
-        if vm.propSet[0].val == vm_name:
-            return vm.obj
-    return None
+    return _get_object_from_results(session, vms, vm_name,
+                                    _get_object_for_value)
 
 
 def get_vm_ref_from_uuid(session, instance_uuid):
     """Get reference to the VM with the uuid specified."""
     vms = session._call_method(vim_util, "get_objects",
                 "VirtualMachine", ["name"])
-    for vm in vms:
-        if vm.propSet[0].val == instance_uuid:
-            return vm.obj
+    return _get_object_from_results(session, vms, instance_uuid,
+                                    _get_object_for_value)
 
 
 def get_vm_ref(session, instance):
@@ -536,10 +659,8 @@ def get_host_ref_from_id(session, host_id, property_list=None):
     host_refs = session._call_method(
                     vim_util, "get_objects",
                     "HostSystem", property_list)
-
-    for ref in host_refs:
-        if ref.obj.value == host_id:
-            return ref
+    return _get_object_from_results(session, host_refs, host_id,
+                                    _get_reference_for_value)
 
 
 def get_host_id_from_vm_ref(session, vm_ref):
@@ -600,7 +721,7 @@ def property_from_property_set(property_name, property_set):
     :return: the value of the property.
     '''
 
-    for prop in property_set:
+    for prop in property_set.objects:
         p = _property_from_propSet(prop.propSet, property_name)
         if p is not None:
             return p
@@ -643,17 +764,17 @@ def get_cluster_ref_from_name(session, cluster_name):
     """Get reference to the cluster with the name specified."""
     cls = session._call_method(vim_util, "get_objects",
                                "ClusterComputeResource", ["name"])
-    for cluster in cls:
-        if cluster.propSet[0].val == cluster_name:
-            return cluster.obj
-    return None
+    return _get_object_from_results(session, cls, cluster_name,
+                                    _get_object_for_value)
 
 
 def get_host_ref(session, cluster=None):
     """Get reference to a host within the cluster specified."""
     if cluster is None:
-        host_mor = session._call_method(vim_util, "get_objects",
-                                        "HostSystem")[0].obj
+        results = session._call_method(vim_util, "get_objects",
+                                       "HostSystem")
+        _cancel_retrieve_if_necessary(session, results)
+        host_mor = results.objects[0].obj
     else:
         host_ret = session._call_method(vim_util, "get_dynamic_property",
                                         cluster, "ClusterComputeResource",
@@ -667,12 +788,30 @@ def get_host_ref(session, cluster=None):
     return host_mor
 
 
-def get_datastore_ref_and_name(session, cluster=None, host=None):
+def _get_datastore_ref_and_name(data_stores, datastore_regex=None):
+    for elem in data_stores.objects:
+        propset_dict = dict([(prop.name, prop.val) for prop in elem.propSet])
+        # Local storage identifier vSphere doesn't support CIFS or
+        # vfat for datastores, therefore filtered
+        ds_type = propset_dict['summary.type']
+        ds_name = propset_dict['summary.name']
+        if ((ds_type == 'VMFS' or ds_type == 'NFS') and
+                propset_dict['summary.accessible']):
+            if not datastore_regex or datastore_regex.match(ds_name):
+                return (elem.obj,
+                        ds_name,
+                        propset_dict['summary.capacity'],
+                        propset_dict['summary.freeSpace'])
+
+
+def get_datastore_ref_and_name(session, cluster=None, host=None,
+                               datastore_regex=None):
     """Get the datastore list and choose the first local storage."""
     if cluster is None and host is None:
         data_stores = session._call_method(vim_util, "get_objects",
                     "Datastore", ["summary.type", "summary.name",
-                                  "summary.capacity", "summary.freeSpace"])
+                                  "summary.capacity", "summary.freeSpace",
+                                  "summary.accessible"])
     else:
         if cluster is not None:
             datastore_ret = session._call_method(
@@ -692,23 +831,184 @@ def get_datastore_ref_and_name(session, cluster=None, host=None):
                                 "get_properties_for_a_collection_of_objects",
                                 "Datastore", data_store_mors,
                                 ["summary.type", "summary.name",
-                                 "summary.capacity", "summary.freeSpace"])
-    for elem in data_stores:
-        ds_name = None
-        ds_type = None
-        ds_cap = None
-        ds_free = None
-        for prop in elem.propSet:
-            if prop.name == "summary.type":
-                ds_type = prop.val
-            elif prop.name == "summary.name":
-                ds_name = prop.val
-            elif prop.name == "summary.capacity":
-                ds_cap = prop.val
-            elif prop.name == "summary.freeSpace":
-                ds_free = prop.val
-        # Local storage identifier
-        if ds_type == "VMFS" or ds_type == "NFS":
-            return elem.obj, ds_name, ds_cap, ds_free
+                                 "summary.capacity", "summary.freeSpace",
+                                 "summary.accessible"])
+    while data_stores:
+        token = _get_token(data_stores)
+        results = _get_datastore_ref_and_name(data_stores, datastore_regex)
+        if results:
+            if token:
+                session._call_method(vim_util,
+                                     "cancel_retrieve",
+                                     token)
+            return results
+        if token:
+            data_stores = session._call_method(vim_util,
+                                               "continue_to_get_objects",
+                                               token)
+        else:
+            if datastore_regex:
+                raise exception.DatastoreNotFound(
+                _("Datastore regex %s did not match any datastores")
+                % datastore_regex.pattern)
+            else:
+                raise exception.DatastoreNotFound()
+    raise exception.DatastoreNotFound()
 
-        raise exception.DatastoreNotFound()
+
+def get_vmdk_backed_disk_uuid(hardware_devices, volume_uuid):
+    if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
+        hardware_devices = hardware_devices.VirtualDevice
+
+    for device in hardware_devices:
+        if (device.__class__.__name__ == "VirtualDisk" and
+                device.backing.__class__.__name__ ==
+                "VirtualDiskFlatVer2BackingInfo" and
+                volume_uuid in device.backing.fileName):
+            return device.backing.uuid
+
+
+def get_vmdk_backed_disk_device(hardware_devices, uuid):
+    if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
+        hardware_devices = hardware_devices.VirtualDevice
+
+    for device in hardware_devices:
+        if (device.__class__.__name__ == "VirtualDisk" and
+                device.backing.__class__.__name__ ==
+                "VirtualDiskFlatVer2BackingInfo" and
+                device.backing.uuid == uuid):
+            return device
+
+
+def get_vmdk_volume_disk(hardware_devices):
+    if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
+        hardware_devices = hardware_devices.VirtualDevice
+
+    for device in hardware_devices:
+        if (device.__class__.__name__ == "VirtualDisk"):
+            return device
+
+
+def get_res_pool_ref(session, cluster, node_mo_id):
+    """Get the resource pool."""
+    if cluster is None:
+        # With no cluster named, use the root resource pool.
+        results = session._call_method(vim_util, "get_objects",
+                                       "ResourcePool")
+        _cancel_retrieve_if_necessary(session, results)
+        # The 0th resource pool is always the root resource pool on both ESX
+        # and vCenter.
+        res_pool_ref = results.objects[0].obj
+    else:
+        if cluster.value == node_mo_id:
+            # Get the root resource pool of the cluster
+            res_pool_ref = session._call_method(vim_util,
+                                                  "get_dynamic_property",
+                                                  cluster,
+                                                  "ClusterComputeResource",
+                                                  "resourcePool")
+
+    return res_pool_ref
+
+
+def get_all_cluster_mors(session):
+    """Get all the clusters in the vCenter."""
+    try:
+        results = session._call_method(vim_util, "get_objects",
+                                        "ClusterComputeResource", ["name"])
+        _cancel_retrieve_if_necessary(session, results)
+        return results.objects
+
+    except Exception as excep:
+        LOG.warn(_("Failed to get cluster references %s") % excep)
+
+
+def get_all_res_pool_mors(session):
+    """Get all the resource pools in the vCenter."""
+    try:
+        results = session._call_method(vim_util, "get_objects",
+                                             "ResourcePool")
+
+        _cancel_retrieve_if_necessary(session, results)
+        return results.objects
+    except Exception as excep:
+        LOG.warn(_("Failed to get resource pool references " "%s") % excep)
+
+
+def get_dynamic_property_mor(session, mor_ref, attribute):
+    """Get the value of an attribute for a given managed object."""
+    return session._call_method(vim_util, "get_dynamic_property",
+                                mor_ref, mor_ref._type, attribute)
+
+
+def find_entity_mor(entity_list, entity_name):
+    """Returns managed object ref for given cluster or resource pool name."""
+    return [mor for mor in entity_list if mor.propSet[0].val == entity_name]
+
+
+def get_all_cluster_refs_by_name(session, path_list):
+    """Get reference to the Cluster, ResourcePool with the path specified.
+
+    The path is the display name. This can be the full path as well.
+    The input will have the list of clusters and resource pool names
+    """
+    cls = get_all_cluster_mors(session)
+    res = get_all_res_pool_mors(session)
+    path_list = [path.strip() for path in path_list]
+    list_obj = []
+    for entity_path in path_list:
+        # entity_path could be unique cluster and/or resource-pool name
+        res_mor = find_entity_mor(res, entity_path)
+        cls_mor = find_entity_mor(cls, entity_path)
+        cls_mor.extend(res_mor)
+        for mor in cls_mor:
+            list_obj.append((mor.obj, mor.propSet[0].val))
+    return get_dict_mor(session, list_obj)
+
+
+def get_dict_mor(session, list_obj):
+    """The input is a list of objects in the form
+    (manage_object,display_name)
+    The managed object will be in the form
+    { value = "domain-1002", _type = "ClusterComputeResource" }
+
+    Output data format:
+    dict_mors = {
+                  'respool-1001': { 'cluster_mor': clusterMor,
+                                    'res_pool_mor': resourcePoolMor,
+                                    'name': display_name },
+                  'domain-1002': { 'cluster_mor': clusterMor,
+                                    'res_pool_mor': resourcePoolMor,
+                                    'name': display_name },
+                }
+    """
+    dict_mors = {}
+    for obj_ref, path in list_obj:
+        if obj_ref._type == "ResourcePool":
+            # Get owner cluster-ref mor
+            cluster_ref = get_dynamic_property_mor(session, obj_ref, "owner")
+            dict_mors[obj_ref.value] = {'cluster_mor': cluster_ref,
+                                        'res_pool_mor': obj_ref,
+                                        'name': path,
+                                        }
+        else:
+            # Get default resource pool of the cluster
+            res_pool_ref = get_dynamic_property_mor(session,
+                                                    obj_ref, "resourcePool")
+            dict_mors[obj_ref.value] = {'cluster_mor': obj_ref,
+                                        'res_pool_mor': res_pool_ref,
+                                        'name': path,
+                                        }
+    return dict_mors
+
+
+def get_mo_id_from_instance(instance):
+    """Return the managed object ID from the instance.
+
+    The instance['node'] will have the hypervisor_hostname field of the
+    compute node on which the instance exists or will be provisioned.
+    This will be of the form
+    'respool-1001(MyResPoolName)'
+    'domain-1001(MyClusterName)'
+    """
+    return instance['node'].partition('(')[0]

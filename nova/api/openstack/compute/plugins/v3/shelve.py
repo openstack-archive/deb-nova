@@ -40,10 +40,10 @@ class ShelveController(wsgi.Controller):
         try:
             return self.compute_api.get(context, instance_id,
                                         want_objects=True)
-        except exception.InstanceNotFound:
-            msg = _("Server not found")
-            raise exc.HTTPNotFound(msg)
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
 
+    @exts.expected_errors((404, 409))
     @wsgi.action('shelve')
     def _shelve(self, req, id, body):
         """Move an instance into shelved mode."""
@@ -59,6 +59,7 @@ class ShelveController(wsgi.Controller):
 
         return webob.Response(status_int=202)
 
+    @exts.expected_errors((404, 409))
     @wsgi.action('shelve_offload')
     def _shelve_offload(self, req, id, body):
         """Force removal of a shelved instance from the compute node."""
@@ -74,6 +75,7 @@ class ShelveController(wsgi.Controller):
 
         return webob.Response(status_int=202)
 
+    @exts.expected_errors((404, 409))
     @wsgi.action('unshelve')
     def _unshelve(self, req, id, body):
         """Restore an instance from shelved mode."""

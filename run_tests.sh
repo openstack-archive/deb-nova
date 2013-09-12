@@ -97,12 +97,6 @@ if [ $no_site_packages -eq 1 ]; then
   installvenvopts="--no-site-packages"
 fi
 
-function init_testr {
-  if [ ! -d .testrepository ]; then
-    ${wrapper} testr init
-  fi
-}
-
 function run_tests {
   # Cleanup *pyc
   ${wrapper} find . -type f -name "*.pyc" -delete
@@ -168,6 +162,10 @@ function copy_subunit_log {
 
 function run_pep8 {
   echo "Running flake8 ..."
+  if [ $never_venv -eq 1 ]; then
+      echo "**WARNING**:"
+      echo "Running flake8 without virtual env may miss OpenStack HACKING detection"
+  fi
   bash -c "${wrapper} flake8"
 }
 
@@ -214,7 +212,6 @@ if [ $just_pep8 -eq 1 ]; then
     exit
 fi
 
-init_testr
 run_tests
 
 # NOTE(sirp): we only want to run pep8 when we're running the full-test suite,

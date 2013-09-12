@@ -28,6 +28,7 @@ from oslo.config import cfg
 from nova import conductor
 from nova import context
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import rpc
@@ -64,7 +65,6 @@ service_opts = [
                default=8773,
                help='port for ec2 api to listen'),
     cfg.IntOpt('ec2_workers',
-               default=None,
                help='Number of workers for EC2 API service'),
     cfg.StrOpt('osapi_compute_listen',
                default="0.0.0.0",
@@ -73,7 +73,6 @@ service_opts = [
                default=8774,
                help='list port for osapi compute'),
     cfg.IntOpt('osapi_compute_workers',
-               default=None,
                help='Number of workers for OpenStack API service'),
     cfg.StrOpt('metadata_manager',
                default='nova.api.manager.MetadataManager',
@@ -85,7 +84,6 @@ service_opts = [
                default=8775,
                help='port for metadata api to listen'),
     cfg.IntOpt('metadata_workers',
-               default=None,
                help='Number of workers for metadata service'),
     cfg.StrOpt('compute_manager',
                default='nova.compute.manager.ComputeManager',
@@ -163,14 +161,14 @@ class Service(service.Service):
         except exception.NotFound:
             self.service_ref = self._create_service_ref(ctxt)
 
+        self.manager.pre_start_hook()
+
         if self.backdoor_port is not None:
             self.manager.backdoor_port = self.backdoor_port
 
         self.conn = rpc.create_connection(new=True)
         LOG.debug(_("Creating Consumer connection for Service %s") %
                   self.topic)
-
-        self.manager.pre_start_hook(rpc_connection=self.conn)
 
         rpc_dispatcher = self.manager.create_rpc_dispatcher(self.backdoor_port)
 

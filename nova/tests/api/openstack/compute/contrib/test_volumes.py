@@ -1,4 +1,5 @@
 # Copyright 2013 Josh Durgin
+# Copyright 2013 Red Hat, Inc.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -20,7 +21,10 @@ from oslo.config import cfg
 import webob
 from webob import exc
 
+from nova.api.openstack.compute.contrib import assisted_volume_snapshots as \
+        assisted_snaps
 from nova.api.openstack.compute.contrib import volumes
+from nova.api.openstack import extensions
 from nova.compute import api as compute_api
 from nova.compute import flavors
 from nova import context
@@ -43,29 +47,7 @@ FAKE_UUID_D = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
 IMAGE_UUID = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
 
 
-def fake_compute_api_create(cls, context, instance_type, image_href, **kwargs):
-    global _block_device_mapping_seen
-    _block_device_mapping_seen = kwargs.get('block_device_mapping')
-
-    inst_type = flavors.get_flavor_by_flavor_id(2)
-    resv_id = None
-    return ([{'id': 1,
-              'display_name': 'test_server',
-              'uuid': FAKE_UUID,
-              'instance_type': dict(inst_type),
-              'access_ip_v4': '1.2.3.4',
-              'access_ip_v6': 'fead::1234',
-              'image_ref': IMAGE_UUID,
-              'user_id': 'fake',
-              'project_id': 'fake',
-              'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
-              'updated_at': datetime.datetime(2010, 11, 11, 11, 0, 0),
-              'progress': 0,
-              'fixed_ips': []
-              }], resv_id)
-
-
-def fake_get_instance(self, context, instance_id):
+def fake_get_instance(self, context, instance_id, want_objects=False):
     return {'uuid': instance_id}
 
 
@@ -81,6 +63,11 @@ def fake_detach_volume(self, context, instance, volume):
     pass
 
 
+def fake_swap_volume(self, context, instance,
+                     old_volume_id, new_volume_id):
+    pass
+
+
 def fake_create_snapshot(self, context, volume, name, description):
     return {'id': 123,
             'volume_id': 'fakeVolId',
@@ -89,6 +76,20 @@ def fake_create_snapshot(self, context, volume, name, description):
             'created_at': '2013-01-01 00:00:01',
             'display_name': 'myVolumeName',
             'display_description': 'myVolumeDescription'}
+
+
+def fake_delete_snapshot(self, context, snapshot_id):
+    pass
+
+
+def fake_compute_volume_snapshot_delete(self, context, volume_id, snapshot_id,
+                                        delete_info):
+    pass
+
+
+def fake_compute_volume_snapshot_create(self, context, volume_id,
+                                        create_info):
+    pass
 
 
 def fake_get_instance_bdms(self, context, instance):
@@ -114,12 +115,40 @@ class BootFromVolumeTest(test.TestCase):
 
     def setUp(self):
         super(BootFromVolumeTest, self).setUp()
-        self.stubs.Set(compute_api.API, 'create', fake_compute_api_create)
+        self.stubs.Set(compute_api.API, 'create',
+                       self._get_fake_compute_api_create())
         fakes.stub_out_nw_api(self.stubs)
+        self._block_device_mapping_seen = None
+        self._legacy_bdm_seen = True
         self.flags(
             osapi_compute_extension=[
                 'nova.api.openstack.compute.contrib.select_extensions'],
-            osapi_compute_ext_list=['Volumes'])
+            osapi_compute_ext_list=['Volumes', 'Block_device_mapping_v2_boot'])
+
+    def _get_fake_compute_api_create(self):
+        def _fake_compute_api_create(cls, context, instance_type,
+                                    image_href, **kwargs):
+            self._block_device_mapping_seen = kwargs.get(
+                'block_device_mapping')
+            self._legacy_bdm_seen = kwargs.get('legacy_bdm')
+
+            inst_type = flavors.get_flavor_by_flavor_id(2)
+            resv_id = None
+            return ([{'id': 1,
+                      'display_name': 'test_server',
+                      'uuid': FAKE_UUID,
+                      'instance_type': dict(inst_type),
+                      'access_ip_v4': '1.2.3.4',
+                      'access_ip_v6': 'fead::1234',
+                      'image_ref': IMAGE_UUID,
+                      'user_id': 'fake',
+                      'project_id': 'fake',
+                      'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
+                      'updated_at': datetime.datetime(2010, 11, 11, 11, 0, 0),
+                      'progress': 0,
+                      'fixed_ips': []
+                      }], resv_id)
+        return _fake_compute_api_create
 
     def test_create_root_volume(self):
         body = dict(server=dict(
@@ -132,8 +161,6 @@ class BootFromVolumeTest(test.TestCase):
                         delete_on_termination=False,
                         )]
                 ))
-        global _block_device_mapping_seen
-        _block_device_mapping_seen = None
         req = webob.Request.blank('/v2/fake/os-volumes_boot')
         req.method = 'POST'
         req.body = jsonutils.dumps(body)
@@ -144,9 +171,40 @@ class BootFromVolumeTest(test.TestCase):
         server = jsonutils.loads(res.body)['server']
         self.assertEqual(FAKE_UUID, server['id'])
         self.assertEqual(CONF.password_length, len(server['adminPass']))
-        self.assertEqual(len(_block_device_mapping_seen), 1)
-        self.assertEqual(_block_device_mapping_seen[0]['volume_id'], 1)
-        self.assertEqual(_block_device_mapping_seen[0]['device_name'],
+        self.assertEqual(len(self._block_device_mapping_seen), 1)
+        self.assertTrue(self._legacy_bdm_seen)
+        self.assertEqual(self._block_device_mapping_seen[0]['volume_id'], 1)
+        self.assertEqual(self._block_device_mapping_seen[0]['device_name'],
+                '/dev/vda')
+
+    def test_create_root_volume_bdm_v2(self):
+        body = dict(server=dict(
+                name='test_server', imageRef=IMAGE_UUID,
+                flavorRef=2, min_count=1, max_count=1,
+                block_device_mapping_v2=[dict(
+                        source_type='volume',
+                        uuid=1,
+                        device_name='/dev/vda',
+                        boot_index=0,
+                        delete_on_termination=False,
+                        )]
+                ))
+        req = webob.Request.blank('/v2/fake/os-volumes_boot')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers['content-type'] = 'application/json'
+        res = req.get_response(fakes.wsgi_app(
+            init_only=('os-volumes_boot', 'servers')))
+        self.assertEqual(res.status_int, 202)
+        server = jsonutils.loads(res.body)['server']
+        self.assertEqual(FAKE_UUID, server['id'])
+        self.assertEqual(CONF.password_length, len(server['adminPass']))
+        self.assertEqual(len(self._block_device_mapping_seen), 1)
+        self.assertFalse(self._legacy_bdm_seen)
+        self.assertEqual(self._block_device_mapping_seen[0]['volume_id'], 1)
+        self.assertEqual(self._block_device_mapping_seen[0]['boot_index'],
+                         0)
+        self.assertEqual(self._block_device_mapping_seen[0]['device_name'],
                 '/dev/vda')
 
 
@@ -263,45 +321,43 @@ class VolumeAttachTests(test.TestCase):
              'id': FAKE_UUID_A,
              'volumeId': FAKE_UUID_A
             }}
+        self.ext_mgr = extensions.ExtensionManager()
+        self.ext_mgr.extensions = {}
+        self.attachments = volumes.VolumeAttachmentController(self.ext_mgr)
 
     def test_show(self):
-        attachments = volumes.VolumeAttachmentController()
-        req = webob.Request.blank('/v2/fake/os-volumes/show')
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')
         req.method = 'POST'
         req.body = jsonutils.dumps({})
         req.headers['content-type'] = 'application/json'
         req.environ['nova.context'] = self.context
 
-        result = attachments.show(req, FAKE_UUID, FAKE_UUID_A)
+        result = self.attachments.show(req, FAKE_UUID, FAKE_UUID_A)
         self.assertEqual(self.expected_show, result)
 
-    def test_delete(self):
+    def test_detach(self):
         self.stubs.Set(compute_api.API,
                        'detach_volume',
                        fake_detach_volume)
-        attachments = volumes.VolumeAttachmentController()
-        req = webob.Request.blank('/v2/fake/os-volumes/delete')
-        req.method = 'POST'
-        req.body = jsonutils.dumps({})
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')
+        req.method = 'DELETE'
         req.headers['content-type'] = 'application/json'
         req.environ['nova.context'] = self.context
 
-        result = attachments.delete(req, FAKE_UUID, FAKE_UUID_A)
+        result = self.attachments.delete(req, FAKE_UUID, FAKE_UUID_A)
         self.assertEqual('202 Accepted', result.status)
 
-    def test_delete_vol_not_found(self):
+    def test_detach_vol_not_found(self):
         self.stubs.Set(compute_api.API,
                        'detach_volume',
                        fake_detach_volume)
-        attachments = volumes.VolumeAttachmentController()
-        req = webob.Request.blank('/v2/fake/os-volumes/delete')
-        req.method = 'POST'
-        req.body = jsonutils.dumps({})
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')
+        req.method = 'DELETE'
         req.headers['content-type'] = 'application/json'
         req.environ['nova.context'] = self.context
 
         self.assertRaises(exc.HTTPNotFound,
-                          attachments.delete,
+                          self.attachments.delete,
                           req,
                           FAKE_UUID,
                           FAKE_UUID_C)
@@ -310,15 +366,14 @@ class VolumeAttachTests(test.TestCase):
         self.stubs.Set(compute_api.API,
                        'attach_volume',
                        fake_attach_volume)
-        attachments = volumes.VolumeAttachmentController()
         body = {'volumeAttachment': {'volumeId': FAKE_UUID_A,
                                     'device': '/dev/fake'}}
-        req = webob.Request.blank('/v2/fake/os-volumes/attach')
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments')
         req.method = 'POST'
         req.body = jsonutils.dumps({})
         req.headers['content-type'] = 'application/json'
         req.environ['nova.context'] = self.context
-        result = attachments.create(req, FAKE_UUID, body)
+        result = self.attachments.create(req, FAKE_UUID, body)
         self.assertEqual(result['volumeAttachment']['id'],
             '00000000-aaaa-aaaa-aaaa-000000000000')
 
@@ -326,7 +381,6 @@ class VolumeAttachTests(test.TestCase):
         self.stubs.Set(compute_api.API,
                        'attach_volume',
                        fake_attach_volume)
-        attachments = volumes.VolumeAttachmentController()
 
         body = {
             'volumeAttachment': {
@@ -335,13 +389,40 @@ class VolumeAttachTests(test.TestCase):
             }
         }
 
-        req = fakes.HTTPRequest.blank('/v2/fake/os-volumes/attach')
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments')
         req.method = 'POST'
-        req.content_type = 'application/json'
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
 
-        self.assertRaises(webob.exc.HTTPBadRequest, attachments.create,
+        self.assertRaises(webob.exc.HTTPBadRequest, self.attachments.create,
                           req, FAKE_UUID, body)
+
+    def _test_swap(self, uuid=FAKE_UUID_A):
+        self.stubs.Set(compute_api.API,
+                       'swap_volume',
+                       fake_swap_volume)
+        body = {'volumeAttachment': {'volumeId': FAKE_UUID_B,
+                                    'device': '/dev/fake'}}
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')
+        req.method = 'PUT'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+        return self.attachments.update(req, FAKE_UUID, uuid, body)
+
+    def test_swap_volume_no_extension(self):
+        self.assertRaises(webob.exc.HTTPBadRequest, self._test_swap)
+
+    def test_swap_volume(self):
+        self.ext_mgr.extensions['os-volume-attachment-update'] = True
+        result = self._test_swap()
+        self.assertEqual('202 Accepted', result.status)
+
+    def test_swap_volume_no_attachment(self):
+        self.ext_mgr.extensions['os-volume-attachment-update'] = True
+
+        self.assertRaises(exc.HTTPNotFound, self._test_swap, FAKE_UUID_C)
 
 
 class VolumeSerializerTest(test.TestCase):
@@ -704,3 +785,72 @@ class CreateSnapshotTestCase(test.TestCase):
         self.body['snapshot']['force'] = 'foo'
         self.assertRaises(exception.InvalidParameterValue,
                           self.controller.create, self.req, body=self.body)
+
+
+class DeleteSnapshotTestCase(test.TestCase):
+    def setUp(self):
+        super(DeleteSnapshotTestCase, self).setUp()
+        self.controller = volumes.SnapshotController()
+        self.stubs.Set(cinder.API, 'get', fake_get_volume)
+        self.stubs.Set(cinder.API, 'create_snapshot_force',
+                       fake_create_snapshot)
+        self.stubs.Set(cinder.API, 'create_snapshot', fake_create_snapshot)
+        self.stubs.Set(cinder.API, 'delete_snapshot', fake_delete_snapshot)
+        self.req = fakes.HTTPRequest.blank('/v2/fake/os-snapshots')
+
+    def test_normal_delete(self):
+        self.req.method = 'POST'
+        self.body = {'snapshot': {'volume_id': 1}}
+        result = self.controller.create(self.req, body=self.body)
+
+        self.req.method = 'DELETE'
+        result = self.controller.delete(self.req, result['snapshot']['id'])
+        self.assertEqual(result.status_int, 202)
+
+
+class AssistedSnapshotCreateTestCase(test.TestCase):
+    def setUp(self):
+        super(AssistedSnapshotCreateTestCase, self).setUp()
+
+        self.controller = assisted_snaps.AssistedVolumeSnapshotsController()
+        self.stubs.Set(compute_api.API, 'volume_snapshot_create',
+                       fake_compute_volume_snapshot_create)
+
+    def test_assisted_create(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/os-assisted-volume-snapshots')
+        body = {'snapshot': {'volume_id': 1, 'create_info': {}}}
+        req.method = 'POST'
+        self.controller.create(req, body=body)
+
+    def test_assisted_create_missing_create_info(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/os-assisted-volume-snapshots')
+        body = {'snapshot': {'volume_id': 1}}
+        req.method = 'POST'
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+                req, body=body)
+
+
+class AssistedSnapshotDeleteTestCase(test.TestCase):
+    def setUp(self):
+        super(AssistedSnapshotDeleteTestCase, self).setUp()
+
+        self.controller = assisted_snaps.AssistedVolumeSnapshotsController()
+        self.stubs.Set(compute_api.API, 'volume_snapshot_delete',
+                       fake_compute_volume_snapshot_delete)
+
+    def test_assisted_delete(self):
+        params = {
+            'delete_info': jsonutils.dumps({'volume_id': 1}),
+        }
+        req = fakes.HTTPRequest.blank(
+                '/v2/fake/os-assisted-volume-snapshots?%s' %
+                '&'.join(['%s=%s' % (k, v) for k, v in params.iteritems()]))
+        req.method = 'DELETE'
+        result = self.controller.delete(req, '5')
+        self.assertEqual(result.status_int, 204)
+
+    def test_assisted_delete_missing_delete_info(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/os-assisted-volume-snapshots')
+        req.method = 'DELETE'
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.delete,
+                req, '5')

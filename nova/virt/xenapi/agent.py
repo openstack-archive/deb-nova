@@ -24,10 +24,10 @@ import uuid
 from oslo.config import cfg
 
 from nova.api.metadata import password
-from nova.compute import api as compute_api
 from nova import context
 from nova import crypto
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
@@ -35,7 +35,12 @@ from nova import utils
 
 
 USE_AGENT_KEY = "xenapi_use_agent"
-USE_AGENT_SM_KEY = compute_api.SM_IMAGE_PROP_PREFIX + USE_AGENT_KEY
+USE_AGENT_SM_KEY = utils.SM_IMAGE_PROP_PREFIX + USE_AGENT_KEY
+SKIP_SSH_KEY = "xenapi_skip_agent_inject_ssh"
+SKIP_SSH_SM_KEY = utils.SM_IMAGE_PROP_PREFIX + SKIP_SSH_KEY
+SKIP_FILES_AT_BOOT_KEY = "xenapi_skip_agent_inject_files_at_boot"
+SKIP_FILES_AT_BOOT_SM_KEY = utils.SM_IMAGE_PROP_PREFIX \
+                                        + SKIP_FILES_AT_BOOT_KEY
 
 LOG = logging.getLogger(__name__)
 
@@ -194,7 +199,7 @@ class XenAPIBasedAgent(object):
 
     def _save_instance_password_if_sshkey_present(self, new_pass):
         sshkey = self.instance.get('key_data')
-        if sshkey:
+        if sshkey and sshkey.startswith("ssh-rsa"):
             ctxt = context.get_admin_context()
             enc = crypto.ssh_encrypt_text(sshkey, new_pass)
             sys_meta = utils.instance_sys_meta(self.instance)
@@ -227,8 +232,14 @@ class XenAPIBasedAgent(object):
         sshkey = self.instance.get('key_data')
         if not sshkey:
             return
+
         if self.instance['os_type'] == 'windows':
             LOG.debug(_("Skipping setting of ssh key for Windows."),
+                      instance=self.instance)
+            return
+
+        if self._skip_ssh_key_inject():
+            LOG.debug(_("Skipping agent ssh key injection for this image."),
                       instance=self.instance)
             return
 
@@ -242,6 +253,14 @@ class XenAPIBasedAgent(object):
             '\n',
         ])
         return self.inject_file(keyfile, key_data)
+
+    def inject_files(self, injected_files):
+        if self._skip_inject_files_at_boot():
+            LOG.debug(_("Skipping agent file injection for this image."),
+                      instance=self.instance)
+        else:
+            for path, contents in injected_files:
+                self.inject_file(path, contents)
 
     def inject_file(self, path, contents):
         LOG.debug(_('Injecting file path: %r'), path, instance=self.instance)
@@ -258,6 +277,17 @@ class XenAPIBasedAgent(object):
 
         return self._call_agent('resetnetwork',
                                 timeout=CONF.agent_resetnetwork_timeout)
+
+    def _skip_ssh_key_inject(self):
+        return self._get_sys_meta_key(SKIP_SSH_SM_KEY)
+
+    def _skip_inject_files_at_boot(self):
+        return self._get_sys_meta_key(SKIP_FILES_AT_BOOT_SM_KEY)
+
+    def _get_sys_meta_key(self, key):
+        sys_meta = utils.instance_sys_meta(self.instance)
+        raw_value = sys_meta.get(key, 'False')
+        return strutils.bool_from_string(raw_value, strict=False)
 
 
 def find_guest_agent(base_dir):
@@ -330,23 +360,12 @@ class SimpleDH(object):
         return self._private
 
     def get_public(self):
-        self._public = self.mod_exp(self._base, self._private, self._prime)
+        self._public = pow(self._base, self._private, self._prime)
         return self._public
 
     def compute_shared(self, other):
-        self._shared = self.mod_exp(other, self._private, self._prime)
+        self._shared = pow(other, self._private, self._prime)
         return self._shared
-
-    @staticmethod
-    def mod_exp(num, exp, mod):
-        """Efficient implementation of (num ** exp) % mod."""
-        result = 1
-        while exp > 0:
-            if (exp & 1) == 1:
-                result = (result * num) % mod
-            exp = exp >> 1
-            num = (num * num) % mod
-        return result
 
     def _run_ssl(self, text, decrypt=False):
         cmd = ['openssl', 'aes-128-cbc', '-A', '-a', '-pass',

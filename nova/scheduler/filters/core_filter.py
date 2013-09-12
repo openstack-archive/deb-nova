@@ -18,6 +18,7 @@
 from oslo.config import cfg
 
 from nova import db
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -97,8 +98,7 @@ class AggregateCoreFilter(BaseCoreFilter):
         try:
             ratio = float(min(aggregate_vals))
         except ValueError as e:
-            LOG.warning(_("Could not decode cpu_allocation_ratio: "
-                            "'%(e)s'") % locals())
+            LOG.warning(_("Could not decode cpu_allocation_ratio: '%s'"), e)
             ratio = CONF.cpu_allocation_ratio
 
         return ratio

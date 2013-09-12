@@ -12,7 +12,7 @@
 #    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
-#    under the License
+#    under the License.
 
 # See: http://wiki.openstack.org/Nova/CoverageExtension for more information
 # and usage explanation for this API extension
@@ -32,6 +32,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import baserpc
 from nova import db
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
 
@@ -159,11 +160,12 @@ class CoverageController(wsgi.Controller):
             # doesn't resolve to 127.0.0.1. Currently backdoors only open on
             # loopback so this is for covering the common single host use case
             except socket.error as e:
+                exc_info = sys.exc_info()
                 if 'ECONNREFUSED' in e and service['host'] == self.host:
                         service['telnet'] = telnetlib.Telnet('127.0.0.1',
                                                              service['port'])
                 else:
-                    raise e
+                    raise exc_info[0], exc_info[1], exc_info[2]
             self.services.append(service)
             self._start_coverage_telnet(service['telnet'], service['service'])
 
@@ -246,7 +248,7 @@ class CoverageController(wsgi.Controller):
                 coverInst.xml_report(outfile=path)
             elif html:
                 if os.path.isdir(path):
-                    msg = _("Directory conflict: %s already exists")
+                    msg = _("Directory conflict: %s already exists") % path
                     raise exc.HTTPBadRequest(explanation=msg)
                 coverInst.html_report(directory=path)
             else:

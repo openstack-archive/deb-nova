@@ -20,6 +20,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
+from nova.openstack.common.gettextutils import _
 
 ALIAS = "os-instance-actions"
 authorize_actions = extensions.extension_authorizer('compute',
@@ -82,6 +83,7 @@ class InstanceActionsController(wsgi.Controller):
             event[key] = event_raw.get(key)
         return event
 
+    @extensions.expected_errors(404)
     @wsgi.serializers(xml=InstanceActionsTemplate)
     def index(self, req, server_id):
         """Returns the list of actions recorded for a given instance."""
@@ -95,6 +97,7 @@ class InstanceActionsController(wsgi.Controller):
         actions = [self._format_action(action) for action in actions_raw]
         return {'instance_actions': actions}
 
+    @extensions.expected_errors(404)
     @wsgi.serializers(xml=InstanceActionTemplate)
     def show(self, req, server_id, id):
         """Return data about the given instance action."""

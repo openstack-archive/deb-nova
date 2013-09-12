@@ -20,6 +20,7 @@ import re
 
 from eventlet import greenthread
 
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 
@@ -95,10 +96,8 @@ def fake_execute(*cmd_parts, **kwargs):
             LOG.debug(_('Faked command raised an exception %s'), e)
             raise
 
-    stdout = reply[0]
-    stderr = reply[1]
     LOG.debug(_("Reply to faked command is stdout='%(stdout)s' "
-                "stderr='%(stderr)s'") % locals())
+        "stderr='%(stderr)s'") % {'stdout': reply[0], 'stderr': reply[1]})
 
     # Replicate the sleep call in the real function
     greenthread.sleep(0)

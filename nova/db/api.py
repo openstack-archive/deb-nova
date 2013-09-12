@@ -35,8 +35,8 @@ these objects be simple dictionaries.
 :db_backend:  string to lookup in the list of LazyPluggable backends.
               `sqlalchemy` is the only supported backend right now.
 
-:sql_connection:  string specifying the sqlalchemy connection to use, like:
-                  `sqlite:///var/lib/nova/nova.sqlite`.
+:connection:  string specifying the sqlalchemy connection to use, like:
+              `sqlite:///var/lib/nova/nova.sqlite`.
 
 :enable_new_services:  when adding a new service to the database, is it in the
                        pool of available hardware (Default: True)
@@ -48,6 +48,7 @@ from oslo.config import cfg
 from nova.cells import rpcapi as cells_rpcapi
 from nova import exception
 from nova.openstack.common.db import api as db_api
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 
@@ -177,9 +178,24 @@ def compute_node_get(context, compute_id):
     return IMPL.compute_node_get(context, compute_id)
 
 
-def compute_node_get_all(context):
-    """Get all computeNodes."""
-    return IMPL.compute_node_get_all(context)
+def compute_node_get_by_service_id(context, service_id):
+    """Get a computeNode by its associated service's id."""
+    return IMPL.compute_node_get_by_service_id(context, service_id)
+
+
+def compute_node_get_all(context, no_date_fields=False):
+    """Get all computeNodes.
+
+    :param context: The security context
+    :param no_date_fields: If set to True, excludes 'created_at', 'updated_at',
+                           'deteled_at' and 'deleted' fields from the output,
+                           thus significantly reducing its size.
+                           Set to False by default
+
+    :returns: List of dictionaries each containing compute node properties,
+              including corresponding service and stats
+    """
+    return IMPL.compute_node_get_all(context, no_date_fields)
 
 
 def compute_node_search_by_hypervisor(context, hypervisor_match):
@@ -248,13 +264,15 @@ def floating_ip_get_pools(context):
     return IMPL.floating_ip_get_pools(context)
 
 
-def floating_ip_allocate_address(context, project_id, pool):
+def floating_ip_allocate_address(context, project_id, pool,
+                                 auto_assigned=False):
     """Allocate free floating ip from specified pool and return the address.
 
     Raises if one is not available.
 
     """
-    return IMPL.floating_ip_allocate_address(context, project_id, pool)
+    return IMPL.floating_ip_allocate_address(context, project_id, pool,
+                                             auto_assigned)
 
 
 def floating_ip_bulk_create(context, ips):
@@ -270,12 +288,6 @@ def floating_ip_bulk_destroy(context, ips):
 def floating_ip_create(context, values):
     """Create a floating ip from the values dictionary."""
     return IMPL.floating_ip_create(context, values)
-
-
-def floating_ip_count_by_project(context, project_id, session=None):
-    """Count floating ips used by project."""
-    return IMPL.floating_ip_count_by_project(context, project_id,
-                                             session=session)
 
 
 def floating_ip_deallocate(context, address):
@@ -521,11 +533,6 @@ def fixed_ip_update(context, address, values):
     return IMPL.fixed_ip_update(context, address, values)
 
 
-def fixed_ip_count_by_project(context, project_id, session=None):
-    """Count fixed ips used by project."""
-    return IMPL.fixed_ip_count_by_project(context, project_id,
-                                          session=session)
-
 ####################
 
 
@@ -578,12 +585,6 @@ def virtual_interface_get_all(context):
 def instance_create(context, values):
     """Create an instance from the values dictionary."""
     return IMPL.instance_create(context, values)
-
-
-def instance_data_get_for_project(context, project_id, session=None):
-    """Get (instance_count, total_cores, total_ram) for project."""
-    return IMPL.instance_data_get_for_project(context, project_id,
-                                              session=session)
 
 
 def instance_destroy(context, instance_uuid, constraint=None,
@@ -681,7 +682,12 @@ def instance_update(context, instance_uuid, values, update_cells=True):
     return rv
 
 
-def instance_update_and_get_original(context, instance_uuid, values):
+# FIXME(comstud): 'update_cells' is temporary as we transition to using
+# objects.  When everything is using Instance.save(), we can remove the
+# argument and the RPC to nova-cells.
+def instance_update_and_get_original(context, instance_uuid, values,
+                                     update_cells=True,
+                                     columns_to_join=None):
     """Set the given properties on an instance and update it. Return
     a shallow copy of the original instance reference, as well as the
     updated one.
@@ -694,11 +700,13 @@ def instance_update_and_get_original(context, instance_uuid, values):
 
     Raises NotFound if instance does not exist.
     """
-    rv = IMPL.instance_update_and_get_original(context, instance_uuid, values)
-    try:
-        cells_rpcapi.CellsAPI().instance_update_at_top(context, rv[1])
-    except Exception:
-        LOG.exception(_("Failed to notify cells of instance update"))
+    rv = IMPL.instance_update_and_get_original(context, instance_uuid, values,
+                                               columns_to_join=columns_to_join)
+    if update_cells:
+        try:
+            cells_rpcapi.CellsAPI().instance_update_at_top(context, rv[1])
+        except Exception:
+            LOG.exception(_("Failed to notify cells of instance update"))
     return rv
 
 
@@ -907,9 +915,9 @@ def network_get(context, network_id, project_only="allow_none"):
     return IMPL.network_get(context, network_id, project_only=project_only)
 
 
-def network_get_all(context):
+def network_get_all(context, project_only="allow_none"):
     """Return all defined networks."""
-    return IMPL.network_get_all(context)
+    return IMPL.network_get_all(context, project_only)
 
 
 def network_get_all_by_uuids(context, network_uuids,
@@ -963,14 +971,20 @@ def network_update(context, network_id, values):
 ###############
 
 
-def quota_create(context, project_id, resource, limit):
+def quota_create(context, project_id, resource, limit, user_id=None):
     """Create a quota for the given project and resource."""
-    return IMPL.quota_create(context, project_id, resource, limit)
+    return IMPL.quota_create(context, project_id, resource, limit,
+                             user_id=user_id)
 
 
-def quota_get(context, project_id, resource):
+def quota_get(context, project_id, resource, user_id=None):
     """Retrieve a quota or raise if it does not exist."""
-    return IMPL.quota_get(context, project_id, resource)
+    return IMPL.quota_get(context, project_id, resource, user_id=user_id)
+
+
+def quota_get_all_by_project_and_user(context, project_id, user_id):
+    """Retrieve all quotas associated with a given project and user."""
+    return IMPL.quota_get_all_by_project_and_user(context, project_id, user_id)
 
 
 def quota_get_all_by_project(context, project_id):
@@ -978,9 +992,15 @@ def quota_get_all_by_project(context, project_id):
     return IMPL.quota_get_all_by_project(context, project_id)
 
 
-def quota_update(context, project_id, resource, limit):
+def quota_get_all(context, project_id):
+    """Retrieve all user quotas associated with a given project."""
+    return IMPL.quota_get_all(context, project_id)
+
+
+def quota_update(context, project_id, resource, limit, user_id=None):
     """Update a quota or raise if it does not exist."""
-    return IMPL.quota_update(context, project_id, resource, limit)
+    return IMPL.quota_update(context, project_id, resource, limit,
+                             user_id=user_id)
 
 
 ###################
@@ -1014,9 +1034,15 @@ def quota_class_update(context, class_name, resource, limit):
 ###################
 
 
-def quota_usage_get(context, project_id, resource):
+def quota_usage_get(context, project_id, resource, user_id=None):
     """Retrieve a quota usage or raise if it does not exist."""
-    return IMPL.quota_usage_get(context, project_id, resource)
+    return IMPL.quota_usage_get(context, project_id, resource, user_id=user_id)
+
+
+def quota_usage_get_all_by_project_and_user(context, project_id, user_id):
+    """Retrieve all usage associated with a given resource."""
+    return IMPL.quota_usage_get_all_by_project_and_user(context,
+                                                        project_id, user_id)
 
 
 def quota_usage_get_all_by_project(context, project_id):
@@ -1024,19 +1050,20 @@ def quota_usage_get_all_by_project(context, project_id):
     return IMPL.quota_usage_get_all_by_project(context, project_id)
 
 
-def quota_usage_update(context, project_id, resource, **kwargs):
+def quota_usage_update(context, project_id, user_id, resource, **kwargs):
     """Update a quota usage or raise if it does not exist."""
-    return IMPL.quota_usage_update(context, project_id, resource, **kwargs)
+    return IMPL.quota_usage_update(context, project_id, user_id, resource,
+                                   **kwargs)
 
 
 ###################
 
 
-def reservation_create(context, uuid, usage, project_id, resource, delta,
-                       expire):
+def reservation_create(context, uuid, usage, project_id, user_id, resource,
+                       delta, expire):
     """Create a reservation for the given project and resource."""
     return IMPL.reservation_create(context, uuid, usage, project_id,
-                                   resource, delta, expire)
+                                   user_id, resource, delta, expire)
 
 
 def reservation_get(context, uuid):
@@ -1047,23 +1074,32 @@ def reservation_get(context, uuid):
 ###################
 
 
-def quota_reserve(context, resources, quotas, deltas, expire,
-                  until_refresh, max_age, project_id=None):
+def quota_reserve(context, resources, quotas, user_quotas, deltas, expire,
+                  until_refresh, max_age, project_id=None, user_id=None):
     """Check quotas and create appropriate reservations."""
-    return IMPL.quota_reserve(context, resources, quotas, deltas, expire,
-                              until_refresh, max_age, project_id=project_id)
+    return IMPL.quota_reserve(context, resources, quotas, user_quotas, deltas,
+                              expire, until_refresh, max_age,
+                              project_id=project_id, user_id=user_id)
 
 
-def reservation_commit(context, reservations, project_id=None):
+def reservation_commit(context, reservations, project_id=None, user_id=None):
     """Commit quota reservations."""
     return IMPL.reservation_commit(context, reservations,
-                                   project_id=project_id)
+                                   project_id=project_id,
+                                   user_id=user_id)
 
 
-def reservation_rollback(context, reservations, project_id=None):
+def reservation_rollback(context, reservations, project_id=None, user_id=None):
     """Roll back quota reservations."""
     return IMPL.reservation_rollback(context, reservations,
-                                     project_id=project_id)
+                                     project_id=project_id,
+                                     user_id=user_id)
+
+
+def quota_destroy_all_by_project_and_user(context, project_id, user_id):
+    """Destroy all quotas associated with a given project and user."""
+    return IMPL.quota_destroy_all_by_project_and_user(context,
+                                                      project_id, user_id)
 
 
 def quota_destroy_all_by_project(context, project_id):
@@ -1128,6 +1164,13 @@ def block_device_mapping_get_all_by_instance(context, instance_uuid):
     """Get all block device mapping belonging to an instance."""
     return IMPL.block_device_mapping_get_all_by_instance(context,
                                                          instance_uuid)
+
+
+def block_device_mapping_get_by_volume_id(context, volume_id,
+        columns_to_join=None):
+    """Get block device mapping for a given volume."""
+    return IMPL.block_device_mapping_get_by_volume_id(context, volume_id,
+            columns_to_join)
 
 
 def block_device_mapping_destroy(context, bdm_id):
@@ -1206,12 +1249,6 @@ def security_group_ensure_default(context):
 def security_group_destroy(context, security_group_id):
     """Deletes a security group."""
     return IMPL.security_group_destroy(context, security_group_id)
-
-
-def security_group_count_by_project(context, project_id, session=None):
-    """Count number of security groups in a project."""
-    return IMPL.security_group_count_by_project(context, project_id,
-                                                session=session)
 
 
 ####################
@@ -1363,10 +1400,12 @@ def flavor_create(context, values):
 instance_type_create = flavor_create
 
 
-def flavor_get_all(context, inactive=False, filters=None):
-    """Get all instance types."""
+def flavor_get_all(context, inactive=False, filters=None, sort_key='flavorid',
+                   sort_dir='asc', limit=None, marker=None):
+    """Get all instance flavors."""
     return IMPL.flavor_get_all(
-        context, inactive=inactive, filters=filters)
+        context, inactive=inactive, filters=filters, sort_key=sort_key,
+        sort_dir=sort_dir, limit=limit, marker=marker)
 
 instance_type_get_all = flavor_get_all
 
@@ -1458,6 +1497,38 @@ instance_type_extra_specs_update_or_create = \
 ####################
 
 
+def pci_device_get_by_addr(context, node_id, dev_addr):
+    """Get PCI device by address."""
+    return IMPL.pci_device_get_by_addr(context, node_id, dev_addr)
+
+
+def pci_device_get_by_id(context, id):
+    """Get PCI device by id."""
+    return IMPL.pci_device_get_by_id(context, id)
+
+
+def pci_device_get_all_by_node(context, node_id):
+    """Get all PCI devices for one host."""
+    return IMPL.pci_device_get_all_by_node(context, node_id)
+
+
+def pci_device_get_all_by_instance_uuid(context, instance_uuid):
+    """Get PCI devices allocated to instance."""
+    return IMPL.pci_device_get_all_by_instance_uuid(context, instance_uuid)
+
+
+def pci_device_destroy(context, node_id, address):
+    """Delete a PCI device record."""
+    return IMPL.pci_device_destroy(context, node_id, address)
+
+
+def pci_device_update(context, node_id, address, value):
+    """Update a pci device."""
+    return IMPL.pci_device_update(context, node_id, address, value)
+
+
+###################
+
 def cell_create(context, values):
     """Create a new child Cell entry."""
     return IMPL.cell_create(context, values)
@@ -1484,11 +1555,6 @@ def cell_get_all(context):
 
 
 ####################
-
-
-def instance_metadata_get_all(context, search_filts):
-    """Get all metadata for an instance."""
-    return IMPL.instance_metadata_get_all(context, search_filts)
 
 
 def instance_metadata_get(context, instance_uuid):
@@ -1646,6 +1712,12 @@ def aggregate_metadata_get_by_host(context, host, key=None):
     Optional key filter
     """
     return IMPL.aggregate_metadata_get_by_host(context, host, key)
+
+
+def aggregate_metadata_get_by_metadata_key(context, aggregate_id, key):
+    """Get metadata for an aggregate by metadata key."""
+    return IMPL.aggregate_metadata_get_by_metadata_key(context, aggregate_id,
+                                                        key)
 
 
 def aggregate_host_get_by_metadata_key(context, key):

@@ -46,6 +46,7 @@ import commands
 import ConfigParser
 import datetime
 import glob
+import operator
 import os
 import urlparse
 import uuid
@@ -60,10 +61,12 @@ import sqlalchemy.exc
 from nova.db.sqlalchemy import api as db
 import nova.db.sqlalchemy.migrate_repo
 from nova.db.sqlalchemy import utils as db_utils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import test
+from nova.tests import matchers
 from nova import utils
 import nova.virt.baremetal.db.sqlalchemy.migrate_repo
 
@@ -83,8 +86,7 @@ def _get_connect_string(backend, user, passwd, database):
     else:
         raise Exception("Unrecognized backend: '%s'" % backend)
 
-    return ("%(backend)s://%(user)s:%(passwd)s@localhost/%(database)s"
-            % locals())
+    return ("%s://%s:%s@localhost/%s" % (backend, user, passwd, database))
 
 
 def _is_backend_avail(backend, user, passwd, database):
@@ -259,13 +261,14 @@ class BaseMigrationTestCase(test.TestCase):
         # operations there is a special database template1.
         sqlcmd = ("psql -w -U %(user)s -h %(host)s -c"
                   " '%(sql)s' -d template1")
+        sqldict = {'user': user, 'host': host}
 
-        sql = ("drop database if exists %(database)s;") % locals()
-        droptable = sqlcmd % locals()
+        sqldict['sql'] = ("drop database if exists %s;") % database
+        droptable = sqlcmd % sqldict
         self.execute_cmd(droptable)
 
-        sql = ("create database %(database)s;") % locals()
-        createtable = sqlcmd % locals()
+        sqldict['sql'] = ("create database %s;") % database
+        createtable = sqlcmd % sqldict
         self.execute_cmd(createtable)
 
         os.unsetenv('PGPASSWORD')
@@ -291,9 +294,11 @@ class BaseMigrationTestCase(test.TestCase):
                 (user, password, database, host) = \
                         get_mysql_connection_info(conn_pieces)
                 sql = ("drop database if exists %(database)s; "
-                        "create database %(database)s;") % locals()
+                        "create database %(database)s;"
+                        % {'database': database})
                 cmd = ("mysql -u \"%(user)s\" %(password)s -h %(host)s "
-                       "-e \"%(sql)s\"") % locals()
+                       "-e \"%(sql)s\"" % {'user': user,
+                           'password': password, 'host': host, 'sql': sql})
                 self.execute_cmd(cmd)
             elif conn_string.startswith('postgresql'):
                 self._reset_pg(conn_pieces)
@@ -321,7 +326,7 @@ class BaseMigrationTestCase(test.TestCase):
         total = connection.execute("SELECT count(*) "
                                    "from information_schema.TABLES "
                                    "where TABLE_SCHEMA='%(database)s'" %
-                                   locals())
+                                   {'database': database})
         self.assertTrue(total.scalar() > 0, "No tables found. Wrong schema?")
 
         noninnodb = connection.execute("SELECT count(*) "
@@ -329,7 +334,7 @@ class BaseMigrationTestCase(test.TestCase):
                                        "where TABLE_SCHEMA='%(database)s' "
                                        "and ENGINE!='InnoDB' "
                                        "and TABLE_NAME!='migrate_version'" %
-                                       locals())
+                                       {'database': database})
         count = noninnodb.scalar()
         self.assertEqual(count, 0, "%d non InnoDB tables created" % count)
         connection.close()
@@ -474,6 +479,31 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                     globals(), locals(), ['versioning_api'], -1)
             self.migration_api = temp.versioning_api
 
+    def assertColumnExists(self, engine, table, column):
+        t = db_utils.get_table(engine, table)
+        self.assertIn(column, t.c)
+
+    def assertColumnNotExists(self, engine, table, column):
+        t = db_utils.get_table(engine, table)
+        self.assertNotIn(column, t.c)
+
+    def assertIndexExists(self, engine, table, index):
+        t = db_utils.get_table(engine, table)
+        index_names = [idx.name for idx in t.indexes]
+        self.assertIn(index, index_names)
+
+    def assertIndexMembers(self, engine, table, index, members):
+        self.assertIndexExists(engine, table, index)
+
+        t = db_utils.get_table(engine, table)
+        index_columns = None
+        for idx in t.indexes:
+            if idx.name == index:
+                index_columns = idx.columns.keys()
+                break
+
+        self.assertEqual(sorted(members), sorted(index_columns))
+
     def _pre_upgrade_134(self, engine):
         now = timeutils.utcnow()
         data = [{
@@ -572,8 +602,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                 aggregate_md.c.key == 'availability_zone').execute().scalar()
         self.assertEqual(0, num_azs)
 
-    # migration 147, availability zone transition for services
-    def _pre_upgrade_147(self, engine):
+    def _upgrade_147_test_data(self):
         az = 'test_zone'
         host1 = 'compute-host1'
         host2 = 'compute-host2'
@@ -590,6 +619,11 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
              'report_count': 0, 'availability_zone': az},
             ]
 
+        return data
+
+    # migration 147, availability zone transition for services
+    def _pre_upgrade_147(self, engine):
+        data = self._upgrade_147_test_data()
         services = db_utils.get_table(engine, 'services')
         engine.execute(services.insert(), data)
         self._pre_upgrade_147_no_duplicate_aggregate_hosts(engine)
@@ -642,6 +676,19 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             ).execute().fetchall()]
         self.assertEqual(['compute-host3'], agg1_hosts)
 
+    def _post_downgrade_147(self, engine):
+        # Test that availability_zone is back on the services table.
+        services = db_utils.get_table(engine, 'services')
+        record_list = list(services.select().execute())
+        test_data = self._upgrade_147_test_data()
+
+        availability_zones = [x['availability_zone'] for x in test_data]
+        # Append the default availability_zone
+        availability_zones.append('nova')
+
+        for row in record_list:
+            self.assertIn(row['availability_zone'], availability_zones)
+
     # migration 149, changes IPAddr storage format
     def _pre_upgrade_149(self, engine):
         provider_fw_rules = db_utils.get_table(engine, 'provider_fw_rules')
@@ -650,19 +697,26 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             'provider_fw_rules':
                 [
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "127.0.0.1/30"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "127.0.0.1/30"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "128.128.128.128/16"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "128.128.128.128/16"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "128.128.128.128/32"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "128.128.128.128/32"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "2001:db8::1:2/48"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "2001:db8::1:2/48"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "::1/64"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "::1/64"))},
                 {'protocol': 'tcp', 'from_port': 1234, 'to_port': 1234,
-                 'cidr': "0000:0000:0000:2013:0000:6535:abcd:ef11/64"},
+                 'cidr': str(netaddr.IPNetwork(
+                             "0000:0000:0000:2013:0000:6535:abcd:ef11/64"))},
                 {'protocol': 'tcp', 'from_port': 1234, 'to_port': 1234,
-                 'cidr': "0000:1020:0000:2013:0000:6535:abcd:ef11/128"},
+                 'cidr': str(netaddr.IPNetwork(
+                             "0000:1020:0000:2013:0000:6535:abcd:ef11/128"))},
                 ],
             'console_pools':
                 [
@@ -885,19 +939,26 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             'provider_fw_rules':
                 [
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "127.0.0.1/30"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "127.0.0.1/30"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "128.128.128.128/16"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "128.128.128.128/16"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "128.128.128.128/32"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "128.128.128.128/32"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "2001:db8::1:2/48"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "2001:db8::1:2/48"))},
                 {'protocol': 'tcp', 'from_port': 1234,
-                 'to_port': 1234, 'cidr': "::1/64"},
+                 'to_port': 1234, 'cidr': str(netaddr.IPNetwork(
+                                              "::1/64"))},
                 {'protocol': 'tcp', 'from_port': 1234, 'to_port': 1234,
-                 'cidr': "0000:0000:0000:2013:0000:6535:abcd:ef11/64"},
+                 'cidr': str(netaddr.IPNetwork(
+                             "0000:0000:0000:2013:0000:6535:abcd:ef11/64"))},
                 {'protocol': 'tcp', 'from_port': 1234, 'to_port': 1234,
-                 'cidr': "0000:1020:0000:2013:0000:6535:abcd:ef11/128"},
+                 'cidr': str(netaddr.IPNetwork(
+                             "0000:1020:0000:2013:0000:6535:abcd:ef11/128"))},
                 ],
             'console_pools':
                 [
@@ -1145,7 +1206,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
 
     # migration 173, add unique constraint to keypairs
     def _pre_upgrade_173(self, engine):
-        created_at = [datetime.datetime.now() for x in range(0, 7)]
+        created_at = [timeutils.utcnow() for x in range(0, 7)]
         fake_keypairs = [dict(name='key1', user_id='1a',
                               created_at=created_at[0],
                               deleted=0),
@@ -1167,7 +1228,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         # is applied to the key_pairs table or not.
         insert = keypairs.insert()
         duplicate_keypair = dict(name='key4', user_id='4a',
-                        created_at=datetime.datetime.now(),
+                        created_at=timeutils.utcnow(),
                         deleted=0)
         insert.execute(duplicate_keypair)
         # Insert again
@@ -1228,12 +1289,12 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
         fake_usage = {'volume_id': 'fake_volume_id',
                       'instance_id': 10,
-                      'tot_last_refreshed': datetime.datetime.now(),
+                      'tot_last_refreshed': timeutils.utcnow(),
                       'tot_reads': 2,
                       'tot_read_bytes': 3,
                       'tot_writes': 4,
                       'tot_write_bytes': 5,
-                      'curr_last_refreshed': datetime.datetime.now(),
+                      'curr_last_refreshed': timeutils.utcnow(),
                       'curr_reads': 6,
                       'curr_read_bytes': 7,
                       'curr_writes': 8,
@@ -1466,7 +1527,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self._unique_constraint_check_migrate_185(engine)
 
     def _pre_upgrade_186(self, engine):
-        fake_instances = [
+        self.mig186_fake_instances = [
             dict(uuid='mig186_uuid-1', image_ref='fake_image_1',
                  root_device_name='/dev/vda'),
             dict(uuid='mig186_uuid-2', image_ref='',
@@ -1475,7 +1536,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                  root_device_name='/dev/vda'),
         ]
 
-        fake_bdms = [
+        self.mig186_fake_bdms = [
             # Instance 1 - image, volume and swap
             dict(instance_uuid='mig186_uuid-1', device_name='/dev/vdc',
                  volume_id='fake_volume_1'),
@@ -1497,11 +1558,11 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
 
         instances = db_utils.get_table(engine, 'instances')
         block_device = db_utils.get_table(engine, 'block_device_mapping')
-        engine.execute(instances.insert(), fake_instances)
-        for fake_bdm in fake_bdms:
+        engine.execute(instances.insert(), self.mig186_fake_instances)
+        for fake_bdm in self.mig186_fake_bdms:
             engine.execute(block_device.insert(), fake_bdm)
 
-        return fake_instances, fake_bdms
+        return self.mig186_fake_instances, self.mig186_fake_bdms
 
     def _check_186(self, engine, data):
         block_device = db_utils.get_table(engine, 'block_device_mapping')
@@ -1586,6 +1647,24 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertEqual(bdm_3s[3].device_type, 'disk')
         self.assertEqual(bdm_3s[3].image_id, 'fake_image_2')
         self.assertEqual(bdm_3s[3].boot_index, 0)
+
+    def _post_downgrade_186(self, engine):
+        block_device = db_utils.get_table(engine, 'block_device_mapping')
+
+        q = block_device.select().where(
+            sqlalchemy.or_(
+                block_device.c.instance_uuid == 'mig186_uuid-1',
+                block_device.c.instance_uuid == 'mig186_uuid-2',
+                block_device.c.instance_uuid == 'mig186_uuid-3'))\
+            .order_by(block_device.c.device_name.asc())
+
+        expected_bdms = sorted(self.mig186_fake_bdms,
+                               key=operator.itemgetter('device_name'))
+        got_bdms = [bdm for bdm in q.execute()]
+
+        self.assertEquals(len(expected_bdms), len(got_bdms))
+        for expected, got in zip(expected_bdms, got_bdms):
+            self.assertThat(expected, matchers.IsSubDictOf(dict(got)))
 
     # addition of the vm instance groups
     def _check_no_group_instance_tables(self, engine):
@@ -2140,6 +2219,687 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertRaises(sqlalchemy.exc.IntegrityError,
                           cells.insert().execute,
                           {'name': 'cell_transport_123', 'deleted': 0})
+
+    def _check_201(self, engine, data):
+        if engine.name != 'sqlite':
+            return
+
+        data = {
+            # table_name: ((idx_1, (c1, c2,)), (idx2, (c1, c2,)), ...)
+            'agent_builds': (
+                ('agent_builds_hypervisor_os_arch_idx',
+                 ('hypervisor', 'os', 'architecture'),),
+            ),
+            'aggregate_metadata': (
+                ('aggregate_metadata_key_idx', ('key',),),
+            ),
+            'block_device_mapping': (
+                ('block_device_mapping_instance_uuid_idx',
+                 ('instance_uuid',),),
+                ('block_device_mapping_instance_uuid_device_name_idx',
+                 ('instance_uuid', 'device_name',),),
+                ('block_device_mapping_instance_uuid_volume_id_idx',
+                 ('instance_uuid', 'volume_id',)),
+                ('snapshot_id', ('snapshot_id',)),
+                ('volume_id', ('volume_id',)),
+            ),
+            'bw_usage_cache': (
+                ('bw_usage_cache_uuid_start_period_idx',
+                 ('uuid', 'start_period',)),
+            ),
+            'certificates': (
+                ('certificates_project_id_deleted_idx',
+                 ('project_id', 'deleted',)),
+                ('certificates_user_id_deleted_idx', ('user_id', 'deleted',)),
+            ),
+            'compute_node_stats': (
+                ('ix_compute_node_stats_compute_node_id',
+                 ('compute_node_id',)),
+            ),
+            'consoles': (
+                ('consoles_instance_uuid_idx', ('instance_uuid',)),
+            ),
+            'dns_domains': (
+                ('dns_domains_domain_deleted_idx', ('domain', 'deleted',)),
+                ('project_id', ('project_id',)),
+            ),
+            'fixed_ips': (
+                ('address', ('address',)),
+                ('fixed_ips_host_idx', ('host',)),
+                ('fixed_ips_network_id_host_deleted_idx',
+                 ('network_id', 'host', 'deleted',)),
+                ('fixed_ips_address_reserved_network_id_deleted_idx',
+                 ('address', 'reserved', 'network_id', 'deleted',)),
+                ('network_id', ('network_id',)),
+                ('fixed_ips_virtual_interface_id_fkey',
+                 ('virtual_interface_id',)),
+                ('fixed_ips_instance_uuid_fkey', ('instance_uuid',)),
+            ),
+            'floating_ips': (
+                ('fixed_ip_id', ('fixed_ip_id',)),
+                ('floating_ips_host_idx', ('host',)),
+                ('floating_ips_project_id_idx', ('project_id',)),
+                ('floating_ips_pool_deleted_fixed_ip_id_project_id_idx',
+                 ('pool', 'deleted', 'fixed_ip_id', 'project_id',)),
+            ),
+            'instance_group_member': (
+                ('instance_group_member_instance_idx', ('instance_id',)),
+            ),
+            'instance_group_metadata': (
+                ('instance_instance_group_metadata_key_idx', ('key',)),
+            ),
+            'instance_group_policy': (
+                ('instance_instance_group_policy_policy_idx', ('policy',)),
+            ),
+            'instance_faults': (
+                ('instance_faults_instance_uuid_deleted_created_at_idx',
+                 ('instance_uuid', 'deleted', 'created_at',)),
+            ),
+            'instance_id_mappings': (
+                ('ix_instance_id_mappings_uuid', ('uuid',)),
+            ),
+            'instance_type_extra_specs': (
+                ('instance_type_extra_specs_instance_type_id_key_idx',
+                 ('instance_type_id', 'key',)),
+            ),
+            'instance_system_metadata': (
+                ('instance_uuid', ('instance_uuid',)),
+            ),
+            'instance_metadata': (
+                ('instance_metadata_instance_uuid_idx', ('instance_uuid',)),
+            ),
+            'instance_type_projects': (
+                ('instance_type_id', ('instance_type_id',)),
+            ),
+            'instances': (
+                ('uuid', ('uuid',)),
+            ),
+            'iscsi_targets': (
+                ('iscsi_targets_host_idx', ('host',)),
+                ('iscsi_targets_volume_id_fkey', ('volume_id',)),
+                ('iscsi_targets_host_volume_id_deleted_idx',
+                 ('host', 'volume_id', 'deleted',)),
+            ),
+            'networks': (
+                ('networks_bridge_deleted_idx', ('bridge', 'deleted',)),
+                ('networks_host_idx', ('host',)),
+                ('networks_project_id_deleted_idx', ('project_id',
+                                                     'deleted',)),
+                ('networks_uuid_project_id_deleted_idx', ('uuid', 'project_id',
+                                                          'deleted',)),
+                ('networks_vlan_deleted_idx', ('vlan', 'deleted',)),
+                ('networks_cidr_v6_idx', ('cidr_v6',)),
+            ),
+            'reservations': (
+                ('ix_reservations_project_id', ('project_id',)),
+                ('usage_id', ('usage_id',)),
+            ),
+            'security_group_instance_association': (
+                ('security_group_instance_association_instance_uuid_idx',
+                 ('instance_uuid',)),
+            ),
+            'quota_classes': (
+                ('ix_quota_classes_class_name', ('class_name',)),
+            ),
+            'quota_usages': (
+                ('ix_quota_usages_project_id', ('project_id',)),
+            ),
+            'virtual_interfaces': (
+                ('virtual_interfaces_network_id_idx', ('network_id',)),
+                ('virtual_interfaces_instance_uuid_fkey', ('instance_uuid',)),
+            ),
+            'volumes': (
+                ('volumes_instance_uuid_idx', ('instance_uuid',)),
+            ),
+            'task_log': (
+                ('ix_task_log_period_beginning', ('period_beginning',)),
+                ('ix_task_log_host', ('host',)),
+                ('ix_task_log_period_ending', ('period_ending',)),
+            ),
+        }
+
+        meta = sqlalchemy.MetaData()
+        meta.bind = engine
+
+        for table_name, indexes in data.iteritems():
+            table = sqlalchemy.Table(table_name, meta, autoload=True)
+            indexes = [(i.name, tuple(i.columns.keys()))
+                       for i in table.indexes]
+
+            for index in indexes:
+                self.assertIn(index, indexes)
+
+    def _pre_upgrade_202(self, engine):
+        fake_types = [
+                {'id': 35, 'name': 'type1', 'memory_mb': 128, 'vcpus': 1,
+                 'root_gb': 10, 'ephemeral_gb': 0, 'flavorid': "1", 'swap': 0,
+                 'rxtx_factor': 1.0, 'vcpu_weight': 1, 'disabled': False,
+                 'is_public': True},
+                {'id': 36, 'name': 'type2', 'memory_mb': 512, 'vcpus': 1,
+                 'root_gb': 10, 'ephemeral_gb': 5, 'flavorid': "2", 'swap': 0,
+                 'rxtx_factor': 1.5, 'vcpu_weight': 2, 'disabled': False,
+                 'is_public': True},
+            ]
+        instance_types = db_utils.get_table(engine, 'instance_types')
+        engine.execute(instance_types.insert(), fake_types)
+        specs = db_utils.get_table(engine, 'instance_type_extra_specs')
+        data = [
+                {'instance_type_id': 35, 'key': 'key1', 'deleted': 0},
+                {'instance_type_id': 35, 'key': 'key1', 'deleted': 0},
+                {'instance_type_id': 36, 'key': 'key1', 'deleted': 0},
+        ]
+        for item in data:
+            specs.insert().values(item).execute()
+        return data
+
+    def _check_202(self, engine, data):
+        specs = db_utils.get_table(engine, 'instance_type_extra_specs')
+
+        def get_(typeid, deleted):
+            deleted_value = 0 if not deleted else specs.c.id
+            return specs.select().\
+                   where(specs.c.instance_type_id == typeid).\
+                   where(specs.c.deleted == deleted_value).\
+                   execute().\
+                   fetchall()
+
+        self.assertEqual(1, len(get_(35, False)))
+        self.assertEqual(1, len(get_(35, True)))
+        self.assertEqual(1, len(get_(36, False)))
+        self.assertRaises(sqlalchemy.exc.IntegrityError,
+                          specs.insert().execute,
+                          {'instance_type_id': 35, 'key': 'key1',
+                           'deleted': 0})
+
+    # migration 203 - make user quotas key and value
+    def _pre_upgrade_203(self, engine):
+        quota_usages = db_utils.get_table(engine, 'quota_usages')
+        reservations = db_utils.get_table(engine, 'reservations')
+        fake_quota_usages = {'id': 5,
+                             'resource': 'instances',
+                             'in_use': 1,
+                             'reserved': 1}
+        fake_reservations = {'id': 6,
+                             'uuid': 'fake_reservationo_uuid',
+                             'usage_id': 5,
+                             'resource': 'instances',
+                             'delta': 1,
+                             'expire': timeutils.utcnow()}
+        quota_usages.insert().execute(fake_quota_usages)
+        reservations.insert().execute(fake_reservations)
+
+    def _check_203(self, engine, data):
+        project_user_quotas = db_utils.get_table(engine, 'project_user_quotas')
+        fake_quotas = {'id': 4,
+                       'project_id': 'fake_project',
+                       'user_id': 'fake_user',
+                       'resource': 'instances',
+                       'hard_limit': 10}
+        project_user_quotas.insert().execute(fake_quotas)
+        quota_usages = db_utils.get_table(engine, 'quota_usages')
+        reservations = db_utils.get_table(engine, 'reservations')
+        # Get the record
+        quota = project_user_quotas.select().execute().first()
+        quota_usage = quota_usages.select().execute().first()
+        reservation = reservations.select().execute().first()
+
+        self.assertEqual(quota['id'], 4)
+        self.assertEqual(quota['project_id'], 'fake_project')
+        self.assertEqual(quota['user_id'], 'fake_user')
+        self.assertEqual(quota['resource'], 'instances')
+        self.assertEqual(quota['hard_limit'], 10)
+        self.assertEqual(quota_usage['user_id'], None)
+        self.assertEqual(reservation['user_id'], None)
+        # Check indexes exist
+        if engine.name == 'mysql' or engine.name == 'postgresql':
+            data = {
+                # table_name: ((idx_1, (c1, c2,)), (idx2, (c1, c2,)), ...)
+                'quota_usages': (
+                    ('ix_quota_usages_user_id_deleted',
+                     sorted(('user_id', 'deleted'))),
+                ),
+                'reservations': (
+                    ('ix_reservations_user_id_deleted',
+                     sorted(('user_id', 'deleted'))),
+                )
+            }
+
+            meta = sqlalchemy.MetaData()
+            meta.bind = engine
+
+            for table_name, indexes in data.iteritems():
+                table = sqlalchemy.Table(table_name, meta, autoload=True)
+                current_indexes = [(i.name, tuple(i.columns.keys()))
+                                   for i in table.indexes]
+
+                # we can not get correct order of columns in index
+                # definition to postgresql using sqlalchemy. So we sort
+                # columns list before compare
+                # bug http://www.sqlalchemy.org/trac/ticket/2767
+                current_indexes = (
+                    [(idx[0], sorted(idx[1])) for idx in current_indexes]
+                )
+                for index in indexes:
+                    self.assertIn(index, current_indexes)
+
+    def _post_downgrade_203(self, engine):
+        try:
+            table_exist = True
+            db_utils.get_table(engine, 'project_user_quotas')
+        except Exception:
+            table_exist = False
+        quota_usages = db_utils.get_table(engine, 'quota_usages')
+        reservations = db_utils.get_table(engine, 'reservations')
+
+        # Get the record
+        quota_usage = quota_usages.select().execute().first()
+        reservation = reservations.select().execute().first()
+
+        self.assertFalse('user_id' in quota_usage)
+        self.assertFalse('user_id' in reservation)
+        self.assertFalse(table_exist)
+        # Check indexes are gone
+        if engine.name == 'mysql' or engine.name == 'postgresql':
+            data = {
+                # table_name: ((idx_1, (c1, c2,)), (idx2, (c1, c2,)), ...)
+                'quota_usages': (
+                    ('ix_quota_usages_user_id_deleted',
+                     sorted(('user_id', 'deleted'))),
+                ),
+                'reservations': (
+                    ('ix_reservations_user_id_deleted',
+                     sorted(('user_id', 'deleted'))),
+                )
+            }
+
+            meta = sqlalchemy.MetaData()
+            meta.bind = engine
+
+            for table_name, indexes in data.iteritems():
+                table = sqlalchemy.Table(table_name, meta, autoload=True)
+                current_indexes = [(i.name, tuple(i.columns.keys()))
+                           for i in table.indexes]
+
+                # we can not get correct order of columns in index
+                # definition to postgresql using sqlalchemy. So we sort
+                # columns list before compare
+                # bug http://www.sqlalchemy.org/trac/ticket/2767
+                current_indexes = (
+                    [(idx[0], sorted(idx[1])) for idx in current_indexes]
+                )
+                for index in indexes:
+                    self.assertNotIn(index, current_indexes)
+
+    def _check_204(self, engine, data):
+        if engine.name != 'sqlite':
+            return
+
+        meta = sqlalchemy.MetaData()
+        meta.bind = engine
+        reservations = sqlalchemy.Table('reservations', meta, autoload=True)
+
+        index_data = [(idx.name, idx.columns.keys())
+                      for idx in reservations.indexes]
+
+        if engine.name == "postgresql":
+            # we can not get correct order of columns in index
+            # definition to postgresql using sqlalchemy. So we sort
+            # columns list before compare
+            # bug http://www.sqlalchemy.org/trac/ticket/2767
+            self.assertIn(
+                ('reservations_uuid_idx', sorted(['uuid'])),
+                ([(idx[0], sorted(idx[1])) for idx in index_data])
+            )
+        else:
+            self.assertIn(('reservations_uuid_idx', ['uuid']), index_data)
+
+    def _pre_upgrade_205(self, engine):
+        fake_instances = [dict(uuid='m205-uuid1', locked=True),
+                          dict(uuid='m205-uuid2', locked=False)]
+        for table_name in ['instances', 'shadow_instances']:
+            table = db_utils.get_table(engine, table_name)
+            engine.execute(table.insert(), fake_instances)
+
+    def _check_205(self, engine, data):
+        for table_name in ['instances', 'shadow_instances']:
+            table = db_utils.get_table(engine, table_name)
+            rows = table.select().\
+                where(table.c.uuid.in_(['m205-uuid1', 'm205-uuid2'])).\
+                order_by(table.c.uuid).execute().fetchall()
+            self.assertEqual(rows[0]['locked_by'], 'admin')
+            self.assertEqual(rows[1]['locked_by'], None)
+
+    def _post_downgrade_205(self, engine):
+        for table_name in ['instances', 'shadow_instances']:
+            table = db_utils.get_table(engine, table_name)
+            rows = table.select().execute().fetchall()
+            self.assertFalse('locked_by' in rows[0])
+
+    def _pre_upgrade_206(self, engine):
+        instances = db_utils.get_table(engine, 'instances')
+        shadow_instances = db_utils.get_table(engine, 'shadow_instances')
+
+        data = [
+            {
+                'id': 650,
+                'deleted': 0,
+            },
+            {
+                'id': 651,
+                'deleted': 2,
+            },
+        ]
+        for item in data:
+            instances.insert().values(item).execute()
+            shadow_instances.insert().values(item).execute()
+        return data
+
+    def _check_206(self, engine, data):
+        self.assertColumnExists(engine, 'instances', 'cleaned')
+        self.assertColumnExists(engine, 'shadow_instances', 'cleaned')
+        self.assertIndexMembers(engine, 'instances',
+                                'instances_host_deleted_cleaned_idx',
+                                ['host', 'deleted', 'cleaned'])
+
+        instances = db_utils.get_table(engine, 'instances')
+        shadow_instances = db_utils.get_table(engine, 'shadow_instances')
+
+        def get_(table, ident):
+            return table.select().\
+                where(table.c.id == ident).\
+                execute().\
+                first()
+
+        for table in (instances, shadow_instances):
+            id_1 = get_(instances, 650)
+            self.assertEqual(0, id_1['deleted'])
+            self.assertEqual(0, id_1['cleaned'])
+
+            id_2 = get_(instances, 651)
+            self.assertEqual(2, id_2['deleted'])
+            self.assertEqual(1, id_2['cleaned'])
+
+    def _post_downgrade_206(self, engine):
+        self.assertColumnNotExists(engine, 'instances', 'cleaned')
+        self.assertColumnNotExists(engine, 'shadow_instances', 'cleaned')
+
+    def _207(self, engine, upgrade=False):
+        uniq_names = ['uniq_cell_name0deleted',
+                      'uniq_cells0name0deleted']
+        if upgrade:
+            uniq_names = uniq_names[::-1]
+        cells = db_utils.get_table(engine, 'cells')
+        values = {'name': 'name',
+                  'deleted': 0,
+                  'transport_url': 'fake_transport_url'}
+        cells.insert().values(values).execute()
+        values['deleted'] = 1
+        cells.insert().values(values).execute()
+        values['deleted'] = 0
+        self.assertRaises(sqlalchemy.exc.IntegrityError,
+                          cells.insert().execute,
+                          values)
+        cells.delete().execute()
+        indexes = dict((i.name, i) for i in cells.indexes)
+        if indexes:
+            check_index_old = indexes.get(uniq_names[0])
+            check_index_new = indexes.get(uniq_names[1])
+            self.assertTrue(bool(check_index_old))
+            self.assertFalse(bool(check_index_new))
+
+    def _pre_upgrade_207(self, engine):
+        self._207(engine)
+
+    def _check_207(self, engine, data):
+        self._207(engine, upgrade=True)
+
+    def _post_downgrade_207(self, engine):
+        self._207(engine)
+
+    def _check_208(self, engine, data):
+        self.assertColumnExists(engine, 'compute_nodes', 'host_ip')
+        self.assertColumnExists(engine, 'compute_nodes', 'supported_instances')
+
+        compute_nodes = db_utils.get_table(engine, 'compute_nodes')
+        if engine.name == "postgresql":
+            self.assertTrue(isinstance(compute_nodes.c.host_ip.type,
+                            sqlalchemy.dialects.postgresql.INET))
+        else:
+            self.assertTrue(isinstance(compute_nodes.c.host_ip.type,
+                            sqlalchemy.types.String))
+        self.assertTrue(isinstance(compute_nodes.c.supported_instances.type,
+                            sqlalchemy.types.Text))
+
+    def _post_downgrade_208(self, engine):
+        self.assertColumnNotExists(engine, 'compute_nodes', 'host_ip')
+        self.assertColumnNotExists(engine, 'compute_nodes',
+                                   'supported_instance')
+
+    def _data_209(self):
+        ret = {"compute_nodes": {"service_id": 999, "vcpus": 1, "memory_mb": 1,
+                                 "local_gb": 1, "vcpus_used": 1,
+                                 "memory_mb_used": 1, "local_gb_used": 1,
+                                 "hypervisor_type": "fake_type",
+                                 "hypervisor_version": 1, "cpu_info": "info"},
+               "instance_actions": {"instance_uuid": "fake"},
+               "migrations": {"instance_uuid": "fake"},
+               "instance_faults": {"instance_uuid": "fake", "code": 1},
+               "compute_node_stats": {"compute_node_id": 1, "key": "fake"}}
+        return ret
+
+    def _constraints_209(self):
+        return {"compute_nodes": ('services', 'id'),
+                "instance_actions": ('instances', 'uuid'),
+                "migrations": ('instances', 'uuid'),
+                "instance_faults": ('instances', 'uuid'),
+                "compute_node_stats": ('compute_nodes', 'id')}
+
+    def _pre_upgrade_209(self, engine):
+        if engine.name == 'sqlite':
+            return
+        instances = db_utils.get_table(engine, 'instances')
+        instances.delete().where(instances.c.uuid == None).execute()
+        tables = ["compute_nodes", "instance_actions", "migrations",
+                  "instance_faults", "compute_node_stats"]
+        change_tables = dict((i, db_utils.get_table(engine, i))
+                             for i in tables)
+        data = self._data_209()
+        for i in tables:
+            change_tables[i].delete().execute()
+            change_tables[i].insert().values(data[i]).execute()
+
+    def _check_209(self, engine, data):
+        if engine.name == 'sqlite':
+            return
+        tables = ["compute_nodes", "instance_actions", "migrations",
+                  "instance_faults", "compute_node_stats"]
+        change_tables = dict((i, db_utils.get_table(engine, i))
+                             for i in tables)
+        data = self._data_209()
+        for i in tables:
+            insert_values = data[i]
+            table = change_tables[i]
+            self.assertRaises(sqlalchemy.exc.IntegrityError,
+                              table.insert().execute,
+                              insert_values)
+            dump_table = db_utils.get_table(engine, 'dump_' + i)
+            self.assertEqual(len(dump_table.select().execute().fetchall()), 1)
+            table.delete().execute()
+            fks = [(f.column.table.name, f.column.name)
+                   for f in table.foreign_keys]
+            self.assertIn(self._constraints_209().get(i), fks)
+
+    def _post_downgrade_209(self, engine):
+        if engine.name == 'sqlite':
+            return
+        check_tables = engine.table_names()
+        tables = ["compute_nodes", "instance_actions", "migrations",
+                  "instance_faults", "compute_node_stats"]
+        change_tables = dict((i, db_utils.get_table(engine, i))
+                             for i in tables)
+        data = self._data_209()
+        for i in tables:
+            dump_table_name = 'dump_' + i
+            self.asserFalse(dump_table_name in check_tables)
+            table = change_tables[i]
+            table.insert().values(data[i]).execute()
+            self.assertEqual(len(table.select().execute().fetchall()), 2)
+            fks = [(f.column.table.name, f.column.name)
+                   for f in table.foreign_keys]
+            self.assertNotIn(self._constraints_209().get(i), fks)
+
+    def _check_210(self, engine, data):
+        project_user_quotas = db_utils.get_table(engine, 'project_user_quotas')
+
+        index_data = [(idx.name, idx.columns.keys())
+                      for idx in project_user_quotas.indexes]
+
+        if engine.name == 'postgresql':
+            # NOTE(vsergeyev): There is no possibility to get the order of
+            #                  columns due to bug in reflection of indexes in
+            #                  PostgreSQL.
+            #                  See http://www.sqlalchemy.org/trac/ticket/2767
+            #                  So we should compare sets instead of lists.
+            index_data = [(name, set(columns)) for name, columns in index_data]
+            self.assertIn(('project_user_quotas_user_id_deleted_idx',
+                           set(['user_id', 'deleted'])), index_data)
+        else:
+            self.assertIn(('project_user_quotas_user_id_deleted_idx',
+                           ['user_id', 'deleted']), index_data)
+
+    def _post_downgrade_210(self, engine):
+        project_user_quotas = db_utils.get_table(engine, 'project_user_quotas')
+
+        index_data = [(idx.name, idx.columns.keys())
+                      for idx in project_user_quotas.indexes]
+
+        if engine.name == 'postgresql':
+            # NOTE(vsergeyev): There is no possibility to get the order of
+            #                  columns due to bug in reflection of indexes in
+            #                  PostgreSQL.
+            #                  See http://www.sqlalchemy.org/trac/ticket/2767
+            #                  So we should compare sets instead of lists.
+            index_data = [(name, set(columns)) for name, columns in index_data]
+            self.assertNotIn(('project_user_quotas_user_id_deleted_idx',
+                              set(['user_id', 'deleted'])), index_data)
+        else:
+            self.assertNotIn(('project_user_quotas_user_id_deleted_idx',
+                              ['user_id', 'deleted']), index_data)
+
+    def _pre_upgrade_211(self, engine):
+        fake_aggregates = [{'id': 7, 'name': 'name1'},
+                           {'id': 8, 'name': 'name2'}]
+        aggregates = db_utils.get_table(engine, 'aggregates')
+        engine.execute(aggregates.insert(), fake_aggregates)
+        metadata = db_utils.get_table(engine, 'aggregate_metadata')
+        data = [
+                {'aggregate_id': 7, 'key': 'availability_zone',
+                 'value': 'custom_az1', 'deleted': 0},
+                {'aggregate_id': 7, 'key': 'availability_zone',
+                 'value': 'custom_az2', 'deleted': 0},
+                {'aggregate_id': 8, 'key': 'availability_zone',
+                 'value': 'custom_az3', 'deleted': 0},
+        ]
+        for item in data:
+            metadata.insert().values(item).execute()
+        return data
+
+    def _check_211(self, engine, data):
+        metadata = db_utils.get_table(engine, 'aggregate_metadata')
+
+        def get_(aggrid, deleted):
+            deleted_value = 0 if not deleted else metadata.c.id
+            return metadata.select().\
+                   where(metadata.c.aggregate_id == aggrid).\
+                   where(metadata.c.deleted == deleted_value).\
+                   execute().\
+                   fetchall()
+
+        self.assertEqual(1, len(get_(7, False)))
+        self.assertEqual(1, len(get_(7, True)))
+        self.assertEqual(1, len(get_(8, False)))
+        self.assertRaises(sqlalchemy.exc.IntegrityError,
+                          metadata.insert().execute,
+                          {'aggregate_id': 7, 'key': 'availability_zone',
+                           'value': 'az4', 'deleted': 0})
+
+    def _post_downgrade_211(self, engine):
+        metadata = db_utils.get_table(engine, 'aggregate_metadata')
+        data = {'aggregate_id': 8, 'key': 'availability_zone',
+                'value': 'az', 'deleted': 0}
+        metadata.insert().values(data).execute()
+        self.assertIsNotNone(metadata.insert().values(data).execute())
+
+    def _212(self, engine, ext=None):
+        if engine.name == 'sqlite':
+            return
+        migrations = db_utils.get_table(engine, 'migrations')
+        indexes = dict((i.name, i) for i in migrations.indexes)
+        check_index = indexes['migrations_by_host_nodes_and_status_idx']
+        index_columns = [c.name for c in check_index.columns]
+        check_columns = ['source_compute', 'dest_compute', 'source_node',
+                         'dest_node', 'status']
+        if ext is not None:
+            check_columns.insert(0, ext)
+        self.assertTrue(set(index_columns) == set(check_columns))
+
+    def _pre_upgrade_212(self, engine):
+        if engine.name == 'mysql':
+            self._212(engine)
+
+    def _check_212(self, engine, data):
+        self._212(engine, ext='deleted')
+
+    def _post_downgrade_212(self, engine):
+        if engine.name == 'mysql':
+            self._212(engine)
+
+    def _pre_upgrade_213(self, engine):
+        self.assertRaises(sqlalchemy.exc.NoSuchTableError,
+                          db_utils.get_table, engine,
+                          'pci_devices')
+
+    def _check_213(self, engine, data):
+        fake_pci = {'id': 3353,
+                    'compute_node_id': 1,
+                    'dev_id': 'pci_0000:0f:08:07',
+                    'address': '0000:0f:08:7',
+                    'product_id': '8086',
+                    'vendor_id': '1520',
+                    'dev_type': 'type-VF',
+                    'label': 'label_8086_1520',
+                    'status': 'available',
+                    'extra_info': None,
+                    'deleted': 0,
+                    'instance_uuid': '00000000-0000-0000-0000-000000000010',
+                   }
+        devs = db_utils.get_table(engine, 'pci_devices')
+        engine.execute(devs.insert(), fake_pci)
+        result = devs.select().execute().fetchall()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['vendor_id'], '1520')
+        fake_node = dict(vcpus=2, memory_mb=1024, local_gb=2048,
+                         vcpus_used=0, memory_mb_used=0,
+                         local_gb_used=0, free_ram_mb=1024,
+                         free_disk_gb=2048, hypervisor_type="xen",
+                         hypervisor_version=1, cpu_info="",
+                         running_vms=0, current_workload=0,
+                         service_id=1,
+                         disk_available_least=100,
+                         hypervisor_hostname='abracadabra104',
+                         host_ip='127.0.0.1',
+                         supported_instances='')
+        nodes = db_utils.get_table(engine, 'compute_nodes')
+        engine.execute(nodes.insert(), fake_node)
+        result = nodes.select().execute().fetchall()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['pci_stats'], None)
+
+    def _post_downgrade_213(self, engine):
+        # check that groups does not exist
+        self.assertRaises(sqlalchemy.exc.NoSuchTableError,
+                          db_utils.get_table, engine,
+                          'pci_devices')
 
 
 class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):

@@ -23,10 +23,11 @@ from nova import context
 from nova.db import base
 from nova import exception
 from nova.network import rpcapi as network_rpcapi
+from nova import notifier
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import processutils
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import uuidutils
@@ -85,7 +86,7 @@ class FloatingIP(object):
                                                     fixed_ip_id,
                                                     get_network=True)
                 except exception.FixedIpNotFound:
-                    msg = _('Fixed ip %(fixed_ip_id)s not found') % locals()
+                    msg = _('Fixed ip %s not found') % fixed_ip_id
                     LOG.debug(msg)
                     continue
                 interface = CONF.public_interface or floating_ip['interface']
@@ -95,7 +96,7 @@ class FloatingIP(object):
                                                   interface,
                                                   fixed_ip['network'])
                 except processutils.ProcessExecutionError:
-                    LOG.debug(_('Interface %(interface)s not found'), locals())
+                    LOG.debug(_('Interface %s not found'), interface)
                     raise exception.NoFloatingIpInterface(interface=interface)
 
     def allocate_for_instance(self, context, **kwargs):
@@ -120,10 +121,8 @@ class FloatingIP(object):
             floating_address = self.allocate_floating_ip(context, project_id,
                 True)
             LOG.debug(_("floating IP allocation for instance "
-                        "|%(floating_address)s|") % locals(),
+                        "|%s|"), floating_address,
                         instance_uuid=instance_uuid, context=context)
-            # set auto_assigned column to true for the floating ip
-            self.db.floating_ip_set_auto_assigned(context, floating_address)
 
             # get the first fixed address belonging to the instance
             fixed_ips = nw_info.fixed_ips()
@@ -217,20 +216,16 @@ class FloatingIP(object):
             if use_quota:
                 reservations = QUOTAS.reserve(context, floating_ips=1)
         except exception.OverQuota:
-            pid = context.project_id
-            LOG.warn(_("Quota exceeded for %(pid)s, tried to allocate "
-                       "floating IP") % locals())
+            LOG.warn(_("Quota exceeded for %s, tried to allocate "
+                       "floating IP"), context.project_id)
             raise exception.FloatingIpLimitExceeded()
 
         try:
-            floating_ip = self.db.floating_ip_allocate_address(context,
-                                                               project_id,
-                                                               pool)
+            floating_ip = self.db.floating_ip_allocate_address(
+                context, project_id, pool, auto_assigned=auto_assigned)
             payload = dict(project_id=project_id, floating_ip=floating_ip)
-            notifier.notify(context,
-                            notifier.publisher_id("network"),
-                            'network.floating_ip.allocate',
-                            notifier.INFO, payload)
+            self.notifier.info(context,
+                               'network.floating_ip.allocate', payload)
 
             # Commit the reservations
             if use_quota:
@@ -266,10 +261,7 @@ class FloatingIP(object):
                                        floating_ip['address'])
         payload = dict(project_id=floating_ip['project_id'],
                        floating_ip=floating_ip['address'])
-        notifier.notify(context,
-                        notifier.publisher_id("network"),
-                        'network.floating_ip.deallocate',
-                        notifier.INFO, payload=payload)
+        self.notifier.info(context, 'network.floating_ip.deallocate', payload)
 
         # Get reservations...
         try:
@@ -371,17 +363,15 @@ class FloatingIP(object):
             except processutils.ProcessExecutionError as e:
                 self.db.floating_ip_disassociate(context, floating_address)
                 if "Cannot find device" in str(e):
-                    LOG.error(_('Interface %(interface)s not found'), locals())
+                    LOG.error(_('Interface %s not found'), interface)
                     raise exception.NoFloatingIpInterface(interface=interface)
                 raise
 
             payload = dict(project_id=context.project_id,
                            instance_id=instance_uuid,
                            floating_ip=floating_address)
-            notifier.notify(context,
-                            notifier.publisher_id("network"),
-                            'network.floating_ip.associate',
-                        notifier.INFO, payload=payload)
+            self.notifier.info(context,
+                               'network.floating_ip.associate', payload)
         do_associate()
 
     @rpc_common.client_exceptions(exception.FloatingIpNotFoundForAddress)
@@ -464,10 +454,8 @@ class FloatingIP(object):
             payload = dict(project_id=context.project_id,
                            instance_id=instance_uuid,
                            floating_ip=address)
-            notifier.notify(context,
-                            notifier.publisher_id("network"),
-                            'network.floating_ip.disassociate',
-                            notifier.INFO, payload=payload)
+            self.notifier.info(context,
+                               'network.floating_ip.disassociate', payload)
         do_disassociate()
 
     @rpc_common.client_exceptions(exception.FloatingIpNotFound)
@@ -529,16 +517,17 @@ class FloatingIP(object):
         if not floating_addresses or (source and source == dest):
             return
 
-        LOG.info(_("Starting migration network for instance"
-                   " %(instance_uuid)s"), locals())
+        LOG.info(_("Starting migration network for instance %s"),
+                 instance_uuid)
         for address in floating_addresses:
             floating_ip = self.db.floating_ip_get_by_address(context,
                                                              address)
 
             if self._is_stale_floating_ip_address(context, floating_ip):
                 LOG.warn(_("Floating ip address |%(address)s| no longer "
-                           "belongs to instance %(instance_uuid)s. Will not"
-                           "migrate it "), locals())
+                           "belongs to instance %(instance_uuid)s. Will not "
+                           "migrate it "),
+                         {'address': address, 'instance_uuid': instance_uuid})
                 continue
 
             interface = CONF.public_interface or floating_ip['interface']
@@ -571,8 +560,8 @@ class FloatingIP(object):
         if not floating_addresses or (source and source == dest):
             return
 
-        LOG.info(_("Finishing migration network for instance"
-                   " %(instance_uuid)s"), locals())
+        LOG.info(_("Finishing migration network for instance %s"),
+                 instance_uuid)
 
         for address in floating_addresses:
             floating_ip = self.db.floating_ip_get_by_address(context,
@@ -581,7 +570,8 @@ class FloatingIP(object):
             if self._is_stale_floating_ip_address(context, floating_ip):
                 LOG.warn(_("Floating ip address |%(address)s| no longer "
                            "belongs to instance %(instance_uuid)s. Will not"
-                           "setup it."), locals())
+                           "setup it."),
+                         {'address': address, 'instance_uuid': instance_uuid})
                 continue
 
             self.db.floating_ip_update(context,
@@ -700,3 +690,4 @@ class LocalManager(base.Base, FloatingIP):
                 CONF.floating_ip_dns_manager)
         self.instance_dns_manager = importutils.import_object(
                 CONF.instance_dns_manager)
+        self.notifier = notifier.get_notifier('network', CONF.host)

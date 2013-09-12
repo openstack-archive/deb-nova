@@ -12,36 +12,79 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova import context
+from nova.cells import opts as cells_opts
+from nova.cells import rpcapi as cells_rpcapi
 from nova import db
+from nova import exception
+from nova.network import model as network_model
 from nova.objects import instance_info_cache
 from nova.tests.objects import test_objects
 
 
 class _TestInstanceInfoCacheObject(object):
     def test_get_by_instance_uuid(self):
-        ctxt = context.get_admin_context()
+        nwinfo = network_model.NetworkInfo.hydrate([{'address': 'foo'}])
         self.mox.StubOutWithMock(db, 'instance_info_cache_get')
-        db.instance_info_cache_get(ctxt, 'fake-uuid').AndReturn(
-            {'instance_uuid': 'fake-uuid', 'network_info': 'foo'})
+        db.instance_info_cache_get(self.context, 'fake-uuid').AndReturn(
+            {'instance_uuid': 'fake-uuid', 'network_info': nwinfo.json()})
         self.mox.ReplayAll()
         obj = instance_info_cache.InstanceInfoCache.get_by_instance_uuid(
-            ctxt, 'fake-uuid')
+            self.context, 'fake-uuid')
         self.assertEqual(obj.instance_uuid, 'fake-uuid')
-        self.assertEqual(obj.network_info, 'foo')
+        self.assertEqual(obj.network_info, nwinfo)
         self.assertRemotes()
 
-    def test_save(self):
-        ctxt = context.get_admin_context()
-        self.mox.StubOutWithMock(db, 'instance_info_cache_update')
-        db.instance_info_cache_update(ctxt, 'fake-uuid',
-                                      {'network_info': 'foo'})
+    def test_get_by_instance_uuid_no_entries(self):
+        self.mox.StubOutWithMock(db, 'instance_info_cache_get')
+        db.instance_info_cache_get(self.context, 'fake-uuid').AndReturn(None)
         self.mox.ReplayAll()
+        self.assertRaises(
+                exception.InstanceInfoCacheNotFound,
+                instance_info_cache.InstanceInfoCache.get_by_instance_uuid,
+                self.context, 'fake-uuid')
+
+    def test_new(self):
+        obj = instance_info_cache.InstanceInfoCache.new(self.context,
+                                                        'fake-uuid')
+        self.assertEqual(set(['instance_uuid', 'network_info']),
+                         obj.obj_what_changed())
+        self.assertEqual('fake-uuid', obj.instance_uuid)
+        self.assertEqual(None, obj.network_info)
+
+    def _save_helper(self, cell_type, update_cells):
         obj = instance_info_cache.InstanceInfoCache()
-        obj._context = ctxt
+        cells_api = cells_rpcapi.CellsAPI()
+
+        self.mox.StubOutWithMock(db, 'instance_info_cache_update')
+        self.mox.StubOutWithMock(cells_opts, 'get_cell_type')
+        self.mox.StubOutWithMock(cells_rpcapi, 'CellsAPI',
+                                 use_mock_anything=True)
+        self.mox.StubOutWithMock(cells_api,
+                                 'instance_info_cache_update_at_top')
+        nwinfo = network_model.NetworkInfo.hydrate([{'address': 'foo'}])
+        db.instance_info_cache_update(
+                self.context, 'fake-uuid',
+                {'network_info': nwinfo.json()}).AndReturn('foo')
+        if update_cells:
+            cells_opts.get_cell_type().AndReturn(cell_type)
+            if cell_type == 'compute':
+                cells_rpcapi.CellsAPI().AndReturn(cells_api)
+                cells_api.instance_info_cache_update_at_top(
+                    self.context, 'foo')
+        self.mox.ReplayAll()
+        obj._context = self.context
         obj.instance_uuid = 'fake-uuid'
-        obj.network_info = 'foo'
-        obj.save()
+        obj.network_info = nwinfo
+        obj.save(update_cells=update_cells)
+
+    def test_save_with_update_cells_and_compute_cell(self):
+        self._save_helper('compute', True)
+
+    def test_save_with_update_cells_and_non_compute_cell(self):
+        self._save_helper(None, True)
+
+    def test_save_without_update_cells(self):
+        self._save_helper(None, False)
 
 
 class TestInstanceInfoCacheObject(test_objects._LocalTest,

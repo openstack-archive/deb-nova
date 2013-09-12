@@ -397,6 +397,21 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               <target bus="ide" dev="/dev/hda"/>
             </disk>""")
 
+    def test_config_file_parse(self):
+        xml = """<disk type="file" device="disk">
+                   <source file="/tmp/hello"/>
+                   <target bus="ide" dev="/dev/hda"/>
+                 </disk>"""
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'file')
+        self.assertEqual(obj.source_path, '/tmp/hello')
+        self.assertEqual(obj.target_dev, '/dev/hda')
+        self.assertEqual(obj.target_bus, 'ide')
+
     def test_config_file_serial(self):
         obj = config.LibvirtConfigGuestDisk()
         obj.source_type = "file"
@@ -412,6 +427,20 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               <target bus="ide" dev="/dev/hda"/>
               <serial>7a97c4a3-6f59-41d4-bf47-191d7f97f8e9</serial>
             </disk>""")
+
+    def test_config_file_serial_parse(self):
+        xml = """<disk type="file" device="disk">
+                   <source file="/tmp/hello"/>
+                   <target bus="ide" dev="/dev/hda"/>
+                   <serial>7a97c4a3-6f59-41d4-bf47-191d7f97f8e9</serial>
+                 </disk>"""
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'file')
+        self.assertEqual(obj.serial, '7a97c4a3-6f59-41d4-bf47-191d7f97f8e9')
 
     def test_config_block(self):
         obj = config.LibvirtConfigGuestDisk()
@@ -430,6 +459,22 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               <target bus="ide" dev="/dev/hdc"/>
             </disk>""")
 
+    def test_config_block_parse(self):
+        xml = """<disk type="block" device="cdrom">
+                   <driver name="qemu"/>
+                   <source dev="/tmp/hello"/>
+                   <target bus="ide" dev="/dev/hdc"/>
+                 </disk>"""
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'block')
+        self.assertEqual(obj.source_path, '/tmp/hello')
+        self.assertEqual(obj.target_dev, '/dev/hdc')
+        self.assertEqual(obj.target_bus, 'ide')
+
     def test_config_network(self):
         obj = config.LibvirtConfigGuestDisk()
         obj.source_type = "network"
@@ -447,6 +492,25 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               <source name="foo.bar.com" protocol="iscsi"/>
               <target bus="ide" dev="/dev/hda"/>
             </disk>""")
+
+    def test_config_network_parse(self):
+        xml = """<disk type="network" device="disk">
+                   <driver name="qemu" type="qcow2"/>
+                   <source name="foo.bar.com" protocol="iscsi"/>
+                   <target bus="ide" dev="/dev/hda"/>
+                 </disk>"""
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'network')
+        self.assertEqual(obj.source_protocol, 'iscsi')
+        self.assertEqual(obj.source_name, 'foo.bar.com')
+        self.assertEqual(obj.driver_name, 'qemu')
+        self.assertEqual(obj.driver_format, 'qcow2')
+        self.assertEqual(obj.target_dev, '/dev/hda')
+        self.assertEqual(obj.target_bus, 'ide')
 
     def test_config_network_no_name(self):
         obj = config.LibvirtConfigGuestDisk()
@@ -546,6 +610,55 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               </iotune>
             </disk>""")
 
+    def test_config_blockio(self):
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "file"
+        obj.source_path = "/tmp/hello"
+        obj.target_dev = "/dev/hda"
+        obj.target_bus = "ide"
+        obj.logical_block_size = "4096"
+        obj.physical_block_size = "4096"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual("""
+            <disk type="file" device="disk">
+              <source file="/tmp/hello"/>
+              <target bus="ide" dev="/dev/hda"/>
+              <blockio logical_block_size="4096" physical_block_size="4096"/>
+            </disk>""", xml)
+
+
+class LibvirtConfigGuestSnapshotDiskTest(LibvirtConfigBaseTest):
+
+    def test_config_file(self):
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "file"
+        obj.source_path = "/tmp/hello"
+        obj.target_dev = "/dev/hda"
+        obj.target_bus = "ide"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="file" device="disk">
+              <source file="/tmp/hello"/>
+              <target bus="ide" dev="/dev/hda"/>
+            </disk>""")
+
+    def test_config_file_parse(self):
+        xml = """<disk type="file" device="disk">
+                   <source file="/tmp/hello"/>
+                   <target bus="ide" dev="/dev/hda"/>
+                 </disk>"""
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'file')
+        self.assertEqual(obj.source_path, '/tmp/hello')
+        self.assertEqual(obj.target_dev, '/dev/hda')
+        self.assertEqual(obj.target_bus, 'ide')
+
 
 class LibvirtConfigGuestFilesysTest(LibvirtConfigBaseTest):
 
@@ -586,6 +699,79 @@ class LibvirtConfigGuestGraphicsTest(LibvirtConfigBaseTest):
         self.assertXmlEqual(xml, """
   <graphics type="vnc" autoport="yes" keymap="en_US" listen="127.0.0.1"/>
                             """)
+
+
+class LibvirtConfigGuestHostdev(LibvirtConfigBaseTest):
+
+    def test_config_pci_guest_host_dev(self):
+        obj = config.LibvirtConfigGuestHostdev(mode='subsystem', type='pci')
+        xml = obj.to_xml()
+        expected = """
+            <hostdev mode="subsystem" type="pci" managed="yes"/>
+            """
+        self.assertXmlEqual(xml, expected)
+
+    def test_parse_GuestHostdev(self):
+        xmldoc = """<hostdev mode="subsystem" type="pci" managed="yes"/>"""
+        obj = config.LibvirtConfigGuestHostdev()
+        obj.parse_str(xmldoc)
+        self.assertEqual(obj.mode, 'subsystem')
+        self.assertEqual(obj.type, 'pci')
+        self.assertEqual(obj.managed, 'yes')
+
+    def test_parse_GuestHostdev_non_pci(self):
+        xmldoc = """<hostdev mode="subsystem" type="usb" managed="no"/>"""
+        obj = config.LibvirtConfigGuestHostdev()
+        obj.parse_str(xmldoc)
+        self.assertEqual(obj.mode, 'subsystem')
+        self.assertEqual(obj.type, 'usb')
+        self.assertEqual(obj.managed, 'no')
+
+
+class LibvirtConfigGuestHostdevPCI(LibvirtConfigBaseTest):
+
+    expected = """
+            <hostdev mode="subsystem" type="pci" managed="yes">
+                <source>
+                    <address bus="0x11" domain="0x1234" function="0x3"
+                             slot="0x22" />
+                </source>
+            </hostdev>
+            """
+
+    def test_config_guest_hosdev_pci(self):
+        hostdev = config.LibvirtConfigGuestHostdevPCI()
+        hostdev.domain = "1234"
+        hostdev.bus = "11"
+        hostdev.slot = "22"
+        hostdev.function = "3"
+        xml = hostdev.to_xml()
+        self.assertXmlEqual(self.expected, xml)
+
+    def test_parse_guest_hosdev_pci(self):
+        xmldoc = self.expected
+        obj = config.LibvirtConfigGuestHostdevPCI()
+        obj.parse_str(xmldoc)
+        self.assertEqual(obj.mode, 'subsystem')
+        self.assertEqual(obj.type, 'pci')
+        self.assertEqual(obj.managed, 'yes')
+        self.assertEqual(obj.domain, '0x1234')
+        self.assertEqual(obj.bus, '0x11')
+        self.assertEqual(obj.slot, '0x22')
+        self.assertEqual(obj.function, '0x3')
+
+    def test_parse_guest_hosdev_usb(self):
+        xmldoc = """<hostdev mode='subsystem' type='usb'>
+                      <source startupPolicy='optional'>
+                          <vendor id='0x1234'/>
+                          <product id='0xbeef'/>
+                      </source>
+                      <boot order='2'/>
+                    </hostdev>"""
+        obj = config.LibvirtConfigGuestHostdevPCI()
+        obj.parse_str(xmldoc)
+        self.assertEqual(obj.mode, 'subsystem')
+        self.assertEqual(obj.type, 'usb')
 
 
 class LibvirtConfigGuestSerialTest(LibvirtConfigBaseTest):
@@ -633,6 +819,20 @@ class LibvirtConfigGuestChannelTest(LibvirtConfigBaseTest):
             <channel type="spicevmc">
               <target type='virtio' name='com.redhat.spice.0'/>
             </channel>""")
+
+    def test_config_qga_full(self):
+        obj = config.LibvirtConfigGuestChannel()
+        obj.type = "unix"
+        obj.target_name = "org.qemu.guest_agent.0"
+        obj.source_path = "/var/lib/libvirt/qemu/%s.%s.sock" % (
+                            obj.target_name, "instance-name")
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <channel type="unix">
+              <source path="%s" mode="bind"/>
+              <target type="virtio" name="org.qemu.guest_agent.0"/>
+            </channel>""" % obj.source_path)
 
 
 class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
@@ -734,6 +934,22 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
               <source dev="eth0" mode="private"/>
               <target dev="tap12345678"/>
               <virtualport type="802.1Qbh"/>
+            </interface>""")
+
+    def test_config_direct(self):
+        obj = config.LibvirtConfigGuestInterface()
+        obj.net_type = "direct"
+        obj.mac_addr = "DE:AD:BE:EF:CA:FE"
+        obj.model = "virtio"
+        obj.source_dev = "eth0"
+        obj.source_mode = "passthrough"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <interface type="direct">
+              <mac address="DE:AD:BE:EF:CA:FE"/>
+              <model type="virtio"/>
+              <source dev="eth0" mode="passthrough"/>
             </interface>""")
 
 
@@ -933,6 +1149,34 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               </devices>
             </domain>""")
 
+    def test_ConfigGuest_parse_devices(self):
+        xmldoc = """ <domain type="kvm">
+                      <devices>
+                        <hostdev mode="subsystem" type="pci" managed="no">
+                        </hostdev>
+                      </devices>
+                     </domain>
+                 """
+        obj = config.LibvirtConfigGuest()
+        obj.parse_str(xmldoc)
+        self.assertEqual(len(obj.devices), 1)
+        self.assertEqual(type(obj.devices[0]),
+                         config.LibvirtConfigGuestHostdevPCI)
+        self.assertEqual(obj.devices[0].mode, 'subsystem')
+        self.assertEqual(obj.devices[0].managed, 'no')
+
+    def test_ConfigGuest_parse_devices_wrong_type(self):
+        xmldoc = """ <domain type="kvm">
+                      <devices>
+                        <hostdev mode="subsystem" type="xxxx" managed="no">
+                        </hostdev>
+                      </devices>
+                     </domain>
+                 """
+        obj = config.LibvirtConfigGuest()
+        obj.parse_str(xmldoc)
+        self.assertEqual(len(obj.devices), 0)
+
 
 class LibvirtConfigGuestSnapshotTest(LibvirtConfigBaseTest):
 
@@ -944,4 +1188,315 @@ class LibvirtConfigGuestSnapshotTest(LibvirtConfigBaseTest):
         self.assertXmlEqual(xml, """
             <domainsnapshot>
               <name>Demo</name>
+              <disks/>
             </domainsnapshot>""")
+
+    def test_config_snapshot_with_disks(self):
+        obj = config.LibvirtConfigGuestSnapshot()
+        obj.name = "Demo"
+
+        disk = config.LibvirtConfigGuestSnapshotDisk()
+        disk.name = 'vda'
+        disk.source_path = 'source-path'
+        disk.source_type = 'file'
+        disk.snapshot = 'external'
+        disk.driver_name = 'qcow2'
+        obj.add_disk(disk)
+
+        disk2 = config.LibvirtConfigGuestSnapshotDisk()
+        disk2.name = 'vdb'
+        disk2.snapshot = 'no'
+        obj.add_disk(disk2)
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <domainsnapshot>
+              <name>Demo</name>
+              <disks>
+               <disk name='vda' snapshot='external' type='file'>
+                <source file='source-path'/>
+               </disk>
+               <disk name='vdb' snapshot='no'/>
+              </disks>
+            </domainsnapshot>""")
+
+
+class LibvirtConfigNodeDeviceTest(LibvirtConfigBaseTest):
+
+    def test_config_virt_usb_device(self):
+        xmlin = """
+        <device>
+          <name>usb_0000_09_00_0</name>
+          <parent>pci_0000_00_1c_0</parent>
+          <driver>
+          <name>vxge</name>
+          </driver>
+          <capability type="usb">
+            <domain>0</domain>
+             <capability type="fake_usb">
+             <address fake_usb="fake"/>
+            </capability>
+          </capability>
+        </device>"""
+
+        obj = config.LibvirtConfigNodeDevice()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(obj.pci_capability, None)
+
+    def test_config_virt_device(self):
+        xmlin = """
+        <device>
+          <name>pci_0000_09_00_0</name>
+          <parent>pci_0000_00_1c_0</parent>
+          <driver>
+          <name>vxge</name>
+          </driver>
+          <capability type="pci">
+            <domain>0</domain>
+            <bus>9</bus>
+            <slot>0</slot>
+            <function>0</function>
+        <product id="0x5833">X3100 Series 10 Gigabit Ethernet PCIe</product>
+            <vendor id="0x17d5">Neterion Inc.</vendor>
+            <capability type="virt_functions">
+             <address domain="0x0000" bus="0x0a" slot="0x00" function="0x1"/>
+             <address domain="0x0000" bus="0x0a" slot="0x00" function="0x2"/>
+             <address domain="0x0000" bus="0x0a" slot="0x00" function="0x3"/>
+            </capability>
+          </capability>
+        </device>"""
+
+        obj = config.LibvirtConfigNodeDevice()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(type(obj.pci_capability),
+                         config.LibvirtConfigNodeDevicePciCap)
+        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
+                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertEqual(obj.pci_capability.fun_capability[0].type,
+                          "virt_functions")
+        self.assertEqual(len(obj.pci_capability.fun_capability[0].
+                             device_addrs),
+                          3)
+        self.assertEqual(obj.pci_capability.bus, 9)
+
+    def test_config_phy_device(self):
+        xmlin = """
+        <device>
+          <name>pci_0000_33_00_0</name>
+          <parent>pci_0000_22_1c_0</parent>
+          <driver>
+          <name>vxx</name>
+          </driver>
+          <capability type="pci">
+            <domain>0</domain>
+            <bus>9</bus>
+            <slot>0</slot>
+            <function>0</function>
+           <product id="0x5833">X3100 Series 10 Gigabit Ethernet PCIe</product>
+            <vendor id="0x17d5">Neterion Inc.</vendor>
+            <capability type="phys_function">
+            <address domain='0x0000' bus='0x09' slot='0x00' function='0x0'/>
+            </capability>
+          </capability>
+        </device>"""
+
+        obj = config.LibvirtConfigNodeDevice()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(type(obj.pci_capability),
+                         config.LibvirtConfigNodeDevicePciCap)
+        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
+                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertEqual(obj.pci_capability.fun_capability[0].type,
+                          "phys_function")
+        self.assertEqual(len(obj.pci_capability.fun_capability[0].
+                             device_addrs),
+                         1)
+
+    def test_config_non_device(self):
+        xmlin = """
+        <device>
+          <name>pci_0000_33_00_0</name>
+          <parent>pci_0000_22_1c_0</parent>
+          <driver>
+          <name>vxx</name>
+          </driver>
+          <capability type="pci">
+            <domain>0</domain>
+            <bus>9</bus>
+            <slot>0</slot>
+            <function>0</function>
+          <product id="0x5833">X3100 Series 10 Gigabit Ethernet PCIe</product>
+             <vendor id="0x17d5">Neterion Inc.</vendor>
+             <capability type="virt_functions"/>
+          </capability>
+        </device>"""
+
+        obj = config.LibvirtConfigNodeDevice()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(type(obj.pci_capability),
+                         config.LibvirtConfigNodeDevicePciCap)
+        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
+                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertEqual(obj.pci_capability.fun_capability[0].type,
+                          "virt_functions")
+
+    def test_config_fail_device(self):
+        xmlin = """
+        <device>
+          <name>pci_0000_33_00_0</name>
+          <parent>pci_0000_22_1c_0</parent>
+          <driver>
+          <name>vxx</name>
+          </driver>
+          <capability type="pci">
+            <domain>0</domain>
+            <bus>9</bus>
+            <slot>0</slot>
+            <function>0</function>
+         <product id="0x5833">X3100 Series 10 Gigabit Ethernet PCIe</product>
+            <vendor id="0x17d5">Neterion Inc.</vendor>
+            <capability type="virt_functions">
+            </capability>
+          </capability>
+        </device>"""
+
+        obj = config.LibvirtConfigNodeDevice()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(type(obj.pci_capability),
+                         config.LibvirtConfigNodeDevicePciCap)
+        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
+                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertEqual(obj.pci_capability.fun_capability[0].type,
+                          "virt_functions")
+
+    def test_config_2cap_device(self):
+        xmlin = """
+        <device>
+          <name>pci_0000_04_10_7</name>
+          <parent>pci_0000_00_01_1</parent>
+          <driver>
+            <name>igbvf</name>
+          </driver>
+          <capability type='pci'>
+            <domain>0</domain>
+            <bus>4</bus>
+            <slot>16</slot>
+            <function>7</function>
+            <product id='0x1520'>I350 Ethernet Controller Virtual</product>
+            <vendor id='0x8086'>Intel Corporation</vendor>
+            <capability type='phys_function'>
+              <address domain='0x0000' bus='0x04' slot='0x00' function='0x3'/>
+            </capability>
+            <capability type='virt_functions'>
+              <address domain='0x0000' bus='0x04' slot='0x00' function='0x3'/>
+            </capability>
+          </capability>
+        </device>"""
+
+        obj = config.LibvirtConfigNodeDevice()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(type(obj.pci_capability),
+                          config.LibvirtConfigNodeDevicePciCap)
+        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
+                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertEqual(obj.pci_capability.fun_capability[0].type,
+                          "phys_function")
+        self.assertEqual(obj.pci_capability.fun_capability[1].type,
+                          "virt_functions")
+
+
+class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
+
+    def test_config_device_pci_cap(self):
+        xmlin = """
+            <capability type="pci">
+              <domain>0</domain>
+              <bus>10</bus>
+              <slot>1</slot>
+              <function>5</function>
+              <product id="0x8086-3">Intel 10 Gigabit Ethernet</product>
+              <vendor id="0x8086">Intel Inc.</vendor>
+              <capability type="virt_functions">
+               <address domain="0000" bus="0x0a" slot="0x1" function="0x1"/>
+               <address domain="0001" bus="0x0a" slot="0x02" function="0x03"/>
+              </capability>
+            </capability>"""
+        obj = config.LibvirtConfigNodeDevicePciCap()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(obj.domain, 0)
+        self.assertEqual(obj.bus, 10)
+        self.assertEqual(obj.slot, 1)
+        self.assertEqual(obj.function, 5)
+        self.assertEqual(obj.product, "Intel 10 Gigabit Ethernet")
+        self.assertEqual(obj.product_id, '0x8086-3')
+        self.assertEqual(obj.vendor, "Intel Inc.")
+        self.assertEqual(obj.vendor_id, "0x8086")
+        self.assertEqual(type(obj.fun_capability[0]),
+                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+
+        self.assertEqual(obj.fun_capability[0].type, 'virt_functions')
+        self.assertEqual(obj.fun_capability[0].device_addrs,
+                         [("0000", "0x0a", "0x1", "0x1"),
+                          ("0001", "0x0a", "0x02", "0x03"), ])
+
+    def test_config_device_pci_2cap(self):
+        xmlin = """
+            <capability type="pci">
+              <domain>0</domain>
+              <bus>10</bus>
+              <slot>1</slot>
+              <function>5</function>
+              <product id="0x8086-3">Intel 10 Gigabit Ethernet</product>
+              <vendor id="0x8086">Intel Inc.</vendor>
+              <capability type="virt_functions">
+               <address domain="0000" bus="0x0a" slot="0x1" function="0x1"/>
+               <address domain="0001" bus="0x0a" slot="0x02" function="0x03"/>
+              </capability>
+              <capability type="phys_function">
+               <address domain="0000" bus="0x0a" slot="0x1" function="0x1"/>
+              </capability>
+            </capability>"""
+        obj = config.LibvirtConfigNodeDevicePciCap()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(obj.domain, 0)
+        self.assertEqual(obj.bus, 10)
+        self.assertEqual(obj.slot, 1)
+        self.assertEqual(obj.function, 5)
+        self.assertEqual(obj.product, "Intel 10 Gigabit Ethernet")
+        self.assertEqual(obj.product_id, '0x8086-3')
+        self.assertEqual(obj.vendor, "Intel Inc.")
+        self.assertEqual(obj.vendor_id, "0x8086")
+        self.assertEqual(type(obj.fun_capability[0]),
+                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+
+        self.assertEqual(obj.fun_capability[0].type, 'virt_functions')
+        self.assertEqual(obj.fun_capability[0].device_addrs,
+                         [("0000", '0x0a', '0x1', "0x1"),
+                          ("0001", "0x0a", "0x02", "0x03"), ])
+        self.assertEqual(obj.fun_capability[1].type, 'phys_function')
+        self.assertEqual(obj.fun_capability[1].device_addrs,
+                         [("0000", '0x0a', '0x1', "0x1"), ])
+
+
+class LibvirtConfigNodeDevicePciSubFunctionCap(LibvirtConfigBaseTest):
+
+    def test_config_device_pci_subfunction(self):
+        xmlin = """
+        <capability type="virt_functions">
+            <address domain="0000" bus="0x0a" slot="0x1" function="0x1"/>
+            <address domain="0001" bus="0x0a" slot="0x02" function="0x03"/>
+        </capability>"""
+        fun_capability = config.LibvirtConfigNodeDevicePciSubFunctionCap()
+        fun_capability.parse_str(xmlin)
+        self.assertEqual('virt_functions', fun_capability.type)
+        self.assertEqual([("0000", "0x0a", "0x1", "0x1"),
+                          ("0001", "0x0a", "0x02", "0x03"), ],
+                         fun_capability.device_addrs)

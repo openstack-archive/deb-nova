@@ -89,7 +89,8 @@ def return_non_existing_address(*args, **kwarg):
 
 
 def fake_InstanceMetadata(stubs, inst_data, address=None,
-                          sgroups=None, content=[], extra_md={}):
+                          sgroups=None, content=[], extra_md={},
+                          vd_driver=None):
 
     if sgroups is None:
         sgroups = [{'name': 'default'}]
@@ -99,7 +100,8 @@ def fake_InstanceMetadata(stubs, inst_data, address=None,
 
     stubs.Set(api, 'security_group_get_by_instance', sg_get)
     return base.InstanceMetadata(inst_data, address=address,
-        content=content, extra_md=extra_md)
+        content=content, extra_md=extra_md,
+        vd_driver=vd_driver)
 
 
 def fake_request(stubs, mdinst, relpath, address="127.0.0.1",
@@ -137,8 +139,7 @@ class MetadataTestCase(test.TestCase):
         self.instance = INSTANCES[0]
         self.instance['system_metadata'] = get_default_sys_meta()
         self.flags(use_local=True, group='conductor')
-        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
-                                                          spectacular=True)
+        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs)
 
     def test_can_pickle_metadata(self):
         # Make sure that InstanceMetadata is possible to pickle. This is
@@ -283,6 +284,12 @@ class MetadataTestCase(test.TestCase):
 
         base.InstanceMetadata(INSTANCES[0], network_info=network_info)
 
+    def test_InstanceMetadata_invoke_metadata_for_config_drive(self):
+        inst = copy.copy(self.instance)
+        inst_md = base.InstanceMetadata(inst)
+        for (path, value) in inst_md.metadata_for_config_drive():
+            self.assertIsNotNone(path)
+
     def test_InstanceMetadata_queries_network_API_when_needed(self):
         network_info_from_api = {"c": "d"}
 
@@ -290,8 +297,7 @@ class MetadataTestCase(test.TestCase):
 
         network_api.API.get_instance_nw_info(
             mox.IgnoreArg(),
-            mox.IgnoreArg(),
-            conductor_api=mox.IgnoreArg()).AndReturn(network_info_from_api)
+            mox.IgnoreArg()).AndReturn(network_info_from_api)
 
         self.mox.StubOutWithMock(netutils, "get_injected_network_template")
 
@@ -309,20 +315,17 @@ class OpenStackMetadataTestCase(test.TestCase):
         self.instance = INSTANCES[0]
         self.instance['system_metadata'] = get_default_sys_meta()
         self.flags(use_local=True, group='conductor')
-        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
-                                                          spectacular=True)
+        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs)
 
     def test_top_level_listing(self):
         # request for /openstack/<version>/ should show metadata.json
         inst = copy.copy(self.instance)
         mdinst = fake_InstanceMetadata(self.stubs, inst)
 
-        listing = mdinst.lookup("/openstack/")
-
         result = mdinst.lookup("/openstack")
 
         # trailing / should not affect anything
-        self.assertEqual(result, mdinst.lookup("/openstack"))
+        self.assertEqual(result, mdinst.lookup("/openstack/"))
 
         # the 'content' should not show up in directory listing
         self.assertTrue(base.CONTENT_DIR not in result)
@@ -434,6 +437,48 @@ class OpenStackMetadataTestCase(test.TestCase):
 
         self.assertEqual([], [k for k in mdjson.keys() if k.find("-") != -1])
 
+    def test_vendor_data_presense(self):
+        inst = copy.copy(self.instance)
+        mdinst = fake_InstanceMetadata(self.stubs, inst)
+
+        # verify that 2013-10-17 has the vendor_data.json file
+        result = mdinst.lookup("/openstack/2013-10-17")
+        self.assertTrue('vendor_data.json' in result)
+
+        # verify that older version do not have it
+        result = mdinst.lookup("/openstack/2013-04-04")
+        self.assertFalse('vendor_data.json' in result)
+
+    def test_vendor_data_response(self):
+        inst = copy.copy(self.instance)
+
+        mydata = {'mykey1': 'value1', 'mykey2': 'value2'}
+
+        class myVdriver(base.VendorDataDriver):
+            def __init__(self, *args, **kwargs):
+                super(myVdriver, self).__init__(*args, **kwargs)
+                data = mydata.copy()
+                uuid = kwargs['instance']['uuid']
+                data.update({'inst_uuid': uuid})
+                self.data = data
+
+            def get(self):
+                return self.data
+
+        mdinst = fake_InstanceMetadata(self.stubs, inst, vd_driver=myVdriver)
+
+        # verify that 2013-10-17 has the vendor_data.json file
+        vdpath = "/openstack/2013-10-17/vendor_data.json"
+        vd = json.loads(mdinst.lookup(vdpath))
+
+        # the instance should be passed through, and our class copies the
+        # uuid through to 'inst_uuid'.
+        self.assertEqual(vd['inst_uuid'], inst['uuid'])
+
+        # check the other expected values
+        for k, v in mydata.items():
+            self.assertEqual(vd[k], v)
+
 
 class MetadataHandlerTestCase(test.TestCase):
     """Test that metadata is returning proper values."""
@@ -441,8 +486,7 @@ class MetadataHandlerTestCase(test.TestCase):
     def setUp(self):
         super(MetadataHandlerTestCase, self).setUp()
 
-        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
-                                                          spectacular=True)
+        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs)
         self.instance = INSTANCES[0]
         self.instance['system_metadata'] = get_default_sys_meta()
         self.flags(use_local=True, group='conductor')
@@ -464,6 +508,16 @@ class MetadataHandlerTestCase(test.TestCase):
         self.assertEqual(response.body, "foo")
 
     def test_root(self):
+        expected = "\n".join(base.VERSIONS) + "\nlatest"
+        response = fake_request(self.stubs, self.mdinst, "/")
+        self.assertEqual(response.body, expected)
+
+        response = fake_request(self.stubs, self.mdinst, "/foo/../")
+        self.assertEqual(response.body, expected)
+
+    def test_root_metadata_proxy_enabled(self):
+        CONF.set_override("service_neutron_metadata_proxy", True)
+
         expected = "\n".join(base.VERSIONS) + "\nlatest"
         response = fake_request(self.stubs, self.mdinst, "/")
         self.assertEqual(response.body, expected)
@@ -608,8 +662,7 @@ class MetadataHandlerTestCase(test.TestCase):
 class MetadataPasswordTestCase(test.TestCase):
     def setUp(self):
         super(MetadataPasswordTestCase, self).setUp()
-        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs,
-                                                          spectacular=True)
+        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs)
         self.instance = copy.copy(INSTANCES[0])
         self.instance['system_metadata'] = get_default_sys_meta()
         self.flags(use_local=True, group='conductor')

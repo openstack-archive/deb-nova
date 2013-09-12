@@ -17,7 +17,7 @@
 
 from nova.tests.virt.xenapi import stubs
 from nova.virt import fake
-from nova.virt.xenapi import XenAPIDriver
+from nova.virt import xenapi
 
 
 class XenAPIDriverTestCase(stubs.XenAPITestBase):
@@ -29,6 +29,7 @@ class XenAPIDriverTestCase(stubs.XenAPITestBase):
                 'disk_total': 4 * 1024 * 1024 * 1024,
                 'disk_used': 5 * 1024 * 1024 * 1024,
                 'host_hostname': 'somename',
+                'supported_instances': 'x86_64',
                 'host_cpu_info': {'cpu_count': 50}}
 
     def test_available_resource(self):
@@ -36,7 +37,7 @@ class XenAPIDriverTestCase(stubs.XenAPITestBase):
                    xenapi_connection_password='test_pass')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
 
-        driver = XenAPIDriver(fake.FakeVirtAPI(), False)
+        driver = xenapi.XenAPIDriver(fake.FakeVirtAPI(), False)
         driver._session.product_version = (6, 8, 2)
 
         self.stubs.Set(driver, 'get_host_stats', self.host_stats)

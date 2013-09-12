@@ -17,8 +17,12 @@
 Claim objects for use with resource tracking.
 """
 
+from nova.objects import instance as instance_obj
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.pci import pci_request
+
 
 LOG = logging.getLogger(__name__)
 
@@ -67,10 +71,22 @@ class Claim(NopClaim):
     correct decisions with respect to host selection.
     """
 
-    def __init__(self, instance, tracker):
+    def __init__(self, instance, tracker, overhead=None):
         super(Claim, self).__init__()
-        self.instance = jsonutils.to_primitive(instance)
+        # Stash a copy of the instance at the current point of time
+        if isinstance(instance, instance_obj.Instance):
+            self.instance = instance.obj_clone()
+        else:
+            # This does not use copy.deepcopy() because it could be
+            # a sqlalchemy model, and it's best to make sure we have
+            # the primitive form.
+            self.instance = jsonutils.to_primitive(instance)
         self.tracker = tracker
+
+        if not overhead:
+            overhead = {'memory_mb': 0}
+
+        self.overhead = overhead
 
     @property
     def disk_gb(self):
@@ -78,7 +94,7 @@ class Claim(NopClaim):
 
     @property
     def memory_mb(self):
-        return self.instance['memory_mb']
+        return self.instance['memory_mb'] + self.overhead['memory_mb']
 
     @property
     def vcpus(self):
@@ -119,7 +135,8 @@ class Claim(NopClaim):
         # Test for resources:
         can_claim = (self._test_memory(resources, memory_mb_limit) and
                      self._test_disk(resources, disk_gb_limit) and
-                     self._test_cpu(resources, vcpu_limit))
+                     self._test_cpu(resources, vcpu_limit) and
+                     self._test_pci())
 
         if can_claim:
             LOG.audit(_("Claim successful"), instance=self.instance)
@@ -145,6 +162,12 @@ class Claim(NopClaim):
         requested = self.disk_gb
 
         return self._test(type_, unit, total, used, requested, limit)
+
+    def _test_pci(self):
+        pci_requests = pci_request.get_instance_pci_requests(self.instance)
+        if not pci_requests:
+            return True
+        return self.tracker.pci_tracker.stats.support_requests(pci_requests)
 
     def _test_cpu(self, resources, limit):
         type_ = _("CPU")
@@ -194,8 +217,8 @@ class ResizeClaim(Claim):
     """Claim used for holding resources for an incoming resize/migration
     operation.
     """
-    def __init__(self, instance, instance_type, tracker):
-        super(ResizeClaim, self).__init__(instance, tracker)
+    def __init__(self, instance, instance_type, tracker, overhead=None):
+        super(ResizeClaim, self).__init__(instance, tracker, overhead=overhead)
         self.instance_type = instance_type
         self.migration = None
 
@@ -206,11 +229,19 @@ class ResizeClaim(Claim):
 
     @property
     def memory_mb(self):
-        return self.instance_type['memory_mb']
+        return self.instance_type['memory_mb'] + self.overhead['memory_mb']
 
     @property
     def vcpus(self):
         return self.instance_type['vcpus']
+
+    def _test_pci(self):
+        pci_requests = pci_request.get_instance_pci_requests(
+            self.instance, 'new_')
+        if not pci_requests:
+            return True
+
+        return self.tracker.pci_tracker.stats.support_requests(pci_requests)
 
     def abort(self):
         """Compute operation requiring claimed resources has failed or

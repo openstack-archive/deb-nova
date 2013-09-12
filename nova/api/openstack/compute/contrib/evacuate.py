@@ -20,6 +20,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 from nova import utils
@@ -32,6 +33,7 @@ class Controller(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(Controller, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
+        self.host_api = compute.HostAPI()
 
     @wsgi.action('evacuate')
     def _evacuate(self, req, id, body):
@@ -68,16 +70,22 @@ class Controller(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:
+            self.host_api.service_get_by_compute_host(context, host)
+        except exception.NotFound:
+            msg = _("Compute host %s not found.") % host
+            raise exc.HTTPNotFound(explanation=msg)
+
+        try:
             instance = self.compute_api.get(context, id)
             self.compute_api.evacuate(context, instance, host,
                                       on_shared_storage, password)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'evacuate')
-        except Exception as e:
-            msg = _("Error in evacuate, %s") % e
-            LOG.exception(msg, instance=instance)
-            raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.ComputeServiceUnavailable as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         if password:
             return {'adminPass': password}

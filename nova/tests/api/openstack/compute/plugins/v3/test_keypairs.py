@@ -27,15 +27,21 @@ from nova.openstack.common import policy
 from nova import quota
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests.objects import test_keypair
 
 
 QUOTAS = quota.QUOTAS
 
 
+keypair_data = {
+    'public_key': 'FAKE_KEY',
+    'fingerprint': 'FAKE_FINGERPRINT',
+}
+
+
 def fake_keypair(name):
-    return {'public_key': 'FAKE_KEY',
-            'fingerprint': 'FAKE_FINGERPRINT',
-            'name': name}
+    return dict(test_keypair.fake_keypair,
+                name=name, **keypair_data)
 
 
 def db_key_pair_get_all_by_user(self, user_id):
@@ -43,7 +49,7 @@ def db_key_pair_get_all_by_user(self, user_id):
 
 
 def db_key_pair_create(self, keypair):
-    return keypair
+    return fake_keypair(name=keypair['name'])
 
 
 def db_key_pair_destroy(context, user_id, name):
@@ -80,7 +86,7 @@ class KeypairsTest(test.TestCase):
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 200)
         res_dict = jsonutils.loads(res.body)
-        response = {'keypairs': [{'keypair': fake_keypair('FAKE')}]}
+        response = {'keypairs': [{'keypair': dict(keypair_data, name='FAKE')}]}
         self.assertEqual(res_dict, response)
 
     def test_keypair_create(self):
@@ -90,7 +96,7 @@ class KeypairsTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(self.app)
-        self.assertEqual(res.status_int, 200)
+        self.assertEqual(res.status_int, 201)
         res_dict = jsonutils.loads(res.body)
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
         self.assertTrue(len(res_dict['keypair']['private_key']) > 0)
@@ -164,7 +170,7 @@ class KeypairsTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(self.app)
-        self.assertEqual(res.status_int, 200)
+        self.assertEqual(res.status_int, 201)
         # FIXME(ja): sholud we check that public_key was sent to create?
         res_dict = jsonutils.loads(res.body)
         self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
@@ -285,7 +291,8 @@ class KeypairsTest(test.TestCase):
     def test_keypair_show(self):
 
         def _db_key_pair_get(context, user_id, name):
-            return {'name': 'foo', 'public_key': 'XXX', 'fingerprint': 'YYY'}
+            return dict(test_keypair.fake_keypair,
+                        name='foo', public_key='XXX', fingerprint='YYY')
 
         self.stubs.Set(db, "key_pair_get", _db_key_pair_get)
 
@@ -358,7 +365,8 @@ class KeypairPolicyTest(test.TestCase):
         self.KeyPairController = keypairs.KeypairController()
 
         def _db_key_pair_get(context, user_id, name):
-            return {'name': 'foo', 'public_key': 'XXX', 'fingerprint': 'YYY'}
+            return dict(test_keypair.fake_keypair,
+                        name='foo', public_key='XXX', fingerprint='YYY')
 
         self.stubs.Set(db, "key_pair_get",
                        _db_key_pair_get)

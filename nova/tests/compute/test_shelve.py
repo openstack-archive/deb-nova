@@ -41,7 +41,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         timeutils.set_time_override(cur_time)
         instance.task_state = task_states.SHELVING
         instance.save()
-        sys_meta = instance.system_metadata
+        sys_meta = dict(instance.system_metadata)
         sys_meta['shelved_at'] = timeutils.strtime(at=cur_time)
         sys_meta['shelved_image_id'] = image_id
         sys_meta['shelved_host'] = host
@@ -67,8 +67,11 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                  'task_state': None,
                  'expected_task_state': [task_states.SHELVING,
                     task_states.SHELVING_IMAGE_UPLOADING],
-                 'system_metadata': sys_meta}).AndReturn((db_instance,
-                                                          db_instance))
+                 'system_metadata': sys_meta},
+                 update_cells=False,
+                 columns_to_join=['metadata', 'system_metadata'],
+                ).AndReturn((db_instance,
+                                                db_instance))
         self.compute._notify_about_instance_usage(self.context,
                                                   instance, 'shelve.end')
         self.mox.ReplayAll()
@@ -92,7 +95,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         host = 'fake-mini'
         cur_time = timeutils.utcnow()
         timeutils.set_time_override(cur_time)
-        sys_meta = instance.system_metadata
+        sys_meta = dict(instance.system_metadata)
         sys_meta['shelved_at'] = timeutils.strtime(at=cur_time)
         sys_meta['shelved_image_id'] = None
         sys_meta['shelved_host'] = host
@@ -113,8 +116,10 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                  'vm_state': vm_states.SHELVED_OFFLOADED,
                  'task_state': None,
                  'expected_task_state': [task_states.SHELVING,
-                    task_states.SHELVING_OFFLOADING]}).AndReturn(
-                            (db_instance, db_instance))
+                    task_states.SHELVING_OFFLOADING]},
+                 update_cells=False,
+                 columns_to_join=['metadata', 'system_metadata'],
+                 ).AndReturn((db_instance, db_instance))
         self.compute._notify_about_instance_usage(self.context, instance,
                 'shelve_offload.end')
         self.mox.ReplayAll()
@@ -139,7 +144,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         cur_time = timeutils.utcnow()
         cur_time_tz = cur_time.replace(tzinfo=iso8601.iso8601.Utc())
         timeutils.set_time_override(cur_time)
-        sys_meta = instance.system_metadata
+        sys_meta = dict(instance.system_metadata)
         sys_meta['shelved_at'] = timeutils.strtime(at=cur_time)
         sys_meta['shelved_image_id'] = image['id']
         sys_meta['shelved_host'] = host
@@ -161,8 +166,10 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         self.compute._notify_about_instance_usage(self.context, instance,
                 'unshelve.start')
         db.instance_update_and_get_original(self.context, instance['uuid'],
-                {'task_state': task_states.SPAWNING}).AndReturn(
-                        (db_instance, db_instance))
+                {'task_state': task_states.SPAWNING},
+                update_cells=False,
+                columns_to_join=['metadata', 'system_metadata'],
+                ).AndReturn((db_instance, db_instance))
         self.compute._prep_block_device(self.context, instance,
                 []).AndReturn('fake_bdm')
         db_instance['key_data'] = None
@@ -179,8 +186,10 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                  'key_data': None,
                  'auto_disk_config': False,
                  'expected_task_state': task_states.SPAWNING,
-                 'launched_at': cur_time_tz}).AndReturn((db_instance,
-                                                         db_instance))
+                 'launched_at': cur_time_tz},
+                 update_cells=False,
+                 columns_to_join=['metadata', 'system_metadata']
+                 ).AndReturn((db_instance, db_instance))
         self.compute._notify_about_instance_usage(self.context, instance,
                 'unshelve.end')
         self.mox.ReplayAll()
@@ -206,7 +215,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
             expected_attrs=['metadata', 'system_metadata'])
         instance.task_state = task_states.UNSHELVING
         instance.save()
-        sys_meta = instance.system_metadata
+        sys_meta = dict(instance.system_metadata)
         sys_meta['shelved_at'] = timeutils.strtime(at=cur_time)
         sys_meta['shelved_image_id'] = None
         sys_meta['shelved_host'] = host
@@ -220,8 +229,10 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         self.compute._notify_about_instance_usage(self.context, instance,
                 'unshelve.start')
         db.instance_update_and_get_original(self.context, instance['uuid'],
-                {'task_state': task_states.SPAWNING}).AndReturn(
-                        (db_instance, db_instance))
+                {'task_state': task_states.SPAWNING},
+                update_cells=False,
+                columns_to_join=['metadata', 'system_metadata']
+                ).AndReturn((db_instance, db_instance))
         self.compute._prep_block_device(self.context, instance,
                 []).AndReturn('fake_bdm')
         db_instance['key_data'] = None
@@ -238,8 +249,10 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                  'key_data': None,
                  'auto_disk_config': False,
                  'expected_task_state': task_states.SPAWNING,
-                 'launched_at': cur_time_tz}).AndReturn((db_instance,
-                                                         db_instance))
+                 'launched_at': cur_time_tz},
+                 update_cells=False,
+                 columns_to_join=['metadata', 'system_metadata']
+                 ).AndReturn((db_instance, db_instance))
         self.compute._notify_about_instance_usage(self.context, instance,
                 'unshelve.end')
         self.mox.ReplayAll()

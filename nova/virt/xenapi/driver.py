@@ -39,6 +39,7 @@ A driver for XenServer or Xen Cloud Platform.
 
 import contextlib
 import cPickle as pickle
+import time
 import urlparse
 import xmlrpclib
 
@@ -48,6 +49,8 @@ from oslo.config import cfg
 
 from nova import context
 from nova import exception
+from nova.openstack.common.gettextutils import _
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import driver
@@ -62,15 +65,15 @@ LOG = logging.getLogger(__name__)
 
 xenapi_opts = [
     cfg.StrOpt('xenapi_connection_url',
-               default=None,
                help='URL for connection to XenServer/Xen Cloud Platform. '
+                    'A special value of unix://local can be used to connect '
+                    'to the local unix socket.  '
                     'Required if compute_driver=xenapi.XenAPIDriver'),
     cfg.StrOpt('xenapi_connection_username',
                default='root',
                help='Username for connection to XenServer/Xen Cloud Platform. '
                     'Used only if compute_driver=xenapi.XenAPIDriver'),
     cfg.StrOpt('xenapi_connection_password',
-               default=None,
                help='Password for connection to XenServer/Xen Cloud Platform. '
                     'Used only if compute_driver=xenapi.XenAPIDriver',
                secret=True),
@@ -94,7 +97,6 @@ xenapi_opts = [
                default='/var/run/sr-mount',
                help='Base path to the storage repository'),
     cfg.StrOpt('target_host',
-               default=None,
                help='iSCSI Target Host'),
     cfg.StrOpt('target_port',
                default='3260',
@@ -380,10 +382,10 @@ class XenAPIDriver(driver.ComputeDriver):
                 'password': CONF.xenapi_connection_password}
 
     def get_available_resource(self, nodename):
-        """Retrieve resource info.
+        """Retrieve resource information.
 
         This method is called when nova-compute launches, and
-        as part of a periodic task.
+        as part of a periodic task that records the results in the DB.
 
         :param nodename: ignored in this driver
         :returns: dictionary describing resources
@@ -399,7 +401,6 @@ class XenAPIDriver(driver.ComputeDriver):
         total_disk_gb = host_stats['disk_total'] / (1024 * 1024 * 1024)
         used_disk_gb = host_stats['disk_used'] / (1024 * 1024 * 1024)
         hyper_ver = utils.convert_version_to_int(self._session.product_version)
-
         dic = {'vcpus': 0,
                'memory_mb': total_ram_mb,
                'local_gb': total_disk_gb,
@@ -409,7 +410,9 @@ class XenAPIDriver(driver.ComputeDriver):
                'hypervisor_type': 'xen',
                'hypervisor_version': hyper_ver,
                'hypervisor_hostname': host_stats['host_hostname'],
-               'cpu_info': host_stats['host_cpu_info']['cpu_count']}
+               'cpu_info': host_stats['host_cpu_info']['cpu_count'],
+               'supported_instances': jsonutils.dumps(
+                   host_stats['supported_instances'])}
 
         return dic
 
@@ -465,13 +468,6 @@ class XenAPIDriver(driver.ComputeDriver):
         """
         pass
 
-    def pre_block_migration(self, ctxt, instance_ref, disk_info_json):
-        """Used by libvirt for live migration. We rely on xenapi
-        checks to do this for us. May be used in the future to
-        populate the vdi/vif maps.
-        """
-        pass
-
     def live_migration(self, ctxt, instance_ref, dest,
                        post_method, recover_method, block_migration=False,
                        migrate_data=None):
@@ -495,7 +491,7 @@ class XenAPIDriver(driver.ComputeDriver):
                                  recover_method, block_migration, migrate_data)
 
     def pre_live_migration(self, context, instance_ref, block_device_info,
-                           network_info, migrate_data=None):
+                           network_info, data, migrate_data=None):
         """Preparation live migration.
 
         :params block_device_info:
@@ -603,13 +599,6 @@ class XenAPIDriver(driver.ComputeDriver):
         return self._pool.undo_aggregate_operation(context, op,
                 aggregate, host, set_error)
 
-    def legacy_nwinfo(self):
-        """
-        Indicate if the driver requires the legacy network_info format.
-        """
-        # TODO(tr3buchet): remove this function once all virts return false
-        return False
-
     def resume_state_on_host_boot(self, context, instance, network_info,
                                   block_device_info=None):
         """resume guest state when a host is booted."""
@@ -688,10 +677,13 @@ class XenAPISession(object):
         software_version = self._get_software_version()
 
         product_version_str = software_version.get('product_version')
+        # Product version is only set in some cases (e.g. XCP, XenServer) and
+        # not in others (e.g. xenserver-core, XAPI-XCP).
+        # In these cases, the platform version is the best number to use.
+        if product_version_str is None:
+            product_version_str = software_version.get('platform_version',
+                                                       '0.0.0')
         product_brand = software_version.get('product_brand')
-
-        if None in (product_version_str, product_brand):
-            return (None, None)
 
         product_version = tuple(int(part) for part in
                                 product_version_str.split('.'))
@@ -748,8 +740,49 @@ class XenAPISession(object):
         rv = self.call_plugin(plugin, fn, params)
         return pickle.loads(rv)
 
+    def call_plugin_serialized_with_retry(self, plugin, fn, num_retries,
+                                          callback, *args, **kwargs):
+        """Allows a plugin to raise RetryableError so we can try again."""
+        attempts = num_retries + 1
+        sleep_time = 0.5
+        for attempt in xrange(1, attempts + 1):
+            LOG.info(_('%(plugin)s.%(fn)s attempt %(attempt)d/%(attempts)d'),
+                     {'plugin': plugin, 'fn': fn, 'attempt': attempt,
+                      'attempts': attempts})
+            try:
+                if callback:
+                    callback(kwargs)
+                return self.call_plugin_serialized(plugin, fn, *args, **kwargs)
+            except self.XenAPI.Failure as exc:
+                if self._is_retryable_exception(exc):
+                    LOG.warn(_('%(plugin)s.%(fn)s failed. Retrying call.')
+                             % {'plugin': plugin, 'fn': fn})
+                else:
+                    raise
+
+            time.sleep(sleep_time)
+            sleep_time = min(2 * sleep_time, 15)
+
+        raise exception.PluginRetriesExceeded(num_retries=num_retries)
+
+    def _is_retryable_exception(self, exc):
+        _type, method, error = exc.details[:3]
+        if error == 'RetryableError':
+            LOG.debug(_("RetryableError, so retrying upload_vhd"),
+                      exc_info=True)
+            return True
+        elif "signal" in method:
+            LOG.debug(_("Error due to a signal, retrying upload_vhd"),
+                      exc_info=True)
+            return True
+        else:
+            return False
+
     def _create_session(self, url):
         """Stubout point. This can be replaced with a mock session."""
+        self.is_local_connection = url == "unix://local"
+        if self.is_local_connection:
+            return self.XenAPI.xapi_local()
         return self.XenAPI.Session(url)
 
     def _unwrap_plugin_exceptions(self, func, *args, **kwargs):

@@ -137,6 +137,14 @@
             "updated": "%(timestamp)s"
         },
         {
+            "alias": "os-assisted-volume-snapshots",
+            "description": "%(text)s",
+            "links": [],
+            "name": "AssistedVolumeSnapshots",
+            "namespace": "http://docs.openstack.org/compute/ext/assisted-volume-snapshots/api/v2",
+            "updated": "%(timestamp)s"
+        },
+        {
             "alias": "os-attach-interfaces",
             "description": "Attach interface support.",
             "links": [],
@@ -158,6 +166,14 @@
             "links": [],
             "name": "BareMetalNodes",
             "namespace": "http://docs.openstack.org/compute/ext/baremetal_nodes/api/v2",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "os-block-device-mapping-v2-boot",
+            "description": "%(text)s",
+            "links": [],
+            "name": "BlockDeviceMappingV2Boot",
+            "namespace": "http://docs.openstack.org/compute/ext/block_device_mapping_v2_boot/api/v2",
             "updated": "%(timestamp)s"
         },
         {
@@ -465,6 +481,14 @@
             "updated": "%(timestamp)s"
         },
         {
+            "alias": "os-user-quotas",
+            "description": "%(text)s",
+            "links": [],
+            "name": "UserQuotas",
+            "namespace": "http://docs.openstack.org/compute/ext/user_quotas/api/v1.1",
+            "updated": "%(timestamp)s"
+        },
+        {
             "alias": "os-rescue",
             "description": "%(text)s",
             "links": [],
@@ -558,6 +582,14 @@
             "links": [],
             "name": "VirtualInterfaces",
             "namespace": "http://docs.openstack.org/compute/ext/virtual_interfaces/api/v1.1",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "os-volume-attachment-update",
+            "description": "%(text)s",
+            "links": [],
+            "name": "VolumeAttachmentUpdate",
+            "namespace": "http://docs.openstack.org/compute/ext/os-volume-attachment-update/api/v2",
             "updated": "%(timestamp)s"
         },
         {

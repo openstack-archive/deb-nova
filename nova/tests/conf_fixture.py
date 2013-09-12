@@ -52,7 +52,6 @@ class ConfFixture(fixtures.Fixture):
         self.conf.set_default('host', 'fake-mini')
         self.conf.set_default('compute_driver', 'nova.virt.fake.FakeDriver')
         self.conf.set_default('fake_network', True)
-        self.conf.set_default('fake_rabbit', True)
         self.conf.set_default('flat_network_bridge', 'br100')
         self.conf.set_default('floating_ip_dns_manager',
                               'nova.tests.utils.dns_manager')
@@ -65,7 +64,7 @@ class ConfFixture(fixtures.Fixture):
                               'nova.openstack.common.rpc.impl_fake')
         self.conf.set_default('rpc_cast_timeout', 5)
         self.conf.set_default('rpc_response_timeout', 5)
-        self.conf.set_default('sql_connection', "sqlite://")
+        self.conf.set_default('connection', "sqlite://", group='database')
         self.conf.set_default('sqlite_synchronous', False)
         self.conf.set_default('use_ipv6', True)
         self.conf.set_default('verbose', True)

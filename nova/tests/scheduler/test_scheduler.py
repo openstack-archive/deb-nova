@@ -20,6 +20,7 @@ Tests For Scheduler
 """
 
 import mox
+from oslo.config import cfg
 
 from nova.compute import api as compute_api
 from nova.compute import task_states
@@ -31,16 +32,21 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.image import glance
-from nova.openstack.common.notifier import api as notifier
+from nova import notifier as notify
+from nova.objects import instance as instance_obj
 from nova.openstack.common.rpc import common as rpc_common
 from nova.scheduler import driver
 from nova.scheduler import manager
 from nova import servicegroup
 from nova import test
+from nova.tests import fake_instance
 from nova.tests import fake_instance_actions
 from nova.tests.image import fake as fake_image
 from nova.tests import matchers
 from nova.tests.scheduler import fakes
+from nova import utils
+
+CONF = cfg.CONF
 
 
 class SchedulerManagerTestCase(test.NoDBTestCase):
@@ -60,12 +66,6 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         self.fake_args = (1, 2, 3)
         self.fake_kwargs = {'cat': 'meow', 'dog': 'woof'}
         fake_instance_actions.stub_out_action_events(self.stubs)
-
-    def stub_out_client_exceptions(self):
-        def passthru(exceptions, func, *args, **kwargs):
-            return func(*args, **kwargs)
-
-        self.stubs.Set(rpc_common, 'catch_client_exception', passthru)
 
     def test_1_correct_init(self):
         # Correct scheduler driver
@@ -192,7 +192,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                         'instance_uuids': [fake_instance_uuid]}
 
         self.manager.driver.schedule_run_instance(self.context,
-                request_spec, None, None, None, None, {}).AndRaise(
+                request_spec, None, None, None, None, {}, False).AndRaise(
                         exception.NoValidHost(reason=""))
         old, new_ref = db.instance_update_and_get_original(self.context,
                 fake_instance_uuid,
@@ -204,7 +204,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
 
         self.mox.ReplayAll()
         self.manager.run_instance(self.context, request_spec,
-                None, None, None, None, {})
+                None, None, None, None, {}, False)
 
     def test_live_migration_schedule_novalidhost(self):
         inst = {"uuid": "fake-instance-id",
@@ -233,7 +233,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                                 mox.IgnoreArg())
 
         self.mox.ReplayAll()
-        self.stub_out_client_exceptions()
+        self.manager = utils.ExceptionHelper(self.manager)
         self.assertRaises(exception.NoValidHost,
                           self.manager.live_migration,
                           self.context, inst, dest, block_migration,
@@ -266,7 +266,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                                 mox.IgnoreArg())
 
         self.mox.ReplayAll()
-        self.stub_out_client_exceptions()
+        self.manager = utils.ExceptionHelper(self.manager)
         self.assertRaises(exception.ComputeServiceUnavailable,
                           self.manager.live_migration,
                           self.context, inst, dest, block_migration,
@@ -276,7 +276,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         instance = {'host': 'h'}
         self.mox.StubOutClassWithMocks(live_migrate, "LiveMigrationTask")
         task = live_migrate.LiveMigrationTask(self.context, instance,
-                    "dest", "bm", "doc", self.manager.driver.select_hosts)
+                    "dest", "bm", "doc")
         task.execute()
 
         self.mox.ReplayAll()
@@ -307,7 +307,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                                 mox.IgnoreArg())
 
         self.mox.ReplayAll()
-        self.stub_out_client_exceptions()
+        self.manager = utils.ExceptionHelper(self.manager)
         self.assertRaises(ValueError,
                           self.manager.live_migration,
                           self.context, inst, dest, block_migration,
@@ -318,7 +318,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         fake_instance = {'uuid': fake_instance_uuid}
         inst = {"vm_state": "", "task_state": ""}
 
-        self._mox_schedule_method_helper('schedule_prep_resize')
+        self._mox_schedule_method_helper('select_destinations')
 
         self.mox.StubOutWithMock(compute_utils, 'add_instance_fault_from_exc')
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
@@ -335,7 +335,8 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                 'instance_type': 'fake_type',
                 'reservations': list('fake_res'),
         }
-        self.manager.driver.schedule_prep_resize(**kwargs).AndRaise(
+        self.manager.driver.select_destinations(
+            self.context, request_spec, 'fake_props').AndRaise(
                 exception.NoValidHost(reason=""))
         old_ref, new_ref = db.instance_update_and_get_original(self.context,
                 fake_instance_uuid,
@@ -348,17 +349,55 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
         self.manager.prep_resize(**kwargs)
 
-    def test_prep_resize_exception_host_in_error_state_and_raise(self):
+    def test_prep_resize_no_valid_host_back_in_shutoff_state(self):
         fake_instance_uuid = 'fake-instance-id'
-        fake_instance = {'uuid': fake_instance_uuid}
+        fake_instance = {'uuid': fake_instance_uuid, "vm_state": "stopped"}
+        inst = {"vm_state": "stopped", "task_state": ""}
 
-        self._mox_schedule_method_helper('schedule_prep_resize')
+        self._mox_schedule_method_helper('select_destinations')
 
         self.mox.StubOutWithMock(compute_utils, 'add_instance_fault_from_exc')
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
 
-        request_spec = {'instance_properties':
-                {'uuid': fake_instance_uuid}}
+        request_spec = {'instance_type': 'fake_type',
+                        'instance_uuids': [fake_instance_uuid],
+                        'instance_properties': {'uuid': fake_instance_uuid}}
+        kwargs = {
+                'context': self.context,
+                'image': 'fake_image',
+                'request_spec': request_spec,
+                'filter_properties': 'fake_props',
+                'instance': fake_instance,
+                'instance_type': 'fake_type',
+                'reservations': list('fake_res'),
+        }
+        self.manager.driver.select_destinations(
+            self.context, request_spec, 'fake_props').AndRaise(
+                exception.NoValidHost(reason=""))
+        old_ref, new_ref = db.instance_update_and_get_original(self.context,
+                fake_instance_uuid,
+                {"vm_state": vm_states.STOPPED, "task_state": None}).AndReturn(
+                        (inst, inst))
+        compute_utils.add_instance_fault_from_exc(self.context,
+                mox.IsA(conductor_api.LocalAPI), new_ref,
+                mox.IsA(exception.NoValidHost), mox.IgnoreArg())
+
+        self.mox.ReplayAll()
+        self.manager.prep_resize(**kwargs)
+
+    def test_prep_resize_exception_host_in_error_state_and_raise(self):
+        fake_instance_uuid = 'fake-instance-id'
+        fake_instance = {'uuid': fake_instance_uuid}
+
+        self._mox_schedule_method_helper('select_destinations')
+
+        self.mox.StubOutWithMock(compute_utils, 'add_instance_fault_from_exc')
+        self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
+
+        request_spec = {
+            'instance_properties': {'uuid': fake_instance_uuid},
+            'instance_uuids': [fake_instance_uuid]
+        }
         kwargs = {
                 'context': self.context,
                 'image': 'fake_image',
@@ -369,7 +408,8 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                 'reservations': list('fake_res'),
         }
 
-        self.manager.driver.schedule_prep_resize(**kwargs).AndRaise(
+        self.manager.driver.select_destinations(
+            self.context, request_spec, 'fake_props').AndRaise(
                 test.TestingException('something happened'))
 
         inst = {
@@ -396,13 +436,15 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
 
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(db, 'instance_fault_create')
-        self.mox.StubOutWithMock(notifier, 'notify')
+        self.mox.StubOutWithMock(notify, 'get_notifier')
+        notifier = self.mox.CreateMockAnything()
+        notify.get_notifier('conductor', CONF.host).AndReturn(notifier)
+        notify.get_notifier('scheduler').AndReturn(notifier)
         db.instance_update_and_get_original(self.context, 'fake-uuid',
                                             updates).AndReturn((None,
                                                                 fake_inst))
         db.instance_fault_create(self.context, mox.IgnoreArg())
-        notifier.notify(self.context, mox.IgnoreArg(), 'scheduler.foo',
-                        notifier.ERROR, mox.IgnoreArg())
+        notifier.error(self.context, 'scheduler.foo', mox.IgnoreArg())
         self.mox.ReplayAll()
 
         self.manager._set_vm_state_and_notify('foo', {'vm_state': 'foo'},
@@ -418,6 +460,41 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         self.assertRaises(rpc_common.ClientException,
                           self.manager.select_hosts,
                           self.context, {}, {})
+
+    def test_prep_resize_post_populates_retry(self):
+        self.manager.driver = fakes.FakeFilterScheduler()
+
+        image = 'image'
+        instance_uuid = 'fake-instance-id'
+        instance = fake_instance.fake_db_instance(uuid=instance_uuid)
+
+        instance_properties = {'project_id': 'fake', 'os_type': 'Linux'}
+        instance_type = "m1.tiny"
+        request_spec = {'instance_properties': instance_properties,
+                        'instance_type': instance_type,
+                        'instance_uuids': [instance_uuid]}
+        retry = {'hosts': [], 'num_attempts': 1}
+        filter_properties = {'retry': retry}
+        reservations = None
+
+        hosts = [dict(host='host', nodename='node', limits={})]
+
+        self._mox_schedule_method_helper('select_destinations')
+        self.manager.driver.select_destinations(
+            self.context, request_spec, filter_properties).AndReturn(hosts)
+
+        self.mox.StubOutWithMock(self.manager.compute_rpcapi, 'prep_resize')
+        self.manager.compute_rpcapi.prep_resize(self.context, image,
+                mox.IsA(instance_obj.Instance),
+                instance_type, 'host', reservations, request_spec=request_spec,
+                filter_properties=filter_properties, node='node')
+
+        self.mox.ReplayAll()
+        self.manager.prep_resize(self.context, image, request_spec,
+                filter_properties, instance, instance_type, reservations)
+
+        self.assertEqual([['host', 'node']],
+                         filter_properties['retry']['hosts'])
 
 
 class SchedulerTestCase(test.NoDBTestCase):
@@ -485,14 +562,15 @@ class SchedulerTestCase(test.NoDBTestCase):
         instance = {'uuid': 'fake-uuid'}
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(db, 'instance_fault_create')
-        self.mox.StubOutWithMock(notifier, 'notify')
         db.instance_update_and_get_original(self.context, instance['uuid'],
                                             mox.IgnoreArg()).AndReturn(
                                                 (None, instance))
         db.instance_fault_create(self.context, mox.IgnoreArg())
-        notifier.notify(self.context, mox.IgnoreArg(),
-                        'scheduler.run_instance',
-                        notifier.ERROR, mox.IgnoreArg())
+        self.mox.StubOutWithMock(notify, 'get_notifier')
+        notifier = self.mox.CreateMockAnything()
+        notify.get_notifier('conductor', CONF.host).AndReturn(notifier)
+        notify.get_notifier('scheduler').AndReturn(notifier)
+        notifier.error(self.context, 'scheduler.run_instance', mox.IgnoreArg())
         self.mox.ReplayAll()
 
         driver.handle_schedule_error(self.context,
@@ -512,16 +590,7 @@ class SchedulerDriverBaseTestCase(SchedulerTestCase):
         self.assertRaises(NotImplementedError,
                          self.driver.schedule_run_instance,
                          self.context, fake_request_spec, None, None, None,
-                         None, None)
-
-    def test_unimplemented_schedule_prep_resize(self):
-        fake_request_spec = {'instance_properties':
-                {'uuid': 'uuid'}}
-
-        self.assertRaises(NotImplementedError,
-                         self.driver.schedule_prep_resize,
-                         self.context, {},
-                         fake_request_spec, {}, {}, {}, None)
+                         None, None, False)
 
     def test_unimplemented_select_hosts(self):
         self.assertRaises(NotImplementedError,

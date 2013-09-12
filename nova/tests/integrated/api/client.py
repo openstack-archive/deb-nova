@@ -18,8 +18,10 @@ import httplib
 import urllib
 import urlparse
 
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.tests.image import fake
 
 
 LOG = logging.getLogger(__name__)
@@ -35,8 +37,10 @@ class OpenStackApiException(Exception):
             _status = response.status
             _body = response.read()
 
-            message = _('%(message)s\nStatus Code: %(_status)s\n'
-                        'Body: %(_body)s') % locals()
+            message = (_('%(message)s\nStatus Code: %(_status)s\n'
+                         'Body: %(_body)s') %
+                         {'message': message, '_status': _status,
+                          '_body': _body})
 
         super(OpenStackApiException, self).__init__(message)
 
@@ -102,7 +106,8 @@ class TestOpenStackClient(object):
         relative_url = parsed_url.path
         if parsed_url.query:
             relative_url = relative_url + "?" + parsed_url.query
-        LOG.info(_("Doing %(method)s on %(relative_url)s") % locals())
+        LOG.info(_("Doing %(method)s on %(relative_url)s") %
+                 {'method': method, 'relative_url': relative_url})
         if body:
             LOG.info(_("Body: %s") % body)
 
@@ -122,7 +127,8 @@ class TestOpenStackClient(object):
                                 headers=headers)
 
         http_status = response.status
-        LOG.debug(_("%(auth_uri)s => code %(http_status)s") % locals())
+        LOG.debug(_("%(auth_uri)s => code %(http_status)s") %
+                  {'auth_uri': auth_uri, 'http_status': http_status})
 
         if http_status == 401:
             raise OpenStackApiAuthenticationException(response=response)
@@ -152,7 +158,8 @@ class TestOpenStackClient(object):
         response = self.request(full_uri, **kwargs)
 
         http_status = response.status
-        LOG.debug(_("%(relative_uri)s => code %(http_status)s") % locals())
+        LOG.debug(_("%(relative_uri)s => code %(http_status)s") %
+                  {'relative_uri': relative_uri, 'http_status': http_status})
 
         if check_response_status:
             if http_status not in check_response_status:
@@ -293,3 +300,34 @@ class TestOpenStackClient(object):
     def delete_server_volume(self, server_id, attachment_id):
         return self.api_delete('/servers/%s/os-volume_attachments/%s' %
                             (server_id, attachment_id))
+
+
+class TestOpenStackClientV3(TestOpenStackClient):
+    """Simple OpenStack v3 API Client.
+
+    This is a really basic OpenStack API client that is under our control,
+    so we can make changes / insert hooks for testing.
+
+    Note that the V3 API does not have an image API and so it is
+    not possible to query the api for the image information.
+    So instead we just access the fake image service used by the unittests
+    directly.
+
+    """
+
+    def get_image(self, image_id):
+        return fake._fakeImageService.show(None, image_id)
+
+    def get_images(self, detail=True):
+        return fake._fakeImageService.detail(None)
+
+    def post_image(self, image):
+        raise NotImplementedError
+
+    def delete_image(self, image_id):
+        return fake._fakeImageService.delete(None, image_id)
+
+
+class TestOpenStackClientV3Mixin(object):
+    def _get_test_client(self):
+        return TestOpenStackClientV3('fake', 'fake', self.auth_url)

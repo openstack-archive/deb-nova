@@ -1,6 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright 2010-2011 OpenStack Foundation
+# Copyright 2013 IBM Corp.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -14,8 +15,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
-import os.path
 
 from nova.api.openstack import common
 from nova.image import glance
@@ -119,10 +118,10 @@ class ViewBuilder(common.ViewBuilder):
         """Create an alternate link for a specific image id."""
         glance_url = glance.generate_glance_url()
         glance_url = self._update_glance_link_prefix(glance_url)
-        return os.path.join(glance_url,
-                            request.environ["nova.context"].project_id,
-                            self._collection_name,
-                            str(identifier))
+        return '/'.join([glance_url,
+                         request.environ["nova.context"].project_id,
+                         self._collection_name,
+                         str(identifier)])
 
     @staticmethod
     def _format_date(date_string):
@@ -153,40 +152,16 @@ class ViewBuilder(common.ViewBuilder):
 
 class ViewBuilderV3(ViewBuilder):
 
-    def show(self, request, image):
-        """Return a dictionary with image details."""
-        image_dict = {
-            "id": image.get("id"),
-            "name": image.get("name"),
-            "size": int(image.get("size") or 0),
-            "minRam": int(image.get("min_ram") or 0),
-            "minDisk": int(image.get("min_disk") or 0),
-            "metadata": image.get("properties", {}),
-            "created": self._format_date(image.get("created_at")),
-            "updated": self._format_date(image.get("updated_at")),
-            "status": self._get_status(image),
-            "progress": self._get_progress(image),
-            "links": self._get_links(request,
-                                     image["id"],
-                                     self._collection_name),
-        }
-
-        instance_uuid = image.get("properties", {}).get("instance_uuid")
-
-        if instance_uuid is not None:
-            server_ref = self._get_href_link(request, instance_uuid, 'servers')
-            image_dict["server"] = {
-                "id": instance_uuid,
-                "links": [{
-                    "rel": "self",
-                    "href": server_ref,
-                },
-                {
-                    "rel": "bookmark",
-                    "href": self._get_bookmark_link(request,
-                                                    instance_uuid,
-                                                    'servers'),
-                }],
-            }
-
-        return dict(image=image_dict)
+    def _get_bookmark_link(self, request, identifier, collection_name):
+        """Create a URL that refers to a specific resource."""
+        if collection_name == "images":
+            glance_url = glance.generate_image_url(identifier)
+            return self._update_glance_link_prefix(glance_url)
+        else:
+            raise NotImplementedError
+            # NOTE(cyeoh) The V3 version of _get_bookmark_link should
+            # only ever be called with images as the
+            # collection_name. The images API has been removed in the
+            # V3 API and the V3 version of the view only exists for
+            # the servers view to be able to generate the appropriate
+            # bookmark link for the image of the instance.

@@ -24,6 +24,8 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.network import model as network_model
+from nova.objects import instance as instance_obj
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
 from nova.openstack.common import timeutils
@@ -154,12 +156,17 @@ def get_ip_info_for_instance_from_nw_info(nw_info):
 def get_ip_info_for_instance(context, instance):
     """Return a dictionary of IP information for an instance."""
 
-    info_cache = instance['info_cache'] or {}
-    cached_nwinfo = info_cache.get('network_info')
-    # Make sure empty response is turned into []
-    if not cached_nwinfo:
-        cached_nwinfo = []
-    nw_info = network_model.NetworkInfo.hydrate(cached_nwinfo)
+    if isinstance(instance, instance_obj.Instance):
+        nw_info = instance.info_cache.network_info
+    else:
+        # FIXME(comstud): Temporary as we transition to objects.
+        info_cache = instance['info_cache'] or {}
+        nw_info = info_cache.get('network_info')
+        # Make sure empty response is turned into the model
+        if not nw_info:
+            nw_info = []
+        if not isinstance(nw_info, network_model.NetworkInfo):
+            nw_info = network_model.NetworkInfo.hydrate(nw_info)
     return get_ip_info_for_instance_from_nw_info(nw_info)
 
 
@@ -399,3 +406,30 @@ def dict_from_dotted_str(items):
 def search_opts_from_filters(filters):
     return dict((f['name'].replace('-', '_'), f['value']['1'])
                 for f in filters if f['value']['1']) if filters else {}
+
+
+def regex_from_ec2_regex(ec2_re):
+    """Converts an EC2-style regex to a python regex.
+    Approach is based on python fnmatch.
+    """
+
+    iter_ec2_re = iter(ec2_re)
+
+    py_re = ''
+    for char in iter_ec2_re:
+        if char == '*':
+            py_re += '.*'
+        elif char == '?':
+            py_re += '.'
+        elif char == '\\':
+            try:
+                next_char = iter_ec2_re.next()
+            except StopIteration:
+                next_char = ''
+            if next_char == '*' or next_char == '?':
+                py_re += '[%s]' % next_char
+            else:
+                py_re += '\\\\' + next_char
+        else:
+            py_re += re.escape(char)
+    return '\A%s\Z(?s)' % py_re

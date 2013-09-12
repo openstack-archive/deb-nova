@@ -12,7 +12,7 @@
 #    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
-#    under the License
+#    under the License.
 
 from oslo.config import cfg
 
@@ -26,6 +26,7 @@ from nova import servicegroup
 
 CONF = cfg.CONF
 ALIAS = "os-availability-zone"
+ATTRIBUTE_NAME = "%s:availability_zone" % ALIAS
 authorize_list = extensions.extension_authorizer('compute',
                                                  'v3:' + ALIAS + ':list')
 authorize_detail = extensions.extension_authorizer('compute',
@@ -141,6 +142,7 @@ class AvailabilityZoneController(wsgi.Controller):
                            "hosts": None})
         return {'availability_zone_info': result}
 
+    @extensions.expected_errors(())
     @wsgi.serializers(xml=AvailabilityZonesTemplate)
     def index(self, req):
         """Returns a summary list of availability zone."""
@@ -149,6 +151,7 @@ class AvailabilityZoneController(wsgi.Controller):
 
         return self._describe_availability_zones(context)
 
+    @extensions.expected_errors(())
     @wsgi.serializers(xml=AvailabilityZonesTemplate)
     def detail(self, req):
         """Returns a detailed list of availability zone."""
@@ -182,10 +185,9 @@ class AvailabilityZone(extensions.V3APIExtensionBase):
         return []
 
     def server_create(self, server_dict, create_kwargs):
-        create_kwargs['availability_zone'] = server_dict.get(
-            'availability_zone')
+        create_kwargs['availability_zone'] = server_dict.get(ATTRIBUTE_NAME)
 
     def server_xml_extract_server_deserialize(self, server_node, server_dict):
-        availability_zone = server_node.getAttribute('availability_zone')
+        availability_zone = server_node.getAttribute(ATTRIBUTE_NAME)
         if availability_zone:
-            server_dict['availability_zone'] = availability_zone
+            server_dict[ATTRIBUTE_NAME] = availability_zone

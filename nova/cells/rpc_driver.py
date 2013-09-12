@@ -22,9 +22,10 @@ import urlparse
 from oslo.config import cfg
 
 from nova.cells import driver
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import rpc
 from nova.openstack.common.rpc import dispatcher as rpc_dispatcher
-from nova.openstack.common.rpc import proxy as rpc_proxy
+from nova import rpcclient
 
 cell_rpc_driver_opts = [
         cfg.StrOpt('rpc_driver_queue_base',
@@ -39,7 +40,6 @@ CONF.import_opt('call_timeout', 'nova.cells.opts', group='cells')
 CONF.import_opt('rpc_backend', 'nova.openstack.common.rpc')
 
 rpcapi_cap_opt = cfg.StrOpt('intercell',
-        default=None,
         help='Set a version cap for messages sent between cells services')
 CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
@@ -108,7 +108,7 @@ class CellsRPCDriver(driver.BaseCellsDriver):
         self.intercell_rpcapi.send_message_to_cell(cell_state, message)
 
 
-class InterCellRPCAPI(rpc_proxy.RpcProxy):
+class InterCellRPCAPI(rpcclient.RpcProxy):
     """Client side of the Cell<->Cell RPC API.
 
     The CellsRPCDriver uses this to make calls to another cell.
@@ -131,6 +131,11 @@ class InterCellRPCAPI(rpc_proxy.RpcProxy):
         super(InterCellRPCAPI, self).__init__(None, default_version,
                 version_cap=version_cap)
 
+    def _get_client(self, next_hop, topic):
+        server_params = self._get_server_params_for_cell(next_hop)
+        cctxt = self.get_client(server_params=server_params)
+        return cctxt.prepare(topic=topic)
+
     @staticmethod
     def _get_server_params_for_cell(next_hop):
         """Turn the DB information for a cell into the parameters
@@ -146,18 +151,13 @@ class InterCellRPCAPI(rpc_proxy.RpcProxy):
         fanout, do it.  The topic that is used will be
         'CONF.rpc_driver_queue_base.<message_type>'.
         """
-        ctxt = message.ctxt
-        json_message = message.to_json()
-        rpc_message = self.make_msg('process_message', message=json_message)
         topic_base = CONF.cells.rpc_driver_queue_base
         topic = '%s.%s' % (topic_base, message.message_type)
-        server_params = self._get_server_params_for_cell(cell_state)
+        cctxt = self._get_client(cell_state, topic)
         if message.fanout:
-            self.fanout_cast_to_server(ctxt, server_params,
-                    rpc_message, topic=topic)
-        else:
-            self.cast_to_server(ctxt, server_params,
-                    rpc_message, topic=topic)
+            cctxt = cctxt.prepare(fanout=message.fanout)
+        return cctxt.cast(message.ctxt, 'process_message',
+                          message=message.to_json())
 
 
 class InterCellRPCDispatcher(object):
@@ -208,7 +208,7 @@ def parse_transport_url(url):
     # Make sure there's not a query string; that could identify
     # requirements we can't comply with (e.g., ssl), so reject it if
     # it's present
-    if '?' in parsed.path:
+    if '?' in parsed.path or parsed.query:
         raise ValueError(_("Cannot comply with query string in transport URL"))
 
     # Extract the interesting information from the URL; this requires

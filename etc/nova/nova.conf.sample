@@ -93,7 +93,7 @@
 #pybasedir=/usr/lib/python/site-packages
 
 # Directory where nova binaries are installed (string value)
-#bindir=$pybasedir/bin
+#bindir=/usr/local/bin
 
 # Top-level directory for maintaining nova's state (string
 # value)
@@ -260,7 +260,7 @@
 #monkey_patch=false
 
 # List of modules/decorators to monkey patch (list value)
-#monkey_patch_modules=nova.api.ec2.cloud:nova.openstack.common.notifier.api.notify_decorator,nova.compute.api:nova.openstack.common.notifier.api.notify_decorator
+#monkey_patch_modules=nova.api.ec2.cloud:nova.notifications.notify_decorator,nova.compute.api:nova.notifications.notify_decorator
 
 # Length of generated instance admin passwords (integer value)
 #password_length=12
@@ -311,8 +311,9 @@
 # Options defined in nova.api.auth
 #
 
-# whether to rate limit the api (boolean value)
-#api_rate_limit=true
+# whether to use per-user rate limiting for the api. (boolean
+# value)
+#api_rate_limit=false
 
 # The strategy to use for auth: noauth or keystone. (string
 # value)
@@ -384,6 +385,9 @@
 # drive (string value)
 #config_drive_skip_versions=1.0 2007-01-19 2007-03-01 2007-08-29 2007-10-10 2007-12-15 2008-02-01 2008-09-01
 
+# Driver to use for vendor data (string value)
+#vendordata_driver=nova.api.metadata.vendordata_json.JsonFileVendorData
+
 
 #
 # Options defined in nova.api.metadata.handler
@@ -396,6 +400,14 @@
 # Shared secret to validate proxies Neutron metadata requests
 # (string value)
 #neutron_metadata_proxy_shared_secret=
+
+
+#
+# Options defined in nova.api.metadata.vendordata_json
+#
+
+# File to load json formated vendor data from (string value)
+#vendordata_jsonfile_path=<None>
 
 
 #
@@ -443,15 +455,6 @@
 
 
 #
-# Options defined in nova.api.openstack.compute.contrib.hide_server_addresses
-#
-
-# List of instance states that should hide network info (list
-# value)
-#osapi_hide_server_address_states=building
-
-
-#
 # Options defined in nova.api.openstack.compute.contrib.os_tenant_networks
 #
 
@@ -476,6 +479,15 @@
 
 
 #
+# Options defined in nova.api.openstack.compute.plugins.v3.hide_server_addresses
+#
+
+# List of instance states that should hide network info (list
+# value)
+#osapi_hide_server_address_states=building
+
+
+#
 # Options defined in nova.api.openstack.compute.servers
 #
 
@@ -491,6 +503,15 @@
 # the maximum body size per each osapi request(bytes) (integer
 # value)
 #osapi_max_request_body_size=114688
+
+
+#
+# Options defined in nova.cells.opts
+#
+
+# The full class name of the compute API class to use
+# (deprecated) (string value)
+#compute_api_class=nova.compute.api.API
 
 
 #
@@ -524,17 +545,6 @@
 # Suffix to add to project name for vpn key and secgroups
 # (string value)
 #vpn_key_suffix=-vpn
-
-
-#
-# Options defined in nova.cmd.clear_rabbit_queues
-#
-
-# Queues to delete (multi valued)
-#queues=
-
-# delete nova exchange too. (boolean value)
-#delete_exchange=false
 
 
 #
@@ -589,15 +599,6 @@
 
 
 #
-# Options defined in nova.compute
-#
-
-# The full class name of the compute API class to use
-# (deprecated) (string value)
-#compute_api_class=nova.compute.api.API
-
-
-#
 # Options defined in nova.compute.api
 #
 
@@ -630,12 +631,19 @@
 # keys for the template are: name, uuid, count. (string value)
 #multi_instance_display_name_template=%(name)s-%(uuid)s
 
+# Maximum number of devices that will result in a local image
+# being created on the hypervisor node. Setting this to 0
+# means nova will allow only boot from volume. A negative
+# number means unlimited. (integer value)
+#max_local_block_devices=3
+
 
 #
 # Options defined in nova.compute.flavors
 #
 
-# default flavor to use, testing only (string value)
+# default flavor to use for the EC2 API only. The Nova API
+# does not support a default flavor. (string value)
 #default_flavor=m1.small
 
 
@@ -671,6 +679,14 @@
 # rebooted (boolean value)
 #resume_guests_state_on_host_boot=false
 
+# Number of times to retry network allocation on failures
+# (integer value)
+#network_allocate_retries=0
+
+# The number of times to attempt to reap an instance's files.
+# (integer value)
+#maximum_instance_delete_attempts=5
+
 # interval to pull bandwidth usage info (integer value)
 #bandwidth_poll_interval=600
 
@@ -697,6 +713,19 @@
 # Interval in seconds for gathering volume usages (integer
 # value)
 #volume_usage_poll_interval=0
+
+# Interval in seconds for polling shelved instances to offload
+# (integer value)
+#shelved_poll_interval=3600
+
+# Time in seconds before a shelved instance is eligible for
+# removing from a host.  -1 never offload, 0 offload when
+# shelved (integer value)
+#shelved_offload_time=0
+
+# Interval in seconds for retrying failed instance file
+# deletes (integer value)
+#instance_delete_interval=300
 
 # Action to take if a running deleted instance is
 # detected.Valid options are 'noop', 'log' and 'reap'. Set to
@@ -752,6 +781,16 @@
 
 # the topic compute nodes listen on (string value)
 #compute_topic=compute
+
+
+#
+# Options defined in nova.conductor.tasks.live_migrate
+#
+
+# Number of times to retry live-migration before failing. If
+# == -1, try until out of hosts. If == 0, only try once, no
+# retries. (integer value)
+#migrate_max_retries=-1
 
 
 #
@@ -903,7 +942,7 @@
 # value)
 #image_decryption_dir=/tmp
 
-# hostname or ip for openstack to use when accessing the s3
+# hostname or ip for OpenStack to use when accessing the s3
 # api (string value)
 #s3_host=$my_ip
 
@@ -930,6 +969,15 @@
 
 # Backend to use for IPv6 generation (string value)
 #ipv6_backend=rfc2462
+
+
+#
+# Options defined in nova.keymgr
+#
+
+# The full class name of the key manager API class (string
+# value)
+#keymgr_api_class=nova.keymgr.key_mgr.KeyManager
 
 
 #
@@ -1135,11 +1183,6 @@
 # Number of addresses in each private subnet (integer value)
 #network_size=256
 
-# DEPRECATED - Fixed IP address block.If set to an empty
-# string, the subnet range(s) will be automatically determined
-# and configured. (string value)
-#fixed_range=10.0.0.0/8
-
 # Fixed IPv6 address block (string value)
 #fixed_range_v6=fd00::/48
 
@@ -1175,7 +1218,7 @@
 
 # If True, send a dhcp release on instance termination
 # (boolean value)
-#force_dhcp_release=false
+#force_dhcp_release=true
 
 # If True in multi_host mode, all compute hosts share the same
 # dhcp address. (boolean value)
@@ -1243,6 +1286,13 @@
 # (integer value)
 #neutron_extension_sync_interval=600
 
+# Location of ca certicates file to use for neutronclient
+# requests. (string value)
+#neutron_ca_certificates_file=<None>
+
+# Use per-port DHCP options with Neutron (boolean value)
+#dhcp_options_enabled=false
+
 
 #
 # Options defined in nova.network.rpcapi
@@ -1280,69 +1330,28 @@
 
 
 #
-# Options defined in nova.openstack.common.db.api
-#
-
-# The backend to use for db (string value)
-#db_backend=sqlalchemy
-
-# Enable the experimental use of thread pooling for all DB API
-# calls (boolean value)
-#dbapi_use_tpool=false
-
-
-#
 # Options defined in nova.openstack.common.db.sqlalchemy.session
 #
-
-# The SQLAlchemy connection string used to connect to the
-# database (string value)
-#sql_connection=sqlite:////common/db/$sqlite_db
 
 # the filename to use with sqlite (string value)
 #sqlite_db=nova.sqlite
 
-# timeout before idle sql connections are reaped (integer
-# value)
-#sql_idle_timeout=3600
-
-# If passed, use synchronous mode for sqlite (boolean value)
+# If true, use synchronous mode for sqlite (boolean value)
 #sqlite_synchronous=true
-
-# Minimum number of SQL connections to keep open in a pool
-# (integer value)
-#sql_min_pool_size=1
-
-# Maximum number of SQL connections to keep open in a pool
-# (integer value)
-#sql_max_pool_size=5
-
-# maximum db connection retries during startup. (setting -1
-# implies an infinite retry count) (integer value)
-#sql_max_retries=10
-
-# interval between retries of opening a sql connection
-# (integer value)
-#sql_retry_interval=10
-
-# If set, use this value for max_overflow with sqlalchemy
-# (integer value)
-#sql_max_overflow=<None>
-
-# Verbosity of SQL debugging information. 0=None,
-# 100=Everything (integer value)
-#sql_connection_debug=0
-
-# Add python stack traces to SQL as comment strings (boolean
-# value)
-#sql_connection_trace=false
 
 
 #
 # Options defined in nova.openstack.common.eventlet_backdoor
 #
 
-# port for eventlet backdoor to listen (integer value)
+# Enable eventlet backdoor. Acceptable values are 0, <port>
+# and <start>:<end>, where 0 results in listening on a random
+# tcp port number, <port> results in listening on the
+# specified port number and not enabling backdoorif it is in
+# use and <start>:<end> results in listening on the smallest
+# unused port number within the specified range of port
+# numbers. The chosen port is displayed in the service's log
+# file. (string value)
 #backdoor_port=<None>
 
 
@@ -1353,8 +1362,7 @@
 # Whether to disable inter-process locks (boolean value)
 #disable_process_locking=false
 
-# Directory to use for lock files. Default to a temp directory
-# (string value)
+# Directory to use for lock files. (string value)
 #lock_path=<None>
 
 
@@ -1413,9 +1421,9 @@
 # (string value)
 #log_config=<None>
 
-# A logging.Formatter log message format string which may use
-# any of the available logging.LogRecord attributes. This
-# option is deprecated.  Please use
+# DEPRECATED. A logging.Formatter log message format string
+# which may use any of the available logging.LogRecord
+# attributes. This option is deprecated.  Please use
 # logging_context_format_string and
 # logging_default_format_string instead. (string value)
 #log_format=<None>
@@ -1461,14 +1469,14 @@
 
 # Default publisher_id for outgoing notifications (string
 # value)
-#default_publisher_id=$host
+#default_publisher_id=<None>
 
 
 #
 # Options defined in nova.openstack.common.notifier.rpc_notifier
 #
 
-# AMQP topic used for openstack notifications (list value)
+# AMQP topic used for OpenStack notifications (list value)
 #notification_topics=notifications
 
 
@@ -1505,7 +1513,7 @@
 
 # Modules of exceptions that are permitted to be recreatedupon
 # receiving exception data from an rpc call. (list value)
-#allowed_rpc_exception_modules=nova.openstack.common.exception,nova.exception,cinder.exception,exceptions
+#allowed_rpc_exception_modules=nova.exception,cinder.exception,exceptions
 
 # If passed, use a fake RabbitMQ provider (boolean value)
 #fake_rabbit=false
@@ -1519,17 +1527,20 @@
 # Options defined in nova.openstack.common.rpc.amqp
 #
 
-# Enable a fast single reply queue if using AMQP based RPC
-# like RabbitMQ or Qpid. (boolean value)
-#amqp_rpc_single_reply_queue=false
+# Use durable queues in amqp. (boolean value)
+#amqp_durable_queues=false
+
+# Auto-delete queues in amqp. (boolean value)
+#amqp_auto_delete=false
 
 
 #
 # Options defined in nova.openstack.common.rpc.impl_kombu
 #
 
-# SSL version to use (valid only if SSL enabled) (string
-# value)
+# SSL version to use (valid only if SSL enabled). valid values
+# are TLSv1, SSLv23 and SSLv3. SSLv2 may be available on some
+# distributions (string value)
 #kombu_ssl_version=
 
 # SSL key file (valid only if SSL enabled) (string value)
@@ -1578,9 +1589,6 @@
 # value)
 #rabbit_max_retries=0
 
-# use durable queues in RabbitMQ (boolean value)
-#rabbit_durable_queues=false
-
 # use H/A queues in RabbitMQ (x-ha-policy: all).You need to
 # wipe RabbitMQ database when changing this option. (boolean
 # value)
@@ -1620,6 +1628,14 @@
 # Disable Nagle algorithm (boolean value)
 #qpid_tcp_nodelay=true
 
+# The qpid topology version to use.  Version 1 is what was
+# originally used by impl_qpid.  Version 2 includes some
+# backwards-incompatible changes that allow broker federation
+# to work.  Users should update to version 2 when they are
+# able to take everything down, as it requires a clean break.
+# (integer value)
+#qpid_topology_version=1
+
 
 #
 # Options defined in nova.openstack.common.rpc.impl_zmq
@@ -1656,14 +1672,35 @@
 # Options defined in nova.openstack.common.rpc.matchmaker
 #
 
-# Matchmaker ring file (JSON) (string value)
-#matchmaker_ringfile=/etc/nova/matchmaker_ring.json
-
 # Heartbeat frequency (integer value)
 #matchmaker_heartbeat_freq=300
 
 # Heartbeat time-to-live. (integer value)
 #matchmaker_heartbeat_ttl=600
+
+
+#
+# Options defined in nova.pci.pci_request
+#
+
+# An alias for a PCI passthrough device requirement. This
+# allows users to specify the alias in the extra_spec for a
+# flavor, without needing to repeat all the PCI property
+# requirements. For example: pci_alias = { "name":
+# "QuicAssist",   "product_id": "0443",   "vendor_id": "8086",
+# "device_type": "ACCEL" } defines an alias for the Intel
+# QuickAssist card. (multi valued) (multi valued)
+#pci_alias=
+
+
+#
+# Options defined in nova.pci.pci_whitelist
+#
+
+# White list of PCI devices available to VMs. For example:
+# pci_passthrough_whitelist =  [{"vendor_id": "8086",
+# "product_id": "0443"}] (multi valued)
+#pci_passthrough_whitelist=
 
 
 #
@@ -1695,8 +1732,11 @@
 # Options defined in nova.scheduler.filters.core_filter
 #
 
-# Virtual CPU to Physical CPU allocation ratio (floating point
-# value)
+# Virtual CPU to physical CPU allocation ratio which affects
+# all CPU filters. This configuration specifies a global ratio
+# for CoreFilter. For AggregateCoreFilter, it will fall back
+# to this configuration value if no per-aggregate setting
+# found. (floating point value)
 #cpu_allocation_ratio=16.0
 
 
@@ -1728,6 +1768,10 @@
 # Host reserved for specific images (list value)
 #isolated_hosts=
 
+# Whether to force isolated hosts to run only isolated images
+# (boolean value)
+#restrict_isolated_hosts_to_isolated_images=true
+
 
 #
 # Options defined in nova.scheduler.filters.num_instances_filter
@@ -1741,8 +1785,11 @@
 # Options defined in nova.scheduler.filters.ram_filter
 #
 
-# virtual ram to physical ram allocation ratio (floating point
-# value)
+# Virtual ram to physical ram allocation ratio which affects
+# all ram filters. This configuration specifies a global ratio
+# for RamFilter. For AggregateRamFilter, it will fall back to
+# this configuration value if no per-aggregate setting found.
+# (floating point value)
 #ram_allocation_ratio=1.5
 
 
@@ -1842,6 +1889,13 @@
 #virt_mkfs=linux=mkfs.ext3 -L %(fs_label)s -F %(target)s
 #virt_mkfs=windows=mkfs.ntfs --force --fast --label %(fs_label)s %(target)s
 
+# Attempt to resize the filesystem by accessing the image over
+# a block device. This is done by the host and may not be
+# necessary if the image contains a recent version of cloud-
+# init. Possible mechanisms require the nbd driver (for qcow
+# and raw), or loop (for raw). (boolean value)
+#resize_fs_using_block_device=true
+
 
 #
 # Options defined in nova.virt.disk.mount.nbd
@@ -1849,6 +1903,15 @@
 
 # time to wait for a NBD device coming up (integer value)
 #timeout_nbd=10
+
+
+#
+# Options defined in nova.virt.docker.driver
+#
+
+# Default TCP port to find the docker-registry container
+# (integer value)
+#docker_registry_default_port=5042
 
 
 #
@@ -1955,7 +2018,7 @@
 #libvirt_vif_driver=nova.virt.libvirt.vif.LibvirtGenericVIFDriver
 
 # Libvirt handlers for remote volumes. (list value)
-#libvirt_volume_drivers=iscsi=nova.virt.libvirt.volume.LibvirtISCSIVolumeDriver,local=nova.virt.libvirt.volume.LibvirtVolumeDriver,fake=nova.virt.libvirt.volume.LibvirtFakeVolumeDriver,rbd=nova.virt.libvirt.volume.LibvirtNetVolumeDriver,sheepdog=nova.virt.libvirt.volume.LibvirtNetVolumeDriver,nfs=nova.virt.libvirt.volume.LibvirtNFSVolumeDriver,aoe=nova.virt.libvirt.volume.LibvirtAOEVolumeDriver,glusterfs=nova.virt.libvirt.volume.LibvirtGlusterfsVolumeDriver,fibre_channel=nova.virt.libvirt.volume.LibvirtFibreChannelVolumeDriver,scality=nova.virt.libvirt.volume.LibvirtScalityVolumeDriver
+#libvirt_volume_drivers=iscsi=nova.virt.libvirt.volume.LibvirtISCSIVolumeDriver,iser=nova.virt.libvirt.volume.LibvirtISERVolumeDriver,local=nova.virt.libvirt.volume.LibvirtVolumeDriver,fake=nova.virt.libvirt.volume.LibvirtFakeVolumeDriver,rbd=nova.virt.libvirt.volume.LibvirtNetVolumeDriver,sheepdog=nova.virt.libvirt.volume.LibvirtNetVolumeDriver,nfs=nova.virt.libvirt.volume.LibvirtNFSVolumeDriver,aoe=nova.virt.libvirt.volume.LibvirtAOEVolumeDriver,glusterfs=nova.virt.libvirt.volume.LibvirtGlusterfsVolumeDriver,fibre_channel=nova.virt.libvirt.volume.LibvirtFibreChannelVolumeDriver,scality=nova.virt.libvirt.volume.LibvirtScalityVolumeDriver
 
 # Override the default disk prefix for the devices attached to
 # a server, which is dependent on libvirt_type. (valid options
@@ -2006,9 +2069,10 @@
 # Options defined in nova.virt.libvirt.imagebackend
 #
 
-# VM Images format. Acceptable values are: raw, qcow2, lvm,
-# default. If default is specified, then use_cow_images flag
-# is used instead of this one. (string value)
+# VM Images format. Acceptable values are: raw, qcow2,
+# lvm,rbd, default. If default is specified, then
+# use_cow_images flag is used instead of this one. (string
+# value)
 #libvirt_images_type=default
 
 # LVM Volume Group that is used for VM images, when you
@@ -2022,6 +2086,13 @@
 # The amount of storage (in megabytes) to allocate for LVM
 # snapshot copy-on-write blocks. (integer value)
 #libvirt_lvm_snapshot_size=1000
+
+# the RADOS pool in which rbd volumes are stored (string
+# value)
+#libvirt_images_rbd_pool=rbd
+
+# path to the ceph configuration file to use (string value)
+#libvirt_images_rbd_ceph_conf=
 
 
 #
@@ -2091,6 +2162,10 @@
 # (integer value)
 #num_iscsi_scan_tries=3
 
+# number of times to rescan iSER target to find volume
+# (integer value)
+#num_iser_scan_tries=3
+
 # the RADOS client name for accessing rbd volumes (string
 # value)
 #rbd_user=<None>
@@ -2118,12 +2193,19 @@
 # use multipath connection of the iSCSI volume (boolean value)
 #libvirt_iscsi_use_multipath=false
 
+# use multipath connection of the iSER volume (boolean value)
+#libvirt_iser_use_multipath=false
+
 # Path or URL to Scality SOFS configuration file (string
 # value)
 #scality_sofs_config=<None>
 
 # Base dir where Scality SOFS shall be mounted (string value)
 #scality_sofs_mount_point=$state_path/scality
+
+# Protocols listed here will be accessed directly from QEMU.
+# Currently supported protocols: [gluster] (list value)
+#qemu_allowed_storage_drivers=
 
 
 #
@@ -2150,72 +2232,6 @@
 # Local directory to download glance images to. Make sure this
 # path can fit your biggest image in glance (string value)
 #powervm_img_local_path=/tmp
-
-
-#
-# Options defined in nova.virt.vmwareapi.driver
-#
-
-# URL for connection to VMware ESX/VC host. Required if
-# compute_driver is vmwareapi.VMwareESXDriver or
-# vmwareapi.VMwareVCDriver. (string value)
-#vmwareapi_host_ip=<None>
-
-# Username for connection to VMware ESX/VC host. Used only if
-# compute_driver is vmwareapi.VMwareESXDriver or
-# vmwareapi.VMwareVCDriver. (string value)
-#vmwareapi_host_username=<None>
-
-# Password for connection to VMware ESX/VC host. Used only if
-# compute_driver is vmwareapi.VMwareESXDriver or
-# vmwareapi.VMwareVCDriver. (string value)
-#vmwareapi_host_password=<None>
-
-# Name of a VMware Cluster ComputeResource. Used only if
-# compute_driver is vmwareapi.VMwareVCDriver. (string value)
-#vmwareapi_cluster_name=<None>
-
-# The interval used for polling of remote tasks. Used only if
-# compute_driver is vmwareapi.VMwareESXDriver or
-# vmwareapi.VMwareVCDriver. (floating point value)
-#vmwareapi_task_poll_interval=5.0
-
-# The number of times we retry on failures, e.g., socket
-# error, etc. Used only if compute_driver is
-# vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.
-# (integer value)
-#vmwareapi_api_retry_count=10
-
-# VNC starting port (integer value)
-#vnc_port=5900
-
-# Total number of VNC ports (integer value)
-#vnc_port_total=10000
-
-# VNC password (string value)
-#vnc_password=<None>
-
-# Whether to use linked clone (boolean value)
-#use_linked_clone=true
-
-
-#
-# Options defined in nova.virt.vmwareapi.vif
-#
-
-# Physical ethernet adapter name for vlan networking (string
-# value)
-#vmwareapi_vlan_interface=vmnic0
-
-
-#
-# Options defined in nova.virt.vmwareapi.vim
-#
-
-# Optional VIM Service WSDL Location e.g
-# http://<server>/vimService.wsdl. Optional over-ride to
-# default location for bug work-arounds (string value)
-#vmwareapi_wsdl_loc=<None>
 
 
 #
@@ -2257,8 +2273,10 @@
 # Options defined in nova.virt.xenapi.driver
 #
 
-# URL for connection to XenServer/Xen Cloud Platform. Required
-# if compute_driver=xenapi.XenAPIDriver (string value)
+# URL for connection to XenServer/Xen Cloud Platform. A
+# special value of unix://local can be used to connect to the
+# local unix socket.  Required if
+# compute_driver=xenapi.XenAPIDriver (string value)
 #xenapi_connection_url=<None>
 
 # Username for connection to XenServer/Xen Cloud Platform.
@@ -2312,64 +2330,8 @@
 
 
 #
-# Options defined in nova.virt.xenapi.pool
+# Options defined in nova.virt.xenapi.image.bittorrent
 #
-
-# To use for hosts with different CPUs (boolean value)
-#use_join_force=true
-
-
-#
-# Options defined in nova.virt.xenapi.vif
-#
-
-# Name of Integration Bridge used by Open vSwitch (string
-# value)
-#xenapi_ovs_integration_bridge=xapi1
-
-
-#
-# Options defined in nova.virt.xenapi.vm_utils
-#
-
-# Cache glance images locally. `all` will cache all images,
-# `some` will only cache images that have the image_property
-# `cache_in_nova=True`, and `none` turns off caching entirely
-# (string value)
-#cache_images=all
-
-# Default OS type (string value)
-#default_os_type=linux
-
-# Time to wait for a block device to be created (integer
-# value)
-#block_device_creation_timeout=10
-
-# Maximum size in bytes of kernel or ramdisk images (integer
-# value)
-#max_kernel_ramdisk_size=16777216
-
-# Filter for finding the SR to be used to install guest
-# instances on. The default value is the Local Storage in
-# default XenServer/XCP installations. To select an SR with a
-# different matching criteria, you could set it to other-
-# config:my_favorite_sr=true. On the other hand, to fall back
-# on the Default SR, as displayed by XenCenter, set this flag
-# to: default-sr:true (string value)
-#sr_matching_filter=other-config:i18n-key=local-storage
-
-# Whether to use sparse_copy for copying data on a resize down
-# (False will use standard dd). This speeds up resizes down
-# considerably since large runs of zeros won't have to be
-# rsynced (boolean value)
-#xenapi_sparse_copy=true
-
-# Maximum number of retries to unplug VBD (integer value)
-#xenapi_num_vbd_unplug_retries=10
-
-# Whether or not to download images via Bit Torrent
-# (all|some|none). (string value)
-#xenapi_torrent_images=none
 
 # Base URL for torrent files. (string value)
 #xenapi_torrent_base_url=<None>
@@ -2402,6 +2364,83 @@
 
 
 #
+# Options defined in nova.virt.xenapi.pool
+#
+
+# To use for hosts with different CPUs (boolean value)
+#use_join_force=true
+
+
+#
+# Options defined in nova.virt.xenapi.vif
+#
+
+# Name of Integration Bridge used by Open vSwitch (string
+# value)
+#xenapi_ovs_integration_bridge=xapi1
+
+
+#
+# Options defined in nova.virt.xenapi.vm_utils
+#
+
+# Cache glance images locally. `all` will cache all images,
+# `some` will only cache images that have the image_property
+# `cache_in_nova=True`, and `none` turns off caching entirely
+# (string value)
+#cache_images=all
+
+# Compression level for images, e.g., 9 for gzip -9. Range is
+# 1-9, 9 being most compressed but most CPU intensive on dom0.
+# (integer value)
+#xenapi_image_compression_level=<None>
+
+# Default OS type (string value)
+#default_os_type=linux
+
+# Time to wait for a block device to be created (integer
+# value)
+#block_device_creation_timeout=10
+
+# Maximum size in bytes of kernel or ramdisk images (integer
+# value)
+#max_kernel_ramdisk_size=16777216
+
+# Filter for finding the SR to be used to install guest
+# instances on. To use the Local Storage in default
+# XenServer/XCP installations set this flag to other-config
+# :i18n-key=local-storage. To select an SR with a different
+# matching criteria, you could set it to other-
+# config:my_favorite_sr=true. On the other hand, to fall back
+# on the Default SR, as displayed by XenCenter, set this flag
+# to: default-sr:true (string value)
+#sr_matching_filter=default-sr:true
+
+# Whether to use sparse_copy for copying data on a resize down
+# (False will use standard dd). This speeds up resizes down
+# considerably since large runs of zeros won't have to be
+# rsynced (boolean value)
+#xenapi_sparse_copy=true
+
+# Maximum number of retries to unplug VBD (integer value)
+#xenapi_num_vbd_unplug_retries=10
+
+# Whether or not to download images via Bit Torrent
+# (all|some|none). (string value)
+#xenapi_torrent_images=none
+
+# Name of network to use for booting iPXE ISOs (string value)
+#xenapi_ipxe_network_name=<None>
+
+# URL to the iPXE boot menu (string value)
+#xenapi_ipxe_boot_menu_url=<None>
+
+# Name and optionally path of the tool used for ISO image
+# creation (string value)
+#xenapi_ipxe_mkisofs_cmd=mkisofs
+
+
+#
 # Options defined in nova.virt.xenapi.vmops
 #
 
@@ -2413,9 +2452,9 @@
 # value)
 #xenapi_vif_driver=nova.virt.xenapi.vif.XenAPIBridgeDriver
 
-# Object Store Driver used to handle image uploads. (string
+# Dom0 plugin driver used to handle image uploads. (string
 # value)
-#xenapi_image_upload_handler=nova.virt.xenapi.imageupload.glance.GlanceStore
+#xenapi_image_upload_handler=nova.virt.xenapi.image.glance.GlanceStore
 
 
 #
@@ -2514,6 +2553,17 @@
 
 
 #
+# Options defined in nova.virt.hyperv.utilsfactory
+#
+
+# Force V1 WMI utility classes (boolean value)
+#force_hyperv_utils_v1=false
+
+# Force V1 volume utility class (boolean value)
+#force_volumeutils_v1=false
+
+
+#
 # Options defined in nova.virt.hyperv.vif
 #
 
@@ -2542,6 +2592,20 @@
 # a disk drive (boolean value)
 #config_drive_cdrom=false
 
+# Enables metrics collections for an instance by using
+# Hyper-V's metric APIs. Collected data can by retrieved by
+# other apps and services, e.g.: Ceilometer. Requires Hyper-V
+# / Windows Server 2012 and above (boolean value)
+#enable_instance_metrics_collection=false
+
+# Enables dynamic memory allocation (ballooning) when set to a
+# value greater than 1. The value expresses the ratio between
+# the total RAM assigned to an instance and its startup RAM
+# amount. For example a ratio of 2.0 for an instance with
+# 1024MB of RAM implies 512MB of RAM allocated at startup
+# (floating point value)
+#dynamic_memory_ratio=1.0
+
 
 #
 # Options defined in nova.virt.hyperv.volumeops
@@ -2554,9 +2618,6 @@
 # Interval between volume attachment attempts, in seconds
 # (integer value)
 #volume_attach_retry_interval=5
-
-# Force volumeutils v1 (boolean value)
-#force_volumeutils_v1=false
 
 
 [osapi_v3]
@@ -2592,6 +2653,69 @@
 
 # full class name for the Manager for conductor (string value)
 #manager=nova.conductor.manager.ConductorManager
+
+
+[database]
+
+#
+# Options defined in nova.openstack.common.db.api
+#
+
+# The backend to use for db (string value)
+#backend=sqlalchemy
+
+# Enable the experimental use of thread pooling for all DB API
+# calls (boolean value)
+#use_tpool=false
+
+
+#
+# Options defined in nova.openstack.common.db.sqlalchemy.session
+#
+
+# The SQLAlchemy connection string used to connect to the
+# database (string value)
+#connection=sqlite:////nova/openstack/common/db/$sqlite_db
+
+# The SQLAlchemy connection string used to connect to the
+# slave database (string value)
+#slave_connection=
+
+# timeout before idle sql connections are reaped (integer
+# value)
+#idle_timeout=3600
+
+# Minimum number of SQL connections to keep open in a pool
+# (integer value)
+#min_pool_size=1
+
+# Maximum number of SQL connections to keep open in a pool
+# (integer value)
+#max_pool_size=<None>
+
+# maximum db connection retries during startup. (setting -1
+# implies an infinite retry count) (integer value)
+#max_retries=10
+
+# interval between retries of opening a sql connection
+# (integer value)
+#retry_interval=10
+
+# If set, use this value for max_overflow with sqlalchemy
+# (integer value)
+#max_overflow=<None>
+
+# Verbosity of SQL debugging information. 0=None,
+# 100=Everything (integer value)
+#connection_debug=0
+
+# Add python stack traces to SQL as comment strings (boolean
+# value)
+#connection_trace=false
+
+# If set, use this value for pool_timeout with sqlalchemy
+# (integer value)
+#pool_timeout=<None>
 
 
 [cells]
@@ -2654,6 +2778,14 @@
 # Type of cell: api or compute (string value)
 #cell_type=<None>
 
+# Number of seconds after which a lack of capability and
+# capacity updates signals the child cell is to be treated as
+# a mute. (integer value)
+#mute_child_interval=300
+
+# Seconds between bandwidth updates for cells. (integer value)
+#bandwidth_update_interval=600
+
 
 #
 # Options defined in nova.cells.rpc_driver
@@ -2696,6 +2828,11 @@
 # value)
 #db_check_interval=60
 
+# Configuration file from which to read cells configuration.
+# If given, overrides reading cells from the database. (string
+# value)
+#cells_config=<None>
+
 
 #
 # Options defined in nova.cells.weights.mute_child
@@ -2708,11 +2845,6 @@
 # Weight value assigned to mute children.  (The value should
 # be positive.) (floating point value)
 #mute_weight_value=1000.0
-
-# Number of seconds after which a lack of capability and
-# capacity updates signals the child cell is to be treated as
-# a mute. (integer value)
-#mute_child_interval=300
 
 
 #
@@ -2744,6 +2876,18 @@
 # Number of seconds to wait until retrying to join the session
 # (integer value)
 #sg_retry_interval=5
+
+
+[image_file_url]
+
+#
+# Options defined in nova.image.download.file
+#
+
+# A list of filesystems that will be configured in this file
+# under the sections image_file_url:<list entry name> (list
+# value)
+#filesystems=
 
 
 [baremetal]
@@ -2843,6 +2987,10 @@
 # value)
 #pxe_deploy_timeout=0
 
+# If set, pass the network configuration details to the
+# initramfs via cmdline. (boolean value)
+#pxe_network_config=false
+
 
 #
 # Options defined in nova.virt.baremetal.tilera_pdu
@@ -2912,7 +3060,7 @@
 # Options defined in nova.openstack.common.notifier.rpc_notifier2
 #
 
-# AMQP topic(s) used for openstack notifications (list value)
+# AMQP topic(s) used for OpenStack notifications (list value)
 #topics=notifications
 
 
@@ -2930,6 +3078,25 @@
 
 # Password for Redis server. (optional) (string value)
 #password=<None>
+
+
+[ssl]
+
+#
+# Options defined in nova.openstack.common.sslutils
+#
+
+# CA certificate file to use to verify connecting clients
+# (string value)
+#ca_file=<None>
+
+# Certificate file to use when starting the server securely
+# (string value)
+#cert_file=<None>
+
+# Private key file to use when starting the server securely
+# (string value)
+#key_file=<None>
 
 
 [trusted_computing]
@@ -2958,7 +3125,193 @@
 #attestation_auth_timeout=60
 
 
+[upgrade_levels]
+
+#
+# Options defined in nova.baserpc
+#
+
+# Set a version cap for messages sent to the base api in any
+# service (string value)
+#baseapi=<None>
+
+
+#
+# Options defined in nova.cells.rpc_driver
+#
+
+# Set a version cap for messages sent between cells services
+# (string value)
+#intercell=<None>
+
+
+#
+# Options defined in nova.cells.rpcapi
+#
+
+# Set a version cap for messages sent to local cells services
+# (string value)
+#cells=<None>
+
+
+#
+# Options defined in nova.cert.rpcapi
+#
+
+# Set a version cap for messages sent to cert services (string
+# value)
+#cert=<None>
+
+
+#
+# Options defined in nova.compute.rpcapi
+#
+
+# Set a version cap for messages sent to compute services
+# (string value)
+#compute=<None>
+
+
+#
+# Options defined in nova.conductor.rpcapi
+#
+
+# Set a version cap for messages sent to conductor services
+# (string value)
+#conductor=<None>
+
+
+#
+# Options defined in nova.console.rpcapi
+#
+
+# Set a version cap for messages sent to console services
+# (string value)
+#console=<None>
+
+
+#
+# Options defined in nova.consoleauth.rpcapi
+#
+
+# Set a version cap for messages sent to consoleauth services
+# (string value)
+#consoleauth=<None>
+
+
+#
+# Options defined in nova.network.rpcapi
+#
+
+# Set a version cap for messages sent to network services
+# (string value)
+#network=<None>
+
+
+#
+# Options defined in nova.scheduler.rpcapi
+#
+
+# Set a version cap for messages sent to scheduler services
+# (string value)
+#scheduler=<None>
+
+
+[matchmaker_ring]
+
+#
+# Options defined in nova.openstack.common.rpc.matchmaker_ring
+#
+
+# Matchmaker ring file (JSON) (string value)
+#ringfile=/etc/oslo/matchmaker_ring.json
+
+
 [vmware]
+
+#
+# Options defined in nova.virt.vmwareapi.driver
+#
+
+# URL for connection to VMware ESX/VC host. Required if
+# compute_driver is vmwareapi.VMwareESXDriver or
+# vmwareapi.VMwareVCDriver. (string value)
+#host_ip=<None>
+
+# Username for connection to VMware ESX/VC host. Used only if
+# compute_driver is vmwareapi.VMwareESXDriver or
+# vmwareapi.VMwareVCDriver. (string value)
+#host_username=<None>
+
+# Password for connection to VMware ESX/VC host. Used only if
+# compute_driver is vmwareapi.VMwareESXDriver or
+# vmwareapi.VMwareVCDriver. (string value)
+#host_password=<None>
+
+# Name of a VMware Cluster ComputeResource. Used only if
+# compute_driver is vmwareapi.VMwareVCDriver. (multi valued)
+#cluster_name=<None>
+
+# Regex to match the name of a datastore. Used only if
+# compute_driver is vmwareapi.VMwareVCDriver. (string value)
+#datastore_regex=<None>
+
+# The interval used for polling of remote tasks. Used only if
+# compute_driver is vmwareapi.VMwareESXDriver or
+# vmwareapi.VMwareVCDriver. (floating point value)
+#task_poll_interval=5.0
+
+# The number of times we retry on failures, e.g., socket
+# error, etc. Used only if compute_driver is
+# vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.
+# (integer value)
+#api_retry_count=10
+
+# VNC starting port (integer value)
+#vnc_port=5900
+
+# Total number of VNC ports (integer value)
+#vnc_port_total=10000
+
+# VNC password (string value)
+#vnc_password=<None>
+
+# Whether to use linked clone (boolean value)
+#use_linked_clone=true
+
+
+#
+# Options defined in nova.virt.vmwareapi.vif
+#
+
+# Physical ethernet adapter name for vlan networking (string
+# value)
+#vlan_interface=vmnic0
+
+
+#
+# Options defined in nova.virt.vmwareapi.vim
+#
+
+# Optional VIM Service WSDL Location e.g
+# http://<server>/vimService.wsdl. Optional over-ride to
+# default location for bug work-arounds (string value)
+#wsdl_location=<None>
+
+
+#
+# Options defined in nova.virt.vmwareapi.vim_util
+#
+
+# The maximum number of ObjectContent data objects that should
+# be returned in a single result. A positive value will cause
+# the operation to suspend the retrieval when the count of
+# objects reaches the specified maximum. The server may still
+# limit the count to something less than the configured value.
+# Any remaining objects may be retrieved with additional
+# requests. (integer value)
+#maximum_objects=100
+
 
 #
 # Options defined in nova.virt.vmwareapi.vmops
@@ -2996,4 +3349,3 @@
 #keymap=en-us
 
 
-# Total option count: 608

@@ -20,18 +20,24 @@
 import uuid
 
 from nova.compute import claims
+from nova.openstack.common import jsonutils
+from nova.pci import pci_manager
 from nova import test
 
 
 class DummyTracker(object):
     icalled = False
     rcalled = False
+    pci_tracker = pci_manager.PciDevTracker()
 
     def abort_instance_claim(self, *args, **kwargs):
         self.icalled = True
 
     def drop_resize_claim(self, *args, **kwargs):
         self.rcalled = True
+
+    def new_pci_tracker(self):
+        self.pci_tracker = pci_manager.PciDevTracker()
 
 
 class ClaimTestCase(test.TestCase):
@@ -41,9 +47,11 @@ class ClaimTestCase(test.TestCase):
         self.resources = self._fake_resources()
         self.tracker = DummyTracker()
 
-    def _claim(self, **kwargs):
+    def _claim(self, overhead=None, **kwargs):
         instance = self._fake_instance(**kwargs)
-        return claims.Claim(instance, self.tracker)
+        if overhead is None:
+            overhead = {'memory_mb': 0}
+        return claims.Claim(instance, self.tracker, overhead=overhead)
 
     def _fake_instance(self, **kwargs):
         instance = {
@@ -51,7 +59,8 @@ class ClaimTestCase(test.TestCase):
             'memory_mb': 1024,
             'root_gb': 10,
             'ephemeral_gb': 5,
-            'vcpus': 1
+            'vcpus': 1,
+            'system_metadata': {}
         }
         instance.update(**kwargs)
         return instance
@@ -104,6 +113,18 @@ class ClaimTestCase(test.TestCase):
         limits = {'vcpu': 16}
         self.assertTrue(claim.test(self.resources, limits))
 
+    def test_memory_with_overhead(self):
+        overhead = {'memory_mb': 8}
+        claim = self._claim(memory_mb=2040, overhead=overhead)
+        limits = {'memory_mb': 2048}
+        self.assertTrue(claim.test(self.resources, limits))
+
+    def test_memory_with_overhead_insufficient(self):
+        overhead = {'memory_mb': 9}
+        claim = self._claim(memory_mb=2040, overhead=overhead)
+        limits = {'memory_mb': 2048}
+        self.assertFalse(claim.test(self.resources, limits))
+
     def test_cpu_insufficient(self):
         claim = self._claim(vcpus=17)
         limits = {'vcpu': 16}
@@ -129,6 +150,53 @@ class ClaimTestCase(test.TestCase):
         limits = {'disk_gb': 45}
         self.assertFalse(claim.test(self.resources, limits))
 
+    def test_pci_pass(self):
+        dev_dict = {
+            'compute_node_id': 1,
+            'address': 'a',
+            'product_id': 'p',
+            'vendor_id': 'v',
+            'status': 'available'}
+        self.tracker.new_pci_tracker()
+        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        claim = self._claim()
+        self._set_pci_request(claim)
+        self.assertTrue(claim._test_pci())
+
+    def _set_pci_request(self, claim):
+        request = [{'count': 1,
+                       'spec': [{'vendor_id': 'v', 'product_id': 'p'}],
+                      }]
+
+        claim.instance.update(
+            system_metadata={'pci_requests': jsonutils.dumps(request)})
+
+    def test_pci_fail(self):
+        dev_dict = {
+            'compute_node_id': 1,
+            'address': 'a',
+            'product_id': 'p',
+            'vendor_id': 'v1',
+            'status': 'available'}
+        self.tracker.new_pci_tracker()
+        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        claim = self._claim()
+        self._set_pci_request(claim)
+        self.assertFalse(claim._test_pci())
+
+    def test_pci_pass_no_requests(self):
+        dev_dict = {
+            'compute_node_id': 1,
+            'address': 'a',
+            'product_id': 'p',
+            'vendor_id': 'v',
+            'status': 'available'}
+        self.tracker.new_pci_tracker()
+        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        claim = self._claim()
+        self._set_pci_request(claim)
+        self.assertTrue(claim._test_pci())
+
     def test_abort(self):
         claim = self._abort()
         self.assertTrue(claim.tracker.icalled)
@@ -150,9 +218,19 @@ class ResizeClaimTestCase(ClaimTestCase):
         super(ResizeClaimTestCase, self).setUp()
         self.instance = self._fake_instance()
 
-    def _claim(self, **kwargs):
+    def _claim(self, overhead=None, **kwargs):
         instance_type = self._fake_instance_type(**kwargs)
-        return claims.ResizeClaim(self.instance, instance_type, self.tracker)
+        if overhead is None:
+            overhead = {'memory_mb': 0}
+        return claims.ResizeClaim(self.instance, instance_type, self.tracker,
+                                  overhead=overhead)
+
+    def _set_pci_request(self, claim):
+        request = [{'count': 1,
+                       'spec': [{'vendor_id': 'v', 'product_id': 'p'}],
+                      }]
+        claim.instance.update(
+            system_metadata={'new_pci_requests': jsonutils.dumps(request)})
 
     def test_abort(self):
         claim = self._abort()

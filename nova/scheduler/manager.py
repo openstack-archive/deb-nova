@@ -29,9 +29,9 @@ from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.conductor import api as conductor_api
 from nova.conductor.tasks import live_migrate
-import nova.context
 from nova import exception
 from nova import manager
+from nova.objects import instance as instance_obj
 from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
@@ -57,25 +57,22 @@ QUOTAS = quota.QUOTAS
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
 
-    RPC_API_VERSION = '2.7'
+    RPC_API_VERSION = '2.9'
 
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         if not scheduler_driver:
             scheduler_driver = CONF.scheduler_driver
         self.driver = importutils.import_object(scheduler_driver)
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         super(SchedulerManager, self).__init__(service_name='scheduler',
                                                *args, **kwargs)
-
-    def post_start_hook(self):
-        """After we start up and can receive messages via RPC, tell all
-        compute nodes to send us their capabilities.
-        """
-        ctxt = nova.context.get_admin_context()
-        compute_rpcapi.ComputeAPI().publish_service_capabilities(ctxt)
 
     def update_service_capabilities(self, context, service_name,
                                     host, capabilities):
         """Process a capability update from a service node."""
+        #NOTE(jogo) This is deprecated, but is used by the deprecated
+        # publish_service_capabilities call. So this can begin its removal
+        # process once publish_service_capabilities is removed.
         if not isinstance(capabilities, list):
             capabilities = [capabilities]
         for capability in capabilities:
@@ -131,13 +128,12 @@ class SchedulerManager(manager.Manager):
     def _schedule_live_migration(self, context, instance, dest,
             block_migration, disk_over_commit):
         task = live_migrate.LiveMigrationTask(context, instance,
-                    dest, block_migration, disk_over_commit,
-                    self.driver.select_hosts)
+                    dest, block_migration, disk_over_commit)
         return task.execute()
 
     def run_instance(self, context, request_spec, admin_password,
             injected_files, requested_networks, is_first_time,
-            filter_properties):
+            filter_properties, legacy_bdm_in_spec=True):
         """Tries to call schedule_run_instance on the driver.
         Sets instance vm_state to ERROR on exceptions
         """
@@ -147,7 +143,8 @@ class SchedulerManager(manager.Manager):
             try:
                 return self.driver.schedule_run_instance(context,
                         request_spec, admin_password, injected_files,
-                        requested_networks, is_first_time, filter_properties)
+                        requested_networks, is_first_time, filter_properties,
+                        legacy_bdm_in_spec)
 
             except exception.NoValidHost as ex:
                 # don't re-raise
@@ -172,19 +169,32 @@ class SchedulerManager(manager.Manager):
         with compute_utils.EventReporter(context, conductor_api.LocalAPI(),
                                          'schedule', instance_uuid):
             try:
-                kwargs = {
-                    'context': context,
-                    'image': image,
-                    'request_spec': request_spec,
-                    'filter_properties': filter_properties,
-                    'instance': instance,
-                    'instance_type': instance_type,
-                    'reservations': reservations,
-                }
-                return self.driver.schedule_prep_resize(**kwargs)
+                request_spec['num_instances'] = len(
+                        request_spec['instance_uuids'])
+                hosts = self.driver.select_destinations(
+                        context, request_spec, filter_properties)
+                host_state = hosts[0]
+
+                scheduler_utils.populate_filter_properties(filter_properties,
+                                                           host_state)
+                # context is not serializable
+                filter_properties.pop('context', None)
+
+                (host, node) = (host_state['host'], host_state['nodename'])
+                attrs = ['metadata', 'system_metadata', 'info_cache',
+                         'security_groups']
+                inst_obj = instance_obj.Instance._from_db_object(
+                        context, instance_obj.Instance(), instance,
+                        expected_attrs=attrs)
+                self.compute_rpcapi.prep_resize(
+                    context, image, inst_obj, instance_type, host,
+                    reservations, request_spec=request_spec,
+                    filter_properties=filter_properties, node=node)
+
             except exception.NoValidHost as ex:
+                vm_state = instance.get('vm_state', vm_states.ACTIVE)
                 self._set_vm_state_and_notify('prep_resize',
-                                             {'vm_state': vm_states.ACTIVE,
+                                             {'vm_state': vm_state,
                                               'task_state': None},
                                              context, ex, request_spec)
                 if reservations:

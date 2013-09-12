@@ -13,7 +13,6 @@
 #   under the License.
 
 import os.path
-import traceback
 
 import webob
 from webob import exc
@@ -24,6 +23,7 @@ from nova.api.openstack import wsgi
 from nova import compute
 from nova.compute import vm_states
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
@@ -43,153 +43,160 @@ class AdminActionsController(wsgi.Controller):
         super(AdminActionsController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
+    @extensions.expected_errors((404, 409))
     @wsgi.action('pause')
     def _pause(self, req, id, body):
         """Permit Admins to pause the server."""
         ctxt = req.environ['nova.context']
         authorize(ctxt, 'pause')
         try:
-            server = self.compute_api.get(ctxt, id)
+            server = self.compute_api.get(ctxt, id, want_objects=True)
             self.compute_api.pause(ctxt, server)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'pause')
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("Compute.api::pause %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors((404, 409))
     @wsgi.action('unpause')
     def _unpause(self, req, id, body):
         """Permit Admins to unpause the server."""
         ctxt = req.environ['nova.context']
         authorize(ctxt, 'unpause')
         try:
-            server = self.compute_api.get(ctxt, id)
+            server = self.compute_api.get(ctxt, id, want_objects=True)
             self.compute_api.unpause(ctxt, server)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'unpause')
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("Compute.api::unpause %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors((404, 409))
     @wsgi.action('suspend')
     def _suspend(self, req, id, body):
         """Permit admins to suspend the server."""
         context = req.environ['nova.context']
         authorize(context, 'suspend')
         try:
-            server = self.compute_api.get(context, id)
+            server = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.suspend(context, server)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'suspend')
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("compute.api::suspend %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors((404, 409))
     @wsgi.action('resume')
     def _resume(self, req, id, body):
         """Permit admins to resume the server from suspend."""
         context = req.environ['nova.context']
         authorize(context, 'resume')
         try:
-            server = self.compute_api.get(context, id)
+            server = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.resume(context, server)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'resume')
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("compute.api::resume %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors((400, 404, 409, 413))
     @wsgi.action('migrate')
     def _migrate(self, req, id, body):
         """Permit admins to migrate a server to a new host."""
         context = req.environ['nova.context']
         authorize(context, 'migrate')
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.resize(req.environ['nova.context'], instance)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'migrate')
-        except Exception as e:
-            LOG.exception(_("Error in migrate %s"), e)
-            raise exc.HTTPBadRequest()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
+        except exception.FlavorNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.CannotResizeToSameFlavor as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
+        except exception.TooManyInstances as e:
+            raise exc.HTTPRequestEntityTooLarge(explanation=e.format_message())
         return webob.Response(status_int=202)
 
-    @wsgi.action('resetNetwork')
+    @extensions.expected_errors((404, 409))
+    @wsgi.action('reset_network')
     def _reset_network(self, req, id, body):
         """Permit admins to reset networking on a server."""
         context = req.environ['nova.context']
-        authorize(context, 'resetNetwork')
+        authorize(context, 'reset_network')
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.reset_network(context, instance)
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("Compute.api::reset_network %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
-    @wsgi.action('injectNetworkInfo')
+    @extensions.expected_errors((404, 409))
+    @wsgi.action('inject_network_info')
     def _inject_network_info(self, req, id, body):
         """Permit admins to inject network info into a server."""
         context = req.environ['nova.context']
-        authorize(context, 'injectNetworkInfo')
+        authorize(context, 'inject_network_info')
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.inject_network_info(context, instance)
-        except exception.InstanceNotFound:
-            raise exc.HTTPNotFound(_("Server not found"))
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("Compute.api::inject_network_info %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors(404)
     @wsgi.action('lock')
     def _lock(self, req, id, body):
-        """Permit admins to lock a server."""
+        """Lock a server instance."""
         context = req.environ['nova.context']
         authorize(context, 'lock')
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.lock(context, instance)
-        except exception.InstanceNotFound:
-            raise exc.HTTPNotFound(_("Server not found"))
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("Compute.api::lock %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors(404)
     @wsgi.action('unlock')
     def _unlock(self, req, id, body):
-        """Permit admins to lock a server."""
+        """Unlock a server instance."""
         context = req.environ['nova.context']
         authorize(context, 'unlock')
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.unlock(context, instance)
-        except exception.InstanceNotFound:
-            raise exc.HTTPNotFound(_("Server not found"))
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("Compute.api::unlock %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         return webob.Response(status_int=202)
 
-    @wsgi.action('createBackup')
+    @extensions.expected_errors((400, 404, 409, 413))
+    @wsgi.action('create_backup')
     def _create_backup(self, req, id, body):
         """Backup a server instance.
 
@@ -202,10 +209,10 @@ class AdminActionsController(wsgi.Controller):
 
         """
         context = req.environ["nova.context"]
-        authorize(context, 'createBackup')
+        authorize(context, 'create_backup')
 
         try:
-            entity = body["createBackup"]
+            entity = body["create_backup"]
         except (KeyError, TypeError):
             raise exc.HTTPBadRequest(_("Malformed request body"))
 
@@ -215,20 +222,20 @@ class AdminActionsController(wsgi.Controller):
             rotation = entity["rotation"]
 
         except KeyError as missing_key:
-            msg = _("createBackup entity requires %s attribute") % missing_key
+            msg = _("create_backup entity requires %s attribute") % missing_key
             raise exc.HTTPBadRequest(explanation=msg)
 
         except TypeError:
-            msg = _("Malformed createBackup entity")
+            msg = _("Malformed create_backup entity")
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:
             rotation = int(rotation)
         except ValueError:
-            msg = _("createBackup attribute 'rotation' must be an integer")
+            msg = _("create_backup attribute 'rotation' must be an integer")
             raise exc.HTTPBadRequest(explanation=msg)
         if rotation < 0:
-            msg = _("createBackup attribute 'rotation' must be greater "
+            msg = _("create_backup attribute 'rotation' must be greater "
                     "than or equal to zero")
             raise exc.HTTPBadRequest(explanation=msg)
 
@@ -242,16 +249,16 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:
-            instance = self.compute_api.get(context, id)
-        except exception.NotFound:
-            raise exc.HTTPNotFound(_("Instance not found"))
+            instance = self.compute_api.get(context, id, want_objects=True)
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
 
         try:
             image = self.compute_api.backup(context, instance, image_name,
                     backup_type, rotation, extra_properties=props)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'createBackup')
+                    'create_backup')
 
         resp = webob.Response(status_int=202)
 
@@ -263,66 +270,64 @@ class AdminActionsController(wsgi.Controller):
 
         return resp
 
-    @wsgi.action('os-migrateLive')
+    @extensions.expected_errors((400, 404, 409))
+    @wsgi.action('migrate_live')
     def _migrate_live(self, req, id, body):
         """Permit admins to (live) migrate a server to a new host."""
         context = req.environ["nova.context"]
-        authorize(context, 'migrateLive')
+        authorize(context, 'migrate_live')
 
         try:
-            block_migration = body["os-migrateLive"]["block_migration"]
-            disk_over_commit = body["os-migrateLive"]["disk_over_commit"]
-            host = body["os-migrateLive"]["host"]
+            block_migration = body["migrate_live"]["block_migration"]
+            disk_over_commit = body["migrate_live"]["disk_over_commit"]
+            host = body["migrate_live"]["host"]
         except (TypeError, KeyError):
             msg = _("host, block_migration and disk_over_commit must "
                     "be specified for live migration.")
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.live_migrate(context, instance, block_migration,
                                           disk_over_commit, host)
         except (exception.ComputeServiceUnavailable,
                 exception.InvalidHypervisorType,
                 exception.UnableToMigrateToSelf,
-                exception.DestinationHypervisorTooOld) as ex:
+                exception.DestinationHypervisorTooOld,
+                exception.NoValidHost,
+                exception.InvalidLocalStorage,
+                exception.InvalidSharedStorage,
+                exception.MigrationPreCheckError) as ex:
             raise exc.HTTPBadRequest(explanation=ex.format_message())
-        except Exception:
-            if host is None:
-                msg = _("Live migration of instance %s to another host "
-                        "failed") % id
-            else:
-                msg = _("Live migration of instance %(id)s to host %(host)s "
-                        "failed") % {'id': id, 'host': host}
-            LOG.exception(msg)
-            # Return messages from scheduler
-            raise exc.HTTPBadRequest(explanation=msg)
-
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'migrate_live')
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         return webob.Response(status_int=202)
 
-    @wsgi.action('os-resetState')
+    @extensions.expected_errors((400, 404))
+    @wsgi.action('reset_state')
     def _reset_state(self, req, id, body):
         """Permit admins to reset the state of a server."""
         context = req.environ["nova.context"]
-        authorize(context, 'resetState')
+        authorize(context, 'reset_state')
 
         # Identify the desired state from the body
         try:
-            state = state_map[body["os-resetState"]["state"]]
+            state = state_map[body["reset_state"]["state"]]
         except (TypeError, KeyError):
             msg = _("Desired state must be specified.  Valid states "
                     "are: %s") % ', '.join(sorted(state_map.keys()))
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:
-            instance = self.compute_api.get(context, id)
-            self.compute_api.update_state(context, instance, state)
-        except exception.InstanceNotFound:
-            raise exc.HTTPNotFound(_("Server not found"))
-        except Exception:
-            readable = traceback.format_exc()
-            LOG.exception(_("Compute.api::resetState %s"), readable)
-            raise exc.HTTPUnprocessableEntity()
+            instance = self.compute_api.get(context, id, want_objects=True)
+            instance.vm_state = state
+            instance.task_state = None
+            instance.save(admin_state_reset=True)
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         return webob.Response(status_int=202)
 
 
@@ -330,7 +335,7 @@ class AdminActions(extensions.V3APIExtensionBase):
     """Enable admin-only server actions
 
     Actions include: pause, unpause, suspend, resume, migrate,
-    resetNetwork, injectNetworkInfo, lock, unlock, createBackup
+    reset_network, inject_network_info, lock, unlock, create_backup
     """
 
     name = "AdminActions"

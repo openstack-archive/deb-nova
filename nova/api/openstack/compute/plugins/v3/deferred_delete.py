@@ -33,13 +33,14 @@ class DeferredDeleteController(wsgi.Controller):
         super(DeferredDeleteController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
+    @extensions.expected_errors((404, 409, 413))
     @wsgi.action('restore')
     def _restore(self, req, id, body):
         """Restore a previously deleted instance."""
         context = req.environ["nova.context"]
         authorize(context)
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
         except exception.InstanceNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         try:
@@ -53,13 +54,14 @@ class DeferredDeleteController(wsgi.Controller):
                     'restore')
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors((404, 409))
     @wsgi.action('force_delete')
     def _force_delete(self, req, id, body):
         """Force delete of instance before deferred cleanup."""
         context = req.environ["nova.context"]
         authorize(context)
         try:
-            instance = self.compute_api.get(context, id)
+            instance = self.compute_api.get(context, id, want_objects=True)
         except exception.InstanceNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         try:

@@ -32,6 +32,7 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import rpc
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_instance
 from nova.tests.image import fake
 
 
@@ -68,8 +69,8 @@ class SchedulerHintsTestCase(test.TestCase):
         req.content_type = 'application/json'
         body = {'server': {
                   'name': 'server_test',
-                  'imageRef': 'cedef40a-ed67-4d10-800e-17455edce175',
-                  'flavorRef': '1',
+                  'image_ref': 'cedef40a-ed67-4d10-800e-17455edce175',
+                  'flavor_ref': '1',
                }}
 
         req.body = jsonutils.dumps(body)
@@ -90,8 +91,8 @@ class SchedulerHintsTestCase(test.TestCase):
         body = {
             'server': {
                   'name': 'server_test',
-                  'imageRef': 'cedef40a-ed67-4d10-800e-17455edce175',
-                  'flavorRef': '1',
+                  'image_ref': 'cedef40a-ed67-4d10-800e-17455edce175',
+                  'flavor_ref': '1',
             },
             'os-scheduler-hints:scheduler_hints': {'a': 'b'},
         }
@@ -107,8 +108,8 @@ class SchedulerHintsTestCase(test.TestCase):
         body = {
             'server': {
                   'name': 'server_test',
-                  'imageRef': 'cedef40a-ed67-4d10-800e-17455edce175',
-                  'flavorRef': '1',
+                  'image_ref': 'cedef40a-ed67-4d10-800e-17455edce175',
+                  'flavor_ref': '1',
             },
             'os-scheduler-hints:scheduler_hints': 'here',
         }
@@ -142,7 +143,7 @@ class ServersControllerCreateTest(test.TestCase):
             image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
             def_image_ref = 'http://localhost/images/%s' % image_uuid
             self.instance_cache_num += 1
-            instance = {
+            instance = fake_instance.fake_db_instance(**{
                 'id': self.instance_cache_num,
                 'display_name': inst['display_name'] or 'test',
                 'uuid': FAKE_UUID,
@@ -160,7 +161,8 @@ class ServersControllerCreateTest(test.TestCase):
                 "fixed_ips": [],
                 "task_state": "",
                 "vm_state": "",
-            }
+                "root_device_name": inst.get('root_device_name', 'vda'),
+            })
 
             self.instance_cache_by_id[instance['id']] = instance
             self.instance_cache_by_uuid[instance['uuid']] = instance
@@ -176,18 +178,6 @@ class ServersControllerCreateTest(test.TestCase):
             instance = self.instance_cache_by_uuid[uuid]
             instance.update(values)
             return instance
-
-        def rpc_call_wrapper(context, topic, msg, timeout=None):
-            """Stub out the scheduler creating the instance entry."""
-            if (topic == CONF.scheduler_topic and
-                    msg['method'] == 'run_instance'):
-                request_spec = msg['args']['request_spec']
-                num_instances = request_spec.get('num_instances', 1)
-                instances = []
-                for x in xrange(num_instances):
-                    instances.append(instance_create(context,
-                        request_spec['instance_properties']))
-                return instances
 
         def server_update(context, instance_uuid, params):
             inst = self.instance_cache_by_uuid[instance_uuid]
@@ -218,7 +208,6 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(db, 'instance_get', instance_get)
         self.stubs.Set(db, 'instance_update', instance_update)
         self.stubs.Set(rpc, 'cast', fake_method)
-        self.stubs.Set(rpc, 'call', rpc_call_wrapper)
         self.stubs.Set(db, 'instance_update_and_get_original',
                 server_update)
         self.stubs.Set(rpc, 'queue_get_for', queue_get_for)
@@ -228,9 +217,9 @@ class ServersControllerCreateTest(test.TestCase):
     def _test_create_extra(self, params, no_image=False,
                            override_controller=None):
         image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
-        server = dict(name='server_test', imageRef=image_uuid, flavorRef=2)
+        server = dict(name='server_test', image_ref=image_uuid, flavor_ref=2)
         if no_image:
-            server.pop('imageRef', None)
+            server.pop('image_ref', None)
         server.update(params)
         body = dict(server=server)
         req = fakes.HTTPRequestV3.blank('/servers')
@@ -281,8 +270,8 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
         serial_request = """
 <ns2:server xmlns:ns2="http://docs.openstack.org/compute/api/v3"
      name="new-server-test"
-     imageRef="1"
-     flavorRef="2">
+     image_ref="1"
+     flavor_ref="2">
      <ns2:metadata><ns2:meta key="hello">world</ns2:meta></ns2:metadata>
      <os:scheduler_hints
      xmlns:os="http://docs.openstack.org/compute/ext/scheduler-hints/api/v3">
@@ -299,11 +288,40 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                     'near': ['eb999657-dd6b-464e-8713-95c532ac3b18']
                 },
                 "name": "new-server-test",
-                "imageRef": "1",
-                "flavorRef": "2",
+                "image_ref": "1",
+                "flavor_ref": "2",
                 "metadata": {
                     "hello": "world"
                 }
             }
         }
+        self.assertEquals(request['body'], expected)
+
+    def test_request_with_scheduler_hints(self):
+        serial_request = """
+    <server xmlns="http://docs.openstack.org/compute/api/v3"
+     xmlns:os-scheduler-hints=
+     "http://docs.openstack.org/compute/ext/scheduler-hints/api/v3"
+     name="new-server-test" image_ref="1" flavor_ref="1">
+       <os-scheduler-hints:scheduler_hints>
+         <different_host>
+           7329b667-50c7-46a6-b913-cb2a09dfeee0
+         </different_host>
+         <different_host>
+           f31efb24-34d2-43e1-8b44-316052956a39
+         </different_host>
+       </os-scheduler-hints:scheduler_hints>
+    </server>"""
+        request = self.deserializer.deserialize(serial_request)
+        expected = {"server": {
+                "name": "new-server-test",
+                "image_ref": "1",
+                "flavor_ref": "1",
+                "os-scheduler-hints:scheduler_hints": {
+                    "different_host": [
+                        "7329b667-50c7-46a6-b913-cb2a09dfeee0",
+                        "f31efb24-34d2-43e1-8b44-316052956a39",
+                    ]
+                }
+                }}
         self.assertEquals(request['body'], expected)

@@ -46,7 +46,7 @@ def block_db_access():
         def __call__(self, *args, **kwargs):
             stacktrace = "".join(traceback.format_stack())
             LOG = logging.getLogger('nova.compute')
-            LOG.error('No db access allowed in nova-compute: %s' % stacktrace)
+            LOG.error('No db access allowed in nova-compute: %s', stacktrace)
             raise exception.DBNotAllowed('nova-compute')
 
     nova.db.api.IMPL = NoDB()

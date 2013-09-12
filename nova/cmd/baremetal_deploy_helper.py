@@ -33,6 +33,7 @@ from wsgiref import simple_server
 from nova import config
 from nova import context as nova_context
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
@@ -242,7 +243,8 @@ class Worker(threading.Thread):
             else:
                 # Requests comes here from BareMetalDeploy.post()
                 LOG.info(_('start deployment for node %(node_id)s, '
-                           'params %(params)s') % locals())
+                           'params %(params)s'),
+                         {'node_id': node_id, 'params': params})
                 context = nova_context.get_admin_context()
                 try:
                     db.bm_node_update(context, node_id,

@@ -60,7 +60,8 @@ class SchedulerRpcAPITestCase(test.NoDBTestCase):
                 request_spec='fake_request_spec',
                 admin_password='pw', injected_files='fake_injected_files',
                 requested_networks='fake_requested_networks',
-                is_first_time=True, filter_properties='fake_filter_properties')
+                is_first_time=True, filter_properties='fake_filter_properties',
+                legacy_bdm_in_spec=False, version='2.9')
 
     def test_prep_resize(self):
         self._test_scheduler_api('prep_resize', rpc_method='cast',
@@ -68,12 +69,6 @@ class SchedulerRpcAPITestCase(test.NoDBTestCase):
                 instance_type='fake_type', image='fake_image',
                 request_spec='fake_request_spec',
                 filter_properties='fake_props', reservations=list('fake_res'))
-
-    def test_live_migration(self):
-        self._test_scheduler_api('live_migration', rpc_method='call',
-                block_migration='fake_block_migration',
-                disk_over_commit='fake_disk_over_commit',
-                instance='fake_instance', dest='fake_dest')
 
     def test_update_service_capabilities(self):
         self._test_scheduler_api('update_service_capabilities',

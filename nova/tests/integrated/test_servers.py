@@ -32,6 +32,13 @@ LOG = logging.getLogger(__name__)
 
 
 class ServersTest(integrated_helpers._IntegratedTestBase):
+    _api_version = 'v2'
+    _force_delete_parameter = 'forceDelete'
+    _image_ref_parameter = 'imageRef'
+    _flavor_ref_parameter = 'flavorRef'
+    _access_ipv4_parameter = 'accessIPv4'
+    _access_ipv6_parameter = 'accessIPv6'
+
     def setUp(self):
         super(ServersTest, self).setUp()
         self.conductor = self.start_service(
@@ -95,20 +102,22 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
                           self.api.post_server, post)
 
         # With an invalid imageRef, this throws 500.
-        server['imageRef'] = self.get_invalid_image()
+        server[self._image_ref_parameter] = self.get_invalid_image()
         # TODO(justinsb): Check whatever the spec says should be thrown here
         self.assertRaises(client.OpenStackApiException,
                           self.api.post_server, post)
 
         # Add a valid imageRef
-        server['imageRef'] = good_server.get('imageRef')
+        server[self._image_ref_parameter] = good_server.get(
+            self._image_ref_parameter)
 
         # Without flavorRef, this throws 500
         # TODO(justinsb): Check whatever the spec says should be thrown here
         self.assertRaises(client.OpenStackApiException,
                           self.api.post_server, post)
 
-        server['flavorRef'] = good_server.get('flavorRef')
+        server[self._flavor_ref_parameter] = good_server.get(
+            self._flavor_ref_parameter)
 
         # Without a name, this throws 500
         # TODO(justinsb): Check whatever the spec says should be thrown here
@@ -146,7 +155,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
     def _force_reclaim(self):
         # Make sure that compute manager thinks the instance is
         # old enough to be expired
-        the_past = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+        the_past = timeutils.utcnow() + datetime.timedelta(hours=1)
         timeutils.set_time_override(override_time=the_past)
         ctxt = context.get_admin_context()
         self.compute._reclaim_queued_deletes(ctxt)
@@ -185,7 +194,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
 
         # Wait for queued deletion
         found_server = self._wait_for_state_change(found_server, 'ACTIVE')
-        self.assertEqual('DELETED', found_server['status'])
+        self.assertEqual('SOFT_DELETED', found_server['status'])
 
         self._force_reclaim()
 
@@ -216,7 +225,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
 
         # Wait for queued deletion
         found_server = self._wait_for_state_change(found_server, 'ACTIVE')
-        self.assertEqual('DELETED', found_server['status'])
+        self.assertEqual('SOFT_DELETED', found_server['status'])
 
         # Restore server
         self.api.post_server_action(created_server_id, {'restore': {}})
@@ -249,10 +258,11 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
 
         # Wait for queued deletion
         found_server = self._wait_for_state_change(found_server, 'ACTIVE')
-        self.assertEqual('DELETED', found_server['status'])
+        self.assertEqual('SOFT_DELETED', found_server['status'])
 
         # Force delete server
-        self.api.post_server_action(created_server_id, {'forceDelete': {}})
+        self.api.post_server_action(created_server_id,
+                                    {self._force_delete_parameter: {}})
 
         # Wait for real deletion
         self._wait_for_deletion(created_server_id)
@@ -348,10 +358,10 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         # rebuild the server with metadata and other server attributes
         post = {}
         post['rebuild'] = {
-            "imageRef": "76fa36fc-c930-4bf3-8c8a-ea2a2420deb6",
+            self._image_ref_parameter: "76fa36fc-c930-4bf3-8c8a-ea2a2420deb6",
             "name": "blah",
-            "accessIPv4": "172.19.0.2",
-            "accessIPv6": "fe80::2",
+            self._access_ipv4_parameter: "172.19.0.2",
+            self._access_ipv6_parameter: "fe80::2",
             "metadata": {'some': 'thing'},
         }
 
@@ -363,15 +373,16 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self.assertEqual(created_server_id, found_server['id'])
         self.assertEqual({'some': 'thing'}, found_server.get('metadata'))
         self.assertEqual('blah', found_server.get('name'))
-        self.assertEqual(post['rebuild']['imageRef'],
+        self.assertEqual(post['rebuild'][self._image_ref_parameter],
                          found_server.get('image')['id'])
-        self.assertEqual('172.19.0.2', found_server['accessIPv4'])
-        self.assertEqual('fe80::2', found_server['accessIPv6'])
+        self.assertEqual('172.19.0.2',
+                         found_server[self._access_ipv4_parameter])
+        self.assertEqual('fe80::2', found_server[self._access_ipv6_parameter])
 
         # rebuild the server with empty metadata and nothing else
         post = {}
         post['rebuild'] = {
-            "imageRef": "76fa36fc-c930-4bf3-8c8a-ea2a2420deb6",
+            self._image_ref_parameter: "76fa36fc-c930-4bf3-8c8a-ea2a2420deb6",
             "metadata": {},
         }
 
@@ -383,10 +394,11 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
         self.assertEqual(created_server_id, found_server['id'])
         self.assertEqual({}, found_server.get('metadata'))
         self.assertEqual('blah', found_server.get('name'))
-        self.assertEqual(post['rebuild']['imageRef'],
+        self.assertEqual(post['rebuild'][self._image_ref_parameter],
                          found_server.get('image')['id'])
-        self.assertEqual('172.19.0.2', found_server['accessIPv4'])
-        self.assertEqual('fe80::2', found_server['accessIPv6'])
+        self.assertEqual('172.19.0.2',
+                         found_server[self._access_ipv4_parameter])
+        self.assertEqual('fe80::2', found_server[self._access_ipv6_parameter])
 
         # Cleanup
         self._delete_server(created_server_id)
@@ -487,3 +499,17 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
 
         # Cleanup
         self._delete_server(created_server_id)
+
+
+class ServersTestV3(client.TestOpenStackClientV3Mixin, ServersTest):
+    _force_delete_parameter = 'force_delete'
+    _api_version = 'v3'
+    _image_ref_parameter = 'image_ref'
+    _flavor_ref_parameter = 'flavor_ref'
+    _access_ipv4_parameter = 'access_ip_v4'
+    _access_ipv6_parameter = 'access_ip_v6'
+
+    def test_create_multiple_servers(self):
+        # TODO(cyeoh): Remove to enable the test when the V3 multiple
+        # create extension is merged. Bug #1206884
+        pass

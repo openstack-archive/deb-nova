@@ -14,11 +14,8 @@
 
 import contextlib
 import datetime
-import gettext
 import iso8601
 import netaddr
-
-gettext.install('nova')
 
 from nova.conductor import rpcapi as conductor_rpcapi
 from nova import context
@@ -36,11 +33,19 @@ class MyObj(base.NovaObject):
               'missing': str,
               }
 
+    @staticmethod
+    def _from_db_object(context, obj, db_obj):
+        self = MyObj()
+        self.foo = db_obj['foo']
+        self.bar = db_obj['bar']
+        self.missing = db_obj['missing']
+        return self
+
     def obj_load_attr(self, attrname):
         setattr(self, attrname, 'loaded!')
 
     @base.remotable_classmethod
-    def get(cls, context):
+    def query(cls, context):
         obj = cls()
         obj.foo = 1
         obj.bar = 'bar'
@@ -81,8 +86,17 @@ class MyObj2(object):
         return 'MyObj'
 
     @base.remotable_classmethod
-    def get(cls, *args, **kwargs):
+    def query(cls, *args, **kwargs):
         pass
+
+
+class RandomMixInWithNoFields(object):
+    """Used to test object inheritance using a mixin that has no fields."""
+    pass
+
+
+class TestSubclassedObject(RandomMixInWithNoFields, MyObj):
+    fields = {'new_field': str}
 
 
 class TestMetaclass(test.TestCase):
@@ -119,7 +133,7 @@ class TestMetaclass(test.TestCase):
 
 class TestUtils(test.TestCase):
     def test_datetime_or_none(self):
-        naive_dt = datetime.datetime.now()
+        naive_dt = timeutils.utcnow()
         dt = timeutils.parse_isotime(timeutils.isotime(naive_dt))
         self.assertEqual(utils.datetime_or_none(dt), dt)
         self.assertEqual(utils.datetime_or_none(dt),
@@ -148,6 +162,7 @@ class TestUtils(test.TestCase):
         self.assertEqual(utils.str_or_none('foo'), 'foo')
         self.assertEqual(utils.str_or_none(1), '1')
         self.assertEqual(utils.str_or_none(None), None)
+        self.assertEqual(utils.str_or_none(u'\u30bdfoo'), '\xe3\x82\xbdfoo')
 
     def test_ip_or_none(self):
         ip4 = netaddr.IPAddress('1.2.3.4', 4)
@@ -158,6 +173,30 @@ class TestUtils(test.TestCase):
         self.assertEqual(utils.ip_or_none(6)(None), None)
         self.assertRaises(netaddr.AddrFormatError, utils.ip_or_none(4), 'foo')
         self.assertRaises(netaddr.AddrFormatError, utils.ip_or_none(6), 'foo')
+
+    def test_list_of_strings_or_none(self):
+        self.assertEqual(utils.list_of_strings_or_none(None), None)
+        self.assertEqual(utils.list_of_strings_or_none(['1', '2']),
+                         ['1', '2'])
+        self.assertRaises(ValueError,
+                          utils.list_of_strings_or_none, 'foo')
+        self.assertRaises(ValueError,
+                          utils.list_of_strings_or_none, [1, 2])
+        self.assertRaises(ValueError,
+                          utils.list_of_strings_or_none, ['1', 2])
+
+    def test_dict_of_strings_or_none(self):
+        self.assertEqual(utils.dict_of_strings_or_none(None), None)
+        self.assertEqual(utils.dict_of_strings_or_none({'1': '2'}),
+                         {'1': '2'})
+        self.assertRaises(ValueError,
+                          utils.dict_of_strings_or_none, {'1': '2', '3': 4})
+        self.assertRaises(ValueError,
+                          utils.dict_of_strings_or_none, {'1': '2', 3: '4'})
+        self.assertRaises(ValueError,
+                          utils.dict_of_strings_or_none, {'1': '2', 3: '4'})
+        self.assertRaises(ValueError,
+                          utils.dict_of_strings_or_none, 'foo')
 
     def test_dt_serializer(self):
         class Obj(object):
@@ -203,11 +242,27 @@ class TestUtils(test.TestCase):
         self.assertEqual([{'foo': 0}, {'foo': 1}],
                          base.obj_to_primitive(mylist))
 
+    def test_obj_make_list(self):
+        class MyList(base.ObjectListBase, base.NovaObject):
+            pass
+
+        db_objs = [{'foo': 1, 'bar': 'baz', 'missing': 'banana'},
+                   {'foo': 2, 'bar': 'bat', 'missing': 'apple'},
+                   ]
+        mylist = base.obj_make_list('ctxt', MyList(), MyObj, db_objs)
+        self.assertEqual(2, len(mylist))
+        self.assertEqual('ctxt', mylist._context)
+        for index, item in enumerate(mylist):
+            self.assertEqual(db_objs[index]['foo'], item.foo)
+            self.assertEqual(db_objs[index]['bar'], item.bar)
+            self.assertEqual(db_objs[index]['missing'], item.missing)
+
 
 class _BaseTestCase(test.TestCase):
     def setUp(self):
         super(_BaseTestCase, self).setUp()
         self.remote_object_calls = list()
+        self.context = context.RequestContext('fake-user', 'fake-project')
 
 
 class _LocalTest(_BaseTestCase):
@@ -374,72 +429,65 @@ class _TestObject(object):
     def test_with_alternate_context(self):
         ctxt1 = context.RequestContext('foo', 'foo')
         ctxt2 = context.RequestContext('bar', 'alternate')
-        obj = MyObj.get(ctxt1)
+        obj = MyObj.query(ctxt1)
         obj.update_test(ctxt2)
         self.assertEqual(obj.bar, 'alternate-context')
         self.assertRemotes()
 
     def test_orphaned_object(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj._context = None
         self.assertRaises(exception.OrphanedObjectError,
                           obj.update_test)
         self.assertRemotes()
 
     def test_changed_1(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(obj.obj_what_changed(), set(['foo']))
-        obj.update_test(ctxt)
+        obj.update_test(self.context)
         self.assertEqual(obj.obj_what_changed(), set(['foo', 'bar']))
         self.assertEqual(obj.foo, 123)
         self.assertRemotes()
 
     def test_changed_2(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(obj.obj_what_changed(), set(['foo']))
-        obj.save(ctxt)
+        obj.save(self.context)
         self.assertEqual(obj.obj_what_changed(), set([]))
         self.assertEqual(obj.foo, 123)
         self.assertRemotes()
 
     def test_changed_3(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(obj.obj_what_changed(), set(['foo']))
-        obj.refresh(ctxt)
+        obj.refresh(self.context)
         self.assertEqual(obj.obj_what_changed(), set([]))
         self.assertEqual(obj.foo, 321)
         self.assertEqual(obj.bar, 'refreshed')
         self.assertRemotes()
 
     def test_changed_4(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.bar = 'something'
         self.assertEqual(obj.obj_what_changed(), set(['bar']))
-        obj.modify_save_modify(ctxt)
+        obj.modify_save_modify(self.context)
         self.assertEqual(obj.obj_what_changed(), set(['foo']))
         self.assertEqual(obj.foo, 42)
         self.assertEqual(obj.bar, 'meow')
         self.assertRemotes()
 
     def test_static_result(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         self.assertEqual(obj.bar, 'bar')
         result = obj.marco()
         self.assertEqual(result, 'polo')
         self.assertRemotes()
 
     def test_updates(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         self.assertEqual(obj.foo, 1)
         obj.update_test()
         self.assertEqual(obj.bar, 'updated')
@@ -473,6 +521,43 @@ class _TestObject(object):
         self.assertTrue('foo' in obj)
         self.assertFalse('does_not_exist' in obj)
 
+    def test_obj_attr_is_set(self):
+        obj = MyObj()
+        obj.foo = 1
+        self.assertTrue(obj.obj_attr_is_set('foo'))
+        self.assertFalse(obj.obj_attr_is_set('bar'))
+        self.assertRaises(AttributeError, obj.obj_attr_is_set, 'bang')
+
+    def test_get(self):
+        obj = MyObj()
+        obj.foo = 1
+        # Foo has value, should not get the default
+        self.assertEqual(obj.get('foo', 2), 1)
+        # Foo has value, should return the value without error
+        self.assertEqual(obj.get('foo'), 1)
+        # Bar is not loaded, so we should get the default
+        self.assertEqual(obj.get('bar', 'not-loaded'), 'not-loaded')
+        # Bar without a default should lazy-load
+        self.assertEqual(obj.get('bar'), 'loaded!')
+        # Bar now has a default, but loaded value should be returned
+        self.assertEqual(obj.get('bar', 'not-loaded'), 'loaded!')
+        # Invalid attribute should raise AttributeError
+        self.assertRaises(AttributeError, obj.get, 'nothing')
+        # ...even with a default
+        self.assertRaises(AttributeError, obj.get, 'nothing', 3)
+
+    def test_object_inheritance(self):
+        base_fields = base.NovaObject.fields.keys()
+        myobj_fields = ['foo', 'bar', 'missing'] + base_fields
+        myobj3_fields = ['new_field']
+        self.assertTrue(issubclass(TestSubclassedObject, MyObj))
+        self.assertEqual(len(myobj_fields), len(MyObj.fields))
+        self.assertEqual(set(myobj_fields), set(MyObj.fields.keys()))
+        self.assertEqual(len(myobj_fields) + len(myobj3_fields),
+                         len(TestSubclassedObject.fields))
+        self.assertEqual(set(myobj_fields) | set(myobj3_fields),
+                         set(TestSubclassedObject.fields.keys()))
+
 
 class TestObject(_LocalTest, _TestObject):
     pass
@@ -480,21 +565,18 @@ class TestObject(_LocalTest, _TestObject):
 
 class TestRemoteObject(_RemoteTest, _TestObject):
     def test_major_version_mismatch(self):
-        ctxt = context.get_admin_context()
         MyObj2.version = '2.0'
         self.assertRaises(exception.IncompatibleObjectVersion,
-                          MyObj2.get, ctxt)
+                          MyObj2.query, self.context)
 
     def test_minor_version_greater(self):
-        ctxt = context.get_admin_context()
         MyObj2.version = '1.6'
         self.assertRaises(exception.IncompatibleObjectVersion,
-                          MyObj2.get, ctxt)
+                          MyObj2.query, self.context)
 
     def test_minor_version_less(self):
-        ctxt = context.get_admin_context()
         MyObj2.version = '1.2'
-        obj = MyObj2.get(ctxt)
+        obj = MyObj2.query(self.context)
         self.assertEqual(obj.bar, 'bar')
         self.assertRemotes()
 
@@ -536,7 +618,7 @@ class TestObjectListBase(test.TestCase):
                          [y.foo for y in obj2])
 
 
-class TestObjectSerializer(test.TestCase):
+class TestObjectSerializer(_BaseTestCase):
     def test_serialize_entity_primitive(self):
         ser = base.NovaObjectSerializer()
         for thing in (1, 'foo', [1, 2], {'foo': 'bar'}):
@@ -549,25 +631,23 @@ class TestObjectSerializer(test.TestCase):
 
     def test_object_serialization(self):
         ser = base.NovaObjectSerializer()
-        ctxt = context.get_admin_context()
         obj = MyObj()
-        primitive = ser.serialize_entity(ctxt, obj)
+        primitive = ser.serialize_entity(self.context, obj)
         self.assertTrue('nova_object.name' in primitive)
-        obj2 = ser.deserialize_entity(ctxt, primitive)
+        obj2 = ser.deserialize_entity(self.context, primitive)
         self.assertTrue(isinstance(obj2, MyObj))
-        self.assertEqual(ctxt, obj2._context)
+        self.assertEqual(self.context, obj2._context)
 
     def test_object_serialization_iterables(self):
         ser = base.NovaObjectSerializer()
-        ctxt = context.get_admin_context()
         obj = MyObj()
         for iterable in (list, tuple, set):
             thing = iterable([obj])
-            primitive = ser.serialize_entity(ctxt, thing)
+            primitive = ser.serialize_entity(self.context, thing)
             self.assertEqual(1, len(primitive))
             for item in primitive:
                 self.assertFalse(isinstance(item, base.NovaObject))
-            thing2 = ser.deserialize_entity(ctxt, primitive)
+            thing2 = ser.deserialize_entity(self.context, primitive)
             self.assertEqual(1, len(thing2))
             for item in thing2:
                 self.assertTrue(isinstance(item, MyObj))

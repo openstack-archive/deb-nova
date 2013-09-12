@@ -20,6 +20,8 @@
 Handle lease database updates from DHCP servers.
 """
 
+from __future__ import print_function
+
 import os
 import sys
 
@@ -29,6 +31,7 @@ from nova import config
 from nova import context
 from nova import db
 from nova.network import rpcapi as network_rpcapi
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -42,14 +45,8 @@ LOG = logging.getLogger(__name__)
 
 def add_lease(mac, ip_address):
     """Set the IP that was assigned by the DHCP server."""
-    if CONF.fake_rabbit:
-        LOG.debug(_("leasing ip"))
-        network_manager = importutils.import_object(CONF.network_manager)
-        network_manager.lease_fixed_ip(context.get_admin_context(),
-                                       ip_address)
-    else:
-        api = network_rpcapi.NetworkAPI()
-        api.lease_fixed_ip(context.get_admin_context(), ip_address, CONF.host)
+    api = network_rpcapi.NetworkAPI()
+    api.lease_fixed_ip(context.get_admin_context(), ip_address, CONF.host)
 
 
 def old_lease(mac, ip_address):
@@ -62,15 +59,9 @@ def old_lease(mac, ip_address):
 
 def del_lease(mac, ip_address):
     """Called when a lease expires."""
-    if CONF.fake_rabbit:
-        LOG.debug(_("releasing ip"))
-        network_manager = importutils.import_object(CONF.network_manager)
-        network_manager.release_fixed_ip(context.get_admin_context(),
-                                         ip_address)
-    else:
-        api = network_rpcapi.NetworkAPI()
-        api.release_fixed_ip(context.get_admin_context(), ip_address,
-                             CONF.host)
+    api = network_rpcapi.NetworkAPI()
+    api.release_fixed_ip(context.get_admin_context(), ip_address,
+                         CONF.host)
 
 
 def init_leases(network_id):
@@ -126,6 +117,6 @@ def main():
             LOG.error(_("Environment variable 'NETWORK_ID' must be set."))
             return(1)
 
-        print init_leases(network_id)
+        print(init_leases(network_id))
 
     rpc.cleanup()

@@ -16,9 +16,6 @@
 #    under the License.
 
 import contextlib
-import copy
-import pkg_resources
-import urlparse
 
 import fixtures
 import mox
@@ -28,6 +25,7 @@ from nova.compute import flavors
 from nova import context
 from nova import db
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.virt.xenapi import stubs
@@ -189,7 +187,7 @@ class XenAPIGetUUID(test.TestCase):
 
         self.mox.ReplayAll()
         self.assertEquals('2f46f0f5-f14c-ef1b-1fac-9eeca0888a3f',
-                          vm_utils.get_this_vm_uuid())
+                          vm_utils.get_this_vm_uuid(None))
         self.mox.VerifyAll()
 
     def test_get_this_vm_uuid_old_kernel_reboot(self):
@@ -206,124 +204,168 @@ class XenAPIGetUUID(test.TestCase):
 
         self.mox.ReplayAll()
         self.assertEquals('2f46f0f5-f14c-ef1b-1fac-9eeca0888a3f',
-                          vm_utils.get_this_vm_uuid())
+                          vm_utils.get_this_vm_uuid(None))
         self.mox.VerifyAll()
 
 
-class FakeSession():
+class FakeSession(object):
     def call_xenapi(self, *args):
+        pass
+
+    def call_plugin_serialized(self, plugin, fn, *args, **kwargs):
+        pass
+
+    def call_plugin_serialized_with_retry(self, plugin, fn, num_retries,
+                                          callback, *args, **kwargs):
         pass
 
 
 class FetchVhdImageTestCase(test.TestCase):
-    def _apply_stubouts(self):
-        self.mox.StubOutWithMock(vm_utils, '_make_uuid_stack')
-        self.mox.StubOutWithMock(vm_utils, 'get_sr_path')
-        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
-        self.mox.StubOutWithMock(vm_utils, '_add_torrent_url')
-        self.mox.StubOutWithMock(vm_utils, '_add_bittorrent_params')
-        self.mox.StubOutWithMock(vm_utils, '_generate_glance_callback')
-        self.mox.StubOutWithMock(vm_utils,
-            '_fetch_using_dom0_plugin_with_retry')
-        self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
-        self.mox.StubOutWithMock(vm_utils, '_scan_sr')
-        self.mox.StubOutWithMock(vm_utils, '_check_vdi_size')
-        self.mox.StubOutWithMock(vm_utils, 'destroy_vdi')
-
-    def _common_params_setup(self, uses_bittorrent):
-        self.context = "context"
+    def setUp(self):
+        super(FetchVhdImageTestCase, self).setUp()
+        self.context = context.get_admin_context()
+        self.context.auth_token = 'auth_token'
         self.session = FakeSession()
         self.instance = {"uuid": "uuid"}
-        self.image_id = "image_id"
-        self.uuid_stack = ["uuid_stack"]
-        self.sr_path = "sr_path"
-        self.params = {'image_id': self.image_id,
-            'uuid_stack': self.uuid_stack, 'sr_path': self.sr_path}
-        self.bt_params = copy.copy(self.params)
-        self.bt_params['torrent_url'] = "%s.torrent" % self.image_id
-        self.vdis = {'root': {'uuid': 'vdi'}}
 
-        vm_utils._make_uuid_stack().AndReturn(self.uuid_stack)
-        vm_utils.get_sr_path(self.session).AndReturn(self.sr_path)
-        vm_utils._image_uses_bittorrent(self.context,
-            self.instance).AndReturn(uses_bittorrent)
-        if uses_bittorrent:
-            def set_url(instance, image_id, params):
-                params['torrent_url'] = "%s.torrent" % image_id
+        self.mox.StubOutWithMock(vm_utils, '_make_uuid_stack')
+        vm_utils._make_uuid_stack().AndReturn(["uuid_stack"])
 
-            vm_utils._add_torrent_url(self.instance, self.image_id,
-                    self.params).WithSideEffects(set_url).AndReturn(True)
+        self.mox.StubOutWithMock(vm_utils, 'get_sr_path')
+        vm_utils.get_sr_path(self.session).AndReturn('sr_path')
 
     def test_fetch_vhd_image_works_with_glance(self):
-        self._apply_stubouts()
-        self._common_params_setup(False)
+        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
+        vm_utils._image_uses_bittorrent(
+            self.context, self.instance).AndReturn(False)
 
-        vm_utils._generate_glance_callback(self.context).AndReturn("dummy")
+        self.mox.StubOutWithMock(
+                self.session, 'call_plugin_serialized_with_retry')
+        self.session.call_plugin_serialized_with_retry(
+                'glance', 'download_vhd', 0, mox.IgnoreArg(),
+                extra_headers={'X-Service-Catalog': '[]',
+                               'X-Auth-Token': 'auth_token',
+                               'X-Roles': '',
+                               'X-Tenant-Id': None,
+                               'X-User-Id': None,
+                               'X-Identity-Status': 'Confirmed'},
+                image_id='image_id',
+                uuid_stack=["uuid_stack"],
+                sr_path='sr_path').AndReturn({'root': {'uuid': 'vdi'}})
 
-        vm_utils._fetch_using_dom0_plugin_with_retry(self.context,
-            self.session, self.image_id, "glance", self.params,
-            callback="dummy").AndReturn(self.vdis)
-
+        self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
         vm_utils.safe_find_sr(self.session).AndReturn("sr")
+
+        self.mox.StubOutWithMock(vm_utils, '_scan_sr')
         vm_utils._scan_sr(self.session, "sr")
-        vm_utils._check_vdi_size(self.context, self.session, self.instance,
-                                 "vdi")
+
+        self.mox.StubOutWithMock(vm_utils, '_check_vdi_size')
+        vm_utils._check_vdi_size(
+                self.context, self.session, self.instance, "vdi")
 
         self.mox.ReplayAll()
 
         self.assertEqual("vdi", vm_utils._fetch_vhd_image(self.context,
-            self.session, self.instance, self.image_id)['root']['uuid'])
+            self.session, self.instance, 'image_id')['root']['uuid'])
 
         self.mox.VerifyAll()
 
     def test_fetch_vhd_image_works_with_bittorrent(self):
-        self._apply_stubouts()
-        self._common_params_setup(True)
+        cfg.CONF.import_opt('xenapi_torrent_base_url',
+                            'nova.virt.xenapi.image.bittorrent')
+        self.flags(xenapi_torrent_base_url='http://foo')
 
-        vm_utils._add_bittorrent_params(self.image_id, self.bt_params)
+        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
+        vm_utils._image_uses_bittorrent(
+            self.context, self.instance).AndReturn(True)
 
-        vm_utils._fetch_using_dom0_plugin_with_retry(self.context,
-            self.session, self.image_id, "bittorrent", self.bt_params,
-            callback=None).AndReturn(self.vdis)
+        self.mox.StubOutWithMock(
+                self.session, 'call_plugin_serialized')
+        self.session.call_plugin_serialized('bittorrent', 'download_vhd',
+            image_id='image_id',
+            uuid_stack=["uuid_stack"],
+            sr_path='sr_path',
+            torrent_download_stall_cutoff=600,
+            torrent_listen_port_start=6881,
+            torrent_listen_port_end=6891,
+            torrent_max_last_accessed=86400,
+            torrent_max_seeder_processes_per_host=1,
+            torrent_seed_chance=1.0,
+            torrent_seed_duration=3600,
+            torrent_url='http://foo/image_id.torrent'
+        ).AndReturn({'root': {'uuid': 'vdi'}})
 
+        self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
         vm_utils.safe_find_sr(self.session).AndReturn("sr")
+
+        self.mox.StubOutWithMock(vm_utils, '_scan_sr')
         vm_utils._scan_sr(self.session, "sr")
+
+        self.mox.StubOutWithMock(vm_utils, '_check_vdi_size')
         vm_utils._check_vdi_size(self.context, self.session, self.instance,
                                  "vdi")
 
         self.mox.ReplayAll()
 
         self.assertEqual("vdi", vm_utils._fetch_vhd_image(self.context,
-            self.session, self.instance, self.image_id)['root']['uuid'])
+            self.session, self.instance, 'image_id')['root']['uuid'])
 
         self.mox.VerifyAll()
 
     def test_fetch_vhd_image_cleans_up_vdi_on_fail(self):
-        self._apply_stubouts()
-        self._common_params_setup(True)
-        self.mox.StubOutWithMock(self.session, 'call_xenapi')
+        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
+        vm_utils._image_uses_bittorrent(
+            self.context, self.instance).AndReturn(False)
 
-        vm_utils._add_bittorrent_params(self.image_id, self.bt_params)
+        self.mox.StubOutWithMock(
+                self.session, 'call_plugin_serialized_with_retry')
+        self.session.call_plugin_serialized_with_retry(
+                'glance', 'download_vhd', 0, mox.IgnoreArg(),
+                extra_headers={'X-Service-Catalog': '[]',
+                               'X-Auth-Token': 'auth_token',
+                               'X-Roles': '',
+                               'X-Tenant-Id': None,
+                               'X-User-Id': None,
+                               'X-Identity-Status': 'Confirmed'},
+                image_id='image_id',
+                uuid_stack=["uuid_stack"],
+                sr_path='sr_path').AndReturn({'root': {'uuid': 'vdi'}})
 
-        vm_utils._fetch_using_dom0_plugin_with_retry(self.context,
-            self.session, self.image_id, "bittorrent", self.bt_params,
-            callback=None).AndReturn(self.vdis)
-
+        self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
         vm_utils.safe_find_sr(self.session).AndReturn("sr")
+
+        self.mox.StubOutWithMock(vm_utils, '_scan_sr')
         vm_utils._scan_sr(self.session, "sr")
+
+        self.mox.StubOutWithMock(vm_utils, '_check_vdi_size')
         vm_utils._check_vdi_size(self.context, self.session, self.instance,
                 "vdi").AndRaise(exception.InstanceTypeDiskTooSmall)
 
+        self.mox.StubOutWithMock(self.session, 'call_xenapi')
         self.session.call_xenapi("VDI.get_by_uuid", "vdi").AndReturn("ref")
+
+        self.mox.StubOutWithMock(vm_utils, 'destroy_vdi')
         vm_utils.destroy_vdi(self.session, "ref")
 
         self.mox.ReplayAll()
 
         self.assertRaises(exception.InstanceTypeDiskTooSmall,
                 vm_utils._fetch_vhd_image, self.context, self.session,
-                self.instance, self.image_id)
+                self.instance, 'image_id')
 
         self.mox.VerifyAll()
+
+
+class TestImageCompression(test.TestCase):
+    def test_image_compression(self):
+        # Testing for nova.conf, too low, negative, and a correct value.
+        self.assertEqual(vm_utils.get_compression_level(), None)
+        self.flags(xenapi_image_compression_level=0)
+        self.assertEqual(vm_utils.get_compression_level(), None)
+        self.flags(xenapi_image_compression_level=-6)
+        self.assertEqual(vm_utils.get_compression_level(), None)
+        self.flags(xenapi_image_compression_level=6)
+        self.assertEqual(vm_utils.get_compression_level(), 6)
 
 
 class ResizeHelpersTestCase(test.TestCase):
@@ -461,7 +503,7 @@ class CheckVDISizeTestCase(test.TestCase):
 
         self.mox.StubOutWithMock(vm_utils, '_get_vdi_chain_size')
         vm_utils._get_vdi_chain_size(self.session,
-                self.vdi_uuid).AndReturn(1073741825)
+                self.vdi_uuid).AndReturn(11811160065)  # 10GB overhead allowed
 
         self.mox.ReplayAll()
 
@@ -849,68 +891,6 @@ class VDIOtherConfigTestCase(stubs.XenAPITestBase):
         self.assertEqual(expected, other_config)
 
 
-def bad_fetcher(instance, image_id):
-    raise test.TestingException("just plain bad.")
-
-
-def another_fetcher(instance, image_id):
-    return "http://www.foobar.com/%s" % image_id
-
-
-class MockEntryPoint(object):
-    name = "torrent_url"
-
-    def load(self):
-        return another_fetcher
-
-
-class BitTorrentMiscTestCase(test.TestCase):
-
-    def tearDown(self):
-        vm_utils._TORRENT_URL_FN = None
-        super(BitTorrentMiscTestCase, self).tearDown()
-
-    def test_default_fetch_url(self):
-        def mock_iter_none(namespace):
-            return []
-        self.stubs.Set(pkg_resources, 'iter_entry_points', mock_iter_none)
-
-        image_id = "1-2-3-4-5"
-        params = {}
-        self.assertTrue(vm_utils._add_torrent_url({}, image_id, params))
-        expected = urlparse.urljoin(CONF.xenapi_torrent_base_url,
-                                    "%s.torrent" % image_id)
-        self.assertEqual(expected, params['torrent_url'])
-        self.assertEqual(vm_utils.get_torrent_url,
-                         vm_utils._TORRENT_URL_FN)
-
-    def test_with_extension(self):
-        def mock_iter_single(namespace):
-            return [MockEntryPoint()]
-        self.stubs.Set(pkg_resources, 'iter_entry_points', mock_iter_single)
-
-        image_id = "1-2-3-4-5"
-        params = {}
-        self.assertTrue(vm_utils._add_torrent_url({}, image_id, params))
-        expected = "http://www.foobar.com/%s" % image_id
-        self.assertEqual(expected, params['torrent_url'])
-        self.assertEqual(another_fetcher, vm_utils._TORRENT_URL_FN)
-
-    def test_more_than_one_extension(self):
-        def mock_iter_multiple(namespace):
-            return [MockEntryPoint(), MockEntryPoint()]
-        self.stubs.Set(pkg_resources, 'iter_entry_points', mock_iter_multiple)
-        image_id = "1-2-3-4-5"
-        params = {}
-        self.assertRaises(RuntimeError, vm_utils._add_torrent_url, {},
-                          image_id, params)
-
-    def test_fetch_url_failure(self):
-        # fetcher function fails:
-        vm_utils._TORRENT_URL_FN = bad_fetcher
-        self.assertFalse(vm_utils._add_torrent_url({}, '1-2-3-4-5', {}))
-
-
 class GenerateDiskTestCase(stubs.XenAPITestBase):
     def setUp(self):
         super(GenerateDiskTestCase, self).setUp()
@@ -923,7 +903,7 @@ class GenerateDiskTestCase(stubs.XenAPITestBase):
         stubs.stubout_session(self.stubs, fake.SessionBase)
         driver = xenapi_conn.XenAPIDriver(False)
         self.session = driver._session
-        fake.create_local_srs()
+        self.session.is_local_connection = False
         self.vm_ref = fake.create_vm("foo", "Running")
 
     def tearDown(self):
@@ -932,11 +912,24 @@ class GenerateDiskTestCase(stubs.XenAPITestBase):
 
     def _expect_parted_calls(self):
         self.mox.StubOutWithMock(utils, "execute")
+        self.mox.StubOutWithMock(utils, "trycmd")
         self.mox.StubOutWithMock(vm_utils, "destroy_vdi")
-        utils.execute('parted', '--script', '/dev/fakedev', 'mklabel',
-            'msdos', run_as_root=True)
-        utils.execute('parted', '--script', '/dev/fakedev', 'mkpart',
-            'primary', '0', '10', run_as_root=True)
+        self.mox.StubOutWithMock(vm_utils.os.path, "exists")
+        if self.session.is_local_connection:
+            utils.execute('parted', '--script', '/dev/fakedev', 'mklabel',
+                          'msdos', check_exit_code=False, run_as_root=True)
+            utils.execute('parted', '--script', '/dev/fakedev', 'mkpart',
+                          'primary', '0', '10',
+                          check_exit_code=False, run_as_root=True)
+            vm_utils.os.path.exists('/dev/mapper/fakedev1').AndReturn(True)
+            utils.trycmd('kpartx', '-a', '/dev/fakedev',
+                         discard_warnings=True, run_as_root=True)
+        else:
+            utils.execute('parted', '--script', '/dev/fakedev', 'mklabel',
+                          'msdos', check_exit_code=True, run_as_root=True)
+            utils.execute('parted', '--script', '/dev/fakedev', 'mkpart',
+                          'primary', '0', '10',
+                          check_exit_code=True, run_as_root=True)
 
     def _check_vdi(self, vdi_ref):
         vdi_rec = self.session.call_xenapi("VDI.get_record", vdi_ref)
@@ -979,13 +972,25 @@ class GenerateDiskTestCase(stubs.XenAPITestBase):
     def test_generate_disk_ensure_cleanup_called(self):
         self._expect_parted_calls()
         utils.execute('mkfs', '-t', 'ext4', '/dev/fakedev1',
-            run_as_root=True).AndRaise(Exception)
+            run_as_root=True).AndRaise(test.TestingException)
         vm_utils.destroy_vdi(self.session, mox.IgnoreArg())
 
         self.mox.ReplayAll()
-        self.assertRaises(Exception, vm_utils._generate_disk,
+        self.assertRaises(test.TestingException, vm_utils._generate_disk,
             self.session, {"uuid": "fake_uuid"},
             self.vm_ref, "2", "name", "ephemeral", 10, "ext4")
+
+    @test_xenapi.stub_vm_utils_with_vdi_attached_here
+    def test_generate_disk_ephemeral_local(self):
+        self.session.is_local_connection = True
+        self._expect_parted_calls()
+        utils.execute('mkfs', '-t', 'ext4', '/dev/mapper/fakedev1',
+            run_as_root=True)
+
+        self.mox.ReplayAll()
+        vdi_ref = vm_utils._generate_disk(self.session, {"uuid": "fake_uuid"},
+            self.vm_ref, "2", "name", "ephemeral", 10, "ext4")
+        self._check_vdi(vdi_ref)
 
 
 class GenerateEphemeralTestCase(test.TestCase):
@@ -1043,3 +1048,105 @@ class GenerateEphemeralTestCase(test.TestCase):
         self.assertRaises(exception.NovaException, vm_utils.generate_ephemeral,
             self.session, self.instance, self.vm_ref,
             str(self.userdevice), self.name_label, 4030)
+
+
+class FakeFile(object):
+    def __init__(self):
+        self._file_operations = []
+
+    def seek(self, offset):
+        self._file_operations.append((self.seek, offset))
+
+
+class StreamDiskTestCase(test.TestCase):
+    def setUp(self):
+        import __builtin__
+        super(StreamDiskTestCase, self).setUp()
+        self.mox.StubOutWithMock(vm_utils.utils, 'make_dev_path')
+        self.mox.StubOutWithMock(vm_utils.utils, 'temporary_chown')
+        self.mox.StubOutWithMock(vm_utils, '_write_partition')
+
+        # NOTE(matelakat): This might hide the fail reason, as test runners
+        # are unhappy with a mocked out open.
+        self.mox.StubOutWithMock(__builtin__, 'open')
+        self.image_service_func = self.mox.CreateMockAnything()
+
+    def test_non_ami(self):
+        fake_file = FakeFile()
+
+        vm_utils.utils.make_dev_path('dev').AndReturn('some_path')
+        vm_utils.utils.temporary_chown(
+            'some_path').AndReturn(contextified(None))
+        open('some_path', 'wb').AndReturn(contextified(fake_file))
+        self.image_service_func(fake_file)
+
+        self.mox.ReplayAll()
+
+        vm_utils._stream_disk("session", self.image_service_func,
+                              vm_utils.ImageType.KERNEL, None, 'dev')
+
+        self.assertEquals([(fake_file.seek, 0)], fake_file._file_operations)
+
+    def test_ami_disk(self):
+        fake_file = FakeFile()
+
+        vm_utils._write_partition("session", 100, 'dev')
+        vm_utils.utils.make_dev_path('dev').AndReturn('some_path')
+        vm_utils.utils.temporary_chown(
+            'some_path').AndReturn(contextified(None))
+        open('some_path', 'wb').AndReturn(contextified(fake_file))
+        self.image_service_func(fake_file)
+
+        self.mox.ReplayAll()
+
+        vm_utils._stream_disk("session", self.image_service_func,
+                              vm_utils.ImageType.DISK, 100, 'dev')
+
+        self.assertEquals(
+            [(fake_file.seek, vm_utils.MBR_SIZE_BYTES)],
+            fake_file._file_operations)
+
+
+class VMUtilsSRPath(stubs.XenAPITestBase):
+    def setUp(self):
+        super(VMUtilsSRPath, self).setUp()
+        self.flags(disable_process_locking=True,
+                   instance_name_template='%d',
+                   firewall_driver='nova.virt.xenapi.firewall.'
+                                   'Dom0IptablesFirewallDriver',
+                   xenapi_connection_url='test_url',
+                   xenapi_connection_password='test_pass',)
+        stubs.stubout_session(self.stubs, fake.SessionBase)
+        driver = xenapi_conn.XenAPIDriver(False)
+        self.session = driver._session
+        self.session.is_local_connection = False
+
+    def test_defined(self):
+        self.mox.StubOutWithMock(vm_utils, "safe_find_sr")
+        self.mox.StubOutWithMock(self.session, "call_xenapi")
+        self.mox.StubOutWithMock(self.session, "get_xenapi_host")
+
+        vm_utils.safe_find_sr(self.session).AndReturn("sr_ref")
+        self.session.get_xenapi_host().AndReturn("host_ref")
+        self.session.call_xenapi('PBD.get_all_records_where',
+            'field "host"="host_ref" and field "SR"="sr_ref"').AndReturn(
+            {'pbd_ref': {'device_config': {'path': 'sr_path'}}})
+
+        self.mox.ReplayAll()
+        self.assertEqual(vm_utils.get_sr_path(self.session), "sr_path")
+
+    def test_default(self):
+        self.mox.StubOutWithMock(vm_utils, "safe_find_sr")
+        self.mox.StubOutWithMock(self.session, "call_xenapi")
+        self.mox.StubOutWithMock(self.session, "get_xenapi_host")
+
+        vm_utils.safe_find_sr(self.session).AndReturn("sr_ref")
+        self.session.get_xenapi_host().AndReturn("host_ref")
+        self.session.call_xenapi('PBD.get_all_records_where',
+            'field "host"="host_ref" and field "SR"="sr_ref"').AndReturn(
+            {'pbd_ref': {'device_config': {}}})
+        self.session.call_xenapi("SR.get_record", "sr_ref").AndReturn(
+            {'uuid': 'sr_uuid', 'type': 'ext'})
+        self.mox.ReplayAll()
+        self.assertEqual(vm_utils.get_sr_path(self.session),
+                         "/var/run/sr-mount/sr_uuid")

@@ -21,11 +21,10 @@ Management class for migration / resize operations.
 import os
 
 from nova.openstack.common import excutils
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.virt.hyperv import hostutils
 from nova.virt.hyperv import imagecache
-from nova.virt.hyperv import pathutils
-from nova.virt.hyperv import vhdutils
+from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vmops
 from nova.virt.hyperv import vmutils
 from nova.virt.hyperv import volumeops
@@ -35,10 +34,10 @@ LOG = logging.getLogger(__name__)
 
 class MigrationOps(object):
     def __init__(self):
-        self._hostutils = hostutils.HostUtils()
-        self._vmutils = vmutils.VMUtils()
-        self._vhdutils = vhdutils.VHDUtils()
-        self._pathutils = pathutils.PathUtils()
+        self._hostutils = utilsfactory.get_hostutils()
+        self._vmutils = utilsfactory.get_vmutils()
+        self._vhdutils = utilsfactory.get_vhdutils()
+        self._pathutils = utilsfactory.get_pathutils()
         self._volumeops = volumeops.VolumeOps()
         self._vmops = vmops.VMOps()
         self._imagecache = imagecache.ImageCache()
@@ -153,9 +152,12 @@ class MigrationOps(object):
         if self._volumeops.ebs_root_in_block_devices(block_device_info):
             root_vhd_path = None
         else:
-            root_vhd_path = self._pathutils.get_vhd_path(instance_name)
+            root_vhd_path = self._pathutils.lookup_root_vhd_path(instance_name)
+
+        eph_vhd_path = self._pathutils.lookup_ephemeral_vhd_path(instance_name)
+
         self._vmops.create_instance(instance, network_info, block_device_info,
-                                    root_vhd_path)
+                                    root_vhd_path, eph_vhd_path)
 
         if power_on:
             self._vmops.power_on(instance)
@@ -191,12 +193,22 @@ class MigrationOps(object):
                 if self._pathutils.exists(base_vhd_copy_path):
                     self._pathutils.remove(base_vhd_copy_path)
 
+    def _check_resize_vhd(self, vhd_path, vhd_info, new_size):
+        curr_size = vhd_info['MaxInternalSize']
+        if new_size < curr_size:
+            raise vmutils.VHDResizeException(_("Cannot resize a VHD "
+                                               "to a smaller size"))
+        elif new_size > curr_size:
+            self._resize_vhd(vhd_path, new_size)
+
     def _resize_vhd(self, vhd_path, new_size):
-        LOG.debug(_("Getting info for disk: %s"), vhd_path)
-        base_disk_path = self._vhdutils.get_vhd_parent_path(vhd_path)
-        if base_disk_path:
-            # A differential VHD cannot be resized
-            self._merge_base_vhd(vhd_path, base_disk_path)
+        if vhd_path.split('.')[-1].lower() == "vhd":
+            LOG.debug(_("Getting parent disk info for disk: %s"), vhd_path)
+            base_disk_path = self._vhdutils.get_vhd_parent_path(vhd_path)
+            if base_disk_path:
+                # A differential VHD cannot be resized. This limitation
+                # does not apply to the VHDX format.
+                self._merge_base_vhd(vhd_path, base_disk_path)
         LOG.debug(_("Resizing disk \"%(vhd_path)s\" to new max "
                     "size %(new_size)s"),
                   {'vhd_path': vhd_path, 'new_size': new_size})
@@ -227,27 +239,33 @@ class MigrationOps(object):
         if self._volumeops.ebs_root_in_block_devices(block_device_info):
             root_vhd_path = None
         else:
-            root_vhd_path = self._pathutils.get_vhd_path(instance_name)
-            if not self._pathutils.exists(root_vhd_path):
+            root_vhd_path = self._pathutils.lookup_root_vhd_path(instance_name)
+            if not root_vhd_path:
                 raise vmutils.HyperVException(_("Cannot find boot VHD "
-                                                "file: %s") % root_vhd_path)
+                                                "file for instance: %s") %
+                                              instance_name)
 
-            vhd_info = self._vhdutils.get_vhd_info(root_vhd_path)
-            src_base_disk_path = vhd_info.get("ParentPath")
+            root_vhd_info = self._vhdutils.get_vhd_info(root_vhd_path)
+            src_base_disk_path = root_vhd_info.get("ParentPath")
             if src_base_disk_path:
                 self._check_base_disk(context, instance, root_vhd_path,
                                       src_base_disk_path)
 
             if resize_instance:
-                curr_size = vhd_info['MaxInternalSize']
                 new_size = instance['root_gb'] * 1024 ** 3
-                if new_size < curr_size:
-                    raise vmutils.VHDResizeException(_("Cannot resize a VHD "
-                                                       "to a smaller size"))
-                elif new_size > curr_size:
-                    self._resize_vhd(root_vhd_path, new_size)
+                self._check_resize_vhd(root_vhd_path, root_vhd_info, new_size)
+
+        eph_vhd_path = self._pathutils.lookup_ephemeral_vhd_path(instance_name)
+        if resize_instance:
+            new_size = instance.get('ephemeral_gb', 0) * 1024 ** 3
+            if not eph_vhd_path:
+                if new_size:
+                    eph_vhd_path = self._vmops.create_ephemeral_vhd(instance)
+            else:
+                eph_vhd_info = self._vhdutils.get_vhd_info(eph_vhd_path)
+                self._check_resize_vhd(eph_vhd_path, eph_vhd_info, new_size)
 
         self._vmops.create_instance(instance, network_info, block_device_info,
-                                    root_vhd_path)
+                                    root_vhd_path, eph_vhd_path)
         if power_on:
             self._vmops.power_on(instance)

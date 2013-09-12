@@ -30,6 +30,7 @@ from webob import exc
 from nova.api.openstack import extensions
 from nova import baserpc
 from nova import db
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
 
@@ -214,7 +215,7 @@ class CoverageController(object):
                 coverInst.xml_report(outfile=path)
             elif html:
                 if os.path.isdir(path):
-                    msg = _("Directory conflict: %s already exists")
+                    msg = _("Directory conflict: %s already exists") % path
                     raise exc.HTTPBadRequest(explanation=msg)
                 coverInst.html_report(directory=path)
             else:

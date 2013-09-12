@@ -27,6 +27,7 @@ from lxml import etree
 from oslo.config import cfg
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
@@ -255,6 +256,31 @@ def create_lvm_image(vg, lv, size, sparse=False):
         check_size(vg, lv, size)
         cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
     execute(*cmd, run_as_root=True, attempts=3)
+
+
+def import_rbd_image(*args):
+    execute('rbd', 'import', *args)
+
+
+def list_rbd_volumes(pool):
+    """List volumes names for given ceph pool.
+
+    :param pool: ceph pool name
+    """
+    out, err = utils.execute('rbd', '-p', pool, 'ls')
+
+    return [line.strip() for line in out.splitlines()]
+
+
+def remove_rbd_volumes(pool, *names):
+    """Remove one or more rbd volume."""
+    for name in names:
+        rbd_remove = ('rbd', '-p', pool, 'rm', name)
+        try:
+            execute(*rbd_remove, attempts=3, run_as_root=True)
+        except processutils.ProcessExecutionError:
+            LOG.warn(_("rbd remove %(name)s in pool %(pool)s failed"),
+                     {'name': name, 'pool': pool})
 
 
 def get_volume_group_info(vg):
@@ -572,6 +598,10 @@ def find_disk(virt_dom):
     else:
         source = domain.find('devices/disk/source')
         disk_path = source.get('file') or source.get('dev')
+        if not disk_path and CONF.libvirt_images_type == 'rbd':
+            disk_path = source.get('name')
+            if disk_path:
+                disk_path = 'rbd:' + disk_path
 
     if not disk_path:
         raise RuntimeError(_("Can't retrieve root device path "
@@ -584,6 +614,8 @@ def get_disk_type(path):
     """Retrieve disk type (raw, qcow2, lvm) for given file."""
     if path.startswith('/dev'):
         return 'lvm'
+    elif path.startswith('rbd:'):
+        return 'rbd'
 
     return images.qemu_img_info(path).file_format
 

@@ -26,6 +26,7 @@ from oslo.config import cfg
 from nova import exception
 from nova.network import linux_net
 from nova.network import model as network_model
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
@@ -53,6 +54,7 @@ CONF.import_opt('use_ipv6', 'nova.netconf')
 # Since libvirt 0.9.11, <interface type='bridge'>
 # supports OpenVSwitch natively.
 LIBVIRT_OVS_VPORT_VERSION = 9011
+DEV_PREFIX_ETH = 'eth'
 
 
 def is_vif_model_valid_for_virt(virt_type, vif_model):
@@ -88,12 +90,16 @@ class LibvirtBaseVIFDriver(object):
             return True
         return False
 
-    def get_vif_devname(self, mapping):
-        if 'vif_devname' in mapping:
-            return mapping['vif_devname']
-        return ("nic" + mapping['vif_uuid'])[:network_model.NIC_NAME_LEN]
+    def get_vif_devname(self, vif):
+        if 'devname' in vif:
+            return vif['devname']
+        return ("nic" + vif['id'])[:network_model.NIC_NAME_LEN]
 
-    def get_config(self, instance, network, mapping, image_meta, inst_type):
+    def get_vif_devname_with_prefix(self, vif, prefix):
+        devname = self.get_vif_devname(vif)
+        return prefix + devname[3:]
+
+    def get_config(self, instance, vif, image_meta, inst_type):
         conf = vconfig.LibvirtConfigGuestInterface()
         # Default to letting libvirt / the hypervisor choose the model
         model = None
@@ -125,7 +131,7 @@ class LibvirtBaseVIFDriver(object):
                                                 virt=CONF.libvirt_type)
 
         designer.set_vif_guest_frontend_config(
-            conf, mapping['mac'], model, driver)
+            conf, vif['address'], model, driver)
 
         return conf
 
@@ -139,11 +145,11 @@ class LibvirtBaseVIFDriver(object):
 class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
     """Generic VIF driver for libvirt networking."""
 
-    def get_bridge_name(self, network):
-        return network['bridge']
+    def get_bridge_name(self, vif):
+        return vif['network']['bridge']
 
-    def get_ovs_interfaceid(self, mapping):
-        return mapping['ovs_interfaceid']
+    def get_ovs_interfaceid(self, vif):
+        return vif.get('ovs_interfaceid') or vif['id']
 
     def get_br_name(self, iface_id):
         return ("qbr" + iface_id)[:network_model.NIC_NAME_LEN]
@@ -160,20 +166,17 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             return True
         return False
 
-    def get_config_bridge(self, instance, network, mapping, image_meta,
-                          inst_type):
+    def get_config_bridge(self, instance, vif, image_meta, inst_type):
         """Get VIF configurations for bridge type."""
         conf = super(LibvirtGenericVIFDriver,
-                     self).get_config(instance,
-                                      network,
-                                      mapping,
+                     self).get_config(instance, vif,
                                       image_meta, inst_type)
 
         designer.set_vif_host_backend_bridge_config(
-            conf, self.get_bridge_name(network),
-            self.get_vif_devname(mapping))
+            conf, self.get_bridge_name(vif),
+            self.get_vif_devname(vif))
 
-        mac_id = mapping['mac'].replace(':', '')
+        mac_id = vif['address'].replace(':', '')
         name = "nova-instance-" + instance['name'] + "-" + mac_id
         if self.get_firewall_required():
             conf.filtername = name
@@ -181,109 +184,92 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
 
         return conf
 
-    def get_config_ovs_ethernet(self, instance, network, mapping,
+    def get_config_ovs_ethernet(self, instance, vif,
                                 image_meta, inst_type):
         conf = super(LibvirtGenericVIFDriver,
-                     self).get_config(instance,
-                                      network,
-                                      mapping,
+                     self).get_config(instance, vif,
                                       image_meta, inst_type)
 
-        dev = self.get_vif_devname(mapping)
+        dev = self.get_vif_devname(vif)
         designer.set_vif_host_backend_ethernet_config(conf, dev)
 
         return conf
 
-    def get_config_ovs_bridge(self, instance, network, mapping, image_meta,
+    def get_config_ovs_bridge(self, instance, vif, image_meta,
                                  inst_type):
         conf = super(LibvirtGenericVIFDriver,
-                     self).get_config(instance,
-                                      network,
-                                      mapping,
+                     self).get_config(instance, vif,
                                       image_meta, inst_type)
 
         designer.set_vif_host_backend_ovs_config(
-            conf, self.get_bridge_name(network),
-            self.get_ovs_interfaceid(mapping),
-            self.get_vif_devname(mapping))
+            conf, self.get_bridge_name(vif),
+            self.get_ovs_interfaceid(vif),
+            self.get_vif_devname(vif))
 
         return conf
 
-    def get_config_ovs_hybrid(self, instance, network, mapping, image_meta,
+    def get_config_ovs_hybrid(self, instance, vif, image_meta,
                               inst_type):
-        newnet = copy.deepcopy(network)
-        newnet['bridge'] = self.get_br_name(mapping['vif_uuid'])
-        return self.get_config_bridge(instance,
-                                      newnet,
-                                      mapping,
+        newvif = copy.deepcopy(vif)
+        newvif['network']['bridge'] = self.get_br_name(vif['id'])
+        return self.get_config_bridge(instance, newvif,
                                       image_meta, inst_type)
 
-    def get_config_ovs(self, instance, network, mapping, image_meta,
-                        inst_type):
+    def get_config_ovs(self, instance, vif, image_meta, inst_type):
         if self.get_firewall_required():
-            return self.get_config_ovs_hybrid(instance, network,
-                                              mapping,
+            return self.get_config_ovs_hybrid(instance, vif,
                                               image_meta,
                                               inst_type)
         elif self.has_libvirt_version(LIBVIRT_OVS_VPORT_VERSION):
-            return self.get_config_ovs_bridge(instance, network,
-                                              mapping,
+            return self.get_config_ovs_bridge(instance, vif,
                                               image_meta,
                                               inst_type)
         else:
-            return self.get_config_ovs_ethernet(instance, network,
-                                                mapping,
+            return self.get_config_ovs_ethernet(instance, vif,
                                                 image_meta,
                                                 inst_type)
 
-    def get_config_ivs_hybrid(self, instance, network, mapping, image_meta,
+    def get_config_ivs_hybrid(self, instance, vif, image_meta,
                               inst_type):
-        newnet = copy.deepcopy(network)
-        newnet['bridge'] = self.get_br_name(mapping['vif_uuid'])
+        newvif = copy.deepcopy(vif)
+        newvif['network']['bridge'] = self.get_br_name(vif['id'])
         return self.get_config_bridge(instance,
-                                      newnet,
-                                      mapping,
+                                      newvif,
                                       image_meta,
                                       inst_type)
 
-    def get_config_ivs_ethernet(self, instance, network, mapping, image_meta,
+    def get_config_ivs_ethernet(self, instance, vif, image_meta,
                                 inst_type):
         conf = super(LibvirtGenericVIFDriver,
                      self).get_config(instance,
-                                      network,
-                                      mapping,
+                                      vif,
                                       image_meta,
                                       inst_type)
 
-        dev = self.get_vif_devname(mapping)
+        dev = self.get_vif_devname(vif)
         designer.set_vif_host_backend_ethernet_config(conf, dev)
 
         return conf
 
-    def get_config_ivs(self, instance, network, mapping, image_meta,
-                       inst_type):
+    def get_config_ivs(self, instance, vif, image_meta, inst_type):
         if self.get_firewall_required():
-            return self.get_config_ivs_hybrid(instance, network,
-                                              mapping,
+            return self.get_config_ivs_hybrid(instance, vif,
                                               image_meta,
                                               inst_type)
         else:
-            return self.get_config_ivs_ethernet(instance, network,
-                                                mapping,
+            return self.get_config_ivs_ethernet(instance, vif,
                                                 image_meta,
                                                 inst_type)
 
-    def get_config_802qbg(self, instance, network, mapping, image_meta,
+    def get_config_802qbg(self, instance, vif, image_meta,
                             inst_type):
         conf = super(LibvirtGenericVIFDriver,
-                     self).get_config(instance,
-                                      network,
-                                      mapping,
+                     self).get_config(instance, vif,
                                       image_meta, inst_type)
 
-        params = mapping["qbg_params"]
+        params = vif["qbg_params"]
         designer.set_vif_host_backend_802qbg_config(
-            conf, network["interface"],
+            conf, vif['network'].get_meta('interface'),
             params['managerid'],
             params['typeid'],
             params['typeidversion'],
@@ -291,28 +277,48 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
 
         return conf
 
-    def get_config_802qbh(self, instance, network, mapping, image_meta,
+    def get_config_802qbh(self, instance, vif, image_meta,
                             inst_type):
         conf = super(LibvirtGenericVIFDriver,
-                     self).get_config(instance,
-                                      network,
-                                      mapping,
+                     self).get_config(instance, vif,
                                       image_meta, inst_type)
 
-        params = mapping["qbh_params"]
+        params = vif["qbh_params"]
         designer.set_vif_host_backend_802qbh_config(
-            conf, network["interface"],
+            conf, vif['network'].get_meta('interface'),
             params['profileid'])
 
         return conf
 
-    def get_config(self, instance, network, mapping, image_meta, inst_type):
-        vif_type = mapping.get('vif_type')
+    def get_config_iovisor(self, instance, vif, image_meta,
+                             inst_type):
+        conf = super(LibvirtGenericVIFDriver,
+                     self).get_config(instance, vif,
+                                      image_meta, inst_type)
+
+        dev = self.get_vif_devname(vif)
+        designer.set_vif_host_backend_ethernet_config(conf, dev)
+
+        return conf
+
+    def get_config_mlnx_direct(self, instance, vif, image_meta,
+                               inst_type):
+        conf = super(LibvirtGenericVIFDriver,
+                     self).get_config(instance, vif,
+                                      image_meta, inst_type)
+
+        devname = self.get_vif_devname_with_prefix(vif, DEV_PREFIX_ETH)
+        designer.set_vif_host_backend_direct_config(conf, devname)
+
+        return conf
+
+    def get_config(self, instance, vif, image_meta, inst_type):
+        vif_type = vif['type']
 
         LOG.debug(_('vif_type=%(vif_type)s instance=%(instance)s '
-                    'network=%(network)s mapping=%(mapping)s'),
+                    'vif=%(vif)s'),
                   {'vif_type': vif_type, 'instance': instance,
-                   'network': network, 'mapping': mapping})
+                   'vif': vif})
 
         if vif_type is None:
             raise exception.NovaException(
@@ -320,29 +326,39 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
                   "for this vif_driver implementation"))
         elif vif_type == network_model.VIF_TYPE_BRIDGE:
             return self.get_config_bridge(instance,
-                                          network, mapping,
+                                          vif,
                                           image_meta,
                                           inst_type)
         elif vif_type == network_model.VIF_TYPE_OVS:
             return self.get_config_ovs(instance,
-                                       network, mapping,
+                                       vif,
                                        image_meta,
                                        inst_type)
         elif vif_type == network_model.VIF_TYPE_802_QBG:
             return self.get_config_802qbg(instance,
-                                          network, mapping,
+                                          vif,
                                           image_meta,
                                           inst_type)
         elif vif_type == network_model.VIF_TYPE_802_QBH:
             return self.get_config_802qbh(instance,
-                                          network, mapping,
+                                          vif,
                                           image_meta,
                                           inst_type)
         elif vif_type == network_model.VIF_TYPE_IVS:
             return self.get_config_ivs(instance,
-                                       network, mapping,
+                                       vif,
                                        image_meta,
                                        inst_type)
+        elif vif_type == network_model.VIF_TYPE_IOVISOR:
+            return self.get_config_iovisor(instance,
+                                          vif,
+                                          image_meta,
+                                          inst_type)
+        elif vif_type == network_model.VIF_TYPE_MLNX_DIRECT:
+            return self.get_config_mlnx_direct(instance,
+                                               vif,
+                                               image_meta,
+                                               inst_type)
         else:
             raise exception.NovaException(
                 _("Unexpected vif_type=%s") % vif_type)
@@ -351,38 +367,39 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         """Ensure that the bridge exists, and add VIF to it."""
         super(LibvirtGenericVIFDriver,
               self).plug(instance, vif)
-
-        network, mapping = vif
-        if (not network.get('multi_host') and
-                    mapping.get('should_create_bridge')):
-            if mapping.get('should_create_vlan'):
-                iface = CONF.vlan_interface or network['bridge_interface']
+        network = vif['network']
+        if (not network.get_meta('multi_host', False) and
+                    network.get_meta('should_create_bridge', False)):
+            if network.get_meta('should_create_vlan', False):
+                iface = CONF.vlan_interface or \
+                        network.get_meta('bridge_interface')
                 LOG.debug(_('Ensuring vlan %(vlan)s and bridge %(bridge)s'),
-                          {'vlan': network['vlan'],
-                           'bridge': self.get_bridge_name(network)},
+                          {'vlan': network.get_meta('vlan'),
+                           'bridge': self.get_bridge_name(vif)},
                           instance=instance)
                 linux_net.LinuxBridgeInterfaceDriver.ensure_vlan_bridge(
-                                             network['vlan'],
-                                             self.get_bridge_name(network),
+                                             network.get_meta('vlan'),
+                                             self.get_bridge_name(vif),
                                              iface)
             else:
-                iface = CONF.flat_interface or network['bridge_interface']
+                iface = CONF.flat_interface or \
+                            network.get_meta('bridge_interface')
                 LOG.debug(_("Ensuring bridge %s"),
-                          self.get_bridge_name(network), instance=instance)
+                          self.get_bridge_name(vif), instance=instance)
                 linux_net.LinuxBridgeInterfaceDriver.ensure_bridge(
-                                        self.get_bridge_name(network),
+                                        self.get_bridge_name(vif),
                                         iface)
 
     def plug_ovs_ethernet(self, instance, vif):
         super(LibvirtGenericVIFDriver,
               self).plug(instance, vif)
 
-        network, mapping = vif
-        iface_id = self.get_ovs_interfaceid(mapping)
-        dev = self.get_vif_devname(mapping)
+        network = vif['network']
+        iface_id = self.get_ovs_interfaceid(vif)
+        dev = self.get_vif_devname(vif)
         linux_net.create_tap_dev(dev)
-        linux_net.create_ovs_vif_port(self.get_bridge_name(network),
-                                      dev, iface_id, mapping['mac'],
+        linux_net.create_ovs_vif_port(self.get_bridge_name(vif),
+                                      dev, iface_id, vif['address'],
                                       instance['uuid'])
 
     def plug_ovs_bridge(self, instance, vif):
@@ -401,10 +418,9 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         super(LibvirtGenericVIFDriver,
               self).plug(instance, vif)
 
-        network, mapping = vif
-        iface_id = self.get_ovs_interfaceid(mapping)
-        br_name = self.get_br_name(mapping['vif_uuid'])
-        v1_name, v2_name = self.get_veth_pair_names(mapping['vif_uuid'])
+        iface_id = self.get_ovs_interfaceid(vif)
+        br_name = self.get_br_name(vif['id'])
+        v1_name, v2_name = self.get_veth_pair_names(vif['id'])
 
         if not linux_net.device_exists(br_name):
             utils.execute('brctl', 'addbr', br_name, run_as_root=True)
@@ -415,8 +431,8 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             linux_net._create_veth_pair(v1_name, v2_name)
             utils.execute('ip', 'link', 'set', br_name, 'up', run_as_root=True)
             utils.execute('brctl', 'addif', br_name, v1_name, run_as_root=True)
-            linux_net.create_ovs_vif_port(self.get_bridge_name(network),
-                                          v2_name, iface_id, mapping['mac'],
+            linux_net.create_ovs_vif_port(self.get_bridge_name(vif),
+                                          v2_name, iface_id, vif['address'],
                                           instance['uuid'])
 
     def plug_ovs(self, instance, vif):
@@ -431,11 +447,10 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         super(LibvirtGenericVIFDriver,
               self).plug(instance, vif)
 
-        network, mapping = vif
-        iface_id = self.get_ovs_interfaceid(mapping)
-        dev = self.get_vif_devname(mapping)
+        iface_id = self.get_ovs_interfaceid(vif)
+        dev = self.get_vif_devname(vif)
         linux_net.create_tap_dev(dev)
-        linux_net.create_ivs_vif_port(dev, iface_id, mapping['mac'],
+        linux_net.create_ivs_vif_port(dev, iface_id, vif['address'],
                                       instance['uuid'])
 
     def plug_ivs_hybrid(self, instance, vif):
@@ -449,10 +464,9 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         super(LibvirtGenericVIFDriver,
               self).plug(instance, vif)
 
-        network, mapping = vif
-        iface_id = self.get_ovs_interfaceid(mapping)
-        br_name = self.get_br_name(mapping['vif_uuid'])
-        v1_name, v2_name = self.get_veth_pair_names(mapping['vif_uuid'])
+        iface_id = self.get_ovs_interfaceid(vif)
+        br_name = self.get_br_name(vif['id'])
+        v1_name, v2_name = self.get_veth_pair_names(vif['id'])
 
         if not linux_net.device_exists(br_name):
             utils.execute('brctl', 'addbr', br_name, run_as_root=True)
@@ -463,7 +477,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             linux_net._create_veth_pair(v1_name, v2_name)
             utils.execute('ip', 'link', 'set', br_name, 'up', run_as_root=True)
             utils.execute('brctl', 'addif', br_name, v1_name, run_as_root=True)
-            linux_net.create_ivs_vif_port(v2_name, iface_id, mapping['mac'],
+            linux_net.create_ivs_vif_port(v2_name, iface_id, vif['address'],
                                           instance['uuid'])
 
     def plug_ivs(self, instance, vif):
@@ -471,6 +485,23 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             self.plug_ivs_hybrid(instance, vif)
         else:
             self.plug_ivs_ethernet(instance, vif)
+
+    def plug_mlnx_direct(self, instance, vif):
+        super(LibvirtGenericVIFDriver,
+              self).plug(instance, vif)
+
+        network = vif['network']
+        vnic_mac = vif['address']
+        device_id = instance['uuid']
+        fabric = network['meta']['physical_network']
+
+        dev_name = self.get_vif_devname_with_prefix(vif, DEV_PREFIX_ETH)
+        try:
+            utils.execute('ebrctl', 'add-port', vnic_mac, device_id, fabric,
+                          network_model.VIF_TYPE_MLNX_DIRECT, dev_name,
+                          run_as_root=True)
+        except processutils.ProcessExecutionError:
+            LOG.exception(_("Failed while plugging vif"), instance=instance)
 
     def plug_802qbg(self, instance, vif):
         super(LibvirtGenericVIFDriver,
@@ -480,14 +511,37 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         super(LibvirtGenericVIFDriver,
               self).plug(instance, vif)
 
+    def plug_iovisor(self, instance, vif):
+        """Plug using PLUMgrid IO Visor Driver
+
+        Connect a network device to their respective
+        Virtual Domain in PLUMgrid Platform.
+        """
+        super(LibvirtGenericVIFDriver,
+              self).plug(instance, vif)
+        dev = self.get_vif_devname(vif)
+        iface_id = vif['id']
+        linux_net.create_tap_dev(dev)
+        net_id = vif['network']['id']
+        tenant_id = instance["project_id"]
+        try:
+            utils.execute('ifc_ctl', 'gateway', 'add_port', dev,
+                          run_as_root=True)
+            utils.execute('ifc_ctl', 'gateway', 'ifup', dev,
+                          'access_vm',
+                          vif['network']['label'] + "_" + iface_id,
+                          vif['address'], 'pgtag2=%s' % net_id,
+                          'pgtag1=%s' % tenant_id, run_as_root=True)
+        except exception.ProcessExecutionError:
+            LOG.exception(_("Failed while plugging vif"), instance=instance)
+
     def plug(self, instance, vif):
-        network, mapping = vif
-        vif_type = mapping.get('vif_type')
+        vif_type = vif['type']
 
         LOG.debug(_('vif_type=%(vif_type)s instance=%(instance)s '
-                    'network=%(network)s mapping=%(mapping)s'),
+                    'vif=%(vif)s'),
                   {'vif_type': vif_type, 'instance': instance,
-                   'network': network, 'mapping': mapping})
+                   'vif': vif})
 
         if vif_type is None:
             raise exception.NovaException(
@@ -503,6 +557,10 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             self.plug_802qbh(instance, vif)
         elif vif_type == network_model.VIF_TYPE_IVS:
             self.plug_ivs(instance, vif)
+        elif vif_type == network_model.VIF_TYPE_IOVISOR:
+            self.plug_iovisor(instance, vif)
+        elif vif_type == network_model.VIF_TYPE_MLNX_DIRECT:
+            self.plug_mlnx_direct(instance, vif)
         else:
             raise exception.NovaException(
                 _("Unexpected vif_type=%s") % vif_type)
@@ -518,9 +576,8 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
               self).unplug(instance, vif)
 
         try:
-            network, mapping = vif
-            linux_net.delete_ovs_vif_port(self.get_bridge_name(network),
-                                          self.get_vif_devname(mapping))
+            linux_net.delete_ovs_vif_port(self.get_bridge_name(vif),
+                                          self.get_vif_devname(vif))
         except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
@@ -539,16 +596,15 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
               self).unplug(instance, vif)
 
         try:
-            network, mapping = vif
-            br_name = self.get_br_name(mapping['vif_uuid'])
-            v1_name, v2_name = self.get_veth_pair_names(mapping['vif_uuid'])
+            br_name = self.get_br_name(vif['id'])
+            v1_name, v2_name = self.get_veth_pair_names(vif['id'])
 
             utils.execute('brctl', 'delif', br_name, v1_name, run_as_root=True)
             utils.execute('ip', 'link', 'set', br_name, 'down',
                           run_as_root=True)
             utils.execute('brctl', 'delbr', br_name, run_as_root=True)
 
-            linux_net.delete_ovs_vif_port(self.get_bridge_name(network),
+            linux_net.delete_ovs_vif_port(self.get_bridge_name(vif),
                                           v2_name)
         except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
@@ -567,8 +623,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
               self).unplug(instance, vif)
 
         try:
-            network, mapping = vif
-            linux_net.delete_ivs_vif_port(self.get_vif_devname(mapping))
+            linux_net.delete_ivs_vif_port(self.get_vif_devname(vif))
         except exception.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
@@ -582,9 +637,8 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
               self).unplug(instance, vif)
 
         try:
-            network, mapping = vif
-            br_name = self.get_br_name(mapping['vif_uuid'])
-            v1_name, v2_name = self.get_veth_pair_names(mapping['vif_uuid'])
+            br_name = self.get_br_name(vif['id'])
+            v1_name, v2_name = self.get_veth_pair_names(vif['id'])
 
             utils.execute('brctl', 'delif', br_name, v1_name, run_as_root=True)
             utils.execute('ip', 'link', 'set', br_name, 'down',
@@ -596,9 +650,22 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
 
     def unplug_ivs(self, instance, vif):
         if self.get_firewall_required():
-            self.unplug_ovs_hybrid(instance, vif)
+            self.unplug_ivs_hybrid(instance, vif)
         else:
-            self.unplug_ovs_ethernet(instance, vif)
+            self.unplug_ivs_ethernet(instance, vif)
+
+    def unplug_mlnx_direct(self, instance, vif):
+        super(LibvirtGenericVIFDriver,
+              self).unplug(instance, vif)
+
+        network = vif['network']
+        vnic_mac = vif['address']
+        fabric = network['meta']['physical_network']
+        try:
+            utils.execute('ebrctl', 'del-port', fabric,
+                          vnic_mac, run_as_root=True)
+        except processutils.ProcessExecutionError:
+            LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
     def unplug_802qbg(self, instance, vif):
         super(LibvirtGenericVIFDriver,
@@ -608,14 +675,34 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         super(LibvirtGenericVIFDriver,
               self).unplug(instance, vif)
 
+    def unplug_iovisor(self, instance, vif):
+        """Unplug using PLUMgrid IO Visor Driver
+
+        Delete network device and to their respective
+        connection to the Virtual Domain in PLUMgrid Platform.
+        """
+        super(LibvirtGenericVIFDriver,
+              self).unplug(instance, vif)
+        iface_id = vif['id']
+        dev = self.get_vif_devname(vif)
+        try:
+            utils.execute('ifc_ctl', 'gateway', 'ifdown',
+                          dev, 'access_vm',
+                          vif['network']['label'] + "_" + iface_id,
+                          vif['address'], run_as_root=True)
+            utils.execute('ifc_ctl', 'gateway', 'del_port', dev,
+                          run_as_root=True)
+            linux_net.delete_net_dev(dev)
+        except exception.ProcessExecutionError:
+            LOG.exception(_("Failed while unplugging vif"), instance=instance)
+
     def unplug(self, instance, vif):
-        network, mapping = vif
-        vif_type = mapping.get('vif_type')
+        vif_type = vif['type']
 
         LOG.debug(_('vif_type=%(vif_type)s instance=%(instance)s '
-                    'network=%(network)s mapping=%(mapping)s'),
+                    'vif=%(vif)s'),
                   {'vif_type': vif_type, 'instance': instance,
-                   'network': network, 'mapping': mapping})
+                   'vif': vif})
 
         if vif_type is None:
             raise exception.NovaException(
@@ -631,6 +718,10 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             self.unplug_802qbh(instance, vif)
         elif vif_type == network_model.VIF_TYPE_IVS:
             self.unplug_ivs(instance, vif)
+        elif vif_type == network_model.VIF_TYPE_IOVISOR:
+            self.unplug_iovisor(instance, vif)
+        elif vif_type == network_model.VIF_TYPE_MLNX_DIRECT:
+            self.unplug_mlnx_direct(instance, vif)
         else:
             raise exception.NovaException(
                 _("Unexpected vif_type=%s") % vif_type)
@@ -642,13 +733,13 @@ class LibvirtBridgeDriver(LibvirtGenericVIFDriver):
        Will be deprecated in Havana, and removed in Ixxxx.
     """
 
-    def get_config(self, instance, network, mapping, image_meta, inst_type):
+    def get_config(self, instance, vif, image_meta, inst_type):
         LOG.deprecated(_("The LibvirtBridgeDriver VIF driver is now "
                          "deprecated and will be removed in the next release. "
                          "Please use the LibvirtGenericVIFDriver VIF driver, "
                          "together with a network plugin that reports the "
                          "'vif_type' attribute"))
-        return self.get_config_bridge(instance, network, mapping, image_meta,
+        return self.get_config_bridge(instance, vif, image_meta,
                                       inst_type)
 
     def plug(self, instance, vif):
@@ -664,20 +755,20 @@ class LibvirtOpenVswitchDriver(LibvirtGenericVIFDriver):
        Will be deprecated in Havana, and removed in Ixxxx.
     """
 
-    def get_bridge_name(self, network):
-        return network.get('bridge') or CONF.libvirt_ovs_bridge
+    def get_bridge_name(self, vif):
+        return vif['network']['bridge'] or CONF.libvirt_ovs_bridge
 
-    def get_ovs_interfaceid(self, mapping):
-        return mapping.get('ovs_interfaceid') or mapping['vif_uuid']
+    def get_ovs_interfaceid(self, vif):
+        return vif.get('ovs_interfaceid') or vif['id']
 
-    def get_config(self, instance, network, mapping, image_meta, inst_type):
+    def get_config(self, instance, vif, image_meta, inst_type):
         LOG.deprecated(_("The LibvirtOpenVswitchDriver VIF driver is now "
                          "deprecated and will be removed in the next release. "
                          "Please use the LibvirtGenericVIFDriver VIF driver, "
                          "together with a network plugin that reports the "
                          "'vif_type' attribute"))
         return self.get_config_ovs_ethernet(instance,
-                                            network, mapping,
+                                            vif,
                                             image_meta, inst_type)
 
     def plug(self, instance, vif):
@@ -693,20 +784,20 @@ class LibvirtHybridOVSBridgeDriver(LibvirtGenericVIFDriver):
        Will be deprecated in Havana, and removed in Ixxxx.
     """
 
-    def get_bridge_name(self, network):
-        return network.get('bridge') or CONF.libvirt_ovs_bridge
+    def get_bridge_name(self, vif):
+        return vif['network']['bridge'] or CONF.libvirt_ovs_bridge
 
-    def get_ovs_interfaceid(self, mapping):
-        return mapping.get('ovs_interfaceid') or mapping['vif_uuid']
+    def get_ovs_interfaceid(self, vif):
+        return vif.get('ovs_interfaceid') or vif['id']
 
-    def get_config(self, instance, network, mapping, image_meta, inst_type):
+    def get_config(self, instance, vif, image_meta, inst_type):
         LOG.deprecated(_("The LibvirtHybridOVSBridgeDriver VIF driver is now "
                          "deprecated and will be removed in the next release. "
                          "Please use the LibvirtGenericVIFDriver VIF driver, "
                          "together with a network plugin that reports the "
                          "'vif_type' attribute"))
         return self.get_config_ovs_hybrid(instance,
-                                          network, mapping,
+                                          vif,
                                           image_meta,
                                           inst_type)
 
@@ -723,20 +814,20 @@ class LibvirtOpenVswitchVirtualPortDriver(LibvirtGenericVIFDriver):
        Will be deprecated in Havana, and removed in Ixxxx.
     """
 
-    def get_bridge_name(self, network):
-        return network.get('bridge') or CONF.libvirt_ovs_bridge
+    def get_bridge_name(self, vif):
+        return vif['network']['bridge'] or CONF.libvirt_ovs_bridge
 
-    def get_ovs_interfaceid(self, mapping):
-        return mapping.get('ovs_interfaceid') or mapping['vif_uuid']
+    def get_ovs_interfaceid(self, vif):
+        return vif.get('ovs_interfaceid') or vif['id']
 
-    def get_config(self, instance, network, mapping, image_meta, inst_type):
+    def get_config(self, instance, vif, image_meta, inst_type):
         LOG.deprecated(_("The LibvirtOpenVswitchVirtualPortDriver VIF driver "
                          "is now deprecated and will be removed in the next "
                          "release. Please use the LibvirtGenericVIFDriver VIF "
                          "driver, together with a network plugin that reports "
                          "the 'vif_type' attribute"))
         return self.get_config_ovs_bridge(instance,
-                                          network, mapping,
+                                          vif,
                                           image_meta,
                                           inst_type)
 
@@ -753,11 +844,12 @@ class NeutronLinuxBridgeVIFDriver(LibvirtGenericVIFDriver):
        Will be deprecated in Havana, and removed in Ixxxx.
     """
 
-    def get_bridge_name(self, network):
+    def get_bridge_name(self, vif):
+        network = vif['network']
         def_bridge = ("brq" + network['id'])[:network_model.NIC_NAME_LEN]
-        return network.get('bridge') or def_bridge
+        return vif['network'].get('bridge') or def_bridge
 
-    def get_config(self, instance, network, mapping, image_meta, inst_type):
+    def get_config(self, instance, vif, image_meta, inst_type):
         LOG.deprecated(_("The NeutronLinuxBridgeVIFDriver VIF driver is now "
                          "deprecated and will be removed in the next release. "
                          "Please use the LibvirtGenericVIFDriver VIF driver, "
@@ -765,9 +857,10 @@ class NeutronLinuxBridgeVIFDriver(LibvirtGenericVIFDriver):
                          "'vif_type' attribute"))
         # In order for libvirt to make use of the bridge name then it has
         # to ensure that the bridge exists
-        if 'should_create_bridge' not in mapping:
-            mapping['should_create_bridge'] = True
-        return self.get_config_bridge(instance, network, mapping, image_meta,
+        network = vif['network']
+        if network and not network.get_meta('should_create_bridge', False):
+            vif['network']['meta']['should_create_bridge'] = True
+        return self.get_config_bridge(instance, vif, image_meta,
                                       inst_type)
 
     def plug(self, instance, vif):

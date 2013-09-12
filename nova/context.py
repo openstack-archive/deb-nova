@@ -23,6 +23,7 @@ import copy
 import uuid
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import local
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -138,6 +139,8 @@ class RequestContext(object):
 
     @classmethod
     def from_dict(cls, values):
+        values.pop('user', None)
+        values.pop('tenant', None)
         return cls(**values)
 
     def elevated(self, read_deleted=None, overwrite=False):

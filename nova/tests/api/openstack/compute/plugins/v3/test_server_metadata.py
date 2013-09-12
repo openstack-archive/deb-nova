@@ -154,7 +154,7 @@ class ServerMetaDataTest(BaseTest):
     def test_show(self):
         req = fakes.HTTPRequest.blank(self.url + '/key2')
         res_dict = self.controller.show(req, self.uuid, 'key2')
-        expected = {'meta': {'key2': 'value2'}}
+        expected = {'metadata': {'key2': 'value2'}}
         self.assertEqual(expected, res_dict)
 
     def test_show_nonexistent_server(self):
@@ -216,6 +216,7 @@ class ServerMetaDataTest(BaseTest):
             "key3": "value3",
         })
         self.assertEqual(body, res_dict)
+        self.assertEqual(self.controller.create.wsgi_code, 201)
 
     def test_create_empty_body(self):
         self.stubs.Set(nova.db, 'instance_metadata_update',
@@ -233,6 +234,18 @@ class ServerMetaDataTest(BaseTest):
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
         body = {"meta": {"": "value1"}}
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, req, self.uuid, body)
+
+    def test_create_item_non_dict(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url + '/key1')
+        req.method = 'PUT'
+        body = {"meta": None}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
@@ -349,11 +362,11 @@ class ServerMetaDataTest(BaseTest):
                        return_create_instance_metadata)
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
-        body = {"meta": {"key1": "value1"}}
+        body = {"metadata": {"key1": "value1"}}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res_dict = self.controller.update(req, self.uuid, 'key1', body)
-        expected = {'meta': {'key1': 'value1'}}
+        expected = {'metadata': {'key1': 'value1'}}
         self.assertEqual(expected, res_dict)
 
     def test_update_item_nonexistent_server(self):
@@ -361,7 +374,7 @@ class ServerMetaDataTest(BaseTest):
                        return_server_nonexistent)
         req = fakes.HTTPRequest.blank('/v1.1/fake/servers/asdf/metadata/key1')
         req.method = 'PUT'
-        body = {"meta": {"key1": "value1"}}
+        body = {"metadata": {"key1": "value1"}}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
@@ -383,7 +396,7 @@ class ServerMetaDataTest(BaseTest):
                        return_create_instance_metadata)
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
-        body = {"meta": {"": "value1"}}
+        body = {"metadata": {"": "value1"}}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
@@ -395,7 +408,7 @@ class ServerMetaDataTest(BaseTest):
                        return_create_instance_metadata)
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
-        body = {"meta": {("a" * 260): "value1"}}
+        body = {"metadata": {("a" * 260): "value1"}}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
@@ -408,7 +421,7 @@ class ServerMetaDataTest(BaseTest):
                        return_create_instance_metadata)
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
-        body = {"meta": {"key1": ("a" * 260)}}
+        body = {"metadata": {"key1": ("a" * 260)}}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
@@ -421,7 +434,7 @@ class ServerMetaDataTest(BaseTest):
                        return_create_instance_metadata)
         req = fakes.HTTPRequest.blank(self.url + '/key1')
         req.method = 'PUT'
-        body = {"meta": {"key1": "value1", "key2": "value2"}}
+        body = {"metadata": {"key1": "value1", "key2": "value2"}}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
@@ -433,7 +446,19 @@ class ServerMetaDataTest(BaseTest):
                        return_create_instance_metadata)
         req = fakes.HTTPRequest.blank(self.url + '/bad')
         req.method = 'PUT'
-        body = {"meta": {"key1": "value1"}}
+        body = {"metadata": {"key1": "value1"}}
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.update, req, self.uuid, 'bad', body)
+
+    def test_update_item_non_dict(self):
+        self.stubs.Set(nova.db, 'instance_metadata_update',
+                       return_create_instance_metadata)
+        req = fakes.HTTPRequest.blank(self.url + '/bad')
+        req.method = 'PUT'
+        body = {"metadata": None}
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
