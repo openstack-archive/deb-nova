@@ -89,7 +89,7 @@ Build-Depends-Indep: bpython,
                      python-zmq,
                      subunit,
                      testrepository (>= 0.0.14),
-                     websockify
+                     websockify (>= 0.5.1)
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.4
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
@@ -155,7 +155,7 @@ Depends: openssh-client,
          python-webob (>= 1.2.3),
          python-xattr,
          sudo,
-         websockify,
+         websockify (>= 0.5.1),
          ${misc:Depends},
          ${python:Depends}
 Suggests: python-suds (>= 0.4.0)
