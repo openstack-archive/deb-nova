@@ -88,6 +88,7 @@ Build-Depends-Indep: bpython,
                      python-xenapi,
                      python-zmq,
                      subunit,
+                     sqlite3,
                      testrepository (>= 0.0.14),
                      websockify (>= 0.5.1)
 Build-Conflicts: python-cjson
