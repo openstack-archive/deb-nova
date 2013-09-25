@@ -67,13 +67,13 @@ override_dh_fixperms:
 	rm -f $(CURDIR)/debian/python-nova/usr/share/pyshared/nova/CA/reqs/.gitignore
 
 	# Make sure all our plugins are executable
-	set -e ; for i in $(CURDIR)/debian/nova-xcp-plugins/usr/lib/xcp/plugins/* ; do \
-		chmod +x $$i ; \
-	done
-	# Don't ask, that's as stupid as it seems... (and it wouldn't work without this!)
-	mkdir -p $(CURDIR)/debian/nova-xcp-plugins/etc/xcp
-	echo "{}" >$(CURDIR)/debian/nova-xcp-plugins/etc/xcp/xenhost.conf
-	chmod 0440 $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
+#	set -e ; for i in $(CURDIR)/debian/nova-xcp-plugins/usr/lib/xcp/plugins/* ; do \
+#		chmod +x $$i ; \
+#	done
+#	# Don't ask, that's as stupid as it seems... (and it wouldn't work without this!)
+#	mkdir -p $(CURDIR)/debian/nova-xcp-plugins/etc/xcp
+#	echo "{}" >$(CURDIR)/debian/nova-xcp-plugins/etc/xcp/xenhost.conf
+#	chmod 0440 $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
