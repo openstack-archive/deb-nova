@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-09-25 16:05+0800\n"
+"POT-Creation-Date: 2013-09-25 23:09+0800\n"
 "PO-Revision-Date: 2012-06-27 20:48+0100\n"
 "Last-Translator: Martin Bagge / brother <brother@bsnet.se>\n"
 "Language-Team: Swedish <debian-l10n-swedish@lists.debian.org>\n"
@@ -150,6 +150,69 @@ msgstr ""
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "IP address of your RabbitMQ host:"
+msgstr ""
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
+msgid ""
+"In order to interoperate with other components of OpenStack, this package "
+"needs to connect to a central RabbitMQ server."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "Please specify the IP address of that server."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+#, fuzzy
+#| msgid "Username to connect to XenAPI:"
+msgid "Username for connection to the RabbitMQ server:"
+msgstr "Användarnamn för att ansluta till XenAPI:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+#, fuzzy
+#| msgid ""
+#| "Please enter the username used to connect to your XenAPI (XCP server)."
+msgid "Please specify the username used to connect to the RabbitMQ server."
+msgstr ""
+"Ange användarnamnet som ska användas för att ansluta till din XenAPI (XCP-"
+"server)."
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+#, fuzzy
+#| msgid "Password to connect to XenAPI:"
+msgid "Password for connection to the RabbitMQ server:"
+msgstr "Lösenord för att ansluta till XenAPI:"
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+#, fuzzy
+#| msgid ""
+#| "Please enter the password used to connect to your XenAPI (XCP server)."
+msgid "Please specify the password used to connect to the RabbitMQ server."
+msgstr ""
+"Ange lösenordet som ska användas för att ansluta till din XenAPI (XCP-"
+"server)."
 
 #. Type: string
 #. Description

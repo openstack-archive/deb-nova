@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-09-25 16:05+0800\n"
+"POT-Creation-Date: 2013-09-25 23:09+0800\n"
 "PO-Revision-Date: 2013-08-28 16:59+0100\n"
 "Last-Translator: Julien Patriarca <leatherface@debian.org>\n"
 "Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
@@ -165,6 +165,71 @@ msgid ""
 msgstr ""
 "Veuillez entrer l'adresse IP qui sera renseignée dans la directive my_ip de "
 "nova.conf."
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+#, fuzzy
+#| msgid "Ip address of your rabbitmq host:"
+msgid "IP address of your RabbitMQ host:"
+msgstr "Adresse IP de votre hôte rabbitmq :"
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
+msgid ""
+"In order to interoperate with other components of OpenStack, this package "
+"needs to connect to a central RabbitMQ server."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "Please specify the IP address of that server."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+#, fuzzy
+#| msgid "Username to connect to XenAPI:"
+msgid "Username for connection to the RabbitMQ server:"
+msgstr "Identifiant de connexion à XenAPI :"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+#, fuzzy
+#| msgid ""
+#| "Please enter the username used to connect to your XenAPI (XCP server)."
+msgid "Please specify the username used to connect to the RabbitMQ server."
+msgstr ""
+"Veuillez indiquer l'identifiant à utiliser pour se connecter à XenAPI "
+"(serveur XCP)."
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+#, fuzzy
+#| msgid "Password to connect to XenAPI:"
+msgid "Password for connection to the RabbitMQ server:"
+msgstr "Mot de passe de connexion à XenAPI :"
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+#, fuzzy
+#| msgid ""
+#| "Please enter the password used to connect to your XenAPI (XCP server)."
+msgid "Please specify the password used to connect to the RabbitMQ server."
+msgstr ""
+"Veuillez indiquer le mot de passe à utiliser pour la connexion à XenAPI "
+"(serveur XCP)."
 
 #. Type: string
 #. Description
@@ -375,9 +440,6 @@ msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr ""
 "Ce choix peut être modifié ultérieurement en modifiant le fichier /etc/"
 "default/nova-consoleproxy."
-
-#~ msgid "Ip address of your rabbitmq host:"
-#~ msgstr "Adresse IP de votre hôte rabbitmq :"
 
 #~ msgid ""
 #~ "Enter the IP address that will be set in the rabbitmq_host directive of "

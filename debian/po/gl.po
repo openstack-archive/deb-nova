@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-09-25 16:05+0800\n"
+"POT-Creation-Date: 2013-09-25 23:09+0800\n"
 "PO-Revision-Date: 2012-06-25 01:13+0200\n"
 "Last-Translator: Jorge Barreiro <yortx.barry@gmail.com>\n"
 "Language-Team: Galician <proxecto@trasno.net>\n"
@@ -151,6 +151,55 @@ msgstr ""
 #: ../nova-common.templates:9001
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "IP address of your RabbitMQ host:"
+msgstr ""
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
+msgid ""
+"In order to interoperate with other components of OpenStack, this package "
+"needs to connect to a central RabbitMQ server."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "Please specify the IP address of that server."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+msgid "Username for connection to the RabbitMQ server:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+msgid "Please specify the username used to connect to the RabbitMQ server."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+msgid "Password for connection to the RabbitMQ server:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
 
 #. Type: string
