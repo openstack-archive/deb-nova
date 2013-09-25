@@ -85,12 +85,12 @@ Build-Depends-Indep: bpython,
                      python-unittest2,
                      python-webob (>= 1.2.3),
                      python-xattr,
-                     python-xenapi,
                      python-zmq,
                      subunit,
                      sqlite3,
                      testrepository (>= 0.0.14),
                      websockify (>= 0.5.1)
+#                     python-xenapi,
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.4
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
@@ -301,30 +301,30 @@ Description: OpenStack Compute - compute node (UserModeLinux)
  .
  This is a dependency package for compute nodes using UserModeLinux.
 
-Package: nova-compute-xen
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: adduser, nova-common, nova-compute, python-xenapi, ${misc:Depends}
-Provides: nova-compute-hypervisor
-Conflicts: nova-baremetal,
-           nova-compute-kvm,
-           nova-compute-lxc,
-           nova-compute-qemu,
-           nova-compute-uml
-Description: OpenStack Compute - compute node (Xen)
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This is a dependency package for compute nodes to remote-control a XenServer
- or an XCP (Xen Cloud Platform) cloud using Xen API.
+#Package: nova-compute-xen
+#Architecture: all
+#Pre-Depends: dpkg (>= 1.15.6~)
+#Depends: adduser, nova-common, nova-compute, python-xenapi, ${misc:Depends}
+#Provides: nova-compute-hypervisor
+#Conflicts: nova-baremetal,
+#           nova-compute-kvm,
+#           nova-compute-lxc,
+#           nova-compute-qemu,
+#           nova-compute-uml
+#Description: OpenStack Compute - compute node (Xen)
+# OpenStack is a reliable cloud infrastructure. Its mission is to produce
+# the ubiquitous cloud computing platform that will meet the needs of public
+# and private cloud providers regardless of size, by being simple to implement
+# and massively scalable.
+# .
+# OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
+# designed to be modular and easy to extend and adapt. In addition to its
+# "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+# many different database backends (including SQLite, MySQL, and PostgreSQL),
+# hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
+# .
+# This is a dependency package for compute nodes to remote-control a XenServer
+# or an XCP (Xen Cloud Platform) cloud using Xen API.
 
 Package: nova-compute-qemu
 Architecture: all
@@ -389,25 +389,28 @@ Description: OpenStack Compute - compute node (KVM)
  .
  This is a dependency package for compute nodes using KVM.
 
-Package: nova-xcp-plugins
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: xcp-xapi, ${misc:Depends}, ${python:Depends}
-Description: OpenStack Compute plugin for the Xen Cloud Platform
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This package is to be installed on the server where you have installed your
- master Xen API server (see the xcp-xapi package), so that nova-compute can
- remotely control your XCP nodes and start VM instances.
+#Package: nova-xcp-plugins
+#Architecture: all
+#Pre-Depends: dpkg (>= 1.15.6~)
+#Depends: xcp-xapi, ${misc:Depends}, ${python:Depends}
+#Provides: nova-xcp-network
+#Breaks: nova-xcp-network (<< 2013.1.2-1)
+#Replaces: nova-xcp-network (<< 2013.1.2-1)
+#Description: OpenStack Compute plugin for the Xen Cloud Platform
+# OpenStack is a reliable cloud infrastructure. Its mission is to produce
+# the ubiquitous cloud computing platform that will meet the needs of public
+# and private cloud providers regardless of size, by being simple to implement
+# and massively scalable.
+# .
+# OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
+# designed to be modular and easy to extend and adapt. In addition to its
+# "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
+# many different database backends (including SQLite, MySQL, and PostgreSQL),
+# hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
+# .
+# This package is to be installed on the server where you have installed your
+# master Xen API server (see the xcp-xapi package), so that nova-compute can
+# remotely control your XCP nodes and start VM instances.
 
 Package: nova-conductor
 Architecture: all
