@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2013.1.2-3\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"POT-Creation-Date: 2013-09-25 16:05+0800\n"
 "PO-Revision-Date: 2013-08-29 18:53+0400\n"
 "Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
 "Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
@@ -129,8 +129,8 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
-"Openstack Nova поддерживает различные API служб, каждый привязывается "
-"к своему порту. Выберите какие nova-api должны поддерживаться."
+"Openstack Nova поддерживает различные API служб, каждый привязывается к "
+"своему порту. Выберите какие nova-api должны поддерживаться."
 
 #. Type: multiselect
 #. Description
@@ -141,9 +141,8 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Если вы настраиваете вычислительный узел, то вам нужно запустить только "
-"API сервера метаданных. Если вы запускаете Cinder, то вам не нужен "
-"osapi_volume "
+"Если вы настраиваете вычислительный узел, то вам нужно запустить только API "
+"сервера метаданных. Если вы запускаете Cinder, то вам не нужен osapi_volume "
 "(нельзя запустить osapi_volume и cinder-api одновременно — они привязываются "
 "к одному порту)."
 
@@ -159,27 +158,6 @@ msgstr "Значение my_ip:"
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr "Введите IP-адрес, который будет присвоен директиве my_ip в nova.conf."
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr "IP-адрес узла rabbitmq:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
-msgstr ""
-"Введите IP-адрес, который будет присвоен директиве rabbitmq_host в "
-"nova.conf. Если вы устанавливаете openstack-proxy-node, то достаточно "
-"значения по "
-"умолчанию — 127.0.0.1. Если вы устанавливаете openstack-compute-node, то "
-"введите IP-адрес узла proxy-node."
 
 #. Type: string
 #. Description
@@ -262,10 +240,9 @@ msgid ""
 "accessible. This is done using \"keystone service-create\" and \"keystone "
 "endpoint-create\". Select if you want to run these commands now."
 msgstr ""
-"Для доступа к службам Openstack (каждому API) их нужно регистрировать. "
-"Это выполняется с помощью команды «keystone service-create» и «keystone "
-"endpoint-create». Ответьте утвердительно, если хотите их запустить прямо "
-"сейчас."
+"Для доступа к службам Openstack (каждому API) их нужно регистрировать. Это "
+"выполняется с помощью команды «keystone service-create» и «keystone endpoint-"
+"create». Ответьте утвердительно, если хотите их запустить прямо сейчас."
 
 #. Type: boolean
 #. Description
@@ -274,8 +251,8 @@ msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using the Keystone auth token."
 msgstr ""
-"Заметим, что у вас должен быть работающий сервер keystone, к которому "
-"будет произведено подключение с помощью токена аутентификации Keystone."
+"Заметим, что у вас должен быть работающий сервер keystone, к которому будет "
+"произведено подключение с помощью токена аутентификации Keystone."
 
 #. Type: string
 #. Description
@@ -290,8 +267,8 @@ msgid ""
 "Enter the IP address of your keystone server, so that nova-api can contact "
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
-"Введите IP-адрес сервера keystone для того, чтобы nova-api могла подключиться "
-"к Keystone для запуска службы Nova и создания конечной точки."
+"Введите IP-адрес сервера keystone для того, чтобы nova-api могла "
+"подключиться к Keystone для запуска службы Nova и создания конечной точки."
 
 #. Type: password
 #. Description
@@ -306,8 +283,8 @@ msgid ""
 "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
 "token."
 msgstr ""
-"Для настройки собственной конечной точки в Keystone nova-api "
-"требуется токен аутентификации Keystone."
+"Для настройки собственной конечной точки в Keystone nova-api требуется токен "
+"аутентификации Keystone."
 
 #. Type: string
 #. Description
@@ -323,8 +300,7 @@ msgid ""
 "endpoint IP address)."
 msgstr ""
 "Введите IP-адрес, который будет использоваться для подключения к Nova "
-"(например, "
-"IP-адрес конечной точки Nova)."
+"(например, IP-адрес конечной точки Nova)."
 
 #. Type: string
 #. Description
@@ -354,8 +330,7 @@ msgid ""
 msgstr ""
 "Openstack может использоваться с разделением на зоны доступности, где каждая "
 "область представляет определённое расположение. Введите зону, которую вы "
-"хотите "
-"использовать при регистрации конечной точки."
+"хотите использовать при регистрации конечной точки."
 
 #. Type: select
 #. Description
@@ -374,19 +349,28 @@ msgid ""
 "have support for."
 msgstr ""
 "Nova Console поддерживает 3 типа консолей. Одна предназначена для Xen, "
-"называется "
-"XVP (Xen VNC Proxy), а другая поддерживает KVM. Хотя протокол SPICE, обычно, "
-"быстрее VNC, "
-"он также требует поддержки веб-сокетов в браузере, а это свойство есть только "
-"у "
-"самых современных браузеров."
+"называется XVP (Xen VNC Proxy), а другая поддерживает KVM. Хотя протокол "
+"SPICE, обычно, быстрее VNC, он также требует поддержки веб-сокетов в "
+"браузере, а это свойство есть только у самых современных браузеров."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
-#| msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr ""
-"Позже можно изменить настройку, отредактировав файл "
-"/etc/default/nova-consoleproxy."
+"Позже можно изменить настройку, отредактировав файл /etc/default/nova-"
+"consoleproxy."
 
+#~ msgid "Ip address of your rabbitmq host:"
+#~ msgstr "IP-адрес узла rabbitmq:"
+
+#~ msgid ""
+#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
+#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
+#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
+#~ "compute-node, then enter the IP address of your proxy-node host."
+#~ msgstr ""
+#~ "Введите IP-адрес, который будет присвоен директиве rabbitmq_host в nova."
+#~ "conf. Если вы устанавливаете openstack-proxy-node, то достаточно значения "
+#~ "по умолчанию — 127.0.0.1. Если вы устанавливаете openstack-compute-node, "
+#~ "то введите IP-адрес узла proxy-node."

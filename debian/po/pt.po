@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"POT-Creation-Date: 2013-09-25 16:05+0800\n"
 "PO-Revision-Date: 2013-08-20 12:46+0100\n"
 "Last-Translator: Miguel Figueiredo <elmig@debianpt.org>\n"
 "Language-Team: Portuguese <traduz@debianpt.org>\n"
@@ -45,8 +45,8 @@ msgid ""
 "Please specify the URL of your Nova authentication server. Typically this is "
 "also the URL of your OpenStack Identity Service (Keystone)."
 msgstr ""
-"Por favor especifique o URL do seu servidor de autenticação Nova. Tipicamente "
-"este é também o URL do seu OpenStack Identity Service (Keystone)."
+"Por favor especifique o URL do seu servidor de autenticação Nova. "
+"Tipicamente este é também o URL do seu OpenStack Identity Service (Keystone)."
 
 #. Type: string
 #. Description
@@ -143,9 +143,9 @@ msgid ""
 "the same port)."
 msgstr ""
 "Se for um nó de computação que esteja a instalar, então apenas necessita "
-"correr o servidor API de metadata. Se correr o Cinder, então não necessita de "
-"osapi_volume (não pode correr o osapi_volume e cinder-api no mesmo servidor: "
-"eles ligam ao mesmo porto)."
+"correr o servidor API de metadata. Se correr o Cinder, então não necessita "
+"de osapi_volume (não pode correr o osapi_volume e cinder-api no mesmo "
+"servidor: eles ligam ao mesmo porto)."
 
 #. Type: string
 #. Description
@@ -160,27 +160,6 @@ msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr ""
 "Introduza o endereço IP que será definido na directiva my_ip de nova.conf."
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr "Endereço IP da sua máquina rabbitmq:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
-msgstr ""
-"Introduza o endereço IP que irá ser utilizado na directiva rabbitmq_host de "
-"nova.conf. Se estiver a instalar openstack-proxy-node, então o valor "
-"predefinido, 127.0.0.1, provavelmente irá servir. Se estiver a instalar "
-"openstack-compute-node, então introduza o endereço IP da sua máquina "
-"proxy-node."
 
 #. Type: string
 #. Description
@@ -209,8 +188,8 @@ msgid ""
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
 "Isto pode ser um servidor que corre Citrix XenServer, um appliance CentOS "
-"Cloud Platform (XCP) instalado a partir de uma imagem ISO, ou mesmo o XCP "
-"da Kronos Project (disponível em Debian e Ubuntu como o pacote xcp-xapi)."
+"Cloud Platform (XCP) instalado a partir de uma imagem ISO, ou mesmo o XCP da "
+"Kronos Project (disponível em Debian e Ubuntu como o pacote xcp-xapi)."
 
 #. Type: string
 #. Description
@@ -265,8 +244,8 @@ msgid ""
 "accessible. This is done using \"keystone service-create\" and \"keystone "
 "endpoint-create\". Select if you want to run these commands now."
 msgstr ""
-"Cada serviço Openstack (cada API) deve ser registado de modo a ser acessível. "
-"Isto é feito utilizando \"keystone service-create\" e \"keystone "
+"Cada serviço Openstack (cada API) deve ser registado de modo a ser "
+"acessível. Isto é feito utilizando \"keystone service-create\" e \"keystone "
 "endpoint-create\". Escolha se deseja correr agora estes comandos."
 
 #. Type: boolean
@@ -324,8 +303,8 @@ msgid ""
 "Enter the IP address that will be used to contact Nova (eg: the Nova "
 "endpoint IP address)."
 msgstr ""
-"Introduza o endereço IP que irá ser utilizado para contactar Nova "
-"(por exemplo: o endereço IP do endpoint Nova)."
+"Introduza o endereço IP que irá ser utilizado para contactar Nova (por "
+"exemplo: o endereço IP do endpoint Nova)."
 
 #. Type: string
 #. Description
@@ -382,6 +361,21 @@ msgstr ""
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
-#| msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
-msgstr "Isto pode posteriormente ser editado em /etc/default/nova-consoleproxy."
+msgstr ""
+"Isto pode posteriormente ser editado em /etc/default/nova-consoleproxy."
+
+#~ msgid "Ip address of your rabbitmq host:"
+#~ msgstr "Endereço IP da sua máquina rabbitmq:"
+
+#~ msgid ""
+#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
+#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
+#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
+#~ "compute-node, then enter the IP address of your proxy-node host."
+#~ msgstr ""
+#~ "Introduza o endereço IP que irá ser utilizado na directiva rabbitmq_host "
+#~ "de nova.conf. Se estiver a instalar openstack-proxy-node, então o valor "
+#~ "predefinido, 127.0.0.1, provavelmente irá servir. Se estiver a instalar "
+#~ "openstack-compute-node, então introduza o endereço IP da sua máquina "
+#~ "proxy-node."

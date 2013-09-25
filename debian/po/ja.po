@@ -2,12 +2,12 @@
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the nova package.
 # victory <victory.deb@gmail.com>, 2013.
-#
+# 
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"POT-Creation-Date: 2013-09-25 16:05+0800\n"
 "PO-Revision-Date: 2013-04-11 23:32+0900\n"
 "Last-Translator: victory <victory.deb@gmail.com>\n"
 "Language-Team: Japanese <debian-japanese@lists.debian.org>\n"
@@ -128,8 +128,8 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
-"Openstack Nova はそれぞれ別のポートを担当する別々の API サービスをサポートして"
-"います。nova-api でどれをサポートするか選択してください。"
+"Openstack Nova はそれぞれ別のポートを担当する別々の API サービスをサポートし"
+"ています。nova-api でどれをサポートするか選択してください。"
 
 #. Type: multiselect
 #. Description
@@ -142,8 +142,8 @@ msgid ""
 msgstr ""
 "ここで設定しているのが計算ノードであれば、実行する必要があるのはメタデータ "
 "API サーバだけです。Cinder を実行する場合は osapi_volume は不要です "
-"(osapi_volume と cinder-api を同一サーバ上で使うことはできません: 同一ポートを"
-"使うためです)。"
+"(osapi_volume と cinder-api を同一サーバ上で使うことはできません: 同一ポート"
+"を使うためです)。"
 
 #. Type: string
 #. Description
@@ -158,26 +158,6 @@ msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr ""
 "nova.conf の my_ip ディレクティブでセットするIPアドレスを入力してください。"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr "rabbitmq ホストのIPアドレス:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
-msgstr ""
-"nova.conf の rabbitmq_host ディレクティブでセットするIPアドレスを入力してくだ"
-"さい。ここで openstack のプロキシノードをインストールしている場合は恐らくデ"
-"フォルトの 127.0.0.1 を使えばいいでしょう。openstack の計算ノードをインストー"
-"ルしている場合はプロキシノードのIPアドレスを入力してください。"
 
 #. Type: string
 #. Description
@@ -258,9 +238,9 @@ msgid ""
 "accessible. This is done using \"keystone service-create\" and \"keystone "
 "endpoint-create\". Select if you want to run these commands now."
 msgstr ""
-"OpenStack のサービスごと (API ごと) に、アクセスできるようにするため登録すべき"
-"です。「keystone service-create」と「keystone endpoint-create」を使って登録す"
-"ることができます。ここで自動的に行うことができます。"
+"OpenStack のサービスごと (API ごと) に、アクセスできるようにするため登録すべ"
+"きです。「keystone service-create」と「keystone endpoint-create」を使って登録"
+"することができます。ここで自動的に行うことができます。"
 
 #. Type: boolean
 #. Description
@@ -301,7 +281,8 @@ msgid ""
 "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
 "token."
 msgstr ""
-"Keystone で端末を設定するには、nova-api は Keystone 認証文字列を必要とします。"
+"Keystone で端末を設定するには、nova-api は Keystone 認証文字列を必要としま"
+"す。"
 
 #. Type: string
 #. Description
@@ -327,9 +308,9 @@ msgid ""
 "service, so if you are installing a public cloud, this should be a public IP "
 "address."
 msgstr ""
-"この IP アドレスはこのサービスを利用するクライアントからアクセスできないといけ"
-"ないので、パブリッククラウドをインストールしている場合、これは公開 IP アドレス"
-"を使うようにしてください。"
+"この IP アドレスはこのサービスを利用するクライアントからアクセスできないとい"
+"けないので、パブリッククラウドをインストールしている場合、これは公開 IP アド"
+"レスを使うようにしてください。"
 
 #. Type: string
 #. Description
@@ -345,8 +326,8 @@ msgid ""
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
 msgstr ""
-"OpenStack は位置を示す各領域による利用可能区分を利用することができます。端末の"
-"登録時に利用したい区分を入力してください。"
+"OpenStack は位置を示す各領域による利用可能区分を利用することができます。端末"
+"の登録時に利用したい区分を入力してください。"
 
 #. Type: select
 #. Description
@@ -365,12 +346,26 @@ msgid ""
 "have support for."
 msgstr ""
 "Nova Console は3種類のコンソールをサポートしています。1つは Xen 専用の XVP "
-"(Xen VNC Proxy) でもう1つは KVM をサポートするデーモンです。SPICE プロトコルは"
-"通常 VNC よりも高速ですが、これにはかなり新しいブラウザしかサポートしていない"
-"機能であるウェブソケットを、ブラウザがサポートしていることを要求します。"
+"(Xen VNC Proxy) でもう1つは KVM をサポートするデーモンです。SPICE プロトコル"
+"は通常 VNC よりも高速ですが、これにはかなり新しいブラウザしかサポートしていな"
+"い機能であるウェブソケットを、ブラウザがサポートしていることを要求します。"
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "これには後で /etc/default/nova-consoleproxy を編集する方法もあります。"
+
+#~ msgid "Ip address of your rabbitmq host:"
+#~ msgstr "rabbitmq ホストのIPアドレス:"
+
+#~ msgid ""
+#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
+#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
+#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
+#~ "compute-node, then enter the IP address of your proxy-node host."
+#~ msgstr ""
+#~ "nova.conf の rabbitmq_host ディレクティブでセットするIPアドレスを入力して"
+#~ "ください。ここで openstack のプロキシノードをインストールしている場合は恐"
+#~ "らくデフォルトの 127.0.0.1 を使えばいいでしょう。openstack の計算ノードを"
+#~ "インストールしている場合はプロキシノードのIPアドレスを入力してください。"

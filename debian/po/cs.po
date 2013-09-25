@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2013.1.2-3\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"POT-Creation-Date: 2013-09-25 16:05+0800\n"
 "PO-Revision-Date: 2013-08-27 12:31+0200\n"
 "Last-Translator: Michal Simunek <michal.simunek@gmail.com>\n"
 "Language-Team: Czech <debian-l10n-czech@lists.debian.org>\n"
@@ -141,10 +141,10 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Pokud nastavujete výpočetní uzel, pak budete potřebovat spustit pouze API "
-"se serverem pro metadata. Pokud spouštíte Cinder, potom nebudete potřebovat "
-"osapi_volume (osapi_volume a cinder-api nemůžete spouštět na stejném serveru: "
-"vážou se na stejný port)."
+"Pokud nastavujete výpočetní uzel, pak budete potřebovat spustit pouze API se "
+"serverem pro metadata. Pokud spouštíte Cinder, potom nebudete potřebovat "
+"osapi_volume (osapi_volume a cinder-api nemůžete spouštět na stejném "
+"serveru: vážou se na stejný port)."
 
 #. Type: string
 #. Description
@@ -159,26 +159,6 @@ msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr ""
 "Zadejte IP adresu, která se nastaví v souboru nova.conf v direktivě my_ip."
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr "IP adresa hostitele rabbitmq:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
-msgstr ""
-"Zadejte IP adresu, která se nastaví v souboru nova.conf v direktivě rabbitmq_host. "
-"Pokud instalujete openstack-proxy-node, vhodné bude pravděpodobně výchozí "
-"nastavení 127.0.0.1. Instalujete-li openstack-compute-node, potom zadejte IP "
-"adresu hostitele proxy-node."
 
 #. Type: string
 #. Description
@@ -263,7 +243,8 @@ msgid ""
 msgstr ""
 "Aby byla každá služba Openstack (každé API) přístupná, musí být "
 "zaregistrována. To se provádí pomocí příkazů \"keystone service-create\" a "
-"\"keystone endpoint-create\". Zvolte si, zda-li se tyto příkazy mají nyní spustit."
+"\"keystone endpoint-create\". Zvolte si, zda-li se tyto příkazy mají nyní "
+"spustit."
 
 #. Type: boolean
 #. Description
@@ -320,8 +301,8 @@ msgid ""
 "Enter the IP address that will be used to contact Nova (eg: the Nova "
 "endpoint IP address)."
 msgstr ""
-"Zadejte IP adresu, která se bude používat ke spojení s Nova (např: "
-"IP adresa koncového bodu Nova)."
+"Zadejte IP adresu, která se bude používat ke spojení s Nova (např: IP adresa "
+"koncového bodu Nova)."
 
 #. Type: string
 #. Description
@@ -332,8 +313,8 @@ msgid ""
 "address."
 msgstr ""
 "Tato IP adresa musí být přístupná z klientů, kteří budou tuto službu "
-"používat, takže pokud instalujete veřejný cloud, musí to být veřejná "
-"IP adresa."
+"používat, takže pokud instalujete veřejný cloud, musí to být veřejná IP "
+"adresa."
 
 #. Type: string
 #. Description
@@ -369,9 +350,9 @@ msgid ""
 "sockets in your browser, and that is a feature only very modern browsers "
 "have support for."
 msgstr ""
-"Nova Console podporuje 3 typy konzolí. Jedna je určená pro Xen, nazvaná "
-"XVP (Xen VNC Proxy), a ostatní daemoni podporují KVM. Přestože je protokol "
-"SPICE běžně rychlejší než VNC, vyžaduje také v prohlížeči podporu pro webové "
+"Nova Console podporuje 3 typy konzolí. Jedna je určená pro Xen, nazvaná XVP "
+"(Xen VNC Proxy), a ostatní daemoni podporují KVM. Přestože je protokol SPICE "
+"běžně rychlejší než VNC, vyžaduje také v prohlížeči podporu pro webové "
 "sockety, a to je funkce, kterou podporují jen opravdu moderní prohlížeče."
 
 #. Type: select
@@ -380,3 +361,17 @@ msgstr ""
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr ""
 "Toto nastavení lze později upravit v souboru /etc/default/nova-consoleproxy."
+
+#~ msgid "Ip address of your rabbitmq host:"
+#~ msgstr "IP adresa hostitele rabbitmq:"
+
+#~ msgid ""
+#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
+#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
+#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
+#~ "compute-node, then enter the IP address of your proxy-node host."
+#~ msgstr ""
+#~ "Zadejte IP adresu, která se nastaví v souboru nova.conf v direktivě "
+#~ "rabbitmq_host. Pokud instalujete openstack-proxy-node, vhodné bude "
+#~ "pravděpodobně výchozí nastavení 127.0.0.1. Instalujete-li openstack-"
+#~ "compute-node, potom zadejte IP adresu hostitele proxy-node."

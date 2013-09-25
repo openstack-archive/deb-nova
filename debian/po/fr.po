@@ -7,10 +7,11 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"POT-Creation-Date: 2013-09-25 16:05+0800\n"
 "PO-Revision-Date: 2013-08-28 16:59+0100\n"
 "Last-Translator: Julien Patriarca <leatherface@debian.org>\n"
 "Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
+"Language: \n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -133,8 +134,8 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
-"OpenStack Nova prend en charge différents services API, chacun d'entre eux reliés "
-"à un port différent. Veuillez choisir quelle api Nova devra utiliser."
+"OpenStack Nova prend en charge différents services API, chacun d'entre eux "
+"reliés à un port différent. Veuillez choisir quelle api Nova devra utiliser."
 
 #. Type: multiselect
 #. Description
@@ -145,10 +146,10 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Si c'est un nœud de calcul que vous installez, alors vous n'avez qu'à "
-"lancer le serveur API de métadonnées. Si vous utilisez Cinder, alors vous "
-"n'avez pas besoin d'osapi_volume (vous ne pouvez pas lancer osapi_volume et "
-"l'api de cinder sur le même serveur : ils sont liés au même port)."
+"Si c'est un nœud de calcul que vous installez, alors vous n'avez qu'à lancer "
+"le serveur API de métadonnées. Si vous utilisez Cinder, alors vous n'avez "
+"pas besoin d'osapi_volume (vous ne pouvez pas lancer osapi_volume et l'api "
+"de cinder sur le même serveur : ils sont liés au même port)."
 
 #. Type: string
 #. Description
@@ -164,26 +165,6 @@ msgid ""
 msgstr ""
 "Veuillez entrer l'adresse IP qui sera renseignée dans la directive my_ip de "
 "nova.conf."
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr "Adresse IP de votre hôte rabbitmq :"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
-msgstr ""
-"Veuillez entrer l'adresse IP qui sera renseignée pour la directive "
-"rabbitmq_host de nova.conf. Si vous installez openstack-proxy-node, alors la "
-"valeur par défaut 127.0.0.1 devrait suffire. Si vous installez openstack-"
-"compute-node, alors veuillez préciser l'adresse IP de votre hôte proxy-node."
 
 #. Type: string
 #. Description
@@ -381,17 +362,31 @@ msgid ""
 "sockets in your browser, and that is a feature only very modern browsers "
 "have support for."
 msgstr ""
-"Nova Console prend en charge 3 types de consoles. Une est spécifique à Xen, appelée "
-"XVP (Xen VNC Proxy), et l'autre démon prend en charge KVM. Alors que le protocole "
-"SPICE est théoriquement plus rapide que VNC, il requiert également l’emploi "
-"des sockets web dans votre navigateur, et c'est une fonctionnalité "
-"dont seuls les navigateurs les plus modernes disposent."
+"Nova Console prend en charge 3 types de consoles. Une est spécifique à Xen, "
+"appelée XVP (Xen VNC Proxy), et l'autre démon prend en charge KVM. Alors que "
+"le protocole SPICE est théoriquement plus rapide que VNC, il requiert "
+"également l’emploi des sockets web dans votre navigateur, et c'est une "
+"fonctionnalité dont seuls les navigateurs les plus modernes disposent."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
-#| msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr ""
 "Ce choix peut être modifié ultérieurement en modifiant le fichier /etc/"
 "default/nova-consoleproxy."
+
+#~ msgid "Ip address of your rabbitmq host:"
+#~ msgstr "Adresse IP de votre hôte rabbitmq :"
+
+#~ msgid ""
+#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
+#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
+#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
+#~ "compute-node, then enter the IP address of your proxy-node host."
+#~ msgstr ""
+#~ "Veuillez entrer l'adresse IP qui sera renseignée pour la directive "
+#~ "rabbitmq_host de nova.conf. Si vous installez openstack-proxy-node, alors "
+#~ "la valeur par défaut 127.0.0.1 devrait suffire. Si vous installez "
+#~ "openstack-compute-node, alors veuillez préciser l'adresse IP de votre "
+#~ "hôte proxy-node."

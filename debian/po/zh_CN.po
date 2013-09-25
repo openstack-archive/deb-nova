@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"POT-Creation-Date: 2013-09-25 16:05+0800\n"
 "PO-Revision-Date: 2012-08-27 16:48+0800\n"
 "Last-Translator: ben <duyujie.dyj@gmail.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -140,22 +140,6 @@ msgstr ""
 #: ../nova-common.templates:9001
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
-msgstr ""
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr ""
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
 msgstr ""
 
 #. Type: string

@@ -65,8 +65,8 @@ manage_nova_my_ip () {
 
 pkgos_var_user_group nova
 pkgos_dbc_read_conf -pkg nova-common ${NOVA_CONF} DEFAULT sql_connection nova $@
+pkgos_rabbit_read_conf ${NOVA_CONF} DEFAULT nova
 pkgos_read_admin_creds ${NOVA_API_CONF} filter:authtoken nova
-pkgos_read_config -p high ${NOVA_CONF} DEFAULT rabbit_host nova/rabbit-host
 
 manage_nova_enable
 set_enabled_apis_multiselect

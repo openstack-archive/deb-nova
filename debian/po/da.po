@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"POT-Creation-Date: 2013-09-25 16:05+0800\n"
 "PO-Revision-Date: 2013-08-17 23:51+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
@@ -129,8 +129,8 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
-"Openstack Nova understøtter forskellige API-tjenester, hver af dem binder "
-"på en forskellig port. Vælg hvilken nova-api skal understøtte."
+"Openstack Nova understøtter forskellige API-tjenester, hver af dem binder på "
+"en forskellig port. Vælg hvilken nova-api skal understøtte."
 
 #. Type: multiselect
 #. Description
@@ -157,28 +157,7 @@ msgstr "Værdi for my_ip:"
 #: ../nova-common.templates:9001
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
-msgstr ""
-"Indtast IP-adressen som bliver sat i my_ip-direktivet i nova.conf."
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr "IP-adresse for din rabbitmq-vært:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
-msgstr ""
-"Indtast IP-adressen som vil blive sat i rabbitmq_host-direktivet i nova."
-"conf. Hvis du installerer openstack-proxy-node, så er standarden 127.0.0.1 "
-"sikkert fin. Hvis du installerer openstack-compute-node, så indtast "
-"IP-adressen for din proxy-node-vært."
+msgstr "Indtast IP-adressen som bliver sat i my_ip-direktivet i nova.conf."
 
 #. Type: string
 #. Description
@@ -306,8 +285,8 @@ msgid ""
 "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
 "token."
 msgstr ""
-"For at konfigurere si slutpunkt i Keystone, skal nova-api bruge "
-"authsymbolet for Keystone."
+"For at konfigurere si slutpunkt i Keystone, skal nova-api bruge authsymbolet "
+"for Keystone."
 
 #. Type: string
 #. Description
@@ -322,8 +301,8 @@ msgid ""
 "Enter the IP address that will be used to contact Nova (eg: the Nova "
 "endpoint IP address)."
 msgstr ""
-"Indtast IP-adressen som vil blive brugt til at kontakte Nova (f.eks. "
-"IP-adressen for Novaslutpunktet)."
+"Indtast IP-adressen som vil blive brugt til at kontakte Nova (f.eks. IP-"
+"adressen for Novaslutpunktet)."
 
 #. Type: string
 #. Description
@@ -352,8 +331,8 @@ msgid ""
 "registering the endpoint."
 msgstr ""
 "Openstack kan bruges med tilgængelighedszoner, hvor hver region "
-"repræsenterer et sted. Indtast venligst zonen du ønsker at bruge "
-"når du registrerer slutpunktet."
+"repræsenterer et sted. Indtast venligst zonen du ønsker at bruge når du "
+"registrerer slutpunktet."
 
 #. Type: select
 #. Description
@@ -383,3 +362,16 @@ msgstr ""
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Dette kan senere redigeres i /etc/default/nova-consoleproxy."
 
+#~ msgid "Ip address of your rabbitmq host:"
+#~ msgstr "IP-adresse for din rabbitmq-vært:"
+
+#~ msgid ""
+#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
+#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
+#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
+#~ "compute-node, then enter the IP address of your proxy-node host."
+#~ msgstr ""
+#~ "Indtast IP-adressen som vil blive sat i rabbitmq_host-direktivet i nova."
+#~ "conf. Hvis du installerer openstack-proxy-node, så er standarden "
+#~ "127.0.0.1 sikkert fin. Hvis du installerer openstack-compute-node, så "
+#~ "indtast IP-adressen for din proxy-node-vært."
