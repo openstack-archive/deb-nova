@@ -24,13 +24,6 @@ manage_nova_my_ip_field () {
 	fi
 }
 
-manage_nova_rabbitmq_host () {
-	db_get nova/rabbit-host
-	if [ -n "${RET}" ] ; then
-		pkgos_inifile set ${NOVA_CONF} DEFAULT rabbit_host ${RET}
-	fi
-}
-
 manage_keystone_auth_fields () {
 	db_get nova/auth-host
 	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken auth_host ${RET}
@@ -73,7 +66,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 
 	# Tweak config files depending on debconf answers
 	pkgos_dbc_postinst /etc/nova/nova.conf DEFAULT sql_connection nova $@
-	pkgos_rabbit_read_conf /etc/nova/nova.conf DEFAULT nova
+	pkgos_rabbit_write_conf /etc/nova/nova.conf DEFAULT nova
 	manage_nova_api_field
 	manage_nova_my_ip_field
 	manage_keystone_auth_fields
