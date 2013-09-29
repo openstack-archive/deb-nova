@@ -181,7 +181,7 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dbconfig-common,
-         iproute2,
+         iproute2 | iproute,
          python-amqplib,
          python-configobj,
          python-iso8601,
