@@ -50,6 +50,8 @@ nova (2013.1.2-3) unstable; urgency=low
   * Added missing nova-common pre-depends: net-tools.
   * Fixed upgrade of nova-xcp-network to nova-xcp-plugins (Closes: #718965).
 
+ -- Thomas Goirand <zigo@debian.org>  Wed, 07 Aug 2013 11:28:26 +0200
+
 nova (2013.1.2-1) unstable; urgency=low
 
   * Uploading to unstable.
