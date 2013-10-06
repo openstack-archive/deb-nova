@@ -1,8 +1,54 @@
-nova (2013.2~rc1-1) unstable; urgency=low
+nova (2013.2~rc1-1) experimental; urgency=low
 
   * New upstream release.
 
  -- Thomas Goirand <zigo@debian.org>  Sat, 29 Jun 2013 22:50:28 +0800
+
+nova (2013.1.3-2) unstable; urgency=low
+
+  * Removes XCP support to allow Ocaml transition to testing until XCP is
+    fixed and updated.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 25 Sep 2013 10:15:47 +0800
+
+nova (2013.1.3-1) unstable; urgency=low
+
+  * New upstream point release.
+  * Fixed wrong chown in upstart script (sed s/Root/root/).
+  * Adds new debconf template translations:
+    - Brazilian Portuguese, thanks to Adriano Rafael Gomes (Closes: #718710).
+    - Japanese, thanks to victory (Closes: #718924).
+  * Debconf translation updates:
+    - Danish, thanks to Joe Dalton (Closes: #720005).
+    - Portuguese, thanks to the Traduz team (Closes: #720315).
+    - Czech, thanks to Michal Šimůnek (Closes: #721039).
+    - Russian, thanks to Yuri Kozlov (Closes: #721259).
+  * Adds iproute to nova-common depends (Closes: #719138).
+  * Removes Make-nova-api-use-servicegroup.API.service_is_up.patch applied
+    upstream.
+  * Removes CVE-2013-2256_Make_flavors_is_public_option_actually_work.patch
+    now applied upstream.
+  * Removes CVE-2013-4185_Use_cached_nwinfo_for_secgroup_rules.patch now
+    applied upstream.
+  * CVE-2013-4278: Applies upstream patch (Closes: #720602).
+  * Added patch to fix Nova networking.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 22 Aug 2013 12:10:46 +0200
+
+nova (2013.1.2-3) unstable; urgency=low
+
+  [ Julien Cristau ]
+  * Add logrotate configuration for nova-manage.log.
+
+  [ Thomas Goirand ]
+  * Added some logic to purge /etc/init.d/nova-xcp-network if it's there, and
+    have upgrade working (Closes: #718965). Thanks to Andreas Beckmann for his
+    bug report.
+  * CVE-2013-2256: fixes ACL on public flavors (Closes: #718905).
+  * CVE-2013-4185: stops a potential DOS with source security groups by using
+    cached nwinfo for secgroup rules (Closes: #718907).
+  * Added missing nova-common pre-depends: net-tools.
+  * Fixed upgrade of nova-xcp-network to nova-xcp-plugins (Closes: #718965).
 
 nova (2013.1.2-1) unstable; urgency=low
 
