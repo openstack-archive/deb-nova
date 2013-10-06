@@ -16,8 +16,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import inspect
+
 from nova import context
 from nova import exception
+from nova.openstack.common import gettextutils
 from nova import test
 
 
@@ -43,7 +46,7 @@ def bad_function_exception(self, context, extra, blah="a", boo="b", zoo=None):
     raise test.TestingException()
 
 
-class WrapExceptionTestCase(test.TestCase):
+class WrapExceptionTestCase(test.NoDBTestCase):
     def test_wrap_exception_good_return(self):
         wrapped = exception.wrap_exception('foo')
         self.assertEquals(99, wrapped(good_function)(1, 2))
@@ -56,11 +59,12 @@ class WrapExceptionTestCase(test.TestCase):
                           wrapped(bad_function_exception), 1, ctxt, 3, zoo=3)
         self.assertEquals(notifier.provided_event, "bad_function_exception")
         self.assertEquals(notifier.provided_context, ctxt)
+        self.assertEquals(notifier.provided_payload['args']['extra'], 3)
         for key in ['exception', 'args']:
             self.assertTrue(key in notifier.provided_payload.keys())
 
 
-class NovaExceptionTestCase(test.TestCase):
+class NovaExceptionTestCase(test.NoDBTestCase):
     def test_default_error_msg(self):
         class FakeNovaException(exception.NovaException):
             msg_fmt = "default message"
@@ -138,8 +142,17 @@ class NovaExceptionTestCase(test.TestCase):
         exc = FakeNovaException_Remote(lame_arg='lame')
         self.assertEquals(exc.format_message(), "some message %(somearg)s")
 
+    def test_format_message_gettext_msg_returned(self):
+        class FakeNovaException(exception.NovaException):
+            msg_fmt = gettextutils.Message("Some message %(param)s", 'nova')
 
-class ExceptionTestCase(test.TestCase):
+        exc = FakeNovaException(param='blah')
+        msg = exc.format_message()
+        self.assertIsInstance(msg, gettextutils.Message)
+        self.assertEqual(msg, "Some message blah")
+
+
+class ExceptionTestCase(test.NoDBTestCase):
     @staticmethod
     def _raise_exc(exc):
         raise exc()
@@ -151,3 +164,26 @@ class ExceptionTestCase(test.TestCase):
             exc = getattr(exception, name)
             if isinstance(exc, type):
                 self.assertRaises(exc, self._raise_exc, exc)
+
+
+class ExceptionValidMessageTestCase(test.NoDBTestCase):
+
+    def test_messages(self):
+        failures = []
+
+        for name, obj in inspect.getmembers(exception):
+            if name in ['NovaException', 'InstanceFaultRollback']:
+                continue
+
+            if not inspect.isclass(obj):
+                continue
+
+            if not issubclass(obj, exception.NovaException):
+                continue
+
+            e = obj
+            if e.msg_fmt == "An unknown exception occurred.":
+                failures.append('%s needs a more specific msg_fmt' % name)
+
+        if failures:
+            self.fail('\n'.join(failures))

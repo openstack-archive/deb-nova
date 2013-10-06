@@ -31,7 +31,7 @@ from nova.virt.vmwareapi import vmops
 from nova.virt.vmwareapi import vmware_images
 
 
-class ConfigDriveTestCase(test.TestCase):
+class ConfigDriveTestCase(test.NoDBTestCase):
     def setUp(self):
         super(ConfigDriveTestCase, self).setUp()
         self.context = context.RequestContext('fake', 'fake', is_admin=False)
@@ -75,7 +75,8 @@ class ConfigDriveTestCase(test.TestCase):
                               'reservation_id': 'r-3t8muvr0',
                               'id': 1,
                               'uuid': 'fake-uuid',
-                              'node': self.node_name}
+                              'node': self.node_name,
+                              'metadata': []}
 
         class FakeInstanceMetadata(object):
             def __init__(self, instance, content=None, extra_md=None):

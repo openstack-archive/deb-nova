@@ -18,7 +18,11 @@ from nova.objects import instance as instance_obj
 from nova.objects import utils
 
 
-class Migration(base.NovaObject):
+class Migration(base.NovaPersistentObject, base.NovaObject):
+    # Version 1.0: Initial version
+    # Version 1.1: String attributes updated to support unicode
+    VERSION = '1.1'
+
     fields = {
         'id': int,
         'source_compute': utils.str_or_none,
@@ -53,18 +57,14 @@ class Migration(base.NovaObject):
 
     @base.remotable
     def create(self, context):
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         updates.pop('id', None)
         db_migration = db.migration_create(context, updates)
         self._from_db_object(context, self, db_migration)
 
     @base.remotable
     def save(self, context):
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         updates.pop('id', None)
         db_migration = db.migration_update(context, self.id, updates)
         self._from_db_object(context, self, db_migration)

@@ -17,7 +17,11 @@ from nova.objects import base
 from nova.objects import utils
 
 
-class KeyPair(base.NovaObject):
+class KeyPair(base.NovaPersistentObject, base.NovaObject):
+    # Version 1.0: Initial version
+    # Version 1.1: String attributes updated to support unicode
+    VERSION = '1.1'
+
     fields = {
         'id': int,
         'name': utils.str_or_none,
@@ -45,9 +49,7 @@ class KeyPair(base.NovaObject):
 
     @base.remotable
     def create(self, context):
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         db_keypair = db.key_pair_create(context, updates)
         self._from_db_object(context, self, db_keypair)
 

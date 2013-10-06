@@ -181,24 +181,6 @@ class VMOps(object):
         self.image_upload_handler = importutils.import_object(
                                 CONF.xenapi_image_upload_handler)
 
-    def _create_kernel_and_ramdisk(self, instance, context, name_label):
-        kernel_file = None
-        ramdisk_file = None
-
-        if instance['kernel_id']:
-            vdis = vm_utils.create_kernel_image(context, self._session,
-                    instance, name_label, instance['kernel_id'],
-                    vm_utils.ImageType.KERNEL)
-            kernel_file = vdis['kernel'].get('file')
-
-        if instance['ramdisk_id']:
-            vdis = vm_utils.create_kernel_image(context, self._session,
-                    instance, name_label, instance['ramdisk_id'],
-                    vm_utils.ImageType.RAMDISK)
-            ramdisk_file = vdis['ramdisk'].get('file')
-
-        return (kernel_file, ramdisk_file)
-
     def agent_enabled(self, instance):
         if CONF.xenapi_disable_agent:
             return False
@@ -210,6 +192,9 @@ class VMOps(object):
             return xapi_agent.XenAPIBasedAgent(self._session, self._virtapi,
                                                instance, vm_ref)
         raise exception.NovaException(_("Error: Agent is disabled"))
+
+    def instance_exists(self, name_label):
+        return vm_utils.lookup(self._session, name_label) is not None
 
     def list_instances(self):
         """List VM instances."""
@@ -289,30 +274,32 @@ class VMOps(object):
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance,
                          block_device_info=None, power_on=True):
-        root_vdi = vm_utils.move_disks(self._session, instance, disk_info)
 
-        if resize_instance:
-            self._resize_instance(instance, root_vdi)
+        def null_step_decorator(f):
+            return f
 
-        name_label = instance['name']
+        def create_disks_step(undo_mgr, disk_image_type, image_meta,
+                              name_label):
+            #TODO(johngarbutt) clean up the move_disks if this is not run
+            root_vdi = vm_utils.move_disks(self._session, instance, disk_info)
 
-        kernel_file, ramdisk_file = self._create_kernel_and_ramdisk(
-            instance, context, name_label)
+            def undo_create_disks():
+                vm_utils.safe_destroy_vdis(self._session, [root_vdi['ref']])
 
-        disk_image_type = vm_utils.determine_disk_image_type(image_meta)
-        vm_ref = self._create_vm(context, instance, instance['name'],
-                                 {'root': root_vdi},
-                                 disk_image_type, network_info, kernel_file,
-                                 ramdisk_file)
+            undo_mgr.undo_with(undo_create_disks)
+            return {'root': root_vdi}
 
-        self._attach_mapped_block_devices(instance, block_device_info)
+        def completed_callback():
+            self._update_instance_progress(context, instance,
+                                           step=5,
+                                           total_steps=RESIZE_TOTAL_STEPS)
 
-        # 5. Start VM
-        if power_on:
-            self._start(instance, vm_ref=vm_ref)
-        self._update_instance_progress(context, instance,
-                                       step=5,
-                                       total_steps=RESIZE_TOTAL_STEPS)
+        self._spawn(context, instance, image_meta, null_step_decorator,
+                    create_disks_step, first_boot=False, injected_files=None,
+                    admin_password=None, network_info=network_info,
+                    block_device_info=block_device_info, name_label=None,
+                    rescue=False, power_on=power_on, resize=resize_instance,
+                    completed_callback=completed_callback)
 
     def _start(self, instance, vm_ref=None, bad_volumes_callback=None):
         """Power on a VM instance."""
@@ -339,42 +326,25 @@ class VMOps(object):
         if bad_volumes_callback and bad_devices:
             bad_volumes_callback(bad_devices)
 
-    def _create_disks(self, context, instance, name_label, disk_image_type,
-                      image_meta, block_device_info=None):
-        vdis = vm_utils.get_vdis_for_instance(context, self._session,
-                                          instance, name_label,
-                                          image_meta.get('id'),
-                                          disk_image_type,
-                                          block_device_info=block_device_info)
-        # Just get the VDI ref once
-        for vdi in vdis.itervalues():
-            vdi['ref'] = self._session.call_xenapi('VDI.get_by_uuid',
-                                                   vdi['uuid'])
-
-        root_vdi = vdis.get('root')
-        if root_vdi:
-            self._resize_instance(instance, root_vdi)
-
-        return vdis
-
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None,
               name_label=None, rescue=False):
-        if name_label is None:
-            name_label = instance['name']
+
+        if block_device_info:
+            LOG.debug(_("Block device information present: %s")
+                      % block_device_info, instance=instance)
+        if block_device_info and not block_device_info['root_device_name']:
+            block_device_info['root_device_name'] = self.default_root_dev
 
         step = make_step_decorator(context, instance,
                                    self._update_instance_progress)
 
         @step
-        def determine_disk_image_type_step(undo_mgr):
-            return vm_utils.determine_disk_image_type(image_meta)
-
-        @step
-        def create_disks_step(undo_mgr, disk_image_type, image_meta):
-            vdis = self._create_disks(context, instance, name_label,
-                                      disk_image_type, image_meta,
-                                      block_device_info=block_device_info)
+        def create_disks_step(undo_mgr, disk_image_type, image_meta,
+                              name_label):
+            vdis = vm_utils.get_vdis_for_instance(context, self._session,
+                        instance, name_label, image_meta.get('id'),
+                        disk_image_type, block_device_info=block_device_info)
 
             def undo_create_disks():
                 vdi_refs = [vdi['ref'] for vdi in vdis.values()
@@ -384,17 +354,33 @@ class VMOps(object):
             undo_mgr.undo_with(undo_create_disks)
             return vdis
 
+        self._spawn(context, instance, image_meta, step, create_disks_step,
+                    True, injected_files, admin_password,
+                    network_info, block_device_info, name_label, rescue)
+
+    def _spawn(self, context, instance, image_meta, step, create_disks_step,
+               first_boot, injected_files=None, admin_password=None,
+               network_info=None, block_device_info=None,
+               name_label=None, rescue=False, power_on=True, resize=True,
+               completed_callback=None):
+        if name_label is None:
+            name_label = instance['name']
+
+        self._ensure_instance_name_unique(name_label)
+        self._ensure_enough_free_mem(instance)
+
+        @step
+        def determine_disk_image_type_step(undo_mgr):
+            return vm_utils.determine_disk_image_type(image_meta)
+
         @step
         def create_kernel_ramdisk_step(undo_mgr):
-            kernel_file, ramdisk_file = self._create_kernel_and_ramdisk(
-                instance, context, name_label)
+            kernel_file, ramdisk_file = vm_utils.create_kernel_and_ramdisk(
+                    context, self._session, instance, name_label)
 
             def undo_create_kernel_ramdisk():
-                if kernel_file or ramdisk_file:
-                    LOG.debug(_("Removing kernel/ramdisk files from dom0"),
-                              instance=instance)
-                    vm_utils.destroy_kernel_ramdisk(
-                            self._session, kernel_file, ramdisk_file)
+                vm_utils.destroy_kernel_ramdisk(self._session, instance,
+                        kernel_file, ramdisk_file)
 
             undo_mgr.undo_with(undo_create_kernel_ramdisk)
             return kernel_file, ramdisk_file
@@ -427,9 +413,16 @@ class VMOps(object):
                     LOG.warning(_('ipxe_boot is True but no ISO image found'),
                                 instance=instance)
 
+            root_vdi = vdis.get('root')
+            if root_vdi and resize:
+                self._resize_up_root_vdi(instance, root_vdi)
+
             self._attach_disks(instance, vm_ref, name_label, vdis,
                                disk_image_type, admin_password,
                                injected_files)
+            if not first_boot:
+                self._attach_mapped_block_devices(instance,
+                                                  block_device_info)
 
         if rescue:
             # NOTE(johannes): Attach root disk to rescue VM now, before
@@ -437,52 +430,45 @@ class VMOps(object):
             # on non-PV guests
             @step
             def attach_root_disk_step(undo_mgr, vm_ref):
-                orig_vm_ref = vm_utils.lookup(self._session, instance['name'])
-                vdi_ref = self._find_root_vdi_ref(orig_vm_ref)
+                vbd_ref = self._attach_orig_disk_for_rescue(instance, vm_ref)
 
-                vm_utils.create_vbd(self._session, vm_ref, vdi_ref,
-                                    DEVICE_RESCUE, bootable=False)
+                def undo_attach_root_disk():
+                    # destroy the vbd in preparation to re-attach the VDI
+                    # to its original VM.  (does not delete VDI)
+                    vm_utils.destroy_vbd(self._session, vbd_ref)
 
-        @step
-        def setup_network_step(undo_mgr, vm_ref, vdis):
-            self._setup_vm_networking(instance, vm_ref, vdis, network_info,
-                    rescue)
+                undo_mgr.undo_with(undo_attach_root_disk)
 
         @step
-        def inject_instance_data_step(undo_mgr, vm_ref):
-            self.inject_instance_metadata(instance, vm_ref)
-            self.inject_auto_disk_config(instance, vm_ref)
+        def inject_instance_data_step(undo_mgr, vm_ref, vdis):
+            self._inject_instance_metadata(instance, vm_ref)
+            self._inject_auto_disk_config(instance, vm_ref)
+            if first_boot:
+                self._inject_hostname(instance, vm_ref, rescue)
+            self._file_inject_vm_settings(instance, vm_ref, vdis, network_info)
+            self.inject_network_info(instance, network_info, vm_ref)
 
         @step
-        def prepare_security_group_filters_step(undo_mgr):
-            try:
-                self.firewall_driver.setup_basic_filtering(
-                        instance, network_info)
-            except NotImplementedError:
-                # NOTE(salvatore-orlando): setup_basic_filtering might be
-                # empty or not implemented at all, as basic filter could
-                # be implemented with VIF rules created by xapi plugin
-                pass
-
-            self.firewall_driver.prepare_instance_filter(instance,
-                                                         network_info)
+        def setup_network_step(undo_mgr, vm_ref):
+            self._create_vifs(instance, vm_ref, network_info)
+            self._prepare_instance_filter(instance, network_info)
 
         @step
         def boot_instance_step(undo_mgr, vm_ref):
-            self._boot_new_instance(instance, vm_ref, injected_files,
-                                    admin_password)
+            if power_on:
+                self._start(instance, vm_ref)
+                self._wait_for_instance_to_start(instance, vm_ref)
+
+        @step
+        def configure_booted_instance_step(undo_mgr, vm_ref):
+            if first_boot:
+                self._configure_new_instance_with_agent(instance, vm_ref,
+                        injected_files, admin_password)
+                self._remove_hostname(instance, vm_ref)
 
         @step
         def apply_security_group_filters_step(undo_mgr):
             self.firewall_driver.apply_instance_filter(instance, network_info)
-
-        @step
-        def bdev_set_default_root(undo_mgr):
-            if block_device_info:
-                LOG.debug(_("Block device information present: %s")
-                          % block_device_info, instance=instance)
-            if block_device_info and not block_device_info['root_device_name']:
-                block_device_info['root_device_name'] = self.default_root_dev
 
         undo_mgr = utils.UndoManager()
         try:
@@ -491,56 +477,52 @@ class VMOps(object):
             # over the network and images can be several gigs in size. To
             # avoid progress remaining at 0% for too long, make sure the
             # first step is something that completes rather quickly.
-            bdev_set_default_root(undo_mgr)
             disk_image_type = determine_disk_image_type_step(undo_mgr)
 
-            vdis = create_disks_step(undo_mgr, disk_image_type, image_meta)
+            vdis = create_disks_step(undo_mgr, disk_image_type, image_meta,
+                                     name_label)
             kernel_file, ramdisk_file = create_kernel_ramdisk_step(undo_mgr)
+
             vm_ref = create_vm_record_step(undo_mgr, vdis, disk_image_type,
                     kernel_file, ramdisk_file)
             attach_disks_step(undo_mgr, vm_ref, vdis, disk_image_type)
-            setup_network_step(undo_mgr, vm_ref, vdis)
-            inject_instance_data_step(undo_mgr, vm_ref)
-            prepare_security_group_filters_step(undo_mgr)
+
+            inject_instance_data_step(undo_mgr, vm_ref, vdis)
+            setup_network_step(undo_mgr, vm_ref)
 
             if rescue:
                 attach_root_disk_step(undo_mgr, vm_ref)
 
             boot_instance_step(undo_mgr, vm_ref)
 
+            configure_booted_instance_step(undo_mgr, vm_ref)
             apply_security_group_filters_step(undo_mgr)
+
+            if completed_callback:
+                completed_callback()
         except Exception:
             msg = _("Failed to spawn, rolling back")
             undo_mgr.rollback_and_reraise(msg=msg, instance=instance)
 
-    def _create_vm(self, context, instance, name_label, vdis,
-            disk_image_type, network_info, kernel_file=None,
-            ramdisk_file=None, rescue=False):
-        """Create VM instance."""
-        vm_ref = self._create_vm_record(context, instance, name_label,
-                vdis, disk_image_type, kernel_file, ramdisk_file)
-        self._attach_disks(instance, vm_ref, name_label, vdis,
-                disk_image_type)
-        self._setup_vm_networking(instance, vm_ref, vdis, network_info,
-                rescue)
-        self.inject_instance_metadata(instance, vm_ref)
+    def _attach_orig_disk_for_rescue(self, instance, vm_ref):
+        orig_vm_ref = vm_utils.lookup(self._session, instance['name'])
+        vdi_ref = self._find_root_vdi_ref(orig_vm_ref)
+        return vm_utils.create_vbd(self._session, vm_ref, vdi_ref,
+                                   DEVICE_RESCUE, bootable=False)
 
-        return vm_ref
-
-    def _setup_vm_networking(self, instance, vm_ref, vdis, network_info,
-            rescue):
-        # Alter the image before VM start for network injection.
+    def _file_inject_vm_settings(self, instance, vm_ref, vdis, network_info):
         if CONF.flat_injected:
             vm_utils.preconfigure_instance(self._session, instance,
                                            vdis['root']['ref'], network_info)
 
-        self._create_vifs(vm_ref, instance, network_info)
-        self.inject_network_info(instance, network_info, vm_ref)
+    def _ensure_instance_name_unique(self, name_label):
+        vm_ref = vm_utils.lookup(self._session, name_label)
+        if vm_ref is not None:
+            raise exception.InstanceExists(name=name_label)
 
-        hostname = instance['hostname']
-        if rescue:
-            hostname = 'RESCUE-%s' % hostname
-        self.inject_hostname(instance, vm_ref, hostname)
+    def _ensure_enough_free_mem(self, instance):
+        if not vm_utils.is_enough_free_mem(self._session, instance):
+            raise exception.InsufficientFreeMemory(uuid=instance['uuid'])
 
     def _create_vm_record(self, context, instance, name_label, vdis,
             disk_image_type, kernel_file, ramdisk_file):
@@ -550,14 +532,6 @@ class VMOps(object):
         check only accounts for running VMs, so it can miss other builds
         that are in progress.)
         """
-        vm_ref = vm_utils.lookup(self._session, name_label)
-        if vm_ref is not None:
-            raise exception.InstanceExists(name=name_label)
-
-        # Ensure enough free memory is available
-        if not vm_utils.ensure_free_mem(self._session, instance):
-            raise exception.InsufficientFreeMemory(uuid=instance['uuid'])
-
         mode = self._determine_vm_mode(instance, vdis, disk_image_type)
         if instance['vm_mode'] != mode:
             # Update database with normalized (or determined) value
@@ -648,15 +622,7 @@ class VMOps(object):
                                           admin_password=admin_password,
                                           files=files)
 
-    def _boot_new_instance(self, instance, vm_ref, injected_files,
-                           admin_password):
-        """Boot a new instance and configure it."""
-        LOG.debug(_('Starting VM'), instance=instance)
-        self._start(instance, vm_ref)
-
-        ctx = nova_context.get_admin_context()
-
-        # Wait for boot to finish
+    def _wait_for_instance_to_start(self, instance, vm_ref):
         LOG.debug(_('Waiting for instance state to become running'),
                   instance=instance)
         expiration = time.time() + CONF.xenapi_running_timeout
@@ -664,10 +630,12 @@ class VMOps(object):
             state = self.get_info(instance, vm_ref)['state']
             if state == power_state.RUNNING:
                 break
-
             greenthread.sleep(0.5)
 
+    def _configure_new_instance_with_agent(self, instance, vm_ref,
+                                           injected_files, admin_password):
         if self.agent_enabled(instance):
+            ctx = nova_context.get_admin_context()
             agent_build = self._virtapi.agent_build_get_by_triple(
                 ctx, 'xen', instance['os_type'], instance['architecture'])
             if agent_build:
@@ -711,7 +679,18 @@ class VMOps(object):
             # Reset network config
             agent.resetnetwork()
 
-        self.remove_hostname(instance, vm_ref)
+    def _prepare_instance_filter(self, instance, network_info):
+        try:
+            self.firewall_driver.setup_basic_filtering(
+                    instance, network_info)
+        except NotImplementedError:
+            # NOTE(salvatore-orlando): setup_basic_filtering might be
+            # empty or not implemented at all, as basic filter could
+            # be implemented with VIF rules created by xapi plugin
+            pass
+
+        self.firewall_driver.prepare_instance_filter(instance,
+                                                     network_info)
 
     def _get_vm_opaque_ref(self, instance, check_rescue=False):
         """Get xapi OpaqueRef from a db record.
@@ -720,8 +699,7 @@ class VMOps(object):
         """
         vm_ref = vm_utils.lookup(self._session, instance['name'], check_rescue)
         if vm_ref is None:
-            raise exception.NotFound(_('Could not find VM with name %s') %
-                                     instance['name'])
+            raise exception.InstanceNotFound(instance_id=instance['name'])
         return vm_ref
 
     def _acquire_bootlock(self, vm):
@@ -803,7 +781,7 @@ class VMOps(object):
         # instance's progress field as each step is completed.
         #
         # For a first cut this should be fine, however, for large VM images,
-        # the _create_disks step begins to dominate the equation. A
+        # the get_vdis_for_instance step begins to dominate the equation. A
         # better approximation would use the percentage of the VM image that
         # has been streamed to the destination host.
         progress = round(float(step) / total_steps * 100)
@@ -942,12 +920,16 @@ class VMOps(object):
                                        step=0,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
-        vm_ref = self._get_vm_opaque_ref(instance)
-        sr_path = vm_utils.get_sr_path(self._session)
-
         old_gb = instance['root_gb']
         new_gb = instance_type['root_gb']
         resize_down = old_gb > new_gb
+
+        if new_gb == 0 and old_gb != 0:
+            reason = _("Can't resize a disk to 0 GB.")
+            raise exception.ResizeError(reason=reason)
+
+        vm_ref = self._get_vm_opaque_ref(instance)
+        sr_path = vm_utils.get_sr_path(self._session)
 
         if resize_down:
             self._migrate_disk_resizing_down(
@@ -974,7 +956,7 @@ class VMOps(object):
             self._volumeops.detach_volume(connection_info, name_label,
                                           mount_device)
 
-    def _resize_instance(self, instance, root_vdi):
+    def _resize_up_root_vdi(self, instance, root_vdi):
         """Resize an instances root disk."""
 
         new_disk_size = instance['root_gb'] * 1024 * 1024 * 1024
@@ -1096,7 +1078,7 @@ class VMOps(object):
                          "0123456789-_@")
         return ''.join([x in allowed_chars and x or '_' for x in key])
 
-    def inject_instance_metadata(self, instance, vm_ref):
+    def _inject_instance_metadata(self, instance, vm_ref):
         """Inject instance metadata into xenstore."""
         @utils.synchronized('xenstore-' + instance['uuid'])
         def store_meta(topdir, data_dict):
@@ -1109,7 +1091,7 @@ class VMOps(object):
         # Store user metadata
         store_meta('vm-data/user-metadata', utils.instance_meta(instance))
 
-    def inject_auto_disk_config(self, instance, vm_ref):
+    def _inject_auto_disk_config(self, instance, vm_ref):
         """Inject instance's auto_disk_config attribute into xenstore."""
         @utils.synchronized('xenstore-' + instance['uuid'])
         def store_auto_disk_config(key, value):
@@ -1216,7 +1198,8 @@ class VMOps(object):
         (kernel, ramdisk) = vm_utils.lookup_kernel_ramdisk(self._session,
                                                            vm_ref)
         if kernel or ramdisk:
-            vm_utils.destroy_kernel_ramdisk(self._session, kernel, ramdisk)
+            vm_utils.destroy_kernel_ramdisk(self._session, instance,
+                                            kernel, ramdisk)
             LOG.debug(_("kernel/ramdisk files removed"), instance=instance)
 
     def _destroy_rescue_instance(self, rescue_vm_ref, original_vm_ref):
@@ -1580,7 +1563,7 @@ class VMOps(object):
                     pass
         update_nwinfo()
 
-    def _create_vifs(self, vm_ref, instance, network_info):
+    def _create_vifs(self, instance, vm_ref, network_info):
         """Creates vifs for an instance."""
 
         LOG.debug(_("Creating vifs"), instance=instance)
@@ -1618,8 +1601,12 @@ class VMOps(object):
         else:
             raise NotImplementedError()
 
-    def inject_hostname(self, instance, vm_ref, hostname):
+    def _inject_hostname(self, instance, vm_ref, rescue):
         """Inject the hostname of the instance into the xenstore."""
+        hostname = instance['hostname']
+        if rescue:
+            hostname = 'RESCUE-%s' % hostname
+
         if instance['os_type'] == "windows":
             # NOTE(jk0): Windows hostnames can only be <= 15 chars.
             hostname = hostname[:15]
@@ -1627,7 +1614,7 @@ class VMOps(object):
         LOG.debug(_("Injecting hostname to xenstore"), instance=instance)
         self._add_to_param_xenstore(vm_ref, 'vm-data/hostname', hostname)
 
-    def remove_hostname(self, instance, vm_ref):
+    def _remove_hostname(self, instance, vm_ref):
         LOG.debug(_("Removing hostname from xenstore"), instance=instance)
         self._remove_from_param_xenstore(vm_ref, 'vm-data/hostname')
 
@@ -1911,13 +1898,21 @@ class VMOps(object):
                 host_ref = self._get_host_opaque_ref(context,
                                                      destination_hostname)
                 self._session.call_xenapi("VM.pool_migrate", vm_ref,
-                                          host_ref, {})
+                                          host_ref, {"live": "true"})
             post_method(context, instance, destination_hostname,
                         block_migration)
         except Exception:
             with excutils.save_and_reraise_exception():
                 recover_method(context, instance, destination_hostname,
                                block_migration)
+
+    def post_live_migration_at_destination(self, context, instance,
+                                           network_info, block_migration,
+                                           block_device_info):
+        # FIXME(johngarbutt): we should block all traffic until we have
+        # applied security groups, however this requires changes to XenServer
+        self._prepare_instance_filter(instance, network_info)
+        self.firewall_driver.apply_instance_filter(instance, network_info)
 
     def get_per_instance_usage(self):
         """Get usage info about each active instance."""

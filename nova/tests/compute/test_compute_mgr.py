@@ -445,13 +445,17 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertEqual(instance.power_state, power_state.SHUTDOWN)
 
     def _test_sync_to_stop(self, power_state, vm_state, driver_power_state,
-                           stop=True):
+                           stop=True, force=False):
         instance = self._get_sync_instance(power_state, vm_state)
         instance.refresh()
         instance.save()
         self.mox.StubOutWithMock(self.compute.compute_api, 'stop')
+        self.mox.StubOutWithMock(self.compute.compute_api, 'force_stop')
         if stop:
-            self.compute.compute_api.stop(self.context, instance)
+            if force:
+                self.compute.compute_api.force_stop(self.context, instance)
+            else:
+                self.compute.compute_api.stop(self.context, instance)
         self.mox.ReplayAll()
         self.compute._sync_instance_power_state(self.context, instance,
                                                 driver_power_state)
@@ -463,7 +467,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                    power_state.SUSPENDED):
             self._test_sync_to_stop(power_state.RUNNING, vm_states.ACTIVE, ps)
         self._test_sync_to_stop(power_state.SHUTDOWN, vm_states.STOPPED,
-                                power_state.RUNNING)
+                                power_state.RUNNING, force=True)
 
     def test_sync_instance_power_state_to_no_stop(self):
         for ps in (power_state.PAUSED, power_state.NOSTATE):
@@ -502,7 +506,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                                  'get_by_filters')
         instance_obj.InstanceList.get_by_filters(
             {'read_deleted': 'yes'},
-            {'deleted': True, 'host': 'fake-mini', 'cleaned': False},
+            {'deleted': True, 'soft_deleted': False, 'host': 'fake-mini',
+             'cleaned': False},
             expected_attrs=['info_cache', 'security_groups',
                             'system_metadata']).AndReturn([a, b, c])
 
@@ -595,28 +600,28 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         # Good path
         self.compute.swap_volume(self.context, old_volume_id, new_volume_id,
                                  {'uuid': 'fake'})
-        self.assertTrue(volumes[old_volume_id]['status'], 'available')
-        self.assertTrue(volumes[new_volume_id]['status'], 'in-use')
+        self.assertEqual(volumes[old_volume_id]['status'], 'available')
+        self.assertEqual(volumes[new_volume_id]['status'], 'in-use')
 
         # Error paths
         volumes[old_volume_id]['status'] = 'detaching'
-        volumes[old_volume_id]['status'] = 'attaching'
+        volumes[new_volume_id]['status'] = 'attaching'
         self.stubs.Set(self.compute.driver, 'swap_volume', fake_func_exc)
         self.assertRaises(AttributeError, self.compute.swap_volume,
                           self.context, old_volume_id, new_volume_id,
                           {'uuid': 'fake'})
-        self.assertTrue(volumes[old_volume_id]['status'], 'detaching')
-        self.assertTrue(volumes[new_volume_id]['status'], 'attaching')
+        self.assertEqual(volumes[old_volume_id]['status'], 'detaching')
+        self.assertEqual(volumes[new_volume_id]['status'], 'attaching')
 
         volumes[old_volume_id]['status'] = 'detaching'
-        volumes[old_volume_id]['status'] = 'attaching'
+        volumes[new_volume_id]['status'] = 'attaching'
         self.stubs.Set(self.compute.volume_api, 'initialize_connection',
                        fake_func_exc)
         self.assertRaises(AttributeError, self.compute.swap_volume,
                           self.context, old_volume_id, new_volume_id,
                           {'uuid': 'fake'})
-        self.assertTrue(volumes[old_volume_id]['status'], 'detaching')
-        self.assertTrue(volumes[new_volume_id]['status'], 'attaching')
+        self.assertEqual(volumes[old_volume_id]['status'], 'detaching')
+        self.assertEqual(volumes[new_volume_id]['status'], 'available')
 
     def test_check_can_live_migrate_source(self):
         is_volume_backed = 'volume_backed'

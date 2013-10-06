@@ -63,6 +63,10 @@ def add_instance_fault_from_exc(context, conductor,
             message = None
     if not message:
         message = fault.__class__.__name__
+    # NOTE(dripton) The message field in the database is limited to 255 chars.
+    # MySQL silently truncates overly long messages, but PostgreSQL throws an
+    # error if we don't truncate it.
+    u_message = unicode(message)[:255]
     details = ''
 
     if exc_info and code == 500:
@@ -72,7 +76,7 @@ def add_instance_fault_from_exc(context, conductor,
     values = {
         'instance_uuid': instance['uuid'],
         'code': code,
-        'message': unicode(message),
+        'message': u_message,
         'details': unicode(details),
         'host': CONF.host
     }
@@ -223,6 +227,29 @@ def _get_unused_letter(used_letters):
     # NOTE(vish): prepend ` so all shorter sequences sort first
     letters.sort(key=lambda x: x.rjust(2, '`'))
     return letters[0]
+
+
+def get_image_metadata(context, image_service, image_id, instance):
+    # If the base image is still available, get its metadata
+    try:
+        image = image_service.show(context, image_id)
+    except Exception as e:
+        LOG.warning(_("Can't access image %(image_id)s: %(error)s"),
+                    {"image_id": image_id, "error": e}, instance=instance)
+        image_system_meta = {}
+    else:
+        instance_type = flavors.extract_flavor(instance)
+        image_system_meta = utils.get_system_metadata_from_image(
+                image, instance_type)
+
+    # Get the system metadata from the instance
+    system_meta = utils.instance_sys_meta(instance)
+
+    # Merge the metadata from the instance with the image's, if any
+    system_meta.update(image_system_meta)
+
+    # Convert the system metadata to image metadata
+    return utils.get_image_from_system_metadata(system_meta)
 
 
 def notify_usage_exists(notifier, context, instance_ref, current_period=False,

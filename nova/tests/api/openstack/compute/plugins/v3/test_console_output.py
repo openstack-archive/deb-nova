@@ -52,7 +52,7 @@ def fake_get_not_found(*args, **kwargs):
     raise exception.InstanceNotFound(instance_id='')
 
 
-class ConsoleOutputExtensionTest(test.TestCase):
+class ConsoleOutputExtensionTest(test.NoDBTestCase):
     application_type = "application/json"
 
     def setUp(self):
@@ -60,8 +60,7 @@ class ConsoleOutputExtensionTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'get_console_output',
                        fake_get_console_output)
         self.stubs.Set(compute_api.API, 'get', fake_get)
-        self.app = fakes.wsgi_app_v3(init_only=('servers',
-                                                'os-console-output'))
+        self.app = fakes.wsgi_app_v3(init_only=('servers', 'console-output'))
 
     def _create_request(self, length_dict={}):
         body = {'get_console_output': length_dict}

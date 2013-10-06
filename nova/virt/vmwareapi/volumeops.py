@@ -165,12 +165,17 @@ class VMwareVolumeOps(object):
     def get_volume_connector(self, instance):
         """Return volume connector information."""
         instance_name = instance['name']
-        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        try:
+            vm_ref = vm_util.get_vm_ref(self._session, instance)
+        except exception.InstanceNotFound:
+            vm_ref = None
         iqn = volume_util.get_host_iqn(self._session, self._cluster)
-        return {'ip': CONF.vmware.host_ip,
-                'initiator': iqn,
-                'host': CONF.vmware.host_ip,
-                'instance': vm_ref.value}
+        connector = {'ip': CONF.vmware.host_ip,
+                     'initiator': iqn,
+                     'host': CONF.vmware.host_ip}
+        if vm_ref:
+            connector['instance'] = vm_ref.value
+        return connector
 
     def _get_unit_number(self, mountpoint, unit_number):
         """Get a unit number for the device."""
@@ -445,7 +450,8 @@ class VMwareVolumeOps(object):
         else:
             raise exception.VolumeDriverNotFound(driver_type=driver_type)
 
-    def attach_root_volume(self, connection_info, instance, mountpoint):
+    def attach_root_volume(self, connection_info, instance, mountpoint,
+                           datastore):
         """Attach a root volume to the VM instance."""
         driver_type = connection_info['driver_volume_type']
         LOG.debug(_("Root volume attach. Driver type: %s"), driver_type,
@@ -453,9 +459,11 @@ class VMwareVolumeOps(object):
         if driver_type == 'vmdk':
             vm_ref = vm_util.get_vm_ref(self._session, instance)
             data = connection_info['data']
-            device = self._get_vmdk_backed_disk_device(vm_ref, data)
             # Get the volume ref
             volume_ref = self._get_volume_ref(data['volume'])
-            self._consolidate_vmdk_volume(instance, vm_ref, device, volume_ref)
+            # Pick the resource pool on which the instance resides. Move the
+            # volume to the datastore of the instance.
+            res_pool = self._get_res_pool_of_vm(vm_ref)
+            self._relocate_vmdk_volume(volume_ref, res_pool, datastore)
 
         self.attach_volume(connection_info, instance, mountpoint)

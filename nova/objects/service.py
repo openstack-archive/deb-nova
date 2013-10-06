@@ -18,12 +18,18 @@ from nova import exception
 from nova.objects import base
 from nova.objects import compute_node
 from nova.objects import utils
+from nova.openstack.common.gettextutils import _
+from nova.openstack.common import log as logging
 
 
-class Service(base.NovaObject):
+LOG = logging.getLogger(__name__)
+
+
+class Service(base.NovaPersistentObject, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added compute_node nested object
-    VERSION = '1.1'
+    # Version 1.2: String attributes updated to support unicode
+    VERSION = '1.2'
 
     fields = {
         'id': int,
@@ -34,8 +40,7 @@ class Service(base.NovaObject):
         'disabled': bool,
         'disabled_reason': utils.str_or_none,
         'availability_zone': utils.str_or_none,
-        'compute_node': utils.nested_object_or_none(
-            compute_node.ComputeNode),
+        'compute_node': utils.nested_object(compute_node.ComputeNode),
         }
 
     @staticmethod
@@ -65,6 +70,11 @@ class Service(base.NovaObject):
         return service
 
     def obj_load_attr(self, attrname):
+        LOG.debug(_("Lazy-loading `%(attr)s' on %(name)s id %(id)s"),
+                  {'attr': attrname,
+                   'name': self.obj_name(),
+                   'id': self.id,
+                   })
         if attrname != 'compute_node':
             raise exception.ObjectActionError(
                 action='obj_load_attr',
@@ -99,17 +109,13 @@ class Service(base.NovaObject):
 
     @base.remotable
     def create(self, context):
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         db_service = db.service_create(context, updates)
         self._from_db_object(context, self, db_service)
 
     @base.remotable
     def save(self, context):
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         updates.pop('id', None)
         db_service = db.service_update(context, self.id, updates)
         self._from_db_object(context, self, db_service)

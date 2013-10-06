@@ -23,7 +23,7 @@ from nova import test
 from nova.tests.cells import fakes
 
 
-class FiltersTestCase(test.TestCase):
+class FiltersTestCase(test.NoDBTestCase):
     """Makes sure the proper filters are in the directory."""
 
     def test_all_filters(self):
@@ -32,7 +32,7 @@ class FiltersTestCase(test.TestCase):
         self.assertIn("TargetCellFilter", class_names)
 
 
-class _FilterTestClass(test.TestCase):
+class _FilterTestClass(test.NoDBTestCase):
     """Base class for testing individual filter plugins."""
     filter_cls_name = None
 
@@ -154,10 +154,10 @@ class TestTargetCellFilter(_FilterTestClass):
                         'routing_path': current_cell,
                         'scheduler': self.scheduler,
                         'context': self.context,
-                        'host_sched_kwargs': 'meow'}
+                        'host_sched_kwargs': 'meow',
+                        'cell_scheduler_method': 'schedule_run_instance'}
         # None is returned to bypass further scheduling.
-        self.assertEqual(None,
-                         self._filter_cells(cells, filter_props))
+        self.assertEqual(None, self._filter_cells(cells, filter_props))
         # The filter should have re-scheduled to the child cell itself.
         expected_info = {'ctxt': self.context,
                          'cell': 'fake!cell!path',

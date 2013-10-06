@@ -34,7 +34,13 @@ class fake_session(object):
         return self.ret
 
 
-class VMwareVMUtilTestCase(test.TestCase):
+class partialObject(object):
+    def __init__(self, path='fake-path'):
+        self.path = path
+        self.fault = fake.DataObject()
+
+
+class VMwareVMUtilTestCase(test.NoDBTestCase):
     def setUp(self):
         super(VMwareVMUtilTestCase, self).setUp()
         fake.reset()
@@ -248,3 +254,93 @@ class VMwareVMUtilTestCase(test.TestCase):
         expected = re.sub(r'\s+', '', expected)
         result = re.sub(r'\s+', '', repr(result))
         self.assertEqual(expected, result)
+
+    def test_lsilogic_controller_spec(self):
+        # Test controller spec returned for lsiLogic sas adapter type
+        config_spec = vm_util.create_controller_spec(fake.FakeFactory(), -101,
+                          adapter_type="lsiLogicsas")
+        self.assertEqual("ns0:VirtualLsiLogicSASController",
+                          config_spec.device.obj_name)
+
+    def test_get_vmdk_path_and_adapter_type(self):
+        # Test the adapter_type returned for a lsiLogic sas controller
+        controller_key = 1000
+        filename = '[test_datastore] test_file.vmdk'
+        disk = fake.VirtualDisk()
+        disk.controllerKey = controller_key
+        disk_backing = fake.VirtualDiskFlatVer2BackingInfo()
+        disk_backing.fileName = filename
+        disk.backing = disk_backing
+        controller = fake.VirtualLsiLogicSASController()
+        controller.key = controller_key
+        devices = [disk, controller]
+        vmdk_info = vm_util.get_vmdk_path_and_adapter_type(devices)
+        adapter_type = vmdk_info[2]
+        self.assertEqual('lsiLogicsas', adapter_type)
+
+    def test_get_vmdk_adapter_type(self):
+        # Test for the adapter_type to be used in vmdk descriptor
+        # Adapter type in vmdk descriptor is same for LSI-SAS & LSILogic
+        vmdk_adapter_type = vm_util.get_vmdk_adapter_type("lsiLogic")
+        self.assertEqual("lsiLogic", vmdk_adapter_type)
+        vmdk_adapter_type = vm_util.get_vmdk_adapter_type("lsiLogicsas")
+        self.assertEqual("lsiLogic", vmdk_adapter_type)
+        vmdk_adapter_type = vm_util.get_vmdk_adapter_type("dummyAdapter")
+        self.assertEqual("dummyAdapter", vmdk_adapter_type)
+
+    def _test_get_vnc_config_spec(self, port, password):
+
+        result = vm_util.get_vnc_config_spec(fake.FakeFactory(),
+                                             port, password)
+        return result
+
+    def test_get_vnc_config_spec(self):
+        result = self._test_get_vnc_config_spec(7, None)
+        expected = """{'extraConfig': [
+                          {'value': 'true',
+                           'key': 'RemoteDisplay.vnc.enabled',
+                           'obj_name': 'ns0:OptionValue'},
+                          {'value': 7,
+                           'key': 'RemoteDisplay.vnc.port',
+                           'obj_name': 'ns0:OptionValue'}],
+                       'obj_name': 'ns0:VirtualMachineConfigSpec'}"""
+        expected = re.sub(r'\s+', '', expected)
+        result = re.sub(r'\s+', '', repr(result))
+        self.assertEqual(expected, result)
+
+    def test_get_vnc_config_spec_password(self):
+        result = self._test_get_vnc_config_spec(7, 'password')
+        expected = """{'extraConfig': [
+                          {'value': 'true',
+                           'key': 'RemoteDisplay.vnc.enabled',
+                           'obj_name': 'ns0:OptionValue'},
+                          {'value': 7,
+                           'key': 'RemoteDisplay.vnc.port',
+                           'obj_name': 'ns0:OptionValue'},
+                          {'value':'password',
+                           'key':'RemoteDisplay.vnc.password',
+                           'obj_name':'ns0:OptionValue'}],
+                       'obj_name': 'ns0:VirtualMachineConfigSpec'}"""
+        expected = re.sub(r'\s+', '', expected)
+        result = re.sub(r'\s+', '', repr(result))
+        self.assertEqual(expected, result)
+
+    def test_get_all_cluster_refs_by_name_none(self):
+        fake_objects = fake.FakeRetrieveResult()
+        refs = vm_util.get_all_cluster_refs_by_name(fake_session(fake_objects),
+                                                    ['fake_cluster'])
+        self.assertTrue(not refs)
+
+    def test_get_all_cluster_refs_by_name_exists(self):
+        fake_objects = fake.FakeRetrieveResult()
+        fake_objects.add_object(fake.ClusterComputeResource(name='cluster'))
+        refs = vm_util.get_all_cluster_refs_by_name(fake_session(fake_objects),
+                                                    ['cluster'])
+        self.assertTrue(len(refs) == 1)
+
+    def test_get_all_cluster_refs_by_name_missing(self):
+        fake_objects = fake.FakeRetrieveResult()
+        fake_objects.add_object(partialObject(path='cluster'))
+        refs = vm_util.get_all_cluster_refs_by_name(fake_session(fake_objects),
+                                                    ['cluster'])
+        self.assertTrue(not refs)

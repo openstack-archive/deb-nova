@@ -49,9 +49,13 @@ fake_db_dev = {
     'id': 1,
     'compute_node_id': 1,
     'address': '0000:00:00.1',
-    'product_id': 'p',
     'vendor_id': 'v',
+    'product_id': 'p',
+    'dev_type': 't',
     'status': 'available',
+    'dev_id': 'i',
+    'label': 'l',
+    'instance_uuid': None,
     'extra_info': '{}',
     }
 fake_db_dev_1 = dict(fake_db_dev, vendor_id='v1',
@@ -320,7 +324,7 @@ class PciGetInstanceDevs(test.TestCase):
         def _fake_obj_load_attr(foo, attrname):
             if attrname == 'pci_devices':
                 self.load_attr_called = True
-                foo.pci_devices = None
+                foo.pci_devices = pci_device.PciDeviceList()
 
         inst = fakes.stub_instance(id='1')
         ctxt = context.get_admin_context()

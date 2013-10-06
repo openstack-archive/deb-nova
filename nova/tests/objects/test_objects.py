@@ -26,7 +26,7 @@ from nova.openstack.common import timeutils
 from nova import test
 
 
-class MyObj(base.NovaObject):
+class MyObj(base.NovaPersistentObject, base.NovaObject):
     version = '1.5'
     fields = {'foo': int,
               'bar': str,
@@ -162,7 +162,18 @@ class TestUtils(test.TestCase):
         self.assertEqual(utils.str_or_none('foo'), 'foo')
         self.assertEqual(utils.str_or_none(1), '1')
         self.assertEqual(utils.str_or_none(None), None)
-        self.assertEqual(utils.str_or_none(u'\u30bdfoo'), '\xe3\x82\xbdfoo')
+        self.assertTrue(isinstance(utils.str_or_none('foo'), unicode))
+
+    def test_str_value(self):
+        self.assertEqual('foo', utils.str_value('foo'))
+        self.assertEqual('1', utils.str_value(1))
+        self.assertRaises(ValueError, utils.str_value, None)
+        self.assertTrue(isinstance(utils.str_value('foo'), unicode))
+
+    def test_cstring(self):
+        self.assertEqual('foo', utils.cstring('foo'))
+        self.assertEqual('1', utils.cstring(1))
+        self.assertRaises(ValueError, utils.cstring, None)
 
     def test_ip_or_none(self):
         ip4 = netaddr.IPAddress('1.2.3.4', 4)
@@ -258,11 +269,43 @@ class TestUtils(test.TestCase):
             self.assertEqual(db_objs[index]['missing'], item.missing)
 
 
+def compare_obj(test, obj, db_obj, subs=None, allow_missing=None):
+    """Compare a NovaObject and a dict-like database object.
+
+    This automatically converts TZ-aware datetimes and iterates over
+    the fields of the object.
+
+    :param:test: The TestCase doing the comparison
+    :param:obj: The NovaObject to examine
+    :param:db_obj: The dict-like database object to use as reference
+    :param:subs: A dict of objkey=dbkey field substitutions
+    :param:allow_missing: A list of fields that may not be in db_obj
+    """
+
+    if subs is None:
+        subs = {}
+    if allow_missing is None:
+        allow_missing = []
+
+    for key in obj.fields:
+        if key in allow_missing and not obj.obj_attr_is_set(key):
+            continue
+        obj_val = obj[key]
+        db_key = subs.get(key, key)
+        db_val = db_obj[db_key]
+        if isinstance(obj_val, datetime.datetime):
+            obj_val = obj_val.replace(tzinfo=None)
+        test.assertEqual(db_val, obj_val)
+
+
 class _BaseTestCase(test.TestCase):
     def setUp(self):
         super(_BaseTestCase, self).setUp()
         self.remote_object_calls = list()
         self.context = context.RequestContext('fake-user', 'fake-project')
+
+    def compare_obj(self, obj, db_obj, subs=None, allow_missing=None):
+        compare_obj(self, obj, db_obj, subs=subs, allow_missing=allow_missing)
 
 
 class _LocalTest(_BaseTestCase):
@@ -547,7 +590,7 @@ class _TestObject(object):
         self.assertRaises(AttributeError, obj.get, 'nothing', 3)
 
     def test_object_inheritance(self):
-        base_fields = base.NovaObject.fields.keys()
+        base_fields = base.NovaPersistentObject.fields.keys()
         myobj_fields = ['foo', 'bar', 'missing'] + base_fields
         myobj3_fields = ['new_field']
         self.assertTrue(issubclass(TestSubclassedObject, MyObj))
@@ -557,6 +600,28 @@ class _TestObject(object):
                          len(TestSubclassedObject.fields))
         self.assertEqual(set(myobj_fields) | set(myobj3_fields),
                          set(TestSubclassedObject.fields.keys()))
+
+    def test_get_changes(self):
+        obj = MyObj()
+        self.assertEqual({}, obj.obj_get_changes())
+        obj.foo = 123
+        self.assertEqual({'foo': 123}, obj.obj_get_changes())
+        obj.bar = 'test'
+        self.assertEqual({'foo': 123, 'bar': 'test'}, obj.obj_get_changes())
+        obj.obj_reset_changes()
+        self.assertEqual({}, obj.obj_get_changes())
+
+    def test_obj_fields(self):
+        class TestObj(base.NovaObject):
+            fields = {'foo': int}
+            obj_extra_fields = ['bar']
+
+            @property
+            def bar(self):
+                return 'this is bar'
+
+        obj = TestObj()
+        self.assertEqual(['foo', 'bar'], obj.obj_fields)
 
 
 class TestObject(_LocalTest, _TestObject):
@@ -589,7 +654,7 @@ class TestObjectListBase(test.TestCase):
         objlist = Foo()
         objlist._context = 'foo'
         objlist.objects = [1, 2, 3]
-        self.assertTrue(list(objlist), objlist.objects)
+        self.assertEqual(list(objlist), objlist.objects)
         self.assertEqual(len(objlist), 3)
         self.assertIn(2, objlist)
         self.assertEqual(list(objlist[:1]), [1])

@@ -38,7 +38,6 @@ from xml.sax import saxutils
 
 import eventlet
 import netaddr
-
 from oslo.config import cfg
 
 from nova import exception
@@ -50,6 +49,7 @@ from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova.openstack.common.rpc import common as rpc_common
+from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 
 notify_decorator = 'nova.notifications.notify_decorator'
@@ -349,8 +349,7 @@ def get_my_ipv4_address():
     """
     LOCALHOST = '127.0.0.1'
     try:
-        out = execute('ip', '-f', 'inet', '-o', 'route', 'show',
-                      run_as_root=True)
+        out = execute('ip', '-f', 'inet', '-o', 'route', 'show')
 
         # Find the default route
         regex_default = ('default\s*via\s*'
@@ -382,8 +381,7 @@ def _get_ipv4_address_for_interface(iface):
     """Run ip addr show for an interface and grab its ipv4 addresses
     """
     try:
-        out = execute('ip', '-f', 'inet', '-o', 'addr', 'show', iface,
-                      run_as_root=True)
+        out = execute('ip', '-f', 'inet', '-o', 'addr', 'show', iface)
         regexp_address = re.compile('inet\s*'
                                     '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
         address = [m.group(1) for m in regexp_address.finditer(out[0])
@@ -415,18 +413,6 @@ def get_my_linklocal(interface):
         msg = _("Couldn't get Link Local IP of %(interface)s"
                 " :%(ex)s") % {'interface': interface, 'ex': ex}
         raise exception.NovaException(msg)
-
-
-def parse_mailmap(mailmap='.mailmap'):
-    mapping = {}
-    if os.path.exists(mailmap):
-        fp = open(mailmap, 'r')
-        for l in fp:
-            l = l.strip()
-            if not l.startswith('#') and ' ' in l:
-                canonical_email, alias = l.split(' ')
-                mapping[alias.lower()] = canonical_email.lower()
-    return mapping
 
 
 def str_dict_replace(s, mapping):
@@ -1255,3 +1241,40 @@ def get_system_metadata_from_image(image_meta, instance_type=None):
         system_meta[prefix_format % key] = value
 
     return system_meta
+
+
+def get_image_from_system_metadata(system_meta):
+    image_meta = {}
+    properties = {}
+
+    if not isinstance(system_meta, dict):
+        system_meta = metadata_to_dict(system_meta)
+
+    for key, value in system_meta.iteritems():
+        if value is None:
+            continue
+
+        # NOTE(xqueralt): Not sure this has to inherit all the properties or
+        # just the ones we need. Leaving it for now to keep the old behaviour.
+        if key.startswith(SM_IMAGE_PROP_PREFIX):
+            key = key[len(SM_IMAGE_PROP_PREFIX):]
+
+        if key in SM_INHERITABLE_KEYS:
+            image_meta[key] = value
+        else:
+            # Skip properties that are non-inheritable
+            if key in CONF.non_inheritable_image_properties:
+                continue
+            properties[key] = value
+
+    if properties:
+        image_meta['properties'] = properties
+
+    return image_meta
+
+
+def get_boolean(value):
+    if isinstance(value, bool):
+        return value
+    else:
+        return strutils.bool_from_string(value)

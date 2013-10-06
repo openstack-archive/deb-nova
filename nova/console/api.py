@@ -36,7 +36,8 @@ class API(base.Base):
         super(API, self).__init__(**kwargs)
 
     def get_consoles(self, context, instance_uuid):
-        return self.db.console_get_all_by_instance(context, instance_uuid)
+        return self.db.console_get_all_by_instance(context, instance_uuid,
+                                                   columns_to_join=['pool'])
 
     def get_console(self, context, instance_uuid, console_uuid):
         return self.db.console_get(context, console_uuid, instance_uuid)
@@ -55,7 +56,7 @@ class API(base.Base):
         #               console info. I am not sure which is better
         #               here.
         instance = self._get_instance(context, instance_uuid)
-        topic = self._get_console_topic(context, instance['host']),
+        topic = self._get_console_topic(context, instance['host'])
         rpcapi = console_rpcapi.ConsoleAPI(topic=topic)
         rpcapi.add_console(context, instance['id'])
 

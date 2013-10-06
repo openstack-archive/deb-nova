@@ -207,7 +207,7 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, context=None):
         key = instance['name']
         if key in self.instances:
             del self.instances[key]
@@ -216,7 +216,8 @@ class FakeDriver(driver.ComputeDriver):
                         {'key': key,
                          'inst': self.instances}, instance=instance)
 
-    def attach_volume(self, connection_info, instance, mountpoint):
+    def attach_volume(self, context, connection_info, instance, mountpoint,
+                      encryption=None):
         """Attach the disk to the instance at mountpoint using info."""
         instance_name = instance['name']
         if instance_name not in self._mounts:
@@ -224,7 +225,8 @@ class FakeDriver(driver.ComputeDriver):
         self._mounts[instance_name][mountpoint] = connection_info
         return True
 
-    def detach_volume(self, connection_info, instance, mountpoint):
+    def detach_volume(self, connection_info, instance, mountpoint,
+                      encryption=None):
         """Detach the disk attached to the instance."""
         try:
             del self._mounts[instance['name']][mountpoint]
@@ -356,8 +358,7 @@ class FakeDriver(driver.ComputeDriver):
         return dic
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
-        """This method is supported only by libvirt."""
-        raise NotImplementedError('This method is supported only by libvirt.')
+        return
 
     def get_instance_disk_info(self, instance_name):
         return
@@ -365,6 +366,8 @@ class FakeDriver(driver.ComputeDriver):
     def live_migration(self, context, instance_ref, dest,
                        post_method, recover_method, block_migration=False,
                        migrate_data=None):
+        post_method(context, instance_ref, dest, block_migration,
+                            migrate_data)
         return
 
     def check_can_live_migrate_destination_cleanup(self, ctxt,
@@ -394,8 +397,7 @@ class FakeDriver(driver.ComputeDriver):
         return
 
     def unfilter_instance(self, instance_ref, network_info):
-        """This method is supported only by libvirt."""
-        raise NotImplementedError('This method is supported only by libvirt.')
+        return
 
     def test_remove_vm(self, instance_name):
         """Removes the named VM, as if it crashed. For testing."""

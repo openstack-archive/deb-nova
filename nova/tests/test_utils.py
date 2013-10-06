@@ -38,7 +38,7 @@ from nova import utils
 CONF = cfg.CONF
 
 
-class GetFromPathTestCase(test.TestCase):
+class GetFromPathTestCase(test.NoDBTestCase):
     def test_tolerates_nones(self):
         f = utils.get_from_path
 
@@ -193,7 +193,7 @@ class GetFromPathTestCase(test.TestCase):
         self.assertEquals(['b_1'], f(input, "a/b"))
 
 
-class GetMyIP4AddressTestCase(test.TestCase):
+class GetMyIP4AddressTestCase(test.NoDBTestCase):
     def test_get_my_ipv4_address_with_no_ipv4(self):
         response = """172.16.0.0/16 via 172.16.251.13 dev tun1
 172.16.251.1 via 172.16.251.13 dev tun1
@@ -279,7 +279,7 @@ default via 172.17.248.1 dev eth0  proto static
         self.assertEqual(address, '172.17.255.9')
 
 
-class GenericUtilsTestCase(test.TestCase):
+class GenericUtilsTestCase(test.NoDBTestCase):
     def test_parse_server_string(self):
         result = utils.parse_server_string('::1')
         self.assertEqual(('::1', ''), result)
@@ -467,7 +467,7 @@ class GenericUtilsTestCase(test.TestCase):
                           "failure")
 
 
-class MonkeyPatchTestCase(test.TestCase):
+class MonkeyPatchTestCase(test.NoDBTestCase):
     """Unit test for utils.monkey_patch()."""
     def setUp(self):
         super(MonkeyPatchTestCase, self).setUp()
@@ -512,7 +512,7 @@ class MonkeyPatchTestCase(test.TestCase):
             in nova.tests.monkey_patch_example.CALLED_FUNCTION)
 
 
-class MonkeyPatchDefaultTestCase(test.TestCase):
+class MonkeyPatchDefaultTestCase(test.NoDBTestCase):
     """Unit test for default monkey_patch_modules value."""
 
     def setUp(self):
@@ -535,7 +535,7 @@ class MonkeyPatchDefaultTestCase(test.TestCase):
             getattr(decorator_module, decorator_name[1])
 
 
-class AuditPeriodTest(test.TestCase):
+class AuditPeriodTest(test.NoDBTestCase):
 
     def setUp(self):
         super(AuditPeriodTest, self).setUp()
@@ -699,7 +699,7 @@ class AuditPeriodTest(test.TestCase):
                                            year=2011))
 
 
-class DiffDict(test.TestCase):
+class DiffDict(test.NoDBTestCase):
     """Unit tests for diff_dict()."""
 
     def test_no_change(self):
@@ -731,7 +731,7 @@ class DiffDict(test.TestCase):
         self.assertEqual(diff, dict(b=['-']))
 
 
-class MkfsTestCase(test.TestCase):
+class MkfsTestCase(test.NoDBTestCase):
 
     def test_mkfs(self):
         self.mox.StubOutWithMock(utils, 'execute')
@@ -758,7 +758,7 @@ class MkfsTestCase(test.TestCase):
         utils.mkfs('swap', '/my/swap/block/dev', 'swap-vol')
 
 
-class LastBytesTestCase(test.TestCase):
+class LastBytesTestCase(test.NoDBTestCase):
     """Test the last_bytes() utility method."""
 
     def setUp(self):
@@ -785,7 +785,7 @@ class LastBytesTestCase(test.TestCase):
         self.assertEqual((content, 0), utils.last_bytes(flo, 1000))
 
 
-class IntLikeTestCase(test.TestCase):
+class IntLikeTestCase(test.NoDBTestCase):
 
     def test_is_int_like(self):
         self.assertTrue(utils.is_int_like(1))
@@ -806,7 +806,7 @@ class IntLikeTestCase(test.TestCase):
         self.assertFalse(utils.is_int_like("a1"))
 
 
-class MetadataToDictTestCase(test.TestCase):
+class MetadataToDictTestCase(test.NoDBTestCase):
     def test_metadata_to_dict(self):
         self.assertEqual(utils.metadata_to_dict(
                 [{'key': 'foo1', 'value': 'bar'},
@@ -827,7 +827,7 @@ class MetadataToDictTestCase(test.TestCase):
         self.assertEqual(utils.dict_to_metadata({}), [])
 
 
-class WrappedCodeTestCase(test.TestCase):
+class WrappedCodeTestCase(test.NoDBTestCase):
     """Test the get_wrapped_function utility method."""
 
     def _wrapper(self, function):
@@ -879,7 +879,7 @@ class WrappedCodeTestCase(test.TestCase):
         self.assertTrue('blue' in func_code.co_varnames)
 
 
-class StringLengthTestCase(test.TestCase):
+class StringLengthTestCase(test.NoDBTestCase):
     def test_check_string_length(self):
         self.assertIsNone(utils.check_string_length(
                           'test', 'name', max_length=255))
@@ -894,7 +894,7 @@ class StringLengthTestCase(test.TestCase):
                           'a' * 256, 'name', max_length=255)
 
 
-class ValidateIntegerTestCase(test.TestCase):
+class ValidateIntegerTestCase(test.NoDBTestCase):
     def test_valid_inputs(self):
         self.assertEquals(
             utils.validate_integer(42, "answer"), 42)
@@ -930,7 +930,7 @@ class ValidateIntegerTestCase(test.TestCase):
                           max_value=54)
 
 
-class ValidateNeutronConfiguration(test.TestCase):
+class ValidateNeutronConfiguration(test.NoDBTestCase):
     def setUp(self):
         super(ValidateNeutronConfiguration, self).setUp()
         utils.reset_is_neutron()
@@ -948,7 +948,7 @@ class ValidateNeutronConfiguration(test.TestCase):
         self.assertTrue(utils.is_neutron())
 
 
-class AutoDiskConfigUtilTestCase(test.TestCase):
+class AutoDiskConfigUtilTestCase(test.NoDBTestCase):
     def test_is_auto_disk_config_disabled(self):
         self.assertTrue(utils.is_auto_disk_config_disabled("Disabled "))
 
@@ -959,7 +959,7 @@ class AutoDiskConfigUtilTestCase(test.TestCase):
         self.assertFalse(utils.is_auto_disk_config_disabled("false"))
 
 
-class GetSystemMetadataFromImageTestCase(test.TestCase):
+class GetSystemMetadataFromImageTestCase(test.NoDBTestCase):
     def get_image(self):
         image_meta = {
             "id": "fake-image",
@@ -1028,3 +1028,58 @@ class GetSystemMetadataFromImageTestCase(test.TestCase):
         for key in utils.SM_INHERITABLE_KEYS:
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
             self.assertTrue(sys_key not in sys_meta)
+
+
+class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
+    def get_system_metadata(self):
+        sys_meta = {
+            "image_min_ram": 1,
+            "image_min_disk": 1,
+            "image_disk_format": "raw",
+            "image_container_format": "bare",
+        }
+
+        return sys_meta
+
+    def test_image_from_system_metadata(self):
+        sys_meta = self.get_system_metadata()
+        sys_meta["%soo1" % utils.SM_IMAGE_PROP_PREFIX] = "bar"
+        sys_meta["%soo2" % utils.SM_IMAGE_PROP_PREFIX] = "baz"
+
+        image = utils.get_image_from_system_metadata(sys_meta)
+
+        # Verify that we inherit all the needed keys
+        for key in utils.SM_INHERITABLE_KEYS:
+            sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
+            self.assertEqual(image[key], sys_meta.get(sys_key))
+
+        # Verify that we inherit the rest of metadata as properties
+        self.assertTrue("properties" in image)
+
+        for key, value in image["properties"].iteritems():
+            sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
+            self.assertEqual(image["properties"][key], sys_meta[sys_key])
+
+    def test_dont_inherit_empty_values(self):
+        sys_meta = self.get_system_metadata()
+
+        for key in utils.SM_INHERITABLE_KEYS:
+            sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
+            sys_meta[sys_key] = None
+
+        image = utils.get_image_from_system_metadata(sys_meta)
+
+        # Verify that the empty properties have not been inherited
+        for key in utils.SM_INHERITABLE_KEYS:
+            self.assertTrue(key not in image)
+
+    def test_non_inheritable_image_properties(self):
+        sys_meta = self.get_system_metadata()
+        sys_meta["%soo1" % utils.SM_IMAGE_PROP_PREFIX] = "bar"
+
+        CONF.non_inheritable_image_properties = ["foo1"]
+
+        image = utils.get_image_from_system_metadata(sys_meta)
+
+        # Verify that the foo1 key has not been inherited
+        self.assertTrue("foo1" not in image)

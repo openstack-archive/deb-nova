@@ -23,30 +23,41 @@ from nova.objects import instance_info_cache
 from nova.objects import pci_device
 from nova.objects import security_group
 from nova.objects import utils as obj_utils
+from nova.openstack.common.gettextutils import _
+from nova.openstack.common import log as logging
 from nova import utils
 
 from oslo.config import cfg
 
 
 CONF = cfg.CONF
+LOG = logging.getLogger(__name__)
 
 
-# These are fields that can be specified as expected_attrs but are
-# also joined often by default.
-INSTANCE_OPTIONAL_COMMON_FIELDS = ['metadata', 'system_metadata']
-# These are fields that can be specified as expected_attrs
-INSTANCE_OPTIONAL_FIELDS = (INSTANCE_OPTIONAL_COMMON_FIELDS +
-                            ['fault', 'pci_devices'])
-# These are fields that are always joined by the db right now
-INSTANCE_IMPLIED_FIELDS = ['info_cache', 'security_groups']
+# List of fields that can be joined in DB layer.
+_INSTANCE_OPTIONAL_JOINED_FIELDS = ['metadata', 'system_metadata',
+                                    'info_cache', 'security_groups',
+                                    'pci_devices']
 # These are fields that are optional but don't translate to db columns
-INSTANCE_OPTIONAL_NON_COLUMNS = ['fault']
-# These are all fields that most query calls load by default
-INSTANCE_DEFAULT_FIELDS = (INSTANCE_OPTIONAL_COMMON_FIELDS +
-                           INSTANCE_IMPLIED_FIELDS)
+_INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault']
+
+# These are fields that can be specified as expected_attrs
+INSTANCE_OPTIONAL_ATTRS = (_INSTANCE_OPTIONAL_JOINED_FIELDS +
+                           _INSTANCE_OPTIONAL_NON_COLUMN_FIELDS)
+# These are fields that most query calls load by default
+INSTANCE_DEFAULT_FIELDS = ['metadata', 'system_metadata',
+                           'info_cache', 'security_groups']
 
 
-class Instance(base.NovaObject):
+def _expected_cols(expected_attrs):
+    """Return expected_attrs that are columns needing joining."""
+    if not expected_attrs:
+        return expected_attrs
+    return [attr for attr in expected_attrs
+                 if attr in _INSTANCE_OPTIONAL_JOINED_FIELDS]
+
+
+class Instance(base.NovaPersistentObject, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added info_cache
     # Version 1.2: Added security_groups
@@ -55,7 +66,10 @@ class Instance(base.NovaObject):
     # Version 1.4: Added locked_by and deprecated locked
     # Version 1.5: Added cleaned
     # Version 1.6: Added pci_devices
-    VERSION = '1.6'
+    # Version 1.7: String attributes updated to support unicode
+    # Version 1.8: 'security_groups' and 'pci_devices' cannot be None
+    # Version 1.9: Make uuid a non-None real string
+    VERSION = '1.9'
 
     fields = {
         'id': int,
@@ -109,7 +123,7 @@ class Instance(base.NovaObject):
         'os_type': obj_utils.str_or_none,
         'architecture': obj_utils.str_or_none,
         'vm_mode': obj_utils.str_or_none,
-        'uuid': obj_utils.str_or_none,
+        'uuid': obj_utils.cstring,
 
         'root_device_name': obj_utils.str_or_none,
         'default_ephemeral_device': obj_utils.str_or_none,
@@ -130,19 +144,19 @@ class Instance(base.NovaObject):
         'metadata': dict,
         'system_metadata': dict,
 
-        'info_cache': obj_utils.nested_object_or_none(
+        'info_cache': obj_utils.nested_object(
             instance_info_cache.InstanceInfoCache),
 
-        'security_groups': obj_utils.nested_object_or_none(
-            security_group.SecurityGroupList),
+        'security_groups': obj_utils.nested_object(
+            security_group.SecurityGroupList, none_ok=False),
 
-        'fault': obj_utils.nested_object_or_none(
+        'fault': obj_utils.nested_object(
             instance_fault.InstanceFault),
 
         'cleaned': bool,
 
-        'pci_devices': obj_utils.nested_object_or_none(
-            pci_device.PciDeviceList),
+        'pci_devices': obj_utils.nested_object(
+            pci_device.PciDeviceList, none_ok=False),
         }
 
     obj_extra_fields = ['name']
@@ -177,9 +191,11 @@ class Instance(base.NovaObject):
             # NOTE(russellb): Don't use self.iteritems() here, as it will
             # result in infinite recursion on the name property.
             for key in self.fields:
-                # prevent recursion if someone specifies %(name)s
-                # %(name)s will not be valid.
                 if key == 'name':
+                    # NOTE(danms): prevent recursion
+                    continue
+                elif not self.obj_attr_is_set(key):
+                    # NOTE(danms): Don't trigger lazy-loads
                     continue
                 info[key] = self[key]
             try:
@@ -214,6 +230,8 @@ class Instance(base.NovaObject):
     _attr_terminated_at_from_primitive = obj_utils.dt_deserializer
 
     def _attr_info_cache_from_primitive(self, val):
+        if val is None:
+            return val
         return base.NovaObject.obj_from_primitive(val)
 
     def _attr_security_groups_from_primitive(self, val):
@@ -221,7 +239,8 @@ class Instance(base.NovaObject):
 
     def _attr_pci_devices_from_primitive(self, val):
         if val is None:
-            return None
+            # Only possible in version <= 1.7
+            return pci_device.PciDeviceList()
         return base.NovaObject.obj_from_primitive(val)
 
     @staticmethod
@@ -234,7 +253,7 @@ class Instance(base.NovaObject):
             expected_attrs = []
         # Most of the field names match right now, so be quick
         for field in instance.fields:
-            if field in INSTANCE_OPTIONAL_FIELDS + INSTANCE_IMPLIED_FIELDS:
+            if field in INSTANCE_OPTIONAL_ATTRS:
                 continue
             elif field == 'deleted':
                 instance.deleted = db_inst['deleted'] == db_inst['id']
@@ -253,52 +272,33 @@ class Instance(base.NovaObject):
                     context, instance.uuid))
 
         if 'pci_devices' in expected_attrs:
-            if db_inst['pci_devices'] is None:
-                pci_devices = None
-            else:
-                pci_devices = pci_device._make_pci_list(
-                        context, pci_device.PciDeviceList(),
-                        db_inst['pci_devices'])
+            pci_devices = pci_device._make_pci_list(
+                    context, pci_device.PciDeviceList(),
+                    db_inst['pci_devices'])
             instance['pci_devices'] = pci_devices
-
-        # NOTE(danms): info_cache and security_groups are almost
-        # always joined in the DB layer right now, so check to see if
-        # they are asked for and are present in the resulting object
-        if 'info_cache' in expected_attrs and db_inst.get('info_cache'):
-            instance['info_cache'] = instance_info_cache.InstanceInfoCache()
-            instance_info_cache.InstanceInfoCache._from_db_object(
-                    context, instance['info_cache'], db_inst['info_cache'])
-        if ('security_groups' in expected_attrs and
-                db_inst.get('security_groups') is not None):
-            instance['security_groups'] = security_group.SecurityGroupList()
-            security_group._make_secgroup_list(context,
-                                               instance['security_groups'],
-                                               db_inst['security_groups'])
+        if 'info_cache' in expected_attrs:
+            if db_inst['info_cache'] is None:
+                info_cache = None
+            else:
+                info_cache = instance_info_cache.InstanceInfoCache()
+                instance_info_cache.InstanceInfoCache._from_db_object(
+                        context, info_cache, db_inst['info_cache'])
+            instance['info_cache'] = info_cache
+        if 'security_groups' in expected_attrs:
+            sec_groups = security_group._make_secgroup_list(
+                    context, security_group.SecurityGroupList(),
+                    db_inst['security_groups'])
+            instance['security_groups'] = sec_groups
 
         instance._context = context
         instance.obj_reset_changes()
         return instance
 
-    @staticmethod
-    def _attrs_to_columns(attrs):
-        """Translate instance attributes into columns needing joining."""
-        columns_to_join = []
-        if 'metadata' in attrs:
-            columns_to_join.append('metadata')
-        if 'system_metadata' in attrs:
-            columns_to_join.append('system_metadata')
-        if 'pci_devices' in attrs:
-            columns_to_join.append('pci_devices')
-        # NOTE(danms): The DB API currently always joins info_cache and
-        # security_groups for get operations, so don't add them to the
-        # list of columns
-        return columns_to_join
-
     @base.remotable_classmethod
     def get_by_uuid(cls, context, uuid, expected_attrs=None):
         if expected_attrs is None:
             expected_attrs = ['info_cache', 'security_groups']
-        columns_to_join = cls._attrs_to_columns(expected_attrs)
+        columns_to_join = _expected_cols(expected_attrs)
         db_inst = db.instance_get_by_uuid(context, uuid,
                                           columns_to_join=columns_to_join)
         return cls._from_db_object(context, cls(), db_inst,
@@ -308,7 +308,7 @@ class Instance(base.NovaObject):
     def get_by_id(cls, context, inst_id, expected_attrs=None):
         if expected_attrs is None:
             expected_attrs = ['info_cache', 'security_groups']
-        columns_to_join = cls._attrs_to_columns(expected_attrs)
+        columns_to_join = _expected_cols(expected_attrs)
         db_inst = db.instance_get(context, inst_id,
                                   columns_to_join=columns_to_join)
         return cls._from_db_object(context, cls(), db_inst,
@@ -319,9 +319,8 @@ class Instance(base.NovaObject):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
-        updates = {}
-        for attr in self.obj_what_changed() - set(['id']):
-            updates[attr] = self[attr]
+        updates = self.obj_get_changes()
+        updates.pop('id', None)
         expected_attrs = [attr for attr in INSTANCE_DEFAULT_FIELDS
                           if attr in updates]
         if 'security_groups' in updates:
@@ -362,7 +361,7 @@ class Instance(base.NovaObject):
         for secgroup in self.security_groups:
             secgroup.save(context)
 
-    def _save_instance_fault(self, context):
+    def _save_fault(self, context):
         # NOTE(danms): I don't think we need to worry about this, do we?
         pass
 
@@ -415,9 +414,13 @@ class Instance(base.NovaObject):
         updates = {}
         changes = self.obj_what_changed()
         for field in self.fields:
-            if (hasattr(self, base.get_attrname(field)) and
+            if (self.obj_attr_is_set(field) and
                     isinstance(self[field], base.NovaObject)):
-                getattr(self, '_save_%s' % field)(context)
+                try:
+                    getattr(self, '_save_%s' % field)(context)
+                except AttributeError:
+                    LOG.exception(_('No save handler for %s') % field,
+                                  instance=self)
             elif field in changes:
                 updates[field] = self[field]
 
@@ -438,14 +441,11 @@ class Instance(base.NovaObject):
         if expected_vm_state is not None:
             updates['expected_vm_state'] = expected_vm_state
 
-        expected_attrs = []
-        for attr in INSTANCE_OPTIONAL_FIELDS + INSTANCE_IMPLIED_FIELDS:
-            if hasattr(self, base.get_attrname(attr)):
-                expected_attrs.append(attr)
-
+        expected_attrs = [attr for attr in _INSTANCE_OPTIONAL_JOINED_FIELDS
+                               if self.obj_attr_is_set(attr)]
         old_ref, inst_ref = db.instance_update_and_get_original(
                 context, self.uuid, updates, update_cells=False,
-                columns_to_join=self._attrs_to_columns(expected_attrs))
+                columns_to_join=_expected_cols(expected_attrs))
 
         if stale_instance:
             _handle_cell_update_from_api()
@@ -454,51 +454,38 @@ class Instance(base.NovaObject):
             cells_api.instance_update_at_top(context, inst_ref)
 
         self._from_db_object(context, self, inst_ref, expected_attrs)
-        if 'vm_state' in changes or 'task_state' in changes:
-            notifications.send_update(context, old_ref, inst_ref)
+        notifications.send_update(context, old_ref, inst_ref)
         self.obj_reset_changes()
 
     @base.remotable
     def refresh(self, context):
-        extra = []
-        for field in INSTANCE_OPTIONAL_FIELDS + INSTANCE_IMPLIED_FIELDS:
-            if hasattr(self, base.get_attrname(field)):
-                extra.append(field)
+        extra = [field for field in INSTANCE_OPTIONAL_ATTRS
+                       if self.obj_attr_is_set(field)]
         current = self.__class__.get_by_uuid(context, uuid=self.uuid,
                                              expected_attrs=extra)
         for field in self.fields:
-            if (hasattr(self, base.get_attrname(field)) and
-                    self[field] != current[field]):
+            if self.obj_attr_is_set(field) and self[field] != current[field]:
                 self[field] = current[field]
         self.obj_reset_changes()
 
     def obj_load_attr(self, attrname):
-        extra = []
-        if attrname == 'system_metadata':
-            extra.append('system_metadata')
-        elif attrname == 'metadata':
-            extra.append('metadata')
-        elif attrname == 'info_cache':
-            extra.append('info_cache')
-        elif attrname == 'security_groups':
-            extra.append('security_groups')
-        elif attrname == 'pci_devices':
-            extra.append('pci_devices')
-        elif attrname == 'fault':
-            extra.append('fault')
-
-        if not extra:
+        if attrname not in INSTANCE_OPTIONAL_ATTRS:
             raise exception.ObjectActionError(
                 action='obj_load_attr',
                 reason='attribute %s not lazy-loadable' % attrname)
 
-        # NOTE(danms): This could be optimized to just load the bits we need
+        LOG.debug(_("Lazy-loading `%(attr)s' on %(name)s uuid %(uuid)s"),
+                  {'attr': attrname,
+                   'name': self.obj_name(),
+                   'uuid': self.uuid,
+                   })
+        # FIXME(comstud): This should be optimized to only load the attr.
         instance = self.__class__.get_by_uuid(self._context,
                                               uuid=self.uuid,
-                                              expected_attrs=extra)
+                                              expected_attrs=[attrname])
 
         # NOTE(danms): Never allow us to recursively-load
-        if hasattr(instance, base.get_attrname(attrname)):
+        if instance.obj_attr_is_set(attrname):
             self[attrname] = instance[attrname]
         else:
             raise exception.ObjectActionError(
@@ -530,14 +517,6 @@ def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):
     return inst_list
 
 
-def expected_cols(expected_attrs):
-    """Return expected_attrs that are columns needing joining."""
-    if expected_attrs:
-        return list(set(expected_attrs) - set(INSTANCE_OPTIONAL_NON_COLUMNS))
-    else:
-        return expected_attrs
-
-
 class InstanceList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def get_by_filters(cls, context, filters,
@@ -545,14 +524,14 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
                        marker=None, expected_attrs=None):
         db_inst_list = db.instance_get_all_by_filters(
             context, filters, sort_key, sort_dir, limit=limit, marker=marker,
-            columns_to_join=expected_cols(expected_attrs))
+            columns_to_join=_expected_cols(expected_attrs))
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 
     @base.remotable_classmethod
     def get_by_host(cls, context, host, expected_attrs=None):
         db_inst_list = db.instance_get_all_by_host(
-            context, host, columns_to_join=expected_cols(expected_attrs))
+            context, host, columns_to_join=_expected_cols(expected_attrs))
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 

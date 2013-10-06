@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2010 Citrix Systems, Inc.
 # Copyright 2010 OpenStack Foundation
@@ -39,6 +38,7 @@ A driver for XenServer or Xen Cloud Platform.
 
 import contextlib
 import cPickle as pickle
+import math
 import time
 import urlparse
 import xmlrpclib
@@ -163,6 +163,42 @@ class XenAPIDriver(driver.ComputeDriver):
         except Exception:
             LOG.exception(_('Failure while cleaning up attached VDIs'))
 
+    def instance_exists(self, instance_name):
+        """Checks existence of an instance on the host.
+
+        :param instance_name: The name of the instance to lookup
+
+        Returns True if an instance with the supplied name exists on
+        the host, False otherwise.
+
+        NOTE(belliott): This is an override of the base method for
+        efficiency.
+        """
+        return self._vmops.instance_exists(instance_name)
+
+    def estimate_instance_overhead(self, instance_info):
+        """Get virtualization overhead required to build an instance of the
+        given flavor.
+
+        :param instance_info: Instance/flavor to calculate overhead for.
+        :returns: Overhead memory in MB.
+        """
+
+        # XenServer memory overhead is proportional to the size of the
+        # VM.  Larger flavor VMs become more efficient with respect to
+        # overhead.
+
+        # interpolated formula to predict overhead required per vm.
+        # based on data from:
+        # https://wiki.openstack.org/wiki/XenServer/Overhead
+        base = 3  # MB
+        per_mb = 0.0081  # MB
+
+        memory_mb = instance_info['memory_mb']
+        overhead = memory_mb * per_mb + base
+        overhead = math.ceil(overhead)
+        return {'memory_mb': overhead}
+
     def list_instances(self):
         """List VM instances."""
         return self._vmops.list_instances()
@@ -224,7 +260,7 @@ class XenAPIDriver(driver.ComputeDriver):
         self._vmops.change_instance_metadata(instance, diff)
 
     def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, context=None):
         """Destroy VM instance."""
         self._vmops.destroy(instance, network_info, block_device_info,
                             destroy_disks)
@@ -363,13 +399,15 @@ class XenAPIDriver(driver.ComputeDriver):
         xs_url = urlparse.urlparse(CONF.xenapi_connection_url)
         return xs_url.netloc
 
-    def attach_volume(self, connection_info, instance, mountpoint):
+    def attach_volume(self, context, connection_info, instance, mountpoint,
+                      encryption=None):
         """Attach volume storage to VM instance."""
         return self._volumeops.attach_volume(connection_info,
                                              instance['name'],
                                              mountpoint)
 
-    def detach_volume(self, connection_info, instance, mountpoint):
+    def detach_volume(self, connection_info, instance, mountpoint,
+                      encryption=None):
         """Detach volume storage from VM instance."""
         return self._volumeops.detach_volume(connection_info,
                                              instance['name'],
@@ -516,8 +554,8 @@ class XenAPIDriver(driver.ComputeDriver):
         :params network_info: instance network information
         :params : block_migration: if true, post operation of block_migraiton.
         """
-        # TODO(JohnGarbutt) look at moving/downloading ramdisk and kernel
-        pass
+        self._vmops.post_live_migration_at_destination(ctxt, instance_ref,
+                network_info, block_device_info, block_device_info)
 
     def unfilter_instance(self, instance_ref, network_info):
         """Removes security groups configured for an instance."""

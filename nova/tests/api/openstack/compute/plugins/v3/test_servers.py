@@ -891,10 +891,10 @@ class ServersControllerTest(ControllerTest):
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False):
             self.assertNotEqual(search_opts, None)
-            self.assertTrue('changes_since' in search_opts)
+            self.assertTrue('changes-since' in search_opts)
             changes_since = datetime.datetime(2011, 1, 24, 17, 8, 1,
                                               tzinfo=iso8601.iso8601.UTC)
-            self.assertEqual(search_opts['changes_since'], changes_since)
+            self.assertEqual(search_opts['changes-since'], changes_since)
             self.assertTrue('deleted' not in search_opts)
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
@@ -2273,6 +2273,23 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPConflict,
                           self._test_create_extra, params)
 
+    def test_create_multiple_instance_with_neutronv2_port(self):
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'uuid': network, 'port': port}]
+        params = {'networks': requested_networks}
+        self.body['server']['max_count'] = 2
+
+        def fake_create(*args, **kwargs):
+            msg = _("Unable to launch multiple instances with"
+                    " a single configured port ID. Please launch your"
+                    " instance one by one with different ports.")
+            raise exception.MultiplePortsNotApplicable(reason=msg)
+
+        self.stubs.Set(compute_api.API, 'create', fake_create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
+
 
 class TestServerCreateRequestXMLDeserializer(test.TestCase):
 
@@ -2741,7 +2758,7 @@ class ServersViewBuilderTest(test.TestCase):
         super(ServersViewBuilderTest, self).setUp()
         CONF.set_override('glance_host', 'localhost')
         self.flags(use_ipv6=True)
-        self.instance = fakes.stub_instance(
+        db_inst = fakes.stub_instance(
             id=1,
             image_ref="5",
             uuid="deadbeef-feed-edee-beef-d0ea7beefedd",
@@ -2766,9 +2783,14 @@ class ServersViewBuilderTest(test.TestCase):
         fakes.stub_out_nw_api_get_floating_ips_by_fixed_address(self.stubs,
                                                                 floaters)
 
-        self.uuid = self.instance['uuid']
+        self.uuid = db_inst['uuid']
         self.view_builder = views.servers.ViewBuilderV3()
         self.request = fakes.HTTPRequestV3.blank("")
+        self.request.context = context.RequestContext('fake', 'fake')
+        self.instance = fake_instance.fake_instance_obj(
+                    self.request.context,
+                    expected_attrs=instance_obj.INSTANCE_DEFAULT_FIELDS,
+                    **db_inst)
 
     def test_get_flavor_valid_instance_type(self):
         flavor_bookmark = "http://localhost/flavors/1"
@@ -2891,13 +2913,7 @@ class ServersViewBuilderTest(test.TestCase):
 
     def test_build_server_detail_with_fault(self):
         self.instance['vm_state'] = vm_states.ERROR
-        self.instance['fault'] = {
-            'code': 404,
-            'instance_uuid': self.uuid,
-            'message': "HTTPNotFound",
-            'details': "Stock details for test",
-            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
-        }
+        self.instance['fault'] = fake_instance.fake_fault_obj(self.uuid)
 
         image_bookmark = "http://localhost:9292/images/5"
         flavor_bookmark = "http://localhost/flavors/1"
@@ -2967,13 +2983,10 @@ class ServersViewBuilderTest(test.TestCase):
 
     def test_build_server_detail_with_fault_no_details_not_admin(self):
         self.instance['vm_state'] = vm_states.ERROR
-        self.instance['fault'] = {
-            'code': 500,
-            'instance_uuid': self.uuid,
-            'message': "Error",
-            'details': 'Stock details for test',
-            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
-        }
+        self.instance['fault'] = fake_instance.fake_fault_obj(
+                                                   self.uuid,
+                                                   code=500,
+                                                   message='Error')
 
         expected_fault = {"code": 500,
                           "created": "2010-10-10T12:00:00Z",
@@ -2986,13 +2999,10 @@ class ServersViewBuilderTest(test.TestCase):
 
     def test_build_server_detail_with_fault_admin(self):
         self.instance['vm_state'] = vm_states.ERROR
-        self.instance['fault'] = {
-            'code': 500,
-            'instance_uuid': self.uuid,
-            'message': "Error",
-            'details': 'Stock details for test',
-            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
-        }
+        self.instance['fault'] = fake_instance.fake_fault_obj(
+                                                   self.uuid,
+                                                   code=500,
+                                                   message='Error')
 
         expected_fault = {"code": 500,
                           "created": "2010-10-10T12:00:00Z",
@@ -3006,13 +3016,11 @@ class ServersViewBuilderTest(test.TestCase):
 
     def test_build_server_detail_with_fault_no_details_admin(self):
         self.instance['vm_state'] = vm_states.ERROR
-        self.instance['fault'] = {
-            'code': 500,
-            'instance_uuid': self.uuid,
-            'message': "Error",
-            'details': '',
-            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
-        }
+        self.instance['fault'] = fake_instance.fake_fault_obj(
+                                                   self.uuid,
+                                                   code=500,
+                                                   message='Error',
+                                                   details='')
 
         expected_fault = {"code": 500,
                           "created": "2010-10-10T12:00:00Z",
@@ -3026,13 +3034,7 @@ class ServersViewBuilderTest(test.TestCase):
     def test_build_server_detail_with_fault_but_active(self):
         self.instance['vm_state'] = vm_states.ACTIVE
         self.instance['progress'] = 100
-        self.instance['fault'] = {
-            'code': 404,
-            'instance_uuid': self.uuid,
-            'message': "HTTPNotFound",
-            'details': "Stock details for test",
-            'created_at': datetime.datetime(2010, 10, 10, 12, 0, 0),
-        }
+        self.instance['fault'] = fake_instance.fake_fault_obj(self.uuid)
 
         image_bookmark = "http://localhost:9292/images/5"
         flavor_bookmark = "http://localhost/flavors/1"
@@ -3238,6 +3240,7 @@ class ServersViewBuilderTest(test.TestCase):
 
         metadata = []
         metadata.append(models.InstanceMetadata(key="Open", value="Stack"))
+        metadata = nova_utils.metadata_to_dict(metadata)
         self.instance['metadata'] = metadata
 
         image_bookmark = "http://localhost:9292/images/5"

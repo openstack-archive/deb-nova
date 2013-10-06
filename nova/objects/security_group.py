@@ -14,15 +14,20 @@
 
 from nova import db
 from nova.objects import base
+from nova.objects import utils
 
 
-class SecurityGroup(base.NovaObject):
+class SecurityGroup(base.NovaPersistentObject, base.NovaObject):
+    # Version 1.0: Initial version
+    # Version 1.1: String attributes updated to support unicode
+    VERSION = '1.1'
+
     fields = {
         'id': int,
-        'name': str,
-        'description': str,
-        'user_id': str,
-        'project_id': str,
+        'name': utils.str_value,
+        'description': utils.str_value,
+        'user_id': utils.str_value,
+        'project_id': utils.str_value,
         }
 
     @staticmethod
@@ -51,9 +56,7 @@ class SecurityGroup(base.NovaObject):
 
     @base.remotable
     def save(self, context):
-        updates = {}
-        for field in self.obj_what_changed():
-            updates[field] = self[field]
+        updates = self.obj_get_changes()
         if updates:
             db_secgroup = db.security_group_update(context, self.id, updates)
             SecurityGroup._from_db_object(self, db_secgroup)
@@ -77,6 +80,11 @@ def _make_secgroup_list(context, secgroup_list, db_secgroup_list):
 
 
 class SecurityGroupList(base.ObjectListBase, base.NovaObject):
+    def __init__(self):
+        super(SecurityGroupList, self).__init__()
+        self.objects = []
+        self.obj_reset_changes()
+
     @base.remotable_classmethod
     def get_all(cls, context):
         return _make_secgroup_list(context, cls(),

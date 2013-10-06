@@ -1402,14 +1402,6 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.create_instance_with_args(context=context2, hostname='h2')
         self.flags(osapi_compute_unique_server_name_scope=None)
 
-    def test_instance_get_all_with_meta(self):
-        inst = self.create_instance_with_args()
-        for inst in db.instance_get_all(self.ctxt):
-            meta = utils.metadata_to_dict(inst['metadata'])
-            self.assertEqual(meta, self.sample_data['metadata'])
-            sys_meta = utils.metadata_to_dict(inst['system_metadata'])
-            self.assertEqual(sys_meta, self.sample_data['system_metadata'])
-
     def test_instance_get_all_by_filters_with_meta(self):
         inst = self.create_instance_with_args()
         for inst in db.instance_get_all_by_filters(self.ctxt, {}):
@@ -1476,6 +1468,14 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.create_instance_with_args()
         result = db.instance_get_all_by_filters(self.ctxt,
                                                 {'metadata': {'foo': 'bar'}})
+        self._assertEqualListsOfInstances([instance], result)
+
+    def test_instance_get_all_by_filters_system_metadata(self):
+        instance = self.create_instance_with_args(
+                system_metadata={'foo': 'bar'})
+        self.create_instance_with_args()
+        result = db.instance_get_all_by_filters(self.ctxt,
+                {'system_metadata': {'foo': 'bar'}})
         self._assertEqualListsOfInstances([instance], result)
 
     def test_instance_get_all_by_filters_unicode_value(self):
@@ -2542,7 +2542,6 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
                         assert_multi_filter_instance_type_get(filts)
 
     def test_flavor_get_all_limit_sort(self):
-        """Test sorting getting all flavours."""
         def assert_sorted_by_key_dir(sort_key, asc=True):
             sort_dir = 'asc' if asc else 'desc'
             results = db.flavor_get_all(self.ctxt, sort_key='name',
@@ -2564,12 +2563,10 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
             assert_sorted_by_key_both_dir(attr)
 
     def test_flavor_get_all_limit(self):
-        """Check a limit can be applied to db.flavor_get_all."""
         limited_flavors = db.flavor_get_all(self.ctxt, limit=2)
         self.assertEqual(2, len(limited_flavors))
 
     def test_flavor_get_all_list_marker(self):
-        """Check results can be returned after marker"""
         all_flavors = db.flavor_get_all(self.ctxt)
 
         # Set the 3rd result as the marker
@@ -2730,6 +2727,12 @@ class InstanceTypeExtraSpecsTestCase(BaseInstanceTypeTestCase):
             real_specs = db.flavor_extra_specs_get(self.ctxt,
                                                           it['flavorid'])
             self._assertEqualObjects(it['extra_specs'], real_specs)
+
+    def test_instance_type_extra_specs_delete_failed(self):
+        for it in self.inst_types:
+            self.assertRaises(exception.InstanceTypeExtraSpecsNotFound,
+                          db.flavor_extra_specs_delete,
+                          self.ctxt, it['flavorid'], 'dummy')
 
     def test_instance_type_extra_specs_update_or_create(self):
         for it in self.inst_types:
@@ -4573,12 +4576,6 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
             network.id)
         return network, instance
 
-    def test_network_in_use_on_host(self):
-        network, _ = self._get_associated_fixed_ip('host.net', '192.0.2.0/30',
-            '192.0.2.1')
-        self.assertTrue(db.network_in_use_on_host(self.ctxt, network.id,
-            'host.net'))
-
     def test_network_get_associated_fixed_ips(self):
         network, instance = self._get_associated_fixed_ip('host.net',
             '192.0.2.0/30', '192.0.2.1')
@@ -4700,10 +4697,6 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'virtual_interface_id': vif.id})
         self._assertEqualListsOfObjects([net1, net2, net3],
             db.network_get_all_by_host(self.ctxt, host))
-
-    def test_network_get_by_cidr_nonexistent(self):
-        self.assertRaises(exception.NetworkNotFoundForCidr,
-            db.network_get_by_cidr(self.ctxt, '192.0.2.0/29'))
 
     def test_network_get_by_cidr(self):
         cidr = '192.0.2.0/30'
@@ -5261,6 +5254,68 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
             new_stats = self._stats_as_dict(node['stats'])
             self._stats_equal(self.stats, new_stats)
 
+    def test_compute_node_get_all_deleted_compute_node(self):
+        # Create a service and compute node and ensure we can find its stats;
+        # delete the service and compute node when done and loop again
+        for x in range(2, 5):
+            # Create a service
+            service_data = self.service_dict.copy()
+            service_data['host'] = 'host-%s' % x
+            service = db.service_create(self.ctxt, service_data)
+
+            # Create a compute node
+            compute_node_data = self.compute_node_dict.copy()
+            compute_node_data['service_id'] = service['id']
+            compute_node_data['stats'] = self.stats.copy()
+            compute_node_data['hypervisor_hostname'] = 'hypervisor-%s' % x
+            node = db.compute_node_create(self.ctxt, compute_node_data)
+
+            # Ensure the "new" compute node is found
+            nodes = db.compute_node_get_all(self.ctxt, False)
+            self.assertEqual(2, len(nodes))
+            found = None
+            for n in nodes:
+                if n['id'] == node['id']:
+                    found = n
+                    break
+            self.assertNotEqual(None, found)
+            # Now ensure the match has stats!
+            self.assertNotEqual(self._stats_as_dict(found['stats']), {})
+
+            # Now delete the newly-created compute node to ensure the related
+            # compute node stats are wiped in a cascaded fashion
+            db.compute_node_delete(self.ctxt, node['id'])
+
+            # Clean up the service
+            db.service_destroy(self.ctxt, service['id'])
+
+    def test_compute_node_get_all_mult_compute_nodes_one_service_entry(self):
+        service_data = self.service_dict.copy()
+        service_data['host'] = 'host2'
+        service = db.service_create(self.ctxt, service_data)
+
+        existing_node = dict(self.item.iteritems())
+        existing_node['service'] = dict(self.service.iteritems())
+        expected = [existing_node]
+
+        for name in ['bm_node1', 'bm_node2']:
+            compute_node_data = self.compute_node_dict.copy()
+            compute_node_data['service_id'] = service['id']
+            compute_node_data['stats'] = self.stats
+            compute_node_data['hypervisor_hostname'] = 'bm_node_1'
+            node = db.compute_node_create(self.ctxt, compute_node_data)
+
+            node = dict(node.iteritems())
+            node['service'] = dict(service.iteritems())
+
+            expected.append(node)
+
+        result = sorted(db.compute_node_get_all(self.ctxt, False),
+                        key=lambda n: n['hypervisor_hostname'])
+
+        self._assertEqualListsOfObjects(expected, result,
+                                        ignored_keys=['stats'])
+
     def test_compute_node_get(self):
         compute_node_id = self.item['id']
         node = db.compute_node_get(self.ctxt, compute_node_id)
@@ -5477,7 +5532,7 @@ class ConsoleTestCase(test.TestCase, ModelsObjectComparatorMixin):
              'compute_host': 'compute_host2',
             },
         ]
-        console_pools = [db.console_pool_create(self.ctxt, val)
+        self.console_pools = [db.console_pool_create(self.ctxt, val)
                          for val in pools_data]
         instance_uuid = uuidutils.generate_uuid()
         db.instance_create(self.ctxt, {'uuid': instance_uuid})
@@ -5485,7 +5540,7 @@ class ConsoleTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                   ('instance_uuid', instance_uuid),
                                   ('password', 'pass' + str(x)),
                                   ('port', 7878 + x),
-                                  ('pool_id', console_pools[x]['id'])])
+                                  ('pool_id', self.console_pools[x]['id'])])
                              for x in xrange(len(pools_data))]
         self.consoles = [db.console_create(self.ctxt, val)
                          for val in self.console_data]
@@ -5522,6 +5577,15 @@ class ConsoleTestCase(test.TestCase, ModelsObjectComparatorMixin):
         instance_uuid = self.consoles[0]['instance_uuid']
         consoles_get = db.console_get_all_by_instance(self.ctxt, instance_uuid)
         self._assertEqualListsOfObjects(self.consoles, consoles_get)
+
+    def test_console_get_all_by_instance_with_pool(self):
+        instance_uuid = self.consoles[0]['instance_uuid']
+        consoles_get = db.console_get_all_by_instance(self.ctxt, instance_uuid,
+                                                      columns_to_join=['pool'])
+        self._assertEqualListsOfObjects(self.consoles, consoles_get,
+                                        ignored_keys=['pool'])
+        self._assertEqualListsOfObjects([pool for pool in self.console_pools],
+                                        [c['pool'] for c in consoles_get])
 
     def test_console_get_all_by_instance_empty(self):
         consoles_get = db.console_get_all_by_instance(self.ctxt,
@@ -5603,8 +5667,7 @@ class CellTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'is_parent': False,
         }
         test_cellname = self._get_cell_base_values()['name']
-        db.cell_update(self.ctxt, test_cellname, new_values)
-        updated_cell = db.cell_get(self.ctxt, test_cellname)
+        updated_cell = db.cell_update(self.ctxt, test_cellname, new_values)
         self._assertEqualObjects(updated_cell, new_values,
                                  ignored_keys=self._ignored_keys + ['name'])
 

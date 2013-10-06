@@ -84,8 +84,8 @@ neutron_opts = [
                 help='Number of seconds before querying neutron for'
                      ' extensions'),
     cfg.StrOpt('neutron_ca_certificates_file',
-                help='Location of ca certicates file to use for neutronclient'
-                     ' requests.'),
+                help='Location of ca certificates file to use for '
+                     'neutron client requests.'),
     cfg.BoolOpt('dhcp_options_enabled',
                 default=False,
                 help='Use per-port DHCP options with Neutron'),
@@ -124,18 +124,19 @@ class API(base.Base):
         """
         neutron = neutronv2.get_client(context)
 
-        # If user has specified to attach instance only to specific
-        # networks, add them to **search_opts
-        # (1) Retrieve non-public network list owned by the tenant.
-        search_opts = {"tenant_id": project_id, 'shared': False}
         if net_ids:
-            search_opts['id'] = net_ids
-        nets = neutron.list_networks(**search_opts).get('networks', [])
-        # (2) Retrieve public network list.
-        search_opts = {'shared': True}
-        if net_ids:
-            search_opts['id'] = net_ids
-        nets += neutron.list_networks(**search_opts).get('networks', [])
+            # If user has specified to attach instance only to specific
+            # networks then only add these to **search_opts. This search will
+            # also include 'shared' networks.
+            search_opts = {'id': net_ids}
+            nets = neutron.list_networks(**search_opts).get('networks', [])
+        else:
+            # (1) Retrieve non-public network list owned by the tenant.
+            search_opts = {'tenant_id': project_id, 'shared': False}
+            nets = neutron.list_networks(**search_opts).get('networks', [])
+            # (2) Retrieve public network list.
+            search_opts = {'shared': True}
+            nets += neutron.list_networks(**search_opts).get('networks', [])
 
         _ensure_requested_network_ordering(
             lambda x: x['id'],
@@ -896,7 +897,8 @@ class API(base.Base):
         data = neutron.list_ports(**search_opts)
         ports = data['ports']
         for p in ports:
-            port_req_body = {'port': {'binding:host_id': instance.get('host')}}
+            port_req_body = {'port': {'binding:host_id':
+                                      migration['dest_compute']}}
             try:
                 neutron.update_port(p['id'], port_req_body)
             except Exception as ex:

@@ -42,7 +42,7 @@ class FakeCinderClient(object):
         self.volume_snapshots = self.volumes
 
 
-class CinderApiTestCase(test.TestCase):
+class CinderApiTestCase(test.NoDBTestCase):
     def setUp(self):
         super(CinderApiTestCase, self).setUp()
 
@@ -296,3 +296,15 @@ class CinderApiTestCase(test.TestCase):
             'id1', {'status': 'error', 'progress': '90%'})
         self.mox.ReplayAll()
         self.api.update_snapshot_status(self.ctx, 'id1', 'error')
+
+    def test_get_volume_encryption_metadata(self):
+        cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
+        self.mox.StubOutWithMock(self.cinderclient.volumes,
+                                 'get_encryption_metadata')
+        self.cinderclient.volumes.\
+            get_encryption_metadata({'encryption_key_id': 'fake_key'})
+        self.mox.ReplayAll()
+
+        self.api.get_volume_encryption_metadata(self.ctx,
+                                                {'encryption_key_id':
+                                                 'fake_key'})

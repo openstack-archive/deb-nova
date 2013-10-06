@@ -17,10 +17,11 @@ from nova.objects import base
 from nova.objects import utils
 
 
-class ComputeNode(base.NovaObject):
+class ComputeNode(base.NovaPersistentObject, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added get_by_service_id()
-    VERSION = '1.1'
+    # Version 1.2: String attributes updated to support unicode
+    VERSION = '1.2'
 
     fields = {
         'id': int,
@@ -31,7 +32,7 @@ class ComputeNode(base.NovaObject):
         'vcpus_used': int,
         'memory_mb_used': int,
         'local_gb_used': int,
-        'hypervisor_type': str,
+        'hypervisor_type': utils.str_value,
         'hypervisor_version': int,
         'hypervisor_hostname': utils.str_or_none,
         'free_ram_mb': utils.int_or_none,
@@ -62,17 +63,13 @@ class ComputeNode(base.NovaObject):
 
     @base.remotable
     def create(self, context):
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         db_compute = db.compute_node_create(context, updates)
         self._from_db_object(context, self, db_compute)
 
     @base.remotable
     def save(self, context, prune_stats=False):
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         updates.pop('id', None)
         db_compute = db.compute_node_update(context, self.id, updates,
                                             prune_stats=prune_stats)

@@ -31,7 +31,6 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova import paths
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import db
 from nova.virt.baremetal import pxe
@@ -42,13 +41,6 @@ from nova.virt.libvirt import imagecache
 LOG = logging.getLogger(__name__)
 
 opts = [
-    cfg.BoolOpt('inject_password',
-                default=True,
-                help='Whether baremetal compute injects password or not'),
-    cfg.StrOpt('injected_network_template',
-               default=paths.basedir_def('nova/virt/'
-                                         'baremetal/interfaces.template'),
-               help='Template file for injected network'),
     cfg.StrOpt('vif_driver',
                default='nova.virt.baremetal.vif_driver.BareMetalVIFDriver',
                help='Baremetal VIF driver.'),
@@ -71,9 +63,6 @@ opts = [
                default='/tftpboot',
                help='Baremetal compute node\'s tftp root path'),
     ]
-
-
-LOG = logging.getLogger(__name__)
 
 baremetal_group = cfg.OptGroup(name='baremetal',
                                title='Baremetal Options')
@@ -196,7 +185,7 @@ class BareMetalDriver(driver.ComputeDriver):
         for vol in block_device_mapping:
             connection_info = vol['connection_info']
             mountpoint = vol['mount_device']
-            self.attach_volume(
+            self.attach_volume(None,
                     connection_info, instance['name'], mountpoint)
 
     def _detach_block_devices(self, instance, block_device_info):
@@ -294,7 +283,8 @@ class BareMetalDriver(driver.ComputeDriver):
                 "for instance %r") % instance['uuid'])
         _update_state(ctx, node, instance, state)
 
-    def destroy(self, instance, network_info, block_device_info=None):
+    def destroy(self, instance, network_info, block_device_info=None,
+                context=None):
         context = nova_context.get_admin_context()
 
         try:
@@ -354,11 +344,13 @@ class BareMetalDriver(driver.ComputeDriver):
     def get_volume_connector(self, instance):
         return self.volume_driver.get_volume_connector(instance)
 
-    def attach_volume(self, connection_info, instance, mountpoint):
+    def attach_volume(self, context, connection_info, instance, mountpoint,
+                      encryption=None):
         return self.volume_driver.attach_volume(connection_info,
                                                 instance, mountpoint)
 
-    def detach_volume(self, connection_info, instance_name, mountpoint):
+    def detach_volume(self, connection_info, instance_name, mountpoint,
+                      encryption=None):
         return self.volume_driver.detach_volume(connection_info,
                                                 instance_name, mountpoint)
 
@@ -501,23 +493,19 @@ class BareMetalDriver(driver.ComputeDriver):
         node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         return self.driver.get_console_output(node, instance)
 
-    def get_available_nodes(self):
+    def get_available_nodes(self, refresh=False):
         context = nova_context.get_admin_context()
         return [str(n['uuid']) for n in
                 db.bm_node_get_all(context, service_host=CONF.host)]
 
     def dhcp_options_for_instance(self, instance):
-        # NOTE(deva): This only works for PXE driver currently.
-        try:
-            bootfile_path = pxe.get_pxe_config_file_path(instance)
-        except AttributeError as ex:
-            # NOTE: not all drivers are going to support PXE boot capability
-            LOG.exception(_("Exception no pxe bootfile-name path: %s"),
-                          unicode(ex))
-            return None
+        # NOTE(deva): This only works for PXE driver currently:
+        # If not running the PXE driver, you should not enable
+        # DHCP updates in nova.conf.
+        bootfile_name = pxe.get_pxe_bootfile_name(instance)
 
         opts = [{'opt_name': 'bootfile-name',
-                 'opt_value': bootfile_path},
+                 'opt_value': bootfile_name},
                 {'opt_name': 'server-ip-address',
                  'opt_value': CONF.my_ip},
                 {'opt_name': 'tftp-server',

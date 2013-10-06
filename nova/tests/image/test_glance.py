@@ -23,6 +23,10 @@ import random
 import tempfile
 import time
 
+import sys
+import testtools
+
+from mock import patch
 import mox
 
 import glanceclient.exc
@@ -31,10 +35,13 @@ from oslo.config import cfg
 from nova import context
 from nova import exception
 from nova.image import glance
+from nova.image.glance import GlanceClientWrapper
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests.glance import stubs as glance_stubs
 from nova.tests import matchers
+from nova import utils
+
 import nova.virt.libvirt.utils as lv_utils
 
 CONF = cfg.CONF
@@ -47,7 +54,7 @@ class NullWriter(object):
         pass
 
 
-class TestGlanceSerializer(test.TestCase):
+class TestGlanceSerializer(test.NoDBTestCase):
     def test_serialize(self):
         metadata = {'name': 'image1',
                     'is_public': True,
@@ -83,7 +90,7 @@ class TestGlanceSerializer(test.TestCase):
         self.assertEqual(glance._convert_from_string(converted), metadata)
 
 
-class TestGlanceImageService(test.TestCase):
+class TestGlanceImageService(test.NoDBTestCase):
     """
     Tests the Glance image service.
 
@@ -110,8 +117,8 @@ class TestGlanceImageService(test.TestCase):
         super(TestGlanceImageService, self).setUp()
         fakes.stub_out_compute_api_snapshot(self.stubs)
 
-        client = glance_stubs.StubGlanceClient()
-        self.service = self._create_image_service(client)
+        self.client = glance_stubs.StubGlanceClient()
+        self.service = self._create_image_service(self.client)
         self.context = context.RequestContext('fake', 'fake', auth_token=True)
         self.mox = mox.Mox()
         self.files_to_clean = []
@@ -122,7 +129,7 @@ class TestGlanceImageService(test.TestCase):
         for f in self.files_to_clean:
             try:
                 os.unlink(f)
-            except Exception:
+            except os.error:
                 pass
 
     def _get_tempfile(self):
@@ -298,6 +305,14 @@ class TestGlanceImageService(test.TestCase):
 
         image_metas = self.service.detail(self.context, limit=5)
         self.assertEquals(len(image_metas), 5)
+
+    def test_page_size(self):
+        with patch.object(GlanceClientWrapper, 'call') as a_mock:
+            self.service.detail(self.context, page_size=5)
+            self.assertEquals(a_mock.called, True)
+            a_mock.assert_called_with(self.context, 1, 'list',
+                                      filters={'is_public': 'none'},
+                                      page_size=5)
 
     def test_detail_default_limit(self):
         fixtures = []
@@ -758,7 +773,7 @@ def _create_failing_glance_client(info):
     return MyGlanceStubClient()
 
 
-class TestGlanceClientWrapper(test.TestCase):
+class TestGlanceClientWrapper(test.NoDBTestCase):
 
     def setUp(self):
         super(TestGlanceClientWrapper, self).setUp()
@@ -944,15 +959,56 @@ class TestGlanceClientWrapper(test.TestCase):
         self.assertEqual(info['num_calls'], 2)
 
 
-class TestGlanceUrl(test.TestCase):
+class TestGlanceUrl(test.NoDBTestCase):
 
     def test_generate_glance_http_url(self):
         generated_url = glance.generate_glance_url()
-        http_url = "http://%s:%d" % (CONF.glance_host, CONF.glance_port)
+        glance_host = CONF.glance_host
+        # ipv6 address, need to wrap it with '[]'
+        if utils.is_valid_ipv6(glance_host):
+            glance_host = '[%s]' % glance_host
+        http_url = "http://%s:%d" % (glance_host, CONF.glance_port)
         self.assertEqual(generated_url, http_url)
 
     def test_generate_glance_https_url(self):
         self.flags(glance_protocol="https")
         generated_url = glance.generate_glance_url()
-        https_url = "https://%s:%d" % (CONF.glance_host, CONF.glance_port)
+        glance_host = CONF.glance_host
+        # ipv6 address, need to wrap it with '[]'
+        if utils.is_valid_ipv6(glance_host):
+            glance_host = '[%s]' % glance_host
+        https_url = "https://%s:%d" % (glance_host, CONF.glance_port)
         self.assertEqual(generated_url, https_url)
+
+
+class TestGlanceApiServers(test.TestCase):
+
+    def test_get_ipv4_api_servers(self):
+        self.flags(glance_api_servers=['10.0.1.1:9292',
+                              'https://10.0.0.1:9293',
+                              'http://10.0.2.2:9294'])
+        glance_host = ['10.0.1.1', '10.0.0.1',
+                        '10.0.2.2']
+        api_servers = glance.get_api_servers()
+        i = 0
+        for server in api_servers:
+            i += 1
+            self.assertIn(server[0], glance_host)
+            if i > 2:
+                break
+
+    # Python 2.6 can not parse ipv6 address correctly
+    @testtools.skipIf(sys.version_info < (2, 7), "py27 or greater only")
+    def test_get_ipv6_api_servers(self):
+        self.flags(glance_api_servers=['[2001:2012:1:f101::1]:9292',
+                              'https://[2010:2013:1:f122::1]:9293',
+                              'http://[2001:2011:1:f111::1]:9294'])
+        glance_host = ['2001:2012:1:f101::1', '2010:2013:1:f122::1',
+                        '2001:2011:1:f111::1']
+        api_servers = glance.get_api_servers()
+        i = 0
+        for server in api_servers:
+            i += 1
+            self.assertIn(server[0], glance_host)
+            if i > 2:
+                break

@@ -18,7 +18,11 @@ from nova.objects import base
 from nova.objects import utils
 
 
-class InstanceAction(base.NovaObject):
+class InstanceAction(base.NovaPersistentObject, base.NovaObject):
+    # Version 1.0: Initial version
+    # Version 1.1: String attributes updated to support unicode
+    VERSION = '1.1'
+
     fields = {
         'id': int,
         'action': utils.str_or_none,
@@ -84,7 +88,7 @@ class InstanceActionList(base.ObjectListBase, base.NovaObject):
         return base.obj_make_list(context, cls(), InstanceAction, db_actions)
 
 
-class InstanceActionEvent(base.NovaObject):
+class InstanceActionEvent(base.NovaPersistentObject, base.NovaObject):
     fields = {
         'id': int,
         'event': utils.str_or_none,

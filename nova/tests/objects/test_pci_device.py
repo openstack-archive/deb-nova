@@ -40,9 +40,13 @@ fake_db_dev = {
     'id': 1,
     'compute_node_id': 1,
     'address': 'a',
-    'product_id': 'p',
     'vendor_id': 'v',
+    'product_id': 'p',
+    'dev_type': 't',
     'status': 'available',
+    'dev_id': 'i',
+    'label': 'l',
+    'instance_uuid': None,
     'extra_info': '{}',
     }
 
@@ -55,9 +59,13 @@ fake_db_dev_1 = {
     'id': 2,
     'compute_node_id': 1,
     'address': 'a1',
-    'product_id': 'p1',
     'vendor_id': 'v1',
+    'product_id': 'p1',
+    'dev_type': 't',
     'status': 'available',
+    'dev_id': 'i',
+    'label': 'l',
+    'instance_uuid': None,
     'extra_info': '{}',
     }
 
@@ -80,7 +88,7 @@ class _TestPciDeviceObject(object):
         self.assertEqual(self.pci_device.product_id, 'p')
         self.assertEqual(self.pci_device.obj_what_changed(),
                          set(['compute_node_id', 'product_id', 'vendor_id',
-                              'status', 'address']))
+                              'status', 'address', 'extra_info']))
 
     def test_pci_device_extra_info(self):
         self.dev_dict = copy.copy(dev_dict)
@@ -233,6 +241,20 @@ class _TestPciDeviceObject(object):
         self.assertEqual(self.pci_device.instance_uuid,
                          'fake-uuid-3')
         self.assertRemotes()
+
+    def test_save_no_extra_info(self):
+        return_dev = dict(fake_db_dev, status='available',
+                          instance_uuid='fake-uuid-3')
+
+        def _fake_update(ctxt, node_id, addr, updates):
+            self.extra_info = updates.get('extra_info')
+            return return_dev
+
+        ctxt = context.get_admin_context()
+        self.stubs.Set(db, 'pci_device_update', _fake_update)
+        self.pci_device = pci_device.PciDevice.create(dev_dict)
+        self.pci_device.save(ctxt)
+        self.assertEqual(self.extra_info, '{}')
 
     def test_save_removed(self):
         ctxt = context.get_admin_context()

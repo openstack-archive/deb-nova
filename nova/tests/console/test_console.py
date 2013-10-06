@@ -144,7 +144,8 @@ class ConsoleAPITestCase(test.TestCase):
             return self.fake_console
         self.stubs.Set(db, 'console_get', _fake_db_console_get)
 
-        def _fake_db_console_get_all_by_instance(_ctxt, _instance_uuid):
+        def _fake_db_console_get_all_by_instance(_ctxt, _instance_uuid,
+                                                 columns_to_join):
             return [self.fake_console]
         self.stubs.Set(db, 'console_get_all_by_instance',
                        _fake_db_console_get_all_by_instance)
@@ -178,11 +179,11 @@ class ConsoleAPITestCase(test.TestCase):
 
         compute_rpcapi.ComputeAPI.get_console_topic(
             self.context, 'fake_host').AndReturn('compute.fake_host')
-
-        self.mox.StubOutWithMock(console_rpcapi.ConsoleAPI, 'add_console')
-
-        console_rpcapi.ConsoleAPI.add_console(self.context,
-                                              self.fake_instance['id'])
+        self.mox.StubOutClassWithMocks(console_rpcapi, 'ConsoleAPI')
+        console_api_mock = console_rpcapi.ConsoleAPI(
+            topic='compute.fake_host')
+        console_api_mock.add_console(self.context,
+                                     self.fake_instance['id'])
 
         self.mox.ReplayAll()
 

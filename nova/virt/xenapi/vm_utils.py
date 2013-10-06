@@ -211,7 +211,9 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
     vcpu_weight = instance_type['vcpu_weight']
     vcpu_params = {}
     if vcpu_weight is not None:
-        vcpu_params = {"weight": str(vcpu_weight)}
+        # NOTE(johngarbutt) bug in XenServer 6.1 and 6.2 means
+        # we need to specify both weight and cap for either to apply
+        vcpu_params = {"weight": str(vcpu_weight), "cap": "0"}
 
     rec = {
         'actions_after_crash': 'destroy',
@@ -321,7 +323,7 @@ def is_vm_shutdown(session, vm_ref):
     return False
 
 
-def ensure_free_mem(session, instance):
+def is_enough_free_mem(session, instance):
     instance_type = flavors.extract_flavor(instance)
     mem = long(instance_type['memory_mb']) * 1024 * 1024
     host = session.get_xenapi_host()
@@ -487,7 +489,7 @@ def get_vdi_uuid_for_volume(session, connection_data):
     vdi_uuid = None
 
     if 'vdi_uuid' in connection_data:
-        session.call_xenapi("SR.scan", sr_ref)
+        _scan_sr(session, sr_ref)
         vdi_uuid = connection_data['vdi_uuid']
     else:
         try:
@@ -531,6 +533,10 @@ def get_vdis_for_instance(context, session, instance, name_label, image,
         create_image_vdis = _create_image(
                 context, session, instance, name_label, image, image_type)
         vdis.update(create_image_vdis)
+
+    # Just get the VDI ref once
+    for vdi in vdis.itervalues():
+        vdi['ref'] = session.call_xenapi('VDI.get_by_uuid', vdi['uuid'])
 
     return vdis
 
@@ -582,9 +588,7 @@ def _safe_copy_vdi(session, sr_ref, instance, vdi_to_copy_ref):
 
     root_uuid = imported_vhds['root']['uuid']
 
-    # TODO(sirp): for safety, we should probably re-scan the SR after every
-    # call to a dom0 plugin, since there is a possibility that the underlying
-    # VHDs changed
+    # rescan to discover new VHDs
     scan_default_sr(session)
     vdi_ref = session.call_xenapi('VDI.get_by_uuid', root_uuid)
     return vdi_ref
@@ -773,6 +777,11 @@ def _find_cached_image(session, image_id, sr_ref):
 
 
 def resize_disk(session, instance, vdi_ref, instance_type):
+    size_gb = instance_type['root_gb']
+    if size_gb == 0:
+        reason = _("Can't resize a disk to 0 GB.")
+        raise exception.ResizeError(reason=reason)
+
     # Copy VDI over to something we can resize
     # NOTE(jerdfelt): Would be nice to just set vdi_ref to read/write
     sr_ref = safe_find_sr(session)
@@ -780,10 +789,10 @@ def resize_disk(session, instance, vdi_ref, instance_type):
 
     try:
         # Resize partition and filesystem down
-        _auto_configure_disk(session, copy_ref, instance_type['root_gb'])
+        _auto_configure_disk(session, copy_ref, size_gb)
 
         # Create new VDI
-        vdi_size = instance_type['root_gb'] * 1024 * 1024 * 1024
+        vdi_size = size_gb * 1024 * 1024 * 1024
         # NOTE(johannes): No resizing allowed for rescue instances, so
         # using instance['name'] is safe here
         new_ref = create_vdi(session, sr_ref, instance, instance['name'],
@@ -792,7 +801,7 @@ def resize_disk(session, instance, vdi_ref, instance_type):
         new_uuid = session.call_xenapi('VDI.get_uuid', new_ref)
 
         # Manually copy contents over
-        virtual_size = instance_type['root_gb'] * 1024 * 1024 * 1024
+        virtual_size = size_gb * 1024 * 1024 * 1024
         _copy_partition(session, copy_ref, new_ref, 1, virtual_size)
 
         return new_ref, new_uuid
@@ -816,6 +825,10 @@ def _auto_configure_disk(session, vdi_ref, new_gb):
 
         3. The file-system on the one partition must be ext3 or ext4.
     """
+    if new_gb == 0:
+        LOG.debug(_("Skipping auto_config_disk as destination size is 0GB"))
+        return
+
     with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
         partitions = _get_partitions(dev)
 
@@ -1005,8 +1018,8 @@ def generate_configdrive(session, instance, vm_ref, userdevice,
             destroy_vdi(session, vdi_ref)
 
 
-def create_kernel_image(context, session, instance, name_label, image_id,
-                        image_type):
+def _create_kernel_image(context, session, instance, name_label, image_id,
+                         image_type):
     """Creates kernel/ramdisk file from the image stored in the cache.
     If the image is not present in the cache, it streams it from glance.
 
@@ -1027,13 +1040,33 @@ def create_kernel_image(context, session, instance, name_label, image_id,
         return {vdi_type: dict(uuid=None, file=filename)}
 
 
-def destroy_kernel_ramdisk(session, kernel, ramdisk):
+def create_kernel_and_ramdisk(context, session, instance, name_label):
+    kernel_file = None
+    ramdisk_file = None
+    if instance['kernel_id']:
+        vdis = _create_kernel_image(context, session,
+                instance, name_label, instance['kernel_id'],
+                ImageType.KERNEL)
+        kernel_file = vdis['kernel'].get('file')
+
+    if instance['ramdisk_id']:
+        vdis = _create_kernel_image(context, session,
+                instance, name_label, instance['ramdisk_id'],
+                ImageType.RAMDISK)
+        ramdisk_file = vdis['ramdisk'].get('file')
+
+    return kernel_file, ramdisk_file
+
+
+def destroy_kernel_ramdisk(session, instance, kernel, ramdisk):
     args = {}
     if kernel:
         args['kernel-file'] = kernel
     if ramdisk:
         args['ramdisk-file'] = ramdisk
     if args:
+        LOG.debug(_("Removing kernel/ramdisk files from dom0"),
+                    instance=instance)
         session.call_plugin('kernel', 'remove_kernel_ramdisk', args)
 
 
@@ -1211,7 +1244,9 @@ def _fetch_vhd_image(context, session, instance, image_id):
     except Exception as e:
         default_handler = _default_download_handler()
 
-        if handler == default_handler:
+        # Using type() instead of isinstance() so instance of subclass doesn't
+        # test as equivalent
+        if type(handler) == type(default_handler):
             raise
 
         LOG.exception(_("Download handler '%(handler)s' raised an"
@@ -1223,8 +1258,8 @@ def _fetch_vhd_image(context, session, instance, image_id):
         vdis = default_handler.download_image(
                 context, session, instance, image_id)
 
-    sr_ref = safe_find_sr(session)
-    _scan_sr(session, sr_ref)
+    # Ensure we can see the import VHDs as VDIs
+    scan_default_sr(session)
 
     try:
         _check_vdi_size(context, session, instance, vdis['root']['uuid'])
@@ -1400,7 +1435,7 @@ def determine_disk_image_type(image_meta):
     except KeyError:
         raise exception.InvalidDiskFormat(disk_format=disk_format)
 
-    image_ref = image_meta['id']
+    image_ref = image_meta.get('id')
 
     params = {
         'image_type_str': ImageType.to_string(image_type),
@@ -1593,16 +1628,39 @@ def fetch_bandwidth(session):
     return bw
 
 
-def _scan_sr(session, sr_ref=None):
-    """Scans the SR specified by sr_ref."""
+def _scan_sr(session, sr_ref=None, max_attempts=4):
     if sr_ref:
-        LOG.debug(_("Re-scanning SR %s"), sr_ref)
-        session.call_xenapi('SR.scan', sr_ref)
+        # NOTE(johngarbutt) xenapi will collapse any duplicate requests
+        # for SR.scan if there is already a scan in progress.
+        # However, we don't want that, because the scan may have started
+        # before we modified the underlying VHDs on disk through a plugin.
+        # Using our own mutex will reduce cases where our periodic SR scan
+        # in host.update_status starts racing the sr.scan after a plugin call.
+        @utils.synchronized('sr-scan-' + sr_ref)
+        def do_scan(sr_ref):
+            LOG.debug(_("Scanning SR %s"), sr_ref)
+
+            attempt = 1
+            while True:
+                try:
+                    return session.call_xenapi('SR.scan', sr_ref)
+                except session.XenAPI.Failure as exc:
+                    with excutils.save_and_reraise_exception() as ctxt:
+                        if exc.details[0] == 'SR_BACKEND_FAILURE_40':
+                            if attempt < max_attempts:
+                                ctxt.reraise = False
+                                LOG.warn(_("Retry SR scan due to error: %s")
+                                         % exc)
+                                greenthread.sleep(2 ** attempt)
+                                attempt += 1
+        do_scan(sr_ref)
 
 
 def scan_default_sr(session):
     """Looks for the system default SR and triggers a re-scan."""
-    _scan_sr(session, _find_sr(session))
+    sr_ref = safe_find_sr(session)
+    _scan_sr(session, sr_ref)
+    return sr_ref
 
 
 def safe_find_sr(session):
@@ -1825,12 +1883,10 @@ def _wait_for_vhd_coalesce(session, instance, sr_ref, vdi_ref,
         base_uuid = _get_vhd_parent_uuid(session, parent_ref)
         return parent_uuid, base_uuid
 
-    # NOTE(sirp): This rescan is necessary to ensure the VM's `sm_config`
-    # matches the underlying VHDs.
-    _scan_sr(session, sr_ref)
-
     max_attempts = CONF.xenapi_vhd_coalesce_max_attempts
     for i in xrange(max_attempts):
+        # NOTE(sirp): This rescan is necessary to ensure the VM's `sm_config`
+        # matches the underlying VHDs.
         _scan_sr(session, sr_ref)
         parent_uuid = _get_vhd_parent_uuid(session, vdi_ref)
         if parent_uuid and (parent_uuid != original_parent_uuid):
@@ -2092,7 +2148,7 @@ def _log_progress_if_required(left, last_log_time, virtual_size):
         complete_pct = float(virtual_size - left) / virtual_size * 100
         LOG.debug(_("Sparse copy in progress, "
                     "%(complete_pct).2f%% complete. "
-                    "%(left) bytes left to copy"),
+                    "%(left)s bytes left to copy"),
             {"complete_pct": complete_pct, "left": left})
     return last_log_time
 

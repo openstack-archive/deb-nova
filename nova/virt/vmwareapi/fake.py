@@ -60,6 +60,7 @@ def reset():
     create_network()
     create_host_network_system()
     create_host()
+    create_host()
     create_datacenter()
     create_datastore()
     create_res_pool()
@@ -277,6 +278,11 @@ class VirtualLsiLogicController(DataObject):
     pass
 
 
+class VirtualLsiLogicSASController(DataObject):
+    """VirtualLsiLogicSASController class."""
+    pass
+
+
 class VirtualPCNet32(DataObject):
     """VirtualPCNet32 class."""
 
@@ -351,10 +357,9 @@ class Network(ManagedObject):
 class ResourcePool(ManagedObject):
     """Resource Pool class."""
 
-    def __init__(self, name="test-rpool", value="resgroup-test"):
+    def __init__(self, name="test_ResPool", value="resgroup-test"):
         super(ResourcePool, self).__init__("rp")
         self.set("name", name)
-        self.set("name", "test_ResPool")
         summary = DataObject()
         runtime = DataObject()
         config = DataObject()
@@ -377,6 +382,7 @@ class ResourcePool(ManagedObject):
         config.memoryAllocation = memoryAllocation
         config.cpuAllocation = cpuAllocation
         self.set("summary", summary)
+        self.set("summary.runtime.memory", memory)
         self.set("config", config)
         parent = ManagedObjectReference(value=value,
                                         name=name)
@@ -414,17 +420,12 @@ class ClusterComputeResource(ManagedObject):
         summary.numEffectiveHosts = 0
         summary.totalMemory = 0
         summary.effectiveMemory = 0
+        summary.effectiveCpu = 10000
         self.set("summary", summary)
-        self.set("summary.effectiveCpu", 10000)
 
-    def _add_resource_pool(self, r_pool):
+    def _add_root_resource_pool(self, r_pool):
         if r_pool:
-            r_pools = self.get("resourcePool")
-            if r_pools is None:
-                r_pools = DataObject()
-                r_pools.ManagedObjectReference = []
-                self.set("resourcePool", r_pools)
-            r_pools.ManagedObjectReference.append(r_pool)
+            self.set("resourcePool", r_pool)
 
     def _add_host(self, host_sys):
         if host_sys:
@@ -544,6 +545,7 @@ class HostSystem(ManagedObject):
         self.set("capability.maxHostSupportedVcpus", 600)
         self.set("summary.runtime.inMaintenanceMode", False)
         self.set("runtime.connectionState", "connected")
+        self.set("summary.hardware", hardware)
         self.set("config.network.pnic", net_info_pnic)
         self.set("connected", connected)
 
@@ -631,11 +633,12 @@ class Datacenter(ManagedObject):
 class Task(ManagedObject):
     """Task class."""
 
-    def __init__(self, task_name, state="running"):
+    def __init__(self, task_name, state="running", result=None):
         super(Task, self).__init__("Task")
-        info = DataObject
+        info = DataObject()
         info.name = task_name
         info.state = state
+        info.result = result
         self.set("info", info)
 
 
@@ -672,13 +675,14 @@ def create_network():
 def create_cluster(name):
     cluster = ClusterComputeResource(name=name)
     cluster._add_host(_get_object_refs("HostSystem")[0])
+    cluster._add_host(_get_object_refs("HostSystem")[1])
     cluster._add_datastore(_get_object_refs("Datastore")[0])
-    cluster._add_resource_pool(_get_object_refs("ResourcePool")[0])
+    cluster._add_root_resource_pool(_get_object_refs("ResourcePool")[0])
     _create_object('ClusterComputeResource', cluster)
 
 
-def create_task(task_name, state="running"):
-    task = Task(task_name, state)
+def create_task(task_name, state="running", result=None):
+    task = Task(task_name, state, result)
     _create_object("Task", task)
     return task
 
@@ -714,6 +718,13 @@ def fake_plug_vifs(*args, **kwargs):
 def fake_get_network(*args, **kwargs):
     """Fake get network."""
     return {'type': 'fake'}
+
+
+def get_file(file_path):
+    """Check if file exists in the db."""
+    if _db_content.get("files") is None:
+        raise exception.NoFilesFound()
+    return file_path in _db_content.get("files")
 
 
 def fake_fetch_image(context, image, instance, **kwargs):
@@ -866,6 +877,11 @@ class FakeVim(object):
         task_mdo = create_task(method, "success")
         return task_mdo.obj
 
+    def _extend_disk(self, method, size):
+        """Extend disk size when create a instance."""
+        task_mdo = create_task(method, "success")
+        return task_mdo.obj
+
     def _snapshot_vm(self, method):
         """Snapshots a VM. Here we do nothing for faking sake."""
         task_mdo = create_task(method, "success")
@@ -908,7 +924,10 @@ class FakeVim(object):
             raise exception.NoFilesFound()
         for file in _db_content.get("files"):
             if file.find(ds_path) != -1:
-                task_mdo = create_task(method, "success")
+                result = DataObject()
+                result.path = ds_path
+                task_mdo = create_task(method, state="success",
+                                       result=result)
                 return task_mdo.obj
         task_mdo = create_task(method, "error")
         return task_mdo.obj
@@ -1020,6 +1039,9 @@ class FakeVim(object):
         elif attr_name == "CopyVirtualDisk_Task":
             return lambda *args, **kwargs: self._create_copy_disk(attr_name,
                                                 kwargs.get("destName"))
+        elif attr_name == "ExtendVirtualDisk_Task":
+            return lambda *args, **kwargs: self._extend_disk(attr_name,
+                                                kwargs.get("size"))
         elif attr_name == "DeleteVirtualDisk_Task":
             return lambda *args, **kwargs: self._delete_disk(attr_name,
                                                 *args, **kwargs)

@@ -66,7 +66,7 @@ CONF = cfg.CONF
 CONF.import_opt('vswitch_name', 'nova.virt.hyperv.vif', 'hyperv')
 
 
-class HyperVAPITestCase(test.TestCase):
+class HyperVAPITestCase(test.NoDBTestCase):
     """Unit tests for Hyper-V driver calls."""
 
     def __init__(self, test_case_name):
@@ -1000,7 +1000,8 @@ class HyperVAPITestCase(test.TestCase):
             else:
                 fake.PathUtils.copyfile(mox.IsA(str), mox.IsA(str))
                 m = vhdutils.VHDUtils.get_vhd_info(mox.IsA(str))
-                m.AndReturn({'MaxInternalSize': 1024})
+                m.AndReturn({'MaxInternalSize': 1024, 'FileSize': 1024,
+                             'Type': 2})
                 vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object))
 
         self._setup_check_admin_permissions_mocks(
@@ -1214,7 +1215,8 @@ class HyperVAPITestCase(test.TestCase):
                                  target_portal)
 
         self._mox.ReplayAll()
-        self._conn.attach_volume(connection_info, instance_data, mount_point)
+        self._conn.attach_volume(None, connection_info, instance_data,
+                                 mount_point)
         self._mox.VerifyAll()
 
         self.assertEquals(len(self._instance_volume_disks), 1)

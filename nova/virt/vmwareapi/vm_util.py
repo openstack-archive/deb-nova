@@ -27,7 +27,6 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import vim_util
 
-
 LOG = logging.getLogger(__name__)
 
 
@@ -119,6 +118,9 @@ def create_controller_spec(client_factory, key, adapter_type="lsiLogic"):
     if adapter_type == "busLogic":
         virtual_controller = client_factory.create(
                                 'ns0:VirtualBusLogicController')
+    elif adapter_type == "lsiLogicsas":
+        virtual_controller = client_factory.create(
+                                'ns0:VirtualLsiLogicSASController')
     else:
         virtual_controller = client_factory.create(
                                 'ns0:VirtualLsiLogicController')
@@ -312,7 +314,7 @@ def get_vmdk_path_and_adapter_type(hardware_devices):
         elif device.__class__.__name__ == "VirtualIDEController":
             adapter_type_dict[device.key] = "ide"
         elif device.__class__.__name__ == "VirtualLsiLogicSASController":
-            adapter_type_dict[device.key] = "lsiLogic"
+            adapter_type_dict[device.key] = "lsiLogicsas"
 
     adapter_type = adapter_type_dict.get(vmdk_controler_key, "")
 
@@ -333,11 +335,11 @@ def get_rdm_disk(hardware_devices, uuid):
             return device
 
 
-def get_copy_virtual_disk_spec(client_factory, adapter_type="lsilogic",
+def get_copy_virtual_disk_spec(client_factory, adapter_type="lsiLogic",
                                disk_type="preallocated"):
     """Builds the Virtual Disk copy spec."""
     dest_spec = client_factory.create('ns0:VirtualDiskSpec')
-    dest_spec.adapterType = adapter_type
+    dest_spec.adapterType = get_vmdk_adapter_type(adapter_type)
     dest_spec.diskType = disk_type
     return dest_spec
 
@@ -346,7 +348,7 @@ def get_vmdk_create_spec(client_factory, size_in_kb, adapter_type="lsiLogic",
                          disk_type="preallocated"):
     """Builds the virtual disk create spec."""
     create_vmdk_spec = client_factory.create('ns0:FileBackedVirtualDiskSpec')
-    create_vmdk_spec.adapterType = adapter_type
+    create_vmdk_spec.adapterType = get_vmdk_adapter_type(adapter_type)
     create_vmdk_spec.diskType = disk_type
     create_vmdk_spec.capacityKb = size_in_kb
     return create_vmdk_spec
@@ -356,7 +358,7 @@ def get_rdm_create_spec(client_factory, device, adapter_type="lsiLogic",
                         disk_type="rdmp"):
     """Builds the RDM virtual disk create spec."""
     create_vmdk_spec = client_factory.create('ns0:DeviceBackedVirtualDiskSpec')
-    create_vmdk_spec.adapterType = adapter_type
+    create_vmdk_spec.adapterType = get_vmdk_adapter_type(adapter_type)
     create_vmdk_spec.diskType = disk_type
     create_vmdk_spec.device = device
     return create_vmdk_spec
@@ -566,10 +568,17 @@ def get_vnc_config_spec(client_factory, port, password):
     opt_port = client_factory.create('ns0:OptionValue')
     opt_port.key = "RemoteDisplay.vnc.port"
     opt_port.value = port
-    opt_pass = client_factory.create('ns0:OptionValue')
-    opt_pass.key = "RemoteDisplay.vnc.password"
-    opt_pass.value = password
-    virtual_machine_config_spec.extraConfig = [opt_enabled, opt_port, opt_pass]
+    extras = [opt_enabled, opt_port]
+    if password:
+        LOG.deprecated(_("The password-based access to VNC consoles will be "
+                         "removed in the next release. Please, switch to "
+                         "using the default value (this will disable password "
+                         "protection on the VNC console)."))
+        opt_pass = client_factory.create('ns0:OptionValue')
+        opt_pass.key = "RemoteDisplay.vnc.password"
+        opt_pass.value = password
+        extras.append(opt_pass)
+    virtual_machine_config_spec.extraConfig = extras
     return virtual_machine_config_spec
 
 
@@ -760,6 +769,44 @@ def get_vm_state_from_name(session, vm_name):
     return vm_state
 
 
+def get_stats_from_cluster(session, cluster):
+    """Get the aggregate resource stats of a cluster."""
+    cpu_info = {'vcpus': 0, 'cores': 0, 'vendor': [], 'model': []}
+    mem_info = {'total': 0, 'free': 0}
+    # Get the Host and Resource Pool Managed Object Refs
+    prop_dict = session._call_method(vim_util, "get_dynamic_properties",
+                                     cluster, "ClusterComputeResource",
+                                     ["host", "resourcePool"])
+    if prop_dict:
+        host_ret = prop_dict.get('host')
+        if host_ret:
+            host_mors = host_ret.ManagedObjectReference
+            result = session._call_method(vim_util,
+                         "get_properties_for_a_collection_of_objects",
+                         "HostSystem", host_mors, ["summary.hardware"])
+            for obj in result.objects:
+                hardware_summary = obj.propSet[0].val
+                # Total vcpus is the sum of all pCPUs of individual hosts
+                # The overcommitment ratio is factored in by the scheduler
+                cpu_info['vcpus'] += hardware_summary.numCpuThreads
+                cpu_info['cores'] += hardware_summary.numCpuCores
+                cpu_info['vendor'].append(hardware_summary.vendor)
+                cpu_info['model'].append(hardware_summary.cpuModel)
+
+        res_mor = prop_dict.get('resourcePool')
+        if res_mor:
+            res_usage = session._call_method(vim_util, "get_dynamic_property",
+                            res_mor, "ResourcePool", "summary.runtime.memory")
+            if res_usage:
+                # maxUsage is the memory limit of the cluster available to VM's
+                mem_info['total'] = int(res_usage.maxUsage / (1024 * 1024))
+                # overallUsage is the hypervisor's view of memory usage by VM's
+                consumed = int(res_usage.overallUsage / (1024 * 1024))
+                mem_info['free'] = mem_info['total'] - consumed
+    stats = {'cpu': cpu_info, 'mem': mem_info}
+    return stats
+
+
 def get_cluster_ref_from_name(session, cluster_name):
     """Get reference to the cluster with the name specified."""
     cls = session._call_method(vim_util, "get_objects",
@@ -943,7 +990,8 @@ def get_dynamic_property_mor(session, mor_ref, attribute):
 
 def find_entity_mor(entity_list, entity_name):
     """Returns managed object ref for given cluster or resource pool name."""
-    return [mor for mor in entity_list if mor.propSet[0].val == entity_name]
+    return [mor for mor in entity_list if (hasattr(mor, 'propSet') and
+                                           mor.propSet[0].val == entity_name)]
 
 
 def get_all_cluster_refs_by_name(session, path_list):
@@ -953,7 +1001,11 @@ def get_all_cluster_refs_by_name(session, path_list):
     The input will have the list of clusters and resource pool names
     """
     cls = get_all_cluster_mors(session)
+    if not cls:
+        return
     res = get_all_res_pool_mors(session)
+    if not res:
+        return
     path_list = [path.strip() for path in path_list]
     list_obj = []
     for entity_path in path_list:
@@ -1012,3 +1064,17 @@ def get_mo_id_from_instance(instance):
     'domain-1001(MyClusterName)'
     """
     return instance['node'].partition('(')[0]
+
+
+def get_vmdk_adapter_type(adapter_type):
+    """Return the adapter type to be used in vmdk descriptor.
+
+    Adapter type in vmdk descriptor is same for LSI-SAS & LSILogic
+    because Virtual Disk Manager API does not recognize the newer controller
+    types.
+    """
+    if adapter_type == "lsiLogicsas":
+        vmdk_adapter_type = "lsiLogic"
+    else:
+        vmdk_adapter_type = adapter_type
+    return vmdk_adapter_type

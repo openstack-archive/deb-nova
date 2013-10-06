@@ -25,7 +25,7 @@ from nova.keymgr import key
 from nova import test
 
 
-class KeyTestCase(test.TestCase):
+class KeyTestCase(test.NoDBTestCase):
 
     def _create_key(self):
         raise NotImplementedError()
@@ -55,3 +55,15 @@ class SymmetricKeyTestCase(KeyTestCase):
 
     def test_get_encoded(self):
         self.assertEquals(self.key.get_encoded(), self.encoded)
+
+    def test___eq__(self):
+        self.assertTrue(self.key == self.key)
+
+        self.assertFalse(self.key == None)
+        self.assertFalse(None == self.key)
+
+    def test___ne__(self):
+        self.assertFalse(self.key != self.key)
+
+        self.assertTrue(self.key != None)
+        self.assertTrue(None != self.key)

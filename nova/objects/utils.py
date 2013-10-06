@@ -20,7 +20,6 @@ import netaddr
 
 from nova.network import model as network_model
 from nova.openstack.common.gettextutils import _
-from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 
 
@@ -55,14 +54,24 @@ def int_or_none(val):
         return int(val)
 
 
+def str_value(val):
+    if val is None:
+        raise ValueError(_('None is not valid here'))
+    return unicode(val)
+
+
 def str_or_none(val):
     """Attempt to stringify a value, or None."""
     if val is None:
         return val
-    elif isinstance(val, basestring):
-        return strutils.safe_encode(val)
     else:
-        return str(val)
+        return str_value(val)
+
+
+def cstring(val):
+    if val is None:
+        raise ValueError(_('None is not valid here'))
+    return str(val)
 
 
 def ip_or_none(version):
@@ -75,9 +84,11 @@ def ip_or_none(version):
     return validator
 
 
-def nested_object_or_none(objclass):
+def nested_object(objclass, none_ok=True):
     def validator(val, objclass=objclass):
-        if val is None or isinstance(val, objclass):
+        if none_ok and val is None:
+            return val
+        if isinstance(val, objclass):
             return val
         raise ValueError('An object of class %s is required here' % objclass)
     return validator

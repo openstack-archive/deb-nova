@@ -112,11 +112,11 @@ linux_net_opts = [
                help='the port for the metadata api port'),
     cfg.StrOpt('iptables_top_regex',
                default='',
-               help='Regular expression to match iptables rule that should'
+               help='Regular expression to match iptables rule that should '
                     'always be on the top.'),
     cfg.StrOpt('iptables_bottom_regex',
                default='',
-               help='Regular expression to match iptables rule that should'
+               help='Regular expression to match iptables rule that should '
                     'always be on the bottom.'),
     cfg.StrOpt('iptables_drop_action',
                default='DROP',
@@ -1502,6 +1502,8 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             msg = _('Adding interface %(interface)s to bridge %(bridge)s')
             LOG.debug(msg, {'interface': interface, 'bridge': bridge})
             out, err = _execute('brctl', 'addif', bridge, interface,
+                                check_exit_code=False, run_as_root=True)
+            out, err = _execute('ip', 'link', 'set', interface, 'up',
                                 check_exit_code=False, run_as_root=True)
 
             # NOTE(vish): This will break if there is already an ip on the

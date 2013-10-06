@@ -81,13 +81,24 @@ def fake_compute_get_all(*args, **kwargs):
 
 
 def fake_compute_get(*args, **kwargs):
-    return fakes.stub_instance(1, uuid=UUID3,
+    inst = fakes.stub_instance(1, uuid=UUID3,
                                security_groups=[{'name': 'fake-2-0'},
                                                 {'name': 'fake-2-1'}])
+    return fake_instance.fake_instance_obj(args[1],
+               expected_attrs=instance_obj.INSTANCE_DEFAULT_FIELDS, **inst)
 
 
 def fake_compute_create(*args, **kwargs):
-    return ([fake_compute_get()], '')
+    return ([fake_compute_get(*args, **kwargs)], '')
+
+
+def fake_get_instance_security_groups(*args, **kwargs):
+    return [{'name': 'fake'}]
+
+
+def fake_get_instances_security_groups_bindings(inst, context):
+    return {UUID1: [{'name': 'fake-0-0'}, {'name': 'fake-0-1'}],
+            UUID2: [{'name': 'fake-1-0'}, {'name': 'fake-1-1'}]}
 
 
 class SecurityGroupsOutputTest(test.TestCase):
@@ -95,6 +106,7 @@ class SecurityGroupsOutputTest(test.TestCase):
 
     def setUp(self):
         super(SecurityGroupsOutputTest, self).setUp()
+        CONF.set_override('security_group_api', 'nova')
         fakes.stub_out_nw_api(self.stubs)
         self.stubs.Set(compute.api.API, 'get', fake_compute_get)
         self.stubs.Set(compute.api.API, 'get_all', fake_compute_get_all)
@@ -177,8 +189,18 @@ class SecurityGroupsOutputXmlTest(SecurityGroupsOutputTest):
             root.set('id')
             root.set('image_ref')
             root.set('flavor_ref')
+            secgrps = xmlutil.SubTemplateElement(root,
+                '{%s}security_groups' %
+                security_groups.SecurityGroups.namespace)
+            secgrp = xmlutil.SubTemplateElement(
+                secgrps, 'security_group',
+                selector="os-security-groups:security_groups")
+            secgrp.set('name')
+            alias = security_groups.SecurityGroups.alias
+            namespace = security_groups.SecurityGroups.namespace
             return xmlutil.MasterTemplate(root, 1,
-                                          nsmap={None: xmlutil.XMLNS_V11})
+                                          nsmap={None: xmlutil.XMLNS_V11,
+                                                 alias: namespace})
 
     def _encode_body(self, body):
         serializer = self.MinimalCreateServerTemplate()

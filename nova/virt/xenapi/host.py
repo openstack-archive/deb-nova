@@ -93,7 +93,8 @@ class Host(object):
                     instance.save()
 
                     self._session.call_xenapi('VM.pool_migrate',
-                                              vm_ref, host_ref, {})
+                                              vm_ref, host_ref,
+                                              {"live": "true"})
                     migrations_counter = migrations_counter + 1
 
                     instance.vm_state = vm_states.ACTIVE
@@ -166,8 +167,7 @@ class HostState(object):
         LOG.debug(_("Updating host stats"))
         data = call_xenhost(self._session, "host_data", {})
         if data:
-            sr_ref = vm_utils.safe_find_sr(self._session)
-            self._session.call_xenapi("SR.scan", sr_ref)
+            sr_ref = vm_utils.scan_default_sr(self._session)
             sr_rec = self._session.call_xenapi("SR.get_record", sr_ref)
             total = int(sr_rec["physical_size"])
             used = int(sr_rec["physical_utilisation"])
@@ -185,6 +185,13 @@ class HostState(object):
                 data["host_memory_free_computed"] = host_memory.get(
                                                     'free-computed', 0)
                 del data['host_memory']
+            if (data['host_hostname'] !=
+                    self._stats.get('host_hostname', data['host_hostname'])):
+                LOG.error(_('Hostname has changed from %(old)s '
+                            'to %(new)s. A restart is required to take effect.'
+                            ) % {'old': self._stats['host_hostname'],
+                                 'new': data['host_hostname']})
+                data['host_hostname'] = self._stats['host_hostname']
             data['hypervisor_hostname'] = data['host_hostname']
             self._stats = data
 

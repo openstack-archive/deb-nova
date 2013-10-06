@@ -16,6 +16,7 @@
 
 import collections
 import copy
+import functools
 
 from nova import context
 from nova import exception
@@ -97,6 +98,7 @@ class NovaObjectMetaclass(type):
 # requested action and the result will be returned here.
 def remotable_classmethod(fn):
     """Decorator for remotable classmethods."""
+    @functools.wraps(fn)
     def wrapper(cls, context, *args, **kwargs):
         if NovaObject.indirection_api:
             result = NovaObject.indirection_api.object_class_action(
@@ -117,6 +119,7 @@ def remotable_classmethod(fn):
 # "orphaned" and remotable methods cannot be called.
 def remotable(fn):
     """Decorator for remotable object methods."""
+    @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
         ctxt = self._context
         try:
@@ -129,6 +132,8 @@ def remotable(fn):
         if ctxt is None:
             raise exception.OrphanedObjectError(method=fn.__name__,
                                                 objtype=self.obj_name())
+        # Force this to be set if it wasn't before.
+        self._context = ctxt
         if NovaObject.indirection_api:
             updates, result = NovaObject.indirection_api.object_action(
                 ctxt, self, fn.__name__, args, kwargs)
@@ -186,14 +191,7 @@ class NovaObject(object):
     #            'bar': str,
     #            'baz': lambda x: str(x).ljust(8),
     #          }
-    #
-    # NOTE(danms): These fields will be inherited by all subclasses.
-    fields = {
-        'created_at': obj_utils.datetime_or_str_or_none,
-        'updated_at': obj_utils.datetime_or_str_or_none,
-        'deleted_at': obj_utils.datetime_or_str_or_none,
-        'deleted': bool,
-        }
+    fields = {}
     obj_extra_fields = []
 
     def __init__(self):
@@ -230,10 +228,6 @@ class NovaObject(object):
 
         raise exception.IncompatibleObjectVersion(objname=objname,
                                                   objver=objver)
-
-    _attr_created_at_from_primitive = obj_utils.dt_deserializer
-    _attr_updated_at_from_primitive = obj_utils.dt_deserializer
-    _attr_deleted_at_from_primitive = obj_utils.dt_deserializer
 
     def _attr_from_primitive(self, attribute, value):
         """Attribute deserialization dispatcher.
@@ -272,10 +266,6 @@ class NovaObject(object):
         changes = primitive.get('nova_object.changes', [])
         self._changed_fields = set([x for x in changes if x in self.fields])
         return self
-
-    _attr_created_at_to_primitive = obj_utils.dt_serializer('created_at')
-    _attr_updated_at_to_primitive = obj_utils.dt_serializer('updated_at')
-    _attr_deleted_at_to_primitive = obj_utils.dt_serializer('deleted_at')
 
     def _attr_to_primitive(self, attribute):
         """Attribute serialization dispatcher.
@@ -332,6 +322,13 @@ class NovaObject(object):
         """Returns a set of fields that have been modified."""
         return self._changed_fields
 
+    def obj_get_changes(self):
+        """Returns a dict of changed fields and their new values."""
+        changes = {}
+        for key in self.obj_what_changed():
+            changes[key] = self[key]
+        return changes
+
     def obj_reset_changes(self, fields=None):
         """Reset the list of fields that have been changed.
 
@@ -349,12 +346,15 @@ class NovaObject(object):
         False if not. Raises AttributeError if attrname is not
         a valid attribute for this object.
         """
-        if (attrname not in self.fields and
-                attrname not in self.obj_extra_fields):
+        if attrname not in self.obj_fields:
             raise AttributeError(
                 _("%(objname)s object has no attribute '%(attrname)s'") %
                 {'objname': self.obj_name(), 'attrname': attrname})
         return hasattr(self, get_attrname(attrname))
+
+    @property
+    def obj_fields(self):
+        return self.fields.keys() + self.obj_extra_fields
 
     # dictish syntactic sugar
     def iteritems(self):
@@ -362,7 +362,7 @@ class NovaObject(object):
 
         NOTE(danms): May be removed in the future.
         """
-        for name in self.fields.keys() + self.obj_extra_fields:
+        for name in self.obj_fields:
             if (self.obj_attr_is_set(name) or
                     name in self.obj_extra_fields):
                 yield name, getattr(self, name)
@@ -398,7 +398,7 @@ class NovaObject(object):
 
         NOTE(danms): May be removed in the future.
         """
-        if key not in self.fields:
+        if key not in self.obj_fields:
             raise AttributeError("'%s' object has no attribute '%s'" % (
                     self.__class__, key))
         if value != NotSpecifiedSentinel and not self.obj_attr_is_set(key):
@@ -413,6 +413,26 @@ class NovaObject(object):
         """
         for key, value in updates.items():
             self[key] = value
+
+
+class NovaPersistentObject(object):
+    """Mixin class for Persistent objects.
+
+    This adds the fields that we use in common for all persisent objects.
+    """
+    fields = {
+        'created_at': obj_utils.datetime_or_str_or_none,
+        'updated_at': obj_utils.datetime_or_str_or_none,
+        'deleted_at': obj_utils.datetime_or_str_or_none,
+        'deleted': bool,
+        }
+
+    _attr_created_at_from_primitive = obj_utils.dt_deserializer
+    _attr_updated_at_from_primitive = obj_utils.dt_deserializer
+    _attr_deleted_at_from_primitive = obj_utils.dt_deserializer
+    _attr_created_at_to_primitive = obj_utils.dt_serializer('created_at')
+    _attr_updated_at_to_primitive = obj_utils.dt_serializer('updated_at')
+    _attr_deleted_at_to_primitive = obj_utils.dt_serializer('deleted_at')
 
 
 class ObjectListBase(object):

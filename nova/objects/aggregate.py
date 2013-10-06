@@ -19,10 +19,14 @@ from nova.objects import base
 from nova.objects import utils
 
 
-class Aggregate(base.NovaObject):
+class Aggregate(base.NovaPersistentObject, base.NovaObject):
+    # Version 1.0: Initial version
+    # Version 1.1: String attributes updated to support unicode
+    VERSION = '1.1'
+
     fields = {
         'id': int,
-        'name': str,
+        'name': utils.str_value,
         'hosts': utils.list_of_strings_or_none,
         'metadata': utils.dict_of_strings_or_none,
         }
@@ -55,9 +59,7 @@ class Aggregate(base.NovaObject):
     @base.remotable
     def create(self, context):
         self._assert_no_hosts('create')
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
         payload = dict(updates)
         if 'metadata' in updates:
             # NOTE(danms): For some reason the notification format is weird
@@ -76,9 +78,7 @@ class Aggregate(base.NovaObject):
     @base.remotable
     def save(self, context):
         self._assert_no_hosts('save')
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
+        updates = self.obj_get_changes()
 
         payload = {'aggregate_id': self.id}
         if 'metadata' in updates:

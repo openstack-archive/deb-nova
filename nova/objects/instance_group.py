@@ -20,9 +20,12 @@ from nova.objects import base
 from nova.objects import utils as obj_utils
 
 
-class InstanceGroup(base.NovaObject):
+class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
     # Version 1.0: Initial version
-    VERSION = '1.0'
+    # Version 1.1: String attributes updated to support unicode
+    # Version 1.2: Use list/dict helpers for policies, metadetails, members
+    # Version 1.3: Make uuid a non-None real string
+    VERSION = '1.3'
 
     fields = {
         'id': int,
@@ -30,12 +33,12 @@ class InstanceGroup(base.NovaObject):
         'user_id': obj_utils.str_or_none,
         'project_id': obj_utils.str_or_none,
 
-        'uuid': obj_utils.str_or_none,
+        'uuid': obj_utils.cstring,
         'name': obj_utils.str_or_none,
 
-        'policies': list,
-        'metadetails': dict,
-        'members': list,
+        'policies': obj_utils.list_of_strings_or_none,
+        'metadetails': obj_utils.dict_of_strings_or_none,
+        'members': obj_utils.list_of_strings_or_none,
         }
 
     @staticmethod
@@ -64,10 +67,7 @@ class InstanceGroup(base.NovaObject):
     def save(self, context):
         """Save updates to this instance group."""
 
-        updates = {}
-        for key in self.obj_what_changed():
-            updates[key] = self[key]
-
+        updates = self.obj_get_changes()
         if not updates:
             return
 
@@ -85,8 +85,7 @@ class InstanceGroup(base.NovaObject):
         """Refreshes the instance group."""
         current = self.__class__.get_by_uuid(context, self.uuid)
         for field in self.fields:
-            if (hasattr(self, base.get_attrname(field)) and
-                    self[field] != current[field]):
+            if self.obj_attr_is_set(field) and self[field] != current[field]:
                 self[field] = current[field]
         self.obj_reset_changes()
 
@@ -95,10 +94,7 @@ class InstanceGroup(base.NovaObject):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
-        updates = {}
-        for attr in self.obj_what_changed():
-            updates[attr] = self[attr]
-
+        updates = self.obj_get_changes()
         updates.pop('id', None)
         policies = updates.pop('policies', None)
         members = updates.pop('members', None)

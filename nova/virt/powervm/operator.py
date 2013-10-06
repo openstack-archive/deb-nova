@@ -632,7 +632,14 @@ class BaseOperator(object):
         :returns: string -- hostname
         """
         output = self.run_vios_command(self.command.hostname())
-        return output[0]
+        hostname = output[0]
+        if not hasattr(self, '_hostname'):
+            self._hostname = hostname
+        elif hostname != self._hostname:
+            LOG.error(_('Hostname has changed from %(old)s to %(new)s. '
+                        'A restart is required to take effect.'
+                        ) % {'old': self._hostname, 'new': hostname})
+        return self._hostname
 
     def get_disk_name_by_vhost(self, vhost):
         """Returns the disk name attached to a vhost.
@@ -815,16 +822,6 @@ class BaseOperator(object):
         self.run_vios_command(cmd)
 
         return new_name_trimmed
-
-    def _decompress_image_file(self, file_path, outfile_path):
-        command = "/usr/bin/gunzip -c %s > %s" % (file_path, outfile_path)
-        self.run_vios_command_as_root(command)
-
-        # Remove compressed image file
-        command = "/usr/bin/rm %s" % file_path
-        self.run_vios_command_as_root(command)
-
-        return outfile_path
 
     def _remove_file(self, file_path):
         """Removes a file on the VIOS partition

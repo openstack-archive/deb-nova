@@ -20,6 +20,7 @@ import copy
 import errno
 import eventlet
 import fixtures
+import functools
 import mox
 import os
 import re
@@ -52,6 +53,7 @@ from nova import test
 from nova.tests import fake_network
 import nova.tests.image.fake
 from nova.tests import matchers
+from nova.tests.objects import test_pci_device
 from nova.tests.virt.libvirt import fake_libvirt_utils
 from nova import utils
 from nova import version
@@ -720,6 +722,21 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEquals(cfg.clock.timers[1].tickpolicy,
                           "catchup")
 
+    def test_get_guest_config_windows(self):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        instance_ref = db.instance_create(self.context, self.test_instance)
+        instance_ref['os_type'] = 'windows'
+
+        disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
+                                            instance_ref)
+        cfg = conn.get_guest_config(instance_ref,
+                                    _fake_network_info(self.stubs, 1),
+                                    None, disk_info)
+
+        self.assertEquals(type(cfg.clock),
+                          vconfig.LibvirtConfigGuestClock)
+        self.assertEquals(cfg.clock.offset, "localtime")
+
     def test_get_guest_config_with_two_nics(self):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         instance_ref = db.instance_create(self.context, self.test_instance)
@@ -1079,15 +1096,14 @@ class LibvirtConnTestCase(test.TestCase):
         service_ref, compute_ref = self._create_fake_service_compute()
 
         instance_ref = db.instance_create(self.context, self.test_instance)
-        pci_device_info = {
-            'compute_node_id': 1,
-            'label': 'fake',
-            'status': 'allocated',
-            'address': '0000:00:00.1',
-            'compute_id': compute_ref['id'],
-            'instance_uuid': instance_ref['uuid'],
-            'extra_info': jsonutils.dumps({}),
-        }
+        pci_device_info = dict(test_pci_device.fake_db_dev)
+        pci_device_info.update(compute_node_id=1,
+                               label='fake',
+                               status='allocated',
+                               address='0000:00:00.1',
+                               compute_id=compute_ref['id'],
+                               instance_uuid=instance_ref['uuid'],
+                               extra_info=jsonutils.dumps({}))
         db.pci_device_update(self.context, pci_device_info['compute_node_id'],
                              pci_device_info['address'], pci_device_info)
 
@@ -1118,15 +1134,14 @@ class LibvirtConnTestCase(test.TestCase):
         service_ref, compute_ref = self._create_fake_service_compute()
 
         instance_ref = db.instance_create(self.context, self.test_instance)
-        pci_device_info = {
-            'compute_node_id': 1,
-            'label': 'fake',
-            'status': 'allocated',
-            'address': '0000:00:00.2',
-            'compute_id': compute_ref['id'],
-            'instance_uuid': instance_ref['uuid'],
-            'extra_info': jsonutils.dumps({}),
-        }
+        pci_device_info = dict(test_pci_device.fake_db_dev)
+        pci_device_info.update(compute_node_id=1,
+                               label='fake',
+                               status='allocated',
+                               address='0000:00:00.2',
+                               compute_id=compute_ref['id'],
+                               instance_uuid=instance_ref['uuid'],
+                               extra_info=jsonutils.dumps({}))
         db.pci_device_update(self.context, pci_device_info['compute_node_id'],
                              pci_device_info['address'], pci_device_info)
 
@@ -2293,7 +2308,7 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.VolumeDriverNotFound,
-                          conn.attach_volume,
+                          conn.attach_volume, None,
                           {"driver_volume_type": "badtype"},
                           {"name": "fake-instance"},
                           "/dev/sda")
@@ -2305,7 +2320,7 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.InvalidHypervisorType,
-                          conn.attach_volume,
+                          conn.attach_volume, None,
                           {"driver_volume_type": "fake",
                            "data": {"logical_block_size": "4096",
                                     "physical_block_size": "4096"}
@@ -2323,7 +2338,7 @@ class LibvirtConnTestCase(test.TestCase):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.stubs.Set(self.conn, "getLibVersion", get_lib_version_stub)
         self.assertRaises(exception.Invalid,
-                          conn.attach_volume,
+                          conn.attach_volume, None,
                           {"driver_volume_type": "fake",
                            "data": {"logical_block_size": "4096",
                                     "physical_block_size": "4096"}
@@ -2338,7 +2353,7 @@ class LibvirtConnTestCase(test.TestCase):
         instance_ref = db.instance_create(self.context, instance_data)
         disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
                                             instance_ref)
-        xml = conn.to_xml(instance_ref, network_info, disk_info)
+        xml = conn.to_xml(self.context, instance_ref, network_info, disk_info)
         tree = etree.fromstring(xml)
         interfaces = tree.findall("./devices/interface")
         self.assertEquals(len(interfaces), 2)
@@ -2357,7 +2372,7 @@ class LibvirtConnTestCase(test.TestCase):
         network_info = _fake_network_info(self.stubs, 1)
         disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
                                             instance_ref)
-        xml = conn.to_xml(instance_ref, network_info, disk_info)
+        xml = conn.to_xml(self.context, instance_ref, network_info, disk_info)
         tree = etree.fromstring(xml)
 
         check = [
@@ -2411,7 +2426,8 @@ class LibvirtConnTestCase(test.TestCase):
             network_info = _fake_network_info(self.stubs, 1)
             disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
                                                 instance_ref)
-            xml = conn.to_xml(instance_ref, network_info, disk_info)
+            xml = conn.to_xml(self.context, instance_ref,
+                              network_info, disk_info)
             tree = etree.fromstring(xml)
 
             for i, (check, expected_result) in enumerate(checks):
@@ -2447,7 +2463,8 @@ class LibvirtConnTestCase(test.TestCase):
         drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
                                             instance_ref)
-        xml = drv.to_xml(instance_ref, network_info, disk_info, image_meta)
+        xml = drv.to_xml(self.context, instance_ref,
+                         network_info, disk_info, image_meta)
         tree = etree.fromstring(xml)
         disks = tree.findall('./devices/disk/driver')
         for disk in disks:
@@ -2460,7 +2477,8 @@ class LibvirtConnTestCase(test.TestCase):
         drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
                                             instance_ref)
-        xml = drv.to_xml(instance_ref, network_info, disk_info, image_meta)
+        xml = drv.to_xml(self.context, instance_ref,
+                         network_info, disk_info, image_meta)
         tree = etree.fromstring(xml)
         disks = tree.findall('./devices/disk/driver')
         for disk in disks:
@@ -2477,7 +2495,8 @@ class LibvirtConnTestCase(test.TestCase):
                                             instance_ref,
                                             block_device_info,
                                             image_meta)
-        xml = drv.to_xml(instance_ref, network_info, disk_info, image_meta,
+        xml = drv.to_xml(self.context, instance_ref,
+                         network_info, disk_info, image_meta,
                          block_device_info=block_device_info)
         tree = etree.fromstring(xml)
 
@@ -2504,7 +2523,8 @@ class LibvirtConnTestCase(test.TestCase):
         drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
                                             instance_ref)
-        xml = drv.to_xml(instance_ref, network_info, disk_info, image_meta)
+        xml = drv.to_xml(self.context, instance_ref,
+                         network_info, disk_info, image_meta)
         tree = etree.fromstring(xml)
         self.assertEqual(tree.find('./uuid').text,
                          instance_ref['uuid'])
@@ -2660,8 +2680,8 @@ class LibvirtConnTestCase(test.TestCase):
             disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
                                                 instance_ref,
                                                 rescue=rescue)
-            xml = conn.to_xml(instance_ref, network_info, disk_info,
-                              rescue=rescue)
+            xml = conn.to_xml(self.context, instance_ref,
+                              network_info, disk_info, rescue=rescue)
             tree = etree.fromstring(xml)
             for i, (check, expected_result) in enumerate(checks):
                 self.assertEqual(check(tree),
@@ -2751,8 +2771,6 @@ class LibvirtConnTestCase(test.TestCase):
 
     def test_check_can_live_migrate_dest_all_pass_with_block_migration(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
-        dest = "fake_host_2"
-        src = instance_ref['host']
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         compute_info = {'disk_available_least': 400,
                         'cpu_info': 'asdf',
@@ -2779,8 +2797,6 @@ class LibvirtConnTestCase(test.TestCase):
 
     def test_check_can_live_migrate_dest_all_pass_no_block_migration(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
-        dest = "fake_host_2"
-        src = instance_ref['host']
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         compute_info = {'cpu_info': 'asdf'}
         filename = "file"
@@ -2805,8 +2821,6 @@ class LibvirtConnTestCase(test.TestCase):
 
     def test_check_can_live_migrate_dest_incompatible_cpu_raises(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
-        dest = "fake_host_2"
-        src = instance_ref['host']
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         compute_info = {'cpu_info': 'asdf'}
 
@@ -2922,8 +2936,6 @@ class LibvirtConnTestCase(test.TestCase):
 
     def test_check_can_live_migrate_source_with_dest_not_enough_disk(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
-        dest = "fake_host_2"
-        src = instance_ref['host']
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
 
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
@@ -3071,6 +3083,37 @@ class LibvirtConnTestCase(test.TestCase):
             self.assertTrue(os.path.exists('%s/%s/' % (tmpdir,
                                                        inst_ref['name'])))
         db.instance_destroy(self.context, inst_ref['uuid'])
+
+    def test_pre_live_migration_plug_vifs_retry_fails(self):
+        self.flags(live_migration_retry_count=3)
+        instance = {'name': 'test', 'uuid': 'uuid'}
+
+        def fake_plug_vifs(instance, network_info):
+            raise processutils.ProcessExecutionError()
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.stubs.Set(conn, 'plug_vifs', fake_plug_vifs)
+        self.assertRaises(processutils.ProcessExecutionError,
+                          conn.pre_live_migration,
+                          self.context, instance, block_device_info=None,
+                          network_info=[], disk_info={})
+
+    def test_pre_live_migration_plug_vifs_retry_works(self):
+        self.flags(live_migration_retry_count=3)
+        called = {'count': 0}
+        instance = {'name': 'test', 'uuid': 'uuid'}
+
+        def fake_plug_vifs(instance, network_info):
+            called['count'] += 1
+            if called['count'] < CONF.live_migration_retry_count:
+                raise processutils.ProcessExecutionError()
+            else:
+                return
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.stubs.Set(conn, 'plug_vifs', fake_plug_vifs)
+        conn.pre_live_migration(self.context, instance, block_device_info=None,
+                                network_info=[], disk_info={})
 
     def test_get_instance_disk_info_works_correctly(self):
         # Test data
@@ -3483,7 +3526,7 @@ class LibvirtConnTestCase(test.TestCase):
                                             image_meta)
         conn._create_image(context, instance,
                            disk_info['mapping'])
-        xml = conn.to_xml(instance, None,
+        xml = conn.to_xml(self.context, instance, None,
                           disk_info, image_meta)
 
         wantFiles = [
@@ -3544,7 +3587,7 @@ class LibvirtConnTestCase(test.TestCase):
                                             image_meta)
         conn._create_image(context, instance,
                            disk_info['mapping'])
-        xml = conn.to_xml(instance, None,
+        xml = conn.to_xml(self.context, instance, None,
                           disk_info, image_meta)
 
         wantFiles = [
@@ -3699,14 +3742,16 @@ class LibvirtConnTestCase(test.TestCase):
     def test_destroy_removes_disk(self):
         instance = {"name": "instancename", "id": "42",
                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64",
-                    "cleaned": 0, 'info_cache': None, 'security_groups': None}
+                    "cleaned": 0, 'info_cache': None, 'security_groups': []}
 
         self.mox.StubOutWithMock(libvirt_driver.LibvirtDriver,
                                  '_undefine_domain')
         libvirt_driver.LibvirtDriver._undefine_domain(instance)
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         db.instance_get_by_uuid(mox.IgnoreArg(), mox.IgnoreArg(),
-                                columns_to_join=[]).AndReturn(instance)
+                                columns_to_join=['info_cache',
+                                                 'security_groups']
+                                ).AndReturn(instance)
         self.mox.StubOutWithMock(shutil, "rmtree")
         shutil.rmtree(os.path.join(CONF.instances_path,
                                    'instance-%08x' % int(instance['id'])))
@@ -3785,14 +3830,16 @@ class LibvirtConnTestCase(test.TestCase):
     def test_delete_instance_files(self):
         instance = {"name": "instancename", "id": "42",
                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64",
-                    "cleaned": 0, 'info_cache': None, 'security_groups': None}
+                    "cleaned": 0, 'info_cache': None, 'security_groups': []}
 
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         self.mox.StubOutWithMock(os.path, 'exists')
         self.mox.StubOutWithMock(shutil, "rmtree")
 
         db.instance_get_by_uuid(mox.IgnoreArg(), mox.IgnoreArg(),
-                                columns_to_join=[]).AndReturn(instance)
+                                columns_to_join=['info_cache',
+                                                 'security_groups']
+                                ).AndReturn(instance)
         os.path.exists(mox.IgnoreArg()).AndReturn(False)
         os.path.exists(mox.IgnoreArg()).AndReturn(True)
         shutil.rmtree(os.path.join(CONF.instances_path, instance['uuid']))
@@ -3929,6 +3976,126 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         conn.reboot(context, instance, network_info)
+
+    def _test_resume_state_on_host_boot_with_state(self, state):
+        called = {'count': 0}
+        mock = self.mox.CreateMock(libvirt.virDomain)
+        mock.info().AndReturn([state, None, None, None, None])
+        self.mox.ReplayAll()
+
+        def fake_lookup_by_name(instance_name):
+            return mock
+
+        def fake_hard_reboot(*args):
+            called['count'] += 1
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+        self.stubs.Set(conn, '_hard_reboot', fake_hard_reboot)
+        instance = {"name": "instancename", "id": "instanceid",
+                    "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
+        network_info = _fake_network_info(self.stubs, 1)
+
+        conn.resume_state_on_host_boot(self.context, instance, network_info,
+                                       block_device_info=None)
+
+        ignored_states = (power_state.RUNNING,
+                          power_state.SUSPENDED,
+                          power_state.NOSTATE,
+                          power_state.PAUSED)
+        if state in ignored_states:
+            self.assertEquals(called['count'], 0)
+        else:
+            self.assertEquals(called['count'], 1)
+
+    def test_resume_state_on_host_boot_with_running_state(self):
+        self._test_resume_state_on_host_boot_with_state(power_state.RUNNING)
+
+    def test_resume_state_on_host_boot_with_suspended_state(self):
+        self._test_resume_state_on_host_boot_with_state(power_state.SUSPENDED)
+
+    def test_resume_state_on_host_boot_with_paused_state(self):
+        self._test_resume_state_on_host_boot_with_state(power_state.PAUSED)
+
+    def test_resume_state_on_host_boot_with_nostate(self):
+        self._test_resume_state_on_host_boot_with_state(power_state.NOSTATE)
+
+    def test_resume_state_on_host_boot_with_shutdown_state(self):
+        self._test_resume_state_on_host_boot_with_state(power_state.RUNNING)
+
+    def test_resume_state_on_host_boot_with_crashed_state(self):
+        self._test_resume_state_on_host_boot_with_state(power_state.CRASHED)
+
+    def test_resume_state_on_host_boot_with_instance_not_found_on_driver(self):
+        called = {'count': 0}
+        instance = {'name': 'test'}
+
+        def fake_instance_exists(name):
+            return False
+
+        def fake_hard_reboot(*args):
+            called['count'] += 1
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.stubs.Set(conn, 'instance_exists', fake_instance_exists)
+        self.stubs.Set(conn, '_hard_reboot', fake_hard_reboot)
+        conn.resume_state_on_host_boot(self.context, instance, network_info=[],
+                                       block_device_info=None)
+
+        self.assertEquals(called['count'], 1)
+
+    def test_hard_reboot(self):
+        called = {'count': 0}
+        instance = db.instance_create(self.context, self.test_instance)
+        network_info = _fake_network_info(self.stubs, 1)
+        block_device_info = None
+
+        dummyxml = ("<domain type='kvm'><name>instance-0000000a</name>"
+                    "<devices>"
+                    "<disk type='file'><driver name='qemu' type='raw'/>"
+                    "<source file='/test/disk'/>"
+                    "<target dev='vda' bus='virtio'/></disk>"
+                    "<disk type='file'><driver name='qemu' type='qcow2'/>"
+                    "<source file='/test/disk.local'/>"
+                    "<target dev='vdb' bus='virtio'/></disk>"
+                    "</devices></domain>")
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.mox.StubOutWithMock(conn, '_destroy')
+        self.mox.StubOutWithMock(conn, 'get_instance_disk_info')
+        self.mox.StubOutWithMock(conn, 'to_xml')
+        self.mox.StubOutWithMock(conn, '_create_images_and_backing')
+        self.mox.StubOutWithMock(conn, '_create_domain_and_network')
+
+        def fake_get_info(instance_name):
+            called['count'] += 1
+            if called['count'] == 1:
+                state = power_state.SHUTDOWN
+            else:
+                state = power_state.RUNNING
+            return dict(state=state)
+
+        self.stubs.Set(conn, 'get_info', fake_get_info)
+
+        conn._destroy(instance)
+        disk_info = blockinfo.get_disk_info(CONF.libvirt_type,
+                                            instance, block_device_info)
+        conn.to_xml(self.context, instance, network_info, disk_info,
+                    block_device_info=block_device_info,
+                    write_to_disk=True).AndReturn(dummyxml)
+        disk_info_json = '[{"virt_disk_size": 2}]'
+        conn.get_instance_disk_info(instance["name"], dummyxml,
+                            block_device_info).AndReturn(disk_info_json)
+        conn._create_images_and_backing(self.context, instance,
+                                libvirt_utils.get_instance_path(instance),
+                                disk_info_json)
+        conn._create_domain_and_network(dummyxml, instance,
+                                        network_info, block_device_info,
+                                        context=self.context, reboot=True)
+        self.mox.ReplayAll()
+
+        conn._hard_reboot(self.context, instance, network_info,
+                          block_device_info)
 
     def test_destroy_undefines(self):
         mock = self.mox.CreateMock(libvirt.virDomain)
@@ -4112,6 +4279,24 @@ class LibvirtConnTestCase(test.TestCase):
                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
         # NOTE(vish): verifies destroy doesn't raise if the instance disappears
         conn._destroy(instance)
+
+    def test_undefine_domain_with_not_found_instance(self):
+        def fake_lookup(instance_name):
+            raise libvirt.libvirtError("not found")
+
+        self.mox.StubOutWithMock(libvirt_driver.LibvirtDriver, '_conn')
+        libvirt_driver.LibvirtDriver._conn.lookupByName = fake_lookup
+        self.mox.StubOutWithMock(libvirt.libvirtError, "get_error_code")
+        libvirt.libvirtError.get_error_code().AndReturn(
+            libvirt.VIR_ERR_NO_DOMAIN)
+
+        self.mox.ReplayAll()
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = {'name': 'test'}
+
+        # NOTE(wenjianhn): verifies undefine doesn't raise if the
+        # instance disappears
+        conn._undefine_domain(instance)
 
     def test_disk_over_committed_size_total(self):
         # Ensure destroy calls managedSaveRemove for saved instance.
@@ -5122,6 +5307,24 @@ class LibvirtConnTestCase(test.TestCase):
                                                ephemerals, swap,
                                                block_device_mapping)
 
+    def test_hypervisor_hostname_caching(self):
+        # Make sure that the first hostname is always returned
+        class FakeConn(object):
+            def getHostname(self):
+                pass
+
+            def getLibVersion(self):
+                return 99999
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        conn._wrapped_conn = FakeConn()
+        self.mox.StubOutWithMock(conn._wrapped_conn, 'getHostname')
+        conn._conn.getHostname().AndReturn('foo')
+        conn._conn.getHostname().AndReturn('bar')
+        self.mox.ReplayAll()
+        self.assertEqual('foo', conn.get_hypervisor_hostname())
+        self.assertEqual('foo', conn.get_hypervisor_hostname())
+
 
 class HostStateTestCase(test.TestCase):
 
@@ -6063,7 +6266,7 @@ disk size: 4.4M''', ''))
         def fake_unlink(path):
             self.executes.append(('rm', path))
 
-        def fake_rm_on_errror(path):
+        def fake_rm_on_error(path, remove=None):
             self.executes.append(('rm', '-f', path))
 
         def fake_qemu_img_info(path):
@@ -6090,7 +6293,14 @@ disk size: 4.4M''', ''))
         self.stubs.Set(os, 'unlink', fake_unlink)
         self.stubs.Set(images, 'fetch', lambda *_: None)
         self.stubs.Set(images, 'qemu_img_info', fake_qemu_img_info)
-        self.stubs.Set(fileutils, 'delete_if_exists', fake_rm_on_errror)
+        self.stubs.Set(fileutils, 'delete_if_exists', fake_rm_on_error)
+
+        # Since the remove param of fileutils.remove_path_on_error()
+        # is initialized at load time, we must provide a wrapper
+        # that explicitly resets it to our fake delete_if_exists()
+        old_rm_path_on_error = fileutils.remove_path_on_error
+        f = functools.partial(old_rm_path_on_error, remove=fake_rm_on_error)
+        self.stubs.Set(fileutils, 'remove_path_on_error', f)
 
         context = 'opaque context'
         image_id = '4'
@@ -6278,7 +6488,7 @@ class LibvirtDriverTestCase(test.TestCase):
     def test_wait_for_running(self):
         def fake_get_info(instance):
             if instance['name'] == "not_found":
-                raise exception.NotFound
+                raise exception.InstanceNotFound(instance_id=instance['uuid'])
             elif instance['name'] == "running":
                 return {'state': power_state.RUNNING}
             else:
@@ -6288,7 +6498,7 @@ class LibvirtDriverTestCase(test.TestCase):
                        fake_get_info)
 
         # instance not found case
-        self.assertRaises(exception.NotFound,
+        self.assertRaises(exception.InstanceNotFound,
                 self.libvirtconnection._wait_for_running,
                     {'name': 'not_found',
                      'uuid': 'not_found_uuid'})
@@ -6316,13 +6526,13 @@ class LibvirtDriverTestCase(test.TestCase):
         powered_on = power_on
         self.fake_create_domain_called = False
 
-        def fake_can_resize_fs(path, size, use_cow=False):
+        def fake_can_resize_image(path, size):
             return False
 
         def fake_extend(path, size, use_cow=False):
             pass
 
-        def fake_to_xml(instance, network_info, disk_info,
+        def fake_to_xml(context, instance, network_info, disk_info,
                         image_meta=None, rescue=None,
                         block_device_info=None, write_to_disk=False):
             return ""
@@ -6355,8 +6565,8 @@ class LibvirtDriverTestCase(test.TestCase):
 
         self.flags(use_cow_images=True)
         self.stubs.Set(libvirt_driver.disk, 'extend', fake_extend)
-        self.stubs.Set(libvirt_driver.disk, 'can_resize_fs',
-                       fake_can_resize_fs)
+        self.stubs.Set(libvirt_driver.disk, 'can_resize_image',
+                       fake_can_resize_image)
         self.stubs.Set(self.libvirtconnection, 'to_xml', fake_to_xml)
         self.stubs.Set(self.libvirtconnection, 'plug_vifs', fake_plug_vifs)
         self.stubs.Set(self.libvirtconnection, '_create_image',
@@ -6411,7 +6621,7 @@ class LibvirtDriverTestCase(test.TestCase):
             else:
                 return {'state': power_state.SHUTDOWN}
 
-        def fake_to_xml(instance, network_info, disk_info,
+        def fake_to_xml(context, instance, network_info, disk_info,
                         image_meta=None, rescue=None,
                         block_device_info=None):
             return ""
@@ -6448,7 +6658,8 @@ class LibvirtDriverTestCase(test.TestCase):
     def test_finish_revert_migration_power_off(self):
         self._test_finish_revert_migration(False)
 
-    def _test_finish_revert_migration_after_crash(self, backup_made, new_made):
+    def _test_finish_revert_migration_after_crash(self, backup_made=True,
+                                                  del_inst_failed=False):
         class FakeLoopingCall:
             def start(self, *a, **k):
                 return self
@@ -6471,8 +6682,10 @@ class LibvirtDriverTestCase(test.TestCase):
         libvirt_utils.get_instance_path({}).AndReturn('/fake/foo')
         os.path.exists('/fake/foo_resize').AndReturn(backup_made)
         if backup_made:
-            os.path.exists('/fake/foo').AndReturn(new_made)
-            if new_made:
+            if del_inst_failed:
+                os_error = OSError(errno.ENOENT, 'No such file or directory')
+                shutil.rmtree('/fake/foo').AndRaise(os_error)
+            else:
                 shutil.rmtree('/fake/foo')
             utils.execute('mv', '/fake/foo_resize', '/fake/foo')
 
@@ -6481,13 +6694,17 @@ class LibvirtDriverTestCase(test.TestCase):
         self.libvirtconnection.finish_revert_migration({}, [])
 
     def test_finish_revert_migration_after_crash(self):
-        self._test_finish_revert_migration_after_crash(True, True)
+        self._test_finish_revert_migration_after_crash(backup_made=True)
 
     def test_finish_revert_migration_after_crash_before_new(self):
-        self._test_finish_revert_migration_after_crash(True, False)
+        self._test_finish_revert_migration_after_crash(backup_made=True)
 
     def test_finish_revert_migration_after_crash_before_backup(self):
-        self._test_finish_revert_migration_after_crash(False, False)
+        self._test_finish_revert_migration_after_crash(backup_made=False)
+
+    def test_finish_revert_migration_after_crash_delete_failed(self):
+        self._test_finish_revert_migration_after_crash(backup_made=True,
+                                                       del_inst_failed=True)
 
     def test_cleanup_failed_migration(self):
         self.mox.StubOutWithMock(shutil, 'rmtree')

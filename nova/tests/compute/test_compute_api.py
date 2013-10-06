@@ -255,9 +255,9 @@ class _ComputeAPIUnitTestMixIn(object):
                           self.compute_api.start,
                           self.context, instance)
 
-    def test_stop(self):
+    def _test_stop(self, vm_state, force=False):
         # Make sure 'progress' gets reset
-        params = dict(task_state=None, progress=99)
+        params = dict(task_state=None, progress=99, vm_state=vm_state)
         instance = self._create_instance_obj(params=params)
 
         self.mox.StubOutWithMock(instance, 'save')
@@ -278,14 +278,31 @@ class _ComputeAPIUnitTestMixIn(object):
 
         self.mox.ReplayAll()
 
-        self.compute_api.stop(self.context, instance)
+        if force:
+            self.compute_api.force_stop(self.context, instance)
+        else:
+            self.compute_api.stop(self.context, instance)
         self.assertEqual(task_states.POWERING_OFF,
                          instance.task_state)
         self.assertEqual(0, instance.progress)
 
+    def test_stop(self):
+        self._test_stop(vm_states.ACTIVE)
+
+    def test_stop_stopped_instance_with_bypass(self):
+        self._test_stop(vm_states.STOPPED, force=True)
+
     def test_stop_invalid_state(self):
         params = dict(vm_state=vm_states.PAUSED)
         instance = self._create_instance_obj(params=params)
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.compute_api.stop,
+                          self.context, instance)
+
+    def test_stop_a_stopped_inst(self):
+        params = {'vm_state': vm_states.STOPPED}
+        instance = self._create_instance_obj(params=params)
+
         self.assertRaises(exception.InstanceInvalidState,
                           self.compute_api.stop,
                           self.context, instance)
@@ -1042,7 +1059,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
         def fake_vol_api_reserve(context, volume_id):
             self.assertTrue(uuidutils.is_uuid_like(volume_id))
-            self.assertTrue(volumes[volume_id]['status'], 'available')
+            self.assertEqual(volumes[volume_id]['status'], 'available')
             volumes[volume_id]['status'] = 'attaching'
 
         def fake_vol_api_unreserve(context, volume_id):
@@ -1159,8 +1176,7 @@ class _ComputeAPIUnitTestMixIn(object):
         fake_sys_meta.update(instance.system_metadata)
         extra_props = dict(cow='moo', cat='meow')
 
-        self.mox.StubOutWithMock(self.compute_api,
-                                 '_get_minram_mindisk_params')
+        self.mox.StubOutWithMock(compute_utils, 'get_image_metadata')
         self.mox.StubOutWithMock(self.compute_api.image_service,
                                  'create')
         self.mox.StubOutWithMock(instance, 'save')
@@ -1189,14 +1205,16 @@ class _ComputeAPIUnitTestMixIn(object):
                          'is_public': False,
                          'properties': expected_props}
         if is_snapshot:
-            self.compute_api._get_minram_mindisk_params(
-                    self.context, instance).AndReturn((min_ram, min_disk))
             if min_ram is not None:
                 expected_meta['min_ram'] = min_ram
             if min_disk is not None:
                 expected_meta['min_disk'] = min_disk
         else:
             expected_props['backup_type'] = 'fake-backup-type'
+
+        compute_utils.get_image_metadata(
+            self.context, self.compute_api.image_service,
+            FAKE_IMAGE_REF, instance).AndReturn(expected_meta)
 
         fake_image = dict(id='fake-image-id')
         mock_method = self.compute_api.image_service.create(
@@ -1304,61 +1322,6 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_backup_with_base_image_ref(self):
         self._test_snapshot_and_backup(is_snapshot=False,
                                        with_base_ref=True)
-
-    def _test_get_minram_mindisk_params(self, disk_format,
-                                        show_fails=False,
-                                        img_missing_mins=False):
-        params = dict(image_ref='fake-image-ref')
-        instance = self._create_instance_obj(params=params)
-
-        self.mox.StubOutWithMock(self.compute_api.image_service, 'show')
-        self.mox.StubOutWithMock(flavors, 'extract_flavor')
-
-        fake_image = dict(disk_format=disk_format)
-        if not img_missing_mins:
-            fake_image.update(min_ram=42, min_disk=24)
-        fake_flavor = dict(root_gb=10)
-
-        mock_method = self.compute_api.image_service.show(
-                    self.context, 'fake-image-ref')
-        if show_fails:
-            exc_info = exception.ImageNotFound(image_id='fake-image-ref')
-            mock_method.AndRaise(exc_info)
-            expected_min_ram = None
-            expected_min_disk = None
-        else:
-            mock_method.AndReturn(fake_image)
-            flavors.extract_flavor(instance).AndReturn(fake_flavor)
-            if disk_format == 'vhd' or img_missing_mins:
-                expected_min_disk = 10
-            else:
-                expected_min_disk = 24
-            if img_missing_mins:
-                expected_min_ram = None
-            else:
-                expected_min_ram = 42
-        self.mox.ReplayAll()
-
-        min_ram, min_disk = self.compute_api._get_minram_mindisk_params(
-                self.context, instance)
-        self.assertEqual(expected_min_ram, min_ram)
-        self.assertEqual(expected_min_disk, min_disk)
-
-    def test_get_minram_mindisk_vhd(self):
-        self._test_get_minram_mindisk_params('vhd')
-
-    def test_get_minram_mindisk_vhd_fails(self):
-        self._test_get_minram_mindisk_params('vhd', show_fails=True)
-
-    def test_get_minram_mindisk_other(self):
-        self._test_get_minram_mindisk_params('other')
-
-    def test_get_minram_mindisk_other_img_missing_mins(self):
-        self._test_get_minram_mindisk_params('other',
-                                             img_missing_mins=True)
-
-    def test_get_minram_mindisk_other_fails(self):
-        self._test_get_minram_mindisk_params('other', show_fails=True)
 
     def test_volume_snapshot_create(self):
         volume_id = '1'

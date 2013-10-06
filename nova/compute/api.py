@@ -58,7 +58,7 @@ from nova.objects import instance_action
 from nova.objects import instance_info_cache
 from nova.objects import keypair as keypair_obj
 from nova.objects import migration as migration_obj
-from nova.objects import security_group
+from nova.objects import security_group as security_group_obj
 from nova.objects import service as service_obj
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
@@ -75,7 +75,7 @@ from nova import volume
 
 LOG = logging.getLogger(__name__)
 
-get_notifier = functools.partial(notifier.get_notifier, service='aggregate')
+get_notifier = functools.partial(notifier.get_notifier, service='compute')
 wrap_exception = functools.partial(exception.wrap_exception,
                                    get_notifier=get_notifier)
 
@@ -273,15 +273,6 @@ class API(base.Base):
                     instance_uuid=instance['uuid'],
                     state="temporary_readonly",
                     method=method)
-
-    def _instance_update(self, context, instance_uuid, **kwargs):
-        """Update an instance in the database using kwargs as value."""
-
-        (old_ref, instance_ref) = self.db.instance_update_and_get_original(
-                context, instance_uuid, kwargs)
-        notifications.send_update(context, old_ref, instance_ref, 'api')
-
-        return instance_ref
 
     def _record_action_start(self, context, instance, action):
         instance_action.InstanceAction.action_start(context,
@@ -487,7 +478,7 @@ class API(base.Base):
         return kernel_id, ramdisk_id
 
     @staticmethod
-    def _handle_availability_zone(availability_zone):
+    def _handle_availability_zone(context, availability_zone):
         # NOTE(vish): We have a legacy hack to allow admins to specify hosts
         #             via az using az:host:node. It might be nice to expose an
         #             api to specify specific hosts to force onto, but for
@@ -513,6 +504,11 @@ class API(base.Base):
 
         if not availability_zone:
             availability_zone = CONF.default_schedule_zone
+
+        if forced_host:
+            check_policy(context, 'create:forced_host', {})
+        if forced_node:
+            check_policy(context, 'create:forced_host', {})
 
         return availability_zone, forced_host, forced_node
 
@@ -736,10 +732,8 @@ class API(base.Base):
         filter_properties = dict(scheduler_hints=scheduler_hints)
         filter_properties['instance_type'] = instance_type
         if forced_host:
-            check_policy(context, 'create:forced_host', {})
             filter_properties['force_hosts'] = [forced_host]
         if forced_node:
-            check_policy(context, 'create:forced_host', {})
             filter_properties['force_nodes'] = [forced_node]
         return filter_properties
 
@@ -801,14 +795,15 @@ class API(base.Base):
             if bdm.get('image_id'):
                 try:
                     image_id = bdm['image_id']
-                    return self.image_service.show(context, image_id)
+                    image_meta = self.image_service.show(context, image_id)
+                    return image_meta.get('properties', {})
                 except Exception:
                     raise exception.InvalidBDMImage(id=image_id)
             elif bdm.get('volume_id'):
                 try:
                     volume_id = bdm['volume_id']
                     volume = self.volume_api.get(context, volume_id)
-                    return volume['volume_image_metadata']
+                    return volume.get('volume_image_metadata', {})
                 except Exception:
                     raise exception.InvalidBDMVolume(id=volume_id)
 
@@ -854,7 +849,7 @@ class API(base.Base):
                                      auto_disk_config=auto_disk_config)
 
         handle_az = self._handle_availability_zone
-        availability_zone, forced_host, forced_node = handle_az(
+        availability_zone, forced_host, forced_node = handle_az(context,
                                                             availability_zone)
 
         base_options = self._validate_and_build_base_options(context,
@@ -1176,6 +1171,15 @@ class API(base.Base):
         if block_device_mapping:
             check_policy(context, 'create:attach_volume', target)
 
+    def _check_multiple_instances_neutron_ports(self, requested_networks):
+        """Check whether multiple instances are created from port id(s)."""
+        for net, ip, port in requested_networks:
+            if port:
+                msg = _("Unable to launch multiple instances with"
+                        " a single configured port ID. Please launch your"
+                        " instance one by one with different ports.")
+                raise exception.MultiplePortsNotApplicable(reason=msg)
+
     @hooks.add_hook("create_instance")
     def create(self, context, instance_type,
                image_href, kernel_id=None, ramdisk_id=None,
@@ -1197,6 +1201,9 @@ class API(base.Base):
 
         self._check_create_policies(context, availability_zone,
                 requested_networks, block_device_mapping)
+
+        if requested_networks and max_count > 1 and utils.is_neutron():
+            self._check_multiple_instances_neutron_ports(requested_networks)
 
         return self._create_instance(
                                context, instance_type,
@@ -1319,36 +1326,7 @@ class API(base.Base):
                     instance.refresh()
 
             if instance['vm_state'] == vm_states.RESIZED:
-                # If in the middle of a resize, use confirm_resize to
-                # ensure the original instance is cleaned up too
-                mig_cls = migration_obj.Migration
-                try:
-                    migration = mig_cls.get_by_instance_and_status(
-                        context.elevated(), instance.uuid, 'finished')
-                except exception.MigrationNotFoundByStatus:
-                    migration = None
-                if migration:
-                    src_host = migration.source_compute
-                    # Call since this can race with the terminate_instance.
-                    # The resize is done but awaiting confirmation/reversion,
-                    # so there are two cases:
-                    # 1. up-resize: here -instance['vcpus'/'memory_mb'] match
-                    #    the quota usages accounted for this instance,
-                    #    so no further quota adjustment is needed
-                    # 2. down-resize: here -instance['vcpus'/'memory_mb'] are
-                    #    shy by delta(old, new) from the quota usages accounted
-                    #    for this instance, so we must adjust
-                    deltas = self._downsize_quota_delta(context, instance)
-                    downsize_reservations = self._reserve_quota_delta(context,
-                                                                      deltas)
-
-                    self._record_action_start(context, instance,
-                                              instance_actions.CONFIRM_RESIZE)
-
-                    self.compute_rpcapi.confirm_resize(context,
-                            instance, migration,
-                            src_host, downsize_reservations,
-                            cast=False)
+                self._confirm_resize_on_deleting(context, instance)
 
             is_up = False
             try:
@@ -1387,6 +1365,56 @@ class API(base.Base):
                                     reservations,
                                     project_id=project_id,
                                     user_id=user_id)
+
+    def _confirm_resize_on_deleting(self, context, instance):
+        # If in the middle of a resize, use confirm_resize to
+        # ensure the original instance is cleaned up too
+        mig_cls = migration_obj.Migration
+        migration = None
+        for status in ('finished', 'confirming'):
+            try:
+                migration = mig_cls.get_by_instance_and_status(
+                        context.elevated(), instance.uuid, status)
+                LOG.info(_('Found an unconfirmed migration during delete, '
+                           'id: %(id)s, status: %(status)s') %
+                           {'id': migration.id,
+                            'status': migration.status},
+                           context=context, instance=instance)
+                break
+            except exception.MigrationNotFoundByStatus:
+                pass
+
+        if not migration:
+            LOG.info(_('Instance may have been confirmed during delete'),
+                    context=context, instance=instance)
+            return
+
+        src_host = migration.source_compute
+        # Call since this can race with the terminate_instance.
+        # The resize is done but awaiting confirmation/reversion,
+        # so there are two cases:
+        # 1. up-resize: here -instance['vcpus'/'memory_mb'] match
+        #    the quota usages accounted for this instance,
+        #    so no further quota adjustment is needed
+        # 2. down-resize: here -instance['vcpus'/'memory_mb'] are
+        #    shy by delta(old, new) from the quota usages accounted
+        #    for this instance, so we must adjust
+        try:
+            deltas = self._downsize_quota_delta(context, instance)
+        except KeyError:
+            LOG.info(_('Migration %s may have been confirmed during delete') %
+                    migration.id, context=context, instance=instance)
+            return
+        downsize_reservations = self._reserve_quota_delta(context,
+                                                          deltas)
+
+        self._record_action_start(context, instance,
+                                  instance_actions.CONFIRM_RESIZE)
+
+        self.compute_rpcapi.confirm_resize(context,
+                instance, migration,
+                src_host, downsize_reservations,
+                cast=False)
 
     def _create_reservations(self, context, old_instance, new_instance_type_id,
                              project_id, user_id):
@@ -1554,15 +1582,7 @@ class API(base.Base):
         """Force delete a previously deleted (but not reclaimed) instance."""
         self._delete_instance(context, instance)
 
-    @wrap_check_policy
-    @check_instance_lock
-    @check_instance_host
-    @check_instance_cell
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED,
-                                    vm_states.ERROR],
-                          task_state=[None])
-    def stop(self, context, instance, do_cast=True):
-        """Stop an instance."""
+    def force_stop(self, context, instance, do_cast=True):
         LOG.debug(_("Going to try to stop instance"), instance=instance)
 
         instance.task_state = task_states.POWERING_OFF
@@ -1572,6 +1592,17 @@ class API(base.Base):
         self._record_action_start(context, instance, instance_actions.STOP)
 
         self.compute_rpcapi.stop_instance(context, instance, do_cast=do_cast)
+
+    @wrap_check_policy
+    @check_instance_lock
+    @check_instance_host
+    @check_instance_cell
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.RESCUED,
+                                    vm_states.ERROR],
+                          task_state=[None])
+    def stop(self, context, instance, do_cast=True):
+        """Stop an instance."""
+        self.force_stop(context, instance, do_cast)
 
     @wrap_check_policy
     @check_instance_lock
@@ -1845,41 +1876,16 @@ class API(base.Base):
             'user_id': str(context.user_id),
             'image_type': image_type,
         }
-        sent_meta = {
-            'name': name,
-            'is_public': False,
-            'properties': properties,
-        }
+        image_ref = instance.image_ref
+        sent_meta = compute_utils.get_image_metadata(
+            context, self.image_service, image_ref, instance)
 
-        # Persist base image ref as a Glance image property
-        system_meta = instance.system_metadata
-        base_image_ref = system_meta.get('image_base_image_ref')
-        if base_image_ref:
-            properties['base_image_ref'] = base_image_ref
+        sent_meta['name'] = name
+        sent_meta['is_public'] = False
 
-        if image_type == 'snapshot':
-            min_ram, min_disk = self._get_minram_mindisk_params(context,
-                                                                instance)
-            if min_ram is not None:
-                sent_meta['min_ram'] = min_ram
-            if min_disk is not None:
-                sent_meta['min_disk'] = min_disk
-
-        properties.update(extra_properties)
-
-        # Now inherit image properties from the base image
-        for key, value in system_meta.items():
-            # Trim off the image_ prefix
-            if key.startswith(utils.SM_IMAGE_PROP_PREFIX):
-                key = key[len(utils.SM_IMAGE_PROP_PREFIX):]
-
-            # Skip properties that are non-inheritable
-            if key in CONF.non_inheritable_image_properties:
-                continue
-
-            # By using setdefault, we ensure that the properties set
-            # up above will not be overwritten by inherited values
-            properties.setdefault(key, value)
+        # The properties set up above and in extra_properties have precedence
+        properties.update(extra_properties or {})
+        sent_meta['properties'].update(properties)
 
         return self.image_service.create(context, sent_meta)
 
@@ -1952,27 +1958,6 @@ class API(base.Base):
         image_meta['size'] = 0
 
         return self.image_service.create(context, image_meta, data='')
-
-    def _get_minram_mindisk_params(self, context, instance):
-        try:
-            #try to get source image of the instance
-            orig_image = self.image_service.show(context,
-                                                 instance['image_ref'])
-        except exception.ImageNotFound:
-            return None, None
-
-        flavor = flavors.extract_flavor(instance)
-        #disk format of vhd is non-shrinkable
-        if orig_image.get('disk_format') == 'vhd':
-            min_disk = flavor['root_gb']
-        else:
-            #set new image values to the original image values
-            min_disk = max(orig_image.get('min_disk'),
-                           flavor['root_gb'])
-
-        min_ram = orig_image.get('min_ram')
-
-        return min_ram, min_disk
 
     @wrap_check_policy
     @check_instance_lock
@@ -3247,11 +3232,12 @@ class KeypairAPI(base.Base):
         clean_value = "".join(x for x in key_name if x in safe_chars)
         if clean_value != key_name:
             raise exception.InvalidKeypair(
-                _("Keypair name contains unsafe characters"))
+                reason=_("Keypair name contains unsafe characters"))
 
         if not 0 < len(key_name) < 256:
             raise exception.InvalidKeypair(
-                _('Keypair name must be between 1 and 255 characters long'))
+                reason=_('Keypair name must be between '
+                         '1 and 255 characters long'))
 
         count = QUOTAS.count(context, 'key_pairs', user_id)
         try:
@@ -3686,7 +3672,7 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
 
     def populate_security_groups(self, instance, security_groups):
         if not security_groups:
-            instance.security_groups = None
-            return
-        instance.security_groups = security_group.make_secgroup_list(
+            # Make sure it's an empty list and not None
+            security_groups = []
+        instance.security_groups = security_group_obj.make_secgroup_list(
             security_groups)

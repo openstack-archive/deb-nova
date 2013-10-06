@@ -18,18 +18,52 @@
 
 from xml.dom import minidom
 
+import mock
 import webob
 import webob.dec
 import webob.exc
 
+import nova.api.openstack
 from nova.api.openstack import common
 from nova.api.openstack import wsgi
+from nova import exception
 from nova.openstack.common import gettextutils
 from nova.openstack.common import jsonutils
 from nova import test
 
 
-class TestFaults(test.TestCase):
+class TestFaultWrapper(test.NoDBTestCase):
+    """Tests covering `nova.api.openstack:FaultWrapper` class."""
+
+    @mock.patch('nova.openstack.common.gettextutils.get_localized_message')
+    def test_safe_exception_translated(self, mock_get_localized):
+        msg = gettextutils.Message('Should be translated.', 'nova')
+        safe_exception = exception.NotFound()
+        safe_exception.msg_fmt = msg
+        safe_exception.safe = True
+        safe_exception.code = 404
+
+        req = webob.Request.blank('/')
+
+        def fake_translate(mesg, locale):
+            if str(mesg) == "Should be translated.":
+                return "I've been translated!"
+            return mesg
+
+        mock_get_localized.side_effect = fake_translate
+
+        def raiser(*args, **kwargs):
+            raise safe_exception
+
+        wrapper = nova.api.openstack.FaultWrapper(raiser)
+        response = req.get_response(wrapper)
+
+        self.assertIn("I've been translated!", unicode(response.body))
+        mock_get_localized.assert_any_call(
+                u'Should be translated.', None)
+
+
+class TestFaults(test.NoDBTestCase):
     """Tests covering `nova.api.openstack.faults:Fault` class."""
 
     def _prepare_xml(self, xml_string):
@@ -174,7 +208,7 @@ class TestFaults(test.TestCase):
         self.assertEqual(response.status_int, 400)
 
 
-class FaultsXMLSerializationTestV11(test.TestCase):
+class FaultsXMLSerializationTestV11(test.NoDBTestCase):
     """Tests covering `nova.api.openstack.faults:Fault` class."""
 
     def _prepare_xml(self, xml_string):

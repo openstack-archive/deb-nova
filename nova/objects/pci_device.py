@@ -52,7 +52,7 @@ def check_device_status(dev_status=None):
     return outer
 
 
-class PciDevice(base.NovaObject):
+class PciDevice(base.NovaPersistentObject, base.NovaObject):
 
     """Object to represent a PCI device on a compute node.
 
@@ -91,18 +91,19 @@ class PciDevice(base.NovaObject):
     """
 
     # Version 1.0: Initial version
-    VERSION = '1.0'
+    # Version 1.1: String attributes updated to support unicode
+    VERSION = '1.1'
 
     fields = {
         'id': int,
         # Note(yjiang5): the compute_node_id may be None because the pci
         # device objects are created before the compute node is created in DB
         'compute_node_id': obj_utils.int_or_none,
-        'address': str,
-        'vendor_id': str,
-        'product_id': str,
-        'dev_type': str,
-        'status': str,
+        'address': obj_utils.str_value,
+        'vendor_id': obj_utils.str_value,
+        'product_id': obj_utils.str_value,
+        'dev_type': obj_utils.str_value,
+        'status': obj_utils.str_value,
         'dev_id': obj_utils.str_or_none,
         'label': obj_utils.str_or_none,
         'instance_uuid': obj_utils.str_or_none,
@@ -136,14 +137,14 @@ class PciDevice(base.NovaObject):
 
     def __init__(self):
         super(PciDevice, self).__init__()
-        self.extra_info = {}
         self.obj_reset_changes()
+        self.extra_info = {}
 
     @staticmethod
     def _from_db_object(context, pci_device, db_dev):
         for key in pci_device.fields:
             if key != 'extra_info':
-                pci_device[key] = db_dev.get(key)
+                pci_device[key] = db_dev[key]
             else:
                 extra_info = db_dev.get("extra_info")
                 pci_device.extra_info = jsonutils.loads(extra_info)
@@ -230,12 +231,9 @@ class PciDevice(base.NovaObject):
             self.status = 'deleted'
             db.pci_device_destroy(context, self.compute_node_id, self.address)
         elif self.status != 'deleted':
-            updates = {}
-            for field in self.obj_what_changed():
-                if field == 'extra_info':
-                    updates['extra_info'] = jsonutils.dumps(self.extra_info)
-                else:
-                    updates[field] = self[field]
+            updates = self.obj_get_changes()
+            if 'extra_info' in updates:
+                updates['extra_info'] = jsonutils.dumps(updates['extra_info'])
             if updates:
                 db_pci = db.pci_device_update(context, self.compute_node_id,
                                               self.address, updates)

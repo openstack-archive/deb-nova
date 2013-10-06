@@ -16,8 +16,11 @@
 #    under the License.
 
 import contextlib
+import uuid
 
+from eventlet import greenthread
 import fixtures
+import mock
 import mox
 from oslo.config import cfg
 
@@ -69,7 +72,7 @@ def _fake_noop(*args, **kwargs):
     return
 
 
-class LookupTestCase(test.TestCase):
+class LookupTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(LookupTestCase, self).setUp()
@@ -125,7 +128,7 @@ class LookupTestCase(test.TestCase):
                           check_rescue=True)
 
 
-class GenerateConfigDriveTestCase(test.TestCase):
+class GenerateConfigDriveTestCase(test.NoDBTestCase):
     def test_no_admin_pass(self):
         # This is here to avoid masking errors, it shouldn't be used normally
         self.useFixture(fixtures.MonkeyPatch(
@@ -178,7 +181,7 @@ class GenerateConfigDriveTestCase(test.TestCase):
                                       'userdevice')
 
 
-class XenAPIGetUUID(test.TestCase):
+class XenAPIGetUUID(test.NoDBTestCase):
     def test_get_this_vm_uuid_new_kernel(self):
         self.mox.StubOutWithMock(vm_utils, '_get_sys_hypervisor_uuid')
 
@@ -212,6 +215,9 @@ class FakeSession(object):
     def call_xenapi(self, *args):
         pass
 
+    def call_plugin(self, *args):
+        pass
+
     def call_plugin_serialized(self, plugin, fn, *args, **kwargs):
         pass
 
@@ -220,7 +226,7 @@ class FakeSession(object):
         pass
 
 
-class FetchVhdImageTestCase(test.TestCase):
+class FetchVhdImageTestCase(test.NoDBTestCase):
     def setUp(self):
         super(FetchVhdImageTestCase, self).setUp()
         self.context = context.get_admin_context()
@@ -234,14 +240,10 @@ class FetchVhdImageTestCase(test.TestCase):
         self.mox.StubOutWithMock(vm_utils, 'get_sr_path')
         vm_utils.get_sr_path(self.session).AndReturn('sr_path')
 
-    def test_fetch_vhd_image_works_with_glance(self):
-        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
-        vm_utils._image_uses_bittorrent(
-            self.context, self.instance).AndReturn(False)
-
+    def _stub_glance_download_vhd(self, raise_exc=None):
         self.mox.StubOutWithMock(
                 self.session, 'call_plugin_serialized_with_retry')
-        self.session.call_plugin_serialized_with_retry(
+        func = self.session.call_plugin_serialized_with_retry(
                 'glance', 'download_vhd', 0, mox.IgnoreArg(),
                 extra_headers={'X-Service-Catalog': '[]',
                                'X-Auth-Token': 'auth_token',
@@ -251,7 +253,41 @@ class FetchVhdImageTestCase(test.TestCase):
                                'X-Identity-Status': 'Confirmed'},
                 image_id='image_id',
                 uuid_stack=["uuid_stack"],
-                sr_path='sr_path').AndReturn({'root': {'uuid': 'vdi'}})
+                sr_path='sr_path')
+
+        if raise_exc:
+            func.AndRaise(raise_exc)
+        else:
+            func.AndReturn({'root': {'uuid': 'vdi'}})
+
+    def _stub_bittorrent_download_vhd(self, raise_exc=None):
+        self.mox.StubOutWithMock(
+                self.session, 'call_plugin_serialized')
+        func = self.session.call_plugin_serialized(
+            'bittorrent', 'download_vhd',
+            image_id='image_id',
+            uuid_stack=["uuid_stack"],
+            sr_path='sr_path',
+            torrent_download_stall_cutoff=600,
+            torrent_listen_port_start=6881,
+            torrent_listen_port_end=6891,
+            torrent_max_last_accessed=86400,
+            torrent_max_seeder_processes_per_host=1,
+            torrent_seed_chance=1.0,
+            torrent_seed_duration=3600,
+            torrent_url='http://foo/image_id.torrent'
+        )
+        if raise_exc:
+            func.AndRaise(raise_exc)
+        else:
+            func.AndReturn({'root': {'uuid': 'vdi'}})
+
+    def test_fetch_vhd_image_works_with_glance(self):
+        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
+        vm_utils._image_uses_bittorrent(
+            self.context, self.instance).AndReturn(False)
+
+        self._stub_glance_download_vhd()
 
         self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
         vm_utils.safe_find_sr(self.session).AndReturn("sr")
@@ -279,21 +315,7 @@ class FetchVhdImageTestCase(test.TestCase):
         vm_utils._image_uses_bittorrent(
             self.context, self.instance).AndReturn(True)
 
-        self.mox.StubOutWithMock(
-                self.session, 'call_plugin_serialized')
-        self.session.call_plugin_serialized('bittorrent', 'download_vhd',
-            image_id='image_id',
-            uuid_stack=["uuid_stack"],
-            sr_path='sr_path',
-            torrent_download_stall_cutoff=600,
-            torrent_listen_port_start=6881,
-            torrent_listen_port_end=6891,
-            torrent_max_last_accessed=86400,
-            torrent_max_seeder_processes_per_host=1,
-            torrent_seed_chance=1.0,
-            torrent_seed_duration=3600,
-            torrent_url='http://foo/image_id.torrent'
-        ).AndReturn({'root': {'uuid': 'vdi'}})
+        self._stub_bittorrent_download_vhd()
 
         self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
         vm_utils.safe_find_sr(self.session).AndReturn("sr")
@@ -317,19 +339,7 @@ class FetchVhdImageTestCase(test.TestCase):
         vm_utils._image_uses_bittorrent(
             self.context, self.instance).AndReturn(False)
 
-        self.mox.StubOutWithMock(
-                self.session, 'call_plugin_serialized_with_retry')
-        self.session.call_plugin_serialized_with_retry(
-                'glance', 'download_vhd', 0, mox.IgnoreArg(),
-                extra_headers={'X-Service-Catalog': '[]',
-                               'X-Auth-Token': 'auth_token',
-                               'X-Roles': '',
-                               'X-Tenant-Id': None,
-                               'X-User-Id': None,
-                               'X-Identity-Status': 'Confirmed'},
-                image_id='image_id',
-                uuid_stack=["uuid_stack"],
-                sr_path='sr_path').AndReturn({'root': {'uuid': 'vdi'}})
+        self._stub_glance_download_vhd()
 
         self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
         vm_utils.safe_find_sr(self.session).AndReturn("sr")
@@ -355,8 +365,59 @@ class FetchVhdImageTestCase(test.TestCase):
 
         self.mox.VerifyAll()
 
+    def test_fallback_to_default_handler(self):
+        cfg.CONF.import_opt('xenapi_torrent_base_url',
+                            'nova.virt.xenapi.image.bittorrent')
+        self.flags(xenapi_torrent_base_url='http://foo')
 
-class TestImageCompression(test.TestCase):
+        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
+        vm_utils._image_uses_bittorrent(
+            self.context, self.instance).AndReturn(True)
+
+        self._stub_bittorrent_download_vhd(raise_exc=RuntimeError)
+
+        vm_utils._make_uuid_stack().AndReturn(["uuid_stack"])
+        vm_utils.get_sr_path(self.session).AndReturn('sr_path')
+
+        self._stub_glance_download_vhd()
+
+        self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
+        vm_utils.safe_find_sr(self.session).AndReturn("sr")
+
+        self.mox.StubOutWithMock(vm_utils, '_scan_sr')
+        vm_utils._scan_sr(self.session, "sr")
+
+        self.mox.StubOutWithMock(vm_utils, '_check_vdi_size')
+        vm_utils._check_vdi_size(self.context, self.session, self.instance,
+                                 "vdi")
+
+        self.mox.ReplayAll()
+
+        self.assertEqual("vdi", vm_utils._fetch_vhd_image(self.context,
+            self.session, self.instance, 'image_id')['root']['uuid'])
+
+        self.mox.VerifyAll()
+
+    def test_default_handler_doesnt_fallback_to_itself(self):
+        cfg.CONF.import_opt('xenapi_torrent_base_url',
+                            'nova.virt.xenapi.image.bittorrent')
+        self.flags(xenapi_torrent_base_url='http://foo')
+
+        self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
+        vm_utils._image_uses_bittorrent(
+            self.context, self.instance).AndReturn(False)
+
+        self._stub_glance_download_vhd(raise_exc=RuntimeError)
+
+        self.mox.ReplayAll()
+
+        self.assertRaises(RuntimeError, vm_utils._fetch_vhd_image,
+                self.context, self.session, self.instance, 'image_id')
+
+        self.mox.VerifyAll()
+
+
+class TestImageCompression(test.NoDBTestCase):
     def test_image_compression(self):
         # Testing for nova.conf, too low, negative, and a correct value.
         self.assertEqual(vm_utils.get_compression_level(), None)
@@ -368,7 +429,7 @@ class TestImageCompression(test.TestCase):
         self.assertEqual(vm_utils.get_compression_level(), 6)
 
 
-class ResizeHelpersTestCase(test.TestCase):
+class ResizeHelpersTestCase(test.NoDBTestCase):
     def test_get_min_sectors(self):
         self.mox.StubOutWithMock(utils, 'execute')
 
@@ -425,7 +486,7 @@ class ResizeHelpersTestCase(test.TestCase):
         self.mox.StubOutWithMock(vm_utils.LOG, "debug")
         vm_utils.LOG.debug(_("Sparse copy in progress, "
                              "%(complete_pct).2f%% complete. "
-                             "%(left) bytes left to copy"),
+                             "%(left)s bytes left to copy"),
                            {"complete_pct": 50.0, "left": 1})
         current = timeutils.utcnow()
         timeutils.set_time_override(current)
@@ -473,8 +534,16 @@ class ResizeHelpersTestCase(test.TestCase):
 
         vm_utils._resize_part_and_fs("fake", 0, 20, 30)
 
+    def test_resize_disk_throws_on_zero_size(self):
+        self.assertRaises(exception.ResizeError,
+                vm_utils.resize_disk, "session", "instance", "vdi_ref",
+                {"root_gb": 0})
 
-class CheckVDISizeTestCase(test.TestCase):
+    def test_auto_config_disk_returns_early_on_zero_size(self):
+        vm_utils.try_auto_configure_disk("bad_session", "bad_vdi_ref", 0)
+
+
+class CheckVDISizeTestCase(test.NoDBTestCase):
     def setUp(self):
         super(CheckVDISizeTestCase, self).setUp()
         self.context = 'fakecontext'
@@ -594,7 +663,7 @@ class GetInstanceForVdisForSrTestCase(stubs.XenAPITestBase):
         self.assertNotEquals(vdi_uuid, None)
 
 
-class VMRefOrRaiseVMFoundTestCase(test.TestCase):
+class VMRefOrRaiseVMFoundTestCase(test.NoDBTestCase):
 
     def test_lookup_call(self):
         mock = mox.Mox()
@@ -618,7 +687,7 @@ class VMRefOrRaiseVMFoundTestCase(test.TestCase):
         mock.VerifyAll()
 
 
-class VMRefOrRaiseVMNotFoundTestCase(test.TestCase):
+class VMRefOrRaiseVMNotFoundTestCase(test.NoDBTestCase):
 
     def test_exception_raised(self):
         mock = mox.Mox()
@@ -695,7 +764,7 @@ class BittorrentTestCase(stubs.XenAPITestBase):
         self._test_create_image('none')
 
 
-class ShutdownTestCase(test.TestCase):
+class ShutdownTestCase(test.NoDBTestCase):
 
     def test_hardshutdown_should_return_true_when_vm_is_shutdown(self):
         self.mock = mox.Mox()
@@ -720,7 +789,7 @@ class ShutdownTestCase(test.TestCase):
             session, instance, vm_ref))
 
 
-class CreateVBDTestCase(test.TestCase):
+class CreateVBDTestCase(test.NoDBTestCase):
     def setUp(self):
         super(CreateVBDTestCase, self).setUp()
         self.session = FakeSession()
@@ -993,7 +1062,7 @@ class GenerateDiskTestCase(stubs.XenAPITestBase):
         self._check_vdi(vdi_ref)
 
 
-class GenerateEphemeralTestCase(test.TestCase):
+class GenerateEphemeralTestCase(test.NoDBTestCase):
     def setUp(self):
         super(GenerateEphemeralTestCase, self).setUp()
         self.session = "session"
@@ -1058,7 +1127,7 @@ class FakeFile(object):
         self._file_operations.append((self.seek, offset))
 
 
-class StreamDiskTestCase(test.TestCase):
+class StreamDiskTestCase(test.NoDBTestCase):
     def setUp(self):
         import __builtin__
         super(StreamDiskTestCase, self).setUp()
@@ -1150,3 +1219,130 @@ class VMUtilsSRPath(stubs.XenAPITestBase):
         self.mox.ReplayAll()
         self.assertEqual(vm_utils.get_sr_path(self.session),
                          "/var/run/sr-mount/sr_uuid")
+
+
+class CreateKernelRamdiskTestCase(test.NoDBTestCase):
+    def setUp(self):
+        super(CreateKernelRamdiskTestCase, self).setUp()
+        self.context = "context"
+        self.session = FakeSession()
+        self.instance = {"kernel_id": None, "ramdisk_id": None}
+        self.name_label = "name"
+        self.mox.StubOutWithMock(self.session, "call_plugin")
+        self.mox.StubOutWithMock(uuid, "uuid4")
+        self.mox.StubOutWithMock(vm_utils, "_fetch_disk_image")
+
+    def test_create_kernel_and_ramdisk_no_create(self):
+        self.mox.ReplayAll()
+        result = vm_utils.create_kernel_and_ramdisk(self.context,
+                    self.session, self.instance, self.name_label)
+        self.assertEqual((None, None), result)
+
+    def test_create_kernel_and_ramdisk_create_both_cached(self):
+        kernel_id = "kernel"
+        ramdisk_id = "ramdisk"
+        self.instance["kernel_id"] = kernel_id
+        self.instance["ramdisk_id"] = ramdisk_id
+
+        args_kernel = {}
+        args_kernel['cached-image'] = kernel_id
+        args_kernel['new-image-uuid'] = "fake_uuid1"
+        uuid.uuid4().AndReturn("fake_uuid1")
+        self.session.call_plugin('kernel', 'create_kernel_ramdisk',
+                                  args_kernel).AndReturn("k")
+
+        args_ramdisk = {}
+        args_ramdisk['cached-image'] = ramdisk_id
+        args_ramdisk['new-image-uuid'] = "fake_uuid2"
+        uuid.uuid4().AndReturn("fake_uuid2")
+        self.session.call_plugin('kernel', 'create_kernel_ramdisk',
+                                  args_ramdisk).AndReturn("r")
+
+        self.mox.ReplayAll()
+        result = vm_utils.create_kernel_and_ramdisk(self.context,
+                    self.session, self.instance, self.name_label)
+        self.assertEqual(("k", "r"), result)
+
+    def test_create_kernel_and_ramdisk_create_kernel_not_cached(self):
+        kernel_id = "kernel"
+        self.instance["kernel_id"] = kernel_id
+
+        args_kernel = {}
+        args_kernel['cached-image'] = kernel_id
+        args_kernel['new-image-uuid'] = "fake_uuid1"
+        uuid.uuid4().AndReturn("fake_uuid1")
+        self.session.call_plugin('kernel', 'create_kernel_ramdisk',
+                                  args_kernel).AndReturn("")
+
+        kernel = {"kernel": {"file": "k"}}
+        vm_utils._fetch_disk_image(self.context, self.session, self.instance,
+                    self.name_label, kernel_id, 0).AndReturn(kernel)
+
+        self.mox.ReplayAll()
+        result = vm_utils.create_kernel_and_ramdisk(self.context,
+                    self.session, self.instance, self.name_label)
+        self.assertEqual(("k", None), result)
+
+
+class ScanSrTestCase(test.NoDBTestCase):
+    @mock.patch.object(vm_utils, "_scan_sr")
+    @mock.patch.object(vm_utils, "safe_find_sr")
+    def test_scan_default_sr(self, mock_safe_find_sr, mock_scan_sr):
+        mock_safe_find_sr.return_value = "sr_ref"
+
+        self.assertEqual("sr_ref", vm_utils.scan_default_sr("fake_session"))
+
+        mock_scan_sr.assert_called_once_with("fake_session", "sr_ref")
+
+    def test_scan_sr_works(self):
+        session = mock.Mock()
+        vm_utils._scan_sr(session, "sr_ref")
+        session.call_xenapi.assert_called_once_with('SR.scan', "sr_ref")
+
+    def test_scan_sr_unknown_error_fails_once(self):
+        session = mock.Mock()
+        session.call_xenapi.side_effect = test.TestingException
+        self.assertRaises(test.TestingException,
+                          vm_utils._scan_sr, session, "sr_ref")
+        session.call_xenapi.assert_called_once_with('SR.scan', "sr_ref")
+
+    @mock.patch.object(greenthread, 'sleep')
+    def test_scan_sr_known_error_retries_then_throws(self, mock_sleep):
+        session = mock.Mock()
+
+        class FakeException(Exception):
+            details = ['SR_BACKEND_FAILURE_40', "", "", ""]
+
+        session.XenAPI.Failure = FakeException
+        session.call_xenapi.side_effect = FakeException
+
+        self.assertRaises(FakeException,
+                          vm_utils._scan_sr, session, "sr_ref")
+
+        session.call_xenapi.assert_called_with('SR.scan', "sr_ref")
+        self.assertEqual(4, session.call_xenapi.call_count)
+        mock_sleep.assert_has_calls([mock.call(2), mock.call(4), mock.call(8)])
+
+    @mock.patch.object(greenthread, 'sleep')
+    def test_scan_sr_known_error_retries_then_succeeds(self, mock_sleep):
+        session = mock.Mock()
+
+        class FakeException(Exception):
+            details = ['SR_BACKEND_FAILURE_40', "", "", ""]
+
+        session.XenAPI.Failure = FakeException
+        sr_scan_call_count = 0
+
+        def fake_call_xenapi(*args):
+            fake_call_xenapi.count += 1
+            if fake_call_xenapi.count != 2:
+                raise FakeException()
+
+        fake_call_xenapi.count = 0
+        session.call_xenapi.side_effect = fake_call_xenapi
+
+        vm_utils._scan_sr(session, "sr_ref")
+
+        session.call_xenapi.assert_called_with('SR.scan', "sr_ref")
+        self.assertEqual(2, session.call_xenapi.call_count)
+        mock_sleep.assert_called_once_with(2)

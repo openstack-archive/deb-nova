@@ -46,7 +46,6 @@ import commands
 import ConfigParser
 import datetime
 import glob
-import operator
 import os
 import urlparse
 import uuid
@@ -184,7 +183,7 @@ class CommonTestsMixIn(object):
             self.fail("Shouldn't have connected")
 
 
-class BaseMigrationTestCase(test.TestCase):
+class BaseMigrationTestCase(test.NoDBTestCase):
     """Base class fort testing migrations and migration utils."""
     USER = None
     PASSWD = None
@@ -816,6 +815,40 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertEqual("", volume.deleted)
         volume = volumes.select(volumes.c.id == "second").execute().first()
         self.assertEqual(volume.id, volume.deleted)
+
+    def _post_downgrade_152(self, engine):
+        # Check indexes exist as they used to
+        if engine.name != 'sqlite':
+            test_data = self._pre_upgrade_194(engine)
+            test_data['migrations'] = ((
+                 'migrations_instance_uuid_and_status_idx',
+                ['deleted', 'instance_uuid', 'status']
+            ), (
+                'migrations_by_host_nodes_and_status_idx',
+                ['deleted', 'source_compute', 'dest_compute', 'source_node',
+                 'dest_node', 'status']
+            ))
+
+            for table_name, indexes in test_data.iteritems():
+                meta = sqlalchemy.MetaData()
+                meta.bind = engine
+                table = sqlalchemy.Table(table_name, meta, autoload=True)
+
+                index_data = [(idx.name, idx.columns.keys())
+                              for idx in table.indexes]
+
+                for name, columns in indexes:
+                    if engine.name == "postgresql":
+                        # we can not get correct order of columns in index
+                        # definition to postgresql using sqlalchemy.
+                        # So we sort columns list before compare
+                        # bug http://www.sqlalchemy.org/trac/ticket/2767
+                        self.assertIn(
+                            (name, sorted(columns)),
+                            ([(idx[0], sorted(idx[1])) for idx in index_data])
+                        )
+                    else:
+                        self.assertIn((name, columns), index_data)
 
     # migration 153, copy flavor information into system_metadata
     def _pre_upgrade_153(self, engine):
@@ -1656,10 +1689,12 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                 block_device.c.instance_uuid == 'mig186_uuid-1',
                 block_device.c.instance_uuid == 'mig186_uuid-2',
                 block_device.c.instance_uuid == 'mig186_uuid-3'))\
-            .order_by(block_device.c.device_name.asc())
+            .order_by(block_device.c.device_name.asc(),
+                      block_device.c.instance_uuid.asc())
 
         expected_bdms = sorted(self.mig186_fake_bdms,
-                               key=operator.itemgetter('device_name'))
+                               key=lambda x:
+                                    x['device_name'] + x['instance_uuid'])
         got_bdms = [bdm for bdm in q.execute()]
 
         self.assertEquals(len(expected_bdms), len(got_bdms))
@@ -1871,10 +1906,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         check = tables & dropped_tables
         self.assertEqual(check, dropped_tables)
 
-    def _check_194(self, engine, data):
-        if engine.name == 'sqlite':
-            return
-
+    def _pre_upgrade_194(self, engine):
         test_data = {
             # table_name: ((index_name_1, (*columns)), ...)
             "certificates": (
@@ -1917,7 +1949,13 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             ),
         }
 
-        for table_name, indexes in test_data.iteritems():
+        return test_data
+
+    def _check_194(self, engine, data):
+        if engine.name == 'sqlite':
+            return
+
+        for table_name, indexes in data.iteritems():
             meta = sqlalchemy.MetaData()
             meta.bind = engine
             table = sqlalchemy.Table(table_name, meta, autoload=True)
@@ -1937,6 +1975,31 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                     )
                 else:
                     self.assertIn((name, columns), index_data)
+
+    def _post_downgrade_194(self, engine):
+        if engine.name == 'sqlite':
+            return
+
+        for table_name, indexes in self._pre_upgrade_194(engine).iteritems():
+            meta = sqlalchemy.MetaData()
+            meta.bind = engine
+            table = sqlalchemy.Table(table_name, meta, autoload=True)
+
+            index_data = [(idx.name, idx.columns.keys())
+                          for idx in table.indexes]
+
+            for name, columns in indexes:
+                if engine.name == "postgresql":
+                    # we can not get correct order of columns in index
+                    # definition to postgresql using sqlalchemy. So we sortind
+                    # columns list before compare
+                    # bug http://www.sqlalchemy.org/trac/ticket/2767
+                    self.assertNotIn(
+                        (name, sorted(columns)),
+                        ([(idx[0], sorted(idx[1])) for idx in index_data])
+                    )
+                else:
+                    self.assertNotIn((name, columns), index_data)
 
     def _pre_upgrade_195(self, engine):
         fixed_ips = db_utils.get_table(engine, 'fixed_ips')
@@ -2220,10 +2283,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                           cells.insert().execute,
                           {'name': 'cell_transport_123', 'deleted': 0})
 
-    def _check_201(self, engine, data):
-        if engine.name != 'sqlite':
-            return
-
+    def _pre_upgrade_201(self, engine):
         data = {
             # table_name: ((idx_1, (c1, c2,)), (idx2, (c1, c2,)), ...)
             'agent_builds': (
@@ -2357,17 +2417,38 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                 ('ix_task_log_period_ending', ('period_ending',)),
             ),
         }
+        return data
+
+    def _check_201(self, engine, data):
+        if engine.name != 'sqlite':
+            return
 
         meta = sqlalchemy.MetaData()
         meta.bind = engine
 
         for table_name, indexes in data.iteritems():
             table = sqlalchemy.Table(table_name, meta, autoload=True)
-            indexes = [(i.name, tuple(i.columns.keys()))
-                       for i in table.indexes]
+            loaded_indexes = [(i.name, tuple(i.columns.keys()))
+                              for i in table.indexes]
 
             for index in indexes:
-                self.assertIn(index, indexes)
+                self.assertIn(index, loaded_indexes)
+
+    def _post_downgrade_201(self, engine):
+        if engine.name != 'sqlite':
+            return
+
+        data = self._pre_upgrade_201(engine)
+        meta = sqlalchemy.MetaData()
+        meta.bind = engine
+
+        for table_name, indexes in data.iteritems():
+            table = sqlalchemy.Table(table_name, meta, autoload=True)
+            loaded_indexes = [(i.name, tuple(i.columns.keys()))
+                              for i in table.indexes]
+
+            for index in indexes:
+                self.assertNotIn(index, loaded_indexes)
 
     def _pre_upgrade_202(self, engine):
         fake_types = [
@@ -2740,7 +2821,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         data = self._data_209()
         for i in tables:
             dump_table_name = 'dump_' + i
-            self.asserFalse(dump_table_name in check_tables)
+            self.assertFalse(dump_table_name in check_tables)
             table = change_tables[i]
             table.insert().values(data[i]).execute()
             self.assertEqual(len(table.select().execute().fetchall()), 2)
@@ -2854,10 +2935,14 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         if engine.name == 'mysql':
             self._212(engine)
 
-    def _pre_upgrade_213(self, engine):
+    def _213(self, engine):
         self.assertRaises(sqlalchemy.exc.NoSuchTableError,
                           db_utils.get_table, engine,
                           'pci_devices')
+        self.assertColumnNotExists(engine, 'compute_nodes', 'pci_stats')
+
+    def _pre_upgrade_213(self, engine):
+        self._213(engine)
 
     def _check_213(self, engine, data):
         fake_pci = {'id': 3353,
@@ -2878,28 +2963,179 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         result = devs.select().execute().fetchall()
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['vendor_id'], '1520')
-        fake_node = dict(vcpus=2, memory_mb=1024, local_gb=2048,
-                         vcpus_used=0, memory_mb_used=0,
-                         local_gb_used=0, free_ram_mb=1024,
-                         free_disk_gb=2048, hypervisor_type="xen",
-                         hypervisor_version=1, cpu_info="",
-                         running_vms=0, current_workload=0,
-                         service_id=1,
-                         disk_available_least=100,
-                         hypervisor_hostname='abracadabra104',
-                         host_ip='127.0.0.1',
-                         supported_instances='')
+
+        self.assertColumnExists(engine, 'compute_nodes', 'pci_stats')
         nodes = db_utils.get_table(engine, 'compute_nodes')
-        engine.execute(nodes.insert(), fake_node)
-        result = nodes.select().execute().fetchall()
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]['pci_stats'], None)
+        self.assertTrue(isinstance(nodes.c.pci_stats.type,
+                                   sqlalchemy.types.Text))
 
     def _post_downgrade_213(self, engine):
-        # check that groups does not exist
-        self.assertRaises(sqlalchemy.exc.NoSuchTableError,
-                          db_utils.get_table, engine,
-                          'pci_devices')
+        self._213(engine)
+
+    def _pre_upgrade_214(self, engine):
+        test_data = {
+            # table_name: ((index_name_1, (*columns)), ...)
+            "migrations": ((
+                 'migrations_instance_uuid_and_status_idx',
+                ['deleted', 'instance_uuid', 'status']
+            ),)
+        }
+
+        return test_data
+
+    def _check_214(self, engine, data):
+        if engine.name == 'sqlite':
+            return
+
+        for table_name, indexes in data.iteritems():
+            meta = sqlalchemy.MetaData()
+            meta.bind = engine
+            table = sqlalchemy.Table(table_name, meta, autoload=True)
+
+            index_data = [(idx.name, idx.columns.keys())
+                          for idx in table.indexes]
+
+            for name, columns in indexes:
+                if engine.name == "postgresql":
+                    # we can not get correct order of columns in index
+                    # definition to postgresql using sqlalchemy. So we sortind
+                    # columns list before compare
+                    # bug http://www.sqlalchemy.org/trac/ticket/2767
+                    self.assertIn(
+                        (name, sorted(columns)),
+                        ([(idx[0], sorted(idx[1])) for idx in index_data])
+                    )
+                else:
+                    self.assertIn((name, columns), index_data)
+
+    def _post_downgrade_214(self, engine):
+        if engine.name == 'sqlite':
+            return
+
+        for table_name, indexes in self._pre_upgrade_214(engine).iteritems():
+            meta = sqlalchemy.MetaData()
+            meta.bind = engine
+            table = sqlalchemy.Table(table_name, meta, autoload=True)
+
+            index_data = [(idx.name, idx.columns.keys())
+                          for idx in table.indexes]
+
+            for name, columns in indexes:
+                if engine.name == "postgresql":
+                    # we can not get correct order of columns in index
+                    # definition to postgresql using sqlalchemy. So we sortind
+                    # columns list before compare
+                    # bug http://www.sqlalchemy.org/trac/ticket/2767
+                    self.assertNotIn(
+                        (name, sorted(columns)),
+                        ([(idx[0], sorted(idx[1])) for idx in index_data])
+                    )
+                else:
+                    self.assertNotIn((name, columns), index_data)
+
+    def _data_216(self):
+        ret = {'instances': [{'user_id': '1234', 'project_id': '5678',
+                              'vcpus': 2, 'memory_mb': 256, 'uuid': 'uuid1',
+                              'deleted': 0},
+                             {'user_id': '234', 'project_id': '5678',
+                              'vcpus': 1, 'memory_mb': 256, 'deleted': 0}],
+            'security_groups': [{'user_id': '1234', 'project_id': '5678',
+                                 'deleted': 0},
+                                {'user_id': '234', 'project_id': '5678',
+                                 'deleted': 0},
+                                {'user_id': '234', 'project_id': '5678',
+                                 'deleted': 0}],
+            'floating_ips': [{'deleted': 0, 'project_id': '5678',
+                              'auto_assigned': False},
+                             {'deleted': 0, 'project_id': '5678',
+                              'auto_assigned': False}],
+            'fixed_ips': [{'instance_uuid': 'uuid1', 'deleted': 0}],
+            'networks': [{'project_id': '5678', 'deleted': 0}],
+            'quota_usages': [{'user_id': '1234', 'project_id': '5678',
+                'resource': 'instances', 'in_use': 1, 'reserved': 0},
+                {'user_id': '234', 'project_id': '5678',
+                    'resource': 'instances', 'in_use': 1, 'reserved': 0},
+                {'user_id': None, 'project_id': '5678',
+                    'resource': 'instances', 'in_use': 1, 'reserved': 0},
+                {'user_id': '1234', 'project_id': '5678',
+                    'resource': 'security_groups', 'in_use': 1, 'reserved': 0},
+                {'user_id': '234', 'project_id': '5678',
+                    'resource': 'security_groups', 'in_use': 2, 'reserved': 0},
+                {'user_id': None, 'project_id': '5678',
+                    'resource': 'security_groups', 'in_use': 1, 'reserved': 0},
+                {'user_id': '1234', 'project_id': '5678',
+                    'resource': 'floating_ips', 'in_use': 1, 'reserved': 0},
+                {'user_id': None, 'project_id': '5678',
+                    'resource': 'floating_ips', 'in_use': 1, 'reserved': 0},
+                {'user_id': '1234', 'project_id': '5678',
+                    'resource': 'fixed_ips', 'in_use': 1, 'reserved': 0},
+                {'user_id': None, 'project_id': '5678',
+                    'resource': 'fixed_ips', 'in_use': 1, 'reserved': 0},
+                {'user_id': '1234', 'project_id': '5678',
+                    'resource': 'networks', 'in_use': 1, 'reserved': 0},
+                {'user_id': None, 'project_id': '5678',
+                    'resource': 'networks', 'in_use': 2, 'reserved': 0}]}
+        return ret
+
+    def _pre_upgrade_216(self, engine):
+        tables = ['instance_system_metadata', 'instance_info_caches',
+                'block_device_mapping', 'security_group_instance_association',
+                'security_groups', 'migrations', 'instance_metadata',
+                'fixed_ips', 'instances', 'security_groups', 'floating_ips',
+                'fixed_ips', 'networks']
+        delete_tables = dict((table, db_utils.get_table(engine, table))
+                             for table in tables)
+        for table in tables:
+            delete_tables[table].delete().execute()
+
+        data = self._data_216()
+        tables = data.keys()
+        change_tables = dict((table, db_utils.get_table(engine, table))
+                             for table in tables)
+        for table in tables:
+            for row in data[table]:
+                try:
+                    change_tables[table].insert().values(row).execute()
+                except sqlalchemy.exc.IntegrityError:
+                    # This is run multiple times with opportunistic db testing.
+                    # There's no on duplicate key update functionality in
+                    # sqlalchemy so we just ignore the error.
+                    pass
+
+    def _check_216(self, engine, data):
+        quota_usages = db_utils.get_table(engine, 'quota_usages')
+        per_user = {'1234': {'instances': 1, 'cores': 2, 'ram': 256,
+                        'security_groups': 1},
+                    '234': {'instances': 1, 'cores': 1, 'ram': 256,
+                        'security_groups': 2}}
+
+        per_project = {'floating_ips': 2, 'fixed_ips': 1, 'networks': 1}
+
+        for resource in ['instances', 'cores', 'ram', 'security_groups']:
+            rows = quota_usages.select().where(
+                    quota_usages.c.user_id == None).where(
+                            quota_usages.c.resource == resource).execute(
+                                    ).fetchall()
+            self.assertEqual(0, len(rows))
+
+        for user in per_user.keys():
+            rows = quota_usages.select().where(
+                    quota_usages.c.user_id == user).where(
+                            quota_usages.c.project_id == '5678').execute(
+                                    ).fetchall()
+            for row in rows:
+                resource = row['resource']
+                self.assertEqual(per_user[user][resource], row['in_use'])
+
+        networks = db_utils.get_table(engine, 'networks')
+        rows = networks.select().execute().fetchall()
+        for resource in per_project:
+            rows = quota_usages.select().where(
+                    quota_usages.c.resource == resource).where(
+                            quota_usages.c.project_id == '5678').execute(
+                                    ).fetchall()
+            self.assertEqual(1, len(rows))
+            self.assertEqual(per_project[resource], rows[0]['in_use'])
 
 
 class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):
@@ -3012,7 +3248,7 @@ class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         db_utils.get_table(engine, 'bm_pxe_ips')
 
 
-class ProjectTestCase(test.TestCase):
+class ProjectTestCase(test.NoDBTestCase):
 
     def test_all_migrations_have_downgrade(self):
         topdir = os.path.normpath(os.path.dirname(__file__) + '/../../../')
