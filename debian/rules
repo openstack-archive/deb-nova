@@ -77,7 +77,8 @@ override_dh_fixperms:
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
-	python setup.py testr --slowest --testr-args='--subunit  ' || true
+	./run_tests.sh -N -P || true
+	#python setup.py testr --slowest --testr-args='--subunit  ' || true
 endif
 
 # We use override_dh_installmenu because it's done in the sequence with dh,
