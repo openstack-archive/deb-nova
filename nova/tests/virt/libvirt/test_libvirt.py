@@ -2861,6 +2861,8 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
         conn._check_shared_storage_test_file("file").AndReturn(False)
+        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
 
         self.mox.StubOutWithMock(conn, "_assert_dest_node_has_enough_disk")
         conn._assert_dest_node_has_enough_disk(
@@ -2881,11 +2883,31 @@ class LibvirtConnTestCase(test.TestCase):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
         conn._check_shared_storage_test_file("file").AndReturn(False)
+        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
         self.mox.ReplayAll()
         ret = conn.check_can_live_migrate_source(self.context, instance_ref,
                                                  dest_check_data)
         self.assertTrue(type(ret) == dict)
         self.assertTrue('is_shared_storage' in ret)
+
+    def test_check_can_live_migrate_source_vol_backed_w_disk_raises(self):
+        instance_ref = db.instance_create(self.context, self.test_instance)
+        dest_check_data = {"filename": "file",
+                           "block_migration": False,
+                           "disk_over_commit": False,
+                           "disk_available_mb": 1024,
+                           "is_volume_backed": True}
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
+        conn._check_shared_storage_test_file("file").AndReturn(False)
+        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref['name']).AndReturn(
+                '[{"fake_disk_attr": "fake_disk_val"}]')
+        self.mox.ReplayAll()
+        self.assertRaises(exception.InvalidSharedStorage,
+                          conn.check_can_live_migrate_source, self.context,
+                          instance_ref, dest_check_data)
 
     def test_check_can_live_migrate_source_vol_backed_fails(self):
         instance_ref = db.instance_create(self.context, self.test_instance)
@@ -2897,6 +2919,9 @@ class LibvirtConnTestCase(test.TestCase):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
         conn._check_shared_storage_test_file("file").AndReturn(False)
+        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref['name']).AndReturn(
+                '[{"fake_disk_attr": "fake_disk_val"}]')
         self.mox.ReplayAll()
         self.assertRaises(exception.InvalidSharedStorage,
                           conn.check_can_live_migrate_source, self.context,
@@ -2912,6 +2937,8 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
         conn._check_shared_storage_test_file("file").AndReturn(True)
+        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
 
         self.mox.ReplayAll()
         self.assertRaises(exception.InvalidLocalStorage,
@@ -2928,6 +2955,8 @@ class LibvirtConnTestCase(test.TestCase):
 
         self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
         conn._check_shared_storage_test_file("file").AndReturn(False)
+        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
 
         self.mox.ReplayAll()
         self.assertRaises(exception.InvalidSharedStorage,
@@ -2942,6 +2971,8 @@ class LibvirtConnTestCase(test.TestCase):
         conn._check_shared_storage_test_file("file").AndReturn(False)
 
         self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+        conn.get_instance_disk_info(instance_ref["name"]).AndReturn(
+                                            '[{"virt_disk_size":2}]')
         conn.get_instance_disk_info(instance_ref["name"]).AndReturn(
                                             '[{"virt_disk_size":2}]')
 
@@ -2996,6 +3027,34 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertTrue(instance_ref['power_state'] == power_state.RUNNING)
 
         db.instance_destroy(self.context, instance_ref['uuid'])
+
+    def test_create_images_and_backing(self):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.mox.StubOutWithMock(conn, '_fetch_instance_kernel_ramdisk')
+        self.mox.StubOutWithMock(libvirt_driver.libvirt_utils, 'create_image')
+
+        libvirt_driver.libvirt_utils.create_image(mox.IgnoreArg(),
+                                                  mox.IgnoreArg(),
+                                                  mox.IgnoreArg())
+        conn._fetch_instance_kernel_ramdisk(self.context, self.test_instance)
+        self.mox.ReplayAll()
+
+        self.stubs.Set(os.path, 'exists', lambda *args: False)
+        disk_info_json = jsonutils.dumps([{'path': 'foo', 'type': None,
+                                           'disk_size': 0,
+                                           'backing_file': None}])
+        conn._create_images_and_backing(self.context, self.test_instance,
+                                        "/fake/instance/dir", disk_info_json)
+
+    def test_create_images_and_backing_disk_info_none(self):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.mox.StubOutWithMock(conn, '_fetch_instance_kernel_ramdisk')
+
+        conn._fetch_instance_kernel_ramdisk(self.context, self.test_instance)
+        self.mox.ReplayAll()
+
+        conn._create_images_and_backing(self.context, self.test_instance,
+                                        "/fake/instance/dir", None)
 
     def test_pre_live_migration_works_correctly_mocked(self):
         # Creating testdata
@@ -5239,9 +5298,10 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         if method_name == "attach_interface":
-            conn.attach_interface(test_instance, fake_image_meta, network_info)
+            conn.attach_interface(test_instance, fake_image_meta,
+                                  network_info[0])
         elif method_name == "detach_interface":
-            conn.detach_interface(test_instance, network_info)
+            conn.detach_interface(test_instance, network_info[0])
         else:
             raise ValueError("Unhandled method %" % method_name)
 

@@ -32,6 +32,7 @@ from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception as exc
 from nova import notifications
+from nova.objects import base as obj_base
 from nova.objects import instance as instance_obj
 from nova.objects import migration as migration_obj
 from nova.openstack.common import jsonutils
@@ -824,6 +825,65 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         self.conductor.compute_confirm_resize(self.context, inst_obj,
                                               mig_obj)
 
+    def _test_object_action(self, is_classmethod, raise_exception):
+        class TestObject(obj_base.NovaObject):
+            def foo(self, context, raise_exception=False):
+                if raise_exception:
+                    raise Exception('test')
+                else:
+                    return 'test'
+
+            @classmethod
+            def bar(cls, context, raise_exception=False):
+                if raise_exception:
+                    raise Exception('test')
+                else:
+                    return 'test'
+
+        obj = TestObject()
+        if is_classmethod:
+            result = self.conductor.object_class_action(
+                self.context, TestObject.obj_name(), 'bar', '1.0',
+                tuple(), {'raise_exception': raise_exception})
+        else:
+            updates, result = self.conductor.object_action(
+                self.context, obj, 'foo', tuple(),
+                {'raise_exception': raise_exception})
+        self.assertEqual('test', result)
+
+    def test_object_action(self):
+        self._test_object_action(False, False)
+
+    def test_object_action_on_raise(self):
+        self.assertRaises(rpc_common.ClientException,
+                          self._test_object_action, False, True)
+
+    def test_object_class_action(self):
+        self._test_object_action(True, False)
+
+    def test_object_class_action_on_raise(self):
+        self.assertRaises(rpc_common.ClientException,
+                          self._test_object_action, True, True)
+
+    def test_object_action_copies_object(self):
+        class TestObject(obj_base.NovaObject):
+            fields = {'dict': dict}
+
+            def touch_dict(self, context):
+                self.dict['foo'] = 'bar'
+                self.obj_reset_changes()
+
+        obj = TestObject()
+        obj.dict = {}
+        obj.obj_reset_changes()
+        updates, result = self.conductor.object_action(
+            self.context, obj, 'touch_dict', tuple(), {})
+        # NOTE(danms): If conductor did not properly copy the object, then
+        # the new and reference copies of the nested dict object will be
+        # the same, and thus 'dict' will not be reported as changed
+        self.assertIn('dict', updates)
+        self.assertEqual({'foo': 'bar'}, updates['dict'])
+
 
 class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
     """Conductor RPC API Tests."""
@@ -1377,6 +1437,7 @@ class _BaseTaskTestCase(object):
                 db_instance['uuid'], expected_attrs=['system_metadata'])
         instance.vm_state = vm_states.SHELVED_OFFLOADED
         instance.save()
+        filter_properties = {}
         system_metadata = instance.system_metadata
 
         self.mox.StubOutWithMock(self.conductor_manager, '_get_image')
@@ -1387,7 +1448,7 @@ class _BaseTaskTestCase(object):
         self.conductor_manager._get_image(self.context,
                 'fake_image_id').AndReturn('fake_image')
         self.conductor_manager._schedule_instances(self.context,
-                'fake_image', [], instance).AndReturn(
+                'fake_image', filter_properties, instance).AndReturn(
                         [{'host': 'fake_host'}])
         self.conductor_manager.compute_rpcapi.unshelve_instance(self.context,
                 instance, 'fake_host', 'fake_image')
@@ -1404,6 +1465,7 @@ class _BaseTaskTestCase(object):
                 db_instance['uuid'], expected_attrs=['system_metadata'])
         instance.vm_state = vm_states.SHELVED_OFFLOADED
         instance.save()
+        filter_properties = {}
         system_metadata = instance.system_metadata
 
         self.mox.StubOutWithMock(self.conductor_manager, '_get_image')
@@ -1414,7 +1476,7 @@ class _BaseTaskTestCase(object):
         self.conductor_manager._get_image(self.context,
                 'fake_image_id').AndReturn(None)
         self.conductor_manager._schedule_instances(self.context,
-                None, [], instance).AndReturn(
+                None, filter_properties, instance).AndReturn(
                         [{'host': 'fake_host'}])
         self.conductor_manager.compute_rpcapi.unshelve_instance(self.context,
                 instance, 'fake_host', None)
