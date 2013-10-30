@@ -1,3 +1,10 @@
+nova (2013.2-2) UNRELEASED; urgency=low
+
+  * Added some Provides: for the nova-consoleproxy so that it is in line with
+    what Ubuntu does.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 30 Oct 2013 22:11:58 +0800
+
 nova (2013.2-1) unstable; urgency=low
 
   * New upstream release.
