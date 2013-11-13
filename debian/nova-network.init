@@ -18,7 +18,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Network"
 NAME=nova-network
 DAEMON=/usr/bin/nova-network
-DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf --log-file=/var/log/nova/nova-network.log"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova

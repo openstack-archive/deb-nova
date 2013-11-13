@@ -18,7 +18,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute API"
 NAME=nova-api
 DAEMON=/usr/bin/nova-api
-DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf --log-file=/var/log/nova/nova-api.log"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova

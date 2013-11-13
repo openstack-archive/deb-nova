@@ -18,7 +18,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Conductor"
 NAME=nova-conductor
 DAEMON=/usr/bin/nova-conductor
-DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf --log-file=/var/log/nova/nova-conductor.log"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova

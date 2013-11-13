@@ -2,6 +2,7 @@ nova (2013.2-2) UNRELEASED; urgency=low
 
   * Added some Provides: for the nova-consoleproxy so that it is in line with
     what Ubuntu does.
+  * Adds --log-file= for each daemons.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 30 Oct 2013 22:11:58 +0800
 
