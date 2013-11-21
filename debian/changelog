@@ -3,9 +3,8 @@ nova (2013.2-2) UNRELEASED; urgency=low
   * Added some Provides: for the nova-consoleproxy so that it is in line with
     what Ubuntu does.
   * Adds --log-file= for each daemons.
-  * Updated VCS field to git.gplhost.com.
 
- -- Thomas Goirand <zigo@debian.org>  Wed, 20 Nov 2013 19:55:06 +0800
+ -- Thomas Goirand <zigo@debian.org>  Wed, 30 Oct 2013 22:11:58 +0800
 
 nova (2013.2-1) unstable; urgency=low
 
