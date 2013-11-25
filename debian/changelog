@@ -1,3 +1,9 @@
+nova (2013.2-3) UNRELEASED; urgency=low
+
+  * Moved python-mysqldb from Recommends to Depends in python-nova.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 26 Nov 2013 00:13:07 +0800
+
 nova (2013.2-2) unstable; urgency=low
 
   * Added some Provides: for the nova-consoleproxy so that it is in line with

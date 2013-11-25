@@ -130,6 +130,7 @@ Depends: openssh-client,
          python-markdown,
          python-memcache,
          python-migrate,
+         python-mysqldb,
          python-netaddr,
          python-neutronclient (>= 2.2.0),
          python-novaclient (>= 1:2.9.0),
@@ -160,7 +161,6 @@ Depends: openssh-client,
          ${python:Depends}
 Suggests: python-suds (>= 0.4.0)
 Conflicts: python-cjson
-Recommends: python-mysqldb
 Description: OpenStack Compute - libraries
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
