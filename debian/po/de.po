@@ -1,27 +1,26 @@
 # GERMAN TRANSLATION OF THE NOVA DEBCONF TEMPLATE.
-# Copyright (C) 2012 Erik Pfannenstein
+# Copyright (c) 2010 OpenStack LLC.
 # This file is distributed under the same license as the NOVA package.
-# Erik Pfannenstein <debianignatz@gmx.de>, 2012.
+# Copyright of this file Erik Pfannenstein 2012, Chris Leick 2013.
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 2012.1.1-3\n"
+"Project-Id-Version: nova 2013.1.2-4\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-09-25 23:09+0800\n"
-"PO-Revision-Date: 2012-06-14 20:59+0200\n"
-"Last-Translator: Erik Pfannenstein <debianignatz@gmx.de>\n"
-"Language-Team: de <debian-l10n-german@lists.debian.org>\n"
+"POT-Creation-Date: 2013-05-23 16:12+0800\n"
+"PO-Revision-Date: 2013-11-18 16:36+0100\n"
+"Last-Translator: Chris Leick <c.leick@vollbio.de>\n"
+"Language-Team: German <debian-l10n-german@lists.debian.org>\n"
 "Language: de\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Virtaal 0.7.1\n"
 
 #. Type: boolean
 #. Description
 #: ../nova-common.templates:2001
 msgid "Start nova services at boot?"
-msgstr "Nova-Dienste beim Booten starten?"
+msgstr "Nova-Dienste beim Hochfahren starten?"
 
 # FIXME: non-personal writing style cause services are started automatically?
 #. Type: boolean
@@ -38,7 +37,7 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:3001
 msgid "Auth server hostname:"
-msgstr ""
+msgstr "Rechnername des Authentifizierungsservers:"
 
 #. Type: string
 #. Description
@@ -47,24 +46,26 @@ msgid ""
 "Please specify the URL of your Nova authentication server. Typically this is "
 "also the URL of your OpenStack Identity Service (Keystone)."
 msgstr ""
+"Bitte geben Sie die URL Ihres Nova-Authentifizierungsservers an. Dies ist "
+"normalerweise auch die URL Ihres OpenStack-Identitätsdienstes (Keystone)."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:4001
 msgid "Auth server tenant name:"
-msgstr ""
+msgstr "Tenant-Name des Authentifizierungsservers:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:5001
 msgid "Auth server username:"
-msgstr ""
+msgstr "Benutzername des Authentifizierungsservers:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:6001
 msgid "Auth server password:"
-msgstr ""
+msgstr "Passwort des Authentifizierungsservers:"
 
 #. Type: boolean
 #. Description
@@ -92,10 +93,10 @@ msgid ""
 " * a username and password to access the database;\n"
 " * the type of database management software you want to use."
 msgstr ""
-" * der Rechnername des Datenbank-Servers (welcher TCP-Verbindungen von    "
-"dieser Maschine aus zulassen muss);\n"
-" * einen Benutzernamen samt Passwort, um auf die Datenbank zuzugreifen;\n"
-" * die Art von Datenbank-Verwaltungssoftware, die Sie verwenden wollen."
+" * der Rechnername des Datenbank-Servers (welcher TCP-Verbindungen von\n"
+"   dieser Maschine aus zulassen muss)\n"
+" * einen Benutzernamen samt Passwort, um auf die Datenbank zuzugreifen\n"
+" * die Art von Datenbankverwaltungssoftware, die Sie verwenden wollen"
 
 #. Type: boolean
 #. Description
@@ -114,14 +115,14 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
 msgstr ""
-"Sie können diese Einstellung später durch Ausführen von »dpkg-reconfigure -"
-"plow nova-common« ändern."
+"Sie können diese Einstellung später durch Ausführen von "
+"»dpkg-reconfigure -plow nova-common« ändern."
 
 #. Type: multiselect
 #. Description
 #: ../nova-common.templates:8001
 msgid "API to activate:"
-msgstr ""
+msgstr "API, die aktiviert werden soll:"
 
 #. Type: multiselect
 #. Description
@@ -130,6 +131,9 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
+"Openstack Nova unterstützt verschiedene API-Dienste, von denen jeder einzelne "
+"an einen anderen Port gebunden ist. Wählen Sie aus, welche von »nova-api« "
+"unterstützt werden soll."
 
 #. Type: multiselect
 #. Description
@@ -140,12 +144,16 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
+"Falls Sie einen Rechenknoten einrichten, müssen Sie nur den "
+"Metadaten-API-Server starten. Falls Sie Cinder ausführen, benötigen Sie "
+"»osapi_volume« nicht (Sie können »osapi_volume« und »cinder-api« nicht auf "
+"demselben Server ausführen, sie binden sich an den selben Port)."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
 msgid "Value for my_ip:"
-msgstr ""
+msgstr "Wert für »my_ip«:"
 
 #. Type: string
 #. Description
@@ -153,69 +161,29 @@ msgstr ""
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr ""
+"Geben Sie die IP-Adresse ein, die in der Direktive »my_ip« der nova.conf "
+"gesetzt werden wird."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid "IP address of your RabbitMQ host:"
-msgstr ""
+msgid "Ip address of your rabbitmq host:"
+msgstr "IP-Adresse Ihres Rabbitmq-Rechners:"
 
 #. Type: string
 #. Description
-#. Type: string
-#. Description
-#. Type: password
-#. Description
-#: ../nova-common.templates:10001 ../nova-common.templates:11001
-#: ../nova-common.templates:12001
+#: ../nova-common.templates:10001
 msgid ""
-"In order to interoperate with other components of OpenStack, this package "
-"needs to connect to a central RabbitMQ server."
+"Enter the IP address that will be set in the rabbitmq_host directive of nova."
+"conf. If you are installing openstack-proxy-node, then the default to use "
+"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
+"then enter the IP address of your proxy-node host."
 msgstr ""
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:10001
-msgid "Please specify the IP address of that server."
-msgstr ""
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:11001
-#, fuzzy
-#| msgid "Username to connect to XenAPI:"
-msgid "Username for connection to the RabbitMQ server:"
-msgstr "Benutzername für die Verbindung mit XenAPI:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:11001
-#, fuzzy
-#| msgid ""
-#| "Please enter the username used to connect to your XenAPI (XCP server)."
-msgid "Please specify the username used to connect to the RabbitMQ server."
-msgstr ""
-"Bitte geben Sie den Benutzernamen ein, mit dem Sie sich mit Ihrer XenAPI "
-"(XCP-Server) verbinden."
-
-#. Type: password
-#. Description
-#: ../nova-common.templates:12001
-#, fuzzy
-#| msgid "Password to connect to XenAPI:"
-msgid "Password for connection to the RabbitMQ server:"
-msgstr "Passwort für die Verbindung mit XenAPI:"
-
-#. Type: password
-#. Description
-#: ../nova-common.templates:12001
-#, fuzzy
-#| msgid ""
-#| "Please enter the password used to connect to your XenAPI (XCP server)."
-msgid "Please specify the password used to connect to the RabbitMQ server."
-msgstr ""
-"Bitte geben Sie das Passwort ein, mit dem Sie sich mit Ihrer XenAPI (XCP-"
-"Server) verbinden."
+"Geben Sie die IP-Adresse ein, die in der Direktive »rabbitmq_host« von "
+"nova.conf gesetzt werden wird. Falls Sie »openstack-proxy-node« installieren, "
+"ist die Verwendung der Standardeinstellung 127.0.0.1 wahrscheinlich richtig. "
+"alls Sie »openstack-compute-node« installieren, geben Sie die IP-Adresse "
+"Ihres »proxy-node«-Rechners ein."
 
 #. Type: string
 #. Description
@@ -232,7 +200,7 @@ msgid ""
 "correctly."
 msgstr ""
 "Nova Compute Xen muss die Adresse des Servers kennen, der XenAPI ausführt. "
-"Sie können wahlweise eine IP-Adresse oder einen vollqualifizierten Domain-"
+"Sie können wahlweise eine IP-Adresse oder einen voll qualifizierten Domain-"
 "Namen eingeben, wenn er korrekt aufgelöst wird."
 
 #. Type: string
@@ -243,7 +211,7 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
-"Das kann ein Server mit Citrix XenServer, die von einem ISO-Image "
+"Dies kann ein Server mit Citrix XenServer, die von einem ISO-Image "
 "installierte CentOS Xen-Cloud-Platform-(XCP)-Anwendung oder sogar das XCP "
 "des Kronos-Projekts sein (in Debian und Ubuntu als Paket xcp-xapi verfügbar)."
 
@@ -290,7 +258,7 @@ msgstr ""
 #. Description
 #: ../nova-api.templates:1001
 msgid "Register Nova in the keystone endpoint catalog?"
-msgstr ""
+msgstr "Soll Nova im Keystone-Endpunktkatalog registriert werden?"
 
 #. Type: boolean
 #. Description
@@ -300,6 +268,10 @@ msgid ""
 "accessible. This is done using \"keystone service-create\" and \"keystone "
 "endpoint-create\". Select if you want to run these commands now."
 msgstr ""
+"Alle OpenStack-Dienste (jedes API) sollten registriert werden, damit darauf "
+"zugegriffen werden kann. Dies wird mittels »keystone service-create« und "
+"»keystone endpoint-create« erledigt. Wählen Sie, ob Sie diese Befehle nun "
+"ausführen möchten."
 
 #. Type: boolean
 #. Description
@@ -308,12 +280,15 @@ msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using the Keystone auth token."
 msgstr ""
+"Beachten Sie, dass Sie einen laufenden Keystone-Server haben müssen, zu dem "
+"mittels des Keystone-Authentifizierungs-Tokens eine Verbindung hergestellt "
+"werden kann."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:2001
 msgid "Keystone IP address:"
-msgstr ""
+msgstr "IP-Adresse von Keystone:"
 
 #. Type: string
 #. Description
@@ -322,12 +297,14 @@ msgid ""
 "Enter the IP address of your keystone server, so that nova-api can contact "
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
+"Geben Sie die IP-Adresse Ihres Keystone-Servers ein, so dass »nova-api« "
+"Keystone zum Erstellen des Nova-Dienstes und des Endpunkts kontaktieren kann."
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:3001
 msgid "Keystone Auth Token:"
-msgstr ""
+msgstr "Keystone-Authentifizierungs-Token:"
 
 #. Type: password
 #. Description
@@ -336,12 +313,14 @@ msgid ""
 "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
 "token."
 msgstr ""
+"Zur Konfiguration seines Endpunkts in Keystone benötigt »nova-api« das "
+"Keystone-Authentifizierungs-Token."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
 msgid "Nova endpoint IP address:"
-msgstr ""
+msgstr "IP-Adresse des Nova-Endpunkts:"
 
 #. Type: string
 #. Description
@@ -350,6 +329,8 @@ msgid ""
 "Enter the IP address that will be used to contact Nova (eg: the Nova "
 "endpoint IP address)."
 msgstr ""
+"Geben Sie die IP-Adresse ein, die zum Kontaktieren von Nova benutzt werden "
+"soll (z.B.: die IP-Adresse des Nova-Endpunkts)."
 
 #. Type: string
 #. Description
@@ -359,12 +340,15 @@ msgid ""
 "service, so if you are installing a public cloud, this should be a public IP "
 "address."
 msgstr ""
+"Auf diese IP-Adresse sollten Clients, die diesen Dienst nutzen, zugreifen "
+"können. Wenn Sie also eine öffentliche Cloud installieren, sollte dies eine "
+"öffentliche IP-Adresse sein."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:5001
 msgid "Name of the region to register:"
-msgstr ""
+msgstr "Name der Region zum Registrieren:"
 
 #. Type: string
 #. Description
@@ -374,12 +358,15 @@ msgid ""
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
 msgstr ""
+"OpenStack kann kann mittels Verfügbarkeitszonen benutzt werden, bei denen "
+"jede Region für einen Ort steht. Bitte geben Sie die Zone ein, die Sie beim "
+"Registrieren des Endpunkts verwenden möchten."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
 msgid "Type of console daemon to start at boot time:"
-msgstr ""
+msgstr "Typ des Konsolen-Daemons, der beim Hochfahren gestartet werden soll:"
 
 #. Type: select
 #. Description
@@ -391,11 +378,14 @@ msgid ""
 "sockets in your browser, and that is a feature only very modern browsers "
 "have support for."
 msgstr ""
+"Nova Console unterstützt drei Konsolentypen. Eine ist speziell für Xen, sie "
+"heißt XVP (Xen-VNC-Proxy) und die anderen unterstützen KVM. Während das "
+"Protokoll SPICE normalerweise schneller als VNC ist, verlangt es außerdem, "
+"dass Ihr Browser Web-Sockets unterstützt und dies ist eine Funktionalität. "
+"die nur von sehr neuen Browsern geboten wird."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
-#, fuzzy
-#| msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
-msgstr "Dies kann später in /etc/nova/nova-compute.conf geändert werden."
+msgstr "Dies kann später in /etc/default/nova-consoleproxy geändert werden."

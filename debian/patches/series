@@ -3,3 +3,4 @@ install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
 fixes-requirements.txt-for-sid.patch
+CVE-2013-4463_CVE-2013-4469_ensure_we_dont_boot_oversized_image.patch

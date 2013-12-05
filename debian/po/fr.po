@@ -8,10 +8,10 @@ msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2013-09-25 23:09+0800\n"
-"PO-Revision-Date: 2013-08-28 16:59+0100\n"
+"PO-Revision-Date: 2013-10-26 18:44+0100\n"
 "Last-Translator: Julien Patriarca <leatherface@debian.org>\n"
 "Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
-"Language: \n"
+"Language: fr\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -46,8 +46,8 @@ msgid ""
 "Please specify the URL of your Nova authentication server. Typically this is "
 "also the URL of your OpenStack Identity Service (Keystone)."
 msgstr ""
-"Veuillez indiquer l'adresse URL de votre serveur d'authentification Nova. "
-"Typiquement il s'agit également de l'adresse URL du votre Service d'identité "
+"Veuillez indiquer l'adresse URL du serveur d'authentification Nova. "
+"En général, il s'agit également de l'adresse URL du Service d'identité "
 "OpenStack (Keystone)."
 
 #. Type: string
@@ -94,12 +94,12 @@ msgid ""
 " * a username and password to access the database;\n"
 " * the type of database management software you want to use."
 msgstr ""
-" * le nom d'hôte du serveur de bases de données (qui doit autoriser les "
-"connexions TCP\n"
-"   depuis cette machine);\n"
-" * un nom d'utilisateur et un mot de passe pour accéder à la base de "
-"données;\n"
-" * le type de gestionnaire de base de données que vous souhaitez utiliser"
+" - le nom d'hôte du serveur de bases de données (qui doit\n
+    autoriser les connexions TCP depuis cette machine) ;\n"
+" - un nom d'utilisateur et un mot de passe pour accéder à\n
+    la base de données ;\n"
+" - le type de gestionnaire de base de données que vous\n
+    souhaitez utiliser."
 
 #. Type: boolean
 #. Description
@@ -146,8 +146,8 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Si c'est un nœud de calcul que vous installez, alors vous n'avez qu'à lancer "
-"le serveur API de métadonnées. Si vous utilisez Cinder, alors vous n'avez "
+"Si c'est un nœud de calcul que vous installez, alors, vous n'avez qu'à lancer "
+"le serveur API de métadonnées. Si vous utilisez Cinder, alors, vous n'avez "
 "pas besoin d'osapi_volume (vous ne pouvez pas lancer osapi_volume et l'api "
 "de cinder sur le même serveur : ils sont liés au même port)."
 
@@ -169,10 +169,9 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-#, fuzzy
 #| msgid "Ip address of your rabbitmq host:"
 msgid "IP address of your RabbitMQ host:"
-msgstr "Adresse IP de votre hôte rabbitmq :"
+msgstr "Adresse IP de l'hôte RabbitMQ :"
 
 #. Type: string
 #. Description
@@ -186,50 +185,48 @@ msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
 msgstr ""
+"Afin de pouvoir interagir avec d'autres composants d'OpenStack, ce paquet "
+"doit se connecter à un serveur centralisé RabbitMQ."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
 msgid "Please specify the IP address of that server."
-msgstr ""
+msgstr "Veuillez indiquer l'adresse IP de ce serveur."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#, fuzzy
 #| msgid "Username to connect to XenAPI:"
 msgid "Username for connection to the RabbitMQ server:"
-msgstr "Identifiant de connexion à XenAPI :"
+msgstr "Identifiant de connexion au serveur RabbitMQ :"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#, fuzzy
 #| msgid ""
 #| "Please enter the username used to connect to your XenAPI (XCP server)."
 msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
-"Veuillez indiquer l'identifiant à utiliser pour se connecter à XenAPI "
-"(serveur XCP)."
+"Veuillez indiquer l'identifiant à utiliser pour se connecter au serveur "
+"RabbitMQ."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#, fuzzy
 #| msgid "Password to connect to XenAPI:"
 msgid "Password for connection to the RabbitMQ server:"
-msgstr "Mot de passe de connexion à XenAPI :"
+msgstr "Mot de passe de connexion au serveur RabbitMQ :"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#, fuzzy
 #| msgid ""
 #| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
-"Veuillez indiquer le mot de passe à utiliser pour la connexion à XenAPI "
-"(serveur XCP)."
+"Veuillez indiquer le mot de passe à utiliser pour se connecter au serveur "
+"RabbitMQ :"
 
 #. Type: string
 #. Description
@@ -246,7 +243,7 @@ msgid ""
 "correctly."
 msgstr ""
 "Nova Compute Xen a besoin de connaître l'adresse du serveur qui exécute "
-"XenAPI. Vous pouvez indiquer l'adresse IP, ou un nom de domaine pleinement "
+"XenAPI. Vous pouvez indiquer l'adresse IP ou un nom de domaine pleinement "
 "qualifié s'il peut être résolu correctement."
 
 #. Type: string
@@ -329,7 +326,7 @@ msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using the Keystone auth token."
 msgstr ""
-"Veuillez noter que vous aurez besoin d'avoir un serveur Keystone fonctionnel "
+"Veuillez noter que vous aurez besoin d'un serveur Keystone fonctionnel "
 "sur lequel se connecter pour utiliser le jeton d'authentification Keystone."
 
 #. Type: string
@@ -346,8 +343,8 @@ msgid ""
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
 "Veuillez indiquer l'adresse IP du serveur Keystone, pour que l'api de Nova "
-"puisse contacter Keystone pour établir le service Nova ainsi que la création "
-"du point d'accès."
+"puisse contacter Keystone pour établir le service Nova et créer "
+"le point d'accès."
 
 #. Type: password
 #. Description
@@ -390,7 +387,7 @@ msgid ""
 "address."
 msgstr ""
 "Cette adresse IP doit être accessible depuis les clients qui utiliseront ce "
-"service, donc si vous installez un nuage public, elle devra être une adresse "
+"service, donc si vous installez un nuage public, ce devra être une adresse "
 "IP publique."
 
 #. Type: string
@@ -407,8 +404,8 @@ msgid ""
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
 msgstr ""
-"OpenStack supporte l'utilisation de zones disponibles, avec chaque région "
-"représentant un lieu. Veuillez entrer une zone que vous souhaitez utiliser "
+"OpenStack prend en charge l'utilisation de zones disponibles, avec chaque région "
+"représentant un lieu. Veuillez entrer la zone que vous souhaitez utiliser "
 "lors de l'enregistrement d'un point d'accès."
 
 #. Type: select
@@ -428,9 +425,9 @@ msgid ""
 "have support for."
 msgstr ""
 "Nova Console prend en charge 3 types de consoles. Une est spécifique à Xen, "
-"appelée XVP (Xen VNC Proxy), et l'autre démon prend en charge KVM. Alors que "
+"appelée XVP (Xen VNC Proxy) et l'autre démon prend en charge KVM. Alors que "
 "le protocole SPICE est théoriquement plus rapide que VNC, il requiert "
-"également l’emploi des sockets web dans votre navigateur, et c'est une "
+"également l’emploi des sockets web dans le navigateur, et c'est une "
 "fonctionnalité dont seuls les navigateurs les plus modernes disposent."
 
 #. Type: select

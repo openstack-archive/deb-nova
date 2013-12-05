@@ -1,6 +1,12 @@
-nova (2013.2-3) UNRELEASED; urgency=low
+nova (2013.2-3) unstable; urgency=high
 
   * Moved python-mysqldb from Recommends to Depends in python-nova.
+  * CVE-2013-4463 & CVE-2013-4469: ensure we don't boot oversized images,
+    applied upstream patch (Closes: #728605).
+  * Update of some debconf translations, with warm thanks to:
+    - French, Julien Patriarca <leatherface@debian.org> (Closes: #728765).
+    - Russian, Yuri Kozlov <yuray@komyakino.ru> (Closes: #729711).
+    - German, Chris Leick <c.leick@vollbio.de> (Closes: #730453).
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 26 Nov 2013 00:13:07 +0800
 

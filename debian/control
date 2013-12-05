@@ -677,7 +677,7 @@ Description: Openstack Compute - baremetal virt
 Package: nova-consoleproxy
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Provides: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy, nova-ajax-console-proxy
+Provides: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy, nova-ajax-console-proxy, nova-spiceproxy
 Conflicts: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy
 Replaces: nova-novncproxy, nova-spicehtml5proxy, nova-xvpvncproxy
 Depends: debconf,
