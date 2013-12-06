@@ -1,3 +1,12 @@
+nova (2013.2-4) UNRELEASED; urgency=low
+
+  * Added | cut -d" " -f1 when searching for the default gateway interface,
+    in the nova-common.config script that tries to guess the "my_ip" address,
+    just in case there's more than one interface in use (in which case it may
+    fail in non-interactive mode).
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 06 Dec 2013 15:35:56 +0800
+
 nova (2013.2-3) unstable; urgency=high
 
   * Moved python-mysqldb from Recommends to Depends in python-nova.
