@@ -27,12 +27,13 @@ CONF.import_opt('compute_manager', 'nova.service')
 CONF.import_opt('compute_driver', 'nova.virt.driver')
 
 
-class ComputeXenTestCase(stubs.XenAPITestBase):
+class ComputeXenTestCase(stubs.XenAPITestBaseNoDB):
     def setUp(self):
         super(ComputeXenTestCase, self).setUp()
-        self.flags(compute_driver='xenapi.XenAPIDriver',
-                xenapi_connection_url='test_url',
-                xenapi_connection_password='test_pass')
+        self.flags(compute_driver='xenapi.XenAPIDriver')
+        self.flags(connection_url='test_url',
+                   connection_password='test_pass',
+                   group='xenserver')
 
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         self.compute = importutils.import_object(CONF.compute_manager)
@@ -50,7 +51,7 @@ class ComputeXenTestCase(stubs.XenAPITestBase):
         self.mox.StubOutWithMock(self.compute, '_sync_instance_power_state')
 
         instance_obj.InstanceList.get_by_host(ctxt,
-                self.compute.host).AndReturn(instance_list)
+                self.compute.host, use_slave=True).AndReturn(instance_list)
         self.compute.driver.get_num_instances().AndReturn(1)
         vm_utils.lookup(self.compute.driver._session, instance['name'],
                 False).AndReturn(None)

@@ -21,8 +21,8 @@ import re
 from oslo.config import cfg
 
 from nova import context as nova_context
-from nova.db import api as nova_db_api
 from nova import exception
+from nova import network
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
@@ -51,7 +51,7 @@ CONF.register_opts(opts, baremetal_group)
 
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('use_ipv6', 'nova.netconf')
-CONF.import_opt('libvirt_volume_drivers', 'nova.virt.libvirt.driver')
+CONF.import_opt('volume_drivers', 'nova.virt.libvirt.driver', group='libvirt')
 
 LOG = logging.getLogger(__name__)
 
@@ -174,6 +174,13 @@ def _get_iqn(instance_name, mountpoint):
     return iqn
 
 
+def _get_fixed_ips(instance):
+    context = nova_context.get_admin_context()
+    nw_info = network.API().get_instance_nw_info(context, instance)
+    ips = nw_info.fixed_ips()
+    return ips
+
+
 class VolumeDriver(object):
 
     def __init__(self, virtapi):
@@ -201,12 +208,12 @@ class VolumeDriver(object):
 
 
 class LibvirtVolumeDriver(VolumeDriver):
-    """The VolumeDriver deligates to nova.virt.libvirt.volume."""
+    """The VolumeDriver delegates to nova.virt.libvirt.volume."""
 
     def __init__(self, virtapi):
         super(LibvirtVolumeDriver, self).__init__(virtapi)
         self.volume_drivers = {}
-        for driver_str in CONF.libvirt_volume_drivers:
+        for driver_str in CONF.libvirt.volume_drivers:
             driver_type, _sep, driver = driver_str.partition('=')
             driver_class = importutils.import_class(driver)
             self.volume_drivers[driver_type] = driver_class(self)
@@ -221,8 +228,7 @@ class LibvirtVolumeDriver(VolumeDriver):
         return method(connection_info, *args, **kwargs)
 
     def attach_volume(self, connection_info, instance, mountpoint):
-        ctx = nova_context.get_admin_context()
-        fixed_ips = nova_db_api.fixed_ip_get_by_instance(ctx, instance['uuid'])
+        fixed_ips = _get_fixed_ips(instance)
         if not fixed_ips:
             if not CONF.baremetal.use_unsafe_iscsi:
                 raise exception.NovaException(_(
@@ -269,3 +275,9 @@ class LibvirtVolumeDriver(VolumeDriver):
         Return all block devices in use on this node.
         """
         return _list_backingstore_path()
+
+    def get_hypervisor_version(self):
+        """
+        A dummy method for LibvirtBaseVolumeDriver.connect_volume.
+        """
+        return 1

@@ -13,6 +13,7 @@
 #    under the License.
 
 
+import calendar
 import datetime
 import webob.exc
 
@@ -124,6 +125,11 @@ def fake_utcnow():
     return datetime.datetime(2012, 10, 29, 13, 42, 11)
 
 
+def fake_utcnow_ts():
+    d = fake_utcnow()
+    return calendar.timegm(d.utctimetuple())
+
+
 class ServicesTest(test.TestCase):
 
     def setUp(self):
@@ -136,6 +142,7 @@ class ServicesTest(test.TestCase):
         self.stubs.Set(self.controller.host_api, "service_get_all",
                        fake_host_api_service_get_all)
         self.stubs.Set(timeutils, "utcnow", fake_utcnow)
+        self.stubs.Set(timeutils, "utcnow_ts", fake_utcnow_ts)
         self.stubs.Set(db, "service_get_by_args",
                        fake_service_get_by_host_binary)
         self.stubs.Set(db, "service_update", fake_service_update)
@@ -327,7 +334,7 @@ class ServicesTest(test.TestCase):
 
     def test_services_enable(self):
         def _service_update(context, service_id, values):
-            self.assertEqual(values['disabled_reason'], None)
+            self.assertIsNone(values['disabled_reason'])
             return dict(test_service.fake_service, **values)
 
         self.stubs.Set(db, "service_update", _service_update)
@@ -337,7 +344,7 @@ class ServicesTest(test.TestCase):
 
         res_dict = self.controller.update(req, "enable", body)
         self.assertEqual(res_dict['service']['status'], 'enabled')
-        self.assertFalse('disabled_reason' in res_dict['service'])
+        self.assertNotIn('disabled_reason', res_dict['service'])
 
     # This test is just to verify that the servicegroup API gets used when
     # calling this API.
@@ -355,7 +362,7 @@ class ServicesTest(test.TestCase):
         res_dict = self.controller.update(req, "disable", body)
 
         self.assertEqual(res_dict['service']['status'], 'disabled')
-        self.assertFalse('disabled_reason' in res_dict['service'])
+        self.assertNotIn('disabled_reason', res_dict['service'])
 
     def test_services_disable_log_reason(self):
         self.ext_mgr.extensions['os-extended-services'] = True

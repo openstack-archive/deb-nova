@@ -219,9 +219,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
         filter_set = ['no-mac-spoofing',
                       'no-ip-spoofing',
                       'no-arp-spoofing']
-        if CONF.use_ipv6:
-            self._define_filter(self.nova_no_nd_reflection_filter)
-            filter_set.append('nova-no-nd-reflection')
+        self._define_filter(self.nova_no_nd_reflection_filter)
+        filter_set.append('nova-no-nd-reflection')
         self._define_filter(self._filter_container('nova-nodhcp', filter_set))
         filter_set.append('allow-dhcp-server')
         self._define_filter(self._filter_container('nova-base', filter_set))
@@ -241,7 +240,7 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
         if callable(xml):
             xml = xml()
         # execute in a native thread and block current greenthread until done
-        if not CONF.libvirt_nonblocking:
+        if not CONF.libvirt.api_thread_pool:
             # NOTE(maoy): the original implementation is to have the API called
             # in the thread pool no matter what.
             tpool.execute(self._conn.nwfilterDefineXML, xml)

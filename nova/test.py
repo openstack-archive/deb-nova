@@ -35,9 +35,7 @@ import tempfile
 import uuid
 
 import fixtures
-import mox
 from oslo.config import cfg
-import stubout
 import testtools
 
 from nova import context
@@ -46,6 +44,7 @@ from nova.db import migration
 from nova.network import manager as network_manager
 from nova.objects import base as objects_base
 from nova.openstack.common.db.sqlalchemy import session
+from nova.openstack.common.fixture import moxstubout
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import paths
@@ -86,7 +85,7 @@ class Database(fixtures.Fixture):
         self.engine.dispose()
         conn = self.engine.connect()
         if sql_connection == "sqlite://":
-            if db_migrate.db_version() > db_migrate.INIT_VERSION:
+            if db_migrate.db_version() > db_migrate.db_initial_version():
                 return
         else:
             testdb = paths.state_path_rel(sqlite_db)
@@ -177,21 +176,6 @@ class ServiceFixture(fixtures.Fixture):
         self.addCleanup(self.service.kill)
 
 
-class MoxStubout(fixtures.Fixture):
-    """Deal with code around mox and stubout as a fixture."""
-
-    def setUp(self):
-        super(MoxStubout, self).setUp()
-        # emulate some of the mox stuff, we can't use the metaclass
-        # because it screws with our generators
-        self.mox = mox.Mox()
-        self.stubs = stubout.StubOutForTesting()
-        self.addCleanup(self.stubs.UnsetAll)
-        self.addCleanup(self.stubs.SmartUnsetAll)
-        self.addCleanup(self.mox.UnsetStubs)
-        self.addCleanup(self.mox.VerifyAll)
-
-
 class TranslationFixture(fixtures.Fixture):
     """Use gettext NullTranslation objects in tests."""
 
@@ -239,7 +223,8 @@ class TestCase(testtools.TestCase):
             stderr = self.useFixture(fixtures.StringStream('stderr')).stream
             self.useFixture(fixtures.MonkeyPatch('sys.stderr', stderr))
 
-        self.log_fixture = self.useFixture(fixtures.FakeLogger())
+        fs = '%(levelname)s [%(name)s] %(message)s'
+        self.log_fixture = self.useFixture(fixtures.FakeLogger(format=fs))
         self.useFixture(conf_fixture.ConfFixture(CONF))
 
         if self.USES_DB:
@@ -260,7 +245,7 @@ class TestCase(testtools.TestCase):
             objects_base.NovaObject._obj_classes)
         self.addCleanup(self._restore_obj_registry)
 
-        mox_fixture = self.useFixture(MoxStubout())
+        mox_fixture = self.useFixture(moxstubout.MoxStubout())
         self.mox = mox_fixture.mox
         self.stubs = mox_fixture.stubs
         self.addCleanup(self._clear_attrs)

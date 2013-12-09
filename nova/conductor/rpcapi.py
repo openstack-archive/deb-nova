@@ -110,12 +110,23 @@ class ConductorAPI(rpcclient.RpcProxy):
                   migration_get_unconfirmed_by_dest_compute
     1.57 - Remove migration_create()
     1.58 - Remove migration_get()
+
+        ... Havana supports message version 1.58.  So, any changes to existing
+        methods in 1.x after that point should be done such that they can
+        handle the version_cap being set to 1.58.
+
+    1.59 - Remove instance_info_cache_update()
+    1.60 - Remove aggregate_metadata_add() and aggregate_metadata_delete()
+    ...  - Remove security_group_get_by_instance() and
+           security_group_rule_get_by_security_group()
+    1.61 - Return deleted instance from instance_destroy()
     """
 
     BASE_RPC_API_VERSION = '1.0'
 
     VERSION_ALIASES = {
         'grizzly': '1.48',
+        'havana': '1.58',
     }
 
     def __init__(self):
@@ -189,22 +200,6 @@ class ConductorAPI(rpcclient.RpcProxy):
         cctxt = self.client.prepare(version='1.7')
         return cctxt.call(context, 'aggregate_get_by_host', host=host, key=key)
 
-    def aggregate_metadata_add(self, context, aggregate, metadata,
-                               set_delete=False):
-        aggregate_p = jsonutils.to_primitive(aggregate)
-        cctxt = self.client.prepare(version='1.7')
-        return cctxt.call(context, 'aggregate_metadata_add',
-                          aggregate=aggregate_p,
-                          metadata=metadata,
-                          set_delete=set_delete)
-
-    def aggregate_metadata_delete(self, context, aggregate, key):
-        aggregate_p = jsonutils.to_primitive(aggregate)
-        cctxt = self.client.prepare(version='1.7')
-        return cctxt.call(context, 'aggregate_metadata_delete',
-                          aggregate=aggregate_p,
-                          key=key)
-
     def aggregate_metadata_get_by_host(self, context, host, key):
         cctxt = self.client.prepare(version='1.42')
         return cctxt.call(context, 'aggregate_metadata_get_by_host',
@@ -228,18 +223,6 @@ class ConductorAPI(rpcclient.RpcProxy):
 
         cctxt = self.client.prepare(version=version)
         return cctxt.call(context, 'bw_usage_update', **msg_kwargs)
-
-    def security_group_get_by_instance(self, context, instance):
-        instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare(version='1.8')
-        return cctxt.call(context, 'security_group_get_by_instance',
-                          instance=instance_p)
-
-    def security_group_rule_get_by_security_group(self, context, secgroup):
-        secgroup_p = jsonutils.to_primitive(secgroup)
-        cctxt = self.client.prepare(version='1.8')
-        return cctxt.call(context, 'security_group_rule_get_by_security_group',
-                          secgroup=secgroup_p)
 
     def provider_fw_rule_get_all(self, context):
         cctxt = self.client.prepare(version='1.9')
@@ -303,8 +286,8 @@ class ConductorAPI(rpcclient.RpcProxy):
 
     def instance_destroy(self, context, instance):
         instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare(version='1.16')
-        cctxt.call(context, 'instance_destroy', instance=instance_p)
+        cctxt = self.client.prepare(version='1.61')
+        return cctxt.call(context, 'instance_destroy', instance=instance_p)
 
     def instance_info_cache_delete(self, context, instance):
         instance_p = jsonutils.to_primitive(instance)
@@ -359,12 +342,6 @@ class ConductorAPI(rpcclient.RpcProxy):
         values_p = jsonutils.to_primitive(values)
         cctxt = self.client.prepare(version='1.25')
         return cctxt.call(context, 'action_event_finish', values=values_p)
-
-    def instance_info_cache_update(self, context, instance, values):
-        instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare(version='1.26')
-        return cctxt.call(context, 'instance_info_cache_update',
-                          instance=instance_p, values=values)
 
     def service_create(self, context, values):
         cctxt = self.client.prepare(version='1.27')

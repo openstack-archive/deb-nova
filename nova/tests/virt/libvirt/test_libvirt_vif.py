@@ -14,12 +14,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
 from lxml import etree
+import mock
 from oslo.config import cfg
 
 from nova.compute import flavors
 from nova import exception
+from nova.network import linux_net
 from nova.network import model as network_model
+from nova.openstack.common import processutils
 from nova import test
 from nova.tests.virt.libvirt import fakelibvirt
 from nova import utils
@@ -164,11 +168,23 @@ class LibvirtVifTestCase(test.TestCase):
                                                   subnet_bridge_6],
                                          interface='eth0')
 
+    network_midonet = network_model.Network(id='network-id-xxx-yyy-zzz',
+                                            label=None,
+                                            bridge=None,
+                                            subnets=[subnet_bridge_4],
+                                            interface='eth0')
+
     vif_mlnx = network_model.VIF(id='vif-xxx-yyy-zzz',
                                  address='ca:fe:de:ad:be:ef',
                                  network=network_mlnx,
                                  type=network_model.VIF_TYPE_MLNX_DIRECT,
                                  devname='tap-xxx-yyy-zzz')
+
+    vif_midonet = network_model.VIF(id='vif-xxx-yyy-zzz',
+                                    address='ca:fe:de:ad:be:ef',
+                                    network=network_midonet,
+                                    type=network_model.VIF_TYPE_MIDONET,
+                                    devname='tap-xxx-yyy-zzz')
 
     instance = {
         'name': 'instance-name',
@@ -257,8 +273,8 @@ class LibvirtVifTestCase(test.TestCase):
     def _get_instance_xml(self, driver, vif, image_meta=None):
         default_inst_type = flavors.get_default_flavor()
         extra_specs = default_inst_type['extra_specs'].items()
-        quota_bandwith = self.bandwidth.items()
-        default_inst_type['extra_specs'] = dict(extra_specs + quota_bandwith)
+        quota_bandwidth = self.bandwidth.items()
+        default_inst_type['extra_specs'] = dict(extra_specs + quota_bandwidth)
         conf = self._get_conf()
         nic = driver.get_config(self.instance, vif, image_meta,
                                 default_inst_type)
@@ -302,16 +318,18 @@ class LibvirtVifTestCase(test.TestCase):
                              node.find("target").get("dev"))
 
     def test_model_novirtio(self):
-        self.flags(libvirt_use_virtio_for_bridges=False,
-                   libvirt_type='kvm')
+        self.flags(use_virtio_for_bridges=False,
+                   virt_type='kvm',
+                   group='libvirt')
 
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
         xml = self._get_instance_xml(d, self.vif_bridge)
         self._assertModel(xml)
 
     def test_model_kvm(self):
-        self.flags(libvirt_use_virtio_for_bridges=True,
-                   libvirt_type='kvm')
+        self.flags(use_virtio_for_bridges=True,
+                   virt_type='kvm',
+                   group='libvirt')
 
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
         xml = self._get_instance_xml(d, self.vif_bridge)
@@ -319,8 +337,9 @@ class LibvirtVifTestCase(test.TestCase):
         self._assertModel(xml, "virtio")
 
     def test_model_kvm_custom(self):
-        self.flags(libvirt_use_virtio_for_bridges=True,
-                   libvirt_type='kvm')
+        self.flags(use_virtio_for_bridges=True,
+                   virt_type='kvm',
+                   group='libvirt')
 
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
         image_meta = {'properties': {'hw_vif_model': 'e1000'}}
@@ -329,8 +348,9 @@ class LibvirtVifTestCase(test.TestCase):
         self._assertModel(xml, "e1000")
 
     def test_model_kvm_bogus(self):
-        self.flags(libvirt_use_virtio_for_bridges=True,
-                   libvirt_type='kvm')
+        self.flags(use_virtio_for_bridges=True,
+                   virt_type='kvm',
+                   group='libvirt')
 
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
         image_meta = {'properties': {'hw_vif_model': 'acme'}}
@@ -341,8 +361,9 @@ class LibvirtVifTestCase(test.TestCase):
                           image_meta)
 
     def test_model_qemu(self):
-        self.flags(libvirt_use_virtio_for_bridges=True,
-                   libvirt_type='qemu')
+        self.flags(use_virtio_for_bridges=True,
+                   virt_type='qemu',
+                   group='libvirt')
 
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
         xml = self._get_instance_xml(d, self.vif_bridge)
@@ -355,8 +376,9 @@ class LibvirtVifTestCase(test.TestCase):
         self._assertModel(xml, "virtio", "qemu")
 
     def test_model_xen(self):
-        self.flags(libvirt_use_virtio_for_bridges=True,
-                   libvirt_type='xen')
+        self.flags(use_virtio_for_bridges=True,
+                   virt_type='xen',
+                   group='libvirt')
 
         d = vif.LibvirtGenericVIFDriver(self._get_conn("xen:///system"))
         xml = self._get_instance_xml(d, self.vif_bridge)
@@ -375,25 +397,11 @@ class LibvirtVifTestCase(test.TestCase):
         self._assertTypeAndMacEquals(node, "bridge", "source", "bridge",
                                      self.vif_bridge, br_want, 1)
 
-    def test_bridge_driver(self):
-        d = vif.LibvirtBridgeDriver(self._get_conn())
-        self._check_bridge_driver(d,
-                                  self.vif_bridge,
-                                  self.vif_bridge['network']['bridge'])
-
     def test_generic_driver_bridge(self):
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
         self._check_bridge_driver(d,
                                   self.vif_bridge,
                                   self.vif_bridge['network']['bridge'])
-
-    def test_neutron_bridge_driver(self):
-        d = vif.NeutronLinuxBridgeVIFDriver(self._get_conn())
-        br_want = 'brq' + self.vif_bridge_neutron['network']['id']
-        br_want = br_want[:network_model.NIC_NAME_LEN]
-        self._check_bridge_driver(d,
-                                  self.vif_bridge_neutron,
-                                  br_want)
 
     def _check_ivs_ethernet_driver(self, d, vif, dev_prefix):
         self.flags(firewall_driver="nova.virt.firewall.NoopFirewallDriver")
@@ -402,7 +410,7 @@ class LibvirtVifTestCase(test.TestCase):
         self._assertTypeAndMacEquals(node, "ethernet", "target", "dev",
                                      self.vif_ivs, prefix=dev_prefix)
         script = node.find("script").get("path")
-        self.assertEquals(script, "")
+        self.assertEqual(script, "")
 
     def _check_ovs_ethernet_driver(self, d, vif, dev_prefix):
         self.flags(firewall_driver="nova.virt.firewall.NoopFirewallDriver")
@@ -411,13 +419,94 @@ class LibvirtVifTestCase(test.TestCase):
         self._assertTypeAndMacEquals(node, "ethernet", "target", "dev",
                                      self.vif_ovs, prefix=dev_prefix)
         script = node.find("script").get("path")
-        self.assertEquals(script, "")
+        self.assertEqual(script, "")
 
     def test_ovs_ethernet_driver(self):
         d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
         self._check_ovs_ethernet_driver(d,
                                         self.vif_ovs,
                                         "tap")
+
+    def test_unplug_ivs_ethernet(self):
+        d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
+        with mock.patch.object(linux_net, 'delete_ivs_vif_port') as delete:
+            delete.side_effect = processutils.ProcessExecutionError
+            d.unplug_ivs_ethernet(None, self.vif_ovs)
+
+    def test_unplug_ovs_hybrid(self):
+        calls = {
+            'device_exists': [mock.call('qbrvif-xxx-yyy'),
+                              mock.call('qvovif-xxx-yyy')],
+            'execute': [mock.call('brctl', 'delif', 'qbrvif-xxx-yyy',
+                                  'qvbvif-xxx-yyy', run_as_root=True),
+                        mock.call('ip', 'link', 'set',
+                                  'qbrvif-xxx-yyy', 'down', run_as_root=True),
+                        mock.call('brctl', 'delbr',
+                                  'qbrvif-xxx-yyy', run_as_root=True),
+                        mock.call('ovs-vsctl', 'del-port',
+                                  'br0', 'qvovif-xxx-yyy', run_as_root=True),
+                        mock.call('ip', 'link', 'delete',
+                                  'qvovif-xxx-yyy', run_as_root=True,
+                                  check_exit_code=[0, 2, 254])]
+        }
+        with contextlib.nested(
+                mock.patch.object(linux_net, 'device_exists',
+                                  return_value=True),
+                mock.patch.object(utils, 'execute'),
+                mock.patch.object(linux_net, 'delete_ivs_vif_port')
+        ) as (device_exists, execute, delete_ivs_vif_port):
+            d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
+            d.unplug_ovs_hybrid(None, self.vif_ovs)
+            device_exists.assert_has_calls(calls['device_exists'])
+            execute.assert_has_calls(calls['execute'])
+            delete_ivs_vif_port.assert_has_calls([])
+
+    def test_unplug_ovs_hybrid_bridge_does_not_exist(self):
+        calls = {
+            'device_exists': [mock.call('qbrvif-xxx-yyy'),
+                              mock.call('qvovif-xxx-yyy')],
+            'execute': [mock.call('ovs-vsctl', 'del-port', 'br0',
+                                  'qvovif-xxx-yyy', run_as_root=True)]
+        }
+        with contextlib.nested(
+                mock.patch.object(linux_net, 'device_exists',
+                                  return_value=False),
+                mock.patch.object(utils, 'execute'),
+                mock.patch.object(linux_net, 'delete_ivs_vif_port')
+        ) as (device_exists, execute, delete_ivs_vif_port):
+            d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
+            d.unplug_ovs_hybrid(None, self.vif_ovs)
+            device_exists.assert_has_calls(calls['device_exists'])
+            execute.assert_has_calls(calls['execute'])
+            delete_ivs_vif_port.assert_has_calls([])
+
+    def test_unplug_ivs_hybrid(self):
+        d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
+        with mock.patch.object(utils, 'execute') as execute:
+            execute.side_effect = processutils.ProcessExecutionError
+            d.unplug_ivs_hybrid(None, self.vif_ivs)
+
+    def test_unplug_iovisor(self):
+        d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
+        with mock.patch.object(utils, 'execute') as execute:
+            execute.side_effect = processutils.ProcessExecutionError
+            mynetwork = network_model.Network(id='network-id-xxx-yyy-zzz',
+                                              label='mylabel')
+            myvif = network_model.VIF(id='vif-xxx-yyy-zzz',
+                                      address='ca:fe:de:ad:be:ef',
+                                      network=mynetwork)
+            d.unplug_iovisor(None, myvif)
+
+    def test_plug_iovisor(self):
+        d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
+        with mock.patch.object(utils, 'execute') as execute:
+            execute.side_effect = processutils.ProcessExecutionError
+            instance = {
+                'name': 'instance-name',
+                'uuid': 'instance-uuid',
+                'project_id': 'myproject'
+            }
+            d.plug_iovisor(instance, self.vif_ivs)
 
     def test_ivs_ethernet_driver(self):
         d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
@@ -449,13 +538,6 @@ class LibvirtVifTestCase(test.TestCase):
 
         self.assertTrue(iface_id_found)
 
-    def test_ovs_virtualport_driver(self):
-        d = vif.LibvirtOpenVswitchVirtualPortDriver(self._get_conn(ver=9011))
-        want_iface_id = 'vif-xxx-yyy-zzz'
-        self._check_ovs_virtualport_driver(d,
-                                           self.vif_ovs_legacy,
-                                           want_iface_id)
-
     def test_generic_ovs_virtualport_driver(self):
         d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9011))
         want_iface_id = self.vif_ovs['ovs_interfaceid']
@@ -476,14 +558,6 @@ class LibvirtVifTestCase(test.TestCase):
         node = self._get_node(xml)
         self._assertTypeAndMacEquals(node, "bridge", "source", "bridge",
                                      vif, br_want, 1)
-
-    def test_quantum_hybrid_driver(self):
-        br_want = "qbr" + self.vif_ovs['id']
-        br_want = br_want[:network_model.NIC_NAME_LEN]
-        d = vif.LibvirtHybridOVSBridgeDriver(self._get_conn())
-        self._check_neutron_hybrid_driver(d,
-                                          self.vif_ovs_legacy,
-                                          br_want)
 
     def test_generic_hybrid_driver(self):
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
@@ -513,6 +587,15 @@ class LibvirtVifTestCase(test.TestCase):
                                "mode", "passthrough")
         self._assertMacEquals(node, self.vif_mlnx)
         self._assertModel(xml, "virtio")
+
+    def test_midonet_ethernet_vif_driver(self):
+        d = vif.LibvirtGenericVIFDriver(self._get_conn())
+        self.flags(firewall_driver="nova.virt.firewall.NoopFirewallDriver")
+        br_want = self.vif_midonet['devname']
+        xml = self._get_instance_xml(d, self.vif_midonet)
+        node = self._get_node(xml)
+        self._assertTypeAndMacEquals(node, "ethernet", "target", "dev",
+                                     self.vif_midonet, br_want)
 
     def test_generic_8021qbh_driver(self):
         d = vif.LibvirtGenericVIFDriver(self._get_conn())

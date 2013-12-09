@@ -129,11 +129,6 @@ class FakeDriver(driver.ComputeDriver):
         fake_instance = FakeInstance(name, state)
         self.instances[name] = fake_instance
 
-    def live_snapshot(self, context, instance, name, update_task_state):
-        if instance['name'] not in self.instances:
-            raise exception.InstanceNotRunning(instance_id=instance['uuid'])
-        update_task_state(task_state=task_states.IMAGE_UPLOADING)
-
     def snapshot(self, context, instance, name, update_task_state):
         if instance['name'] not in self.instances:
             raise exception.InstanceNotRunning(instance_id=instance['uuid'])
@@ -168,11 +163,11 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info,
+                                   flavor, network_info,
                                    block_device_info=None):
         pass
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
         pass
 
@@ -203,11 +198,11 @@ class FakeDriver(driver.ComputeDriver):
     def suspend(self, instance):
         pass
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         pass
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True, context=None):
+    def destroy(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
         key = instance['name']
         if key in self.instances:
             del self.instances[key]
@@ -296,6 +291,14 @@ class FakeDriver(driver.ComputeDriver):
         volusage = []
         return volusage
 
+    def get_host_cpu_stats(self):
+        stats = {'kernel': 5664160000000L,
+                'idle': 1592705190000000L,
+                'user': 26728850000000L,
+                'iowait': 6121490000000L}
+        stats['frequency'] = 800
+        return stats
+
     def block_stats(self, instance_name, disk_id):
         return [0L, 0L, 0L, 0L, None]
 
@@ -310,7 +313,7 @@ class FakeDriver(driver.ComputeDriver):
                 'host': 'fakevncconsole.com',
                 'port': 6969}
 
-    def get_spice_console(self, instance):
+    def get_spice_console(self, context, instance):
         return {'internal_access_path': 'FAKE',
                 'host': 'fakespiceconsole.com',
                 'port': 6969,
@@ -438,12 +441,6 @@ class FakeDriver(driver.ComputeDriver):
     def get_disk_available_least(self):
         pass
 
-    def add_to_aggregate(self, context, aggregate, host, **kwargs):
-        pass
-
-    def remove_from_aggregate(self, context, aggregate, host, **kwargs):
-        pass
-
     def get_volume_connector(self, instance):
         return {'ip': '127.0.0.1', 'initiator': 'fake', 'host': 'fakehost'}
 
@@ -463,25 +460,6 @@ class FakeVirtAPI(virtapi.VirtAPI):
                                                    instance_uuid,
                                                    updates)
 
-    def aggregate_get_by_host(self, context, host, key=None):
-        return db.aggregate_get_by_host(context, host, key=key)
-
-    def aggregate_metadata_add(self, context, aggregate, metadata,
-                               set_delete=False):
-        return db.aggregate_metadata_add(context, aggregate['id'], metadata,
-                                         set_delete=set_delete)
-
-    def aggregate_metadata_delete(self, context, aggregate, key):
-        return db.aggregate_metadata_delete(context, aggregate['id'], key)
-
-    def security_group_get_by_instance(self, context, instance):
-        return db.security_group_get_by_instance(context, instance['uuid'])
-
-    def security_group_rule_get_by_security_group(self, context,
-                                                  security_group):
-        return db.security_group_rule_get_by_security_group(
-            context, security_group['id'])
-
     def provider_fw_rule_get_all(self, context):
         return db.provider_fw_rule_get_all(context)
 
@@ -489,8 +467,8 @@ class FakeVirtAPI(virtapi.VirtAPI):
         return db.agent_build_get_by_triple(context,
                                             hypervisor, os, architecture)
 
-    def instance_type_get(self, context, instance_type_id):
-        return db.instance_type_get(context, instance_type_id)
+    def flavor_get(self, context, flavor_id):
+        return db.flavor_get(context, flavor_id)
 
     def block_device_mapping_get_all_by_instance(self, context, instance,
                                                  legacy=True):

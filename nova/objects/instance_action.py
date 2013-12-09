@@ -15,7 +15,7 @@
 from nova.compute import utils as compute_utils
 from nova import db
 from nova.objects import base
-from nova.objects import utils
+from nova.objects import fields
 
 
 class InstanceAction(base.NovaPersistentObject, base.NovaObject):
@@ -24,21 +24,16 @@ class InstanceAction(base.NovaPersistentObject, base.NovaObject):
     VERSION = '1.1'
 
     fields = {
-        'id': int,
-        'action': utils.str_or_none,
-        'instance_uuid': utils.str_or_none,
-        'request_id': utils.str_or_none,
-        'user_id': utils.str_or_none,
-        'project_id': utils.str_or_none,
-        'start_time': utils.datetime_or_none,
-        'finish_time': utils.datetime_or_none,
-        'message': utils.str_or_none,
+        'id': fields.IntegerField(),
+        'action': fields.StringField(nullable=True),
+        'instance_uuid': fields.UUIDField(nullable=True),
+        'request_id': fields.StringField(nullable=True),
+        'user_id': fields.StringField(nullable=True),
+        'project_id': fields.StringField(nullable=True),
+        'start_time': fields.DateTimeField(nullable=True),
+        'finish_time': fields.DateTimeField(nullable=True),
+        'message': fields.StringField(nullable=True),
         }
-
-    _attr_start_time_to_primitive = utils.dt_serializer('start_time')
-    _attr_finish_time_to_primitive = utils.dt_serializer('finish_time')
-    _attr_start_time_from_primitive = utils.dt_deserializer
-    _attr_finish_time_from_primitive = utils.dt_deserializer
 
     @staticmethod
     def _from_db_object(context, action, db_action):
@@ -82,6 +77,10 @@ class InstanceAction(base.NovaPersistentObject, base.NovaObject):
 
 
 class InstanceActionList(base.ObjectListBase, base.NovaObject):
+    fields = {
+        'objects': fields.ListOfObjectsField('InstanceAction'),
+        }
+
     @base.remotable_classmethod
     def get_by_instance_uuid(cls, context, instance_uuid):
         db_actions = db.actions_get(context, instance_uuid)
@@ -90,19 +89,14 @@ class InstanceActionList(base.ObjectListBase, base.NovaObject):
 
 class InstanceActionEvent(base.NovaPersistentObject, base.NovaObject):
     fields = {
-        'id': int,
-        'event': utils.str_or_none,
-        'action_id': utils.int_or_none,
-        'start_time': utils.datetime_or_none,
-        'finish_time': utils.datetime_or_none,
-        'result': utils.str_or_none,
-        'traceback': utils.str_or_none,
+        'id': fields.IntegerField(),
+        'event': fields.StringField(nullable=True),
+        'action_id': fields.IntegerField(nullable=True),
+        'start_time': fields.DateTimeField(nullable=True),
+        'finish_time': fields.DateTimeField(nullable=True),
+        'result': fields.StringField(nullable=True),
+        'traceback': fields.StringField(nullable=True),
         }
-
-    _attr_start_time_to_primitive = utils.dt_serializer('start_time')
-    _attr_finish_time_to_primitive = utils.dt_serializer('finish_time')
-    _attr_start_time_from_primitive = utils.dt_deserializer
-    _attr_finish_time_from_primitive = utils.dt_deserializer
 
     @staticmethod
     def _from_db_object(context, event, db_event):
@@ -160,6 +154,10 @@ class InstanceActionEvent(base.NovaPersistentObject, base.NovaObject):
 
 
 class InstanceActionEventList(base.ObjectListBase, base.NovaObject):
+    fields = {
+        'objects': fields.ListOfObjectsField('InstanceActionEvent'),
+        }
+
     @base.remotable_classmethod
     def get_by_action(cls, context, action_id):
         db_events = db.action_events_get(context, action_id)

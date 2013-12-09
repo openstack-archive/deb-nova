@@ -21,11 +21,12 @@
 
 import calendar
 import inspect
-import netaddr
 import os
 import re
 
+import netaddr
 from oslo.config import cfg
+import six
 
 from nova import db
 from nova import exception
@@ -53,8 +54,8 @@ linux_net_opts = [
     cfg.StrOpt('public_interface',
                default='eth0',
                help='Interface for public IP addresses'),
-    cfg.StrOpt('network_device_mtu',
-               help='MTU setting for vlan'),
+    cfg.IntOpt('network_device_mtu',
+               help='MTU setting for network interface'),
     cfg.StrOpt('dhcpbridge',
                default=paths.bindir_def('nova-dhcpbridge'),
                help='location of nova-dhcpbridge'),
@@ -292,7 +293,7 @@ class IptablesTable(object):
 
     def remove_rules_regex(self, regex):
         """Remove all rules matching regex."""
-        if isinstance(regex, basestring):
+        if isinstance(regex, six.string_types):
             regex = re.compile(regex)
         num_rules = len(self.rules)
         self.rules = filter(lambda r: not regex.match(str(r)), self.rules)
@@ -1192,9 +1193,11 @@ def _execute(*cmd, **kwargs):
 
 def device_exists(device):
     """Check if ethernet device exists."""
-    (_out, err) = _execute('ip', 'link', 'show', 'dev', device,
-                           check_exit_code=False, run_as_root=True)
-    return not err
+    try:
+        _execute('ip', 'link', 'show', 'dev', device, run_as_root=True)
+    except processutils.ProcessExecutionError:
+        return False
+    return True
 
 
 def _dhcp_file(dev, kind):

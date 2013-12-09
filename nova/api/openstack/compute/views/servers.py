@@ -47,7 +47,7 @@ class ViewBuilder(common.ViewBuilder):
     )
 
     _fault_statuses = (
-        "ERROR",
+        "ERROR", "DELETED"
     )
 
     def __init__(self):
@@ -88,7 +88,7 @@ class ViewBuilder(common.ViewBuilder):
             "server": {
                 "id": instance["uuid"],
                 "name": instance["display_name"],
-                "status": self._get_vm_state(instance),
+                "status": self._get_vm_status(instance),
                 "tenant_id": instance.get("project_id") or "",
                 "user_id": instance.get("user_id") or "",
                 "metadata": self._get_metadata(instance),
@@ -146,7 +146,10 @@ class ViewBuilder(common.ViewBuilder):
             return utils.instance_meta(instance)
 
     @staticmethod
-    def _get_vm_state(instance):
+    def _get_vm_status(instance):
+        # If the instance is deleted the vm and task states don't really matter
+        if instance.get("deleted"):
+            return "DELETED"
         return common.status_from_state(instance.get("vm_state"),
                                         instance.get("task_state"))
 
@@ -234,13 +237,11 @@ class ViewBuilderV3(ViewBuilder):
 
     def show(self, request, instance):
         """Detailed view of a single instance."""
-        ip_v4 = instance.get('access_ip_v4')
-        ip_v6 = instance.get('access_ip_v6')
         server = {
             "server": {
                 "id": instance["uuid"],
                 "name": instance["display_name"],
-                "status": self._get_vm_state(instance),
+                "status": self._get_vm_status(instance),
                 "tenant_id": instance.get("project_id") or "",
                 "user_id": instance.get("user_id") or "",
                 "metadata": self._get_metadata(instance),
@@ -250,8 +251,6 @@ class ViewBuilderV3(ViewBuilder):
                 "created": timeutils.isotime(instance["created_at"]),
                 "updated": timeutils.isotime(instance["updated_at"]),
                 "addresses": self._get_addresses(request, instance),
-                "access_ip_v4": str(ip_v4) if ip_v4 is not None else '',
-                "access_ip_v6": str(ip_v6) if ip_v6 is not None else '',
                 "links": self._get_links(request,
                                          instance["uuid"],
                                          self._collection_name),

@@ -28,7 +28,8 @@ from nova.openstack.common.gettextutils import _
 
 class ExtraSpecsTemplate(xmlutil.TemplateBuilder):
     def construct(self):
-        return xmlutil.MasterTemplate(xmlutil.make_flat_dict('extra_specs'), 1)
+        extra_specs_dict = xmlutil.make_flat_dict('extra_specs', colon_ns=True)
+        return xmlutil.MasterTemplate(extra_specs_dict, 1)
 
 
 class ExtraSpecTemplate(xmlutil.TemplateBuilder):
@@ -50,7 +51,7 @@ class FlavorExtraSpecsController(object):
                                                          'v3:' + self.ALIAS)
 
     def _get_extra_specs(self, context, flavor_id):
-        extra_specs = db.instance_type_extra_specs_get(context, flavor_id)
+        extra_specs = db.flavor_extra_specs_get(context, flavor_id)
         return dict(extra_specs=extra_specs)
 
     def _check_body(self, body):
@@ -75,7 +76,7 @@ class FlavorExtraSpecsController(object):
         if not specs or type(specs) is not dict:
             raise webob.exc.HTTPBadRequest(_('No or bad extra_specs provided'))
         try:
-            db.instance_type_extra_specs_update_or_create(context, flavor_id,
+            db.flavor_extra_specs_update_or_create(context, flavor_id,
                                                           specs)
         except db_exc.DBDuplicateEntry as error:
             raise webob.exc.HTTPBadRequest(explanation=error.format_message())
@@ -93,7 +94,7 @@ class FlavorExtraSpecsController(object):
             expl = _('Request body contains too many items')
             raise webob.exc.HTTPBadRequest(explanation=expl)
         try:
-            db.instance_type_extra_specs_update_or_create(context, flavor_id,
+            db.flavor_extra_specs_update_or_create(context, flavor_id,
                                                           body)
         except db_exc.DBDuplicateEntry as error:
             raise webob.exc.HTTPBadRequest(explanation=error.format_message())
@@ -105,10 +106,10 @@ class FlavorExtraSpecsController(object):
         context = req.environ['nova.context']
         self.authorize(context, action='show')
         try:
-            extra_spec = db.instance_type_extra_specs_get_item(context,
+            extra_spec = db.flavor_extra_specs_get_item(context,
                                                                flavor_id, id)
             return extra_spec
-        except exception.InstanceTypeExtraSpecsNotFound as e:
+        except exception.FlavorExtraSpecsNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
     @wsgi.response(204)
@@ -118,8 +119,8 @@ class FlavorExtraSpecsController(object):
         context = req.environ['nova.context']
         self.authorize(context, action='delete')
         try:
-            db.instance_type_extra_specs_delete(context, flavor_id, id)
-        except exception.InstanceTypeExtraSpecsNotFound as e:
+            db.flavor_extra_specs_delete(context, flavor_id, id)
+        except exception.FlavorExtraSpecsNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
 

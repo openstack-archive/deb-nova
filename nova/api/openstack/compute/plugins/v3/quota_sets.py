@@ -70,7 +70,7 @@ class QuotaDetailTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class QuotaSetsController(object):
+class QuotaSetsController(wsgi.Controller):
 
     def _format_quota_set(self, project_id, quota_set):
         """Convert the quota object to a result dict."""
@@ -142,7 +142,12 @@ class QuotaSetsController(object):
         bad_keys = []
         force_update = False
 
-        for key, value in body['quota_set'].items():
+        if not self.is_valid_body(body, 'quota_set'):
+            msg = _("quota_set not specified")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+        quota_set = body['quota_set']
+
+        for key, value in quota_set.items():
             if key not in QUOTAS and key != 'force':
                 bad_keys.append(key)
                 continue
@@ -152,8 +157,9 @@ class QuotaSetsController(object):
                 try:
                     value = int(value)
                 except (ValueError, TypeError):
-                    msg = _("Quota '%(value)s' for %(key)s should be "
-                            "integer.") % {'value': value, 'key': key}
+                    msg = _("Quota value for key '%(key)s' should be an "
+                            "integer.  It is actually type '%(vtype)s'.")
+                    msg = msg % {'key': key, 'vtype': type(value)}
                     LOG.warn(msg)
                     raise webob.exc.HTTPBadRequest(explanation=msg)
 
@@ -193,7 +199,7 @@ class QuotaSetsController(object):
                                'value': value})
                     if quota_used > value:
                         msg = (_("Quota value %(value)s for %(key)s are "
-                                "greater than already used and reserved "
+                                "less than already used and reserved "
                                 "%(quota_used)s") %
                                 {'value': value, 'key': key,
                                  'quota_used': quota_used})

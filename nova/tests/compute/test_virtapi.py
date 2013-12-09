@@ -45,25 +45,6 @@ class VirtAPIBaseTest(test.NoDBTestCase, test.APICoverage):
         self.assertExpected('instance_update', 'fake-uuid',
                             dict(host='foohost'))
 
-    def test_aggregate_get_by_host(self):
-        self.assertExpected('aggregate_get_by_host', 'fake-host', key=None)
-
-    def test_aggregate_metadata_add(self):
-        self.assertExpected('aggregate_metadata_add', {'id': 'fake'},
-                            {'foo': 'bar'}, set_delete=False)
-
-    def test_aggregate_metadata_delete(self):
-        self.assertExpected('aggregate_metadata_delete', {'id': 'fake'},
-                            'foo')
-
-    def test_security_group_get_by_instance(self):
-        self.assertExpected('security_group_get_by_instance',
-                            {'uuid': 'fake-id'})
-
-    def test_security_group_rule_get_by_security_group(self):
-        self.assertExpected('security_group_rule_get_by_security_group',
-                            {'id': 'fake-id'})
-
     def test_provider_fw_rule_get_all(self):
         self.assertExpected('provider_fw_rule_get_all')
 
@@ -71,9 +52,8 @@ class VirtAPIBaseTest(test.NoDBTestCase, test.APICoverage):
         self.assertExpected('agent_build_get_by_triple',
                             'fake-hv', 'gnu/hurd', 'fake-arch')
 
-    def test_instance_type_get(self):
-        self.assertExpected('instance_type_get',
-                            'fake-instance-type')
+    def test_flavor_get(self):
+        self.assertExpected('flavor_get', 'fake-flavor')
 
     def test_block_device_mapping_get_all_by_instance(self):
         self.assertExpected('block_device_mapping_get_all_by_instance',
@@ -111,7 +91,7 @@ class FakeVirtAPITest(VirtAPIBaseTest):
         else:
             e_args = args
 
-        if method in ('block_device_mapping_get_all_by_instance'):
+        if method == 'block_device_mapping_get_all_by_instance':
             e_kwargs = {}
         else:
             e_kwargs = kwargs
@@ -143,8 +123,14 @@ class ComputeVirtAPITest(VirtAPIBaseTest):
         self.virtapi = compute_manager.ComputeVirtAPI(self.compute)
 
     def assertExpected(self, method, *args, **kwargs):
-        self.mox.StubOutWithMock(self.compute.conductor_api, method)
-        getattr(self.compute.conductor_api, method)(
+        if method == 'flavor_get':
+            # TODO(mriedem): Remove this when conductor_api.instance_type_get
+            # is renamed to flavor_get.
+            cond_api_method = 'instance_type_get'
+        else:
+            cond_api_method = method
+        self.mox.StubOutWithMock(self.compute.conductor_api, cond_api_method)
+        getattr(self.compute.conductor_api, cond_api_method)(
             self.context, *args, **kwargs).AndReturn('it worked')
         self.mox.ReplayAll()
         result = getattr(self.virtapi, method)(self.context, *args, **kwargs)

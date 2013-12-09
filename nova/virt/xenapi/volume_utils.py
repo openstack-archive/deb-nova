@@ -27,6 +27,7 @@ from oslo.config import cfg
 
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova import utils
 
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
@@ -299,14 +300,26 @@ def _get_volume_id(path_or_id):
 def _get_target_host(iscsi_string):
     """Retrieve target host."""
     if iscsi_string:
-        return iscsi_string[0:iscsi_string.find(':')]
-    elif iscsi_string is None or CONF.target_host:
-        return CONF.target_host
+        host = iscsi_string.split(':')[0]
+        if len(host) > 0:
+            return host
+    return CONF.xenserver.target_host
 
 
 def _get_target_port(iscsi_string):
     """Retrieve target port."""
-    if iscsi_string:
-        return iscsi_string[iscsi_string.find(':') + 1:]
-    elif iscsi_string is None or CONF.target_port:
-        return CONF.target_port
+    if iscsi_string and ':' in iscsi_string:
+        return iscsi_string.split(':')[1]
+
+    return CONF.xenserver.target_port
+
+
+def vbd_plug(session, vbd_ref, vm_ref):
+    @utils.synchronized('xenapi-vbd-plug-' + vm_ref)
+    def synchronized_plug():
+        session.call_xenapi("VBD.plug", vbd_ref)
+
+    # NOTE(johngarbutt) we need to ensure there is only ever one VBD.plug
+    # happening at once per VM due to a bug in XenServer 6.1 and greater
+    # where there is a race condition in VBD.plug that causes tapdisk to hang
+    synchronized_plug()

@@ -14,7 +14,7 @@
 
 from nova import db
 from nova.objects import base
-from nova.objects import utils as obj_utils
+from nova.objects import fields
 
 
 class InstanceFault(base.NovaPersistentObject, base.NovaObject):
@@ -23,12 +23,12 @@ class InstanceFault(base.NovaPersistentObject, base.NovaObject):
     VERSION = '1.1'
 
     fields = {
-        'id': int,
-        'instance_uuid': obj_utils.str_value,
-        'code': int,
-        'message': obj_utils.str_or_none,
-        'details': obj_utils.str_or_none,
-        'host': obj_utils.str_or_none,
+        'id': fields.IntegerField(),
+        'instance_uuid': fields.UUIDField(),
+        'code': fields.IntegerField(),
+        'message': fields.StringField(nullable=True),
+        'details': fields.StringField(nullable=True),
+        'host': fields.StringField(nullable=True),
         }
 
     @staticmethod
@@ -58,6 +58,10 @@ def _make_fault_list(faultlist, db_faultlist):
 
 
 class InstanceFaultList(base.ObjectListBase, base.NovaObject):
+    fields = {
+        'objects': fields.ListOfObjectsField('InstanceFault'),
+        }
+
     @base.remotable_classmethod
     def get_by_instance_uuids(cls, context, instance_uuids):
         db_faults = db.instance_fault_get_by_instance_uuids(context,

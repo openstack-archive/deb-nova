@@ -14,6 +14,8 @@
 
 """Handles database requests from other nova services."""
 
+import six
+
 from nova.api.ec2 import ec2utils
 from nova import block_device
 from nova.cells import rpcapi as cells_rpcapi
@@ -74,7 +76,7 @@ class ConductorManager(manager.Manager):
     namespace.  See the ComputeTaskManager class for details.
     """
 
-    RPC_API_VERSION = '1.58'
+    RPC_API_VERSION = '1.61'
 
     def __init__(self, *args, **kwargs):
         super(ConductorManager, self).__init__(service_name='conductor',
@@ -124,7 +126,7 @@ class ConductorManager(manager.Manager):
                             "'%(key)s' on %(instance_uuid)s"),
                           {'key': key, 'instance_uuid': instance_uuid})
                 raise KeyError("unexpected update keyword '%s'" % key)
-            if key in datetime_fields and isinstance(value, basestring):
+            if key in datetime_fields and isinstance(value, six.string_types):
                 updates[key] = timeutils.parse_strtime(value)
 
         old_ref, instance_ref = self.db.instance_update_and_get_original(
@@ -218,6 +220,8 @@ class ConductorManager(manager.Manager):
                                                    host, key)
         return jsonutils.to_primitive(aggregates)
 
+    # NOTE(danms): This method is now deprecated and can be removed in
+    # version 2.0 of the RPC API
     def aggregate_metadata_add(self, context, aggregate, metadata,
                                set_delete=False):
         new_metadata = self.db.aggregate_metadata_add(context.elevated(),
@@ -225,6 +229,8 @@ class ConductorManager(manager.Manager):
                                                       metadata, set_delete)
         return jsonutils.to_primitive(new_metadata)
 
+    # NOTE(danms): This method is now deprecated and can be removed in
+    # version 2.0 of the RPC API
     @rpc_common.client_exceptions(exception.AggregateMetadataNotFound)
     def aggregate_metadata_delete(self, context, aggregate, key):
         self.db.aggregate_metadata_delete(context.elevated(),
@@ -253,11 +259,13 @@ class ConductorManager(manager.Manager):
     def get_backdoor_port(self, context):
         return self.backdoor_port
 
+    # NOTE(danms): This method can be removed in version 2.0 of this API.
     def security_group_get_by_instance(self, context, instance):
         group = self.db.security_group_get_by_instance(context,
                                                        instance['uuid'])
         return jsonutils.to_primitive(group)
 
+    # NOTE(danms): This method can be removed in version 2.0 of this API.
     def security_group_rule_get_by_security_group(self, context, secgroup):
         rules = self.db.security_group_rule_get_by_security_group(
             context, secgroup['id'])
@@ -363,11 +371,14 @@ class ConductorManager(manager.Manager):
         return jsonutils.to_primitive(result)
 
     def instance_destroy(self, context, instance):
-        self.db.instance_destroy(context, instance['uuid'])
+        result = self.db.instance_destroy(context, instance['uuid'])
+        return jsonutils.to_primitive(result)
 
     def instance_info_cache_delete(self, context, instance):
         self.db.instance_info_cache_delete(context, instance['uuid'])
 
+    # NOTE(hanlind): This method is now deprecated and can be removed in
+    # version v2.0 of the RPC API.
     def instance_info_cache_update(self, context, instance, values):
         self.db.instance_info_cache_update(context, instance['uuid'],
                                            values)
@@ -514,8 +525,8 @@ class ConductorManager(manager.Manager):
         ec2_ids['ami-id'] = ec2utils.glance_id_to_ec2_id(context,
                                                          instance['image_ref'])
         for image_type in ['kernel', 'ramdisk']:
-            if '%s_id' % image_type in instance:
-                image_id = instance['%s_id' % image_type]
+            image_id = instance.get('%s_id' % image_type)
+            if image_id is not None:
                 ec2_image_type = ec2utils.image_type(image_type)
                 ec2_id = ec2utils.glance_id_to_ec2_id(context, image_id,
                                                       ec2_image_type)
@@ -571,8 +582,13 @@ class ConductorManager(manager.Manager):
         """Perform a classmethod action on an object."""
         objclass = nova_object.NovaObject.obj_class_from_name(objname,
                                                               objver)
-        return self._object_dispatch(objclass, objmethod, context,
-                                     args, kwargs)
+        result = self._object_dispatch(objclass, objmethod, context,
+                                       args, kwargs)
+        # NOTE(danms): The RPC layer will convert to primitives for us,
+        # but in this case, we need to honor the version the client is
+        # asking for, so we do it before returning here.
+        return (result.obj_to_primitive(target_version=objver)
+                if isinstance(result, nova_object.NovaObject) else result)
 
     def object_action(self, context, objinst, objmethod, args, kwargs):
         """Perform an action on an object."""
@@ -582,13 +598,14 @@ class ConductorManager(manager.Manager):
         updates = dict()
         # NOTE(danms): Diff the object with the one passed to us and
         # generate a list of changes to forward back
-        for field in objinst.fields:
-            if not objinst.obj_attr_is_set(field):
+        for name, field in objinst.fields.items():
+            if not objinst.obj_attr_is_set(name):
                 # Avoid demand-loading anything
                 continue
-            if (not oldobj.obj_attr_is_set(field) or
-                    oldobj[field] != objinst[field]):
-                updates[field] = objinst._attr_to_primitive(field)
+            if (not oldobj.obj_attr_is_set(name) or
+                    oldobj[name] != objinst[name]):
+                updates[name] = field.to_primitive(objinst, name,
+                                                   objinst[name])
         # This is safe since a field named this would conflict with the
         # method anyway
         updates['obj_what_changed'] = objinst.obj_what_changed()
@@ -642,7 +659,7 @@ class ComputeTaskManager(base.Base):
                                block_migration, disk_over_commit)
         elif not live and not rebuild and flavor:
             instance_uuid = instance['uuid']
-            with compute_utils.EventReporter(context, ConductorManager(),
+            with compute_utils.EventReporter(context, self.db,
                                          'cold_migrate', instance_uuid):
                 self._cold_migrate(context, instance, flavor,
                                    scheduler_hint['filter_properties'],
@@ -673,7 +690,8 @@ class ComputeTaskManager(base.Base):
             if reservations:
                 self.quotas.rollback(context, reservations)
 
-            LOG.warning(_("No valid host found for cold migrate"))
+            LOG.warning(_("No valid host found for cold migrate"),
+                        instance=instance)
             return
 
         try:
@@ -799,12 +817,23 @@ class ComputeTaskManager(base.Base):
                     instance.vm_state = vm_states.ERROR
                     instance.save()
 
-            filter_properties = {}
-            hosts = self._schedule_instances(context, image,
-                                             filter_properties, instance)
-            host = hosts.pop(0)['host']
-            self.compute_rpcapi.unshelve_instance(context, instance, host,
-                    image)
+            try:
+                with compute_utils.EventReporter(context, self.db,
+                                                 'schedule_instances',
+                                                 instance.uuid):
+                    filter_properties = {}
+                    hosts = self._schedule_instances(context, image,
+                                                     filter_properties,
+                                                     instance)
+                    host = hosts.pop(0)['host']
+                    self.compute_rpcapi.unshelve_instance(context, instance,
+                                                          host, image)
+            except exception.NoValidHost as ex:
+                instance.task_state = None
+                instance.save()
+                LOG.warning(_("No valid host found for unshelve instance"),
+                            instance=instance)
+                return
         else:
             LOG.error(_('Unshelve attempted but vm_state not SHELVED or '
                         'SHELVED_OFFLOADED'), instance=instance)

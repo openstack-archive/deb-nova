@@ -15,6 +15,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+"""
+Utility class for VHD related operations.
+
+Official VHD format specs can be retrieved at:
+http://technet.microsoft.com/en-us/library/bb676673.aspx
+See "Download the Specifications Without Registering"
+
+Official VHDX format specs can be retrieved at:
+http://www.microsoft.com/en-us/download/details.aspx?id=34750
+"""
 import struct
 import sys
 
@@ -33,6 +43,9 @@ VHD_DYNAMIC_DISK_HEADER_SIZE = 1024
 VHD_HEADER_SIZE_DYNAMIC = 512
 VHD_FOOTER_SIZE_DYNAMIC = 512
 VHD_BLK_SIZE_OFFSET = 544
+
+VHD_SIGNATURE = 'conectix'
+VHDX_SIGNATURE = 'vhdxfile'
 
 
 class VHDUtils(object):
@@ -86,7 +99,7 @@ class VHDUtils(object):
 
     def resize_vhd(self, vhd_path, new_max_size, is_file_max_size=True):
         if is_file_max_size:
-            new_internal_max_size = self._get_internal_vhd_size_by_file_size(
+            new_internal_max_size = self.get_internal_vhd_size_by_file_size(
                                             vhd_path, new_max_size)
         else:
             new_internal_max_size = new_max_size
@@ -97,8 +110,7 @@ class VHDUtils(object):
             Path=vhd_path, MaxInternalSize=new_internal_max_size)
         self._vmutils.check_ret_val(ret_val, job_path)
 
-    def _get_internal_vhd_size_by_file_size(self, vhd_path,
-                                            new_vhd_file_size):
+    def get_internal_vhd_size_by_file_size(self, vhd_path, new_vhd_file_size):
         """Fixed VHD size = Data Block size + 512 bytes
            Dynamic_VHD_size = Dynamic Disk Header
                              + Copy of hard disk footer
@@ -179,13 +191,19 @@ class VHDUtils(object):
 
     def get_vhd_format(self, path):
         with open(path, 'rb') as f:
-            signature = f.read(8)
-        if signature == 'vhdxfile':
-            return constants.DISK_FORMAT_VHDX
-        elif signature == 'conectix':
-            return constants.DISK_FORMAT_VHD
-        else:
-            raise vmutils.HyperVException(_('Unsupported virtual disk format'))
+            # Read header
+            if f.read(8) == VHDX_SIGNATURE:
+                return constants.DISK_FORMAT_VHDX
+
+            # Read footer
+            f.seek(0, 2)
+            file_size = f.tell()
+            if file_size >= 512:
+                f.seek(-512, 2)
+                if f.read(8) == VHD_SIGNATURE:
+                    return constants.DISK_FORMAT_VHD
+
+        raise vmutils.HyperVException(_('Unsupported virtual disk format'))
 
     def get_best_supported_vhd_format(self):
         return constants.DISK_FORMAT_VHD

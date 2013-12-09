@@ -191,7 +191,7 @@ class _TestPciDeviceObject(object):
         self.pci_device.claim(self.inst)
         self.pci_device.free(self.inst)
         self.assertEqual(self.pci_device.status, 'available')
-        self.assertEqual(self.pci_device.instance_uuid, None)
+        self.assertIsNone(self.pci_device.instance_uuid)
 
     def test_free_allocated_device(self):
         self._create_fake_instance()
@@ -202,7 +202,7 @@ class _TestPciDeviceObject(object):
         self.pci_device.free(self.inst)
         self.assertEqual(len(self.inst.pci_devices), 0)
         self.assertEqual(self.pci_device.status, 'available')
-        self.assertEqual(self.pci_device.instance_uuid, None)
+        self.assertIsNone(self.pci_device.instance_uuid)
 
     def test_free_device_fail(self):
         self._create_fake_pci_device()
@@ -214,7 +214,7 @@ class _TestPciDeviceObject(object):
         self._create_fake_pci_device()
         self.pci_device.remove()
         self.assertEqual(self.pci_device.status, 'removed')
-        self.assertEqual(self.pci_device.instance_uuid, None)
+        self.assertIsNone(self.pci_device.instance_uuid)
 
     def test_remove_device_fail(self):
         self._create_fake_instance()
@@ -304,7 +304,7 @@ class _TestPciDeviceListObject(object):
         self.mox.ReplayAll()
         devs = pci_device.PciDeviceList.get_by_compute_node(ctxt, 1)
         for i in range(len(fake_pci_devs)):
-            self.assertTrue(isinstance(devs[i], pci_device.PciDevice))
+            self.assertIsInstance(devs[i], pci_device.PciDevice)
             self.assertEqual(fake_pci_devs[i]['vendor_id'], devs[i].vendor_id)
         self.assertRemotes()
 
@@ -321,7 +321,7 @@ class _TestPciDeviceListObject(object):
         devs = pci_device.PciDeviceList.get_by_instance_uuid(ctxt, '1')
         self.assertEqual(len(devs), 2)
         for i in range(len(fake_pci_devs)):
-            self.assertTrue(isinstance(devs[i], pci_device.PciDevice))
+            self.assertIsInstance(devs[i], pci_device.PciDevice)
         self.assertEqual(devs[0].vendor_id, 'v')
         self.assertEqual(devs[1].vendor_id, 'v')
         self.assertRemotes()

@@ -19,6 +19,7 @@ import functools
 
 import eventlet
 import netaddr
+import six
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
@@ -37,6 +38,7 @@ VIF_TYPE_BRIDGE = 'bridge'
 VIF_TYPE_802_QBG = '802.1qbg'
 VIF_TYPE_802_QBH = '802.1qbh'
 VIF_TYPE_MLNX_DIRECT = 'mlnx_direct'
+VIF_TYPE_MIDONET = 'midonet'
 VIF_TYPE_OTHER = 'other'
 
 # Constant for max length of network interface names
@@ -323,7 +325,7 @@ class NetworkInfo(list):
 
     @classmethod
     def hydrate(cls, network_info):
-        if isinstance(network_info, basestring):
+        if isinstance(network_info, six.string_types):
             network_info = jsonutils.loads(network_info)
         return cls([VIF.hydrate(vif) for vif in network_info])
 

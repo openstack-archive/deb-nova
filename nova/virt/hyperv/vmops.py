@@ -31,11 +31,13 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
+from nova import unit
 from nova import utils
 from nova.virt import configdrive
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import imagecache
 from nova.virt.hyperv import utilsfactory
+from nova.virt.hyperv import vhdutilsv2
 from nova.virt.hyperv import vmutils
 from nova.virt.hyperv import volumeops
 
@@ -157,13 +159,26 @@ class VMOps(object):
                 self._pathutils.copyfile(base_vhd_path, root_vhd_path)
 
                 base_vhd_info = self._vhdutils.get_vhd_info(base_vhd_path)
-                base_vhd_size = base_vhd_info['FileSize']
-                root_vhd_size = instance['root_gb'] * 1024 ** 3
+                base_vhd_size = base_vhd_info['MaxInternalSize']
+                root_vhd_size = instance['root_gb'] * unit.Gi
 
-                if root_vhd_size < base_vhd_size:
-                    raise vmutils.HyperVException(_("Cannot resize a VHD to a "
-                                                    "smaller size"))
-                elif root_vhd_size > base_vhd_size:
+                # NOTE(lpetrut): Checking the namespace is needed as the
+                # following method is not yet implemented in vhdutilsv2.
+                if not isinstance(self._vhdutils, vhdutilsv2.VHDUtilsV2):
+                    root_vhd_internal_size = (
+                        self._vhdutils.get_internal_vhd_size_by_file_size(
+                            root_vhd_path, root_vhd_size))
+                else:
+                    root_vhd_internal_size = root_vhd_size
+
+                if root_vhd_internal_size < base_vhd_size:
+                    error_msg = _("Cannot resize a VHD to a smaller size, the"
+                                  " original size is %(base_vhd_size)s, the"
+                                  " newer size is %(root_vhd_size)s"
+                                  ) % {'base_vhd_size': base_vhd_size,
+                                       'root_vhd_size': root_vhd_size}
+                    raise vmutils.HyperVException(error_msg)
+                elif root_vhd_internal_size > base_vhd_size:
                     LOG.debug(_("Resizing VHD %(root_vhd_path)s to new "
                                 "size %(root_vhd_size)s"),
                               {'base_vhd_path': base_vhd_path,
@@ -177,7 +192,7 @@ class VMOps(object):
         return root_vhd_path
 
     def create_ephemeral_vhd(self, instance):
-        eph_vhd_size = instance.get('ephemeral_gb', 0) * 1024 ** 3
+        eph_vhd_size = instance.get('ephemeral_gb', 0) * unit.Gi
         if eph_vhd_size:
             vhd_format = self._vhdutils.get_best_supported_vhd_format()
 

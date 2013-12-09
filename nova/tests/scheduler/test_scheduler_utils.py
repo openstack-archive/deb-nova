@@ -18,6 +18,7 @@ Tests For Scheduler Utils
 import mox
 from oslo.config import cfg
 
+from nova.compute import flavors
 from nova.compute import utils as compute_utils
 from nova.conductor import api as conductor_api
 from nova import db
@@ -34,6 +35,21 @@ class SchedulerUtilsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(SchedulerUtilsTestCase, self).setUp()
         self.context = 'fake-context'
+
+    def test_build_request_spec_without_image(self):
+        image = None
+        instance = {'uuid': 'fake-uuid'}
+        instance_type = {'flavorid': 'fake-id'}
+
+        self.mox.StubOutWithMock(flavors, 'extract_flavor')
+        self.mox.StubOutWithMock(db, 'flavor_extra_specs_get')
+        flavors.extract_flavor(mox.IgnoreArg()).AndReturn(instance_type)
+        db.flavor_extra_specs_get(self.context, mox.IgnoreArg()).AndReturn([])
+        self.mox.ReplayAll()
+
+        request_spec = scheduler_utils.build_request_spec(self.context, image,
+                                                          [instance])
+        self.assertEqual({}, request_spec['image'])
 
     def _test_set_vm_state_and_notify(self, request_spec,
                                       expected_uuids):
@@ -97,8 +113,12 @@ class SchedulerUtilsTestCase(test.NoDBTestCase):
 
     def _test_populate_filter_props(self, host_state_obj=True,
                                     with_retry=True,
-                                    force_hosts=[],
-                                    force_nodes=[]):
+                                    force_hosts=None,
+                                    force_nodes=None):
+        if force_hosts is None:
+            force_hosts = []
+        if force_nodes is None:
+            force_nodes = []
         if with_retry:
             if not force_hosts and not force_nodes:
                 filter_properties = dict(retry=dict(hosts=[]))
@@ -125,7 +145,13 @@ class SchedulerUtilsTestCase(test.NoDBTestCase):
             scheduler_utils.populate_filter_properties(filter_properties,
                                                        host_state)
 
-        self.assertEqual('fake-limits', filter_properties['limits'])
+        if force_hosts:
+            expected_limits = None
+        else:
+            expected_limits = 'fake-limits'
+        self.assertEqual(expected_limits,
+                         filter_properties.get('limits'))
+
         if with_retry and not force_hosts and not force_nodes:
             self.assertEqual([['fake-host', 'fake-node'],
                               ['fake-host', 'fake-node']],

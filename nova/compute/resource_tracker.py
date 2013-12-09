@@ -121,8 +121,9 @@ class ResourceTracker(object):
             # Mark resources in-use and update stats
             self._update_usage_from_instance(self.compute_node, instance_ref)
 
+            elevated = context.elevated()
             # persist changes to the compute node:
-            self._update(context, self.compute_node)
+            self._update(elevated, self.compute_node)
 
             return claim
 
@@ -198,7 +199,7 @@ class ResourceTracker(object):
 
     def _set_instance_host_and_node(self, context, instance_ref):
         """Tag the instance as belonging to this host.  This should be done
-        while the COMPUTE_RESOURCES_SEMPAHORE is held so the resource claim
+        while the COMPUTE_RESOURCES_SEMAPHORE is held so the resource claim
         will not be lost if the audit process starts.
         """
         values = {'host': self.host, 'node': self.nodename,
@@ -535,8 +536,8 @@ class ResourceTracker(object):
             try:
                 self._update_usage_from_migration(context, instance, resources,
                                                   migration)
-            except exception.InstanceTypeNotFound:
-                LOG.warn(_("InstanceType could not be found, skipping "
+            except exception.FlavorNotFound:
+                LOG.warn(_("Flavor could not be found, skipping "
                            "migration."), instance_uuid=uuid)
                 continue
 
@@ -583,7 +584,7 @@ class ResourceTracker(object):
         # purge old stats
         self.stats.clear()
 
-        # set some intiial values, reserve room for host/hypervisor:
+        # set some initial values, reserve room for host/hypervisor:
         resources['local_gb_used'] = CONF.reserved_host_disk_mb / 1024
         resources['memory_mb_used'] = CONF.reserved_host_memory_mb
         resources['vcpus_used'] = 0

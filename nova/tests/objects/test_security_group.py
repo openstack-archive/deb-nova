@@ -76,7 +76,7 @@ class _TestSecurityGroupObject(object):
                                      updated_secgroup)
         self.mox.ReplayAll()
         secgroup = security_group.SecurityGroup._from_db_object(
-            security_group.SecurityGroup(), fake_secgroup)
+            self.context, security_group.SecurityGroup(), fake_secgroup)
         secgroup.description = 'foobar'
         secgroup.save(self.context)
         self.assertEqual(self._fix_deleted(updated_secgroup),
@@ -88,7 +88,7 @@ class _TestSecurityGroupObject(object):
         self.mox.StubOutWithMock(db, 'security_group_update')
         self.mox.ReplayAll()
         secgroup = security_group.SecurityGroup._from_db_object(
-            security_group.SecurityGroup(), fake_secgroup)
+            self.context, security_group.SecurityGroup(), fake_secgroup)
         secgroup.save(self.context)
 
     def test_refresh(self):
@@ -97,7 +97,7 @@ class _TestSecurityGroupObject(object):
         db.security_group_get(self.context, 1).AndReturn(updated_secgroup)
         self.mox.ReplayAll()
         secgroup = security_group.SecurityGroup._from_db_object(
-            security_group.SecurityGroup(), fake_secgroup)
+            self.context, security_group.SecurityGroup(), fake_secgroup)
         secgroup.refresh(self.context)
         self.assertEqual(self._fix_deleted(updated_secgroup),
                          dict(secgroup.items()))
@@ -128,8 +128,8 @@ class _TestSecurityGroupListObject(object):
         self.mox.ReplayAll()
         secgroup_list = security_group.SecurityGroupList.get_all(self.context)
         for i in range(len(fake_secgroups)):
-            self.assertTrue(isinstance(secgroup_list[i],
-                                       security_group.SecurityGroup))
+            self.assertIsInstance(secgroup_list[i],
+                                  security_group.SecurityGroup)
             self.assertEqual(fake_secgroups[i]['id'],
                              secgroup_list[i]['id'])
             self.assertEqual(secgroup_list[i]._context, self.context)
@@ -143,8 +143,8 @@ class _TestSecurityGroupListObject(object):
         secgroup_list = security_group.SecurityGroupList.get_by_project(
             self.context, 'fake-project')
         for i in range(len(fake_secgroups)):
-            self.assertTrue(isinstance(secgroup_list[i],
-                                       security_group.SecurityGroup))
+            self.assertIsInstance(secgroup_list[i],
+                                  security_group.SecurityGroup)
             self.assertEqual(fake_secgroups[i]['id'],
                              secgroup_list[i]['id'])
 
@@ -159,8 +159,8 @@ class _TestSecurityGroupListObject(object):
         secgroup_list = security_group.SecurityGroupList.get_by_instance(
             self.context, inst)
         for i in range(len(fake_secgroups)):
-            self.assertTrue(isinstance(secgroup_list[i],
-                                       security_group.SecurityGroup))
+            self.assertIsInstance(secgroup_list[i],
+                                  security_group.SecurityGroup)
             self.assertEqual(fake_secgroups[i]['id'],
                              secgroup_list[i]['id'])
 

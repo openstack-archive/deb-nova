@@ -33,6 +33,7 @@ from nova.image import glance
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log
+from nova import unit
 from nova import utils
 import nova.virt.docker.client
 from nova.virt.docker import hostinfo
@@ -40,14 +41,16 @@ from nova.virt import driver
 
 
 docker_opts = [
-    cfg.IntOpt('docker_registry_default_port',
+    cfg.IntOpt('registry_default_port',
                default=5042,
                help=_('Default TCP port to find the '
-                      'docker-registry container')),
+                      'docker-registry container'),
+               deprecated_group='DEFAULT',
+               deprecated_name='docker_registry_default_port'),
 ]
 
 CONF = cfg.CONF
-CONF.register_opts(docker_opts)
+CONF.register_opts(docker_opts, 'docker')
 CONF.import_opt('my_ip', 'nova.netconf')
 
 LOG = log.getLogger(__name__)
@@ -99,11 +102,13 @@ class DockerDriver(driver.ComputeDriver):
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
-        pass
+        msg = _("VIF plugging is not supported by the Docker driver.")
+        raise NotImplementedError(msg)
 
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
-        pass
+        msg = _("VIF unplugging is not supported by the Docker driver.")
+        raise NotImplementedError(msg)
 
     def find_container_by_name(self, name):
         for info in self.list_instances(inspect=True):
@@ -150,13 +155,13 @@ class DockerDriver(driver.ComputeDriver):
         stats = {
             'vcpus': 1,
             'vcpus_used': 0,
-            'memory_mb': memory['total'] / (1024 ** 2),
-            'memory_mb_used': memory['used'] / (1024 ** 2),
-            'local_gb': disk['total'] / (1024 ** 3),
-            'local_gb_used': disk['used'] / (1024 ** 3),
-            'disk_available_least': disk['available'] / (1024 ** 3),
+            'memory_mb': memory['total'] / unit.Mi,
+            'memory_mb_used': memory['used'] / unit.Mi,
+            'local_gb': disk['total'] / unit.Gi,
+            'local_gb_used': disk['used'] / unit.Gi,
+            'disk_available_least': disk['available'] / unit.Gi,
             'hypervisor_type': 'docker',
-            'hypervisor_version': '1.0',
+            'hypervisor_version': utils.convert_version_to_int('1.0'),
             'hypervisor_hostname': self._nodename,
             'cpu_info': '?',
             'supported_instances': jsonutils.dumps([
@@ -254,12 +259,8 @@ class DockerDriver(driver.ComputeDriver):
             undo_mgr.rollback_and_reraise(msg=msg, instance=instance)
 
     def _get_memory_limit_bytes(self, instance):
-        for metadata in instance.get('system_metadata', []):
-            if metadata['deleted']:
-                continue
-            if metadata['key'] == 'instance_type_memory_mb':
-                return int(metadata['value']) * 1024 * 1024
-        return 0
+        system_meta = utils.instance_sys_meta(instance)
+        return int(system_meta.get('instance_type_memory_mb', 0)) * unit.Mi
 
     def _get_image_name(self, context, instance, image):
         fmt = image['container_format']
@@ -313,8 +314,8 @@ class DockerDriver(driver.ComputeDriver):
             raise exception.InstanceDeployFailure(msg.format(e),
                                                   instance_id=instance['name'])
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+    def destroy(self, context, instance, network_info, block_device_info=None,
+            destroy_disks=True):
         container_id = self.find_container_by_name(instance['name']).get('id')
         if not container_id:
             return
@@ -352,7 +353,7 @@ class DockerDriver(driver.ComputeDriver):
         return self.docker.get_container_logs(container_id)
 
     def _get_registry_port(self):
-        default_port = CONF.docker_registry_default_port
+        default_port = CONF.docker.registry_default_port
         registry = None
         for container in self.docker.list_containers(_all=False):
             container = self.docker.inspect_container(container['id'])

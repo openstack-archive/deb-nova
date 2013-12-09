@@ -71,6 +71,24 @@ def visit_insert_from_select(element, compiler, **kw):
         compiler.process(element.select))
 
 
+class DeleteFromSelect(UpdateBase):
+    def __init__(self, table, select, column):
+        self.table = table
+        self.select = select
+        self.column = column
+
+
+# NOTE(guochbo): some verions of MySQL doesn't yet support subquery with
+# 'LIMIT & IN/ALL/ANY/SOME' We need work around this with nesting select .
+@compiles(DeleteFromSelect)
+def visit_delete_from_select(element, compiler, **kw):
+    return "DELETE FROM %s WHERE %s in (SELECT T1.%s FROM (%s) as T1)" % (
+        compiler.process(element.table, asfrom=True),
+        compiler.process(element.column),
+        element.column.name,
+        compiler.process(element.select))
+
+
 def _get_not_supported_column(col_name_col_instance, column_name):
     try:
         column = col_name_col_instance[column_name]
@@ -169,7 +187,7 @@ def drop_unique_constraint(migrate_engine, table_name, uc_name, *columns,
                            **col_name_col_instance):
     """
     This method drops UC from table and works for mysql, postgresql and sqlite.
-    In mysql and postgresql we are able to use "alter table" constuction. In
+    In mysql and postgresql we are able to use "alter table" construction. In
     sqlite is only one way to drop UC:
         1) Create new table with same columns, indexes and constraints
            (except one that we want to drop).
@@ -178,9 +196,9 @@ def drop_unique_constraint(migrate_engine, table_name, uc_name, *columns,
         4) Rename new table to the name of old table.
 
     :param migrate_engine: sqlalchemy engine
-    :param table_name:     name of table that contains uniq constarint.
+    :param table_name:     name of table that contains uniq constraint.
     :param uc_name:        name of uniq constraint that will be dropped.
-    :param columns:        columns that are in uniq constarint.
+    :param columns:        columns that are in uniq constraint.
     :param col_name_col_instance:   contains pair column_name=column_instance.
                             column_instance is instance of Column. These params
                             are required only for columns that have unsupported
@@ -289,6 +307,8 @@ def create_shadow_table(migrate_engine, table_name=None, table=None,
                             column_instance is instance of Column. These params
                             are required only for columns that have unsupported
                             types by sqlite. For example BigInteger.
+
+    :returns: The created shadow_table object.
     """
     meta = MetaData(bind=migrate_engine)
 
@@ -316,6 +336,7 @@ def create_shadow_table(migrate_engine, table_name=None, table=None,
                          mysql_engine='InnoDB')
     try:
         shadow_table.create()
+        return shadow_table
     except (OperationalError, ProgrammingError):
         LOG.info(repr(shadow_table))
         LOG.exception(_('Exception while creating table.'))
@@ -530,6 +551,14 @@ def _change_deleted_column_type_to_id_type_sqlite(migrate_engine, table_name,
         execute()
 
 
+def _index_exists(migrate_engine, table_name, index_name):
+    inspector = reflection.Inspector.from_engine(migrate_engine)
+    indexes = inspector.get_indexes(table_name)
+    index_names = [index['name'] for index in indexes]
+
+    return index_name in index_names
+
+
 def _add_index(migrate_engine, table, index_name, idx_columns):
     index = Index(
         index_name, *[getattr(table.c, col) for col in idx_columns]
@@ -538,18 +567,20 @@ def _add_index(migrate_engine, table, index_name, idx_columns):
 
 
 def _drop_index(migrate_engine, table, index_name, idx_columns):
-    index = Index(
-        index_name, *[getattr(table.c, col) for col in idx_columns]
-    )
-    index.drop()
+    if _index_exists(migrate_engine, table.name, index_name):
+        index = Index(
+            index_name, *[getattr(table.c, col) for col in idx_columns]
+        )
+        index.drop()
 
 
 def _change_index_columns(migrate_engine, table, index_name,
                           new_columns, old_columns):
-    Index(
-        index_name,
-        *[getattr(table.c, col) for col in old_columns]
-    ).drop(migrate_engine)
+    if _index_exists(migrate_engine, table.name, index_name):
+        Index(
+            index_name,
+            *[getattr(table.c, col) for col in old_columns]
+        ).drop(migrate_engine)
 
     Index(
         index_name,

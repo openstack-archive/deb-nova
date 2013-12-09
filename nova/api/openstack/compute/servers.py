@@ -19,6 +19,7 @@ import os
 import re
 
 from oslo.config import cfg
+import six
 import webob
 from webob import exc
 
@@ -44,8 +45,11 @@ from nova import utils
 server_opts = [
     cfg.BoolOpt('enable_instance_password',
                 default=True,
-                help='Allows use of instance password during '
-                     'server creation'),
+                help='Enables returning of the instance password by the'
+                     ' relevant server API calls such as create, rebuild'
+                     ' or rescue, If the hypervisor does not support'
+                     ' password injection then the password returned will'
+                     ' not be correct'),
 ]
 CONF = cfg.CONF
 CONF.register_opts(server_opts)
@@ -546,14 +550,30 @@ class Controller(wsgi.Controller):
                 # No 'changes-since', so we only want non-deleted servers
                 search_opts['deleted'] = False
 
-        if search_opts.get("vm_state") == "deleted":
+        if search_opts.get("vm_state") == ['deleted']:
             if context.is_admin:
                 search_opts['deleted'] = True
             else:
                 msg = _("Only administrators may list deleted instances")
                 raise exc.HTTPBadRequest(explanation=msg)
 
-        if 'all_tenants' not in search_opts:
+        # If all tenants is passed with 0 or false as the value
+        # then remove it from the search options. Nothing passed as
+        # the value for all_tenants is considered to enable the feature
+        all_tenants = search_opts.get('all_tenants')
+        if all_tenants:
+            try:
+                if not strutils.bool_from_string(all_tenants, True):
+                    del search_opts['all_tenants']
+            except ValueError as err:
+                raise exception.InvalidInput(str(err))
+
+        if 'all_tenants' in search_opts:
+            policy.enforce(context, 'compute:get_all_tenants',
+                           {'project_id': context.project_id,
+                            'user_id': context.user_id})
+            del search_opts['all_tenants']
+        else:
             if context.project_id:
                 search_opts['project_id'] = context.project_id
             else:
@@ -595,7 +615,7 @@ class Controller(wsgi.Controller):
 
     def _check_string_length(self, value, name, max_length=None):
         try:
-            if isinstance(value, basestring):
+            if isinstance(value, six.string_types):
                 value = value.strip()
             utils.check_string_length(value, name, min_length=1,
                                       max_length=max_length)
@@ -640,7 +660,7 @@ class Controller(wsgi.Controller):
                     network_uuid = None
                     if not utils.is_neutron():
                         # port parameter is only for neutron v2.0
-                        msg = _("Unknown argment : port")
+                        msg = _("Unknown argument : port")
                         raise exc.HTTPBadRequest(explanation=msg)
                     if not uuidutils.is_uuid_like(port_id):
                         msg = _("Bad port format: port uuid is "
@@ -666,7 +686,7 @@ class Controller(wsgi.Controller):
                     msg = _("Invalid fixed IP address (%s)") % address
                     raise exc.HTTPBadRequest(explanation=msg)
 
-                # For neutronv2, requestd_networks
+                # For neutronv2, requested_networks
                 # should be tuple of (network_uuid, fixed_ip, port_id)
                 if utils.is_neutron():
                     networks.append((network_uuid, address, port_id))
@@ -945,9 +965,8 @@ class Controller(wsgi.Controller):
             msg = "UnicodeError: %s" % unicode(error)
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
-                exception.InstanceTypeNotFound,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
                 exception.MultiplePortsNotApplicable,
@@ -1069,7 +1088,7 @@ class Controller(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.InstanceTypeNotFound:
+        except exception.FlavorNotFound:
             msg = _("Flavor used by the instance could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.InstanceInvalidState as state_error:
@@ -1205,10 +1224,8 @@ class Controller(wsgi.Controller):
                 or 'adminPass' not in body['changePassword']):
             msg = _("No adminPass was specified")
             raise exc.HTTPBadRequest(explanation=msg)
-        password = body['changePassword']['adminPass']
-        if not isinstance(password, basestring):
-            msg = _("Invalid adminPass")
-            raise exc.HTTPBadRequest(explanation=msg)
+        password = self._get_server_admin_password(body['changePassword'])
+
         server = self._get_server(context, req, id)
         try:
             self.compute_api.set_admin_password(context, server, password)
@@ -1267,10 +1284,7 @@ class Controller(wsgi.Controller):
 
         image_href = self._image_uuid_from_href(image_href)
 
-        try:
-            password = body['adminPass']
-        except (KeyError, TypeError):
-            password = utils.generate_password()
+        password = self._get_server_admin_password(body)
 
         context = req.environ['nova.context']
         instance = self._get_server(context, req, id)
@@ -1326,8 +1340,8 @@ class Controller(wsgi.Controller):
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
 
@@ -1370,7 +1384,8 @@ class Controller(wsgi.Controller):
 
         instance = self._get_server(context, req, id)
 
-        bdms = self.compute_api.get_instance_bdms(context, instance)
+        bdms = self.compute_api.get_instance_bdms(context, instance,
+                                                  legacy=False)
 
         try:
             if self.compute_api.is_volume_backed_instance(context, instance,
@@ -1382,7 +1397,8 @@ class Controller(wsgi.Controller):
                     # device is set to 'vda'. It needs to be fixed later,
                     # but tentatively we use it here.
                     image_meta = {'properties': self.compute_api.
-                                    _get_bdm_image_metadata(context, bdms)}
+                                    _get_bdm_image_metadata(context, bdms,
+                                                            legacy_bdm=False)}
                 else:
                     src_image = self.compute_api.image_service.\
                                                 show(context, img)
@@ -1429,7 +1445,7 @@ class Controller(wsgi.Controller):
         return password
 
     def _validate_admin_password(self, password):
-        if not isinstance(password, basestring):
+        if not isinstance(password, six.string_types):
             raise ValueError()
 
     def _get_server_search_options(self):

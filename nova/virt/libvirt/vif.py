@@ -36,19 +36,16 @@ from nova.virt.libvirt import designer
 LOG = logging.getLogger(__name__)
 
 libvirt_vif_opts = [
-    # neutron_ovs_bridge is used, if Neutron provides Nova
-    # the 'vif_type' portbinding field
-    cfg.StrOpt('libvirt_ovs_bridge',
-               default='br-int',
-               help='Name of Integration Bridge used by Open vSwitch'),
-    cfg.BoolOpt('libvirt_use_virtio_for_bridges',
+    cfg.BoolOpt('use_virtio_for_bridges',
                 default=True,
-                help='Use virtio for bridge interfaces with KVM/QEMU'),
+                help='Use virtio for bridge interfaces with KVM/QEMU',
+                deprecated_group='DEFAULT',
+                deprecated_name='libvirt_use_virtio_for_bridges'),
 ]
 
 CONF = cfg.CONF
-CONF.register_opts(libvirt_vif_opts)
-CONF.import_opt('libvirt_type', 'nova.virt.libvirt.driver')
+CONF.register_opts(libvirt_vif_opts, 'libvirt')
+CONF.import_opt('virt_type', 'nova.virt.libvirt.driver', group='libvirt')
 CONF.import_opt('use_ipv6', 'nova.netconf')
 
 # Since libvirt 0.9.11, <interface type='bridge'>
@@ -116,19 +113,19 @@ class LibvirtBaseVIFDriver(object):
         # Else if the virt type is KVM/QEMU, use virtio according
         # to the global config parameter
         if (model is None and
-            CONF.libvirt_type in ('kvm', 'qemu') and
-                    CONF.libvirt_use_virtio_for_bridges):
+            CONF.libvirt.virt_type in ('kvm', 'qemu') and
+                    CONF.libvirt.use_virtio_for_bridges):
             model = "virtio"
 
         # Workaround libvirt bug, where it mistakenly
         # enables vhost mode, even for non-KVM guests
-        if model == "virtio" and CONF.libvirt_type == "qemu":
+        if model == "virtio" and CONF.libvirt.virt_type == "qemu":
             driver = "qemu"
 
-        if not is_vif_model_valid_for_virt(CONF.libvirt_type,
+        if not is_vif_model_valid_for_virt(CONF.libvirt.virt_type,
                                            model):
             raise exception.UnsupportedHardware(model=model,
-                                                virt=CONF.libvirt_type)
+                                                virt=CONF.libvirt.virt_type)
 
         designer.set_vif_guest_frontend_config(
             conf, vif['address'], model, driver)
@@ -301,6 +298,17 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
 
         return conf
 
+    def get_config_midonet(self, instance, vif, image_meta,
+                           inst_type):
+        conf = super(LibvirtGenericVIFDriver,
+                     self).get_config(instance, vif,
+                                      image_meta, inst_type)
+
+        dev = self.get_vif_devname(vif)
+        designer.set_vif_host_backend_ethernet_config(conf, dev)
+
+        return conf
+
     def get_config_mlnx_direct(self, instance, vif, image_meta,
                                inst_type):
         conf = super(LibvirtGenericVIFDriver,
@@ -359,6 +367,11 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
                                                vif,
                                                image_meta,
                                                inst_type)
+        elif vif_type == network_model.VIF_TYPE_MIDONET:
+            return self.get_config_midonet(instance,
+                                           vif,
+                                           image_meta,
+                                           inst_type)
         else:
             raise exception.NovaException(
                 _("Unexpected vif_type=%s") % vif_type)
@@ -511,6 +524,22 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         super(LibvirtGenericVIFDriver,
               self).plug(instance, vif)
 
+    def plug_midonet(self, instance, vif):
+        """Plug into MidoNet's network port
+
+        Bind the vif to a MidoNet virtual port.
+        """
+        super(LibvirtGenericVIFDriver,
+              self).plug(instance, vif)
+        dev = self.get_vif_devname(vif)
+        port_id = vif['id']
+        try:
+            linux_net.create_tap_dev(dev)
+            utils.execute('mm-ctl', '--bind-port', port_id, dev,
+                          run_as_root=True)
+        except processutils.ProcessExecutionError:
+            LOG.exception(_("Failed while plugging vif"), instance=instance)
+
     def plug_iovisor(self, instance, vif):
         """Plug using PLUMgrid IO Visor Driver
 
@@ -532,7 +561,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
                           vif['network']['label'] + "_" + iface_id,
                           vif['address'], 'pgtag2=%s' % net_id,
                           'pgtag1=%s' % tenant_id, run_as_root=True)
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while plugging vif"), instance=instance)
 
     def plug(self, instance, vif):
@@ -561,6 +590,8 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             self.plug_iovisor(instance, vif)
         elif vif_type == network_model.VIF_TYPE_MLNX_DIRECT:
             self.plug_mlnx_direct(instance, vif)
+        elif vif_type == network_model.VIF_TYPE_MIDONET:
+            self.plug_midonet(instance, vif)
         else:
             raise exception.NovaException(
                 _("Unexpected vif_type=%s") % vif_type)
@@ -599,10 +630,13 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             br_name = self.get_br_name(vif['id'])
             v1_name, v2_name = self.get_veth_pair_names(vif['id'])
 
-            utils.execute('brctl', 'delif', br_name, v1_name, run_as_root=True)
-            utils.execute('ip', 'link', 'set', br_name, 'down',
-                          run_as_root=True)
-            utils.execute('brctl', 'delbr', br_name, run_as_root=True)
+            if linux_net.device_exists(br_name):
+                utils.execute('brctl', 'delif', br_name, v1_name,
+                              run_as_root=True)
+                utils.execute('ip', 'link', 'set', br_name, 'down',
+                              run_as_root=True)
+                utils.execute('brctl', 'delbr', br_name,
+                              run_as_root=True)
 
             linux_net.delete_ovs_vif_port(self.get_bridge_name(vif),
                                           v2_name)
@@ -624,7 +658,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
 
         try:
             linux_net.delete_ivs_vif_port(self.get_vif_devname(vif))
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
     def unplug_ivs_hybrid(self, instance, vif):
@@ -645,7 +679,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
                           run_as_root=True)
             utils.execute('brctl', 'delbr', br_name, run_as_root=True)
             linux_net.delete_ivs_vif_port(v2_name)
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
     def unplug_ivs(self, instance, vif):
@@ -675,6 +709,22 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
         super(LibvirtGenericVIFDriver,
               self).unplug(instance, vif)
 
+    def unplug_midonet(self, instance, vif):
+        """Unplug from MidoNet network port
+
+        Unbind the vif from a MidoNet virtual port.
+        """
+        super(LibvirtGenericVIFDriver,
+              self).unplug(instance, vif)
+        dev = self.get_vif_devname(vif)
+        port_id = vif['id']
+        try:
+            utils.execute('mm-ctl', '--unbind-port', port_id,
+                          run_as_root=True)
+            linux_net.delete_net_dev(dev)
+        except processutils.ProcessExecutionError:
+            LOG.exception(_("Failed while unplugging vif"), instance=instance)
+
     def unplug_iovisor(self, instance, vif):
         """Unplug using PLUMgrid IO Visor Driver
 
@@ -693,7 +743,7 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             utils.execute('ifc_ctl', 'gateway', 'del_port', dev,
                           run_as_root=True)
             linux_net.delete_net_dev(dev)
-        except exception.ProcessExecutionError:
+        except processutils.ProcessExecutionError:
             LOG.exception(_("Failed while unplugging vif"), instance=instance)
 
     def unplug(self, instance, vif):
@@ -722,152 +772,8 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             self.unplug_iovisor(instance, vif)
         elif vif_type == network_model.VIF_TYPE_MLNX_DIRECT:
             self.unplug_mlnx_direct(instance, vif)
+        elif vif_type == network_model.VIF_TYPE_MIDONET:
+            self.unplug_midonet(instance, vif)
         else:
             raise exception.NovaException(
                 _("Unexpected vif_type=%s") % vif_type)
-
-
-class LibvirtBridgeDriver(LibvirtGenericVIFDriver):
-    """Retained in Grizzly for compatibility with Neutron
-       drivers which do not yet report 'vif_type' port binding.
-       Will be deprecated in Havana, and removed in Ixxxx.
-    """
-
-    def get_config(self, instance, vif, image_meta, inst_type):
-        LOG.deprecated(_("The LibvirtBridgeDriver VIF driver is now "
-                         "deprecated and will be removed in the next release. "
-                         "Please use the LibvirtGenericVIFDriver VIF driver, "
-                         "together with a network plugin that reports the "
-                         "'vif_type' attribute"))
-        return self.get_config_bridge(instance, vif, image_meta,
-                                      inst_type)
-
-    def plug(self, instance, vif):
-        self.plug_bridge(instance, vif)
-
-    def unplug(self, instance, vif):
-        self.unplug_bridge(instance, vif)
-
-
-class LibvirtOpenVswitchDriver(LibvirtGenericVIFDriver):
-    """Retained in Grizzly for compatibility with Neutron
-       drivers which do not yet report 'vif_type' port binding.
-       Will be deprecated in Havana, and removed in Ixxxx.
-    """
-
-    def get_bridge_name(self, vif):
-        return vif['network']['bridge'] or CONF.libvirt_ovs_bridge
-
-    def get_ovs_interfaceid(self, vif):
-        return vif.get('ovs_interfaceid') or vif['id']
-
-    def get_config(self, instance, vif, image_meta, inst_type):
-        LOG.deprecated(_("The LibvirtOpenVswitchDriver VIF driver is now "
-                         "deprecated and will be removed in the next release. "
-                         "Please use the LibvirtGenericVIFDriver VIF driver, "
-                         "together with a network plugin that reports the "
-                         "'vif_type' attribute"))
-        return self.get_config_ovs_ethernet(instance,
-                                            vif,
-                                            image_meta, inst_type)
-
-    def plug(self, instance, vif):
-        self.plug_ovs_ethernet(instance, vif)
-
-    def unplug(self, instance, vif):
-        self.unplug_ovs_ethernet(instance, vif)
-
-
-class LibvirtHybridOVSBridgeDriver(LibvirtGenericVIFDriver):
-    """Retained in Grizzly for compatibility with Neutron
-       drivers which do not yet report 'vif_type' port binding.
-       Will be deprecated in Havana, and removed in Ixxxx.
-    """
-
-    def get_bridge_name(self, vif):
-        return vif['network']['bridge'] or CONF.libvirt_ovs_bridge
-
-    def get_ovs_interfaceid(self, vif):
-        return vif.get('ovs_interfaceid') or vif['id']
-
-    def get_config(self, instance, vif, image_meta, inst_type):
-        LOG.deprecated(_("The LibvirtHybridOVSBridgeDriver VIF driver is now "
-                         "deprecated and will be removed in the next release. "
-                         "Please use the LibvirtGenericVIFDriver VIF driver, "
-                         "together with a network plugin that reports the "
-                         "'vif_type' attribute"))
-        return self.get_config_ovs_hybrid(instance,
-                                          vif,
-                                          image_meta,
-                                          inst_type)
-
-    def plug(self, instance, vif):
-        return self.plug_ovs_hybrid(instance, vif)
-
-    def unplug(self, instance, vif):
-        return self.unplug_ovs_hybrid(instance, vif)
-
-
-class LibvirtOpenVswitchVirtualPortDriver(LibvirtGenericVIFDriver):
-    """Retained in Grizzly for compatibility with Neutron
-       drivers which do not yet report 'vif_type' port binding.
-       Will be deprecated in Havana, and removed in Ixxxx.
-    """
-
-    def get_bridge_name(self, vif):
-        return vif['network']['bridge'] or CONF.libvirt_ovs_bridge
-
-    def get_ovs_interfaceid(self, vif):
-        return vif.get('ovs_interfaceid') or vif['id']
-
-    def get_config(self, instance, vif, image_meta, inst_type):
-        LOG.deprecated(_("The LibvirtOpenVswitchVirtualPortDriver VIF driver "
-                         "is now deprecated and will be removed in the next "
-                         "release. Please use the LibvirtGenericVIFDriver VIF "
-                         "driver, together with a network plugin that reports "
-                         "the 'vif_type' attribute"))
-        return self.get_config_ovs_bridge(instance,
-                                          vif,
-                                          image_meta,
-                                          inst_type)
-
-    def plug(self, instance, vif):
-        return self.plug_ovs_bridge(instance, vif)
-
-    def unplug(self, instance, vif):
-        return self.unplug_ovs_bridge(instance, vif)
-
-
-class NeutronLinuxBridgeVIFDriver(LibvirtGenericVIFDriver):
-    """Retained in Grizzly for compatibility with Nuetron
-       drivers which do not yet report 'vif_type' port binding.
-       Will be deprecated in Havana, and removed in Ixxxx.
-    """
-
-    def get_bridge_name(self, vif):
-        network = vif['network']
-        def_bridge = ("brq" + network['id'])[:network_model.NIC_NAME_LEN]
-        return vif['network'].get('bridge') or def_bridge
-
-    def get_config(self, instance, vif, image_meta, inst_type):
-        LOG.deprecated(_("The NeutronLinuxBridgeVIFDriver VIF driver is now "
-                         "deprecated and will be removed in the next release. "
-                         "Please use the LibvirtGenericVIFDriver VIF driver, "
-                         "together with a network plugin that reports the "
-                         "'vif_type' attribute"))
-        # In order for libvirt to make use of the bridge name then it has
-        # to ensure that the bridge exists
-        network = vif['network']
-        if network and not network.get_meta('should_create_bridge', False):
-            vif['network']['meta']['should_create_bridge'] = True
-        return self.get_config_bridge(instance, vif, image_meta,
-                                      inst_type)
-
-    def plug(self, instance, vif):
-        self.plug_bridge(instance, vif)
-
-    def unplug(self, instance, vif):
-        self.unplug_bridge(instance, vif)
-
-# For compatibility with exsiting Nova deployments
-QuantumLinuxBridgeVIFDriver = NeutronLinuxBridgeVIFDriver

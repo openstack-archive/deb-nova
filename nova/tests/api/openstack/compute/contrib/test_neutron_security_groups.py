@@ -81,7 +81,7 @@ class TestNeutronSecurityGroups(
         return neutron.create_port(body)
 
     def test_create_security_group_with_no_description(self):
-        # Neutron's security group descirption field is optional.
+        # Neutron's security group description field is optional.
         pass
 
     def test_create_security_group_with_blank_name(self):
@@ -93,7 +93,7 @@ class TestNeutronSecurityGroups(
         pass
 
     def test_create_security_group_with_blank_description(self):
-        # Neutron's security group descirption field is optional.
+        # Neutron's security group description field is optional.
         pass
 
     def test_create_security_group_with_whitespace_description(self):
@@ -124,7 +124,7 @@ class TestNeutronSecurityGroups(
         self._create_sg_template().get('security_group')
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups')
         list_dict = self.controller.index(req)
-        self.assertEquals(len(list_dict['security_groups']), 2)
+        self.assertEqual(len(list_dict['security_groups']), 2)
 
     def test_get_security_group_list_all_tenants(self):
         pass
@@ -143,7 +143,7 @@ class TestNeutronSecurityGroups(
                                       % test_security_groups.FAKE_UUID1)
         res_dict = self.server_controller.index(
             req, test_security_groups.FAKE_UUID1)['security_groups']
-        self.assertEquals(expected, res_dict)
+        self.assertEqual(expected, res_dict)
 
     def test_get_security_group_by_id(self):
         sg = self._create_sg_template().get('security_group')
@@ -151,7 +151,7 @@ class TestNeutronSecurityGroups(
                                       % sg['id'])
         res_dict = self.controller.show(req, sg['id'])
         expected = {'security_group': sg}
-        self.assertEquals(res_dict, expected)
+        self.assertEqual(res_dict, expected)
 
     def test_delete_security_group_by_id(self):
         sg = self._create_sg_template().get('security_group')
@@ -164,6 +164,7 @@ class TestNeutronSecurityGroups(
         self._create_network()
         fake_instance = {'project_id': 'fake_tenant',
                          'availability_zone': 'zone_one',
+                         'info_cache': {'network_info': []},
                          'security_groups': [],
                          'uuid': str(uuid.uuid4()),
                          'display_name': 'test_instance'}
@@ -270,6 +271,8 @@ class TestNeutronSecurityGroups(
         self.manager._removeSecurityGroup(req, '1', body)
 
     def test_get_instances_security_groups_bindings(self):
+        servers = [{'id': test_security_groups.FAKE_UUID1},
+                   {'id': test_security_groups.FAKE_UUID2}]
         sg1 = self._create_sg_template(name='test1').get('security_group')
         sg2 = self._create_sg_template(name='test2').get('security_group')
         # test name='' is replaced with id
@@ -290,8 +293,8 @@ class TestNeutronSecurityGroups(
         security_group_api = self.controller.security_group_api
         bindings = (
             security_group_api.get_instances_security_groups_bindings(
-                context.get_admin_context()))
-        self.assertEquals(bindings, expected)
+                context.get_admin_context(), servers))
+        self.assertEqual(bindings, expected)
 
     def test_get_instance_security_groups(self):
         sg1 = self._create_sg_template(name='test1').get('security_group')
@@ -310,7 +313,7 @@ class TestNeutronSecurityGroups(
         security_group_api = self.controller.security_group_api
         sgs = security_group_api.get_instance_security_groups(
             context.get_admin_context(), test_security_groups.FAKE_UUID1)
-        self.assertEquals(sgs, expected)
+        self.assertEqual(sgs, expected)
 
     def test_create_port_with_sg_and_port_security_enabled_true(self):
         sg1 = self._create_sg_template(name='test1').get('security_group')
@@ -322,7 +325,7 @@ class TestNeutronSecurityGroups(
         security_group_api = self.controller.security_group_api
         sgs = security_group_api.get_instance_security_groups(
             context.get_admin_context(), test_security_groups.FAKE_UUID1)
-        self.assertEquals(sgs, [{'name': 'test1'}])
+        self.assertEqual(sgs, [{'name': 'test1'}])
 
     def test_create_port_with_sg_and_port_security_enabled_false(self):
         sg1 = self._create_sg_template(name='test1').get('security_group')
@@ -480,7 +483,7 @@ class TestNeutronSecurityGroupsOutputTest(TestNeutronSecurityGroupsTestCase):
         self.assertEqual(res.status_int, 202)
         server = self._get_server(res.body)
         group = self._get_groups(server)[0]
-        self.assertEquals(group.get('name'), 'default')
+        self.assertEqual(group.get('name'), 'default')
 
     def test_show(self):
         def fake_get_instance_security_groups(inst, context, id):
@@ -763,7 +766,7 @@ class MockClient(object):
         device_id = _params.get('device_id')
         for port in self._fake_ports.values():
             if device_id:
-                if device_id == port['device_id']:
+                if port['device_id'] in device_id:
                     ret.append(port)
             else:
                 ret.append(port)

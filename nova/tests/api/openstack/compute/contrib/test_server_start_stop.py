@@ -23,7 +23,8 @@ from nova import test
 from nova.tests.api.openstack import fakes
 
 
-def fake_instance_get(context, instance_id, columns_to_join=None):
+def fake_instance_get(context, instance_id,
+                      columns_to_join=None, use_slave=False):
     result = fakes.stub_instance(id=1, uuid=instance_id)
     result['created_at'] = None
     result['deleted_at'] = None
@@ -36,6 +37,10 @@ def fake_instance_get(context, instance_id, columns_to_join=None):
 
 def fake_start_stop_not_ready(self, context, instance):
     raise exception.InstanceNotReady(instance_id=instance["uuid"])
+
+
+def fake_start_stop_locked_server(self, context, instance):
+    raise exception.InstanceIsLocked(instance_uuid=instance['uuid'])
 
 
 class ServerStartStopTest(test.TestCase):
@@ -62,6 +67,14 @@ class ServerStartStopTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPConflict,
             self.controller._start_server, req, 'test_inst', body)
 
+    def test_start_locked_server(self):
+        self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)
+        self.stubs.Set(compute_api.API, 'start', fake_start_stop_locked_server)
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/test_inst/action')
+        body = dict(start="")
+        self.assertRaises(webob.exc.HTTPConflict,
+            self.controller._start_server, req, 'test_inst', body)
+
     def test_stop(self):
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)
         self.mox.StubOutWithMock(compute_api.API, 'stop')
@@ -75,6 +88,14 @@ class ServerStartStopTest(test.TestCase):
     def test_stop_not_ready(self):
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)
         self.stubs.Set(compute_api.API, 'stop', fake_start_stop_not_ready)
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/test_inst/action')
+        body = dict(start="")
+        self.assertRaises(webob.exc.HTTPConflict,
+            self.controller._stop_server, req, 'test_inst', body)
+
+    def test_stop_locked_server(self):
+        self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)
+        self.stubs.Set(compute_api.API, 'stop', fake_start_stop_locked_server)
         req = fakes.HTTPRequest.blank('/v2/fake/servers/test_inst/action')
         body = dict(start="")
         self.assertRaises(webob.exc.HTTPConflict,

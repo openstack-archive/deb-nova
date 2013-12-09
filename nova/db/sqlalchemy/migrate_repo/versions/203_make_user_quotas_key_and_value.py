@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2013 OpenStack LLC.
+# Copyright 2013 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -80,7 +80,7 @@ def upgrade(migrate_engine):
                                String(length=255),
                                nullable=False),
                         Column('resource',
-                               String(length=25),
+                               String(length=255),
                                nullable=False),
                         Column('hard_limit', Integer, nullable=True),
                         UniqueConstraint('user_id', 'project_id', 'resource',

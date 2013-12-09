@@ -34,10 +34,9 @@ def make_flavor(elem, detailed=False):
     if detailed:
         elem.set('ram')
         elem.set('disk')
-        elem.set('vcpus', xmlutil.EmptyStringSelector('vcpus'))
-        # NOTE(vish): this was originally added without a namespace
-        elem.set('swap', xmlutil.EmptyStringSelector('swap'))
-        elem.set('ephemeral', xmlutil.EmptyStringSelector('ephemeral'))
+        elem.set('vcpus')
+        elem.set('swap')
+        elem.set('ephemeral')
         elem.set('disabled')
 
     xmlutil.make_links(elem, 'links')
@@ -149,9 +148,13 @@ class FlavorsController(wsgi.Controller):
                        req.params['min_disk'])
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        limited_flavors = flavors.get_all_flavors_sorted_list(context,
-            filters=filters, sort_key=sort_key, sort_dir=sort_dir,
-            limit=limit, marker=marker)
+        try:
+            limited_flavors = flavors.get_all_flavors_sorted_list(context,
+                filters=filters, sort_key=sort_key, sort_dir=sort_dir,
+                limit=limit, marker=marker)
+        except exception.MarkerNotFound:
+            msg = _('marker [%s] not found') % marker
+            raise webob.exc.HTTPBadRequest(explanation=msg)
 
         return limited_flavors
 

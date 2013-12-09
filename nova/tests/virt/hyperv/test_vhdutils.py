@@ -60,8 +60,8 @@ class VHDUtilsTestCase(test.NoDBTestCase):
         vhdutil.get_vhd_info = mock.MagicMock()
         vhdutil.get_vhd_info.return_value = {'Type': constants.VHD_TYPE_FIXED}
 
-        real_size = vhdutil._get_internal_vhd_size_by_file_size(None,
-                                                                root_vhd_size)
+        real_size = vhdutil.get_internal_vhd_size_by_file_size(None,
+                                                               root_vhd_size)
         expected_vhd_size = 1 * 1024 ** 3 - 512
         self.assertEqual(expected_vhd_size, real_size)
 
@@ -74,8 +74,8 @@ class VHDUtilsTestCase(test.NoDBTestCase):
         vhdutil._get_vhd_dynamic_blk_size = mock.MagicMock()
         vhdutil._get_vhd_dynamic_blk_size.return_value = 2097152
 
-        real_size = vhdutil._get_internal_vhd_size_by_file_size(None,
-                                                                root_vhd_size)
+        real_size = vhdutil.get_internal_vhd_size_by_file_size(None,
+                                                               root_vhd_size)
         expected_vhd_size = 20 * 1024 ** 3 - 43008
         self.assertEqual(expected_vhd_size, real_size)
 
@@ -86,5 +86,49 @@ class VHDUtilsTestCase(test.NoDBTestCase):
         vhdutil.get_vhd_info.return_value = {'Type': 5}
 
         self.assertRaises(vmutils.HyperVException,
-                          vhdutil._get_internal_vhd_size_by_file_size,
+                          vhdutil.get_internal_vhd_size_by_file_size,
                           None, root_vhd_size)
+
+    def test_get_vhd_format_vhdx(self):
+        with mock.patch('nova.virt.hyperv.vhdutils.open',
+                        mock.mock_open(read_data=vhdutils.VHDX_SIGNATURE),
+                        create=True) as mock_open:
+
+            format = self._vhdutils.get_vhd_format(self._FAKE_VHD_PATH)
+
+            self.assertEqual(constants.DISK_FORMAT_VHDX, format)
+
+    def test_get_vhd_format_vhd(self):
+        with mock.patch('nova.virt.hyperv.vhdutils.open',
+                        mock.mock_open(read_data=vhdutils.VHD_SIGNATURE),
+                        create=True) as mock_open:
+            f = mock_open.return_value
+            f.tell.return_value = 1024
+
+            format = self._vhdutils.get_vhd_format(self._FAKE_VHD_PATH)
+
+            self.assertEqual(constants.DISK_FORMAT_VHD, format)
+
+    def test_get_vhd_format_invalid_format(self):
+        with mock.patch('nova.virt.hyperv.vhdutils.open',
+                        mock.mock_open(read_data='invalid'),
+                        create=True) as mock_open:
+            f = mock_open.return_value
+            f.tell.return_value = 1024
+
+            self.assertRaises(vmutils.HyperVException,
+                              self._vhdutils.get_vhd_format,
+                              self._FAKE_VHD_PATH)
+
+    def test_get_vhd_format_zero_length_file(self):
+        with mock.patch('nova.virt.hyperv.vhdutils.open',
+                        mock.mock_open(read_data=''),
+                        create=True) as mock_open:
+            f = mock_open.return_value
+            f.tell.return_value = 0
+
+            self.assertRaises(vmutils.HyperVException,
+                              self._vhdutils.get_vhd_format,
+                              self._FAKE_VHD_PATH)
+
+            f.seek.assert_called_once_with(0, 2)

@@ -17,7 +17,7 @@ from nova import db
 from nova import exception
 from nova.objects import base
 from nova.objects import compute_node
-from nova.objects import utils
+from nova.objects import fields
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
@@ -32,15 +32,15 @@ class Service(base.NovaPersistentObject, base.NovaObject):
     VERSION = '1.2'
 
     fields = {
-        'id': int,
-        'host': utils.str_or_none,
-        'binary': utils.str_or_none,
-        'topic': utils.str_or_none,
-        'report_count': int,
-        'disabled': bool,
-        'disabled_reason': utils.str_or_none,
-        'availability_zone': utils.str_or_none,
-        'compute_node': utils.nested_object(compute_node.ComputeNode),
+        'id': fields.IntegerField(),
+        'host': fields.StringField(nullable=True),
+        'binary': fields.StringField(nullable=True),
+        'topic': fields.StringField(nullable=True),
+        'report_count': fields.IntegerField(),
+        'disabled': fields.BooleanField(),
+        'disabled_reason': fields.StringField(nullable=True),
+        'availability_zone': fields.StringField(nullable=True),
+        'compute_node': fields.ObjectField('ComputeNode'),
         }
 
     @staticmethod
@@ -70,6 +70,9 @@ class Service(base.NovaPersistentObject, base.NovaObject):
         return service
 
     def obj_load_attr(self, attrname):
+        if not self._context:
+            raise exception.OrphanedObjectError(method='obj_load_attr',
+                                                objtype=self.obj_name())
         LOG.debug(_("Lazy-loading `%(attr)s' on %(name)s id %(id)s"),
                   {'attr': attrname,
                    'name': self.obj_name(),
@@ -81,11 +84,6 @@ class Service(base.NovaPersistentObject, base.NovaObject):
                 reason='attribute %s not lazy-loadable' % attrname)
         self.compute_node = compute_node.ComputeNode.get_by_service_id(
             self._context, self.id)
-
-    _attr_compute_node_to_primitive = utils.obj_serializer('compute_node')
-
-    def _attr_compute_node_from_primitive(self, val):
-        return base.NovaObject.obj_from_primitive(val)
 
     @base.remotable_classmethod
     def get_by_id(cls, context, service_id):
@@ -126,6 +124,10 @@ class Service(base.NovaPersistentObject, base.NovaObject):
 
 
 class ServiceList(base.ObjectListBase, base.NovaObject):
+    fields = {
+        'objects': fields.ListOfObjectsField('Service'),
+        }
+
     @base.remotable_classmethod
     def get_by_topic(cls, context, topic):
         db_services = db.service_get_all_by_topic(context, topic)

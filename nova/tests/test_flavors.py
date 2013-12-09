@@ -15,6 +15,7 @@
 """
 Unit Tests for flavors code
 """
+import sys
 import time
 
 from nova.compute import flavors
@@ -145,19 +146,19 @@ class InstanceTypeTestCase(test.TestCase):
 
     def test_non_existent_inst_type_shouldnt_delete(self):
         # Ensures that flavor creation fails with invalid args.
-        self.assertRaises(exception.InstanceTypeNotFoundByName,
+        self.assertRaises(exception.FlavorNotFoundByName,
                           flavors.destroy,
                           'unknown_flavor')
 
     def test_will_not_destroy_with_no_name(self):
         # Ensure destroy said path of no name raises error.
-        self.assertRaises(exception.InstanceTypeNotFoundByName,
+        self.assertRaises(exception.FlavorNotFoundByName,
                           flavors.destroy, None)
 
     def test_will_not_get_bad_default_instance_type(self):
         # ensures error raised on bad default flavor.
         self.flags(default_flavor='unknown_flavor')
-        self.assertRaises(exception.InstanceTypeNotFound,
+        self.assertRaises(exception.FlavorNotFound,
                           flavors.get_default_flavor)
 
     def test_will_get_flavor_by_id(self):
@@ -168,12 +169,12 @@ class InstanceTypeTestCase(test.TestCase):
 
     def test_will_not_get_flavor_by_unknown_id(self):
         # Ensure get by name returns default flavor with no name.
-        self.assertRaises(exception.InstanceTypeNotFound,
+        self.assertRaises(exception.FlavorNotFound,
                          flavors.get_flavor, 10000)
 
     def test_will_not_get_flavor_with_bad_id(self):
         # Ensure get by name returns default flavor with bad name.
-        self.assertRaises(exception.InstanceTypeNotFound,
+        self.assertRaises(exception.FlavorNotFound,
                           flavors.get_flavor, 'asdf')
 
     def test_flavor_get_by_None_name_returns_default(self):
@@ -184,7 +185,7 @@ class InstanceTypeTestCase(test.TestCase):
 
     def test_will_not_get_flavor_with_bad_name(self):
         # Ensure get by name returns default flavor with bad name.
-        self.assertRaises(exception.InstanceTypeNotFound,
+        self.assertRaises(exception.FlavorNotFound,
                           flavors.get_flavor_by_name, 10000)
 
     def test_will_not_get_instance_by_unknown_flavor_id(self):
@@ -248,7 +249,7 @@ class InstanceTypeTestCase(test.TestCase):
         all_flavors = flavors.get_all_flavors_sorted_list()
 
         # Set the 3rd result as the marker
-        marker_flavorid = all_flavors[2]['id']
+        marker_flavorid = all_flavors[2]['flavorid']
         marked_flavors = flavors.get_all_flavors_sorted_list(
             marker=marker_flavorid)
         # We expect everything /after/ the 3rd result
@@ -392,15 +393,21 @@ class CreateInstanceTypeTest(test.TestCase):
                           *create_args, **create_kwargs)
 
     def test_create_with_valid_name(self):
-        # Names can contain [a-zA-Z0-9_.- ]
+        # Names can contain alphanumeric and [_.- ]
         flavors.create('azAZ09. -_', 64, 1, 120)
+        # And they are not limited to ascii characters
+        # E.g.: m1.huge in simplified Chinese
+        flavors.create(u'm1.\u5DE8\u5927', 6400, 100, 12000)
 
     def test_name_with_special_characters(self):
-        # Names can contain [a-zA-Z0-9_.- ]
+        # Names can contain alphanumeric and [_.- ]
         flavors.create('_foo.bar-123', 64, 1, 120)
 
         # Ensure instance types raises InvalidInput for invalid characters.
         self.assertInvalidInput('foobar#', 64, 1, 120)
+
+    def test_non_ascii_name_with_special_characters(self):
+        self.assertInvalidInput(u'm1.\u5DE8\u5927 #', 64, 1, 120)
 
     def test_name_length_checks(self):
         MAX_LEN = 255
@@ -413,6 +420,9 @@ class CreateInstanceTypeTest(test.TestCase):
 
         # Flavor name which is empty should cause an error
         self.assertInvalidInput('', 64, 1, 120)
+
+    def test_all_whitespace_flavor_names_rejected(self):
+        self.assertInvalidInput(' ', 64, 1, 120)
 
     def test_flavorid_with_invalid_characters(self):
         # Ensure Flavor ID can only contain [a-zA-Z0-9_.- ]
@@ -428,23 +438,35 @@ class CreateInstanceTypeTest(test.TestCase):
         self.assertInvalidInput('flavor1', 'foo', 1, 120)
         self.assertInvalidInput('flavor1', -1, 1, 120)
         self.assertInvalidInput('flavor1', 0, 1, 120)
+        self.assertInvalidInput('flavor1', sys.maxint + 1, 1, 120)
         flavors.create('flavor1', 1, 1, 120)
 
     def test_vcpus_must_be_positive_integer(self):
         self.assertInvalidInput('flavor`', 64, 'foo', 120)
         self.assertInvalidInput('flavor1', 64, -1, 120)
         self.assertInvalidInput('flavor1', 64, 0, 120)
+        self.assertInvalidInput('flavor1', 64, sys.maxint + 1, 120)
         flavors.create('flavor1', 64, 1, 120)
 
     def test_root_gb_must_be_nonnegative_integer(self):
         self.assertInvalidInput('flavor1', 64, 1, 'foo')
         self.assertInvalidInput('flavor1', 64, 1, -1)
+        self.assertInvalidInput('flavor1', 64, 1, sys.maxint + 1)
         flavors.create('flavor1', 64, 1, 0)
         flavors.create('flavor2', 64, 1, 120)
+
+    def test_ephemeral_gb_must_be_nonnegative_integer(self):
+        self.assertInvalidInput('flavor1', 64, 1, 120, ephemeral_gb='foo')
+        self.assertInvalidInput('flavor1', 64, 1, 120, ephemeral_gb=-1)
+        self.assertInvalidInput('flavor1', 64, 1, 120,
+                                ephemeral_gb=sys.maxint + 1)
+        flavors.create('flavor1', 64, 1, 120, ephemeral_gb=0)
+        flavors.create('flavor2', 64, 1, 120, ephemeral_gb=120)
 
     def test_swap_must_be_nonnegative_integer(self):
         self.assertInvalidInput('flavor1', 64, 1, 120, swap='foo')
         self.assertInvalidInput('flavor1', 64, 1, 120, swap=-1)
+        self.assertInvalidInput('flavor1', 64, 1, 120, swap=sys.maxint + 1)
         flavors.create('flavor1', 64, 1, 120, swap=0)
         flavors.create('flavor2', 64, 1, 120, swap=1)
 
@@ -517,7 +539,7 @@ class CreateInstanceTypeTest(test.TestCase):
                             'instance type was not created')
 
         flavors.destroy('flavor')
-        self.assertRaises(exception.InstanceTypeNotFound,
+        self.assertRaises(exception.FlavorNotFound,
                           flavors.get_flavor, flavor['id'])
 
         # Deleted instance should not be in list anymore
@@ -525,15 +547,15 @@ class CreateInstanceTypeTest(test.TestCase):
         self.assertEqual(original_list, new_list)
 
     def test_duplicate_names_fail(self):
-        # Ensures that name duplicates raise InstanceTypeCreateFailed.
+        # Ensures that name duplicates raise FlavorCreateFailed.
         flavors.create('flavor', 256, 1, 120, 200, 'flavor1')
-        self.assertRaises(exception.InstanceTypeExists,
+        self.assertRaises(exception.FlavorExists,
                           flavors.create,
                           'flavor', 64, 1, 120)
 
     def test_duplicate_flavorids_fail(self):
-        # Ensures that flavorid duplicates raise InstanceTypeCreateFailed.
+        # Ensures that flavorid duplicates raise FlavorCreateFailed.
         flavors.create('flavor1', 64, 1, 120, flavorid='flavorid')
-        self.assertRaises(exception.InstanceTypeIdExists,
+        self.assertRaises(exception.FlavorIdExists,
                           flavors.create,
                           'flavor2', 64, 1, 120, flavorid='flavorid')

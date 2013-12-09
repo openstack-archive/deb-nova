@@ -18,25 +18,26 @@
 import math
 
 from nova.tests.virt.xenapi import stubs
+from nova import unit
 from nova.virt import fake
 from nova.virt import xenapi
 
 
-class XenAPIDriverTestCase(stubs.XenAPITestBase):
+class XenAPIDriverTestCase(stubs.XenAPITestBaseNoDB):
     """Unit tests for Driver operations."""
 
     def host_stats(self, refresh=True):
-        return {'host_memory_total': 3 * 1024 * 1024,
-                'host_memory_free_computed': 2 * 1024 * 1024,
-                'disk_total': 4 * 1024 * 1024 * 1024,
-                'disk_used': 5 * 1024 * 1024 * 1024,
+        return {'host_memory_total': 3 * unit.Mi,
+                'host_memory_free_computed': 2 * unit.Mi,
+                'disk_total': 4 * unit.Gi,
+                'disk_used': 5 * unit.Gi,
                 'host_hostname': 'somename',
                 'supported_instances': 'x86_64',
                 'host_cpu_info': {'cpu_count': 50}}
 
     def test_available_resource(self):
-        self.flags(xenapi_connection_url='test_url',
-                   xenapi_connection_password='test_pass')
+        self.flags(connection_url='test_url',
+                   connection_password='test_pass', group='xenserver')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
 
         driver = xenapi.XenAPIDriver(fake.FakeVirtAPI(), False)
@@ -57,8 +58,8 @@ class XenAPIDriverTestCase(stubs.XenAPITestBase):
         self.assertEqual(50, resources['cpu_info'])
 
     def test_overhead(self):
-        self.flags(xenapi_connection_url='test_url',
-                   xenapi_connection_password='test_pass')
+        self.flags(connection_url='test_url',
+                   connection_password='test_pass', group='xenserver')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         driver = xenapi.XenAPIDriver(fake.FakeVirtAPI(), False)
         instance = {'memory_mb': 30720}
@@ -68,3 +69,15 @@ class XenAPIDriverTestCase(stubs.XenAPITestBase):
         expected = math.ceil(251.832)
         overhead = driver.estimate_instance_overhead(instance)
         self.assertEqual(expected, overhead['memory_mb'])
+
+    def test_set_bootable(self):
+        self.flags(connection_url='test_url', connection_password='test_pass',
+                   group='xenserver')
+        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
+        driver = xenapi.XenAPIDriver(fake.FakeVirtAPI(), False)
+
+        self.mox.StubOutWithMock(driver._vmops, 'set_bootable')
+        driver._vmops.set_bootable('inst', True)
+        self.mox.ReplayAll()
+
+        driver.set_bootable('inst', True)

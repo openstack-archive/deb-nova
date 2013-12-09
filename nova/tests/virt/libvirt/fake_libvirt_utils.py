@@ -138,15 +138,7 @@ def chown(path, owner):
     pass
 
 
-def create_snapshot(disk_path, snapshot_name):
-    pass
-
-
-def delete_snapshot(disk_path, snapshot_name):
-    pass
-
-
-def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
+def extract_snapshot(disk_path, source_fmt, out_path, dest_fmt):
     files[out_path] = ''
 
 
@@ -197,7 +189,7 @@ def get_fs_info(path):
             'free': 84 * (1024 ** 3)}
 
 
-def fetch_image(context, target, image_id, user_id, project_id):
+def fetch_image(context, target, image_id, user_id, project_id, max_size=0):
     pass
 
 
@@ -211,8 +203,10 @@ def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
 
 
 def list_rbd_volumes(pool):
-    fake_volumes = ['fakeinstancename.local', 'fakeinstancename.swap',
-                    'fakeinstancename', 'wronginstancename']
+    fake_volumes = ['875a8070-d0b9-4949-8b31-104d125c9a64.local',
+                    '875a8070-d0b9-4949-8b31-104d125c9a64.swap',
+                    '875a8070-d0b9-4949-8b31-104d125c9a64',
+                    'wrong875a8070-d0b9-4949-8b31-104d125c9a64']
     return fake_volumes
 
 

@@ -50,7 +50,7 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         handle = vfs.handle
         vfs.teardown()
 
-        self.assertEqual(vfs.handle, None)
+        self.assertIsNone(vfs.handle)
         self.assertEqual(handle.running, False)
         self.assertEqual(handle.closed, True)
         self.assertEqual(len(handle.mounts), 0)
@@ -95,7 +95,7 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         handle = vfs.handle
         vfs.teardown()
 
-        self.assertEqual(vfs.handle, None)
+        self.assertIsNone(vfs.handle)
         self.assertEqual(handle.running, False)
         self.assertEqual(handle.closed, True)
         self.assertEqual(len(handle.mounts), 0)
@@ -114,7 +114,7 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         handle = vfs.handle
         vfs.teardown()
 
-        self.assertEqual(vfs.handle, None)
+        self.assertIsNone(vfs.handle)
         self.assertEqual(handle.running, False)
         self.assertEqual(handle.closed, True)
         self.assertEqual(len(handle.mounts), 0)
@@ -125,8 +125,8 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         vfs.make_path("/some/dir")
         vfs.make_path("/other/dir")
 
-        self.assertTrue("/some/dir" in vfs.handle.files)
-        self.assertTrue("/other/dir" in vfs.handle.files)
+        self.assertIn("/some/dir", vfs.handle.files)
+        self.assertIn("/other/dir", vfs.handle.files)
         self.assertTrue(vfs.handle.files["/some/dir"]["isdir"])
         self.assertTrue(vfs.handle.files["/other/dir"]["isdir"])
 
@@ -137,7 +137,7 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         vfs.setup()
         vfs.append_file("/some/file", " Goodbye")
 
-        self.assertTrue("/some/file" in vfs.handle.files)
+        self.assertIn("/some/file", vfs.handle.files)
         self.assertEqual(vfs.handle.files["/some/file"]["content"],
                          "Hello World Goodbye")
 
@@ -148,7 +148,7 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         vfs.setup()
         vfs.replace_file("/some/file", "Goodbye")
 
-        self.assertTrue("/some/file" in vfs.handle.files)
+        self.assertIn("/some/file", vfs.handle.files)
         self.assertEqual(vfs.handle.files["/some/file"]["content"],
                          "Goodbye")
 
@@ -176,10 +176,10 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         vfs.setup()
         vfs.read_file("/some/file")
 
-        self.assertEquals(vfs.handle.files["/some/file"]["mode"], 0o700)
+        self.assertEqual(vfs.handle.files["/some/file"]["mode"], 0o700)
 
         vfs.set_permissions("/some/file", 0o7777)
-        self.assertEquals(vfs.handle.files["/some/file"]["mode"], 0o7777)
+        self.assertEqual(vfs.handle.files["/some/file"]["mode"], 0o7777)
 
         vfs.teardown()
 
@@ -188,19 +188,19 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         vfs.setup()
         vfs.read_file("/some/file")
 
-        self.assertEquals(vfs.handle.files["/some/file"]["uid"], 100)
-        self.assertEquals(vfs.handle.files["/some/file"]["gid"], 100)
+        self.assertEqual(vfs.handle.files["/some/file"]["uid"], 100)
+        self.assertEqual(vfs.handle.files["/some/file"]["gid"], 100)
 
         vfs.set_ownership("/some/file", "fred", None)
-        self.assertEquals(vfs.handle.files["/some/file"]["uid"], 105)
-        self.assertEquals(vfs.handle.files["/some/file"]["gid"], 100)
+        self.assertEqual(vfs.handle.files["/some/file"]["uid"], 105)
+        self.assertEqual(vfs.handle.files["/some/file"]["gid"], 100)
 
         vfs.set_ownership("/some/file", None, "users")
-        self.assertEquals(vfs.handle.files["/some/file"]["uid"], 105)
-        self.assertEquals(vfs.handle.files["/some/file"]["gid"], 500)
+        self.assertEqual(vfs.handle.files["/some/file"]["uid"], 105)
+        self.assertEqual(vfs.handle.files["/some/file"]["gid"], 500)
 
         vfs.set_ownership("/some/file", "joe", "admins")
-        self.assertEquals(vfs.handle.files["/some/file"]["uid"], 110)
-        self.assertEquals(vfs.handle.files["/some/file"]["gid"], 600)
+        self.assertEqual(vfs.handle.files["/some/file"]["uid"], 110)
+        self.assertEqual(vfs.handle.files["/some/file"]["gid"], 600)
 
         vfs.teardown()

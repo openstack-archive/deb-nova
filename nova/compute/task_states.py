@@ -33,14 +33,12 @@ SPAWNING = 'spawning'
 
 # possible task states during snapshot()
 IMAGE_SNAPSHOT = 'image_snapshot'
+IMAGE_SNAPSHOT_PENDING = 'image_snapshot_pending'
 IMAGE_PENDING_UPLOAD = 'image_pending_upload'
 IMAGE_UPLOADING = 'image_uploading'
 
 # possible task states during backup()
 IMAGE_BACKUP = 'image_backup'
-
-# possible task states during live_snapshot()
-IMAGE_LIVE_SNAPSHOT = 'image_live_snapshot'
 
 # possible task states during set_admin_password()
 UPDATING_PASSWORD = 'updating_password'

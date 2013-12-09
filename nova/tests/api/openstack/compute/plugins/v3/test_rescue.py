@@ -47,16 +47,16 @@ class RescueTest(test.NoDBTestCase):
         self.app = fakes.wsgi_app_v3(init_only=('servers', 'os-rescue'))
 
     def test_rescue_with_preset_password(self):
-        body = {"rescue": {"admin_pass": "AABBCC112233"}}
+        body = {"rescue": {"admin_password": "AABBCC112233"}}
         req = webob.Request.blank('/v3/servers/test_inst/action')
         req.method = "POST"
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
 
         resp = req.get_response(self.app)
-        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.status_int, 202)
         resp_json = jsonutils.loads(resp.body)
-        self.assertEqual("AABBCC112233", resp_json['admin_pass'])
+        self.assertEqual("AABBCC112233", resp_json['admin_password'])
 
     def test_rescue_generates_password(self):
         body = dict(rescue=None)
@@ -66,9 +66,23 @@ class RescueTest(test.NoDBTestCase):
         req.headers["content-type"] = "application/json"
 
         resp = req.get_response(self.app)
-        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.status_int, 202)
         resp_json = jsonutils.loads(resp.body)
-        self.assertEqual(CONF.password_length, len(resp_json['admin_pass']))
+        self.assertEqual(CONF.password_length,
+                         len(resp_json['admin_password']))
+
+    def test_rescue_disable_password(self):
+        self.flags(enable_instance_password=False)
+        body = dict(rescue=None)
+        req = webob.Request.blank('/v3/servers/test_inst/action')
+        req.method = "POST"
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        resp = req.get_response(self.app)
+        self.assertEqual(resp.status_int, 202)
+        resp_json = jsonutils.loads(resp.body)
+        self.assertNotIn('admin_password', resp_json)
 
     def test_rescue_of_rescued_instance(self):
         body = dict(rescue=None)

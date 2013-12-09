@@ -18,10 +18,12 @@
 
 import inspect
 import math
+import re
 import time
 from xml.dom import minidom
 
 from lxml import etree
+import six
 import webob
 
 from nova.api.openstack import xmlutil
@@ -70,6 +72,18 @@ _ROUTES_METHODS = [
     'delete',
     'show',
     'update',
+]
+
+_SANITIZE_KEYS = ['adminPass', 'admin_password']
+
+_SANITIZE_PATTERNS = [
+    re.compile(r'(adminPass\s*[=]\s*[\"\']).*?([\"\'])', re.DOTALL),
+    re.compile(r'(admin_password\s*[=]\s*[\"\']).*?([\"\'])', re.DOTALL),
+    re.compile(r'(<adminPass>).*?(</adminPass>)', re.DOTALL),
+    re.compile(r'(<admin_password>).*?(</admin_password>)', re.DOTALL),
+    re.compile(r'([\"\']adminPass[\"\']\s*:\s*[\"\']).*?([\"\'])', re.DOTALL),
+    re.compile(r'([\"\']admin_password[\"\']\s*:\s*[\"\']).*?([\"\'])',
+               re.DOTALL)
 ]
 
 
@@ -134,6 +148,18 @@ class Request(webob.Request):
 
     def get_db_flavor(self, flavorid):
         return self.get_db_item('flavors', flavorid)
+
+    def cache_db_compute_nodes(self, compute_nodes):
+        self.cache_db_items('compute_nodes', compute_nodes, 'id')
+
+    def cache_db_compute_node(self, compute_node):
+        self.cache_db_items('compute_nodes', [compute_node], 'id')
+
+    def get_db_compute_nodes(self):
+        return self.get_db_items('compute_nodes')
+
+    def get_db_compute_node(self, id):
+        return self.get_db_item('compute_nodes', id)
 
     def best_match_content_type(self):
         """Determine the requested response content-type."""
@@ -700,6 +726,15 @@ class ResourceExceptionHandler(object):
         return False
 
 
+def sanitize(msg):
+    if not (key in msg for key in _SANITIZE_KEYS):
+        return msg
+
+    for pattern in _SANITIZE_PATTERNS:
+        msg = re.sub(pattern, r'\1****\2', msg)
+    return msg
+
+
 class Resource(wsgi.Application):
     """WSGI app that handles (de)serialization and controller dispatch.
 
@@ -937,7 +972,7 @@ class Resource(wsgi.Application):
             msg = _("Action: '%(action)s', body: "
                     "%(body)s") % {'action': action,
                                    'body': unicode(body, 'utf-8')}
-            LOG.debug(msg)
+            LOG.debug(sanitize(msg))
         LOG.debug(_("Calling method %s") % str(meth))
 
         # Now, deserialize the request body...
@@ -1133,10 +1168,9 @@ class ControllerMetaclass(type):
                                                        cls_dict)
 
 
+@six.add_metaclass(ControllerMetaclass)
 class Controller(object):
     """Default controller."""
-
-    __metaclass__ = ControllerMetaclass
 
     _view_builder_class = None
 

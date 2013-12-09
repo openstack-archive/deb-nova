@@ -15,11 +15,11 @@
 #    under the License.
 
 import base64
-import os
 import re
 import stevedore
 
 from oslo.config import cfg
+import six
 import webob
 from webob import exc
 
@@ -32,12 +32,15 @@ from nova.api.openstack import xmlutil
 from nova import compute
 from nova.compute import flavors
 from nova import exception
+from nova.image import glance
 from nova.objects import instance as instance_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
+from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
+from nova import policy
 from nova import utils
 
 
@@ -72,8 +75,6 @@ def make_server(elem, detailed=False):
         elem.set('updated')
         elem.set('created')
         elem.set('host_id')
-        elem.set('access_ip_v4')
-        elem.set('access_ip_v6')
         elem.set('status')
         elem.set('progress')
         elem.set('reservation_id')
@@ -130,7 +131,7 @@ class ServersTemplate(xmlutil.TemplateBuilder):
 class ServerAdminPassTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('server')
-        root.set('admin_pass')
+        root.set('admin_password')
         return xmlutil.SlaveTemplate(root, 1, nsmap=server_nsmap)
 
 
@@ -158,8 +159,8 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         server = {}
         server_node = self.find_first_child_named(node, 'server')
 
-        attributes = ["name", "image_ref", "flavor_ref", "admin_pass",
-                      "access_ip_v4", "access_ip_v6", "key_name"]
+        attributes = ["name", "image_ref", "flavor_ref", "admin_password",
+                      "key_name"]
         for attr in attributes:
             if server_node.getAttribute(attr):
                 server[attr] = server_node.getAttribute(attr)
@@ -246,14 +247,8 @@ class ActionDeserializer(CommonDeserializer):
             raise AttributeError("No image_ref was specified in request")
         rebuild["image_ref"] = node.getAttribute("image_ref")
 
-        if node.hasAttribute("admin_pass"):
-            rebuild["admin_pass"] = node.getAttribute("admin_pass")
-
-        if node.hasAttribute("access_ipv4"):
-            rebuild["access_ip_v4"] = node.getAttribute("access_ip_v4")
-
-        if node.hasAttribute("access_ipv6"):
-            rebuild["access_ip_v6"] = node.getAttribute("access_ip_v6")
+        if node.hasAttribute("admin_password"):
+            rebuild["admin_password"] = node.getAttribute("admin_password")
 
         if self.controller:
             self.controller.server_rebuild_xml_deserialize(node, rebuild)
@@ -388,7 +383,7 @@ class ServersController(wsgi.Controller):
         super(ServersController, self).__init__(**kwargs)
         self.compute_api = compute.API()
 
-        # Look for implmentation of extension point of server creation
+        # Look for implementation of extension point of server creation
         self.create_extension_manager = \
           stevedore.enabled.EnabledExtensionManager(
               namespace=self.EXTENSION_CREATE_NAMESPACE,
@@ -399,7 +394,7 @@ class ServersController(wsgi.Controller):
         if not list(self.create_extension_manager):
             LOG.debug(_("Did not find any server create extensions"))
 
-        # Look for implmentation of extension point of server create
+        # Look for implementation of extension point of server create
         # XML deserialization
         self.create_xml_deserialize_manager = \
           stevedore.enabled.EnabledExtensionManager(
@@ -413,7 +408,7 @@ class ServersController(wsgi.Controller):
             LOG.debug(_("Did not find any server create xml deserializer"
                         " extensions"))
 
-        # Look for implmentation of extension point of server rebuild
+        # Look for implementation of extension point of server rebuild
         self.rebuild_extension_manager = \
             stevedore.enabled.EnabledExtensionManager(
                 namespace=self.EXTENSION_REBUILD_NAMESPACE,
@@ -424,7 +419,7 @@ class ServersController(wsgi.Controller):
         if not list(self.rebuild_extension_manager):
             LOG.debug(_("Did not find any server rebuild extensions"))
 
-        # Look for implmentation of extension point of server rebuild
+        # Look for implementation of extension point of server rebuild
         # XML deserialization
         self.rebuild_xml_deserialize_manager = \
             stevedore.enabled.EnabledExtensionManager(
@@ -438,7 +433,7 @@ class ServersController(wsgi.Controller):
             LOG.debug(_("Did not find any server rebuild xml deserializer"
                         " extensions"))
 
-        # Look for implmentation of extension point of server resize
+        # Look for implementation of extension point of server resize
         self.resize_extension_manager = \
             stevedore.enabled.EnabledExtensionManager(
                 namespace=self.EXTENSION_RESIZE_NAMESPACE,
@@ -449,7 +444,7 @@ class ServersController(wsgi.Controller):
         if not list(self.resize_extension_manager):
             LOG.debug(_("Did not find any server resize extensions"))
 
-        # Look for implmentation of extension point of server resize
+        # Look for implementation of extension point of server resize
         # XML deserialization
         self.resize_xml_deserialize_manager = \
             stevedore.enabled.EnabledExtensionManager(
@@ -463,11 +458,11 @@ class ServersController(wsgi.Controller):
             LOG.debug(_("Did not find any server resize xml deserializer"
                         " extensions"))
 
-        # Look for implmentation of extension point of server update
+        # Look for implementation of extension point of server update
         self.update_extension_manager = \
             stevedore.enabled.EnabledExtensionManager(
                 namespace=self.EXTENSION_UPDATE_NAMESPACE,
-                check_func=_check_load_extension('server_resize'),
+                check_func=_check_load_extension('server_update'),
                 invoke_on_load=True,
                 invoke_kwds={"extension_info": self.extension_info},
                 propagate_map_exceptions=True)
@@ -537,14 +532,45 @@ class ServersController(wsgi.Controller):
         if 'changes_since' in search_opts:
             search_opts['changes-since'] = search_opts.pop('changes_since')
 
-        if search_opts.get("vm_state") == "deleted":
+        if search_opts.get("vm_state") == ['deleted']:
             if context.is_admin:
                 search_opts['deleted'] = True
             else:
                 msg = _("Only administrators may list deleted instances")
                 raise exc.HTTPBadRequest(explanation=msg)
 
-        if 'all_tenants' not in search_opts:
+        # If tenant_id is passed as a search parameter this should
+        # imply that all_tenants is also enabled unless explicitly
+        # disabled. Note that the tenant_id parameter is filtered out
+        # by remove_invalid_options above unless the requestor is an
+        # admin.
+        if 'tenant_id' in search_opts and not 'all_tenants' in search_opts:
+            # We do not need to add the all_tenants flag if the tenant
+            # id associated with the token is the tenant id
+            # specified. This is done so a request that does not need
+            # the all_tenants flag does not fail because of lack of
+            # policy permission for compute:get_all_tenants when it
+            # doesn't actually need it.
+            if context.project_id != search_opts.get('tenant_id'):
+                search_opts['all_tenants'] = 1
+
+        # If all tenants is passed with 0 or false as the value
+        # then remove it from the search options. Nothing passed as
+        # the value for all_tenants is considered to enable the feature
+        all_tenants = search_opts.get('all_tenants')
+        if all_tenants:
+            try:
+                if not strutils.bool_from_string(all_tenants, True):
+                    del search_opts['all_tenants']
+            except ValueError as err:
+                raise exception.InvalidInput(str(err))
+
+        if 'all_tenants' in search_opts:
+            policy.enforce(context, 'compute:get_all_tenants',
+                           {'project_id': context.project_id,
+                            'user_id': context.user_id})
+            del search_opts['all_tenants']
+        else:
             if context.project_id:
                 search_opts['project_id'] = context.project_id
             else:
@@ -586,7 +612,7 @@ class ServersController(wsgi.Controller):
 
     def _check_string_length(self, value, name, max_length=None):
         try:
-            if isinstance(value, basestring):
+            if isinstance(value, six.string_types):
                 value = value.strip()
             utils.check_string_length(value, name, min_length=1,
                                       max_length=max_length)
@@ -685,16 +711,6 @@ class ServersController(wsgi.Controller):
         except TypeError:
             return None
 
-    def _validate_access_ipv4(self, address):
-        if not utils.is_valid_ipv4(address):
-            expl = _('access_ip_v4 is not proper IPv4 format')
-            raise exc.HTTPBadRequest(explanation=expl)
-
-    def _validate_access_ipv6(self, address):
-        if not utils.is_valid_ipv6(address):
-            expl = _('access_ip_v6 is not proper IPv6 format')
-            raise exc.HTTPBadRequest(explanation=expl)
-
     @wsgi.serializers(xml=ServerTemplate)
     def show(self, req, id):
         """Returns server details by server id."""
@@ -768,14 +784,6 @@ class ServersController(wsgi.Controller):
             requested_networks = self._get_requested_networks(
                 requested_networks)
 
-        (access_ip_v4, ) = server_dict.get('access_ip_v4'),
-        if access_ip_v4 is not None:
-            self._validate_access_ipv4(access_ip_v4)
-
-        (access_ip_v6, ) = server_dict.get('access_ip_v6'),
-        if access_ip_v6 is not None:
-            self._validate_access_ipv6(access_ip_v6)
-
         try:
             flavor_id = self._flavor_id_from_req_data(body)
         except ValueError as error:
@@ -792,8 +800,6 @@ class ServersController(wsgi.Controller):
                             display_name=name,
                             display_description=name,
                             metadata=server_dict.get('metadata', {}),
-                            access_ip_v4=access_ip_v4,
-                            access_ip_v6=access_ip_v6,
                             admin_password=password,
                             requested_networks=requested_networks,
                             **create_kwargs)
@@ -824,15 +830,16 @@ class ServersController(wsgi.Controller):
             msg = "UnicodeError: %s" % unicode(error)
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
-                exception.InstanceTypeNotFound,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
                 exception.MultiplePortsNotApplicable,
                 exception.SecurityGroupNotFound,
                 exception.InstanceUserDataMalformed) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
+        except exception.PortNotFound as error:
+            raise exc.HTTPNotFound(explanation=error.format_message())
         except exception.PortInUse as error:
             raise exc.HTTPConflict(explanation=error.format_message())
 
@@ -846,7 +853,7 @@ class ServersController(wsgi.Controller):
         server = self._view_builder.create(req, instances[0])
 
         if CONF.enable_instance_password:
-            server['server']['admin_pass'] = password
+            server['server']['admin_password'] = password
 
         robj = wsgi.ResponseObject(server)
 
@@ -873,7 +880,6 @@ class ServersController(wsgi.Controller):
     def _update_extension_point(self, ext, update_dict, update_kwargs):
         handler = ext.obj
         LOG.debug(_("Running _update_extension_point for %s"), ext.obj)
-
         handler.server_update(update_dict, update_kwargs)
 
     def _delete(self, context, req, instance_uuid):
@@ -903,20 +909,6 @@ class ServersController(wsgi.Controller):
             self._validate_server_name(name)
             update_dict['display_name'] = name.strip()
 
-        if 'access_ip_v4' in body['server']:
-            access_ipv4 = body['server']['access_ip_v4']
-            if access_ipv4:
-                self._validate_access_ipv4(access_ipv4)
-            update_dict['access_ip_v4'] = (
-                access_ipv4 and access_ipv4.strip() or None)
-
-        if 'access_ip_v6' in body['server']:
-            access_ipv6 = body['server']['access_ip_v6']
-            if access_ipv6:
-                self._validate_access_ipv6(access_ipv6)
-            update_dict['access_ip_v6'] = (
-                access_ipv6 and access_ipv6.strip() or None)
-
         if 'host_id' in body['server']:
             msg = _("host_id cannot be updated.")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -928,6 +920,7 @@ class ServersController(wsgi.Controller):
         try:
             instance = self.compute_api.get(ctxt, id, want_objects=True)
             req.cache_db_instance(instance)
+            policy.enforce(ctxt, 'compute:update', instance)
             instance.update(update_dict)
             instance.save()
         except exception.NotFound:
@@ -951,7 +944,6 @@ class ServersController(wsgi.Controller):
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'confirm_resize')
-        return exc.HTTPNoContent()
 
     @wsgi.response(202)
     @wsgi.serializers(xml=FullServerTemplate)
@@ -965,7 +957,7 @@ class ServersController(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.InstanceTypeNotFound:
+        except exception.FlavorNotFound:
             msg = _("Flavor used by the instance could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.InstanceInvalidState as state_error:
@@ -1079,15 +1071,6 @@ class ServersController(wsgi.Controller):
 
         return common.get_id_from_href(flavor_ref)
 
-    def _validate_metadata(self, metadata):
-        """Ensure that we can work with the metadata given."""
-        try:
-            metadata.iteritems()
-        except AttributeError:
-            msg = _("Unable to parse metadata key/value pairs.")
-            LOG.debug(msg)
-            raise exc.HTTPBadRequest(explanation=msg)
-
     @wsgi.response(202)
     @wsgi.serializers(xml=FullServerTemplate)
     @wsgi.deserializers(xml=ActionDeserializer)
@@ -1132,29 +1115,18 @@ class ServersController(wsgi.Controller):
 
         image_href = self._image_uuid_from_href(image_href)
 
-        try:
-            password = rebuild_dict['admin_pass']
-        except (KeyError, TypeError):
-            password = utils.generate_password()
+        password = self._get_server_admin_password(rebuild_dict)
 
         context = req.environ['nova.context']
         instance = self._get_server(context, req, id)
 
         attr_map = {
             'name': 'display_name',
-            'access_ip_v4': 'access_ip_v4',
-            'access_ip_v6': 'access_ip_v6',
             'metadata': 'metadata',
         }
 
         if 'name' in rebuild_dict:
             self._validate_server_name(rebuild_dict['name'])
-
-        if 'access_ip_v4' in rebuild_dict:
-            self._validate_access_ipv4(rebuild_dict['access_ip_v4'])
-
-        if 'access_ip_v6' in rebuild_dict:
-            self._validate_access_ipv6(rebuild_dict['access_ip_v6'])
 
         rebuild_kwargs = {}
         if list(self.rebuild_extension_manager):
@@ -1167,8 +1139,6 @@ class ServersController(wsgi.Controller):
                     request_attribute]
             except (KeyError, TypeError):
                 pass
-
-        self._validate_metadata(rebuild_kwargs.get('metadata', {}))
 
         try:
             self.compute_api.rebuild(context,
@@ -1189,8 +1159,8 @@ class ServersController(wsgi.Controller):
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
 
@@ -1198,10 +1168,10 @@ class ServersController(wsgi.Controller):
 
         view = self._view_builder.show(req, instance)
 
-        # Add on the admin_pass attribute since the view doesn't do it
+        # Add on the admin_password attribute since the view doesn't do it
         # unless instance passwords are disabled
         if CONF.enable_instance_password:
-            view['server']['admin_pass'] = password
+            view['server']['admin_password'] = password
 
         robj = wsgi.ResponseObject(view)
         return self._add_location(robj)
@@ -1233,7 +1203,8 @@ class ServersController(wsgi.Controller):
 
         instance = self._get_server(context, req, id)
 
-        bdms = self.compute_api.get_instance_bdms(context, instance)
+        bdms = self.compute_api.get_instance_bdms(context, instance,
+                                                  legacy=False)
 
         try:
             if self.compute_api.is_volume_backed_instance(context, instance,
@@ -1245,7 +1216,8 @@ class ServersController(wsgi.Controller):
                     # device is set to 'vda'. It needs to be fixed later,
                     # but tentatively we use it here.
                     image_meta = {'properties': self.compute_api.
-                                    _get_bdm_image_metadata(context, bdms)}
+                                    _get_bdm_image_metadata(context, bdms,
+                                                            legacy_bdm=False)}
                 else:
                     src_image = self.compute_api.\
                         image_service.show(context, img)
@@ -1270,10 +1242,7 @@ class ServersController(wsgi.Controller):
 
         # build location of newly-created image entity
         image_id = str(image['id'])
-        image_ref = os.path.join(req.application_url,
-                                 context.project_id,
-                                 'images',
-                                 image_id)
+        image_ref = glance.generate_image_url(image_id)
 
         resp = webob.Response(status_int=202)
         resp.headers['Location'] = image_ref
@@ -1282,17 +1251,17 @@ class ServersController(wsgi.Controller):
     def _get_server_admin_password(self, server):
         """Determine the admin password for a server on creation."""
         try:
-            password = server['admin_pass']
+            password = server['admin_password']
             self._validate_admin_password(password)
         except KeyError:
             password = utils.generate_password()
         except ValueError:
-            raise exc.HTTPBadRequest(explanation=_("Invalid admin_pass"))
+            raise exc.HTTPBadRequest(explanation=_("Invalid admin_password"))
 
         return password
 
     def _validate_admin_password(self, password):
-        if not isinstance(password, basestring):
+        if not isinstance(password, six.string_types):
             raise ValueError()
 
     def _get_server_search_options(self):
@@ -1359,7 +1328,7 @@ class ServersController(wsgi.Controller):
         LOG.debug(_('start instance'), instance=instance)
         try:
             self.compute_api.start(context, instance)
-        except exception.InstanceNotReady as e:
+        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
@@ -1372,7 +1341,7 @@ class ServersController(wsgi.Controller):
         LOG.debug(_('stop instance'), instance=instance)
         try:
             self.compute_api.stop(context, instance)
-        except exception.InstanceNotReady as e:
+        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 

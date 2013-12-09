@@ -14,7 +14,7 @@
 
 
 from nova.objects import base
-from nova.objects import utils as obj_utils
+from nova.objects import fields
 from nova import quota
 
 
@@ -33,14 +33,13 @@ def ids_from_instance(context, instance):
 
 class Quotas(base.NovaObject):
     fields = {
-        'reservations': obj_utils.list_of_strings_or_none,
-        'project_id': obj_utils.str_or_none,
-        'user_id': obj_utils.str_or_none,
+        'reservations': fields.ListOfStringsField(nullable=True),
+        'project_id': fields.StringField(nullable=True),
+        'user_id': fields.StringField(nullable=True),
     }
 
     def __init__(self):
         super(Quotas, self).__init__()
-        self.quotas = quota.QUOTAS
         # Set up defaults.
         self.reservations = []
         self.project_id = None
@@ -66,10 +65,10 @@ class Quotas(base.NovaObject):
     @base.remotable
     def reserve(self, context, expire=None, project_id=None, user_id=None,
                 **deltas):
-        reservations = self.quotas.reserve(context, expire=expire,
-                                           project_id=project_id,
-                                           user_id=user_id,
-                                           **deltas)
+        reservations = quota.QUOTAS.reserve(context, expire=expire,
+                                            project_id=project_id,
+                                            user_id=user_id,
+                                            **deltas)
         self.reservations = reservations
         self.project_id = project_id
         self.user_id = user_id
@@ -81,9 +80,9 @@ class Quotas(base.NovaObject):
             return
         if context is None:
             context = self._context
-        self.quotas.commit(context, self.reservations,
-                           project_id=self.project_id,
-                           user_id=self.user_id)
+        quota.QUOTAS.commit(context, self.reservations,
+                            project_id=self.project_id,
+                            user_id=self.user_id)
         self.reservations = None
         self.obj_reset_changes()
 
@@ -94,8 +93,8 @@ class Quotas(base.NovaObject):
             return
         if context is None:
             context = self._context
-        self.quotas.rollback(context, self.reservations,
-                             project_id=self.project_id,
-                             user_id=self.user_id)
+        quota.QUOTAS.rollback(context, self.reservations,
+                              project_id=self.project_id,
+                              user_id=self.user_id)
         self.reservations = None
         self.obj_reset_changes()

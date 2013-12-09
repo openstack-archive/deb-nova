@@ -21,12 +21,22 @@ from nova.objects import instance_info_cache
 from nova.tests.objects import test_objects
 
 
+fake_info_cache = {
+    'created_at': None,
+    'updated_at': None,
+    'deleted_at': None,
+    'deleted': False,
+    'instance_uuid': 'fake-uuid',
+    'network_info': '[]',
+    }
+
+
 class _TestInstanceInfoCacheObject(object):
     def test_get_by_instance_uuid(self):
         nwinfo = network_model.NetworkInfo.hydrate([{'address': 'foo'}])
         self.mox.StubOutWithMock(db, 'instance_info_cache_get')
         db.instance_info_cache_get(self.context, 'fake-uuid').AndReturn(
-            {'instance_uuid': 'fake-uuid', 'network_info': nwinfo.json()})
+            dict(fake_info_cache, network_info=nwinfo.json()))
         self.mox.ReplayAll()
         obj = instance_info_cache.InstanceInfoCache.get_by_instance_uuid(
             self.context, 'fake-uuid')
@@ -49,7 +59,7 @@ class _TestInstanceInfoCacheObject(object):
         self.assertEqual(set(['instance_uuid', 'network_info']),
                          obj.obj_what_changed())
         self.assertEqual('fake-uuid', obj.instance_uuid)
-        self.assertEqual(None, obj.network_info)
+        self.assertIsNone(obj.network_info)
 
     def _save_helper(self, cell_type, update_cells):
         obj = instance_info_cache.InstanceInfoCache()

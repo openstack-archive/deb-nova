@@ -75,14 +75,14 @@ class NbdTestCase(test.NoDBTestCase):
         self.stubs.Set(nbd.NbdMount, '_detect_nbd_devices',
                        _fake_detect_nbd_devices_none)
         n = nbd.NbdMount(None, tempdir)
-        self.assertEquals(None, n._allocate_nbd())
+        self.assertIsNone(n._allocate_nbd())
 
     def test_nbd_no_free_devices(self):
         tempdir = self.useFixture(fixtures.TempDir()).path
         n = nbd.NbdMount(None, tempdir)
         self.useFixture(fixtures.MonkeyPatch('os.path.exists',
                                              _fake_exists_all_used))
-        self.assertEquals(None, n._allocate_nbd())
+        self.assertIsNone(n._allocate_nbd())
 
     def test_nbd_not_loaded(self):
         tempdir = self.useFixture(fixtures.TempDir()).path
@@ -98,8 +98,8 @@ class NbdTestCase(test.NoDBTestCase):
         # This should fail, as we don't have the module "loaded"
         # TODO(mikal): work out how to force english as the gettext language
         # so that the error check always passes
-        self.assertEquals(None, n._allocate_nbd())
-        self.assertEquals('nbd unavailable: module not loaded', n.error)
+        self.assertIsNone(n._allocate_nbd())
+        self.assertEqual('nbd unavailable: module not loaded', n.error)
 
     def test_nbd_allocation(self):
         tempdir = self.useFixture(fixtures.TempDir()).path
@@ -109,7 +109,7 @@ class NbdTestCase(test.NoDBTestCase):
         self.useFixture(fixtures.MonkeyPatch('random.shuffle', _fake_noop))
 
         # Allocate a nbd device
-        self.assertEquals('/dev/nbd0', n._allocate_nbd())
+        self.assertEqual('/dev/nbd0', n._allocate_nbd())
 
     def test_nbd_allocation_one_in_use(self):
         tempdir = self.useFixture(fixtures.TempDir()).path
@@ -131,7 +131,7 @@ class NbdTestCase(test.NoDBTestCase):
         # TODO(mikal): Note that there is a leak here, as the in use nbd device
         # is removed from the list, but not returned so it will never be
         # re-added. I will fix this in a later patch.
-        self.assertEquals('/dev/nbd1', n._allocate_nbd())
+        self.assertEqual('/dev/nbd1', n._allocate_nbd())
 
     def test_inner_get_dev_no_devices(self):
         tempdir = self.useFixture(fixtures.TempDir()).path
@@ -208,14 +208,14 @@ class NbdTestCase(test.NoDBTestCase):
         # No error logged, device consumed
         self.assertTrue(n._inner_get_dev())
         self.assertTrue(n.linked)
-        self.assertEquals('', n.error)
-        self.assertEquals('/dev/nbd0', n.device)
+        self.assertEqual('', n.error)
+        self.assertEqual('/dev/nbd0', n.device)
 
         # Free
         n.unget_dev()
         self.assertFalse(n.linked)
-        self.assertEquals('', n.error)
-        self.assertEquals(None, n.device)
+        self.assertEqual('', n.error)
+        self.assertIsNone(n.device)
 
     def test_unget_dev_simple(self):
         # This test is just checking we don't get an exception when we unget
@@ -238,14 +238,14 @@ class NbdTestCase(test.NoDBTestCase):
         # No error logged, device consumed
         self.assertTrue(n.get_dev())
         self.assertTrue(n.linked)
-        self.assertEquals('', n.error)
-        self.assertEquals('/dev/nbd0', n.device)
+        self.assertEqual('', n.error)
+        self.assertEqual('/dev/nbd0', n.device)
 
         # Free
         n.unget_dev()
         self.assertFalse(n.linked)
-        self.assertEquals('', n.error)
-        self.assertEquals(None, n.device)
+        self.assertEqual('', n.error)
+        self.assertIsNone(n.device)
 
     def test_get_dev_timeout(self):
         # Always fail to get a device

@@ -25,6 +25,7 @@ import mox
 from oslo.config import cfg
 
 from nova.compute import power_state
+from nova import db as main_db
 from nova import exception
 from nova import test
 from nova.tests.image import fake as fake_image
@@ -36,6 +37,7 @@ from nova.virt.baremetal import db
 from nova.virt.baremetal import driver as bm_driver
 from nova.virt.baremetal import fake
 from nova.virt.baremetal import pxe
+from nova.virt import fake as fake_virt
 
 
 CONF = cfg.CONF
@@ -64,14 +66,11 @@ class BareMetalDriverNoDBTestCase(test.NoDBTestCase):
         self.driver = bm_driver.BareMetalDriver(None)
 
     def test_validate_driver_loading(self):
-        self.assertTrue(isinstance(self.driver.driver,
-                                    fake.FakeDriver))
-        self.assertTrue(isinstance(self.driver.vif_driver,
-                                    fake.FakeVifDriver))
-        self.assertTrue(isinstance(self.driver.volume_driver,
-                                    fake.FakeVolumeDriver))
-        self.assertTrue(isinstance(self.driver.firewall_driver,
-                                    fake.FakeFirewallDriver))
+        self.assertIsInstance(self.driver.driver, fake.FakeDriver)
+        self.assertIsInstance(self.driver.vif_driver, fake.FakeVifDriver)
+        self.assertIsInstance(self.driver.volume_driver, fake.FakeVolumeDriver)
+        self.assertIsInstance(self.driver.firewall_driver,
+                              fake.FakeFirewallDriver)
 
 
 class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
@@ -83,10 +82,10 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
 
         fake_image.stub_out_image_service(self.stubs)
         self.context = utils.get_test_admin_context()
-        self.driver = bm_driver.BareMetalDriver(None)
+        self.driver = bm_driver.BareMetalDriver(fake_virt.FakeVirtAPI())
         self.addCleanup(fake_image.FakeImageService_reset)
 
-    def _create_node(self, node_info=None, nic_info=None):
+    def _create_node(self, node_info=None, nic_info=None, ephemeral=True):
         result = {}
         if node_info is None:
             node_info = bm_db_utils.new_bm_node(
@@ -114,7 +113,11 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
                                     nic['datapath_id'],
                                     nic['port_no'],
                 )
-        result['instance'] = utils.get_test_instance()
+        if ephemeral:
+            result['instance'] = utils.get_test_instance()
+        else:
+            flavor = utils.get_test_instance_type(options={'ephemeral_gb': 0})
+            result['instance'] = utils.get_test_instance(instance_type=flavor)
         result['instance']['node'] = result['node']['uuid']
         result['spawn_params'] = dict(
                 admin_password='test_pass',
@@ -127,6 +130,7 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
                 network_info=utils.get_test_network_info(),
             )
         result['destroy_params'] = dict(
+                context=self.context,
                 instance=result['instance'],
                 network_info=result['spawn_params']['network_info'],
                 block_device_info=result['spawn_params']['block_device_info'],
@@ -137,7 +141,7 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
     def test_get_host_stats(self):
         node = self._create_node()
         stats = self.driver.get_host_stats()
-        self.assertTrue(isinstance(stats, list))
+        self.assertIsInstance(stats, list)
         self.assertEqual(len(stats), 1)
         stats = stats[0]
         self.assertEqual(stats['cpu_arch'], 'test')
@@ -155,6 +159,20 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         self.assertEqual(row['task_state'], baremetal_states.ACTIVE)
         self.assertEqual(row['instance_uuid'], node['instance']['uuid'])
         self.assertEqual(row['instance_name'], node['instance']['hostname'])
+        instance = main_db.instance_get_by_uuid(self.context,
+                node['instance']['uuid'])
+        self.assertEqual(instance['default_ephemeral_device'], '/dev/sda1')
+
+    def test_spawn_no_ephemeral_ok(self):
+        node = self._create_node(ephemeral=False)
+        self.driver.spawn(**node['spawn_params'])
+        row = db.bm_node_get(self.context, node['node']['id'])
+        self.assertEqual(row['task_state'], baremetal_states.ACTIVE)
+        self.assertEqual(row['instance_uuid'], node['instance']['uuid'])
+        self.assertEqual(row['instance_name'], node['instance']['hostname'])
+        instance = main_db.instance_get_by_uuid(self.context,
+                node['instance']['uuid'])
+        self.assertEqual(instance['default_ephemeral_device'], None)
 
     def test_macs_from_nic_for_instance(self):
         node = self._create_node()
@@ -191,7 +209,7 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
                 self.driver.spawn, **node['spawn_params'])
 
         row = db.bm_node_get(self.context, node['node']['id'])
-        self.assertEqual(row['task_state'], None)
+        self.assertIsNone(row['task_state'])
 
     def test_spawn_node_in_use(self):
         node = self._create_node()
@@ -209,7 +227,7 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
                 self.driver.spawn, **node['spawn_params'])
 
         row = db.bm_node_get(self.context, node['node']['id'])
-        self.assertEqual(row['task_state'], None)
+        self.assertIsNone(row['task_state'])
 
     def test_spawn_fails(self):
         node = self._create_node()
@@ -247,8 +265,8 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
 
         row = db.bm_node_get(self.context, node['node']['id'])
         self.assertEqual(row['task_state'], baremetal_states.DELETED)
-        self.assertEqual(row['instance_uuid'], None)
-        self.assertEqual(row['instance_name'], None)
+        self.assertIsNone(row['instance_uuid'])
+        self.assertIsNone(row['instance_name'])
 
     def test_destroy_fails(self):
         node = self._create_node()
@@ -384,3 +402,59 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         res = self.driver.dhcp_options_for_instance(node['instance'])
         self.assertEqual(expected.sort(), res.sort())
         self.mox.VerifyAll()
+
+    def test_attach_volume(self):
+        connection_info = {'_fake_connection_info': None}
+        instance = utils.get_test_instance()
+        mountpoint = '/dev/sdd'
+        self.mox.StubOutWithMock(self.driver.volume_driver, 'attach_volume')
+        self.driver.volume_driver.attach_volume(connection_info,
+                                                instance,
+                                                mountpoint)
+        self.mox.ReplayAll()
+        self.driver.attach_volume(None, connection_info, instance, mountpoint)
+
+    def test_detach_volume(self):
+        connection_info = {'_fake_connection_info': None}
+        instance = utils.get_test_instance()
+        mountpoint = '/dev/sdd'
+        self.mox.StubOutWithMock(self.driver.volume_driver, 'detach_volume')
+        self.driver.volume_driver.detach_volume(connection_info,
+                                                instance,
+                                                mountpoint)
+        self.mox.ReplayAll()
+        self.driver.detach_volume(connection_info, instance, mountpoint)
+
+    def test_attach_block_devices(self):
+        connection_info_1 = {'_fake_connection_info_1': None}
+        connection_info_2 = {'_fake_connection_info_2': None}
+        block_device_mapping = [{'connection_info': connection_info_1,
+                                 'mount_device': '/dev/sde'},
+                                {'connection_info': connection_info_2,
+                                 'mount_device': '/dev/sdf'}]
+        block_device_info = {'block_device_mapping': block_device_mapping}
+        instance = utils.get_test_instance()
+
+        self.mox.StubOutWithMock(self.driver, 'attach_volume')
+        self.driver.attach_volume(None, connection_info_1, instance,
+                                  '/dev/sde')
+        self.driver.attach_volume(None, connection_info_2, instance,
+                                  '/dev/sdf')
+        self.mox.ReplayAll()
+        self.driver._attach_block_devices(instance, block_device_info)
+
+    def test_detach_block_devices(self):
+        connection_info_1 = {'_fake_connection_info_1': None}
+        connection_info_2 = {'_fake_connection_info_2': None}
+        block_device_mapping = [{'connection_info': connection_info_1,
+                                 'mount_device': '/dev/sde'},
+                                {'connection_info': connection_info_2,
+                                 'mount_device': '/dev/sdf'}]
+        block_device_info = {'block_device_mapping': block_device_mapping}
+        instance = utils.get_test_instance()
+
+        self.mox.StubOutWithMock(self.driver, 'detach_volume')
+        self.driver.detach_volume(connection_info_1, instance, '/dev/sde')
+        self.driver.detach_volume(connection_info_2, instance, '/dev/sdf')
+        self.mox.ReplayAll()
+        self.driver._detach_block_devices(instance, block_device_info)

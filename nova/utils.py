@@ -22,7 +22,6 @@
 import contextlib
 import datetime
 import functools
-import hashlib
 import inspect
 import os
 import pyclbr
@@ -33,12 +32,12 @@ import socket
 import struct
 import sys
 import tempfile
-import time
 from xml.sax import saxutils
 
 import eventlet
 import netaddr
 from oslo.config import cfg
+import six
 
 from nova import exception
 from nova.openstack.common import excutils
@@ -49,7 +48,6 @@ from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova.openstack.common.rpc import common as rpc_common
-from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 
 notify_decorator = 'nova.notifications.notify_decorator'
@@ -166,32 +164,27 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
         return server_sess
 
 
-def get_root_helper():
+def _get_root_helper():
     return 'sudo nova-rootwrap %s' % CONF.rootwrap_config
 
 
 def execute(*cmd, **kwargs):
     """Convenience wrapper around oslo's execute() method."""
     if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
-        kwargs['root_helper'] = get_root_helper()
+        kwargs['root_helper'] = _get_root_helper()
     return processutils.execute(*cmd, **kwargs)
 
 
 def trycmd(*args, **kwargs):
     """Convenience wrapper around oslo's trycmd() method."""
     if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
-        kwargs['root_helper'] = get_root_helper()
+        kwargs['root_helper'] = _get_root_helper()
     return processutils.trycmd(*args, **kwargs)
 
 
 def novadir():
     import nova
     return os.path.abspath(nova.__file__).split('nova/__init__.py')[0]
-
-
-def debug(arg):
-    LOG.debug(_('debug in callback: %s'), arg)
-    return arg
 
 
 def generate_uid(topic, size=8):
@@ -340,10 +333,6 @@ def generate_password(length=None, symbolgroups=DEFAULT_PASSWORD_SYMBOLS):
     return ''.join(password)
 
 
-def last_octet(address):
-    return int(address.split('.')[-1])
-
-
 def get_my_ipv4_address():
     """Run ip route/addr commands to figure out the best ipv4
     """
@@ -415,12 +404,6 @@ def get_my_linklocal(interface):
         raise exception.NovaException(msg)
 
 
-def str_dict_replace(s, mapping):
-    for s1, s2 in mapping.iteritems():
-        s = s.replace(s1, s2)
-    return s
-
-
 class LazyPluggable(object):
     """A pluggable backend loaded lazily based on some value."""
 
@@ -476,113 +459,6 @@ def utf8(value):
         return unicode(value).encode('utf-8')
     assert isinstance(value, str)
     return value
-
-
-def get_from_path(items, path):
-    """Returns a list of items matching the specified path.
-
-    Takes an XPath-like expression e.g. prop1/prop2/prop3, and for each item
-    in items, looks up items[prop1][prop2][prop3].  Like XPath, if any of the
-    intermediate results are lists it will treat each list item individually.
-    A 'None' in items or any child expressions will be ignored, this function
-    will not throw because of None (anywhere) in items.  The returned list
-    will contain no None values.
-
-    """
-    if path is None:
-        raise exception.NovaException('Invalid mini_xpath')
-
-    (first_token, sep, remainder) = path.partition('/')
-
-    if first_token == '':
-        raise exception.NovaException('Invalid mini_xpath')
-
-    results = []
-
-    if items is None:
-        return results
-
-    if not isinstance(items, list):
-        # Wrap single objects in a list
-        items = [items]
-
-    for item in items:
-        if item is None:
-            continue
-        get_method = getattr(item, 'get', None)
-        if get_method is None:
-            continue
-        child = get_method(first_token)
-        if child is None:
-            continue
-        if isinstance(child, list):
-            # Flatten intermediate lists
-            for x in child:
-                results.append(x)
-        else:
-            results.append(child)
-
-    if not sep:
-        # No more tokens
-        return results
-    else:
-        return get_from_path(results, remainder)
-
-
-def flatten_dict(dict_, flattened=None):
-    """Recursively flatten a nested dictionary."""
-    flattened = flattened or {}
-    for key, value in dict_.iteritems():
-        if hasattr(value, 'iteritems'):
-            flatten_dict(value, flattened)
-        else:
-            flattened[key] = value
-    return flattened
-
-
-def partition_dict(dict_, keys):
-    """Return two dicts, one with `keys` the other with everything else."""
-    intersection = {}
-    difference = {}
-    for key, value in dict_.iteritems():
-        if key in keys:
-            intersection[key] = value
-        else:
-            difference[key] = value
-    return intersection, difference
-
-
-def map_dict_keys(dict_, key_map):
-    """Return a dict in which the dictionaries keys are mapped to new keys."""
-    mapped = {}
-    for key, value in dict_.iteritems():
-        mapped_key = key_map[key] if key in key_map else key
-        mapped[mapped_key] = value
-    return mapped
-
-
-def subset_dict(dict_, keys):
-    """Return a dict that only contains a subset of keys."""
-    subset = partition_dict(dict_, keys)[0]
-    return subset
-
-
-def diff_dict(orig, new):
-    """
-    Return a dict describing how to change orig to new.  The keys
-    correspond to values that have changed; the value will be a list
-    of one or two elements.  The first element of the list will be
-    either '+' or '-', indicating whether the key was updated or
-    deleted; if the key was updated, the list will contain a second
-    element, giving the updated value.
-    """
-    # Figure out what keys went away
-    result = dict((k, ['-']) for k in set(orig.keys()) - set(new.keys()))
-    # Compute the updates
-    for key, value in new.items():
-        if key not in orig or value != orig[key]:
-            result[key] = ['+', value]
-    return result
 
 
 def check_isinstance(obj, cls):
@@ -751,20 +627,6 @@ def convert_to_list_dict(lst, label):
     return [{label: x} for x in lst]
 
 
-def timefunc(func):
-    """Decorator that logs how long a particular function took to execute."""
-    @functools.wraps(func)
-    def inner(*args, **kwargs):
-        start_time = time.time()
-        try:
-            return func(*args, **kwargs)
-        finally:
-            total_time = time.time() - start_time
-            LOG.debug(_("timefunc: '%(name)s' took %(total_time).2f secs") %
-                      dict(name=func.__name__, total_time=total_time))
-    return inner
-
-
 def make_dev_path(dev, partition=None, base='/dev'):
     """Return a path to a particular device.
 
@@ -778,15 +640,6 @@ def make_dev_path(dev, partition=None, base='/dev'):
     if partition:
         path += str(partition)
     return path
-
-
-def total_seconds(td):
-    """Local total_seconds implementation for compatibility with python 2.6."""
-    if hasattr(td, 'total_seconds'):
-        return td.total_seconds()
-    else:
-        return ((td.days * 86400 + td.seconds) * 10 ** 6 +
-                td.microseconds) / 10.0 ** 6
 
 
 def sanitize_hostname(hostname):
@@ -821,14 +674,6 @@ def read_cached_file(filename, cache_info, reload_func=None):
         if reload_func:
             reload_func(cache_info['data'])
     return cache_info['data']
-
-
-def hash_file(file_like_object):
-    """Generate a hash for the contents of a file."""
-    checksum = hashlib.sha1()
-    for chunk in iter(lambda: file_like_object.read(32768), b''):
-        checksum.update(chunk)
-    return checksum.hexdigest()
 
 
 @contextlib.contextmanager
@@ -979,7 +824,7 @@ class UndoManager(object):
             self._rollback()
 
 
-def mkfs(fs, path, label=None):
+def mkfs(fs, path, label=None, run_as_root=False):
     """Format a file or block device
 
     :param fs: Filesystem type (examples include 'swap', 'ext3', 'ext4'
@@ -992,7 +837,7 @@ def mkfs(fs, path, label=None):
     else:
         args = ['mkfs', '-t', fs]
     #add -F to force no interactive execute on non-block device.
-    if fs in ('ext3', 'ext4'):
+    if fs in ('ext3', 'ext4', 'ntfs'):
         args.extend(['-F'])
     if label:
         if fs in ('msdos', 'vfat'):
@@ -1001,7 +846,7 @@ def mkfs(fs, path, label=None):
             label_opt = '-L'
         args.extend([label_opt, label])
     args.append(path)
-    execute(*args)
+    execute(*args, run_as_root=run_as_root)
 
 
 def last_bytes(file_like_object, num):
@@ -1104,7 +949,7 @@ def check_string_length(value, name, min_length=0, max_length=None):
     :param min_length: the min_length of the string
     :param max_length: the max_length of the string
     """
-    if not isinstance(value, basestring):
+    if not isinstance(value, six.string_types):
         msg = _("%s is not a string or unicode") % name
         raise exception.InvalidInput(message=msg)
 
@@ -1158,14 +1003,47 @@ def is_none_string(val):
     """
     Check if a string represents a None value.
     """
-    if not isinstance(val, basestring):
+    if not isinstance(val, six.string_types):
         return False
 
     return val.lower() == 'none'
 
 
 def convert_version_to_int(version):
-    return version[0] * 1000000 + version[1] * 1000 + version[2]
+    try:
+        if type(version) == str:
+            version = convert_version_to_tuple(version)
+        if type(version) == tuple:
+            return reduce(lambda x, y: (x * 1000) + y, version)
+    except Exception:
+        raise exception.NovaException(message="Hypervisor version invalid.")
+
+
+def convert_version_to_str(version_int):
+    version_numbers = []
+    factor = 1000
+    while version_int != 0:
+        version_number = version_int - (version_int // factor * factor)
+        version_numbers.insert(0, str(version_number))
+        version_int = version_int / factor
+
+    return reduce(lambda x, y: "%s.%s" % (x, y), version_numbers)
+
+
+def convert_version_to_tuple(version_str):
+    return tuple(int(part) for part in version_str.split('.'))
+
+
+def get_major_minor_version(version):
+    try:
+        if type(version) == int or type(version) == float:
+            return version
+        if type(version) == str:
+            major_minor_versions = version.split(".")[0:2]
+            version_as_float = float(".".join(major_minor_versions))
+            return version_as_float
+    except Exception:
+        raise exception.NovaException(_("Version %s invalid") % version)
 
 
 def is_neutron():
@@ -1271,10 +1149,3 @@ def get_image_from_system_metadata(system_meta):
         image_meta['properties'] = properties
 
     return image_meta
-
-
-def get_boolean(value):
-    if isinstance(value, bool):
-        return value
-    else:
-        return strutils.bool_from_string(value)

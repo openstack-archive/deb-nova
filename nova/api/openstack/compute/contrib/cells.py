@@ -299,6 +299,9 @@ class Controller(object):
             self._validate_cell_type(cell['type'])
             cell['is_parent'] = cell['type'] == 'parent'
             del cell['type']
+        # Avoid cell type being overwritten to 'child'
+        elif existing:
+            cell['is_parent'] = existing['is_parent']
         else:
             cell['is_parent'] = False
 
@@ -392,7 +395,8 @@ class Controller(object):
         deleted = body.pop('deleted', False)
         updated_since = body.pop('updated_since', None)
         if body:
-            msg = _("Only 'updated_since' and 'project_id' are understood.")
+            msg = _("Only 'updated_since', 'project_id' and 'deleted' are "
+                    "understood.")
             raise exc.HTTPBadRequest(explanation=msg)
         if updated_since:
             try:

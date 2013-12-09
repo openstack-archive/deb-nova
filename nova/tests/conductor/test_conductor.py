@@ -15,6 +15,8 @@
 
 """Tests for the conductor service."""
 
+import contextlib
+import mock
 import mox
 
 from nova.api.ec2 import ec2utils
@@ -33,6 +35,7 @@ from nova.db.sqlalchemy import models
 from nova import exception as exc
 from nova import notifications
 from nova.objects import base as obj_base
+from nova.objects import fields
 from nova.objects import instance as instance_obj
 from nova.objects import migration as migration_obj
 from nova.openstack.common import jsonutils
@@ -197,27 +200,6 @@ class _BaseTestCase(object):
         aggregates = self.conductor.aggregate_get_by_host(self.context, 'bar')
         self.assertEqual(aggregates[0]['availability_zone'], 'foo')
 
-    def test_aggregate_metadata_add(self):
-        aggregate = {'name': 'fake aggregate', 'id': 'fake-id'}
-        metadata = {'foo': 'bar'}
-        self.mox.StubOutWithMock(db, 'aggregate_metadata_add')
-        db.aggregate_metadata_add(
-            mox.IgnoreArg(), aggregate['id'], metadata, False).AndReturn(
-                metadata)
-        self.mox.ReplayAll()
-        result = self.conductor.aggregate_metadata_add(self.context,
-                                                       aggregate,
-                                                       metadata)
-        self.assertEqual(result, metadata)
-
-    def test_aggregate_metadata_delete(self):
-        aggregate = {'name': 'fake aggregate', 'id': 'fake-id'}
-        self.mox.StubOutWithMock(db, 'aggregate_metadata_delete')
-        db.aggregate_metadata_delete(mox.IgnoreArg(), aggregate['id'], 'fake')
-        self.mox.ReplayAll()
-        self.conductor.aggregate_metadata_delete(self.context, aggregate,
-                                                 'fake')
-
     def test_aggregate_metadata_get_by_host(self):
         self.mox.StubOutWithMock(db, 'aggregate_metadata_get_by_host')
         db.aggregate_metadata_get_by_host(self.context, 'host',
@@ -240,27 +222,6 @@ class _BaseTestCase(object):
         self.mox.ReplayAll()
         result = self.conductor.bw_usage_update(*update_args)
         self.assertEqual(result, 'foo')
-
-    def test_security_group_get_by_instance(self):
-        fake_inst = {'uuid': 'fake-instance'}
-        self.mox.StubOutWithMock(db, 'security_group_get_by_instance')
-        db.security_group_get_by_instance(
-            self.context, fake_inst['uuid']).AndReturn('it worked')
-        self.mox.ReplayAll()
-        result = self.conductor.security_group_get_by_instance(self.context,
-                                                               fake_inst)
-        self.assertEqual(result, 'it worked')
-
-    def test_security_group_rule_get_by_security_group(self):
-        fake_secgroup = {'id': 'fake-secgroup'}
-        self.mox.StubOutWithMock(db,
-                                 'security_group_rule_get_by_security_group')
-        db.security_group_rule_get_by_security_group(
-            self.context, fake_secgroup['id']).AndReturn('it worked')
-        self.mox.ReplayAll()
-        result = self.conductor.security_group_rule_get_by_security_group(
-            self.context, fake_secgroup)
-        self.assertEqual(result, 'it worked')
 
     def test_provider_fw_rule_get_all(self):
         fake_rules = ['a', 'b', 'c']
@@ -303,9 +264,11 @@ class _BaseTestCase(object):
 
     def test_instance_destroy(self):
         self.mox.StubOutWithMock(db, 'instance_destroy')
-        db.instance_destroy(self.context, 'fake-uuid')
+        db.instance_destroy(self.context, 'fake-uuid').AndReturn('fake-result')
         self.mox.ReplayAll()
-        self.conductor.instance_destroy(self.context, {'uuid': 'fake-uuid'})
+        result = self.conductor.instance_destroy(self.context,
+                                                 {'uuid': 'fake-uuid'})
+        self.assertEqual(result, 'fake-result')
 
     def test_instance_info_cache_delete(self):
         self.mox.StubOutWithMock(db, 'instance_info_cache_delete')
@@ -313,17 +276,6 @@ class _BaseTestCase(object):
         self.mox.ReplayAll()
         self.conductor.instance_info_cache_delete(self.context,
                                                   {'uuid': 'fake-uuid'})
-
-    def test_instance_info_cache_update(self):
-        fake_values = {'key1': 'val1', 'key2': 'val2'}
-        fake_inst = {'uuid': 'fake-uuid'}
-        self.mox.StubOutWithMock(db, 'instance_info_cache_update')
-        db.instance_info_cache_update(self.context, 'fake-uuid',
-                                      fake_values)
-        self.mox.ReplayAll()
-        self.conductor.instance_info_cache_update(self.context,
-                                                  fake_inst,
-                                                  fake_values)
 
     def test_flavor_get(self):
         self.mox.StubOutWithMock(db, 'flavor_get')
@@ -398,7 +350,7 @@ class _BaseTestCase(object):
         db.compute_node_delete(self.context, node['id']).AndReturn(None)
         self.mox.ReplayAll()
         result = self.conductor.compute_node_delete(self.context, node)
-        self.assertEqual(result, None)
+        self.assertIsNone(result)
 
     def test_instance_fault_create(self):
         self.mox.StubOutWithMock(db, 'instance_fault_create')
@@ -577,6 +529,17 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         super(ConductorTestCase, self).setUp()
         self.conductor = conductor_manager.ConductorManager()
         self.conductor_manager = self.conductor
+
+    def test_instance_info_cache_update(self):
+        fake_values = {'key1': 'val1', 'key2': 'val2'}
+        fake_inst = {'uuid': 'fake-uuid'}
+        self.mox.StubOutWithMock(db, 'instance_info_cache_update')
+        db.instance_info_cache_update(self.context, 'fake-uuid',
+                                      fake_values)
+        self.mox.ReplayAll()
+        self.conductor.instance_info_cache_update(self.context,
+                                                  fake_inst,
+                                                  fake_values)
 
     def test_migration_get(self):
         migration = db.migration_create(self.context.elevated(),
@@ -867,7 +830,7 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
 
     def test_object_action_copies_object(self):
         class TestObject(obj_base.NovaObject):
-            fields = {'dict': dict}
+            fields = {'dict': fields.DictOfStringsField()}
 
             def touch_dict(self, context):
                 self.dict['foo'] = 'bar'
@@ -883,6 +846,48 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         # the same, and thus 'dict' will not be reported as changed
         self.assertIn('dict', updates)
         self.assertEqual({'foo': 'bar'}, updates['dict'])
+
+    def test_aggregate_metadata_add(self):
+        aggregate = {'name': 'fake aggregate', 'id': 'fake-id'}
+        metadata = {'foo': 'bar'}
+        self.mox.StubOutWithMock(db, 'aggregate_metadata_add')
+        db.aggregate_metadata_add(
+            mox.IgnoreArg(), aggregate['id'], metadata, False).AndReturn(
+                metadata)
+        self.mox.ReplayAll()
+        result = self.conductor.aggregate_metadata_add(self.context,
+                                                       aggregate,
+                                                       metadata)
+        self.assertEqual(result, metadata)
+
+    def test_aggregate_metadata_delete(self):
+        aggregate = {'name': 'fake aggregate', 'id': 'fake-id'}
+        self.mox.StubOutWithMock(db, 'aggregate_metadata_delete')
+        db.aggregate_metadata_delete(mox.IgnoreArg(), aggregate['id'], 'fake')
+        self.mox.ReplayAll()
+        self.conductor.aggregate_metadata_delete(self.context, aggregate,
+                                                 'fake')
+
+    def test_security_group_get_by_instance(self):
+        fake_inst = {'uuid': 'fake-instance'}
+        self.mox.StubOutWithMock(db, 'security_group_get_by_instance')
+        db.security_group_get_by_instance(
+            self.context, fake_inst['uuid']).AndReturn('it worked')
+        self.mox.ReplayAll()
+        result = self.conductor.security_group_get_by_instance(self.context,
+                                                               fake_inst)
+        self.assertEqual(result, 'it worked')
+
+    def test_security_group_rule_get_by_security_group(self):
+        fake_secgroup = {'id': 'fake-secgroup'}
+        self.mox.StubOutWithMock(db,
+                                 'security_group_rule_get_by_security_group')
+        db.security_group_rule_get_by_security_group(
+            self.context, fake_secgroup['id']).AndReturn('it worked')
+        self.mox.ReplayAll()
+        result = self.conductor.security_group_rule_get_by_security_group(
+            self.context, fake_secgroup)
+        self.assertEqual(result, 'it worked')
 
 
 class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
@@ -1191,7 +1196,7 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
         self.conductor.wait_until_ready(self.context)
 
         self.assertEqual(timeouts.count(10), 10)
-        self.assertTrue(None in timeouts)
+        self.assertIn(None, timeouts)
 
     def test_security_groups_trigger_handler(self):
         self.mox.StubOutWithMock(self.conductor_manager.security_group_api,
@@ -1228,24 +1233,22 @@ class ConductorLocalAPITestCase(ConductorAPITestCase):
 class ConductorImportTest(test.TestCase):
     def test_import_conductor_local(self):
         self.flags(use_local=True, group='conductor')
-        self.assertTrue(isinstance(conductor.API(),
-                                   conductor_api.LocalAPI))
-        self.assertTrue(isinstance(conductor.ComputeTaskAPI(),
-                                   conductor_api.LocalComputeTaskAPI))
+        self.assertIsInstance(conductor.API(), conductor_api.LocalAPI)
+        self.assertIsInstance(conductor.ComputeTaskAPI(),
+                              conductor_api.LocalComputeTaskAPI)
 
     def test_import_conductor_rpc(self):
         self.flags(use_local=False, group='conductor')
-        self.assertTrue(isinstance(conductor.API(),
-                                   conductor_api.API))
-        self.assertTrue(isinstance(conductor.ComputeTaskAPI(),
-                                   conductor_api.ComputeTaskAPI))
+        self.assertIsInstance(conductor.API(), conductor_api.API)
+        self.assertIsInstance(conductor.ComputeTaskAPI(),
+                              conductor_api.ComputeTaskAPI)
 
     def test_import_conductor_override_to_local(self):
         self.flags(use_local=False, group='conductor')
-        self.assertTrue(isinstance(conductor.API(use_local=True),
-                                   conductor_api.LocalAPI))
-        self.assertTrue(isinstance(conductor.ComputeTaskAPI(use_local=True),
-                                   conductor_api.LocalComputeTaskAPI))
+        self.assertIsInstance(conductor.API(use_local=True),
+                              conductor_api.LocalAPI)
+        self.assertIsInstance(conductor.ComputeTaskAPI(use_local=True),
+                              conductor_api.LocalComputeTaskAPI)
 
 
 class ConductorPolicyTest(test.TestCase):
@@ -1458,6 +1461,33 @@ class _BaseTaskTestCase(object):
         system_metadata['shelved_image_id'] = 'fake_image_id'
         system_metadata['shelved_host'] = 'fake-mini'
         self.conductor_manager.unshelve_instance(self.context, instance)
+
+    def test_unshelve_instance_schedule_and_rebuild_novalid_host(self):
+        db_instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = instance_obj.Instance.get_by_uuid(self.context,
+                db_instance['uuid'], expected_attrs=['system_metadata'])
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        instance.save()
+        filter_properties = {}
+        system_metadata = instance.system_metadata
+
+        def fake_schedule_instances(context, image, filter_properties,
+                                    *instances):
+            raise exc.NoValidHost(reason='')
+
+        with contextlib.nested(
+            mock.patch.object(self.conductor_manager, '_get_image',
+                              return_value='fake_image'),
+            mock.patch.object(self.conductor_manager, '_schedule_instances',
+                              fake_schedule_instances)
+        ) as (_get_image, _schedule_instances):
+            system_metadata['shelved_at'] = timeutils.utcnow()
+            system_metadata['shelved_image_id'] = 'fake_image_id'
+            system_metadata['shelved_host'] = 'fake-mini'
+            self.conductor_manager.unshelve_instance(self.context, instance)
+            _get_image.assert_has_calls([mock.call(self.context,
+                                      system_metadata['shelved_image_id'])])
+            self.assertEqual(vm_states.SHELVED_OFFLOADED, instance.vm_state)
 
     def test_unshelve_instance_schedule_and_rebuild_volume_backed(self):
         db_instance = jsonutils.to_primitive(self._create_fake_instance())

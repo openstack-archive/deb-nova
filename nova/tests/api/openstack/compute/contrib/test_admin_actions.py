@@ -138,6 +138,24 @@ class CommonMixin(object):
         self.mox.VerifyAll()
         self.mox.UnsetStubs()
 
+    def _test_locked_instance(self, action, method=None):
+        if method is None:
+            method = action
+
+        instance = self._stub_instance_get()
+        getattr(self.compute_api, method)(self.context, instance).AndRaise(
+                exception.InstanceIsLocked(instance_uuid=instance['uuid']))
+
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % instance['uuid'],
+                                 {action: None})
+        self.assertEqual(409, res.status_int)
+        # Do these here instead of tearDown because this method is called
+        # more than once for the same test case
+        self.mox.VerifyAll()
+        self.mox.UnsetStubs()
+
 
 class AdminActionsTest(CommonMixin, test.NoDBTestCase):
     def test_actions(self):
@@ -169,11 +187,29 @@ class AdminActionsTest(CommonMixin, test.NoDBTestCase):
     def test_actions_with_non_existed_instance(self):
         actions = ['pause', 'unpause', 'suspend', 'resume',
                    'resetNetwork', 'injectNetworkInfo', 'lock',
-                   'unlock', 'os-resetState']
-        body_map = {'os-resetState': {'state': 'active'}}
+                   'unlock', 'os-resetState', 'migrate', 'os-migrateLive']
+        body_map = {'os-resetState': {'state': 'active'},
+                    'os-migrateLive':
+                                  {'host': 'hostname',
+                                   'block_migration': False,
+                                   'disk_over_commit': False}}
         for action in actions:
             self._test_non_existing_instance(action,
                                              body_map=body_map)
+            # Re-mock this.
+            self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def test_actions_with_locked_instance(self):
+        actions = ['pause', 'unpause', 'suspend', 'resume', 'migrate',
+                   'resetNetwork', 'injectNetworkInfo']
+        method_translations = {'migrate': 'resize',
+                               'resetNetwork': 'reset_network',
+                               'injectNetworkInfo': 'inject_network_info'}
+
+        for action in actions:
+            method = method_translations.get(action)
+            self.mox.StubOutWithMock(self.compute_api, method or action)
+            self._test_locked_instance(action, method=method)
             # Re-mock this.
             self.mox.StubOutWithMock(self.compute_api, 'get')
 
@@ -246,6 +282,22 @@ class AdminActionsTest(CommonMixin, test.NoDBTestCase):
     def test_migrate_live_destination_hypervisor_too_old(self):
         self._test_migrate_live_failed_with_exception(
             exception.DestinationHypervisorTooOld())
+
+    def test_migrate_live_no_valid_host(self):
+        self._test_migrate_live_failed_with_exception(
+            exception.NoValidHost(reason=''))
+
+    def test_migrate_live_invalid_local_storage(self):
+        self._test_migrate_live_failed_with_exception(
+            exception.InvalidLocalStorage(path='', reason=''))
+
+    def test_migrate_live_invalid_shared_storage(self):
+        self._test_migrate_live_failed_with_exception(
+            exception.InvalidSharedStorage(path='', reason=''))
+
+    def test_migrate_live_migration_pre_check_error(self):
+        self._test_migrate_live_failed_with_exception(
+            exception.MigrationPreCheckError(reason=''))
 
     def test_unlock_not_authorized(self):
         self.mox.StubOutWithMock(self.compute_api, 'unlock')

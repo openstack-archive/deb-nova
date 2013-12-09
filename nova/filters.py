@@ -35,7 +35,7 @@ class BaseFilter(object):
     def filter_all(self, filter_obj_list, filter_properties):
         """Yield objects that pass the filter.
 
-        Can be overriden in a subclass, if you need to base filtering
+        Can be overridden in a subclass, if you need to base filtering
         decisions on all objects.  Otherwise, one can just override
         _filter_one() to filter a single object.
         """
@@ -80,9 +80,10 @@ class BaseFilterHandler(loadables.BaseLoader):
                           {'cls_name': cls_name})
                     return
                 list_objs = list(objs)
+                if not list_objs:
+                    LOG.info(_("Filter %s returned 0 hosts"), cls_name)
+                    break
                 LOG.debug(_("Filter %(cls_name)s returned "
                             "%(obj_len)d host(s)"),
                           {'cls_name': cls_name, 'obj_len': len(list_objs)})
-                if len(list_objs) == 0:
-                    break
         return list_objs

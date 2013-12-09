@@ -106,6 +106,7 @@ class VolumeOps(object):
         Attach a volume to the SCSI controller or to the IDE controller if
         ebs_root is True
         """
+        target_iqn = None
         LOG.debug(_("Attach_volume: %(connection_info)s to %(instance_name)s"),
                   {'connection_info': connection_info,
                    'instance_name': instance_name})
@@ -138,12 +139,13 @@ class VolumeOps(object):
                                                       mounted_disk_path)
         except Exception as exn:
             LOG.exception(_('Attach volume failed: %s'), exn)
-            self._volutils.logout_storage_target(target_iqn)
+            if target_iqn:
+                self._volutils.logout_storage_target(target_iqn)
             raise vmutils.HyperVException(_('Unable to attach volume '
                                             'to instance %s') % instance_name)
 
     def _get_free_controller_slot(self, scsi_controller_path):
-        #Slots starts from 0, so the lenght of the disks gives us the free slot
+        #Slots starts from 0, so the length of the disks gives us the free slot
         return self._vmutils.get_attached_disks_count(scsi_controller_path)
 
     def detach_volumes(self, block_device_info, instance_name):
@@ -156,7 +158,7 @@ class VolumeOps(object):
         self._volutils.logout_storage_target(target_iqn)
 
     def detach_volume(self, connection_info, instance_name):
-        """Dettach a volume to the SCSI controller."""
+        """Detach a volume to the SCSI controller."""
         LOG.debug(_("Detach_volume: %(connection_info)s "
                     "from %(instance_name)s"),
                   {'connection_info': connection_info,

@@ -23,6 +23,7 @@ A driver for Bare-metal platform.
 
 from oslo.config import cfg
 
+from nova.compute import flavors
 from nova.compute import power_state
 from nova import context as nova_context
 from nova import exception
@@ -186,7 +187,7 @@ class BareMetalDriver(driver.ComputeDriver):
             connection_info = vol['connection_info']
             mountpoint = vol['mount_device']
             self.attach_volume(None,
-                    connection_info, instance['name'], mountpoint)
+                    connection_info, instance, mountpoint)
 
     def _detach_block_devices(self, instance, block_device_info):
         block_device_mapping = driver.\
@@ -195,7 +196,7 @@ class BareMetalDriver(driver.ComputeDriver):
             connection_info = vol['connection_info']
             mountpoint = vol['mount_device']
             self.detach_volume(
-                    connection_info, instance['name'], mountpoint)
+                    connection_info, instance, mountpoint)
 
     def _start_firewall(self, instance, network_info):
         self.firewall_driver.setup_basic_filtering(
@@ -216,9 +217,18 @@ class BareMetalDriver(driver.ComputeDriver):
         ifaces = db.bm_interface_get_all_by_bm_node_id(context, node['id'])
         return set(iface['address'] for iface in ifaces)
 
+    def _set_default_ephemeral_device(self, instance):
+        instance_type = flavors.extract_flavor(instance)
+        if instance_type['ephemeral_gb']:
+            self.virtapi.instance_update(
+                nova_context.get_admin_context(), instance['uuid'],
+                {'default_ephemeral_device':
+                    '/dev/sda1'})
+
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         node_uuid = self._require_node(instance)
+        self._set_default_ephemeral_device(instance)
 
         # NOTE(deva): this db method will raise an exception if the node is
         #             already in use. We call it here to ensure no one else
@@ -283,8 +293,7 @@ class BareMetalDriver(driver.ComputeDriver):
                 "for instance %r") % instance['uuid'])
         _update_state(ctx, node, instance, state)
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                context=None):
+    def destroy(self, context, instance, network_info, block_device_info=None):
         context = nova_context.get_admin_context()
 
         try:
@@ -349,10 +358,10 @@ class BareMetalDriver(driver.ComputeDriver):
         return self.volume_driver.attach_volume(connection_info,
                                                 instance, mountpoint)
 
-    def detach_volume(self, connection_info, instance_name, mountpoint,
+    def detach_volume(self, connection_info, instance, mountpoint,
                       encryption=None):
         return self.volume_driver.detach_volume(connection_info,
-                                                instance_name, mountpoint)
+                                                instance, mountpoint)
 
     def get_info(self, instance):
         inst_uuid = instance.get('uuid')

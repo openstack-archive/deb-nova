@@ -57,6 +57,9 @@ def fake_flavor_get_by_flavor_id(flavorid, ctxt=None):
 def fake_get_all_flavors_sorted_list(context=None, inactive=False,
                                      filters=None, sort_key='flavorid',
                                      sort_dir='asc', limit=None, marker=None):
+    if marker in ['99999']:
+        raise exception.MarkerNotFound(marker)
+
     def reject_min(db_attr, filter_attr):
         return (filter_attr in filters and
                 int(flavor[db_attr]) < int(filters[filter_attr]))
@@ -91,7 +94,7 @@ def empty_get_all_flavors_sorted_list(context=None, inactive=False,
 
 
 def return_flavor_not_found(flavor_id, ctxt=None):
-    raise exception.InstanceTypeNotFound(instance_type_id=flavor_id)
+    raise exception.FlavorNotFound(flavor_id=flavor_id)
 
 
 class FlavorsTest(test.TestCase):
@@ -230,6 +233,11 @@ class FlavorsTest(test.TestCase):
             ]
         }
         self.assertThat(flavor, matchers.DictMatches(expected))
+
+    def test_get_flavor_list_with_invalid_marker(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/flavors?marker=99999')
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.index, req)
 
     def test_get_flavor_detail_with_limit(self):
         req = fakes.HTTPRequest.blank('/v2/fake/flavors/detail?limit=1')
@@ -737,7 +745,7 @@ class DisabledFlavorsWithRealDBTest(test.TestCase):
         db_flavorids = set(i['flavorid'] for i in self.inst_types)
         disabled_flavorid = str(self.disabled_type['flavorid'])
 
-        self.assert_(disabled_flavorid in db_flavorids)
+        self.assertIn(disabled_flavorid, db_flavorids)
         self.assertEqual(db_flavorids - set([disabled_flavorid]),
                          api_flavorids)
 
@@ -750,7 +758,7 @@ class DisabledFlavorsWithRealDBTest(test.TestCase):
         db_flavorids = set(i['flavorid'] for i in self.inst_types)
         disabled_flavorid = str(self.disabled_type['flavorid'])
 
-        self.assert_(disabled_flavorid in db_flavorids)
+        self.assertIn(disabled_flavorid, db_flavorids)
         self.assertEqual(db_flavorids, api_flavorids)
 
     def test_show_should_include_disabled_flavor_for_user(self):

@@ -68,7 +68,8 @@ class DiskConfigTestCase(test.TestCase):
 
         self.stubs.Set(db, 'instance_get', fake_instance_get)
 
-        def fake_instance_get_by_uuid(context, uuid, columns_to_join=None):
+        def fake_instance_get_by_uuid(context, uuid,
+                                      columns_to_join=None, use_slave=False):
             for instance in FAKE_INSTANCES:
                 if uuid == instance['uuid']:
                     return instance
@@ -133,7 +134,7 @@ class DiskConfigTestCase(test.TestCase):
         nova.tests.image.fake.FakeImageService_reset()
 
     def assertDiskConfig(self, dict_, value):
-        self.assert_(API_DISK_CONFIG in dict_)
+        self.assertIn(API_DISK_CONFIG, dict_)
         self.assertEqual(dict_[API_DISK_CONFIG], value)
 
     def test_show_server(self):
@@ -596,7 +597,7 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
             },
         }
 
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_create_request_with_disk_config_disabled(self):
         serial_request = """
@@ -617,7 +618,7 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
             },
         }
 
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_rebuild_request(self):
         serial_request = """
@@ -632,7 +633,7 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 "os-disk-config:disk_config": "MANUAL",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_rebuild_request_with_disk_config_disabled(self):
         serial_request = """
@@ -646,7 +647,7 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 "image_ref": "1",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_resize_request(self):
         serial_request = """
@@ -661,7 +662,7 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 "os-disk-config:disk_config": "MANUAL",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_resize_request_with_disk_config_disabled(self):
         serial_request = """
@@ -675,4 +676,4 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 "flavor_ref": "1",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)

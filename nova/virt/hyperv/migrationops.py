@@ -23,6 +23,7 @@ import os
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova import unit
 from nova.virt.hyperv import imagecache
 from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vmops
@@ -95,8 +96,8 @@ class MigrationOps(object):
             LOG.exception(ex)
             LOG.error(_("Cannot cleanup migration files"))
 
-    def _check_target_instance_type(self, instance, instance_type):
-        new_root_gb = instance_type['root_gb']
+    def _check_target_flavor(self, instance, flavor):
+        new_root_gb = flavor['root_gb']
         curr_root_gb = instance['root_gb']
 
         if new_root_gb < curr_root_gb:
@@ -107,11 +108,11 @@ class MigrationOps(object):
                 {'curr_root_gb': curr_root_gb, 'new_root_gb': new_root_gb})
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info,
+                                   flavor, network_info,
                                    block_device_info=None):
         LOG.debug(_("migrate_disk_and_power_off called"), instance=instance)
 
-        self._check_target_instance_type(instance, instance_type)
+        self._check_target_flavor(instance, flavor)
 
         self._vmops.power_off(instance)
 
@@ -142,7 +143,7 @@ class MigrationOps(object):
             instance_name)
         self._pathutils.rename(revert_path, instance_path)
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
         LOG.debug(_("finish_revert_migration called"), instance=instance)
 
@@ -252,12 +253,12 @@ class MigrationOps(object):
                                       src_base_disk_path)
 
             if resize_instance:
-                new_size = instance['root_gb'] * 1024 ** 3
+                new_size = instance['root_gb'] * unit.Gi
                 self._check_resize_vhd(root_vhd_path, root_vhd_info, new_size)
 
         eph_vhd_path = self._pathutils.lookup_ephemeral_vhd_path(instance_name)
         if resize_instance:
-            new_size = instance.get('ephemeral_gb', 0) * 1024 ** 3
+            new_size = instance.get('ephemeral_gb', 0) * unit.Gi
             if not eph_vhd_path:
                 if new_size:
                     eph_vhd_path = self._vmops.create_ephemeral_vhd(instance)

@@ -63,14 +63,7 @@ disk_opts = [
     #                 escape such commas.
     #
     cfg.MultiStrOpt('virt_mkfs',
-                    default=[
-                      'default=mkfs.ext3 -L %(fs_label)s -F %(target)s',
-                      'linux=mkfs.ext3 -L %(fs_label)s -F %(target)s',
-                      'windows=mkfs.ntfs'
-                      ' --force --fast --label %(fs_label)s %(target)s',
-                      # NOTE(yamahata): vfat case
-                      #'windows=mkfs.vfat -n %(fs_label)s %(target)s',
-                      ],
+                    default=[],
                     help='mkfs commands for ephemeral device. '
                          'The format is <os_type>=<mkfs command>'),
 
@@ -85,10 +78,12 @@ disk_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(disk_opts)
+CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
 
 _MKFS_COMMAND = {}
 _DEFAULT_MKFS_COMMAND = None
-
+_DEFAULT_FS_BY_OSTYPE = {'linux': 'ext3',
+                         'windows': 'ntfs'}
 
 for s in CONF.virt_mkfs:
     # NOTE(yamahata): mkfs command may includes '=' for its options.
@@ -100,11 +95,24 @@ for s in CONF.virt_mkfs:
         _DEFAULT_MKFS_COMMAND = mkfs_command
 
 
-def mkfs(os_type, fs_label, target):
+def mkfs(os_type, fs_label, target, run_as_root=True):
+    """Format a file or block device using
+       a user provided command for each os type.
+       If user has not provided any configuration,
+       format type will be used according to a
+       default_ephemeral_format configuration
+       or a system defaults.
+    """
+
     mkfs_command = (_MKFS_COMMAND.get(os_type, _DEFAULT_MKFS_COMMAND) or
                     '') % {'fs_label': fs_label, 'target': target}
     if mkfs_command:
-        utils.execute(*mkfs_command.split(), run_as_root=True)
+        utils.execute(*mkfs_command.split(), run_as_root=run_as_root)
+    else:
+        default_fs = CONF.default_ephemeral_format
+        if not default_fs:
+            default_fs = _DEFAULT_FS_BY_OSTYPE.get(os_type, 'ext3')
+        utils.mkfs(default_fs, target, fs_label, run_as_root=run_as_root)
 
 
 def resize2fs(image, check_exit_code=False, run_as_root=False):
@@ -188,7 +196,7 @@ def is_image_partitionless(image, use_cow=False):
             utils.execute('e2label', image)
         except processutils.ProcessExecutionError as e:
             LOG.debug(_('Unable to determine label for image %(image)s with '
-                        'error %(errror)s. Cannot resize.'),
+                        'error %(error)s. Cannot resize.'),
                       {'image': image,
                        'error': e})
             return False
@@ -207,6 +215,8 @@ class _DiskImage(object):
         self.partition = partition
         self.mount_dir = mount_dir
         self.use_cow = use_cow
+
+        self.device = None
 
         # Internal
         self._mkdir = False
@@ -239,6 +249,7 @@ class _DiskImage(object):
 
         mount_name = os.path.basename(self.mount_dir or '')
         self._mkdir = mount_name.startswith(self.tmp_prefix)
+        self.device = self._mounter.device
 
     @property
     def errors(self):
@@ -319,6 +330,8 @@ def inject_data(image, key=None, net=None, metadata=None, admin_password=None,
     if use_cow:
         fmt = "qcow2"
     try:
+        # Note(mrda): Test if the image exists first to short circuit errors
+        os.stat(image)
         fs = vfs.VFS.instance_for_image(image, fmt, partition)
         fs.setup()
     except Exception as e:
@@ -344,6 +357,8 @@ def setup_container(image, container_dir, use_cow=False):
 
     It will mount the loopback image to the container directory in order
     to create the root filesystem for the container.
+
+    Returns path of image device which is mounted to the container directory.
     """
     img = _DiskImage(image=image, use_cow=use_cow, mount_dir=container_dir)
     if not img.mount():
@@ -352,9 +367,11 @@ def setup_container(image, container_dir, use_cow=False):
                   {"image": img, "target": container_dir,
                    "errors": img.errors})
         raise exception.NovaException(img.errors)
+    else:
+        return img.device
 
 
-def teardown_container(container_dir):
+def teardown_container(container_dir, container_root_device=None):
     """Teardown the container rootfs mounting once it is spawned.
 
     It will umount the container that is mounted,
@@ -363,8 +380,19 @@ def teardown_container(container_dir):
     try:
         img = _DiskImage(image=None, mount_dir=container_dir)
         img.teardown()
+
+        # Make sure container_root_device is released when teardown container.
+        if container_root_device:
+            if 'loop' in container_root_device:
+                LOG.debug(_("Release loop device %s"), container_root_device)
+                utils.execute('losetup', '--detach', container_root_device,
+                              run_as_root=True, attempts=3)
+            else:
+                LOG.debug(_('Release nbd device %s'), container_root_device)
+                utils.execute('qemu-nbd', '-d', container_root_device,
+                              run_as_root=True)
     except Exception as exn:
-        LOG.exception(_('Failed to teardown ntainer filesystem: %s'), exn)
+        LOG.exception(_('Failed to teardown container filesystem: %s'), exn)
 
 
 def clean_lxc_namespace(container_dir):

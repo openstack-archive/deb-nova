@@ -54,6 +54,10 @@ pxe_opts = [
     cfg.StrOpt('pxe_config_template',
                default='$pybasedir/nova/virt/baremetal/pxe_config.template',
                help='Template file for PXE configuration'),
+    cfg.BoolOpt('use_file_injection',
+                help='If True, enable file injection for network info, '
+                'files and admin password',
+                default=True),
     cfg.IntOpt('pxe_deploy_timeout',
                 help='Timeout for PXE deployments. Default: 0 (unlimited)',
                 default=0),
@@ -170,6 +174,7 @@ def get_partition_sizes(instance):
     instance_type = flavors.extract_flavor(instance)
     root_mb = instance_type['root_gb'] * 1024
     swap_mb = instance_type['swap']
+    ephemeral_mb = instance_type['ephemeral_gb'] * 1024
 
     # NOTE(deva): For simpler code paths on the deployment side,
     #             we always create a swap partition. If the flavor
@@ -177,7 +182,7 @@ def get_partition_sizes(instance):
     if swap_mb < 1:
         swap_mb = 1
 
-    return (root_mb, swap_mb)
+    return (root_mb, swap_mb, ephemeral_mb)
 
 
 def get_pxe_mac_path(mac):
@@ -333,14 +338,15 @@ class PXE(base.NodeDriver):
     def cache_images(self, context, node, instance,
             admin_password, image_meta, injected_files, network_info):
         """Prepare all the images for this instance."""
-        instance_type = self.virtapi.instance_type_get(
+        instance_type = self.virtapi.flavor_get(
             context, instance['instance_type_id'])
         tftp_image_info = get_tftp_image_info(instance, instance_type)
         self._cache_tftp_images(context, instance, tftp_image_info)
 
         self._cache_image(context, instance, image_meta)
-        self._inject_into_image(context, node, instance, network_info,
-                injected_files, admin_password)
+        if CONF.baremetal.use_file_injection:
+            self._inject_into_image(context, node, instance, network_info,
+                   injected_files, admin_password)
 
     def destroy_images(self, context, node, instance):
         """Delete instance's image file."""
@@ -368,10 +374,10 @@ class PXE(base.NodeDriver):
             ./pxelinux.cfg/
                  {mac} -> ../{uuid}/config
         """
-        instance_type = self.virtapi.instance_type_get(
+        instance_type = self.virtapi.flavor_get(
             context, instance['instance_type_id'])
         image_info = get_tftp_image_info(instance, instance_type)
-        (root_mb, swap_mb) = get_partition_sizes(instance)
+        (root_mb, swap_mb, ephemeral_mb) = get_partition_sizes(instance)
         pxe_config_file_path = get_pxe_config_file_path(instance)
         image_file_path = get_image_file_path(instance)
 
@@ -382,7 +388,8 @@ class PXE(base.NodeDriver):
                  'image_path': image_file_path,
                  'pxe_config_path': pxe_config_file_path,
                  'root_mb': root_mb,
-                 'swap_mb': swap_mb})
+                 'swap_mb': swap_mb,
+                 'ephemeral_mb': ephemeral_mb})
         pxe_config = build_pxe_config(
                     node['id'],
                     deployment_key,

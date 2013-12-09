@@ -65,13 +65,14 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
     def test_read_stored_checksum_missing(self):
         self.stubs.Set(os.path, 'exists', lambda x: False)
         csum = imagecache.read_stored_checksum('/tmp/foo', timestamped=False)
-        self.assertEquals(csum, None)
+        self.assertIsNone(csum)
 
     def test_read_stored_checksum(self):
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
-                                                    '%(image)s.info'))
+                                                    '%(image)s.info'),
+                       group='libvirt')
 
             csum_input = '{"sha1": "fdghkfhkgjjksfdgjksjkghsdf"}\n'
             fname = os.path.join(tmpdir, 'aaa')
@@ -82,14 +83,15 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
             csum_output = imagecache.read_stored_checksum(fname,
                                                           timestamped=False)
-            self.assertEquals(csum_input.rstrip(),
-                              '{"sha1": "%s"}' % csum_output)
+            self.assertEqual(csum_input.rstrip(),
+                             '{"sha1": "%s"}' % csum_output)
 
     def test_read_stored_checksum_legacy_essex(self):
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
-                                                    '%(image)s.info'))
+                                                    '%(image)s.info'),
+                       group='libvirt')
 
             fname = os.path.join(tmpdir, 'aaa')
             old_fname = fname + '.sha1'
@@ -99,7 +101,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
             csum_output = imagecache.read_stored_checksum(fname,
                                                           timestamped=False)
-            self.assertEquals(csum_output, 'fdghkfhkgjjksfdgjksjkghsdf')
+            self.assertEqual(csum_output, 'fdghkfhkgjjksfdgjksjkghsdf')
             self.assertFalse(os.path.exists(old_fname))
             info_fname = imagecache.get_info_filename(fname)
             self.assertTrue(os.path.exists(info_fname))
@@ -132,33 +134,33 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         sanitized = sanitized.sort()
         images = images.sort()
-        self.assertEquals(sanitized, images)
+        self.assertEqual(sanitized, images)
 
         expected = os.path.join(base_dir,
                                 'e97222e91fc4241f49a7f520d1dcf446751129b3')
-        self.assertTrue(expected in image_cache_manager.unexplained_images)
+        self.assertIn(expected, image_cache_manager.unexplained_images)
 
         expected = os.path.join(base_dir,
                                 '17d1b00b81642842e514494a78e804e9a511637c_'
                                 '10737418240')
-        self.assertTrue(expected in image_cache_manager.unexplained_images)
+        self.assertIn(expected, image_cache_manager.unexplained_images)
 
         unexpected = os.path.join(base_dir, '00000004')
-        self.assertFalse(unexpected in image_cache_manager.unexplained_images)
+        self.assertNotIn(unexpected, image_cache_manager.unexplained_images)
 
         for ent in image_cache_manager.unexplained_images:
             self.assertTrue(ent.startswith(base_dir))
 
-        self.assertEquals(len(image_cache_manager.originals), 2)
+        self.assertEqual(len(image_cache_manager.originals), 2)
 
         expected = os.path.join(base_dir,
                                 '17d1b00b81642842e514494a78e804e9a511637c')
-        self.assertTrue(expected in image_cache_manager.originals)
+        self.assertIn(expected, image_cache_manager.originals)
 
         unexpected = os.path.join(base_dir,
                                   '17d1b00b81642842e514494a78e804e9a511637c_'
                                 '10737418240')
-        self.assertFalse(unexpected in image_cache_manager.originals)
+        self.assertNotIn(unexpected, image_cache_manager.originals)
 
     def test_list_running_instances(self):
         all_instances = [{'image_ref': '1',
@@ -197,8 +199,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         self.assertTrue(image_cache_manager.used_images['22'] ==
                         (0, 1, ['inst-3']))
 
-        self.assertTrue('inst-1' in image_cache_manager.instance_names)
-        self.assertTrue('123' in image_cache_manager.instance_names)
+        self.assertIn('inst-1', image_cache_manager.instance_names)
+        self.assertIn('123', image_cache_manager.instance_names)
 
         self.assertEqual(len(image_cache_manager.image_popularity), 4)
         self.assertEqual(image_cache_manager.image_popularity['1'], 1)
@@ -235,7 +237,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         self.stubs.Set(virtutils, 'get_disk_backing_file',
                        lambda x: 'e97222e91fc4241f49a7f520d1dcf446751129b3_sm')
 
-        found = os.path.join(CONF.instances_path, CONF.base_dir_name,
+        found = os.path.join(CONF.instances_path,
+                             CONF.image_cache_subdirectory_name,
                              'e97222e91fc4241f49a7f520d1dcf446751129b3_sm')
 
         image_cache_manager = imagecache.ImageCacheManager()
@@ -244,8 +247,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         inuse_images = image_cache_manager._list_backing_images()
 
-        self.assertEquals(inuse_images, [found])
-        self.assertEquals(len(image_cache_manager.unexplained_images), 0)
+        self.assertEqual(inuse_images, [found])
+        self.assertEqual(len(image_cache_manager.unexplained_images), 0)
 
     def test_list_backing_images_resized(self):
         self.stubs.Set(os, 'listdir',
@@ -257,7 +260,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                        lambda x: ('e97222e91fc4241f49a7f520d1dcf446751129b3_'
                                   '10737418240'))
 
-        found = os.path.join(CONF.instances_path, CONF.base_dir_name,
+        found = os.path.join(CONF.instances_path,
+                             CONF.image_cache_subdirectory_name,
                              'e97222e91fc4241f49a7f520d1dcf446751129b3_'
                              '10737418240')
 
@@ -267,8 +271,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         inuse_images = image_cache_manager._list_backing_images()
 
-        self.assertEquals(inuse_images, [found])
-        self.assertEquals(len(image_cache_manager.unexplained_images), 0)
+        self.assertEqual(inuse_images, [found])
+        self.assertEqual(len(image_cache_manager.unexplained_images), 0)
 
     def test_list_backing_images_instancename(self):
         self.stubs.Set(os, 'listdir',
@@ -278,7 +282,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         self.stubs.Set(virtutils, 'get_disk_backing_file',
                        lambda x: 'e97222e91fc4241f49a7f520d1dcf446751129b3_sm')
 
-        found = os.path.join(CONF.instances_path, CONF.base_dir_name,
+        found = os.path.join(CONF.instances_path,
+                             CONF.image_cache_subdirectory_name,
                              'e97222e91fc4241f49a7f520d1dcf446751129b3_sm')
 
         image_cache_manager = imagecache.ImageCacheManager()
@@ -287,8 +292,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         inuse_images = image_cache_manager._list_backing_images()
 
-        self.assertEquals(inuse_images, [found])
-        self.assertEquals(len(image_cache_manager.unexplained_images), 0)
+        self.assertEqual(inuse_images, [found])
+        self.assertEqual(len(image_cache_manager.unexplained_images), 0)
 
     def test_find_base_file_nothing(self):
         self.stubs.Set(os.path, 'exists', lambda x: False)
@@ -363,7 +368,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
-                                                    '%(image)s.info'))
+                                                    '%(image)s.info'),
+                       group='libvirt')
             fname = os.path.join(tmpdir, 'aaa')
 
             base_file = open(fname, 'w')
@@ -425,7 +431,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
-                                                    '%(image)s.info'))
+                                                    '%(image)s.info'),
+                       group='libvirt')
 
             fname = os.path.join(tmpdir, 'aaa')
             image_cache_manager = imagecache.ImageCacheManager()
@@ -436,7 +443,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             with utils.tempdir() as tmpdir:
                 self.flags(instances_path=tmpdir)
                 self.flags(image_info_filename_pattern=('$instances_path/'
-                                                        '%(image)s.info'))
+                                                        '%(image)s.info'),
+                           group='libvirt')
 
                 fname = os.path.join(tmpdir, 'aaa')
 
@@ -461,10 +469,10 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             image_cache_manager.unexplained_images = [fname]
             image_cache_manager._handle_base_image(img, fname)
 
-            self.assertEquals(image_cache_manager.unexplained_images, [])
-            self.assertEquals(image_cache_manager.removable_base_files,
-                              [fname])
-            self.assertEquals(image_cache_manager.corrupt_base_files, [])
+            self.assertEqual(image_cache_manager.unexplained_images, [])
+            self.assertEqual(image_cache_manager.removable_base_files,
+                             [fname])
+            self.assertEqual(image_cache_manager.corrupt_base_files, [])
 
     def test_handle_base_image_used(self):
         self.stubs.Set(virtutils, 'chown', lambda x, y: None)
@@ -478,9 +486,9 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             image_cache_manager.used_images = {'123': (1, 0, ['banana-42'])}
             image_cache_manager._handle_base_image(img, fname)
 
-            self.assertEquals(image_cache_manager.unexplained_images, [])
-            self.assertEquals(image_cache_manager.removable_base_files, [])
-            self.assertEquals(image_cache_manager.corrupt_base_files, [])
+            self.assertEqual(image_cache_manager.unexplained_images, [])
+            self.assertEqual(image_cache_manager.removable_base_files, [])
+            self.assertEqual(image_cache_manager.corrupt_base_files, [])
 
     def test_handle_base_image_used_remotely(self):
         self.stubs.Set(virtutils, 'chown', lambda x, y: None)
@@ -494,9 +502,9 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             image_cache_manager.used_images = {'123': (0, 1, ['banana-42'])}
             image_cache_manager._handle_base_image(img, fname)
 
-            self.assertEquals(image_cache_manager.unexplained_images, [])
-            self.assertEquals(image_cache_manager.removable_base_files, [])
-            self.assertEquals(image_cache_manager.corrupt_base_files, [])
+            self.assertEqual(image_cache_manager.unexplained_images, [])
+            self.assertEqual(image_cache_manager.removable_base_files, [])
+            self.assertEqual(image_cache_manager.corrupt_base_files, [])
 
     def test_handle_base_image_absent(self):
         img = '123'
@@ -506,9 +514,9 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             image_cache_manager.used_images = {'123': (1, 0, ['banana-42'])}
             image_cache_manager._handle_base_image(img, None)
 
-            self.assertEquals(image_cache_manager.unexplained_images, [])
-            self.assertEquals(image_cache_manager.removable_base_files, [])
-            self.assertEquals(image_cache_manager.corrupt_base_files, [])
+            self.assertEqual(image_cache_manager.unexplained_images, [])
+            self.assertEqual(image_cache_manager.removable_base_files, [])
+            self.assertEqual(image_cache_manager.corrupt_base_files, [])
             self.assertNotEqual(stream.getvalue().find('an absent base file'),
                                 -1)
 
@@ -518,7 +526,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
-                                                    '%(image)s.info'))
+                                                    '%(image)s.info'),
+                       group='libvirt')
 
             fname = os.path.join(tmpdir, 'aaa')
 
@@ -527,12 +536,12 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             image_cache_manager.used_images = {'123': (1, 0, ['banana-42'])}
             image_cache_manager._handle_base_image(img, fname)
 
-            self.assertEquals(image_cache_manager.unexplained_images, [])
-            self.assertEquals(image_cache_manager.removable_base_files, [])
-            self.assertEquals(image_cache_manager.corrupt_base_files, [])
+            self.assertEqual(image_cache_manager.unexplained_images, [])
+            self.assertEqual(image_cache_manager.removable_base_files, [])
+            self.assertEqual(image_cache_manager.corrupt_base_files, [])
 
     def test_handle_base_image_checksum_fails(self):
-        self.flags(checksum_base_images=True)
+        self.flags(checksum_base_images=True, group='libvirt')
         self.stubs.Set(virtutils, 'chown', lambda x, y: None)
 
         img = '123'
@@ -550,10 +559,10 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             image_cache_manager.used_images = {'123': (1, 0, ['banana-42'])}
             image_cache_manager._handle_base_image(img, fname)
 
-            self.assertEquals(image_cache_manager.unexplained_images, [])
-            self.assertEquals(image_cache_manager.removable_base_files, [])
-            self.assertEquals(image_cache_manager.corrupt_base_files,
-                              [fname])
+            self.assertEqual(image_cache_manager.unexplained_images, [])
+            self.assertEqual(image_cache_manager.removable_base_files, [])
+            self.assertEqual(image_cache_manager.corrupt_base_files,
+                             [fname])
 
     def test_verify_base_images(self):
         hashed_1 = '356a192b7913b04c54574d18c28d46e6395428ab'
@@ -561,9 +570,10 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         hashed_22 = '12c6fc06c99a462375eeb3f43dfd832b08ca9e17'
         hashed_42 = '92cfceb39d57d914ed8b14d0e37643de0797ae56'
 
-        self.flags(instances_path='/instance_path')
-        self.flags(base_dir_name='_base')
-        self.flags(remove_unused_base_images=True)
+        self.flags(instances_path='/instance_path',
+                   image_cache_subdirectory_name='_base')
+        self.flags(remove_unused_base_images=True,
+                   group='libvirt')
 
         base_file_list = ['00000001',
                           'ephemeral_0_20_None',
@@ -714,13 +724,13 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         # Verify
         active = [fq_path(hashed_1), fq_path('%s_5368709120' % hashed_1),
                   fq_path(hashed_21), fq_path(hashed_22)]
-        self.assertEquals(image_cache_manager.active_base_files, active)
+        self.assertEqual(image_cache_manager.active_base_files, active)
 
         for rem in [fq_path('e97222e91fc4241f49a7f520d1dcf446751129b3_sm'),
                     fq_path('e09c675c2d1cfac32dae3c2d83689c8c94bc693b_sm'),
                     fq_path(hashed_42),
                     fq_path('%s_10737418240' % hashed_1)]:
-            self.assertTrue(rem in image_cache_manager.removable_base_files)
+            self.assertIn(rem, image_cache_manager.removable_base_files)
 
         # Ensure there are no "corrupt" images as well
         self.assertEqual(len(image_cache_manager.corrupt_base_files), 0)
@@ -735,7 +745,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         self.flags(instances_path='/tmp/no/such/dir/name/please')
         self.flags(image_info_filename_pattern=('$instances_path/_base/'
-                                                '%(image)s.info'))
+                                                '%(image)s.info'),
+                   group='libvirt')
         base_filename = os.path.join(CONF.instances_path, '_base', hashed)
 
         is_valid_info_file = imagecache.is_valid_info_file
@@ -750,8 +761,9 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
-                                                    '%(image)s.info'))
-            self.flags(remove_unused_base_images=True)
+                                                    '%(image)s.info'),
+                       remove_unused_base_images=True,
+                       group='libvirt')
 
             # Ensure there is a base directory
             os.mkdir(os.path.join(tmpdir, '_base'))
@@ -825,7 +837,7 @@ class VerifyChecksumTestCase(test.NoDBTestCase):
     def setUp(self):
         super(VerifyChecksumTestCase, self).setUp()
         self.img = {'container_format': 'ami', 'id': '42'}
-        self.flags(checksum_base_images=True)
+        self.flags(checksum_base_images=True, group='libvirt')
 
     def _make_checksum(self, tmpdir):
         testdata = ('OpenStack Software delivers a massively scalable cloud '
@@ -854,7 +866,8 @@ class VerifyChecksumTestCase(test.NoDBTestCase):
     def _check_body(self, tmpdir, info_attr):
         self.flags(instances_path=tmpdir)
         self.flags(image_info_filename_pattern=('$instances_path/'
-                                                '%(image)s.info'))
+                                                '%(image)s.info'),
+                   group='libvirt')
         fname, info_fname, testdata = self._make_checksum(tmpdir)
         self._write_file(info_fname, info_attr, testdata)
         image_cache_manager = imagecache.ImageCacheManager()
@@ -867,11 +880,11 @@ class VerifyChecksumTestCase(test.NoDBTestCase):
             self.assertTrue(res)
 
     def test_verify_checksum_disabled(self):
-        self.flags(checksum_base_images=False)
+        self.flags(checksum_base_images=False, group='libvirt')
         with utils.tempdir() as tmpdir:
             image_cache_manager, fname = self._check_body(tmpdir, "csum valid")
             res = image_cache_manager._verify_checksum(self.img, fname)
-            self.assertTrue(res is None)
+            self.assertIsNone(res)
 
     def test_verify_checksum_invalid_json(self):
         with intercept_log_messages() as stream:
@@ -894,7 +907,7 @@ class VerifyChecksumTestCase(test.NoDBTestCase):
                 self._check_body(tmpdir, "csum invalid, not json"))
             res = image_cache_manager._verify_checksum(
                 self.img, fname, create_if_missing=True)
-            self.assertTrue(res is None)
+            self.assertIsNone(res)
 
     def test_verify_checksum_invalid(self):
         with intercept_log_messages() as stream:
@@ -910,12 +923,13 @@ class VerifyChecksumTestCase(test.NoDBTestCase):
         with utils.tempdir() as tmpdir:
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
-                                                    '%(image)s.info'))
+                                                    '%(image)s.info'),
+                       group='libvirt')
             fname, info_fname, testdata = self._make_checksum(tmpdir)
 
             image_cache_manager = imagecache.ImageCacheManager()
             res = image_cache_manager._verify_checksum('aaa', fname)
-            self.assertEquals(res, None)
+            self.assertIsNone(res)
 
             # Checksum requests for a file with no checksum now have the
             # side effect of creating the checksum

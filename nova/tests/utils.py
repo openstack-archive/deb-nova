@@ -17,6 +17,7 @@
 import errno
 import platform
 import socket
+import sys
 
 from oslo.config import cfg
 
@@ -27,6 +28,7 @@ from nova import exception
 from nova.image import glance
 from nova.network import minidns
 from nova.network import model as network_model
+from nova.objects import instance as instance_obj
 
 CONF = cfg.CONF
 CONF.import_opt('use_ipv6', 'nova.netconf')
@@ -46,7 +48,8 @@ def get_test_image_info(context, instance_ref):
     return image_service.show(context, image_id)
 
 
-def get_test_instance_type(context=None):
+def get_test_instance_type(context=None, options=None):
+    options = options or {}
     if not context:
         context = get_test_admin_context()
 
@@ -57,16 +60,19 @@ def get_test_instance_type(context=None):
                           'root_gb': 40,
                           'ephemeral_gb': 80,
                           'swap': 1024}
+
+    test_instance_type.update(options)
+
     try:
         instance_type_ref = nova.db.flavor_create(context,
                                                          test_instance_type)
-    except (exception.InstanceTypeExists, exception.InstanceTypeIdExists):
+    except (exception.FlavorExists, exception.FlavorIdExists):
         instance_type_ref = nova.db.flavor_get_by_name(context,
                                                               'kinda.big')
     return instance_type_ref
 
 
-def get_test_instance(context=None, instance_type=None):
+def get_test_instance(context=None, instance_type=None, obj=False):
     if not context:
         context = get_test_admin_context()
 
@@ -88,8 +94,12 @@ def get_test_instance(context=None, instance_type=None):
                      'system_metadata': metadata,
                      'extra_specs': {}}
 
-    instance_ref = nova.db.instance_create(context, test_instance)
-    return instance_ref
+    if obj:
+        instance = instance_obj.Instance(context, **test_instance)
+        instance.create()
+    else:
+        instance = nova.db.instance_create(context, test_instance)
+    return instance
 
 
 def get_test_network_info(count=1):
@@ -177,7 +187,7 @@ def killer_xml_body():
 
 
 def is_ipv6_supported():
-    has_ipv6_support = True
+    has_ipv6_support = socket.has_ipv6
     try:
         s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     except socket.error as e:
@@ -185,4 +195,14 @@ def is_ipv6_supported():
             has_ipv6_support = False
         else:
             raise
+
+    # check if there is at least one interface with ipv6
+    if has_ipv6_support and sys.platform.startswith('linux'):
+        try:
+            with open('/proc/net/if_inet6') as f:
+                if not f.read():
+                    has_ipv6_support = False
+        except IOError:
+            has_ipv6_support = False
+
     return has_ipv6_support

@@ -67,9 +67,12 @@ variables / types used
 
  * 'format': Which format to apply to the device if applicable
 
+ * 'boot_index': Number designating the boot order of the device
+
 """
 
 import itertools
+import operator
 
 from oslo.config import cfg
 
@@ -86,6 +89,7 @@ CONF = cfg.CONF
 
 
 SUPPORTED_DEVICE_TYPES = ('disk', 'cdrom', 'floppy', 'lun')
+BOOT_DEV_FOR_TYPE = {'disk': 'hd', 'cdrom': 'cdrom', 'floppy': 'fd'}
 
 
 def has_disk_dev(mapping, disk_dev):
@@ -117,20 +121,22 @@ def get_dev_prefix_for_disk_bus(disk_bus):
        exception if the disk bus is unknown.
     """
 
-    if CONF.libvirt_disk_prefix:
-        return CONF.libvirt_disk_prefix
+    if CONF.libvirt.disk_prefix:
+        return CONF.libvirt.disk_prefix
     if disk_bus == "ide":
         return "hd"
     elif disk_bus == "virtio":
         return "vd"
     elif disk_bus == "xen":
         # Two possible mappings for Xen, xvda or sda
-        # which are interchangable, so we pick sda
+        # which are interchangeable, so we pick sda
         return "sd"
     elif disk_bus == "scsi":
         return "sd"
     elif disk_bus == "usb":
         return "sd"
+    elif disk_bus == "fdc":
+        return "fd"
     elif disk_bus == "uml":
         return "ubd"
     elif disk_bus == "lxc":
@@ -191,8 +197,8 @@ def find_disk_dev_for_disk_bus(mapping, bus, last_device=False):
 
 def is_disk_bus_valid_for_virt(virt_type, disk_bus):
     valid_bus = {
-        'qemu': ['virtio', 'scsi', 'ide', 'usb'],
-        'kvm': ['virtio', 'scsi', 'ide', 'usb'],
+        'qemu': ['virtio', 'scsi', 'ide', 'usb', 'fdc'],
+        'kvm': ['virtio', 'scsi', 'ide', 'usb', 'fdc'],
         'xen': ['xen', 'ide'],
         'uml': ['uml'],
         'lxc': ['lxc'],
@@ -244,6 +250,8 @@ def get_disk_bus_for_device_type(virt_type,
             return "ide"
         elif device_type == "disk":
             return "virtio"
+        elif device_type == "floppy":
+            return "fdc"
 
     return None
 
@@ -271,6 +279,8 @@ def get_disk_bus_for_disk_dev(virt_type, disk_dev):
             return "scsi"
     elif disk_dev[:2] == 'vd':
         return "virtio"
+    elif disk_dev[:2] == 'fd':
+        return "fdc"
     elif disk_dev[:3] == 'xvd':
         return "xen"
     elif disk_dev[:3] == 'ubd':
@@ -283,7 +293,8 @@ def get_disk_bus_for_disk_dev(virt_type, disk_dev):
 
 def get_next_disk_info(mapping, disk_bus,
                        device_type='disk',
-                       last_device=False):
+                       last_device=False,
+                       boot_index=None):
     """Determine the disk info for the next device on disk_bus.
 
        Considering the disks already listed in the disk mapping,
@@ -296,9 +307,14 @@ def get_next_disk_info(mapping, disk_bus,
     disk_dev = find_disk_dev_for_disk_bus(mapping,
                                           disk_bus,
                                           last_device)
-    return {'bus': disk_bus,
+    info = {'bus': disk_bus,
             'dev': disk_dev,
             'type': device_type}
+
+    if boot_index is not None and boot_index >= 0:
+        info['boot_index'] = str(boot_index)
+
+    return info
 
 
 def get_eph_disk(index):
@@ -360,6 +376,11 @@ def get_info_from_bdm(virt_type, bdm, mapping={}, disk_bus=None,
     if bdm_format:
         bdm_info.update({'format': bdm_format})
 
+    boot_index = bdm.get('boot_index')
+    if boot_index is not None and boot_index >= 0:
+        # NOTE(ndipanov): libvirt starts ordering from 1, not 0
+        bdm_info['boot_index'] = str(boot_index + 1)
+
     return bdm_info
 
 
@@ -373,7 +394,7 @@ def get_root_info(virt_type, image_meta, root_bdm, disk_bus, cdrom_bus,
 
     # NOTE (ndipanov): This is a hack to avoid considering an image
     #                  BDM with local target, as we don't support them
-    #                  yet. Only aplies when passed non-driver format
+    #                  yet. Only applies when passed non-driver format
     no_root_bdm = (not root_bdm or (
         root_bdm.get('source_type') == 'image' and
         root_bdm.get('destination_type') == 'local'))
@@ -392,7 +413,8 @@ def get_root_info(virt_type, image_meta, root_bdm, disk_bus, cdrom_bus,
 
         return {'bus': root_device_bus,
                 'type': root_device_type,
-                'dev': block_device.strip_dev(root_device_name)}
+                'dev': block_device.strip_dev(root_device_name),
+                'boot_index': '1'}
     else:
         if not get_device_name(root_bdm) and root_device_name:
             root_bdm = root_bdm.copy()
@@ -493,7 +515,8 @@ def get_disk_mapping(virt_type, instance,
 
         root_info = get_next_disk_info(mapping,
                                        root_disk_bus,
-                                       root_device_type)
+                                       root_device_type,
+                                       boot_index=1)
         mapping['root'] = root_info
         mapping['disk'] = root_info
 
@@ -501,7 +524,7 @@ def get_disk_mapping(virt_type, instance,
 
     if rescue:
         rescue_info = get_next_disk_info(mapping,
-                                         disk_bus)
+                                         disk_bus, boot_index=1)
         mapping['disk.rescue'] = rescue_info
         mapping['root'] = rescue_info
 
@@ -511,15 +534,11 @@ def get_disk_mapping(virt_type, instance,
 
         return mapping
 
-    try:
-        root_bdm = (bdm for bdm in
-                    driver.block_device_info_get_mapping(block_device_info)
-                    if bdm.get('boot_index') == 0).next()
-    except StopIteration:
-        # NOTE (ndipanov): This happens when we boot from image as
-        # there is no driver represenation of local targeted images
-        # and they will not be in block_device_info list.
-        root_bdm = None
+    # NOTE (ndipanov): root_bdm can be None when we boot from image
+    # as there is no driver represenation of local targeted images
+    # and they will not be in block_device_info list.
+    root_bdm = block_device.get_root_bdm(
+        driver.block_device_info_get_mapping(block_device_info))
 
     root_device_name = block_device.strip_dev(
         driver.block_device_info_get_root(block_device_info))
@@ -527,7 +546,7 @@ def get_disk_mapping(virt_type, instance,
                               disk_bus, cdrom_bus, root_device_name)
 
     mapping['root'] = root_info
-    # NOTE (ndipanov): This implicitely relies on image->local BDMs not
+    # NOTE (ndipanov): This implicitly relies on image->local BDMs not
     #                  being considered in the driver layer - so missing
     #                  bdm with boot_index 0 means - use image, unless it was
     #                  overriden. This can happen when using legacy syntax and
@@ -610,3 +629,17 @@ def get_disk_info(virt_type, instance, block_device_info=None,
     return {'disk_bus': disk_bus,
             'cdrom_bus': cdrom_bus,
             'mapping': mapping}
+
+
+def get_boot_order(disk_info):
+    boot_mapping = (info for name, info in disk_info['mapping'].iteritems()
+                    if name != 'root' and info.get('boot_index') is not None)
+    boot_devs_dup = (BOOT_DEV_FOR_TYPE[dev['type']] for dev in
+                     sorted(boot_mapping,
+                            key=operator.itemgetter('boot_index')))
+
+    def uniq(lst):
+        s = set()
+        return [el for el in lst if el not in s and not s.add(el)]
+
+    return uniq(boot_devs_dup)

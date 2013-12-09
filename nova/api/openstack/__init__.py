@@ -63,7 +63,9 @@ CONF.register_opts(api_opts, api_opts_group)
 # TODO(cyeoh): Expand this list as the core APIs are ported to V3
 API_V3_CORE_EXTENSIONS = set(['consoles', 'extensions', 'flavors', 'ips',
                               'limits', 'servers', 'server-metadata',
-                              'keypairs', 'console-output', 'versions'])
+                              'keypairs', 'console-output', 'versions',
+                              'flavor-manage', 'flavor-access',
+                              'flavor-extra-specs'])
 
 
 class FaultWrapper(base_wsgi.Middleware):
@@ -336,7 +338,7 @@ class APIRouterV3(base_wsgi.Router):
     def get_missing_core_extensions(extensions_loaded):
         extensions_loaded = set(extensions_loaded)
         missing_extensions = API_V3_CORE_EXTENSIONS - extensions_loaded
-        return missing_extensions
+        return list(missing_extensions)
 
     @property
     def loaded_extension_info(self):

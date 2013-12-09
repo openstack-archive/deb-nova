@@ -21,6 +21,7 @@
 import datetime
 
 from oslo.config import cfg
+import six
 
 from nova import db
 from nova import exception
@@ -96,7 +97,7 @@ class DbQuotaDriver(object):
     def get_by_project_and_user(self, context, project_id, user_id, resource):
         """Get a specific quota by project and user."""
 
-        return db.quota_get(context, project_id, user_id, resource)
+        return db.quota_get(context, project_id, resource, user_id=user_id)
 
     def get_by_project(self, context, project_id, resource):
         """Get a specific quota by project."""
@@ -405,11 +406,22 @@ class DbQuotaDriver(object):
         # Check the quotas and construct a list of the resources that
         # would be put over limit by the desired values
         overs = [key for key, val in values.items()
-                 if (quotas[key] >= 0 and quotas[key] < val) or
+                 if quotas[key] >= 0 and quotas[key] < val or
                  (user_quotas[key] >= 0 and user_quotas[key] < val)]
         if overs:
+            headroom = {}
+            # Check project_quotas:
+            for key in quotas:
+                if quotas[key] >= 0 and quotas[key] < val:
+                    headroom[key] = quotas[key]
+            # Check user quotas:
+            for key in user_quotas:
+                if (user_quotas[key] >= 0 and user_quotas[key] < val and
+                        headroom.get(key) > user_quotas[key]):
+                    headroom[key] = user_quotas[key]
+
             raise exception.OverQuota(overs=sorted(overs), quotas=quotas,
-                                      usages={})
+                                      usages={}, headroom=headroom)
 
     def reserve(self, context, resources, deltas, expire=None,
                 project_id=None, user_id=None):
@@ -651,6 +663,18 @@ class NoopQuotaDriver(object):
             quotas[resource.name] = -1
         return quotas
 
+    def _get_noop_quotas(self, resources, usages=None, remains=False):
+        quotas = {}
+        for resource in resources.values():
+            quotas[resource.name] = {}
+            quotas[resource.name]['limit'] = -1
+            if usages:
+                quotas[resource.name]['in_use'] = -1
+                quotas[resource.name]['reserved'] = -1
+            if remains:
+                quotas[resource.name]['remains'] = -1
+        return quotas
+
     def get_user_quotas(self, context, resources, project_id, user_id,
                         quota_class=None, defaults=True,
                         usages=True):
@@ -674,10 +698,7 @@ class NoopQuotaDriver(object):
         :param usages: If True, the current in_use and reserved counts
                        will also be returned.
         """
-        quotas = {}
-        for resource in resources.values():
-            quotas[resource.name] = -1
-        return quotas
+        return self._get_noop_quotas(resources, usages=usages)
 
     def get_project_quotas(self, context, resources, project_id,
                            quota_class=None, defaults=True,
@@ -703,10 +724,7 @@ class NoopQuotaDriver(object):
         :param remains: If True, the current remains of the project will
                         will be returned.
         """
-        quotas = {}
-        for resource in resources.values():
-            quotas[resource.name] = -1
-        return quotas
+        return self._get_noop_quotas(resources, usages=usages, remains=remains)
 
     def get_settable_quotas(self, context, resources, project_id,
                             user_id=None):
@@ -1040,7 +1058,7 @@ class QuotaEngine(object):
             return self.__driver
         if not self._driver_cls:
             self._driver_cls = CONF.quota_driver
-        if isinstance(self._driver_cls, basestring):
+        if isinstance(self._driver_cls, six.string_types):
             self._driver_cls = importutils.import_object(self._driver_cls)
         self.__driver = self._driver_cls
         return self.__driver

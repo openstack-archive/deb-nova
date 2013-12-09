@@ -28,6 +28,7 @@ from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
 from nova.objects import instance_info_cache as info_cache_obj
+from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova import policy
@@ -68,9 +69,10 @@ def refresh_cache(f):
 def update_instance_cache_with_nw_info(api, context, instance, nw_info=None,
                                        update_cells=True):
     try:
+        LOG.debug(_('Updating cache with info: %s'), nw_info)
         if not isinstance(nw_info, network_model.NetworkInfo):
             nw_info = None
-        if not nw_info:
+        if nw_info is None:
             nw_info = api._get_instance_nw_info(context, instance)
         # NOTE(comstud): The save() method actually handles updating or
         # creating the instance.  We don't need to retrieve the object
@@ -80,7 +82,8 @@ def update_instance_cache_with_nw_info(api, context, instance, nw_info=None,
         ic.network_info = nw_info
         ic.save(update_cells=update_cells)
     except Exception:
-        LOG.exception(_('Failed storing info cache'), instance=instance)
+        with excutils.save_and_reraise_exception():
+            LOG.exception(_('Failed storing info cache'), instance=instance)
 
 
 def wrap_check_policy(func):
@@ -160,6 +163,8 @@ class API(base.Base):
 
     @wrap_check_policy
     def get_floating_ip(self, context, id):
+        if not utils.is_int_like(id):
+            raise exception.InvalidID(id=id)
         return self.db.floating_ip_get(context, id)
 
     @wrap_check_policy
@@ -261,7 +266,7 @@ class API(base.Base):
     @refresh_cache
     def allocate_for_instance(self, context, instance, vpn,
                               requested_networks, macs=None,
-                              conductor_api=None, security_groups=None,
+                              security_groups=None,
                               dhcp_options=None):
         """Allocates all network structures for an instance.
 
@@ -273,7 +278,6 @@ class API(base.Base):
         :param macs: None or a set of MAC addresses that the instance
             should use. macs is supplied by the hypervisor driver (contrast
             with requested_networks which is user supplied).
-        :param conductor_api: The conductor api.
         :param security_groups: None or security groups to allocate for
             instance.
         :param dhcp_options: None or a set of key/value pairs that should
@@ -318,13 +322,11 @@ class API(base.Base):
 
     # NOTE(danms): Here for neutron compatibility
     def allocate_port_for_instance(self, context, instance, port_id,
-                                   network_id=None, requested_ip=None,
-                                   conductor_api=None):
+                                   network_id=None, requested_ip=None):
         raise NotImplementedError()
 
     # NOTE(danms): Here for neutron compatibility
-    def deallocate_port_for_instance(self, context, instance, port_id,
-                                     conductor_api=None):
+    def deallocate_port_for_instance(self, context, instance, port_id):
         raise NotImplementedError()
 
     # NOTE(danms): Here for neutron compatibility
@@ -337,8 +339,7 @@ class API(base.Base):
 
     @wrap_check_policy
     @refresh_cache
-    def add_fixed_ip_to_instance(self, context, instance, network_id,
-                                 conductor_api=None):
+    def add_fixed_ip_to_instance(self, context, instance, network_id):
         """Adds a fixed ip to instance from specified network."""
         instance_type = flavors.extract_flavor(instance)
         args = {'instance_id': instance['uuid'],
@@ -349,8 +350,7 @@ class API(base.Base):
 
     @wrap_check_policy
     @refresh_cache
-    def remove_fixed_ip_from_instance(self, context, instance, address,
-                                      conductor_api=None):
+    def remove_fixed_ip_from_instance(self, context, instance, address):
         """Removes a fixed ip from instance from specified network."""
 
         instance_type = flavors.extract_flavor(instance)

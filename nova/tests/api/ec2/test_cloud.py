@@ -304,6 +304,16 @@ class CloudTestCase(test.TestCase):
                                       'floating_ips': []})
         self.stubs.Set(network_api.API, 'get_instance_id_by_floating_address',
                        lambda *args: 1)
+
+        def fake_update_instance_cache_with_nw_info(api, context, instance,
+                                                    nw_info=None,
+                                                    update_cells=True):
+
+            return
+
+        self.stubs.Set(network_api, "update_instance_cache_with_nw_info",
+                       fake_update_instance_cache_with_nw_info)
+
         self.cloud.associate_address(self.context,
                                      instance_id=ec2_id,
                                      public_ip=address)
@@ -531,9 +541,9 @@ class CloudTestCase(test.TestCase):
         self.assertTrue(authz(self.context, group_name=sec1['name'], **kwargs))
         describe = self.cloud.describe_security_groups
         groups = describe(self.context, group_name=['test'])
-        self.assertEquals(len(groups['securityGroupInfo']), 1)
+        self.assertEqual(len(groups['securityGroupInfo']), 1)
         actual_rules = groups['securityGroupInfo'][0]['ipPermissions']
-        self.assertEquals(len(actual_rules), 4)
+        self.assertEqual(len(actual_rules), 4)
         expected_rules = [{'fromPort': -1,
                            'groups': [{'groupName': 'somegroup1',
                                        'userId': 'someuser'}],
@@ -559,7 +569,7 @@ class CloudTestCase(test.TestCase):
                            'ipRanges': [],
                            'toPort': 80}]
         for rule in expected_rules:
-            self.assertTrue(rule in actual_rules)
+            self.assertIn(rule, actual_rules)
 
         db.security_group_destroy(self.context, sec3['id'])
         db.security_group_destroy(self.context, sec2['id'])
@@ -633,7 +643,7 @@ class CloudTestCase(test.TestCase):
 
         describe = self.cloud.describe_security_groups
         groups = describe(self.context, group_name=['test'])
-        self.assertEquals(len(groups['securityGroupInfo']), 1)
+        self.assertEqual(len(groups['securityGroupInfo']), 1)
         actual_rules = groups['securityGroupInfo'][0]['ipPermissions']
         expected_rules = [{'groups': [{'groupName': 'test',
                                        'userId': self.context.user_id}],
@@ -824,8 +834,7 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(len(result['instancesSet']), 1)
         instance = result['instancesSet'][0]
         self.assertEqual(instance['instanceId'], instance_id)
-        self.assertEqual(instance['placement']['availabilityZone'],
-                'zone2')
+        self.assertEqual(instance['placement']['availabilityZone'], 'zone2')
         self.assertEqual(instance['ipAddress'], '1.2.3.4')
         self.assertEqual(instance['dnsName'], '1.2.3.4')
         self.assertEqual(instance['tagSet'], [])
@@ -1268,7 +1277,7 @@ class CloudTestCase(test.TestCase):
         result = self.cloud.describe_instances(self.context)
         result = result['reservationSet'][0]
         instance = result['instancesSet'][0]
-        self.assertEqual(instance['dnsName'], None)
+        self.assertIsNone(instance['dnsName'])
 
     def test_describe_images(self):
         describe_images = self.cloud.describe_images
@@ -1311,9 +1320,9 @@ class CloudTestCase(test.TestCase):
     def assertDictListUnorderedMatch(self, L1, L2, key):
         self.assertEqual(len(L1), len(L2))
         for d1 in L1:
-            self.assertTrue(key in d1)
+            self.assertIn(key, d1)
             for d2 in L2:
-                self.assertTrue(key in d2)
+                self.assertIn(key, d2)
                 if d1[key] == d2[key]:
                     self.assertThat(d1, matchers.DictMatches(d2))
 
@@ -1402,11 +1411,11 @@ class CloudTestCase(test.TestCase):
     def _assertImageSet(self, result, root_device_type, root_device_name):
         self.assertEqual(1, len(result['imagesSet']))
         result = result['imagesSet'][0]
-        self.assertTrue('rootDeviceType' in result)
+        self.assertIn('rootDeviceType', result)
         self.assertEqual(result['rootDeviceType'], root_device_type)
-        self.assertTrue('rootDeviceName' in result)
+        self.assertIn('rootDeviceName', result)
         self.assertEqual(result['rootDeviceName'], root_device_name)
-        self.assertTrue('blockDeviceMapping' in result)
+        self.assertIn('blockDeviceMapping', result)
 
         return result
 
@@ -1691,7 +1700,7 @@ class CloudTestCase(test.TestCase):
         self.stubs.Set(password, 'extract_password', lambda i: 'fakepass')
         output = self.cloud.get_password_data(context=self.context,
                                               instance_id=[instance_id])
-        self.assertEquals(output['passwordData'], 'fakepass')
+        self.assertEqual(output['passwordData'], 'fakepass')
         rv = self.cloud.terminate_instances(self.context, [instance_id])
 
     def test_console_output(self):
@@ -1701,7 +1710,7 @@ class CloudTestCase(test.TestCase):
             max_count=1)
         output = self.cloud.get_console_output(context=self.context,
                                                instance_id=[instance_id])
-        self.assertEquals(base64.b64decode(output['output']),
+        self.assertEqual(base64.b64decode(output['output']),
                 'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE')
         # TODO(soren): We need this until we can stop polling in the rpc code
         #              for unit tests.
@@ -2270,6 +2279,7 @@ class CloudTestCase(test.TestCase):
                          device_name='sda1',
                          delete_on_termination=False,
                          no_device=None,
+                         boot_index=0,
                          connection_info='{"foo":"bar"}')]
 
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
@@ -2294,15 +2304,15 @@ class CloudTestCase(test.TestCase):
         created_image = self.cloud.describe_images(self.context,
                                                    ec2_ids)['imagesSet'][0]
 
-        self.assertTrue('blockDeviceMapping' in created_image)
+        self.assertIn('blockDeviceMapping', created_image)
         bdm = created_image['blockDeviceMapping'][0]
-        self.assertEquals(bdm.get('deviceName'), 'sda1')
-        self.assertTrue('ebs' in bdm)
-        self.assertEquals(bdm['ebs'].get('snapshotId'),
-                          ec2utils.id_to_ec2_snap_id(snapshots[0]))
-        self.assertEquals(created_image.get('kernelId'), 'aki-00000001')
-        self.assertEquals(created_image.get('ramdiskId'), 'ari-00000002')
-        self.assertEquals(created_image.get('rootDeviceType'), 'ebs')
+        self.assertEqual(bdm.get('deviceName'), 'sda1')
+        self.assertIn('ebs', bdm)
+        self.assertEqual(bdm['ebs'].get('snapshotId'),
+                         ec2utils.id_to_ec2_snap_id(snapshots[0]))
+        self.assertEqual(created_image.get('kernelId'), 'aki-00000001')
+        self.assertEqual(created_image.get('ramdiskId'), 'ari-00000002')
+        self.assertEqual(created_image.get('rootDeviceType'), 'ebs')
         self.assertNotEqual(virt_driver.get('powered_on'), no_reboot)
         self.assertNotEqual(virt_driver.get('powered_off'), no_reboot)
 
@@ -2819,9 +2829,8 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(
                 ec2utils.resource_type_from_id(self.context, 'aki-12345'),
                 'image')
-        self.assertEqual(
-                ec2utils.resource_type_from_id(self.context, 'x-12345'),
-                None)
+        self.assertIsNone(
+                ec2utils.resource_type_from_id(self.context, 'x-12345'))
 
 
 class CloudTestCaseNeutronProxy(test.TestCase):

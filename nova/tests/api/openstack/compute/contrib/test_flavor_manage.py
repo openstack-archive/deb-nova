@@ -17,8 +17,10 @@ import datetime
 
 import webob
 
+from nova.api.openstack.compute.contrib import flavor_access
 from nova.api.openstack.compute.contrib import flavormanage
 from nova.compute import flavors
+from nova import context
 from nova import db
 from nova import exception
 from nova.openstack.common import jsonutils
@@ -126,7 +128,7 @@ class FlavorManageTest(test.NoDBTestCase):
         res = req.get_response(self.app)
         body = jsonutils.loads(res.body)
         for key in expected["flavor"]:
-            self.assertEquals(body["flavor"][key], expected["flavor"][key])
+            self.assertEqual(body["flavor"][key], expected["flavor"][key])
 
     def test_create_invalid_name(self):
         self.stubs.UnsetAll()
@@ -150,7 +152,55 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
-        self.assertEquals(res.status_code, 400)
+        self.assertEqual(res.status_code, 400)
+
+    def test_create_flavor_name_is_whitespace(self):
+        request_dict = {
+            "flavor": {
+                "name": " ",
+                'id': "12345",
+                "ram": 512,
+                "vcpus": 2,
+                "disk": 1,
+                "OS-FLV-EXT-DATA:ephemeral": 1,
+                "swap": 512,
+                "rxtx_factor": 1,
+                "os-flavor-access:is_public": True,
+            }
+        }
+
+        url = '/v2/fake/flavors'
+        req = webob.Request.blank(url)
+        req.headers['Content-Type'] = 'application/json'
+        req.method = 'POST'
+        req.body = jsonutils.dumps(request_dict)
+        res = req.get_response(self.app)
+        self.assertEqual(res.status_code, 400)
+
+    def test_create_flavor_name_with_leading_trailing_whitespace(self):
+        request_dict = {
+            "flavor": {
+                "name": " test ",
+                'id': "12345",
+                "ram": 512,
+                "vcpus": 2,
+                "disk": 1,
+                "OS-FLV-EXT-DATA:ephemeral": 1,
+                "swap": 512,
+                "rxtx_factor": 1,
+                "os-flavor-access:is_public": True,
+            }
+        }
+
+        url = '/v2/fake/flavors'
+        req = webob.Request.blank(url)
+        req.headers['Content-Type'] = 'application/json'
+        req.method = 'POST'
+        req.body = jsonutils.dumps(request_dict)
+        res = req.get_response(self.app)
+        self.assertEqual(res.status_code, 200)
+        body = jsonutils.loads(res.body)
+        self.assertEqual("test", body["flavor"]["name"])
 
     def test_create_public_default(self):
         flavor = {
@@ -180,7 +230,6 @@ class FlavorManageTest(test.NoDBTestCase):
             }
         }
 
-        self.stubs.Set(db, "flavor_create", fake_create)
         url = '/v2/fake/flavors'
         req = webob.Request.blank(url)
         req.headers['Content-Type'] = 'application/json'
@@ -189,7 +238,7 @@ class FlavorManageTest(test.NoDBTestCase):
         res = req.get_response(self.app)
         body = jsonutils.loads(res.body)
         for key in expected["flavor"]:
-            self.assertEquals(body["flavor"][key], expected["flavor"][key])
+            self.assertEqual(body["flavor"][key], expected["flavor"][key])
 
     def test_create_without_flavorid(self):
         expected = {
@@ -213,7 +262,7 @@ class FlavorManageTest(test.NoDBTestCase):
         res = req.get_response(self.app)
         body = jsonutils.loads(res.body)
         for key in expected["flavor"]:
-            self.assertEquals(body["flavor"][key], expected["flavor"][key])
+            self.assertEqual(body["flavor"][key], expected["flavor"][key])
 
     def test_create_without_flavorname(self):
         expected = {
@@ -248,7 +297,7 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
-        self.assertEquals(res.status_code, 400)
+        self.assertEqual(res.status_code, 400)
 
     def test_create_no_body(self):
         self.stubs.UnsetAll()
@@ -260,7 +309,7 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
-        self.assertEquals(res.status_code, 400)
+        self.assertEqual(res.status_code, 400)
 
     def test_create_invalid_format_body(self):
         self.stubs.UnsetAll()
@@ -274,7 +323,7 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
-        self.assertEquals(res.status_code, 400)
+        self.assertEqual(res.status_code, 400)
 
     def test_create_invalid_flavorid(self):
         self.stubs.UnsetAll()
@@ -298,7 +347,7 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
-        self.assertEquals(res.status_code, 400)
+        self.assertEqual(res.status_code, 400)
 
     def test_create_check_flavor_id_length(self):
         self.stubs.UnsetAll()
@@ -323,7 +372,7 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
-        self.assertEquals(res.status_code, 400)
+        self.assertEqual(res.status_code, 400)
 
     def test_create_with_leading_trailing_whitespaces_in_flavor_id(self):
         self.stubs.UnsetAll()
@@ -347,7 +396,7 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(expected)
         res = req.get_response(self.app)
-        self.assertEquals(res.status_code, 400)
+        self.assertEqual(res.status_code, 400)
 
     def test_flavor_exists_exception_returns_409(self):
         expected = {
@@ -366,7 +415,7 @@ class FlavorManageTest(test.NoDBTestCase):
 
         def fake_create(name, memory_mb, vcpus, root_gb, ephemeral_gb,
                         flavorid, swap, rxtx_factor, is_public):
-            raise exception.InstanceTypeExists(name=name)
+            raise exception.FlavorExists(name=name)
 
         self.stubs.Set(flavors, "create", fake_create)
         url = '/v2/fake/flavors'
@@ -391,3 +440,92 @@ class FlavorManageTest(test.NoDBTestCase):
                           512, 2, None, 1, 1234, 512, 1, True)
         self.assertRaises(exception.InvalidInput, flavors.create, "abcdef",
                           "test_memory_mb", 2, None, 1, 1234, 512, 1, True)
+
+
+class FakeRequest(object):
+    environ = {"nova.context": context.get_admin_context()}
+
+
+class PrivateFlavorManageTest(test.TestCase):
+    def setUp(self):
+        super(PrivateFlavorManageTest, self).setUp()
+        # self.stubs.Set(flavors,
+        #                "get_flavor_by_flavor_id",
+        #                fake_get_flavor_by_flavor_id)
+        # self.stubs.Set(flavors, "destroy", fake_destroy)
+        # self.stubs.Set(flavors, "create", fake_create)
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Flavormanage', 'Flavorextradata',
+                'Flavor_access', 'Flavor_rxtx', 'Flavor_swap'])
+
+        self.controller = flavormanage.FlavorManageController()
+        self.flavor_access_controller = flavor_access.FlavorAccessController()
+        self.app = fakes.wsgi_app(init_only=('flavors',))
+
+    def test_create_private_flavor_should_create_flavor_access(self):
+        expected = {
+            "flavor": {
+                "name": "test",
+                "ram": 512,
+                "vcpus": 2,
+                "disk": 1,
+                "OS-FLV-EXT-DATA:ephemeral": 1,
+                "swap": 512,
+                "rxtx_factor": 1,
+                "os-flavor-access:is_public": False
+            }
+        }
+
+        ctxt = context.RequestContext('fake', 'fake',
+                                      is_admin=True, auth_token=True)
+        self.app = fakes.wsgi_app(init_only=('flavors',),
+                                  fake_auth_context=ctxt)
+        url = '/v2/fake/flavors'
+        req = webob.Request.blank(url)
+        req.headers['Content-Type'] = 'application/json'
+        req.method = 'POST'
+        req.body = jsonutils.dumps(expected)
+        res = req.get_response(self.app)
+        body = jsonutils.loads(res.body)
+        for key in expected["flavor"]:
+            self.assertEqual(body["flavor"][key], expected["flavor"][key])
+        flavor_access_body = self.flavor_access_controller.index(
+            FakeRequest(), body["flavor"]["id"])
+        expected_flavor_access_body = {
+            "tenant_id": "%s" % ctxt.project_id,
+            "flavor_id": "%s" % body["flavor"]["id"]
+        }
+        self.assertTrue(expected_flavor_access_body in
+                        flavor_access_body["flavor_access"])
+
+    def test_create_public_flavor_should_not_create_flavor_access(self):
+        expected = {
+            "flavor": {
+                "name": "test",
+                "ram": 512,
+                "vcpus": 2,
+                "disk": 1,
+                "OS-FLV-EXT-DATA:ephemeral": 1,
+                "swap": 512,
+                "rxtx_factor": 1,
+                "os-flavor-access:is_public": True
+            }
+        }
+
+        ctxt = context.RequestContext('fake', 'fake',
+                                      is_admin=True, auth_token=True)
+        self.app = fakes.wsgi_app(init_only=('flavors',),
+                                  fake_auth_context=ctxt)
+        self.mox.StubOutWithMock(flavors, "add_flavor_access")
+        self.mox.ReplayAll()
+        url = '/v2/fake/flavors'
+        req = webob.Request.blank(url)
+        req.headers['Content-Type'] = 'application/json'
+        req.method = 'POST'
+        req.body = jsonutils.dumps(expected)
+        res = req.get_response(self.app)
+        body = jsonutils.loads(res.body)
+        for key in expected["flavor"]:
+            self.assertEqual(body["flavor"][key], expected["flavor"][key])

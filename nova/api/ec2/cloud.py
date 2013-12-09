@@ -208,15 +208,6 @@ def _format_mappings(properties, result):
         result['blockDeviceMapping'] = mappings
 
 
-def db_to_inst_obj(context, db_instance):
-    # NOTE(danms): This is a temporary helper method for converting
-    # Instance DB objects to NovaObjects without needing to re-query.
-    inst_obj = instance_obj.Instance._from_db_object(
-        context, instance_obj.Instance(), db_instance,
-        expected_attrs=['system_metadata', 'metadata'])
-    return inst_obj
-
-
 class CloudController(object):
     """CloudController provides the critical dispatch between
  inbound API calls through the endpoint and messages
@@ -1642,11 +1633,8 @@ class CloudController(object):
         instance = self.compute_api.get(context, instance_uuid,
                                         want_objects=True)
 
-        bdms = self.compute_api.get_instance_bdms(context, instance)
-
         # CreateImage only supported for the analogue of EBS-backed instances
-        if not self.compute_api.is_volume_backed_instance(context, instance,
-                                                          bdms):
+        if not self.compute_api.is_volume_backed_instance(context, instance):
             msg = _("Invalid value '%(ec2_instance_id)s' for instanceId. "
                     "Instance does not have a volume attached at root "
                     "(%(root)s)") % {'root': instance['root_device_name'],

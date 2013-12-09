@@ -17,7 +17,6 @@
 import __builtin__
 import datetime
 import functools
-import hashlib
 import importlib
 import os
 import os.path
@@ -36,161 +35,6 @@ from nova import test
 from nova import utils
 
 CONF = cfg.CONF
-
-
-class GetFromPathTestCase(test.NoDBTestCase):
-    def test_tolerates_nones(self):
-        f = utils.get_from_path
-
-        input = []
-        self.assertEquals([], f(input, "a"))
-        self.assertEquals([], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [None]
-        self.assertEquals([], f(input, "a"))
-        self.assertEquals([], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': None}]
-        self.assertEquals([], f(input, "a"))
-        self.assertEquals([], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': None}}]
-        self.assertEquals([{'b': None}], f(input, "a"))
-        self.assertEquals([], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': {'c': None}}}]
-        self.assertEquals([{'b': {'c': None}}], f(input, "a"))
-        self.assertEquals([{'c': None}], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': {'c': None}}}, {'a': None}]
-        self.assertEquals([{'b': {'c': None}}], f(input, "a"))
-        self.assertEquals([{'c': None}], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': {'c': None}}}, {'a': {'b': None}}]
-        self.assertEquals([{'b': {'c': None}}, {'b': None}], f(input, "a"))
-        self.assertEquals([{'c': None}], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-    def test_does_select(self):
-        f = utils.get_from_path
-
-        input = [{'a': 'a_1'}]
-        self.assertEquals(['a_1'], f(input, "a"))
-        self.assertEquals([], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': 'b_1'}}]
-        self.assertEquals([{'b': 'b_1'}], f(input, "a"))
-        self.assertEquals(['b_1'], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': {'c': 'c_1'}}}]
-        self.assertEquals([{'b': {'c': 'c_1'}}], f(input, "a"))
-        self.assertEquals([{'c': 'c_1'}], f(input, "a/b"))
-        self.assertEquals(['c_1'], f(input, "a/b/c"))
-
-        input = [{'a': {'b': {'c': 'c_1'}}}, {'a': None}]
-        self.assertEquals([{'b': {'c': 'c_1'}}], f(input, "a"))
-        self.assertEquals([{'c': 'c_1'}], f(input, "a/b"))
-        self.assertEquals(['c_1'], f(input, "a/b/c"))
-
-        input = [{'a': {'b': {'c': 'c_1'}}},
-                 {'a': {'b': None}}]
-        self.assertEquals([{'b': {'c': 'c_1'}}, {'b': None}], f(input, "a"))
-        self.assertEquals([{'c': 'c_1'}], f(input, "a/b"))
-        self.assertEquals(['c_1'], f(input, "a/b/c"))
-
-        input = [{'a': {'b': {'c': 'c_1'}}},
-                 {'a': {'b': {'c': 'c_2'}}}]
-        self.assertEquals([{'b': {'c': 'c_1'}}, {'b': {'c': 'c_2'}}],
-                          f(input, "a"))
-        self.assertEquals([{'c': 'c_1'}, {'c': 'c_2'}], f(input, "a/b"))
-        self.assertEquals(['c_1', 'c_2'], f(input, "a/b/c"))
-
-        self.assertEquals([], f(input, "a/b/c/d"))
-        self.assertEquals([], f(input, "c/a/b/d"))
-        self.assertEquals([], f(input, "i/r/t"))
-
-    def test_flattens_lists(self):
-        f = utils.get_from_path
-
-        input = [{'a': [1, 2, 3]}]
-        self.assertEquals([1, 2, 3], f(input, "a"))
-        self.assertEquals([], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': [1, 2, 3]}}]
-        self.assertEquals([{'b': [1, 2, 3]}], f(input, "a"))
-        self.assertEquals([1, 2, 3], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': {'b': [1, 2, 3]}}, {'a': {'b': [4, 5, 6]}}]
-        self.assertEquals([1, 2, 3, 4, 5, 6], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': [{'b': [1, 2, 3]}, {'b': [4, 5, 6]}]}]
-        self.assertEquals([1, 2, 3, 4, 5, 6], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = [{'a': [1, 2, {'b': 'b_1'}]}]
-        self.assertEquals([1, 2, {'b': 'b_1'}], f(input, "a"))
-        self.assertEquals(['b_1'], f(input, "a/b"))
-
-    def test_bad_xpath(self):
-        f = utils.get_from_path
-
-        self.assertRaises(exception.NovaException, f, [], None)
-        self.assertRaises(exception.NovaException, f, [], "")
-        self.assertRaises(exception.NovaException, f, [], "/")
-        self.assertRaises(exception.NovaException, f, [], "/a")
-        self.assertRaises(exception.NovaException, f, [], "/a/")
-        self.assertRaises(exception.NovaException, f, [], "//")
-        self.assertRaises(exception.NovaException, f, [], "//a")
-        self.assertRaises(exception.NovaException, f, [], "a//a")
-        self.assertRaises(exception.NovaException, f, [], "a//a/")
-        self.assertRaises(exception.NovaException, f, [], "a/a/")
-
-    def test_real_failure1(self):
-        # Real world failure case...
-        #  We weren't coping when the input was a Dictionary instead of a List
-        # This led to test_accepts_dictionaries
-        f = utils.get_from_path
-
-        inst = {'fixed_ip': {'floating_ips': [{'address': '1.2.3.4'}],
-                             'address': '192.168.0.3'},
-                'hostname': ''}
-
-        private_ips = f(inst, 'fixed_ip/address')
-        public_ips = f(inst, 'fixed_ip/floating_ips/address')
-        self.assertEquals(['192.168.0.3'], private_ips)
-        self.assertEquals(['1.2.3.4'], public_ips)
-
-    def test_accepts_dictionaries(self):
-        f = utils.get_from_path
-
-        input = {'a': [1, 2, 3]}
-        self.assertEquals([1, 2, 3], f(input, "a"))
-        self.assertEquals([], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = {'a': {'b': [1, 2, 3]}}
-        self.assertEquals([{'b': [1, 2, 3]}], f(input, "a"))
-        self.assertEquals([1, 2, 3], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = {'a': [{'b': [1, 2, 3]}, {'b': [4, 5, 6]}]}
-        self.assertEquals([1, 2, 3, 4, 5, 6], f(input, "a/b"))
-        self.assertEquals([], f(input, "a/b/c"))
-
-        input = {'a': [1, 2, {'b': 'b_1'}]}
-        self.assertEquals([1, 2, {'b': 'b_1'}], f(input, "a"))
-        self.assertEquals(['b_1'], f(input, "a/b"))
 
 
 class GetMyIP4AddressTestCase(test.NoDBTestCase):
@@ -404,13 +248,6 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertEqual('&lt;', utils.xhtml_escape('<'))
         self.assertEqual('&lt;foo&gt;', utils.xhtml_escape('<foo>'))
 
-    def test_hash_file(self):
-        data = 'Mary had a little lamb, its fleece as white as snow'
-        flo = StringIO.StringIO(data)
-        h1 = utils.hash_file(flo)
-        h2 = hashlib.sha1(data).hexdigest()
-        self.assertEquals(h1, h2)
-
     def test_is_valid_ipv4(self):
         self.assertTrue(utils.is_valid_ipv4('127.0.0.1'))
         self.assertFalse(utils.is_valid_ipv4('::1'))
@@ -441,13 +278,13 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertFalse(utils.is_valid_ipv6_cidr("127.0.0.1"))
 
     def test_get_shortened_ipv6(self):
-        self.assertEquals("abcd:ef01:2345:6789:abcd:ef01:c0a8:fefe",
-                          utils.get_shortened_ipv6(
+        self.assertEqual("abcd:ef01:2345:6789:abcd:ef01:c0a8:fefe",
+                         utils.get_shortened_ipv6(
                             "abcd:ef01:2345:6789:abcd:ef01:192.168.254.254"))
-        self.assertEquals("::1", utils.get_shortened_ipv6(
+        self.assertEqual("::1", utils.get_shortened_ipv6(
                                     "0000:0000:0000:0000:0000:0000:0000:0001"))
-        self.assertEquals("caca::caca:0:babe:201:102",
-                          utils.get_shortened_ipv6(
+        self.assertEqual("caca::caca:0:babe:201:102",
+                         utils.get_shortened_ipv6(
                                     "caca:0000:0000:caca:0000:babe:0201:0102"))
         self.assertRaises(netaddr.AddrFormatError, utils.get_shortened_ipv6,
                           "127.0.0.1")
@@ -455,9 +292,9 @@ class GenericUtilsTestCase(test.NoDBTestCase):
                           "failure")
 
     def test_get_shortened_ipv6_cidr(self):
-        self.assertEquals("2600::/64", utils.get_shortened_ipv6_cidr(
+        self.assertEqual("2600::/64", utils.get_shortened_ipv6_cidr(
                 "2600:0000:0000:0000:0000:0000:0000:0000/64"))
-        self.assertEquals("2600::/64", utils.get_shortened_ipv6_cidr(
+        self.assertEqual("2600::/64", utils.get_shortened_ipv6_cidr(
                 "2600::1/64"))
         self.assertRaises(netaddr.AddrFormatError,
                           utils.get_shortened_ipv6_cidr,
@@ -554,12 +391,12 @@ class AuditPeriodTest(test.NoDBTestCase):
 
     def test_hour(self):
         begin, end = utils.last_completed_audit_period(unit='hour')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            hour=7,
                                            day=5,
                                            month=3,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            hour=8,
                                            day=5,
                                            month=3,
@@ -567,13 +404,13 @@ class AuditPeriodTest(test.NoDBTestCase):
 
     def test_hour_with_offset_before_current(self):
         begin, end = utils.last_completed_audit_period(unit='hour@10')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            minute=10,
                                            hour=7,
                                            day=5,
                                            month=3,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            minute=10,
                                            hour=8,
                                            day=5,
@@ -582,13 +419,13 @@ class AuditPeriodTest(test.NoDBTestCase):
 
     def test_hour_with_offset_after_current(self):
         begin, end = utils.last_completed_audit_period(unit='hour@30')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            minute=30,
                                            hour=6,
                                            day=5,
                                            month=3,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            minute=30,
                                            hour=7,
                                            day=5,
@@ -597,23 +434,23 @@ class AuditPeriodTest(test.NoDBTestCase):
 
     def test_day(self):
         begin, end = utils.last_completed_audit_period(unit='day')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            day=4,
                                            month=3,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            day=5,
                                            month=3,
                                            year=2012))
 
     def test_day_with_offset_before_current(self):
         begin, end = utils.last_completed_audit_period(unit='day@6')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            hour=6,
                                            day=4,
                                            month=3,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            hour=6,
                                            day=5,
                                            month=3,
@@ -621,12 +458,12 @@ class AuditPeriodTest(test.NoDBTestCase):
 
     def test_day_with_offset_after_current(self):
         begin, end = utils.last_completed_audit_period(unit='day@10')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            hour=10,
                                            day=3,
                                            month=3,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            hour=10,
                                            day=4,
                                            month=3,
@@ -634,110 +471,81 @@ class AuditPeriodTest(test.NoDBTestCase):
 
     def test_month(self):
         begin, end = utils.last_completed_audit_period(unit='month')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            day=1,
                                            month=2,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            day=1,
                                            month=3,
                                            year=2012))
 
     def test_month_with_offset_before_current(self):
         begin, end = utils.last_completed_audit_period(unit='month@2')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            day=2,
                                            month=2,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            day=2,
                                            month=3,
                                            year=2012))
 
     def test_month_with_offset_after_current(self):
         begin, end = utils.last_completed_audit_period(unit='month@15')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            day=15,
                                            month=1,
                                            year=2012))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            day=15,
                                            month=2,
                                            year=2012))
 
     def test_year(self):
         begin, end = utils.last_completed_audit_period(unit='year')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            day=1,
                                            month=1,
                                            year=2011))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            day=1,
                                            month=1,
                                            year=2012))
 
     def test_year_with_offset_before_current(self):
         begin, end = utils.last_completed_audit_period(unit='year@2')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            day=1,
                                            month=2,
                                            year=2011))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            day=1,
                                            month=2,
                                            year=2012))
 
     def test_year_with_offset_after_current(self):
         begin, end = utils.last_completed_audit_period(unit='year@6')
-        self.assertEquals(begin, datetime.datetime(
+        self.assertEqual(begin, datetime.datetime(
                                            day=1,
                                            month=6,
                                            year=2010))
-        self.assertEquals(end, datetime.datetime(
+        self.assertEqual(end, datetime.datetime(
                                            day=1,
                                            month=6,
                                            year=2011))
-
-
-class DiffDict(test.NoDBTestCase):
-    """Unit tests for diff_dict()."""
-
-    def test_no_change(self):
-        old = dict(a=1, b=2, c=3)
-        new = dict(a=1, b=2, c=3)
-        diff = utils.diff_dict(old, new)
-
-        self.assertEqual(diff, {})
-
-    def test_new_key(self):
-        old = dict(a=1, b=2, c=3)
-        new = dict(a=1, b=2, c=3, d=4)
-        diff = utils.diff_dict(old, new)
-
-        self.assertEqual(diff, dict(d=['+', 4]))
-
-    def test_changed_key(self):
-        old = dict(a=1, b=2, c=3)
-        new = dict(a=1, b=4, c=3)
-        diff = utils.diff_dict(old, new)
-
-        self.assertEqual(diff, dict(b=['+', 4]))
-
-    def test_removed_key(self):
-        old = dict(a=1, b=2, c=3)
-        new = dict(a=1, c=3)
-        diff = utils.diff_dict(old, new)
-
-        self.assertEqual(diff, dict(b=['-']))
 
 
 class MkfsTestCase(test.NoDBTestCase):
 
     def test_mkfs(self):
         self.mox.StubOutWithMock(utils, 'execute')
-        utils.execute('mkfs', '-t', 'ext4', '-F', '/my/block/dev')
-        utils.execute('mkfs', '-t', 'msdos', '/my/msdos/block/dev')
-        utils.execute('mkswap', '/my/swap/block/dev')
+        utils.execute('mkfs', '-t', 'ext4', '-F', '/my/block/dev',
+                      run_as_root=False)
+        utils.execute('mkfs', '-t', 'msdos', '/my/msdos/block/dev',
+                      run_as_root=False)
+        utils.execute('mkswap', '/my/swap/block/dev',
+                      run_as_root=False)
         self.mox.ReplayAll()
 
         utils.mkfs('ext4', '/my/block/dev')
@@ -747,10 +555,12 @@ class MkfsTestCase(test.NoDBTestCase):
     def test_mkfs_with_label(self):
         self.mox.StubOutWithMock(utils, 'execute')
         utils.execute('mkfs', '-t', 'ext4', '-F',
-                      '-L', 'ext4-vol', '/my/block/dev')
+                      '-L', 'ext4-vol', '/my/block/dev', run_as_root=False)
         utils.execute('mkfs', '-t', 'msdos',
-                      '-n', 'msdos-vol', '/my/msdos/block/dev')
-        utils.execute('mkswap', '-L', 'swap-vol', '/my/swap/block/dev')
+                      '-n', 'msdos-vol', '/my/msdos/block/dev',
+                      run_as_root=False)
+        utils.execute('mkswap', '-L', 'swap-vol', '/my/swap/block/dev',
+                      run_as_root=False)
         self.mox.ReplayAll()
 
         utils.mkfs('ext4', '/my/block/dev', 'ext4-vol')
@@ -844,10 +654,10 @@ class WrappedCodeTestCase(test.NoDBTestCase):
         func = utils.get_wrapped_function(wrapped)
         func_code = func.func_code
         self.assertEqual(4, len(func_code.co_varnames))
-        self.assertTrue('self' in func_code.co_varnames)
-        self.assertTrue('instance' in func_code.co_varnames)
-        self.assertTrue('red' in func_code.co_varnames)
-        self.assertTrue('blue' in func_code.co_varnames)
+        self.assertIn('self', func_code.co_varnames)
+        self.assertIn('instance', func_code.co_varnames)
+        self.assertIn('red', func_code.co_varnames)
+        self.assertIn('blue', func_code.co_varnames)
 
     def test_double_wrapped(self):
         @self._wrapper
@@ -858,10 +668,10 @@ class WrappedCodeTestCase(test.NoDBTestCase):
         func = utils.get_wrapped_function(wrapped)
         func_code = func.func_code
         self.assertEqual(4, len(func_code.co_varnames))
-        self.assertTrue('self' in func_code.co_varnames)
-        self.assertTrue('instance' in func_code.co_varnames)
-        self.assertTrue('red' in func_code.co_varnames)
-        self.assertTrue('blue' in func_code.co_varnames)
+        self.assertIn('self', func_code.co_varnames)
+        self.assertIn('instance', func_code.co_varnames)
+        self.assertIn('red', func_code.co_varnames)
+        self.assertIn('blue', func_code.co_varnames)
 
     def test_triple_wrapped(self):
         @self._wrapper
@@ -873,10 +683,10 @@ class WrappedCodeTestCase(test.NoDBTestCase):
         func = utils.get_wrapped_function(wrapped)
         func_code = func.func_code
         self.assertEqual(4, len(func_code.co_varnames))
-        self.assertTrue('self' in func_code.co_varnames)
-        self.assertTrue('instance' in func_code.co_varnames)
-        self.assertTrue('red' in func_code.co_varnames)
-        self.assertTrue('blue' in func_code.co_varnames)
+        self.assertIn('self', func_code.co_varnames)
+        self.assertIn('instance', func_code.co_varnames)
+        self.assertIn('red', func_code.co_varnames)
+        self.assertIn('blue', func_code.co_varnames)
 
 
 class StringLengthTestCase(test.NoDBTestCase):
@@ -896,20 +706,20 @@ class StringLengthTestCase(test.NoDBTestCase):
 
 class ValidateIntegerTestCase(test.NoDBTestCase):
     def test_valid_inputs(self):
-        self.assertEquals(
+        self.assertEqual(
             utils.validate_integer(42, "answer"), 42)
-        self.assertEquals(
+        self.assertEqual(
             utils.validate_integer("42", "answer"), 42)
-        self.assertEquals(
+        self.assertEqual(
             utils.validate_integer(
                 "7", "lucky", min_value=7, max_value=8), 7)
-        self.assertEquals(
+        self.assertEqual(
             utils.validate_integer(
                 7, "lucky", min_value=6, max_value=7), 7)
-        self.assertEquals(
+        self.assertEqual(
             utils.validate_integer(
                 300, "Spartaaa!!!", min_value=300), 300)
-        self.assertEquals(
+        self.assertEqual(
             utils.validate_integer(
                 "300", "Spartaaa!!!", max_value=300), 300)
 
@@ -1027,7 +837,7 @@ class GetSystemMetadataFromImageTestCase(test.NoDBTestCase):
         # Verify that the empty properties have not been inherited
         for key in utils.SM_INHERITABLE_KEYS:
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
-            self.assertTrue(sys_key not in sys_meta)
+            self.assertNotIn(sys_key, sys_meta)
 
 
 class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
@@ -1054,7 +864,7 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
             self.assertEqual(image[key], sys_meta.get(sys_key))
 
         # Verify that we inherit the rest of metadata as properties
-        self.assertTrue("properties" in image)
+        self.assertIn("properties", image)
 
         for key, value in image["properties"].iteritems():
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
@@ -1071,7 +881,7 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
 
         # Verify that the empty properties have not been inherited
         for key in utils.SM_INHERITABLE_KEYS:
-            self.assertTrue(key not in image)
+            self.assertNotIn(key, image)
 
     def test_non_inheritable_image_properties(self):
         sys_meta = self.get_system_metadata()
@@ -1082,4 +892,34 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
         image = utils.get_image_from_system_metadata(sys_meta)
 
         # Verify that the foo1 key has not been inherited
-        self.assertTrue("foo1" not in image)
+        self.assertNotIn("foo1", image)
+
+
+class VersionTestCase(test.NoDBTestCase):
+    def test_convert_version_to_int(self):
+        self.assertEqual(utils.convert_version_to_int('6.2.0'), 6002000)
+        self.assertEqual(utils.convert_version_to_int((6, 4, 3)), 6004003)
+        self.assertEqual(utils.convert_version_to_int((5, )), 5)
+        self.assertRaises(exception.NovaException,
+                          utils.convert_version_to_int, '5a.6b')
+
+    def test_convert_version_to_string(self):
+        self.assertEqual(utils.convert_version_to_str(6007000), '6.7.0')
+        self.assertEqual(utils.convert_version_to_str(4), '4')
+
+    def test_convert_version_to_tuple(self):
+        self.assertEqual(utils.convert_version_to_tuple('6.7.0'), (6, 7, 0))
+
+    def test_get_major_minor_version_from_string(self):
+        self.assertEqual(utils.get_major_minor_version('6.1.3'), 6.1)
+        self.assertEqual(utils.get_major_minor_version('6.4'), 6.4)
+        self.assertEqual(utils.get_major_minor_version('6'), 6)
+
+    def test_get_major_minor_version_from_float(self):
+        self.assertEqual(utils.get_major_minor_version(6.1), 6.1)
+        self.assertEqual(utils.get_major_minor_version(6), 6.0)
+
+    def test_get_major_minor_version_raises_exception(self):
+        exc = self.assertRaises(exception.NovaException,
+                                utils.get_major_minor_version, '5a.6b')
+        self.assertEqual("Version 5a.6b invalid", exc.message)

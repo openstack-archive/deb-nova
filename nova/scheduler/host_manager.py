@@ -17,6 +17,7 @@
 Manage hosts in the current zone.
 """
 
+import collections
 import UserDict
 
 from oslo.config import cfg
@@ -95,6 +96,11 @@ class ReadOnlyDict(UserDict.IterableUserDict):
             raise TypeError()
 
 
+# Representation of a single metric value from a compute node.
+MetricItem = collections.namedtuple(
+             'MetricItem', ['value', 'timestamp', 'source'])
+
+
 class HostState(object):
     """Mutable and immutable information tracked for a host.
     This is an attempt to remove the ad-hoc data structures
@@ -134,6 +140,9 @@ class HostState(object):
         # Resource oversubscription values for the compute host:
         self.limits = {}
 
+        # Generic metrics from compute nodes
+        self.metrics = {}
+
         self.updated = None
 
     def update_capabilities(self, capabilities=None, service=None):
@@ -145,6 +154,26 @@ class HostState(object):
         if service is None:
             service = {}
         self.service = ReadOnlyDict(service)
+
+    def _update_metrics_from_compute_node(self, compute):
+        #NOTE(llu): The 'or []' is to avoid json decode failure of None
+        #           returned from compute.get, because DB schema allows
+        #           NULL in the metrics column
+        metrics = compute.get('metrics', []) or []
+        if metrics:
+            metrics = jsonutils.loads(metrics)
+        for metric in metrics:
+            # 'name', 'value', 'timestamp' and 'source' are all required
+            # to be valid keys, just let KeyError happen if any one of
+            # them is missing. But we also require 'name' to be True.
+            name = metric['name']
+            item = MetricItem(value=metric['value'],
+                              timestamp=metric['timestamp'],
+                              source=metric['source'])
+            if name:
+                self.metrics[name] = item
+            else:
+                LOG.warn(_("Metric name unknown of %r") % item)
 
     def update_from_compute_node(self, compute):
         """Update information about a host from its compute_node info."""
@@ -187,6 +216,7 @@ class HostState(object):
         # overwrite any values, or get overwritten themselves. Store in self so
         # filters can schedule with them.
         self.stats = self._statmap(compute.get('stats', []))
+        self.hypervisor_version = compute['hypervisor_version']
 
         # Track number of instances on host
         self.num_instances = int(self.stats.get('num_instances', 0))
@@ -220,6 +250,9 @@ class HostState(object):
             self.num_instances_by_os_type[os] = int(self.stats[key])
 
         self.num_io_ops = int(self.stats.get('io_workload', 0))
+
+        # update metrics
+        self._update_metrics_from_compute_node(compute)
 
     def consume_from_instance(self, instance):
         """Incrementally update host state from an instance."""
@@ -267,7 +300,7 @@ class HostState(object):
         if vm_state == vm_states.BUILDING or task_state in [
                 task_states.RESIZE_MIGRATING, task_states.REBUILDING,
                 task_states.RESIZE_PREP, task_states.IMAGE_SNAPSHOT,
-                task_states.IMAGE_LIVE_SNAPSHOT, task_states.IMAGE_BACKUP]:
+                task_states.IMAGE_BACKUP]:
             self.num_io_ops += 1
 
     def _statmap(self, stats):
@@ -335,7 +368,7 @@ class HostManager(object):
                         ignored_hosts.append(host)
             ignored_hosts_str = ', '.join(ignored_hosts)
             msg = _('Host filter ignoring hosts: %s')
-            LOG.debug(msg % ignored_hosts_str)
+            LOG.audit(msg % ignored_hosts_str)
 
         def _match_forced_hosts(host_map, hosts_to_force):
             forced_hosts = []
@@ -351,7 +384,7 @@ class HostManager(object):
                 forced_hosts_str = ', '.join(hosts_to_force)
                 msg = _("No hosts matched due to not matching "
                         "'force_hosts' value of '%s'")
-            LOG.debug(msg % forced_hosts_str)
+            LOG.audit(msg % forced_hosts_str)
 
         def _match_forced_nodes(host_map, nodes_to_force):
             forced_nodes = []
@@ -367,7 +400,7 @@ class HostManager(object):
                 forced_nodes_str = ', '.join(nodes_to_force)
                 msg = _("No nodes matched due to not matching "
                         "'force_nodes' value of '%s'")
-            LOG.debug(msg % forced_nodes_str)
+            LOG.audit(msg % forced_nodes_str)
 
         filter_classes = self._choose_host_filters(filter_class_names)
         ignore_hosts = filter_properties.get('ignore_hosts', [])

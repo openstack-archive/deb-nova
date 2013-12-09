@@ -26,7 +26,9 @@ helpers for populating up config object instances.
 """
 
 from nova import exception
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova import unit
 
 from lxml import etree
 
@@ -67,7 +69,7 @@ class LibvirtConfigObject(object):
     def to_xml(self, pretty_print=True):
         root = self.format_dom()
         xml_str = etree.tostring(root, pretty_print=pretty_print)
-        LOG.debug("Generated XML %s " % (xml_str,))
+        LOG.debug(_("Generated XML %s "), (xml_str,))
         return xml_str
 
 
@@ -336,6 +338,11 @@ class LibvirtConfigGuestCPU(LibvirtConfigCPU):
         self.mode = None
         self.match = "exact"
 
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigGuestCPU, self).parse_dom(xmldoc)
+        self.mode = xmldoc.get('mode')
+        self.match = xmldoc.get('match')
+
     def format_dom(self):
         cpu = super(LibvirtConfigGuestCPU, self).format_dom()
 
@@ -478,6 +485,7 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         self.disk_total_iops_sec = None
         self.logical_block_size = None
         self.physical_block_size = None
+        self.readonly = False
 
     def format_dom(self):
         dev = super(LibvirtConfigGuestDisk, self).format_dom()
@@ -571,6 +579,9 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
                 blockio.set('physical_block_size', self.physical_block_size)
 
             dev.append(blockio)
+
+        if self.readonly:
+            dev.append(etree.Element("readonly"))
 
         return dev
 
@@ -1033,7 +1044,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self.virt_type = None
         self.uuid = None
         self.name = None
-        self.memory = 1024 * 1024 * 500
+        self.memory = 500 * unit.Mi
         self.vcpus = 1
         self.cpuset = None
         self.cpu = None
@@ -1051,7 +1062,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self.os_cmdline = None
         self.os_root = None
         self.os_init_path = None
-        self.os_boot_dev = None
+        self.os_boot_dev = []
         self.os_smbios = None
         self.devices = []
 
@@ -1081,8 +1092,10 @@ class LibvirtConfigGuest(LibvirtConfigObject):
             os.append(self._text_node("root", self.os_root))
         if self.os_init_path is not None:
             os.append(self._text_node("init", self.os_init_path))
-        if self.os_boot_dev is not None:
-            os.append(etree.Element("boot", dev=self.os_boot_dev))
+
+        for boot_dev in self.os_boot_dev:
+            os.append(etree.Element("boot", dev=boot_dev))
+
         if self.os_smbios is not None:
             os.append(self.os_smbios.format_dom())
         root.append(os)
@@ -1142,6 +1155,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
     def parse_dom(self, xmldoc):
         # Note: This cover only for: LibvirtConfigGuestDisks
         #                            LibvirtConfigGuestHostdevPCI
+        #                            LibvirtConfigGuestCPU
         for c in xmldoc.getchildren():
             if c.tag == 'devices':
                 for d in c.getchildren():
@@ -1153,6 +1167,10 @@ class LibvirtConfigGuest(LibvirtConfigObject):
                         obj = LibvirtConfigGuestHostdevPCI()
                         obj.parse_dom(d)
                         self.devices.append(obj)
+            elif c.tag == 'cpu':
+                obj = LibvirtConfigGuestCPU()
+                obj.parse_dom(c)
+                self.cpu = obj
 
     def add_device(self, dev):
         self.devices.append(dev)

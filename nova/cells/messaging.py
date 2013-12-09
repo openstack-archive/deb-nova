@@ -37,6 +37,7 @@ from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
 from nova.db import base
 from nova import exception
+from nova.network import model as network_model
 from nova.objects import base as objects_base
 from nova.objects import instance as instance_obj
 from nova.openstack.common import excutils
@@ -875,7 +876,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
                         extra_instance_updates):
         """Resize an instance via compute_api.resize()."""
         self._call_compute_api_with_obj(message.ctxt, instance, 'resize',
-                                        flavor_id=flavor['id'],
+                                        flavor_id=flavor['flavorid'],
                                         **extra_instance_updates)
 
     def live_migrate_instance(self, message, instance, block_migration,
@@ -908,8 +909,8 @@ class _TargetedMessageMethods(_BaseMessageMethods):
     def snapshot_instance(self, message, instance, image_id):
         """Snapshot an instance in its cell."""
         instance.refresh()
-        instance.task_state = task_states.IMAGE_SNAPSHOT
-        instance.save(expected_task_state=None)
+        instance.task_state = task_states.IMAGE_SNAPSHOT_PENDING
+        instance.save(expected_task_state=[None])
         self.compute_rpcapi.snapshot_instance(message.ctxt,
                                               instance,
                                               image_id)
@@ -919,7 +920,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         """Backup an instance in its cell."""
         instance.refresh()
         instance.task_state = task_states.IMAGE_BACKUP
-        instance.save(expected_task_state=None)
+        instance.save(expected_task_state=[None])
         self.compute_rpcapi.backup_instance(message.ctxt,
                                             instance,
                                             image_id,
@@ -991,9 +992,14 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
             except exception.NotFound:
                 # FIXME(comstud): Strange.  Need to handle quotas here,
                 # if we actually want this code to remain..
-                self.db.instance_create(message.ctxt, instance,
-                                        legacy=False)
+                self.db.instance_create(message.ctxt, instance)
         if info_cache:
+            network_info = info_cache.get('network_info')
+            if isinstance(network_info, list):
+                if not isinstance(network_info, network_model.NetworkInfo):
+                    network_info = network_model.NetworkInfo.hydrate(
+                            network_info)
+                info_cache['network_info'] = network_info.json()
             try:
                 self.db.instance_info_cache_update(
                         message.ctxt, instance_uuid, info_cache)

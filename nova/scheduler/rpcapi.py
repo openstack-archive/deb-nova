@@ -70,8 +70,13 @@ class SchedulerAPI(rpcclient.RpcProxy):
         2.7 - Add select_destinations()
         2.8 - Deprecate prep_resize() -- JUST KIDDING.  It is still used
               by the compute manager for retries.
-        2.9 - Added the leagacy_bdm_in_spec parameter to run_instance()
-        2.10 - Deprecated live_migration() call, moved to conductor
+        2.9 - Added the legacy_bdm_in_spec parameter to run_instance()
+
+        ... Havana supports message version 2.9.  So, any changes to existing
+        methods in 2.x after that point should be done such that they can
+        handle the version_cap being set to 2.9.
+
+        ... - Deprecated live_migration() call, moved to conductor
     '''
 
     #
@@ -86,6 +91,7 @@ class SchedulerAPI(rpcclient.RpcProxy):
 
     VERSION_ALIASES = {
         'grizzly': '2.6',
+        'havana': '2.9',
     }
 
     def __init__(self):
@@ -128,16 +134,6 @@ class SchedulerAPI(rpcclient.RpcProxy):
                          image=image_p, request_spec=request_spec,
                          filter_properties=filter_properties,
                          reservations=reservations_p)
-
-    def update_service_capabilities(self, ctxt, service_name, host,
-            capabilities):
-        #NOTE(jogo) This is deprecated, but is used by the deprecated
-        # publish_service_capabilities call. So this can begin its removal
-        # process once publish_service_capabilities is removed.
-        cctxt = self.client.prepare(fanout=True, version='2.4')
-        cctxt.cast(ctxt, 'update_service_capabilities',
-                   service_name=service_name, host=host,
-                   capabilities=capabilities)
 
     def select_hosts(self, ctxt, request_spec, filter_properties):
         cctxt = self.client.prepare(version='2.6')

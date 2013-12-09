@@ -14,7 +14,7 @@
 
 from nova import db
 from nova.objects import base
-from nova.objects import utils
+from nova.objects import fields
 
 
 class KeyPair(base.NovaPersistentObject, base.NovaObject):
@@ -23,11 +23,11 @@ class KeyPair(base.NovaPersistentObject, base.NovaObject):
     VERSION = '1.1'
 
     fields = {
-        'id': int,
-        'name': utils.str_or_none,
-        'user_id': utils.str_or_none,
-        'fingerprint': utils.str_or_none,
-        'public_key': utils.str_or_none,
+        'id': fields.IntegerField(),
+        'name': fields.StringField(nullable=True),
+        'user_id': fields.StringField(nullable=True),
+        'fingerprint': fields.StringField(nullable=True),
+        'public_key': fields.StringField(nullable=True),
         }
 
     @staticmethod
@@ -59,6 +59,10 @@ class KeyPair(base.NovaPersistentObject, base.NovaObject):
 
 
 class KeyPairList(base.ObjectListBase, base.NovaObject):
+    fields = {
+        'objects': fields.ListOfObjectsField('KeyPair'),
+        }
+
     @base.remotable_classmethod
     def get_by_user(cls, context, user_id):
         db_keypairs = db.key_pair_get_all_by_user(context, user_id)

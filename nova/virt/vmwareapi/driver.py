@@ -32,6 +32,7 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
+from nova.openstack.common import uuidutils
 from nova.virt import driver
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import host
@@ -99,15 +100,6 @@ vmwareapi_opts = [
                deprecated_name='vnc_port_total',
                deprecated_group='DEFAULT',
                help='Total number of VNC ports'),
-    # Deprecated, remove in Icehouse
-    cfg.StrOpt('vnc_password',
-               deprecated_name='vnc_password',
-               deprecated_group='DEFAULT',
-               help='DEPRECATED. VNC password. The password-based access to '
-                    'VNC consoles will be removed in the next release. The '
-                    'default value will disable password protection on the '
-                    'VNC console.',
-               secret=True),
     cfg.BoolOpt('use_linked_clone',
                 default=True,
                 deprecated_name='use_linked_clone',
@@ -194,8 +186,8 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Reboot VM instance."""
         self._vmops.reboot(instance, network_info)
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True, context=None):
+    def destroy(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
         """Destroy VM instance."""
         self._vmops.destroy(instance, network_info, destroy_disks)
 
@@ -211,7 +203,7 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Suspend the specified instance."""
         self._vmops.suspend(instance)
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         """Resume the suspended VM instance."""
         self._vmops.resume(instance)
 
@@ -265,7 +257,7 @@ class VMwareESXDriver(driver.ComputeDriver):
 
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics."""
-        return self._vmops.get_info(instance)
+        return self._vmops.get_diagnostics(instance)
 
     def get_console_output(self, instance):
         """Return snapshot of console."""
@@ -379,6 +371,11 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Unplug VIFs from networks."""
         self._vmops.unplug_vifs(instance, network_info)
 
+    def list_instance_uuids(self):
+        """List VM instance UUIDs."""
+        uuids = self._vmops.list_instances()
+        return [uuid for uuid in uuids if uuidutils.is_uuid_like(uuid)]
+
 
 class VMwareVCDriver(VMwareESXDriver):
     """The ESX host connection object."""
@@ -434,32 +431,36 @@ class VMwareVCDriver(VMwareESXDriver):
         self._vc_state = self._resources.get(first_cluster).get('vcstate')
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info,
+                                   flavor, network_info,
                                    block_device_info=None):
         """
         Transfers the disk of a running instance in multiple phases, turning
         off the instance before the end.
         """
-        return self._vmops.migrate_disk_and_power_off(context, instance,
-                                                      dest, instance_type)
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        return _vmops.migrate_disk_and_power_off(context, instance,
+                                                 dest, flavor)
 
     def confirm_migration(self, migration, instance, network_info):
         """Confirms a resize, destroying the source VM."""
-        self._vmops.confirm_migration(migration, instance, network_info)
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops.confirm_migration(migration, instance, network_info)
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
         """Finish reverting a resize, powering back on the instance."""
-        self._vmops.finish_revert_migration(instance, network_info,
-                                            block_device_info, power_on)
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops.finish_revert_migration(context, instance, network_info,
+                                       block_device_info, power_on)
 
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance=False,
                          block_device_info=None, power_on=True):
         """Completes a resize, turning on the migrated instance."""
-        self._vmops.finish_migration(context, migration, instance, disk_info,
-                                     network_info, image_meta, resize_instance,
-                                     block_device_info, power_on)
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops.finish_migration(context, migration, instance, disk_info,
+                                network_info, image_meta, resize_instance,
+                                block_device_info, power_on)
 
     def live_migration(self, context, instance_ref, dest,
                        post_method, recover_method, block_migration=False,
@@ -654,8 +655,8 @@ class VMwareVCDriver(VMwareESXDriver):
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.reboot(instance, network_info)
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True, context=None):
+    def destroy(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
         """Destroy VM instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.destroy(instance, network_info, destroy_disks)
@@ -675,7 +676,7 @@ class VMwareVCDriver(VMwareESXDriver):
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.suspend(instance)
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         """Resume the suspended VM instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.resume(instance)
@@ -716,7 +717,7 @@ class VMwareVCDriver(VMwareESXDriver):
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        return _vmops.get_info(instance)
+        return _vmops.get_diagnostics(instance)
 
     def inject_network_info(self, instance, network_info):
         """inject network info for specified instance."""

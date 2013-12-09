@@ -13,11 +13,12 @@
             }
         ],
         "name": "%(flavor_name)s",
+        "flavor-access:is_public": true,
         "ram": 1024,
         "rxtx_factor": 2.0,
         "vcpus": 2,
         "disabled": false,
-        "ephemeral": "",
-        "swap": ""
+        "ephemeral": 0,
+        "swap": 0
     }
 }

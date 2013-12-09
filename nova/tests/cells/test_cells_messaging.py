@@ -24,7 +24,9 @@ from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
+from nova.network import model as network_model
 from nova.objects import base as objects_base
+from nova.objects import fields as objects_fields
 from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
 from nova.openstack.common import rpc
@@ -275,7 +277,7 @@ class CellsMessageClassesTestCase(test.TestCase):
             """Test object.  We just need 1 field in order to test
             that this gets serialized properly.
             """
-            fields = {'test': str}
+            fields = {'test': objects_fields.StringField()}
 
         test_obj = CellsMsgingTestObject()
         test_obj.test = 'meow'
@@ -303,7 +305,7 @@ class CellsMessageClassesTestCase(test.TestCase):
         self.assertEqual(2, call_info['kwargs']['arg2'])
         # Verify we get a new object with what we expect.
         obj = call_info['kwargs']['obj']
-        self.assertTrue(isinstance(obj, CellsMsgingTestObject))
+        self.assertIsInstance(obj, CellsMsgingTestObject)
         self.assertNotEqual(id(test_obj), id(obj))
         self.assertEqual(test_obj.test, obj.test)
 
@@ -962,7 +964,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         response = self.src_msg_runner.task_log_get_all(self.ctxt,
                 self.tgt_cell_name, task_name, begin, end, host=host,
                 state=state)
-        self.assertTrue(isinstance(response, list))
+        self.assertIsInstance(response, list)
         self.assertEqual(1, len(response))
         result = response[0].value_or_raise()
         self.assertEqual(['fake_result'], result)
@@ -1246,9 +1248,9 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         self._test_instance_action_method('unpause', (), {}, (), {}, False)
 
     def test_resize_instance(self):
-        kwargs = dict(flavor=dict(id=42),
+        kwargs = dict(flavor=dict(id=42, flavorid='orangemocchafrappuccino'),
                       extra_instance_updates=dict(cow='moo'))
-        expected_kwargs = dict(flavor_id=42, cow='moo')
+        expected_kwargs = dict(flavor_id='orangemocchafrappuccino', cow='moo')
         self._test_instance_action_method('resize', (), kwargs,
                                           (), expected_kwargs,
                                           False)
@@ -1286,10 +1288,11 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         self.mox.StubOutWithMock(meth_cls.compute_rpcapi, 'snapshot_instance')
 
         def check_state(expected_task_state=None):
-            self.assertEqual(task_states.IMAGE_SNAPSHOT, inst.task_state)
+            self.assertEqual(task_states.IMAGE_SNAPSHOT_PENDING,
+                             inst.task_state)
 
         inst.refresh()
-        inst.save(expected_task_state=None).WithSideEffects(check_state)
+        inst.save(expected_task_state=[None]).WithSideEffects(check_state)
 
         meth_cls.compute_rpcapi.snapshot_instance(self.ctxt,
                                                   inst, 'image-id')
@@ -1317,7 +1320,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
             self.assertEqual(task_states.IMAGE_BACKUP, inst.task_state)
 
         inst.refresh()
-        inst.save(expected_task_state=None).WithSideEffects(check_state)
+        inst.save(expected_task_state=[None]).WithSideEffects(check_state)
 
         meth_cls.compute_rpcapi.backup_instance(self.ctxt,
                                                 inst,
@@ -1395,10 +1398,10 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
         self.assertFalse(self.mid_methods_cls._at_the_top())
         self.assertFalse(self.src_methods_cls._at_the_top())
 
-    def test_instance_update_at_top(self):
+    def _test_instance_update_at_top(self, net_info, exists=True):
         fake_info_cache = {'id': 1,
                            'instance': 'fake_instance',
-                           'other': 'moo'}
+                           'network_info': net_info}
         fake_sys_metadata = [{'id': 1,
                               'key': 'key1',
                               'value': 'value1'},
@@ -1417,7 +1420,7 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
                          'other': 'meow'}
         expected_sys_metadata = {'key1': 'value1',
                                  'key2': 'value2'}
-        expected_info_cache = {'other': 'moo'}
+        expected_info_cache = {'network_info': "[]"}
         expected_cell_name = 'api-cell!child-cell2!grandchild-cell1'
         expected_instance = {'system_metadata': expected_sys_metadata,
                              'cell_name': expected_cell_name,
@@ -1433,16 +1436,33 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
                                  'instance_info_cache_update')
 
         self.mox.StubOutWithMock(self.tgt_db_inst, 'instance_update')
+        self.mox.StubOutWithMock(self.tgt_db_inst, 'instance_create')
         self.mox.StubOutWithMock(self.tgt_db_inst,
                                  'instance_info_cache_update')
-        self.tgt_db_inst.instance_update(self.ctxt, 'fake_uuid',
-                                         expected_instance,
-                                         update_cells=False)
+        mock = self.tgt_db_inst.instance_update(self.ctxt, 'fake_uuid',
+                                                expected_instance,
+                                                update_cells=False)
+        if not exists:
+            mock.AndRaise(exception.InstanceNotFound(instance_id='fake_uuid'))
+            self.tgt_db_inst.instance_create(self.ctxt,
+                                             expected_instance)
         self.tgt_db_inst.instance_info_cache_update(self.ctxt, 'fake_uuid',
                                                     expected_info_cache)
         self.mox.ReplayAll()
 
         self.src_msg_runner.instance_update_at_top(self.ctxt, fake_instance)
+
+    def test_instance_update_at_top(self):
+        self._test_instance_update_at_top("[]")
+
+    def test_instance_update_at_top_netinfo_list(self):
+        self._test_instance_update_at_top([])
+
+    def test_instance_update_at_top_netinfo_model(self):
+        self._test_instance_update_at_top(network_model.NetworkInfo())
+
+    def test_instance_update_at_top_doesnt_already_exist(self):
+        self._test_instance_update_at_top([], exists=False)
 
     def test_instance_update_at_top_with_building_state(self):
         fake_info_cache = {'id': 1,
@@ -2014,7 +2034,7 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
         responses = self.src_msg_runner.get_migrations(
                 self.ctxt,
                 None, False, filters)
-        self.assertEquals(2, len(responses))
+        self.assertEqual(2, len(responses))
         for response in responses:
             self.assertIn(response.value_or_raise(), [migrations_from_cell1,
                                                       migrations_from_cell2])

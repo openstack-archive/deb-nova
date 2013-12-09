@@ -79,12 +79,15 @@ class QuotaIntegrationTestCase(test.TestCase):
             instance_uuids.append(instance['uuid'])
         inst_type = flavors.get_flavor_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
-        self.assertRaises(exception.QuotaError, compute.API().create,
-                                            self.context,
-                                            min_count=1,
-                                            max_count=1,
-                                            instance_type=inst_type,
-                                            image_href=image_uuid)
+        try:
+            compute.API().create(self.context, min_count=1, max_count=1,
+                             instance_type=inst_type, image_href=image_uuid)
+        except exception.QuotaError as e:
+            expected_kwargs = {'code': 413, 'resource': 'cores', 'req': 1,
+                          'used': 4, 'allowed': 4, 'overs': 'cores,instances'}
+            self.assertEqual(e.kwargs, expected_kwargs)
+        else:
+            self.fail('Expected QuotaError exception')
         for instance_uuid in instance_uuids:
             db.instance_destroy(self.context, instance_uuid)
 
@@ -92,12 +95,23 @@ class QuotaIntegrationTestCase(test.TestCase):
         instance = self._create_instance(cores=4)
         inst_type = flavors.get_flavor_by_name('m1.small')
         image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
-        self.assertRaises(exception.QuotaError, compute.API().create,
-                                            self.context,
-                                            min_count=1,
-                                            max_count=1,
-                                            instance_type=inst_type,
-                                            image_href=image_uuid)
+        try:
+            compute.API().create(self.context, min_count=1, max_count=1,
+                             instance_type=inst_type, image_href=image_uuid)
+        except exception.QuotaError as e:
+            expected_kwargs = {'code': 413, 'resource': 'cores', 'req': 1,
+                          'used': 4, 'allowed': 4, 'overs': 'cores'}
+            self.assertEqual(e.kwargs, expected_kwargs)
+        else:
+            self.fail('Expected QuotaError exception')
+        db.instance_destroy(self.context, instance['uuid'])
+
+    def test_many_cores_with_unlimited_quota(self):
+        # Setting cores quota to unlimited:
+        self.flags(quota_cores=-1)
+        instance = self._create_instance(cores=4)
+        inst_type = flavors.get_flavor_by_name('m1.small')
+        image_uuid = 'cedef40a-ed67-4d10-800e-17455edce175'
         db.instance_destroy(self.context, instance['uuid'])
 
     def test_too_many_addresses(self):
@@ -323,7 +337,7 @@ class BaseResourceTestCase(test.TestCase):
         resource = quota.BaseResource('test_resource')
 
         self.assertEqual(resource.name, 'test_resource')
-        self.assertEqual(resource.flag, None)
+        self.assertIsNone(resource.flag)
         self.assertEqual(resource.default, -1)
 
     def test_with_flag(self):
@@ -420,14 +434,14 @@ class QuotaEngineTestCase(test.TestCase):
         quota_obj = quota.QuotaEngine()
 
         self.assertEqual(quota_obj._resources, {})
-        self.assertTrue(isinstance(quota_obj._driver, quota.DbQuotaDriver))
+        self.assertIsInstance(quota_obj._driver, quota.DbQuotaDriver)
 
     def test_init_override_string(self):
         quota_obj = quota.QuotaEngine(
             quota_driver_class='nova.tests.test_quota.FakeDriver')
 
         self.assertEqual(quota_obj._resources, {})
-        self.assertTrue(isinstance(quota_obj._driver, FakeDriver))
+        self.assertIsInstance(quota_obj._driver, FakeDriver)
 
     def test_init_override_obj(self):
         quota_obj = quota.QuotaEngine(quota_driver_class=FakeDriver)
@@ -962,6 +976,28 @@ class DbQuotaDriverTestCase(test.TestCase):
                     reserved=0,
                     ),
                 ))
+
+    def _stub_get_by_project_and_user_specific(self):
+        def fake_quota_get(context, project_id, resource, user_id=None):
+            self.calls.append('quota_get')
+            self.assertEqual(project_id, 'test_project')
+            self.assertEqual(user_id, 'fake_user')
+            self.assertEqual(resource, 'test_resource')
+            return dict(
+                test_resource=dict(in_use=20, reserved=10),
+                )
+        self.stubs.Set(db, 'quota_get', fake_quota_get)
+
+    def test_get_by_project_and_user(self):
+        self._stub_get_by_project_and_user_specific()
+        result = self.driver.get_by_project_and_user(
+            FakeContext('test_project', 'test_class'),
+            'test_project', 'fake_user', 'test_resource')
+
+        self.assertEqual(self.calls, ['quota_get'])
+        self.assertEqual(result, dict(
+            test_resource=dict(in_use=20, reserved=10),
+            ))
 
     def _stub_get_by_project(self):
         def fake_qgabp(context, project_id):
@@ -2293,12 +2329,23 @@ class QuotaReserveSqlAlchemyTestCase(test.TestCase):
 
     def test_quota_reserve_overs(self):
         context = self._init_usages(4, 8, 10 * 1024, 4)
-        self.assertRaises(exception.OverQuota,
-                          sqa_api.quota_reserve,
-                          context, self.resources, self.quotas,
-                          self.quotas, self.deltas, self.expire,
-                          0, 0)
-
+        try:
+            sqa_api.quota_reserve(context, self.resources, self.quotas,
+                          self.quotas, self.deltas, self.expire, 0, 0)
+        except exception.OverQuota as e:
+            expected_kwargs = {'code': 500,
+                'usages': {'instances': {'reserved': 0, 'in_use': 4},
+                'ram': {'reserved': 0, 'in_use': 10240},
+                'fixed_ips': {'reserved': 0, 'in_use': 4},
+                'cores': {'reserved': 0, 'in_use': 8}},
+                'headroom': {'cores': 2, 'ram': 0, 'fixed_ips': 1,
+                             'instances': 1},
+                'overs': ['cores', 'fixed_ips', 'instances', 'ram'],
+                'quotas': {'cores': 10, 'ram': 10240,
+                           'fixed_ips': 5, 'instances': 5}}
+            self.assertEqual(e.kwargs, expected_kwargs)
+        else:
+            self.fail('Expected OverQuota failure')
         self.assertEqual(self.sync_called, set([]))
         self.usages_list[0]["in_use"] = 4
         self.usages_list[0]["reserved"] = 0
@@ -2307,6 +2354,40 @@ class QuotaReserveSqlAlchemyTestCase(test.TestCase):
         self.usages_list[2]["in_use"] = 10 * 1024
         self.usages_list[2]["reserved"] = 0
         self.usages_list[3]["in_use"] = 4
+        self.usages_list[3]["reserved"] = 0
+        self.compare_usage(self.usages, self.usages_list)
+        self.assertEqual(self.usages_created, {})
+        self.assertEqual(self.reservations_created, {})
+
+    def test_quota_reserve_cores_unlimited(self):
+        # Requesting 8 cores, quota_cores set to unlimited:
+        self.flags(quota_cores=-1)
+        context = self._init_usages(1, 8, 1 * 1024, 1)
+        self.assertEqual(self.sync_called, set([]))
+        self.usages_list[0]["in_use"] = 1
+        self.usages_list[0]["reserved"] = 0
+        self.usages_list[1]["in_use"] = 8
+        self.usages_list[1]["reserved"] = 0
+        self.usages_list[2]["in_use"] = 1 * 1024
+        self.usages_list[2]["reserved"] = 0
+        self.usages_list[3]["in_use"] = 1
+        self.usages_list[3]["reserved"] = 0
+        self.compare_usage(self.usages, self.usages_list)
+        self.assertEqual(self.usages_created, {})
+        self.assertEqual(self.reservations_created, {})
+
+    def test_quota_reserve_ram_unlimited(self):
+        # Requesting 10*1024 ram, quota_ram set to unlimited:
+        self.flags(quota_ram=-1)
+        context = self._init_usages(1, 1, 10 * 1024, 1)
+        self.assertEqual(self.sync_called, set([]))
+        self.usages_list[0]["in_use"] = 1
+        self.usages_list[0]["reserved"] = 0
+        self.usages_list[1]["in_use"] = 1
+        self.usages_list[1]["reserved"] = 0
+        self.usages_list[2]["in_use"] = 10 * 1024
+        self.usages_list[2]["reserved"] = 0
+        self.usages_list[3]["in_use"] = 1
         self.usages_list[3]["reserved"] = 0
         self.compare_usage(self.usages, self.usages_list)
         self.assertEqual(self.usages_created, {})
@@ -2356,47 +2437,55 @@ class NoopQuotaDriverTestCase(test.TestCase):
                    max_age=0,
                    )
 
-        self.expected_quotas = dict([(r, -1)
-                                     for r in quota.QUOTAS._resources])
+        self.expected_with_usages = {}
+        self.expected_without_usages = {}
+        self.expected_without_dict = {}
+        for r in quota.QUOTAS._resources:
+            self.expected_with_usages[r] = dict(limit=-1,
+                                                in_use=-1,
+                                                reserved=-1)
+            self.expected_without_usages[r] = dict(limit=-1)
+            self.expected_without_dict[r] = -1
+
         self.driver = quota.NoopQuotaDriver()
 
     def test_get_defaults(self):
         # Use our pre-defined resources
         result = self.driver.get_defaults(None, quota.QUOTAS._resources)
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_without_dict, result)
 
     def test_get_class_quotas(self):
         result = self.driver.get_class_quotas(None,
                                               quota.QUOTAS._resources,
                                               'test_class')
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_without_dict, result)
 
     def test_get_class_quotas_no_defaults(self):
         result = self.driver.get_class_quotas(None,
                                               quota.QUOTAS._resources,
                                               'test_class',
                                               False)
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_without_dict, result)
 
     def test_get_project_quotas(self):
         result = self.driver.get_project_quotas(None,
                                                 quota.QUOTAS._resources,
                                                 'test_project')
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_with_usages, result)
 
     def test_get_user_quotas(self):
         result = self.driver.get_user_quotas(None,
                                              quota.QUOTAS._resources,
                                              'test_project',
                                              'fake_user')
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_with_usages, result)
 
     def test_get_project_quotas_no_defaults(self):
         result = self.driver.get_project_quotas(None,
                                                 quota.QUOTAS._resources,
                                                 'test_project',
                                                 defaults=False)
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_with_usages, result)
 
     def test_get_user_quotas_no_defaults(self):
         result = self.driver.get_user_quotas(None,
@@ -2404,14 +2493,14 @@ class NoopQuotaDriverTestCase(test.TestCase):
                                              'test_project',
                                              'fake_user',
                                              defaults=False)
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_with_usages, result)
 
     def test_get_project_quotas_no_usages(self):
         result = self.driver.get_project_quotas(None,
                                                 quota.QUOTAS._resources,
                                                 'test_project',
                                                 usages=False)
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_without_usages, result)
 
     def test_get_user_quotas_no_usages(self):
         result = self.driver.get_user_quotas(None,
@@ -2419,4 +2508,4 @@ class NoopQuotaDriverTestCase(test.TestCase):
                                              'test_project',
                                              'fake_user',
                                              usages=False)
-        self.assertEqual(self.expected_quotas, result)
+        self.assertEqual(self.expected_without_usages, result)

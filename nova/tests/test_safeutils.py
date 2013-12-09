@@ -28,11 +28,11 @@ class GetCallArgsTestCase(test.NoDBTestCase):
         callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
         #implicit self counts as an arg
         self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
+        self.assertIn('instance', callargs)
         self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
+        self.assertIn('red', callargs)
         self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
+        self.assertIn('blue', callargs)
         self.assertEqual(4, callargs['blue'])
 
     def test_all_args(self):
@@ -41,11 +41,11 @@ class GetCallArgsTestCase(test.NoDBTestCase):
         callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
         #implicit self counts as an arg
         self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
+        self.assertIn('instance', callargs)
         self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
+        self.assertIn('red', callargs)
         self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
+        self.assertIn('blue', callargs)
         self.assertEqual(4, callargs['blue'])
 
     def test_mixed_args(self):
@@ -54,11 +54,11 @@ class GetCallArgsTestCase(test.NoDBTestCase):
         callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
         #implicit self counts as an arg
         self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
+        self.assertIn('instance', callargs)
         self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
+        self.assertIn('red', callargs)
         self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
+        self.assertIn('blue', callargs)
         self.assertEqual(4, callargs['blue'])
 
     def test_partial_kwargs(self):
@@ -67,12 +67,12 @@ class GetCallArgsTestCase(test.NoDBTestCase):
         callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
         #implicit self counts as an arg
         self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
+        self.assertIn('instance', callargs)
         self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
+        self.assertIn('red', callargs)
         self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(None, callargs['blue'])
+        self.assertIn('blue', callargs)
+        self.assertIsNone(callargs['blue'])
 
     def test_partial_args(self):
         args = ({'uuid': 1}, 3)
@@ -80,21 +80,21 @@ class GetCallArgsTestCase(test.NoDBTestCase):
         callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
         #implicit self counts as an arg
         self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
+        self.assertIn('instance', callargs)
         self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
+        self.assertIn('red', callargs)
         self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(None, callargs['blue'])
+        self.assertIn('blue', callargs)
+        self.assertIsNone(callargs['blue'])
 
     def test_partial_mixed_args(self):
         args = (3,)
         kwargs = {'instance': {'uuid': 1}}
         callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
         self.assertEqual(4, len(callargs))
-        self.assertTrue('instance' in callargs)
+        self.assertIn('instance', callargs)
         self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertTrue('red' in callargs)
+        self.assertIn('red', callargs)
         self.assertEqual(3, callargs['red'])
-        self.assertTrue('blue' in callargs)
-        self.assertEqual(None, callargs['blue'])
+        self.assertIn('blue', callargs)
+        self.assertIsNone(callargs['blue'])

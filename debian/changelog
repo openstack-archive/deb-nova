@@ -1,3 +1,9 @@
+nova (2014.1~b1-1) experimental; urgency=low
+
+  * New upstream release (Icehouse beta 1).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 09 Dec 2013 22:56:39 +0800
+
 nova (2013.2-4) UNRELEASED; urgency=low
 
   * Added | cut -d" " -f1 when searching for the default gateway interface,

@@ -79,24 +79,18 @@ class S3APITestCase(test.NoDBTestCase):
 
         def get_http_connection(*args):
             """Get a new S3 connection, don't attempt to reuse connections."""
-            try:
-                # NOTE(danms): boto < 2.14
-                host, is_secure = args
-                return self.conn.new_http_connection(host, is_secure)
-            except ValueError:
-                host, port, is_secure = args
-                return self.conn.new_http_connection(host, port, is_secure)
+            return self.conn.new_http_connection(*args)
 
         self.conn.get_http_connection = get_http_connection
 
     def _ensure_no_buckets(self, buckets):  # pylint: disable=C0111
-        self.assertEquals(len(buckets), 0, "Bucket list was not empty")
+        self.assertEqual(len(buckets), 0, "Bucket list was not empty")
         return True
 
     def _ensure_one_bucket(self, buckets, name):  # pylint: disable=C0111
-        self.assertEquals(len(buckets), 1,
-                          "Bucket list didn't have exactly one element in it")
-        self.assertEquals(buckets[0].name, name, "Wrong name")
+        self.assertEqual(len(buckets), 1,
+                         "Bucket list didn't have exactly one element in it")
+        self.assertEqual(buckets[0].name, name, "Wrong name")
         return True
 
     def test_list_buckets(self):
@@ -126,8 +120,8 @@ class S3APITestCase(test.NoDBTestCase):
 
         # make sure the contents are correct
         key = bucket.get_key(key_name)
-        self.assertEquals(key.get_contents_as_string(), key_contents,
-                          "Bad contents")
+        self.assertEqual(key.get_contents_as_string(), key_contents,
+                         "Bad contents")
 
         # delete the key
         key.delete()

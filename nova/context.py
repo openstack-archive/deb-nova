@@ -22,6 +22,8 @@
 import copy
 import uuid
 
+import six
+
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import local
@@ -71,7 +73,7 @@ class RequestContext(object):
         self.remote_address = remote_address
         if not timestamp:
             timestamp = timeutils.utcnow()
-        if isinstance(timestamp, basestring):
+        if isinstance(timestamp, six.string_types):
             timestamp = timeutils.parse_strtime(timestamp)
         self.timestamp = timestamp
         if not request_id:
@@ -82,7 +84,7 @@ class RequestContext(object):
         if service_catalog:
             # Only include required parts of service_catalog
             self.service_catalog = [s for s in service_catalog
-                if s.get('type') in ('volume')]
+                if s.get('type') in ('volume',)]
         else:
             # if list is empty or none
             self.service_catalog = []

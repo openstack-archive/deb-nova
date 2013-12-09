@@ -87,9 +87,6 @@
   <extension alias="os-consoles" updated="%(timestamp)s" namespace="http://docs.openstack.org/compute/ext/os-consoles/api/v2" name="Consoles">
     <description>%(text)s</description>
   </extension>
-  <extension alias="os-coverage" updated="%(timestamp)s" namespace="http://docs.openstack.org/compute/ext/coverage/api/v2" name="Coverage">
-    <description>%(text)s</description>
-  </extension>
   <extension alias="os-create-server-ext" updated="%(timestamp)s" namespace="http://docs.openstack.org/compute/ext/createserverext/api/v1.1" name="Createserverext">
     <description>%(text)s</description>
   </extension>
@@ -230,5 +227,7 @@
   </extension>
   <extension alias="os-assisted-volume-snapshots" updated="%(timestamp)s" namespace="http://docs.openstack.org/compute/ext/assisted-volume-snapshots/api/v2" name="AssistedVolumeSnapshots">
     <description>%(text)s</description>
+  </extension>
+  <extension alias="os-baremetal-ext-status" updated="%(timestamp)s" namespace="http://docs.openstack.org/compute/ext/baremetal_ext_status/api/v2" name="BareMetalExtStatus">    <description>%(text)s</description>
   </extension>
 </extensions>

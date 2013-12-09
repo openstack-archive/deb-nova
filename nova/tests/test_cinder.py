@@ -155,7 +155,7 @@ class CinderTestCase(test.NoDBTestCase):
     def test_context_with_catalog(self):
         self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
-        self.assertEquals(
+        self.assertEqual(
             self.fake_client_factory.client.client.management_url,
             'http://localhost:8776/v1/project_id')
 
@@ -165,7 +165,7 @@ class CinderTestCase(test.NoDBTestCase):
         )
         self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
-        self.assertEquals(
+        self.assertEqual(
             self.fake_client_factory.client.client.management_url,
             'http://other_host:8776/v1/project_id')
 
@@ -176,7 +176,7 @@ class CinderTestCase(test.NoDBTestCase):
     def test_volume_with_image_metadata(self):
         volume = self.api.get(self.context, '5678')
         self.assert_called('GET', '/volumes/5678')
-        self.assertTrue('volume_image_metadata' in volume)
+        self.assertIn('volume_image_metadata', volume)
         self.assertEqual(volume['volume_image_metadata'], _image_metadata)
 
     def test_cinder_api_insecure(self):
@@ -185,7 +185,7 @@ class CinderTestCase(test.NoDBTestCase):
         self.flags(cinder_api_insecure=True)
         self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
-        self.assertEquals(
+        self.assertEqual(
             self.fake_client_factory.client.client.verify_cert, False)
 
     def test_cinder_api_cacert_file(self):
@@ -193,7 +193,7 @@ class CinderTestCase(test.NoDBTestCase):
         self.flags(cinder_ca_certificates_file=cacert)
         self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
-        self.assertEquals(
+        self.assertEqual(
             self.fake_client_factory.client.client.verify_cert, cacert)
 
     def test_cinder_http_retries(self):
@@ -201,5 +201,5 @@ class CinderTestCase(test.NoDBTestCase):
         self.flags(cinder_http_retries=retries)
         self.api.get(self.context, '1234')
         self.assert_called('GET', '/volumes/1234')
-        self.assertEquals(
+        self.assertEqual(
             self.fake_client_factory.client.client.retries, retries)

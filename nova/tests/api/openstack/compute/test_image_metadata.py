@@ -42,7 +42,7 @@ class ImageMetaDataTest(test.TestCase):
     def test_show(self):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/key1')
         res_dict = self.controller.show(req, '123', 'key1')
-        self.assertTrue('meta' in res_dict)
+        self.assertIn('meta', res_dict)
         self.assertEqual(len(res_dict['meta']), 1)
         self.assertEqual('value1', res_dict['meta']['key1'])
 
@@ -157,7 +157,7 @@ class ImageMetaDataTest(test.TestCase):
         req.method = 'DELETE'
         res = self.controller.delete(req, '123', 'key1')
 
-        self.assertEqual(None, res)
+        self.assertIsNone(res)
 
     def test_delete_not_found(self):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/blah')

@@ -23,17 +23,18 @@ A fake VMware VI API implementation.
 
 import collections
 import pprint
-import uuid
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import uuidutils
+from nova import unit
 from nova.virt.vmwareapi import error_util
 
 _CLASSES = ['Datacenter', 'Datastore', 'ResourcePool', 'VirtualMachine',
             'Network', 'HostSystem', 'HostNetworkSystem', 'Task', 'session',
-            'files', 'ClusterComputeResource']
+            'files', 'ClusterComputeResource', 'HostStorageSystem']
 
 _FAKE_FILE_SIZE = 1024
 
@@ -59,6 +60,7 @@ def reset():
             _db_content[c] = {}
     create_network()
     create_host_network_system()
+    create_host_storage_system()
     create_host()
     create_host()
     create_datacenter()
@@ -164,12 +166,14 @@ class ObjectContent(object):
 
         # propSet is the name your Python code will need to
         # use since this is the name that the API will use
-        self.propSet = prop_list
+        if prop_list:
+            self.propSet = prop_list
 
         # missingSet is the name your python code will
         # need to use since this is the name that the
         # API we are talking to will use.
-        self.missingSet = missing_list
+        if missing_list:
+            self.missingSet = missing_list
 
 
 class ManagedObject(object):
@@ -241,8 +245,15 @@ class DataObject(object):
         return str(self.__dict__)
 
 
-class HostInternetScsiHba():
-    pass
+class HostInternetScsiHba(DataObject):
+    """
+    iSCSI Host Bus Adapter
+    """
+
+    def __init__(self):
+        super(HostInternetScsiHba, self).__init__()
+        self.device = 'vmhba33'
+        self.key = 'key-vmhba33'
 
 
 class VirtualDisk(DataObject):
@@ -314,6 +325,38 @@ class VirtualMachine(ManagedObject):
         self.set("config.extraConfig", kwargs.get("extra_config", None))
         self.set('runtime.host', kwargs.get("runtime_host", None))
         self.device = kwargs.get("virtual_device")
+        # Sample of diagnostics data is below.
+        config = [
+            ('template', False),
+            ('vmPathName', 'fake_path'),
+            ('memorySizeMB', 512),
+            ('cpuReservation', 0),
+            ('memoryReservation', 0),
+            ('numCpu', 1),
+            ('numEthernetCards', 1),
+            ('numVirtualDisks', 1)]
+        self.set("summary.config", config)
+
+        quickStats = [
+            ('overallCpuUsage', 0),
+            ('overallCpuDemand', 0),
+            ('guestMemoryUsage', 0),
+            ('hostMemoryUsage', 141),
+            ('balloonedMemory', 0),
+            ('consumedOverheadMemory', 20)]
+        self.set("summary.quickStats", quickStats)
+
+        key1 = {'key': 'cpuid.AES'}
+        key2 = {'key': 'cpuid.AVX'}
+        runtime = [
+            ('connectionState', 'connected'),
+            ('powerState', 'poweredOn'),
+            ('toolsInstallerMounted', False),
+            ('suspendInterval', 0),
+            ('memoryOverhead', 21417984),
+            ('maxCpuUsage', 2000),
+            ('featureRequirement', [key1, key2])]
+        self.set("summary.runtime", runtime)
 
     def reconfig(self, factory, val):
         """
@@ -321,6 +364,9 @@ class VirtualMachine(ManagedObject):
         setting of the Virtual Machine object.
         """
         try:
+            if not hasattr(val, 'deviceChange'):
+                return
+
             if len(val.deviceChange) < 2:
                 return
 
@@ -369,8 +415,8 @@ class ResourcePool(ManagedObject):
         memoryAllocation = DataObject()
         cpuAllocation = DataObject()
 
-        memory.maxUsage = 1000 * 1024 * 1024
-        memory.overallUsage = 500 * 1024 * 1024
+        memory.maxUsage = 1000 * unit.Mi
+        memory.overallUsage = 500 * unit.Mi
         cpu.maxUsage = 10000
         cpu.overallUsage = 1000
         runtime.cpu = cpu
@@ -467,7 +513,7 @@ class ClusterComputeResource(ManagedObject):
             summary.numCpuCores += host_summary.hardware.numCpuCores
             summary.numCpuThreads += host_summary.hardware.numCpuThreads
             summary.totalMemory += host_summary.hardware.memorySize
-            free_memory = (host_summary.hardware.memorySize / (1024 * 1024)
+            free_memory = (host_summary.hardware.memorySize / unit.Mi
                            - host_summary.quickStats.overallMemoryUsage)
             summary.effectiveMemory += free_memory if connected else 0
             summary.numEffectiveHosts += 1 if connected else 0
@@ -481,8 +527,8 @@ class Datastore(ManagedObject):
         super(Datastore, self).__init__("ds")
         self.set("summary.type", "VMFS")
         self.set("summary.name", name)
-        self.set("summary.capacity", 1024 * 1024 * 1024 * 1024)
-        self.set("summary.freeSpace", 500 * 1024 * 1024 * 1024)
+        self.set("summary.capacity", unit.Ti)
+        self.set("summary.freeSpace", 500 * unit.Gi)
         self.set("summary.accessible", True)
 
 
@@ -502,6 +548,13 @@ class HostNetworkSystem(ManagedObject):
         self.set("networkInfo.pnic", net_info_pnic)
 
 
+class HostStorageSystem(ManagedObject):
+    """HostStorageSystem class."""
+
+    def __init__(self):
+        super(HostStorageSystem, self).__init__("storageSystem")
+
+
 class HostSystem(ManagedObject):
     """Host System class."""
 
@@ -510,9 +563,13 @@ class HostSystem(ManagedObject):
         self.set("name", name)
         if _db_content.get("HostNetworkSystem", None) is None:
             create_host_network_system()
+        if not _get_object_refs('HostStorageSystem'):
+            create_host_storage_system()
         host_net_key = _db_content["HostNetworkSystem"].keys()[0]
         host_net_sys = _db_content["HostNetworkSystem"][host_net_key].obj
         self.set("configManager.networkSystem", host_net_sys)
+        host_storage_sys_key = _get_object_refs('HostStorageSystem')[0]
+        self.set("configManager.storageSystem", host_storage_sys_key)
 
         summary = DataObject()
         hardware = DataObject()
@@ -522,7 +579,7 @@ class HostSystem(ManagedObject):
         hardware.vendor = "Intel"
         hardware.cpuModel = "Intel(R) Xeon(R)"
         hardware.uuid = "host-uuid"
-        hardware.memorySize = 1024 * 1024 * 1024
+        hardware.memorySize = unit.Gi
         summary.hardware = hardware
 
         quickstats = DataObject()
@@ -581,13 +638,43 @@ class HostSystem(ManagedObject):
         config = DataObject()
         storageDevice = DataObject()
 
-        hostBusAdapter = HostInternetScsiHba()
-        hostBusAdapter.HostHostBusAdapter = [hostBusAdapter]
-        hostBusAdapter.iScsiName = "iscsi-name"
-        storageDevice.hostBusAdapter = hostBusAdapter
+        iscsi_hba = HostInternetScsiHba()
+        iscsi_hba.iScsiName = "iscsi-name"
+        host_bus_adapter_array = DataObject()
+        host_bus_adapter_array.HostHostBusAdapter = [iscsi_hba]
+        storageDevice.hostBusAdapter = host_bus_adapter_array
         config.storageDevice = storageDevice
-        self.set("config.storageDevice.hostBusAdapter",
-                 config.storageDevice.hostBusAdapter)
+        self.set("config.storageDevice.hostBusAdapter", host_bus_adapter_array)
+
+        # Set the same on the storage system managed object
+        host_storage_sys = _get_object(host_storage_sys_key)
+        host_storage_sys.set('storageDeviceInfo.hostBusAdapter',
+                             host_bus_adapter_array)
+
+    def _add_iscsi_target(self, data):
+        default_lun = DataObject()
+        default_lun.scsiLun = 'key-vim.host.ScsiDisk-010'
+        default_lun.key = 'key-vim.host.ScsiDisk-010'
+        default_lun.deviceName = 'fake-device'
+        default_lun.uuid = 'fake-uuid'
+        scsi_lun_array = DataObject()
+        scsi_lun_array.ScsiLun = [default_lun]
+        self.set("config.storageDevice.scsiLun", scsi_lun_array)
+
+        transport = DataObject()
+        transport.address = [data['target_portal']]
+        transport.iScsiName = data['target_iqn']
+        default_target = DataObject()
+        default_target.lun = [default_lun]
+        default_target.transport = transport
+
+        iscsi_adapter = DataObject()
+        iscsi_adapter.adapter = 'key-vmhba33'
+        iscsi_adapter.transport = transport
+        iscsi_adapter.target = [default_target]
+        iscsi_topology = DataObject()
+        iscsi_topology.adapter = [iscsi_adapter]
+        self.set("config.storageDevice.scsiTopology", iscsi_topology)
 
     def _add_port_group(self, spec):
         """Adds a port group to the host system object in the db."""
@@ -645,6 +732,11 @@ class Task(ManagedObject):
 def create_host_network_system():
     host_net_system = HostNetworkSystem()
     _create_object("HostNetworkSystem", host_net_system)
+
+
+def create_host_storage_system():
+    host_storage_system = HostStorageSystem()
+    _create_object("HostStorageSystem", host_storage_system)
 
 
 def create_host():
@@ -809,7 +901,7 @@ class FakeVim(object):
 
     def _login(self):
         """Logs in and sets the session object in the db."""
-        self._session = str(uuid.uuid4())
+        self._session = uuidutils.generate_uuid()
         session = DataObject()
         session.key = self._session
         _db_content['session'][self._session] = session
@@ -910,6 +1002,10 @@ class FakeVim(object):
         """Fakes a task return."""
         task_mdo = create_task(method, "success")
         return task_mdo.obj
+
+    def _clone_vm(self, method, *args, **kwargs):
+        """Fakes a VM clone."""
+        return self._just_return_task(method)
 
     def _unregister_vm(self, method, *args, **kwargs):
         """Unregisters a VM from the Host System."""
@@ -1042,15 +1138,17 @@ class FakeVim(object):
         elif attr_name == "ExtendVirtualDisk_Task":
             return lambda *args, **kwargs: self._extend_disk(attr_name,
                                                 kwargs.get("size"))
-        elif attr_name == "DeleteVirtualDisk_Task":
-            return lambda *args, **kwargs: self._delete_disk(attr_name,
-                                                *args, **kwargs)
         elif attr_name == "Destroy_Task":
             return lambda *args, **kwargs: self._unregister_vm(attr_name,
                                                                *args, **kwargs)
         elif attr_name == "UnregisterVM":
             return lambda *args, **kwargs: self._unregister_vm(attr_name,
                                                 *args, **kwargs)
+        elif attr_name == "CloneVM_Task":
+            return lambda *args, **kwargs: self._clone_vm(attr_name,
+                                                *args, **kwargs)
+        elif attr_name == "Rename_Task":
+            return lambda *args, **kwargs: self._just_return_task(attr_name)
         elif attr_name == "SearchDatastore_Task":
             return lambda *args, **kwargs: self._search_ds(attr_name,
                                                 *args, **kwargs)

@@ -16,9 +16,12 @@
 
 import base64
 import fixtures
-import netaddr
 import sys
 import traceback
+
+import mock
+import netaddr
+import six
 
 from nova.compute import manager
 from nova import exception
@@ -95,7 +98,8 @@ class _FakeDriverBackendTestCase(object):
         self.flags(rescue_image_id="2",
                    rescue_kernel_id="3",
                    rescue_ramdisk_id=None,
-                   libvirt_snapshots_directory='./')
+                   snapshots_directory='./',
+                   group='libvirt')
 
         def fake_extend(image, size):
             pass
@@ -250,22 +254,6 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                                  lambda *args, **kwargs: None)
 
     @catch_notimplementederror
-    def test_live_snapshot_not_running(self):
-        instance_ref = test_utils.get_test_instance()
-        img_ref = self.image_service.create(self.ctxt, {'name': 'snap-1'})
-        self.assertRaises(exception.InstanceNotRunning,
-                          self.connection.live_snapshot,
-                          self.ctxt, instance_ref, img_ref['id'],
-                          lambda *args, **kwargs: None)
-
-    @catch_notimplementederror
-    def test_live_snapshot_running(self):
-        img_ref = self.image_service.create(self.ctxt, {'name': 'snap-1'})
-        instance_ref, network_info = self._get_running_instance()
-        self.connection.live_snapshot(self.ctxt, instance_ref, img_ref['id'],
-                                      lambda *args, **kwargs: None)
-
-    @catch_notimplementederror
     def test_reboot(self):
         reboot_type = "SOFT"
         instance_ref, network_info = self._get_running_instance()
@@ -280,7 +268,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         ip = netaddr.IPAddress(host_ip)
 
         # For now, assume IPv4.
-        self.assertEquals(ip.version, 4)
+        self.assertEqual(ip.version, 4)
 
     @catch_notimplementederror
     def test_set_admin_password(self):
@@ -386,36 +374,36 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_resume_unsuspended_instance(self):
         instance_ref, network_info = self._get_running_instance()
-        self.connection.resume(instance_ref, network_info)
+        self.connection.resume(self.ctxt, instance_ref, network_info)
 
     @catch_notimplementederror
     def test_resume_suspended_instance(self):
         instance_ref, network_info = self._get_running_instance()
         self.connection.suspend(instance_ref)
-        self.connection.resume(instance_ref, network_info)
+        self.connection.resume(self.ctxt, instance_ref, network_info)
 
     @catch_notimplementederror
     def test_destroy_instance_nonexistent(self):
         fake_instance = {'id': 42, 'name': 'I just made this up!',
                          'uuid': 'bda5fb9e-b347-40e8-8256-42397848cb00'}
         network_info = test_utils.get_test_network_info()
-        self.connection.destroy(fake_instance, network_info)
+        self.connection.destroy(self.ctxt, fake_instance, network_info)
 
     @catch_notimplementederror
     def test_destroy_instance(self):
         instance_ref, network_info = self._get_running_instance()
         self.assertIn(instance_ref['name'],
                       self.connection.list_instances())
-        self.connection.destroy(instance_ref, network_info)
+        self.connection.destroy(self.ctxt, instance_ref, network_info)
         self.assertNotIn(instance_ref['name'],
                          self.connection.list_instances())
 
     @catch_notimplementederror
     def test_get_volume_connector(self):
         result = self.connection.get_volume_connector({'id': 'fake'})
-        self.assertTrue('ip' in result)
-        self.assertTrue('initiator' in result)
-        self.assertTrue('host' in result)
+        self.assertIn('ip', result)
+        self.assertIn('initiator', result)
+        self.assertIn('host', result)
 
     @catch_notimplementederror
     def test_attach_detach_volume(self):
@@ -497,20 +485,20 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     def test_block_stats(self):
         instance_ref, network_info = self._get_running_instance()
         stats = self.connection.block_stats(instance_ref['name'], 'someid')
-        self.assertEquals(len(stats), 5)
+        self.assertEqual(len(stats), 5)
 
     @catch_notimplementederror
     def test_interface_stats(self):
         instance_ref, network_info = self._get_running_instance()
         stats = self.connection.interface_stats(instance_ref['name'], 'someid')
-        self.assertEquals(len(stats), 8)
+        self.assertEqual(len(stats), 8)
 
     @catch_notimplementederror
     def test_get_console_output(self):
         fake_libvirt_utils.files['dummy.log'] = ''
         instance_ref, network_info = self._get_running_instance()
         console_output = self.connection.get_console_output(instance_ref)
-        self.assertTrue(isinstance(console_output, basestring))
+        self.assertIsInstance(console_output, six.string_types)
 
     @catch_notimplementederror
     def test_get_vnc_console(self):
@@ -523,7 +511,8 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_get_spice_console(self):
         instance_ref, network_info = self._get_running_instance()
-        spice_console = self.connection.get_spice_console(instance_ref)
+        spice_console = self.connection.get_spice_console(self.ctxt,
+                instance_ref)
         self.assertIn('internal_access_path', spice_console)
         self.assertIn('host', spice_console)
         self.assertIn('port', spice_console)
@@ -591,6 +580,19 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         available_resource = self.connection.get_available_resource(
                 'myhostname')
         self._check_available_resouce_fields(available_resource)
+
+    @catch_notimplementederror
+    def _check_host_cpu_status_fields(self, host_cpu_status):
+        self.assertIn('kernel', host_cpu_status)
+        self.assertIn('idle', host_cpu_status)
+        self.assertIn('user', host_cpu_status)
+        self.assertIn('iowait', host_cpu_status)
+        self.assertIn('frequency', host_cpu_status)
+
+    @catch_notimplementederror
+    def test_get_host_cpu_stats(self):
+        host_cpu_status = self.connection.get_host_cpu_stats()
+        self._check_host_cpu_status_fields(host_cpu_status)
 
     @catch_notimplementederror
     def test_set_host_enabled(self):
@@ -686,6 +688,10 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
 
         self.connection.emit_event(event1)
 
+    def test_set_bootable(self):
+        self.assertRaises(NotImplementedError, self.connection.set_bootable,
+                          'instance', True)
+
 
 class AbstractDriverTestCase(_VirtDriverTestCase, test.TestCase):
     def setUp(self):
@@ -705,12 +711,89 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
         # Point _VirtDriverTestCase at the right module
         self.driver_module = 'nova.virt.libvirt.LibvirtDriver'
         super(LibvirtConnTestCase, self).setUp()
+        self.stubs.Set(self.connection,
+                       'set_host_enabled', mock.MagicMock())
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.context.get_admin_context',
+            self._fake_admin_context))
+
+    def _fake_admin_context(self, *args, **kwargs):
+        return self.ctxt
 
     def test_force_hard_reboot(self):
-        self.flags(libvirt_wait_soft_reboot_seconds=0)
+        self.flags(wait_soft_reboot_seconds=0, group='libvirt')
         self.test_reboot()
 
     def test_migrate_disk_and_power_off(self):
         # there is lack of fake stuff to execute this method. so pass.
         self.skipTest("Test nothing, but this method"
                       " needed to override superclass.")
+
+    def test_set_host_enabled(self):
+        self.mox.UnsetStubs()
+        service_mock = mock.MagicMock()
+
+        # Previous status of the service: disabled: False
+        # service_mock.__getitem__.return_value = False
+        service_mock.configure_mock(disabled_reason='',
+                                    disabled=False)
+        from nova.objects import service as service_obj
+        self.mox.StubOutWithMock(service_obj.Service,
+                                 'get_by_compute_host')
+        service_obj.Service.get_by_compute_host(self.ctxt,
+                                    'fake-mini').AndReturn(service_mock)
+        self.mox.ReplayAll()
+        self.connection.set_host_enabled('my_test_host', 'ERROR!')
+        self.assertTrue(service_mock.disabled)
+        self.assertEqual(service_mock.disabled_reason, 'AUTO: ERROR!')
+
+    def test_set_host_enabled_when_auto_disabled(self):
+        self.mox.UnsetStubs()
+        service_mock = mock.MagicMock()
+
+        # Previous status of the service: disabled: True, 'AUTO: ERROR'
+        service_mock.configure_mock(disabled_reason='AUTO: ERROR',
+                                    disabled=True)
+        from nova.objects import service as service_obj
+        self.mox.StubOutWithMock(service_obj.Service,
+                                 'get_by_compute_host')
+        service_obj.Service.get_by_compute_host(self.ctxt,
+                                    'fake-mini').AndReturn(service_mock)
+        self.mox.ReplayAll()
+        self.connection.set_host_enabled('my_test_host', True)
+        self.assertFalse(service_mock.disabled)
+        self.assertEqual(service_mock.disabled_reason, '')
+
+    def test_set_host_enabled_when_manually_disabled(self):
+        self.mox.UnsetStubs()
+        service_mock = mock.MagicMock()
+
+        # Previous status of the service: disabled: True, 'Manually disabled'
+        service_mock.configure_mock(disabled_reason='Manually disabled',
+                                    disabled=True)
+        from nova.objects import service as service_obj
+        self.mox.StubOutWithMock(service_obj.Service,
+                                 'get_by_compute_host')
+        service_obj.Service.get_by_compute_host(self.ctxt,
+                                    'fake-mini').AndReturn(service_mock)
+        self.mox.ReplayAll()
+        self.connection.set_host_enabled('my_test_host', True)
+        self.assertTrue(service_mock.disabled)
+        self.assertEqual(service_mock.disabled_reason, 'Manually disabled')
+
+    def test_set_host_enabled_dont_override_manually_disabled(self):
+        self.mox.UnsetStubs()
+        service_mock = mock.MagicMock()
+
+        # Previous status of the service: disabled: True, 'Manually disabled'
+        service_mock.configure_mock(disabled_reason='Manually disabled',
+                                    disabled=True)
+        from nova.objects import service as service_obj
+        self.mox.StubOutWithMock(service_obj.Service,
+                                 'get_by_compute_host')
+        service_obj.Service.get_by_compute_host(self.ctxt,
+                                    'fake-mini').AndReturn(service_mock)
+        self.mox.ReplayAll()
+        self.connection.set_host_enabled('my_test_host', 'ERROR!')
+        self.assertTrue(service_mock.disabled)
+        self.assertEqual(service_mock.disabled_reason, 'Manually disabled')

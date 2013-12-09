@@ -58,8 +58,8 @@ class HyperVDriver(driver.ComputeDriver):
                block_device_info=None, bad_volumes_callback=None):
         self._vmops.reboot(instance, network_info, reboot_type)
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True, context=None):
+    def destroy(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
         self._vmops.destroy(instance, network_info, block_device_info,
                             destroy_disks)
 
@@ -100,7 +100,7 @@ class HyperVDriver(driver.ComputeDriver):
     def suspend(self, instance):
         self._vmops.suspend(instance)
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         self._vmops.resume(instance)
 
     def power_off(self, instance):
@@ -151,10 +151,14 @@ class HyperVDriver(driver.ComputeDriver):
             ctxt, instance_ref, dest_check_data)
 
     def plug_vifs(self, instance, network_info):
-        LOG.debug(_("plug_vifs called"), instance=instance)
+        """Plug VIFs into networks."""
+        msg = _("VIF plugging is not supported by the Hyper-V driver.")
+        raise NotImplementedError(msg)
 
     def unplug_vifs(self, instance, network_info):
-        LOG.debug(_("unplug_vifs called"), instance=instance)
+        """Unplug VIFs from networks."""
+        msg = _("VIF unplugging is not supported by the Hyper-V driver.")
+        raise NotImplementedError(msg)
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         LOG.debug(_("ensure_filtering_rules_for_instance called"),
@@ -164,20 +168,21 @@ class HyperVDriver(driver.ComputeDriver):
         LOG.debug(_("unfilter_instance called"), instance=instance)
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info,
+                                   flavor, network_info,
                                    block_device_info=None):
         return self._migrationops.migrate_disk_and_power_off(context,
                                                              instance, dest,
-                                                             instance_type,
+                                                             flavor,
                                                              network_info,
                                                              block_device_info)
 
     def confirm_migration(self, migration, instance, network_info):
         self._migrationops.confirm_migration(migration, instance, network_info)
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
-        self._migrationops.finish_revert_migration(instance, network_info,
+        self._migrationops.finish_revert_migration(context, instance,
+                                                   network_info,
                                                    block_device_info, power_on)
 
     def finish_migration(self, context, migration, instance, disk_info,

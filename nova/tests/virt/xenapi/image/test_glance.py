@@ -15,6 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import time
 
 from nova import context
 from nova import exception
@@ -25,16 +26,17 @@ from nova.virt.xenapi.image import glance
 from nova.virt.xenapi import vm_utils
 
 
-class TestGlanceStore(stubs.XenAPITestBase):
+class TestGlanceStore(stubs.XenAPITestBaseNoDB):
     def setUp(self):
         super(TestGlanceStore, self).setUp()
         self.store = glance.GlanceStore()
 
         self.flags(glance_host='1.1.1.1',
                    glance_port=123,
-                   glance_api_insecure=False,
-                   xenapi_connection_url='test_url',
-                   xenapi_connection_password='test_pass')
+                   glance_api_insecure=False)
+        self.flags(connection_url='test_url',
+                   connection_password='test_pass',
+                   group='xenserver')
 
         self.context = context.RequestContext(
                 'user', 'project', auth_token='foobar')
@@ -86,15 +88,16 @@ class TestGlanceStore(stubs.XenAPITestBase):
 
         self.mox.VerifyAll()
 
-    def _get_upload_params(self, auto_disk_config=True):
+    def _get_upload_params(self, auto_disk_config=True,
+                           expected_os_type='default'):
         params = self._get_params()
         params['vdi_uuids'] = ['fake_vdi_uuid']
         params['properties'] = {'auto_disk_config': auto_disk_config,
-                                'os_type': 'default'}
+                                'os_type': expected_os_type}
         return params
 
-    def _test_upload_image(self, auto_disk_config):
-        params = self._get_upload_params(auto_disk_config)
+    def _test_upload_image(self, auto_disk_config, expected_os_type='default'):
+        params = self._get_upload_params(auto_disk_config, expected_os_type)
 
         self.mox.StubOutWithMock(self.session, 'call_plugin_serialized')
         self.session.call_plugin_serialized('glance', 'upload_vhd', **params)
@@ -106,6 +109,14 @@ class TestGlanceStore(stubs.XenAPITestBase):
 
     def test_upload_image(self):
         self._test_upload_image(True)
+
+    def test_upload_image_None_os_type(self):
+        self.instance['os_type'] = None
+        self._test_upload_image(True, 'linux')
+
+    def test_upload_image_no_os_type(self):
+        del self.instance['os_type']
+        self._test_upload_image(True, 'linux')
 
     def test_upload_image_auto_config_disk_disabled(self):
         sys_meta = [{"key": "image_auto_disk_config", "value": "Disabled"}]
@@ -130,12 +141,15 @@ class TestGlanceStore(stubs.XenAPITestBase):
         params = self._get_upload_params()
 
         self.mox.StubOutWithMock(self.session, 'call_plugin_serialized')
+        self.mox.StubOutWithMock(time, 'sleep')
         error_details = ["", "", "RetryableError", ""]
         error = self.session.XenAPI.Failure(details=error_details)
         self.session.call_plugin_serialized('glance', 'upload_vhd',
                                             **params).AndRaise(error)
+        time.sleep(0.5)
         self.session.call_plugin_serialized('glance', 'upload_vhd',
                                             **params).AndRaise(error)
+        time.sleep(1)
         self.session.call_plugin_serialized('glance', 'upload_vhd',
                                             **params).AndRaise(error)
         self.mox.ReplayAll()
@@ -151,15 +165,18 @@ class TestGlanceStore(stubs.XenAPITestBase):
         params = self._get_upload_params()
 
         self.mox.StubOutWithMock(self.session, 'call_plugin_serialized')
+        self.mox.StubOutWithMock(time, 'sleep')
         error_details = ["", "task signaled", "", ""]
         error = self.session.XenAPI.Failure(details=error_details)
         self.session.call_plugin_serialized('glance', 'upload_vhd',
                                             **params).AndRaise(error)
+        time.sleep(0.5)
         # Note(johngarbutt) XenServer 6.1 and later has this error
         error_details = ["", "signal: SIGTERM", "", ""]
         error = self.session.XenAPI.Failure(details=error_details)
         self.session.call_plugin_serialized('glance', 'upload_vhd',
                                             **params).AndRaise(error)
+        time.sleep(1)
         self.session.call_plugin_serialized('glance', 'upload_vhd',
                                             **params)
         self.mox.ReplayAll()

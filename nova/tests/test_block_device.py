@@ -36,7 +36,7 @@ class BlockDeviceTestCase(test.NoDBTestCase):
         properties1 = {'mappings': mappings,
                        'root_device_name': root_device1}
 
-        self.assertEqual(block_device.properties_root_device_name({}), None)
+        self.assertIsNone(block_device.properties_root_device_name({}))
         self.assertEqual(
             block_device.properties_root_device_name(properties0),
             root_device0)
@@ -118,7 +118,7 @@ class BlockDeviceTestCase(test.NoDBTestCase):
         def _assert_volume_in_mapping(device_name, true_or_false):
             in_mapping = block_device.volume_in_mapping(
                     device_name, block_device_info)
-            self.assertEquals(in_mapping, true_or_false)
+            self.assertEqual(in_mapping, true_or_false)
 
         _assert_volume_in_mapping('sda', False)
         _assert_volume_in_mapping('sdb', True)
@@ -128,6 +128,19 @@ class BlockDeviceTestCase(test.NoDBTestCase):
         _assert_volume_in_mapping('sdf', True)
         _assert_volume_in_mapping('sdg', False)
         _assert_volume_in_mapping('sdh1', False)
+
+    def test_get_root_bdm(self):
+        root_bdm = {'device_name': 'vda', 'boot_index': 0}
+        bdms = [root_bdm,
+                {'device_name': 'vdb', 'boot_index': 1},
+                {'device_name': 'vdc', 'boot_index': -1},
+                {'device_name': 'vdd'}]
+        self.assertEqual(root_bdm, block_device.get_root_bdm(bdms))
+        self.assertEqual(root_bdm, block_device.get_root_bdm([bdms[0]]))
+        self.assertIsNone(block_device.get_root_bdm(bdms[1:]))
+        self.assertIsNone(block_device.get_root_bdm(bdms[2:]))
+        self.assertIsNone(block_device.get_root_bdm(bdms[3:]))
+        self.assertIsNone(block_device.get_root_bdm([]))
 
 
 class TestBlockDeviceDict(test.NoDBTestCase):
@@ -264,25 +277,25 @@ class TestBlockDeviceDict(test.NoDBTestCase):
         dev_dict = block_device.BlockDeviceDict({'field1': 'foo',
                                                  'field2': 'bar',
                                                  'db_field1': 'baz'})
-        self.assertTrue('field1' in dev_dict)
-        self.assertTrue('field2' in dev_dict)
-        self.assertTrue('db_field1' in dev_dict)
+        self.assertIn('field1', dev_dict)
+        self.assertIn('field2', dev_dict)
+        self.assertIn('db_field1', dev_dict)
         self.assertFalse('db_field2'in dev_dict)
 
         # Make sure all expected fields are defaulted
         dev_dict = block_device.BlockDeviceDict({'field1': 'foo'})
-        self.assertTrue('field1' in dev_dict)
-        self.assertTrue('field2' in dev_dict)
-        self.assertTrue(dev_dict['field2'] is None)
-        self.assertFalse('db_field1' in dev_dict)
+        self.assertIn('field1', dev_dict)
+        self.assertIn('field2', dev_dict)
+        self.assertIsNone(dev_dict['field2'])
+        self.assertNotIn('db_field1', dev_dict)
         self.assertFalse('db_field2'in dev_dict)
 
         # Unless they are not meant to be
         dev_dict = block_device.BlockDeviceDict({'field1': 'foo'},
             do_not_default=set(['field2']))
-        self.assertTrue('field1' in dev_dict)
-        self.assertFalse('field2' in dev_dict)
-        self.assertFalse('db_field1' in dev_dict)
+        self.assertIn('field1', dev_dict)
+        self.assertNotIn('field2', dev_dict)
+        self.assertNotIn('db_field1', dev_dict)
         self.assertFalse('db_field2'in dev_dict)
 
     def test_validate(self):
@@ -314,7 +327,7 @@ class TestBlockDeviceDict(test.NoDBTestCase):
         cool_volume_size_bdm['volume_size'] = '42'
         cool_volume_size_bdm = block_device.BlockDeviceDict(
             cool_volume_size_bdm)
-        self.assertEquals(cool_volume_size_bdm['volume_size'], 42)
+        self.assertEqual(cool_volume_size_bdm['volume_size'], 42)
 
         lame_volume_size_bdm = dict(self.new_mapping[2])
         lame_volume_size_bdm['volume_size'] = 'some_non_int_string'
@@ -325,7 +338,7 @@ class TestBlockDeviceDict(test.NoDBTestCase):
         truthy_bdm = dict(self.new_mapping[2])
         truthy_bdm['delete_on_termination'] = '1'
         truthy_bdm = block_device.BlockDeviceDict(truthy_bdm)
-        self.assertEquals(truthy_bdm['delete_on_termination'], True)
+        self.assertEqual(truthy_bdm['delete_on_termination'], True)
 
         verbose_bdm = dict(self.new_mapping[2])
         verbose_bdm['boot_index'] = 'first'
@@ -347,7 +360,7 @@ class TestBlockDeviceDict(test.NoDBTestCase):
             return [bdm for bdm in bdms if bdm['boot_index'] >= 0]
 
         new_no_img = block_device.from_legacy_mapping(self.legacy_mapping)
-        self.assertEquals(len(_get_image_bdms(new_no_img)), 0)
+        self.assertEqual(len(_get_image_bdms(new_no_img)), 0)
 
         for new, expected in zip(new_no_img, self.new_mapping):
             self.assertThat(new, matchers.IsSubDictOf(expected))
@@ -356,19 +369,19 @@ class TestBlockDeviceDict(test.NoDBTestCase):
             self.legacy_mapping, 'fake_image_ref')
         image_bdms = _get_image_bdms(new_with_img)
         boot_bdms = _get_bootable_bdms(new_with_img)
-        self.assertEquals(len(image_bdms), 1)
-        self.assertEquals(len(boot_bdms), 1)
-        self.assertEquals(image_bdms[0]['boot_index'], 0)
-        self.assertEquals(boot_bdms[0]['source_type'], 'image')
+        self.assertEqual(len(image_bdms), 1)
+        self.assertEqual(len(boot_bdms), 1)
+        self.assertEqual(image_bdms[0]['boot_index'], 0)
+        self.assertEqual(boot_bdms[0]['source_type'], 'image')
 
         new_with_img_and_root = block_device.from_legacy_mapping(
             self.legacy_mapping, 'fake_image_ref', 'sda1')
         image_bdms = _get_image_bdms(new_with_img_and_root)
         boot_bdms = _get_bootable_bdms(new_with_img_and_root)
-        self.assertEquals(len(image_bdms), 0)
-        self.assertEquals(len(boot_bdms), 1)
-        self.assertEquals(boot_bdms[0]['boot_index'], 0)
-        self.assertEquals(boot_bdms[0]['source_type'], 'volume')
+        self.assertEqual(len(image_bdms), 0)
+        self.assertEqual(len(boot_bdms), 1)
+        self.assertEqual(boot_bdms[0]['boot_index'], 0)
+        self.assertEqual(boot_bdms[0]['source_type'], 'volume')
 
     def test_from_api(self):
         for api, new in zip(self.api_mapping, self.new_mapping):

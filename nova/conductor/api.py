@@ -98,11 +98,6 @@ class LocalAPI(object):
         return self._manager.instance_get_active_by_window_joined(
             context, begin, end, project_id, host)
 
-    def instance_info_cache_update(self, context, instance, values):
-        return self._manager.instance_info_cache_update(context,
-                                                        instance,
-                                                        values)
-
     def instance_info_cache_delete(self, context, instance):
         return self._manager.instance_info_cache_delete(context, instance)
 
@@ -131,17 +126,6 @@ class LocalAPI(object):
     def aggregate_get_by_host(self, context, host, key=None):
         return self._manager.aggregate_get_by_host(context, host, key)
 
-    def aggregate_metadata_add(self, context, aggregate, metadata,
-                               set_delete=False):
-        return self._manager.aggregate_metadata_add(context, aggregate,
-                                                    metadata,
-                                                    set_delete)
-
-    def aggregate_metadata_delete(self, context, aggregate, key):
-        return self._manager.aggregate_metadata_delete(context,
-                                                       aggregate,
-                                                       key)
-
     def aggregate_metadata_get_by_host(self, context, host,
                                        key='availability_zone'):
         return self._manager.aggregate_metadata_get_by_host(context,
@@ -159,13 +143,6 @@ class LocalAPI(object):
                                              last_ctr_in, last_ctr_out,
                                              last_refreshed,
                                              update_cells=update_cells)
-
-    def security_group_get_by_instance(self, context, instance):
-        return self._manager.security_group_get_by_instance(context, instance)
-
-    def security_group_rule_get_by_security_group(self, context, secgroup):
-        return self._manager.security_group_rule_get_by_security_group(
-            context, secgroup)
 
     def provider_fw_rule_get_all(self, context):
         return self._manager.provider_fw_rule_get_all(context)

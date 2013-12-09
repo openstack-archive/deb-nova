@@ -16,9 +16,9 @@
 
 import copy
 import math
-import netaddr
 import uuid
 
+import netaddr
 from oslo.config import cfg
 import webob
 
@@ -213,7 +213,7 @@ class NetworksTest(test.NoDBTestCase):
         self.maxDiff = None
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks')
         res_dict = self.controller.index(req)
-        self.assertEquals(res_dict, {'networks': []})
+        self.assertEqual(res_dict, {'networks': []})
 
         project_id = req.environ["nova.context"].project_id
         cxt = req.environ["nova.context"]
@@ -225,7 +225,7 @@ class NetworksTest(test.NoDBTestCase):
         expected = [FAKE_USER_NETWORKS[0]]
         for network in expected:
             self.network_uuid_to_id(network)
-        self.assertEquals(res_dict, {'networks': expected})
+        self.assertEqual(res_dict, {'networks': expected})
 
     def test_network_list_all_as_admin(self):
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks')
@@ -234,7 +234,7 @@ class NetworksTest(test.NoDBTestCase):
         expected = copy.deepcopy(FAKE_NETWORKS)
         for network in expected:
             self.network_uuid_to_id(network)
-        self.assertEquals(res_dict, {'networks': expected})
+        self.assertEqual(res_dict, {'networks': expected})
 
     def test_network_disassociate(self):
         uuid = FAKE_NETWORKS[0]['uuid']
@@ -242,8 +242,8 @@ class NetworksTest(test.NoDBTestCase):
         res = self.controller._disassociate_host_and_project(
             req, uuid, {'disassociate': None})
         self.assertEqual(res.status_int, 202)
-        self.assertEqual(self.fake_network_api.networks[0]['project_id'], None)
-        self.assertEqual(self.fake_network_api.networks[0]['host'], None)
+        self.assertIsNone(self.fake_network_api.networks[0]['project_id'])
+        self.assertIsNone(self.fake_network_api.networks[0]['host'])
 
     def test_network_disassociate_host_only(self):
         uuid = FAKE_NETWORKS[0]['uuid']
@@ -251,9 +251,8 @@ class NetworksTest(test.NoDBTestCase):
         res = self.associate_controller._disassociate_host_only(
             req, uuid, {'disassociate_host': None})
         self.assertEqual(res.status_int, 202)
-        self.assertNotEqual(self.fake_network_api.networks[0]['project_id'],
-                            None)
-        self.assertEqual(self.fake_network_api.networks[0]['host'], None)
+        self.assertIsNotNone(self.fake_network_api.networks[0]['project_id'])
+        self.assertIsNone(self.fake_network_api.networks[0]['host'])
 
     def test_network_disassociate_project_only(self):
         uuid = FAKE_NETWORKS[0]['uuid']
@@ -261,8 +260,8 @@ class NetworksTest(test.NoDBTestCase):
         res = self.associate_controller._disassociate_project_only(
             req, uuid, {'disassociate_project': None})
         self.assertEqual(res.status_int, 202)
-        self.assertEqual(self.fake_network_api.networks[0]['project_id'], None)
-        self.assertNotEqual(self.fake_network_api.networks[0]['host'], None)
+        self.assertIsNone(self.fake_network_api.networks[0]['project_id'])
+        self.assertIsNotNone(self.fake_network_api.networks[0]['host'])
 
     def test_network_disassociate_not_found(self):
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks/100/action')
@@ -334,7 +333,7 @@ class NetworksTest(test.NoDBTestCase):
     def test_network_create(self):
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks')
         res_dict = self.controller.create(req, NEW_NETWORK)
-        self.assertTrue('network' in res_dict)
+        self.assertIn('network', res_dict)
         uuid = res_dict['network']['id']
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks/%s' % uuid)
         res_dict = self.controller.show(req, uuid)

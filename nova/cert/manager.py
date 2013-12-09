@@ -31,7 +31,7 @@ from nova import manager
 
 
 class CertManager(manager.Manager):
-    RPC_API_VERSION = '1.1'
+    RPC_API_VERSION = '2.0'
 
     def __init__(self, *args, **kwargs):
         super(CertManager, self).__init__(service_name='cert',
@@ -67,8 +67,3 @@ class CertManager(manager.Manager):
     def decrypt_text(self, context, project_id, text):
         """Decrypt base64 encoded text using the projects private key."""
         return crypto.decrypt_text(project_id, base64.b64decode(text))
-
-    # NOTE(russellb) This method can be removed in 2.0 of this API.  It is
-    # deprecated in favor of the method in the base API.
-    def get_backdoor_port(self, context):
-        return self.backdoor_port

@@ -15,10 +15,12 @@
 
 from lxml import etree
 from oslo.config import cfg
+from webob import exc
 
 from nova.api.openstack.compute.contrib import cloudpipe
 from nova.api.openstack import wsgi
 from nova.compute import utils as compute_utils
+from nova import exception
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.api.openstack import fakes
@@ -115,6 +117,17 @@ class CloudpipeTest(test.NoDBTestCase):
         response = {'instance_id': 7777}
         self.assertEqual(res_dict, response)
 
+    def test_cloudpipe_create_no_networks(self):
+        def launch_vpn_instance(context):
+            raise exception.NoMoreNetworks
+
+        self.stubs.Set(self.controller.cloudpipe, 'launch_vpn_instance',
+                       launch_vpn_instance)
+        body = {'cloudpipe': {'project_id': 1}}
+        req = fakes.HTTPRequest.blank('/v2/fake/os-cloudpipe')
+        self.assertRaises(exc.HTTPBadRequest,
+                          self.controller.create, req, body)
+
     def test_cloudpipe_create_already_running(self):
         def launch_vpn_instance(*args, **kwargs):
             self.fail("Method should not have been called")
@@ -138,7 +151,7 @@ class CloudpipesXMLSerializerTest(test.NoDBTestCase):
         tree = etree.fromstring(text)
         self.assertEqual('cloudpipe', tree.tag)
         for child in tree:
-            self.assertTrue(child.tag in exemplar['cloudpipe'])
+            self.assertIn(child.tag, exemplar['cloudpipe'])
             self.assertEqual(child.text, exemplar['cloudpipe'][child.tag])
 
     def test_index_serializer(self):
@@ -163,7 +176,7 @@ class CloudpipesXMLSerializerTest(test.NoDBTestCase):
         for idx, cl_pipe in enumerate(tree):
             kp_data = exemplar['cloudpipes'][idx]
             for child in cl_pipe:
-                self.assertTrue(child.tag in kp_data)
+                self.assertIn(child.tag, kp_data)
                 self.assertEqual(child.text, kp_data[child.tag])
 
     def test_deserializer(self):

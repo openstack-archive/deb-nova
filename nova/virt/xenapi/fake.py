@@ -64,6 +64,7 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
+from nova import unit
 
 
 _CLASSES = ['host', 'network', 'session', 'pool', 'SR', 'VBD',
@@ -130,7 +131,8 @@ def create_vm(name_label, status, **kwargs):
     vm_rec = kwargs.copy()
     vm_rec.update({'name_label': name_label,
                    'domid': domid,
-                   'power_state': status})
+                   'power_state': status,
+                   'blocked_operations': {}})
     vm_ref = _create_object('VM', vm_rec)
     after_VM_create(vm_ref, vm_rec)
     return vm_ref
@@ -232,8 +234,8 @@ def after_VBD_create(vbd_ref, vbd_rec):
 def after_VM_create(vm_ref, vm_rec):
     """Create read-only fields in the VM record."""
     vm_rec.setdefault('is_control_domain', False)
-    vm_rec.setdefault('memory_static_max', str(8 * 1024 * 1024 * 1024))
-    vm_rec.setdefault('memory_dynamic_max', str(8 * 1024 * 1024 * 1024))
+    vm_rec.setdefault('memory_static_max', str(8 * unit.Gi))
+    vm_rec.setdefault('memory_dynamic_max', str(8 * unit.Gi))
     vm_rec.setdefault('VCPUs_max', str(4))
     vm_rec.setdefault('VBDs', [])
     vm_rec.setdefault('resident_on', '')
@@ -306,7 +308,11 @@ def _create_local_pif(host_ref):
                               'device': 'fake0',
                               'host_uuid': host_ref,
                               'network': '',
+                              'IP': '10.1.1.1',
+                              'IPv6': '',
+                              'uuid': '',
                               'management': 'true'})
+    _db_content['PIF'][pif_ref]['uuid'] = pif_ref
     return pif_ref
 
 
@@ -534,7 +540,7 @@ class SessionBase(object):
         _db_content['SR'][sr_ref]['uuid'] = sr_uuid
         _db_content['SR'][sr_ref]['forgotten'] = 0
         vdi_per_lun = False
-        if type in ('iscsi'):
+        if type == 'iscsi':
             # Just to be clear
             vdi_per_lun = True
         if vdi_per_lun:
@@ -602,7 +608,7 @@ class SessionBase(object):
 
     def host_compute_free_memory(self, _1, ref):
         #Always return 12GB available
-        return 12 * 1024 * 1024 * 1024
+        return 12 * unit.Gi
 
     def _plugin_agent_version(self, method, args):
         return as_json(returncode='0', message='1.0\\r\\n')
@@ -685,7 +691,7 @@ class SessionBase(object):
         return func(method, args)
 
     def VDI_get_virtual_size(self, *args):
-        return 1 * 1024 * 1024 * 1024
+        return 1 * unit.Gi
 
     def VDI_resize_online(self, *args):
         return 'derp'
@@ -737,6 +743,10 @@ class SessionBase(object):
     def VM_migrate_send(self, session, mref, migrate_data, live, vdi_map,
                         vif_map, options):
         pass
+
+    def VM_remove_from_blocked_operations(self, session, vm_ref, key):
+        # operation is idempotent, XenServer doesn't care if the key exists
+        _db_content['VM'][vm_ref]['blocked_operations'].pop(key, None)
 
     def xenapi_request(self, methodname, params):
         if methodname.startswith('login'):

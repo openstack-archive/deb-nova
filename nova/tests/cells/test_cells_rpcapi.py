@@ -17,6 +17,7 @@ Tests For Cells RPCAPI
 """
 
 from oslo.config import cfg
+import six
 
 from nova.cells import rpcapi as cells_rpcapi
 from nova import exception
@@ -56,8 +57,9 @@ class CellsAPITestCase(test.NoDBTestCase):
         self.assertEqual(self.fake_topic, call_info['topic'])
         self.assertEqual(method, call_info['msg']['method'])
         msg_version = call_info['msg']['version']
-        self.assertTrue(isinstance(msg_version, basestring),
-                        "Message version %s is not a string" % msg_version)
+        self.assertIsInstance(msg_version, six.string_types,
+                              msg="Message version %s is not a string" %
+                                  msg_version)
         self.assertEqual(version, call_info['msg']['version'])
         self.assertEqual(args, call_info['msg']['args'])
 

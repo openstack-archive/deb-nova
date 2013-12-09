@@ -76,12 +76,13 @@ class QuotaClassSetsController(wsgi.Controller):
         quota_class = id
         if not self.is_valid_body(body, 'quota_class_set'):
             raise webob.exc.HTTPBadRequest("The request body invalid")
-        for key in body['quota_class_set'].keys():
+        quota_class_set = body['quota_class_set']
+        for key in quota_class_set.keys():
             if key in QUOTAS:
                 try:
-                    value = int(body['quota_class_set'][key])
+                    value = int(quota_class_set[key])
                 except ValueError:
-                    msg = _("The value %s(val) of %(key)s isn't an "
+                    msg = _("The value %(val)s of %(key)s isn't an "
                             "integer") % {'val': body['quota_class_set'][key],
                                           'key': key}
                     raise webob.exc.HTTPBadRequest(explanation=msg)

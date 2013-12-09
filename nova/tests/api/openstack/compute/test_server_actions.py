@@ -322,7 +322,7 @@ class ServerActionsControllerTest(test.TestCase):
         body = robj.obj
 
         self.assertEqual(body['server']['image']['id'], '2')
-        self.assertTrue("adminPass" not in body['server'])
+        self.assertNotIn("adminPass", body['server'])
 
         self.assertEqual(robj['location'], self_href)
 
@@ -434,7 +434,7 @@ class ServerActionsControllerTest(test.TestCase):
         req = fakes.HTTPRequest.blank(self.url)
         body = self.controller._action_rebuild(req, FAKE_UUID, body).obj
 
-        self.assertTrue('personality' not in body['server'])
+        self.assertNotIn('personality', body['server'])
 
     def test_rebuild_admin_pass(self):
         return_server = fakes.fake_instance_get(image_ref='2',
@@ -474,10 +474,11 @@ class ServerActionsControllerTest(test.TestCase):
         body = self.controller._action_rebuild(req, FAKE_UUID, body).obj
 
         self.assertEqual(body['server']['image']['id'], '2')
-        self.assertTrue('adminPass' not in body['server'])
+        self.assertNotIn('adminPass', body['server'])
 
     def test_rebuild_server_not_found(self):
-        def server_not_found(self, instance_id, columns_to_join=None):
+        def server_not_found(self, instance_id,
+                             columns_to_join=None, use_slave=False):
             raise exception.InstanceNotFound(instance_id=instance_id)
         self.stubs.Set(db, 'instance_get_by_uuid', server_not_found)
 
@@ -525,7 +526,7 @@ class ServerActionsControllerTest(test.TestCase):
                 image_ref=self._image_href,
                 kernel_id="", ramdisk_id="",
                 task_state=task_states.REBUILDING,
-                expected_task_state=None,
+                expected_task_state=[None],
                 progress=0, **attributes).AndReturn(
                         fakes.stub_instance(1, host='fake_host'))
         self.mox.ReplayAll()
@@ -858,6 +859,7 @@ class ServerActionsControllerTest(test.TestCase):
                          volume_size=1,
                          device_name='vda',
                          snapshot_id=1,
+                         boot_index=0,
                          delete_on_termination=False,
                          no_device=None)]
 
@@ -889,17 +891,17 @@ class ServerActionsControllerTest(test.TestCase):
         image_id = location.replace('http://localhost/v2/fake/images/', '')
         image = image_service.show(None, image_id)
 
-        self.assertEquals(image['name'], 'snapshot_of_volume_backed')
+        self.assertEqual(image['name'], 'snapshot_of_volume_backed')
         properties = image['properties']
-        self.assertEquals(properties['kernel_id'], _fake_id('b'))
-        self.assertEquals(properties['ramdisk_id'], _fake_id('c'))
-        self.assertEquals(properties['root_device_name'], '/dev/vda')
+        self.assertEqual(properties['kernel_id'], _fake_id('b'))
+        self.assertEqual(properties['ramdisk_id'], _fake_id('c'))
+        self.assertEqual(properties['root_device_name'], '/dev/vda')
         bdms = properties['block_device_mapping']
-        self.assertEquals(len(bdms), 1)
-        self.assertEquals(bdms[0]['device_name'], 'vda')
-        self.assertEquals(bdms[0]['snapshot_id'], snapshot['id'])
+        self.assertEqual(len(bdms), 1)
+        self.assertEqual(bdms[0]['device_name'], 'vda')
+        self.assertEqual(bdms[0]['snapshot_id'], snapshot['id'])
         for k in extra_properties.keys():
-            self.assertEquals(properties[k], extra_properties[k])
+            self.assertEqual(properties[k], extra_properties[k])
 
     def test_create_volume_backed_image_no_metadata(self):
         self._do_test_create_volume_backed_image({})
@@ -924,6 +926,7 @@ class ServerActionsControllerTest(test.TestCase):
                          volume_size=1,
                          device_name='vda',
                          snapshot_id=1,
+                         boot_index=0,
                          delete_on_termination=False,
                          no_device=None)]
 
@@ -946,7 +949,7 @@ class ServerActionsControllerTest(test.TestCase):
         volume_api.create_snapshot_force(mox.IgnoreArg(), volume['id'],
                mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(snapshot)
 
-        def fake_bdm_image_metadata(fd, context, bdms):
+        def fake_bdm_image_metadata(fd, context, bdms, legacy_bdm):
             return {'test_key1': 'test_value1',
                     'test_key2': 'test_value2'}
         req = fakes.HTTPRequest.blank(self.url)
@@ -960,8 +963,8 @@ class ServerActionsControllerTest(test.TestCase):
         image = image_service.show(None, image_id)
 
         properties = image['properties']
-        self.assertEquals(properties['test_key1'], 'test_value1')
-        self.assertEquals(properties['test_key2'], 'test_value2')
+        self.assertEqual(properties['test_key1'], 'test_value1')
+        self.assertEqual(properties['test_key2'], 'test_value2')
 
     def test_create_image_snapshots_disabled(self):
         """Don't permit a snapshot if the allow_instance_snapshots flag is
@@ -1058,7 +1061,8 @@ class ServerActionsControllerTest(test.TestCase):
                           req, FAKE_UUID, body)
 
     def test_locked(self):
-        def fake_locked(context, instance_uuid, columns_to_join=None):
+        def fake_locked(context, instance_uuid,
+                        columns_to_join=None, use_slave=False):
             return fake_instance.fake_db_instance(name="foo",
                                                   uuid=FAKE_UUID,
                                                   locked=True)
@@ -1086,7 +1090,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 "name": "new-server-test",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_create_image_with_metadata(self):
         serial_request = """
@@ -1103,7 +1107,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 "metadata": {"key1": "value1"},
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_change_pass(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1116,7 +1120,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 "adminPass": "1234pass",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_change_pass_no_pass(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1138,7 +1142,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 "adminPass": "",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_reboot(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1151,7 +1155,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 "type": "HARD",
             },
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_reboot_no_type(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1171,7 +1175,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
         expected = {
             "resize": {"flavorRef": "http://localhost/flavors/3"},
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_resize_no_flavor_ref(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1190,7 +1194,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
         expected = {
             "confirmResize": None,
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_revert_resize(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1200,7 +1204,7 @@ class TestServerActionXMLDeserializer(test.TestCase):
         expected = {
             "revertResize": None,
         }
-        self.assertEquals(request['body'], expected)
+        self.assertEqual(request['body'], expected)
 
     def test_rebuild(self):
         serial_request = """<?xml version="1.0" encoding="UTF-8"?>

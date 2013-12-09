@@ -18,6 +18,7 @@ from lxml import etree
 
 from nova import test
 from nova.tests import matchers
+from nova import unit
 from nova.virt.libvirt import config
 
 
@@ -958,7 +959,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_lxc(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "lxc"
-        obj.memory = 1024 * 1024 * 100
+        obj.memory = 100 * unit.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.name = "demo"
@@ -994,7 +995,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_xen_pv(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "xen"
-        obj.memory = 1024 * 1024 * 100
+        obj.memory = 100 * unit.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.name = "demo"
@@ -1038,7 +1039,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_xen_hvm(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "xen"
-        obj.memory = 1024 * 1024 * 100
+        obj.memory = 100 * unit.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.name = "demo"
@@ -1086,7 +1087,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_kvm(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "kvm"
-        obj.memory = 1024 * 1024 * 100
+        obj.memory = 100 * unit.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.cpu_shares = 100
@@ -1095,7 +1096,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.name = "demo"
         obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
         obj.os_type = "linux"
-        obj.os_boot_dev = "hd"
+        obj.os_boot_dev = ["hd", "cdrom", "fd"]
         obj.os_smbios = config.LibvirtConfigGuestSMBIOS()
         obj.acpi = True
         obj.apic = True
@@ -1130,6 +1131,8 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <os>
                 <type>linux</type>
                 <boot dev="hd"/>
+                <boot dev="cdrom"/>
+                <boot dev="fd"/>
                 <smbios mode="sysinfo"/>
               </os>
               <features>
@@ -1176,6 +1179,20 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigGuest()
         obj.parse_str(xmldoc)
         self.assertEqual(len(obj.devices), 0)
+
+    def test_ConfigGuest_parese_cpu(self):
+        xmldoc = """ <domain>
+                       <cpu mode='custom' match='exact'>
+                         <model>kvm64</model>
+                       </cpu>
+                     </domain>
+                """
+        obj = config.LibvirtConfigGuest()
+        obj.parse_str(xmldoc)
+
+        self.assertEqual(obj.cpu.mode, 'custom')
+        self.assertEqual(obj.cpu.match, 'exact')
+        self.assertEqual(obj.cpu.model, 'kvm64')
 
 
 class LibvirtConfigGuestSnapshotTest(LibvirtConfigBaseTest):
@@ -1242,7 +1259,7 @@ class LibvirtConfigNodeDeviceTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigNodeDevice()
         obj.parse_str(xmlin)
 
-        self.assertEqual(obj.pci_capability, None)
+        self.assertIsNone(obj.pci_capability)
 
     def test_config_virt_device(self):
         xmlin = """
@@ -1484,6 +1501,31 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.fun_capability[1].type, 'phys_function')
         self.assertEqual(obj.fun_capability[1].device_addrs,
                          [("0000", '0x0a', '0x1', "0x1"), ])
+
+        def test_config_read_only_disk(self):
+            obj = config.LibvirtConfigGuestDisk()
+            obj.source_type = "disk"
+            obj.source_device = "disk"
+            obj.driver_name = "kvm"
+            obj.target_dev = "/dev/hdc"
+            obj.target_bus = "virtio"
+            obj.readonly = True
+
+            xml = obj.to_xml()
+            self.assertXmlEqual(xml, """
+                <disk type="disk" device="disk">
+                    <driver name="kvm"/>
+                    <target bus="virtio" dev="/dev/hdc"/>
+                    <readonly/>
+                </disk>""")
+
+            obj.readonly = False
+            xml = obj.to_xml()
+            self.assertXmlEqual(xml, """
+                <disk type="disk" device="disk">
+                    <driver name="kvm"/>
+                    <target bus="virtio" dev="/dev/hdc"/>
+                </disk>""")
 
 
 class LibvirtConfigNodeDevicePciSubFunctionCap(LibvirtConfigBaseTest):

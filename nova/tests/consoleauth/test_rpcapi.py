@@ -62,18 +62,34 @@ class ConsoleAuthRpcAPITestCase(test.NoDBTestCase):
         self.assertEqual(self.call_ctxt, ctxt)
         self.assertEqual(self.call_topic, CONF.consoleauth_topic)
         self.assertEqual(self.call_msg, expected_msg)
-        self.assertEqual(self.call_timeout, None)
+        self.assertIsNone(self.call_timeout)
 
     def test_authorize_console(self):
         self._test_consoleauth_api('authorize_console', token='token',
                 console_type='ctype', host='h', port='p',
+                internal_access_path='iap', instance_uuid="instance")
+
+        # NOTE(russellb) Havana compat
+        self.flags(consoleauth='havana', group='upgrade_levels')
+        self._test_consoleauth_api('authorize_console', token='token',
+                console_type='ctype', host='h', port='p',
                 internal_access_path='iap', instance_uuid="instance",
-                version="1.2")
+                version='1.2')
 
     def test_check_token(self):
         self._test_consoleauth_api('check_token', token='t')
 
+        # NOTE(russellb) Havana compat
+        self.flags(consoleauth='havana', group='upgrade_levels')
+        self._test_consoleauth_api('check_token', token='t', version='1.0')
+
     def test_delete_tokens_for_instnace(self):
+        self._test_consoleauth_api('delete_tokens_for_instance',
+                                   _do_cast=True,
+                                   instance_uuid="instance")
+
+        # NOTE(russellb) Havana compat
+        self.flags(consoleauth='havana', group='upgrade_levels')
         self._test_consoleauth_api('delete_tokens_for_instance',
                                    _do_cast=True,
                                    instance_uuid="instance",

@@ -512,21 +512,20 @@ class FlatNetworkTestCase(test.TestCase):
         self.assertEqual(addresses[0], fixedip)
 
     def test_allocate_floating_ip(self):
-        self.assertEqual(self.network.allocate_floating_ip(self.context,
-                                                           1, None), None)
+        self.assertIsNone(self.network.allocate_floating_ip(self.context,
+                                                            1, None))
 
     def test_deallocate_floating_ip(self):
-        self.assertEqual(self.network.deallocate_floating_ip(self.context,
-                                                             1, None), None)
+        self.assertIsNone(self.network.deallocate_floating_ip(self.context,
+                                                              1, None))
 
     def test_associate_floating_ip(self):
-        self.assertEqual(self.network.associate_floating_ip(self.context,
-                                                            None, None), None)
+        self.assertIsNone(self.network.associate_floating_ip(self.context,
+                                                             None, None))
 
     def test_disassociate_floating_ip(self):
-        self.assertEqual(self.network.disassociate_floating_ip(self.context,
-                                                               None, None),
-                         None)
+        self.assertIsNone(self.network.disassociate_floating_ip(self.context,
+                                                                None, None))
 
     def test_get_networks_by_uuids_ordering(self):
         self.mox.StubOutWithMock(db, 'network_get_all_by_uuids')
@@ -969,7 +968,7 @@ class VlanNetworkTestCase(test.TestCase):
                                               'fakeiface',
                                               'fakenet')
 
-    def test_floating_ip_init_host(self):
+    def _test_floating_ip_init_host(self, public_interface, expected_arg):
 
         def get_all_by_host(_context, _host):
             return [{'interface': 'foo',
@@ -990,26 +989,23 @@ class VlanNetworkTestCase(test.TestCase):
         self.stubs.Set(self.network.db, 'fixed_ip_get', fixed_ip_get)
 
         self.mox.StubOutWithMock(self.network.l3driver, 'add_floating_ip')
-        self.flags(public_interface=False)
+        self.flags(public_interface=public_interface)
         self.network.l3driver.add_floating_ip('fakefloat',
                                               'fakefixed',
-                                              'fakeiface',
+                                              expected_arg,
                                               'fakenet')
         self.mox.ReplayAll()
         self.network.init_host_floating_ips()
         self.mox.UnsetStubs()
         self.mox.VerifyAll()
 
-        self.mox.StubOutWithMock(self.network.l3driver, 'add_floating_ip')
-        self.flags(public_interface='fooiface')
-        self.network.l3driver.add_floating_ip('fakefloat',
-                                              'fakefixed',
-                                              'fooiface',
-                                              'fakenet')
-        self.mox.ReplayAll()
-        self.network.init_host_floating_ips()
-        self.mox.UnsetStubs()
-        self.mox.VerifyAll()
+    def test_floating_ip_init_host_without_public_interface(self):
+        self._test_floating_ip_init_host(public_interface=False,
+                                         expected_arg='fakeiface')
+
+    def test_floating_ip_init_host_with_public_interface(self):
+        self._test_floating_ip_init_host(public_interface='fooiface',
+                                         expected_arg='fooiface')
 
     def test_disassociate_floating_ip(self):
         ctxt = context.RequestContext('testuser', 'testproject',
@@ -1408,7 +1404,7 @@ class CommonNetworkTestCase(test.TestCase):
         manager.deallocate_for_instance(
             ctx, instance_id='ignore', host='somehost')
 
-        self.assertEquals([
+        self.assertEqual([
             (ctx, '1.2.3.4', 'somehost')
         ], manager.deallocate_fixed_ip_calls)
 
@@ -1418,7 +1414,7 @@ class CommonNetworkTestCase(test.TestCase):
                                               HOST,
                                               '10.0.0.1')
 
-        self.assertEquals(manager.deallocate_called, '10.0.0.1')
+        self.assertEqual(manager.deallocate_called, '10.0.0.1')
 
     def test_remove_fixed_ip_from_instance_bad_input(self):
         manager = fake_network.FakeNetworkManager()
@@ -1433,7 +1429,7 @@ class CommonNetworkTestCase(test.TestCase):
                                        None, None)
         self.assertEqual(1, len(nets))
         cidrs = [str(net['cidr']) for net in nets]
-        self.assertTrue('192.168.0.0/24' in cidrs)
+        self.assertIn('192.168.0.0/24', cidrs)
 
     def test_validate_cidrs_split_exact_in_half(self):
         manager = fake_network.FakeNetworkManager()
@@ -1442,8 +1438,8 @@ class CommonNetworkTestCase(test.TestCase):
                                        None, None)
         self.assertEqual(2, len(nets))
         cidrs = [str(net['cidr']) for net in nets]
-        self.assertTrue('192.168.0.0/25' in cidrs)
-        self.assertTrue('192.168.0.128/25' in cidrs)
+        self.assertIn('192.168.0.0/25', cidrs)
+        self.assertIn('192.168.0.128/25', cidrs)
 
     def test_validate_cidrs_split_cidr_in_use_middle_of_range(self):
         manager = fake_network.FakeNetworkManager()
@@ -1460,8 +1456,8 @@ class CommonNetworkTestCase(test.TestCase):
         exp_cidrs = ['192.168.0.0/24', '192.168.1.0/24', '192.168.3.0/24',
                      '192.168.4.0/24']
         for exp_cidr in exp_cidrs:
-            self.assertTrue(exp_cidr in cidrs)
-        self.assertFalse('192.168.2.0/24' in cidrs)
+            self.assertIn(exp_cidr, cidrs)
+        self.assertNotIn('192.168.2.0/24', cidrs)
 
     def test_validate_cidrs_smaller_subnet_in_use(self):
         manager = fake_network.FakeNetworkManager()
@@ -1492,8 +1488,8 @@ class CommonNetworkTestCase(test.TestCase):
         exp_cidrs = ['192.168.0.0/24', '192.168.1.0/24', '192.168.3.0/24',
                      '192.168.4.0/24']
         for exp_cidr in exp_cidrs:
-            self.assertTrue(exp_cidr in cidrs)
-        self.assertFalse('192.168.2.0/24' in cidrs)
+            self.assertIn(exp_cidr, cidrs)
+        self.assertNotIn('192.168.2.0/24', cidrs)
 
     def test_validate_cidrs_split_smaller_cidr_in_use2(self):
         manager = fake_network.FakeNetworkManager()
@@ -1509,8 +1505,8 @@ class CommonNetworkTestCase(test.TestCase):
         cidrs = [str(net['cidr']) for net in nets]
         exp_cidrs = ['192.168.2.32/27', '192.168.2.64/27', '192.168.2.96/27']
         for exp_cidr in exp_cidrs:
-            self.assertTrue(exp_cidr in cidrs)
-        self.assertFalse('192.168.2.0/27' in cidrs)
+            self.assertIn(exp_cidr, cidrs)
+        self.assertNotIn('192.168.2.0/27', cidrs)
 
     def test_validate_cidrs_split_all_in_use(self):
         manager = fake_network.FakeNetworkManager()
@@ -1563,8 +1559,8 @@ class CommonNetworkTestCase(test.TestCase):
                                        False, 2, 256, None, None, None, None,
                                        None)
         returned_cidrs = [str(net['cidr']) for net in nets]
-        self.assertTrue('192.168.0.0/24' in returned_cidrs)
-        self.assertTrue('192.168.1.0/24' in returned_cidrs)
+        self.assertIn('192.168.0.0/24', returned_cidrs)
+        self.assertIn('192.168.1.0/24', returned_cidrs)
 
     def test_validate_cidrs_conflict_existing_supernet(self):
         manager = fake_network.FakeNetworkManager()
@@ -1856,7 +1852,7 @@ class CommonNetworkTestCase(test.TestCase):
 
         # Compare the expected rules against the actual ones
         for line in expected_lines:
-            self.assertTrue(line in new_lines)
+            self.assertIn(line, new_lines)
 
         # Add an additional network and ensure the rules get configured
         new_network = {'id': 2,
@@ -1910,7 +1906,7 @@ class CommonNetworkTestCase(test.TestCase):
 
         # Compare the expected rules (with new network) against the actual ones
         for line in expected_lines:
-            self.assertTrue(line in new_lines)
+            self.assertIn(line, new_lines)
 
     def test_flatdhcpmanager_dynamic_fixed_range(self):
         """Test FlatDHCPManager NAT rules for fixed_range."""
@@ -2008,7 +2004,7 @@ class AllocateTestCase(test.TestCase):
             instance_id=inst['id'], instance_uuid=inst['uuid'],
             host=inst['host'], vpn=None, rxtx_factor=3,
             project_id=project_id, macs=None)
-        self.assertEquals(1, len(nw_info))
+        self.assertEqual(1, len(nw_info))
         fixed_ip = nw_info.fixed_ips()[0]['address']
         self.assertTrue(utils.is_valid_ipv4(fixed_ip))
         self.network.deallocate_for_instance(self.context,
@@ -2032,8 +2028,8 @@ class AllocateTestCase(test.TestCase):
             host=inst['host'], vpn=None, rxtx_factor=3,
             project_id=project_id, macs=available_macs)
         assigned_macs = [vif['address'] for vif in nw_info]
-        self.assertEquals(1, len(assigned_macs))
-        self.assertEquals(available_macs.pop(), assigned_macs[0])
+        self.assertEqual(1, len(assigned_macs))
+        self.assertEqual(available_macs.pop(), assigned_macs[0])
         self.network.deallocate_for_instance(self.context,
                                              instance_id=inst['id'],
                                              host=self.network.host,
@@ -2343,14 +2339,14 @@ class FloatingIPTestCase(test.TestCase):
         self.network.add_dns_entry(self.context, address1, name2, "A", zone)
         entries = self.network.get_dns_entries_by_address(self.context,
                                                           address1, zone)
-        self.assertEquals(len(entries), 2)
-        self.assertEquals(entries[0], name1)
-        self.assertEquals(entries[1], name2)
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0], name1)
+        self.assertEqual(entries[1], name2)
 
         entries = self.network.get_dns_entries_by_name(self.context,
                                                        name1, zone)
-        self.assertEquals(len(entries), 1)
-        self.assertEquals(entries[0], address1)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0], address1)
 
     def test_floating_dns_delete(self):
         zone = "example.org"
@@ -2364,8 +2360,8 @@ class FloatingIPTestCase(test.TestCase):
 
         entries = self.network.get_dns_entries_by_address(self.context,
                                                           address1, zone)
-        self.assertEquals(len(entries), 1)
-        self.assertEquals(entries[0], name2)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0], name2)
 
         self.assertRaises(exception.NotFound,
                           self.network.delete_dns_entry, self.context,
@@ -2390,18 +2386,18 @@ class FloatingIPTestCase(test.TestCase):
                                               'fakeproject')
 
         domains = self.network.get_dns_domains(self.context)
-        self.assertEquals(len(domains), 2)
-        self.assertEquals(domains[0]['domain'], domain1)
-        self.assertEquals(domains[1]['domain'], domain2)
-        self.assertEquals(domains[0]['project'], 'testproject')
-        self.assertEquals(domains[1]['project'], 'fakeproject')
+        self.assertEqual(len(domains), 2)
+        self.assertEqual(domains[0]['domain'], domain1)
+        self.assertEqual(domains[1]['domain'], domain2)
+        self.assertEqual(domains[0]['project'], 'testproject')
+        self.assertEqual(domains[1]['project'], 'fakeproject')
 
         self.network.add_dns_entry(self.context, address1, entryname,
                                    'A', domain1)
         entries = self.network.get_dns_entries_by_name(self.context,
                                                        entryname, domain1)
-        self.assertEquals(len(entries), 1)
-        self.assertEquals(entries[0], address1)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0], address1)
 
         self.assertRaises(exception.AdminRequired,
                           self.network.delete_dns_domain, self.context,
@@ -2445,7 +2441,7 @@ class FloatingIPTestCase(test.TestCase):
             entries = self.network.get_dns_entries_by_address(self.context,
                                                               address,
                                                               domain['domain'])
-            self.assertEquals(len(entries), 2)
+            self.assertEqual(len(entries), 2)
 
         self.network._delete_all_entries_for_ip(self.context, address)
 
@@ -2585,9 +2581,9 @@ class InstanceDNSTestCase(test.TestCase):
 
         self.network.create_private_dns_domain(context_admin, domain1, zone1)
         domains = self.network.get_dns_domains(self.context)
-        self.assertEquals(len(domains), 1)
-        self.assertEquals(domains[0]['domain'], domain1)
-        self.assertEquals(domains[0]['availability_zone'], zone1)
+        self.assertEqual(len(domains), 1)
+        self.assertEqual(domains[0]['domain'], domain1)
+        self.assertEqual(domains[0]['availability_zone'], zone1)
 
         self.assertRaises(exception.AdminRequired,
                           self.network.delete_dns_domain, self.context,
@@ -2647,13 +2643,13 @@ class LdapDNSTestCase(test.TestCase):
         self.driver.create_entry(name1, address1, "A", domain1)
         self.driver.create_entry(name2, address1, "A", domain1)
         entries = self.driver.get_entries_by_address(address1, domain1)
-        self.assertEquals(len(entries), 2)
-        self.assertEquals(entries[0], name1)
-        self.assertEquals(entries[1], name2)
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0], name1)
+        self.assertEqual(entries[1], name2)
 
         entries = self.driver.get_entries_by_name(name1, domain1)
-        self.assertEquals(len(entries), 1)
-        self.assertEquals(entries[0], address1)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0], address1)
 
     def test_ldap_dns_delete(self):
         address1 = "10.10.10.11"
@@ -2663,13 +2659,13 @@ class LdapDNSTestCase(test.TestCase):
         self.driver.create_entry(name1, address1, "A", domain1)
         self.driver.create_entry(name2, address1, "A", domain1)
         entries = self.driver.get_entries_by_address(address1, domain1)
-        self.assertEquals(len(entries), 2)
+        self.assertEqual(len(entries), 2)
 
         self.driver.delete_entry(name1, domain1)
         entries = self.driver.get_entries_by_address(address1, domain1)
         LOG.debug("entries: %s" % entries)
-        self.assertEquals(len(entries), 1)
-        self.assertEquals(entries[0], name2)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0], name2)
 
         self.assertRaises(exception.NotFound,
                           self.driver.delete_entry,

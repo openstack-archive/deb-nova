@@ -30,6 +30,7 @@ import urlparse
 import glanceclient
 import glanceclient.exc
 from oslo.config import cfg
+import six
 
 from nova import exception
 import nova.image.download as image_xfers
@@ -467,13 +468,13 @@ def _convert_timestamps_to_datetimes(image_meta):
 # NOTE(bcwaldon): used to store non-string data in glance metadata
 def _json_loads(properties, attr):
     prop = properties[attr]
-    if isinstance(prop, basestring):
+    if isinstance(prop, six.string_types):
         properties[attr] = jsonutils.loads(prop)
 
 
 def _json_dumps(properties, attr):
     prop = properties[attr]
-    if not isinstance(prop, basestring):
+    if not isinstance(prop, six.string_types):
         properties[attr] = jsonutils.dumps(prop)
 
 
@@ -593,3 +594,17 @@ def get_remote_image_service(context, image_href):
 
 def get_default_image_service():
     return GlanceImageService()
+
+
+class UpdateGlanceImage(object):
+    def __init__(self, context, image_id, metadata, stream):
+        self.context = context
+        self.image_id = image_id
+        self.metadata = metadata
+        self.image_stream = stream
+
+    def start(self):
+        image_service, image_id = (
+            get_remote_image_service(self.context, self.image_id))
+        image_service.update(self.context, image_id, self.metadata,
+                             self.image_stream, purge_props=False)

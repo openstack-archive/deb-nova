@@ -14,8 +14,8 @@
 
 from nova import db
 from nova.objects import base
+from nova.objects import fields
 from nova.objects import instance as instance_obj
-from nova.objects import utils
 
 
 class Migration(base.NovaPersistentObject, base.NovaObject):
@@ -24,16 +24,16 @@ class Migration(base.NovaPersistentObject, base.NovaObject):
     VERSION = '1.1'
 
     fields = {
-        'id': int,
-        'source_compute': utils.str_or_none,
-        'dest_compute': utils.str_or_none,
-        'source_node': utils.str_or_none,
-        'dest_node': utils.str_or_none,
-        'dest_host': utils.str_or_none,
-        'old_instance_type_id': utils.int_or_none,
-        'new_instance_type_id': utils.int_or_none,
-        'instance_uuid': utils.str_or_none,
-        'status': utils.str_or_none,
+        'id': fields.IntegerField(),
+        'source_compute': fields.StringField(nullable=True),
+        'dest_compute': fields.StringField(nullable=True),
+        'source_node': fields.StringField(nullable=True),
+        'dest_node': fields.StringField(nullable=True),
+        'dest_host': fields.StringField(nullable=True),
+        'old_instance_type_id': fields.IntegerField(nullable=True),
+        'new_instance_type_id': fields.IntegerField(nullable=True),
+        'instance_uuid': fields.StringField(nullable=True),
+        'status': fields.StringField(nullable=True),
         }
 
     @staticmethod
@@ -86,11 +86,19 @@ def _make_list(context, list_obj, item_cls, db_list):
 
 
 class MigrationList(base.ObjectListBase, base.NovaObject):
+    # Version 1.0: Initial version
+    # Version 1.1: Added use_slave to get_unconfirmed_by_dest_compute
+    VERSION = '1.1'
+
+    fields = {
+        'objects': fields.ListOfObjectsField('Migration'),
+        }
+
     @base.remotable_classmethod
     def get_unconfirmed_by_dest_compute(cls, context, confirm_window,
-                                        dest_compute):
+                                        dest_compute, use_slave=False):
         db_migrations = db.migration_get_unconfirmed_by_dest_compute(
-            context, confirm_window, dest_compute)
+            context, confirm_window, dest_compute, use_slave=use_slave)
         return _make_list(context, MigrationList(), Migration, db_migrations)
 
     @base.remotable_classmethod

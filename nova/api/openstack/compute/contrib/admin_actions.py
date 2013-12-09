@@ -53,6 +53,8 @@ class AdminActionsController(wsgi.Controller):
         try:
             server = self.compute_api.get(ctxt, id, want_objects=True)
             self.compute_api.pause(ctxt, server)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'pause')
@@ -72,6 +74,8 @@ class AdminActionsController(wsgi.Controller):
         try:
             server = self.compute_api.get(ctxt, id, want_objects=True)
             self.compute_api.unpause(ctxt, server)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'unpause')
@@ -91,6 +95,8 @@ class AdminActionsController(wsgi.Controller):
         try:
             server = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.suspend(context, server)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'suspend')
@@ -110,6 +116,8 @@ class AdminActionsController(wsgi.Controller):
         try:
             server = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.resume(context, server)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'resume')
@@ -129,9 +137,13 @@ class AdminActionsController(wsgi.Controller):
         try:
             instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.resize(req.environ['nova.context'], instance)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'migrate')
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except Exception as e:
             LOG.exception(_("Error in migrate %s"), e)
             raise exc.HTTPBadRequest()
@@ -147,6 +159,8 @@ class AdminActionsController(wsgi.Controller):
             self.compute_api.reset_network(context, instance)
         except exception.InstanceNotFound:
             raise exc.HTTPNotFound(_("Server not found"))
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except Exception:
             readable = traceback.format_exc()
             LOG.exception(_("Compute.api::reset_network %s"), readable)
@@ -163,6 +177,8 @@ class AdminActionsController(wsgi.Controller):
             self.compute_api.inject_network_info(context, instance)
         except exception.InstanceNotFound:
             raise exc.HTTPNotFound(_("Server not found"))
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except Exception:
             readable = traceback.format_exc()
             LOG.exception(_("Compute.api::inject_network_info %s"), readable)
@@ -299,8 +315,14 @@ class AdminActionsController(wsgi.Controller):
         except (exception.ComputeServiceUnavailable,
                 exception.InvalidHypervisorType,
                 exception.UnableToMigrateToSelf,
-                exception.DestinationHypervisorTooOld) as ex:
+                exception.DestinationHypervisorTooOld,
+                exception.NoValidHost,
+                exception.InvalidLocalStorage,
+                exception.InvalidSharedStorage,
+                exception.MigrationPreCheckError) as ex:
             raise exc.HTTPBadRequest(explanation=ex.format_message())
+        except exception.InstanceNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except Exception:
             if host is None:
                 msg = _("Live migration of instance %s to another host "

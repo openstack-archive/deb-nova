@@ -38,6 +38,8 @@ sudo -u postgres psql
 postgres=# create user openstack_citest with createdb login password
       'openstack_citest';
 postgres=# create database openstack_citest with owner openstack_citest;
+postgres=# create database openstack_baremetal_citest with owner
+            openstack_citest;
 
 """
 
@@ -156,7 +158,9 @@ class CommonTestsMixIn(object):
     """
     def test_walk_versions(self):
         for key, engine in self.engines.items():
-            self._walk_versions(engine, self.snake_walk)
+            # We start each walk with a completely blank slate.
+            self._reset_database(key)
+            self._walk_versions(engine, self.snake_walk, self.downgrade)
 
     def test_mysql_opportunistically(self):
         self._test_mysql_opportunistically()
@@ -184,7 +188,18 @@ class CommonTestsMixIn(object):
 
 
 class BaseMigrationTestCase(test.NoDBTestCase):
-    """Base class fort testing migrations and migration utils."""
+    """Base class for testing migrations and migration utils. This sets up
+    and configures the databases to run tests against.
+    """
+
+    # NOTE(jhesketh): It is expected that tests clean up after themselves.
+    # This is necessary for concurrency to allow multiple tests to work on
+    # one database.
+    # The full migration walk tests however do call the old _reset_databases()
+    # to throw away whatever was there so they need to operate on their own
+    # database that we know isn't accessed concurrently.
+    # Hence, BaseWalkMigrationTestCase overwrites the engine list.
+
     USER = None
     PASSWD = None
     DATABASE = None
@@ -204,13 +219,16 @@ class BaseMigrationTestCase(test.NoDBTestCase):
         self.INIT_VERSION = 0
 
         self.snake_walk = False
+        self.downgrade = False
         self.test_databases = {}
         self.migration = None
         self.migration_api = None
 
     def setUp(self):
         super(BaseMigrationTestCase, self).setUp()
+        self._load_config()
 
+    def _load_config(self):
         # Load test databases from the config file. Only do this
         # once. No need to re-run this on each test...
         LOG.debug('config_path is %s' % self.CONFIG_FILE_PATH)
@@ -218,10 +236,12 @@ class BaseMigrationTestCase(test.NoDBTestCase):
             cp = ConfigParser.RawConfigParser()
             try:
                 cp.read(self.CONFIG_FILE_PATH)
-                defaults = cp.defaults()
-                for key, value in defaults.items():
-                    self.test_databases[key] = value
+                config = cp.options('unit_tests')
+                for key in config:
+                    self.test_databases[key] = cp.get('unit_tests', key)
                 self.snake_walk = cp.getboolean('walk_style', 'snake_walk')
+                self.downgrade = cp.getboolean('walk_style', 'downgrade')
+
             except ConfigParser.ParsingError as e:
                 self.fail("Failed to read test_migrations.conf config "
                           "file. Got error: %s" % e)
@@ -233,15 +253,9 @@ class BaseMigrationTestCase(test.NoDBTestCase):
         for key, value in self.test_databases.items():
             self.engines[key] = sqlalchemy.create_engine(value)
 
-        # We start each test case with a completely blank slate.
-        self._reset_databases()
-
-    def tearDown(self):
-        # We destroy the test data store between each test case,
-        # and recreate it, which ensures that we have no side-effects
-        # from the tests
-        self._reset_databases()
-        super(BaseMigrationTestCase, self).tearDown()
+        # NOTE(jhesketh): We only need to make sure the databases are created
+        # not necessarily clean of tables.
+        self._create_databases()
 
     def execute_cmd(self, cmd=None):
         status, output = commands.getstatusoutput(cmd)
@@ -273,34 +287,123 @@ class BaseMigrationTestCase(test.NoDBTestCase):
         os.unsetenv('PGPASSWORD')
         os.unsetenv('PGUSER')
 
-    def _reset_databases(self):
+    @utils.synchronized('mysql', external=True)
+    def _reset_mysql(self, conn_pieces):
+        # We can execute the MySQL client to destroy and re-create
+        # the MYSQL database, which is easier and less error-prone
+        # than using SQLAlchemy to do this via MetaData...trust me.
+        (user, password, database, host) = \
+                get_mysql_connection_info(conn_pieces)
+        sql = ("drop database if exists %(database)s; "
+                "create database %(database)s;" % {'database': database})
+        cmd = ("mysql -u \"%(user)s\" %(password)s -h %(host)s "
+               "-e \"%(sql)s\"" % {'user': user, 'password': password,
+                                   'host': host, 'sql': sql})
+        self.execute_cmd(cmd)
+
+    @utils.synchronized('sqlite', external=True)
+    def _reset_sqlite(self, conn_pieces):
+        # We can just delete the SQLite database, which is
+        # the easiest and cleanest solution
+        db_path = conn_pieces.path.strip('/')
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+        # No need to recreate the SQLite DB. SQLite will
+        # create it for us if it's not there...
+
+    def _create_databases(self):
+        """Create all configured databases as needed."""
         for key, engine in self.engines.items():
-            conn_string = self.test_databases[key]
-            conn_pieces = urlparse.urlparse(conn_string)
-            engine.dispose()
-            if conn_string.startswith('sqlite'):
-                # We can just delete the SQLite database, which is
-                # the easiest and cleanest solution
-                db_path = conn_pieces.path.strip('/')
-                if os.path.exists(db_path):
-                    os.unlink(db_path)
-                # No need to recreate the SQLite DB. SQLite will
-                # create it for us if it's not there...
-            elif conn_string.startswith('mysql'):
-                # We can execute the MySQL client to destroy and re-create
-                # the MYSQL database, which is easier and less error-prone
-                # than using SQLAlchemy to do this via MetaData...trust me.
-                (user, password, database, host) = \
-                        get_mysql_connection_info(conn_pieces)
-                sql = ("drop database if exists %(database)s; "
-                        "create database %(database)s;"
-                        % {'database': database})
-                cmd = ("mysql -u \"%(user)s\" %(password)s -h %(host)s "
-                       "-e \"%(sql)s\"" % {'user': user,
-                           'password': password, 'host': host, 'sql': sql})
-                self.execute_cmd(cmd)
-            elif conn_string.startswith('postgresql'):
-                self._reset_pg(conn_pieces)
+            self._create_database(key)
+
+    def _create_database(self, key):
+        """Create database if it doesn't exist."""
+        conn_string = self.test_databases[key]
+        conn_pieces = urlparse.urlparse(conn_string)
+
+        if conn_string.startswith('mysql'):
+            (user, password, database, host) = \
+                get_mysql_connection_info(conn_pieces)
+            sql = "create database if not exists %s;" % database
+            cmd = ("mysql -u \"%(user)s\" %(password)s -h %(host)s "
+                   "-e \"%(sql)s\"" % {'user': user, 'password': password,
+                                       'host': host, 'sql': sql})
+            self.execute_cmd(cmd)
+        elif conn_string.startswith('postgresql'):
+            (user, password, database, host) = \
+                get_pgsql_connection_info(conn_pieces)
+            os.environ['PGPASSWORD'] = password
+            os.environ['PGUSER'] = user
+
+            sqlcmd = ("psql -w -U %(user)s -h %(host)s -c"
+                      " '%(sql)s' -d template1")
+
+            sql = ("create database if not exists %s;") % database
+            createtable = sqlcmd % {'user': user, 'host': host, 'sql': sql}
+            status, output = commands.getstatusoutput(createtable)
+            if status != 0 and status != 256:
+                # 0 means databases is created
+                # 256 means it already exists (which is fine)
+                # otherwise raise an error
+                self.fail("Failed to run: %s\n%s" % (createtable, output))
+
+            os.unsetenv('PGPASSWORD')
+            os.unsetenv('PGUSER')
+
+    def _reset_databases(self):
+        """Reset all configured databases."""
+        for key, engine in self.engines.items():
+            self._reset_database(key)
+
+    def _reset_database(self, key):
+        """Reset specific database."""
+        engine = self.engines[key]
+        conn_string = self.test_databases[key]
+        conn_pieces = urlparse.urlparse(conn_string)
+        engine.dispose()
+        if conn_string.startswith('sqlite'):
+            self._reset_sqlite(conn_pieces)
+        elif conn_string.startswith('mysql'):
+            self._reset_mysql(conn_pieces)
+        elif conn_string.startswith('postgresql'):
+            self._reset_pg(conn_pieces)
+
+
+class BaseWalkMigrationTestCase(BaseMigrationTestCase):
+    """BaseWalkMigrationTestCase loads in an alternative set of databases for
+    testing against. This is necessary as the default databases can run tests
+    concurrently without interfering with itself. It is expected that
+    databases listed under [migraiton_dbs] in the configuration are only being
+    accessed by one test at a time. Currently only test_walk_versions accesses
+    the databases (and is the only method that calls _reset_database() which
+    is clearly problematic for concurrency).
+    """
+
+    def _load_config(self):
+        # Load test databases from the config file. Only do this
+        # once. No need to re-run this on each test...
+        LOG.debug('config_path is %s' % self.CONFIG_FILE_PATH)
+        if os.path.exists(self.CONFIG_FILE_PATH):
+            cp = ConfigParser.RawConfigParser()
+            try:
+                cp.read(self.CONFIG_FILE_PATH)
+                config = cp.options('migration_dbs')
+                for key in config:
+                    self.test_databases[key] = cp.get('migration_dbs', key)
+                self.snake_walk = cp.getboolean('walk_style', 'snake_walk')
+                self.downgrade = cp.getboolean('walk_style', 'downgrade')
+            except ConfigParser.ParsingError as e:
+                self.fail("Failed to read test_migrations.conf config "
+                          "file. Got error: %s" % e)
+        else:
+            self.fail("Failed to find test_migrations.conf config "
+                      "file.")
+
+        self.engines = {}
+        for key, value in self.test_databases.items():
+            self.engines[key] = sqlalchemy.create_engine(value)
+
+        self._create_databases()
 
     def _test_mysql_opportunistically(self):
         # Test that table creation on mysql only builds InnoDB tables
@@ -317,8 +420,8 @@ class BaseMigrationTestCase(test.NoDBTestCase):
         self.test_databases[database] = connect_string
 
         # build a fully populated mysql database with all the tables
-        self._reset_databases()
-        self._walk_versions(engine, False, False)
+        self._reset_database(database)
+        self._walk_versions(engine, self.snake_walk, self.downgrade)
 
         connection = engine.connect()
         # sanity check
@@ -338,6 +441,9 @@ class BaseMigrationTestCase(test.NoDBTestCase):
         self.assertEqual(count, 0, "%d non InnoDB tables created" % count)
         connection.close()
 
+        del(self.engines[database])
+        del(self.test_databases[database])
+
     def _test_postgresql_opportunistically(self):
         # Test postgresql database migration walk
         if not _have_postgresql(self.USER, self.PASSWD, self.DATABASE):
@@ -353,8 +459,10 @@ class BaseMigrationTestCase(test.NoDBTestCase):
         self.test_databases[database] = connect_string
 
         # build a fully populated postgresql database with all the tables
-        self._reset_databases()
-        self._walk_versions(engine, False, False)
+        self._reset_database(database)
+        self._walk_versions(engine, self.snake_walk, self.downgrade)
+        del(self.engines[database])
+        del(self.test_databases[database])
 
     def _walk_versions(self, engine=None, snake_walk=False, downgrade=True):
         # Determine latest version script from the repo, then
@@ -447,7 +555,7 @@ class BaseMigrationTestCase(test.NoDBTestCase):
             raise
 
 
-class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
+class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
     """Test sqlalchemy-migrate migrations."""
     USER = "openstack_citest"
     PASSWD = "openstack_citest"
@@ -471,8 +579,8 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
 
         if self.migration is None:
             self.migration = __import__('nova.db.migration',
-                    globals(), locals(), ['INIT_VERSION'], -1)
-            self.INIT_VERSION = self.migration.INIT_VERSION
+                    globals(), locals(), ['db_initial_version'], -1)
+            self.INIT_VERSION = self.migration.db_initial_version()
         if self.migration_api is None:
             temp = __import__('nova.db.sqlalchemy.migration',
                     globals(), locals(), ['versioning_api'], -1)
@@ -551,8 +659,8 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             bw_usage_cache.c.id == 1).execute().first()
 
         # New columns have 'NULL' as default value.
-        self.assertEqual(bw['last_ctr_in'], None)
-        self.assertEqual(bw['last_ctr_out'], None)
+        self.assertIsNone(bw['last_ctr_in'])
+        self.assertIsNone(bw['last_ctr_out'])
 
         self.assertEqual(data[0]['mac'], bw['mac'])
 
@@ -664,7 +772,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         host = aggregate_hosts.select(
             aggregate_hosts.c.aggregate_id == 3
             ).execute().first()
-        self.assertEqual(host, None)
+        self.assertIsNone(host)
 
         self._check_147_no_duplicate_aggregate_hosts(engine, data)
 
@@ -771,10 +879,8 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
     def _check_151(self, engine, data):
         task_log = db_utils.get_table(engine, 'task_log')
         row = task_log.select(task_log.c.id == data['id']).execute().first()
-        self.assertTrue(isinstance(row['period_beginning'],
-            datetime.datetime))
-        self.assertTrue(isinstance(row['period_ending'],
-            datetime.datetime))
+        self.assertIsInstance(row['period_beginning'], datetime.datetime)
+        self.assertIsInstance(row['period_ending'], datetime.datetime)
         self.assertEqual(
             data['period_beginning'], str(row['period_beginning']))
         self.assertEqual(data['period_ending'], str(row['period_ending']))
@@ -957,8 +1063,8 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             # NullType needs a special case.  We end up with NullType on sqlite
             # where bigint is not defined.
             if isinstance(base_column.type, sqlalchemy.types.NullType):
-                self.assertTrue(isinstance(shadow_column.type,
-                                           sqlalchemy.types.NullType))
+                self.assertIsInstance(shadow_column.type,
+                                      sqlalchemy.types.NullType)
             else:
                 # Identical types do not test equal because sqlalchemy does not
                 # override __eq__, but if we stringify them then they do.
@@ -1107,7 +1213,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         results = list(results)
         self.assertEqual(len(our_ids), len(results))
         for result in results:
-            self.assertEqual(result['deleted'], None)
+            self.assertIsNone(result['deleted'])
         return data
 
     def _check_160(self, engine, data):
@@ -1175,22 +1281,20 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                 # These should not have their values changed, but should
                 # have corrected created_at stamps
                 self.assertEqual(result['value'], original['value'])
-                self.assertTrue(isinstance(result['created_at'],
-                                           datetime.datetime))
+                self.assertIsInstance(result['created_at'], datetime.datetime)
             elif key.startswith('instance_type'):
                 # Values like instance_type_% should be stamped and values
                 # converted from 'None' to None where appropriate
                 self.assertEqual(result['value'],
                                  None if original['value'] == 'None'
                                  else original['value'])
-                self.assertTrue(isinstance(result['created_at'],
-                                           datetime.datetime))
+                self.assertIsInstance(result['created_at'], datetime.datetime)
             else:
                 # None of the non-instance_type values should have
                 # been touched. Since we didn't set created_at on any
                 # of them, they should all still be None.
                 self.assertEqual(result['value'], original['value'])
-                self.assertEqual(result['created_at'], None)
+                self.assertIsNone(result['created_at'])
 
     def _pre_upgrade_172(self, engine):
         instance_types = db_utils.get_table(engine, 'instance_types')
@@ -1340,10 +1444,10 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         rows = volume_usage_cache.select().execute().fetchall()
         self.assertEqual(len(rows), 1)
 
-        self.assertEqual(rows[0]['instance_uuid'], None)
-        self.assertEqual(rows[0]['project_id'], None)
-        self.assertEqual(rows[0]['user_id'], None)
-        self.assertFalse('instance_id' in rows[0])
+        self.assertIsNone(rows[0]['instance_uuid'])
+        self.assertIsNone(rows[0]['project_id'])
+        self.assertIsNone(rows[0]['user_id'])
+        self.assertNotIn('instance_id', rows[0])
 
     def _post_downgrade_175(self, engine):
         volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
@@ -1351,10 +1455,10 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         rows = volume_usage_cache.select().execute().fetchall()
         self.assertEqual(len(rows), 1)
 
-        self.assertFalse('instance_uuid' in rows[0])
-        self.assertFalse('project_id' in rows[0])
-        self.assertFalse('user_id' in rows[0])
-        self.assertEqual(rows[0]['instance_id'], None)
+        self.assertNotIn('instance_uuid', rows[0])
+        self.assertNotIn('project_id', rows[0])
+        self.assertNotIn('user_id', rows[0])
+        self.assertIsNone(rows[0]['instance_id'])
 
     def _check_176(self, engine, data):
         volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
@@ -1362,7 +1466,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         rows = volume_usage_cache.select().execute().fetchall()
         self.assertEqual(len(rows), 1)
 
-        self.assertEqual(rows[0]['availability_zone'], None)
+        self.assertIsNone(rows[0]['availability_zone'])
 
     def _post_downgrade_176(self, engine):
         volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
@@ -1370,7 +1474,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         rows = volume_usage_cache.select().execute().fetchall()
         self.assertEqual(len(rows), 1)
 
-        self.assertFalse('availability_zone' in rows[0])
+        self.assertNotIn('availability_zone', rows[0])
 
     def _pre_upgrade_177(self, engine):
         floating_ips = db_utils.get_table(engine, 'floating_ips')
@@ -1697,7 +1801,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                                     x['device_name'] + x['instance_uuid'])
         got_bdms = [bdm for bdm in q.execute()]
 
-        self.assertEquals(len(expected_bdms), len(got_bdms))
+        self.assertEqual(len(expected_bdms), len(got_bdms))
         for expected, got in zip(expected_bdms, got_bdms):
             self.assertThat(expected, matchers.IsSubDictOf(dict(got)))
 
@@ -1747,12 +1851,12 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
     def _check_188(self, engine, data):
         services = db_utils.get_table(engine, 'services')
         rows = services.select().execute().fetchall()
-        self.assertEqual(rows[0]['disabled_reason'], None)
+        self.assertIsNone(rows[0]['disabled_reason'])
 
     def _post_downgrade_188(self, engine):
         services = db_utils.get_table(engine, 'services')
         rows = services.select().execute().fetchall()
-        self.assertFalse('disabled_reason' in rows[0])
+        self.assertNotIn('disabled_reason', rows[0])
 
     def _pre_upgrade_189(self, engine):
         cells = db_utils.get_table(engine, 'cells')
@@ -2529,8 +2633,8 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         self.assertEqual(quota['user_id'], 'fake_user')
         self.assertEqual(quota['resource'], 'instances')
         self.assertEqual(quota['hard_limit'], 10)
-        self.assertEqual(quota_usage['user_id'], None)
-        self.assertEqual(reservation['user_id'], None)
+        self.assertIsNone(quota_usage['user_id'])
+        self.assertIsNone(reservation['user_id'])
         # Check indexes exist
         if engine.name == 'mysql' or engine.name == 'postgresql':
             data = {
@@ -2576,8 +2680,8 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         quota_usage = quota_usages.select().execute().first()
         reservation = reservations.select().execute().first()
 
-        self.assertFalse('user_id' in quota_usage)
-        self.assertFalse('user_id' in reservation)
+        self.assertNotIn('user_id', quota_usage)
+        self.assertNotIn('user_id', reservation)
         self.assertFalse(table_exist)
         # Check indexes are gone
         if engine.name == 'mysql' or engine.name == 'postgresql':
@@ -2608,6 +2712,30 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                 current_indexes = (
                     [(idx[0], sorted(idx[1])) for idx in current_indexes]
                 )
+                for index in indexes:
+                    self.assertNotIn(index, current_indexes)
+
+        # Check indexes are gone
+        if engine.name == 'mysql' or engine.name == 'postgresql':
+            data = {
+                # table_name: ((idx_1, (c1, c2,)), (idx2, (c1, c2,)), ...)
+                'quota_usages': (
+                    ('ix_quota_usages_user_id_deleted',
+                     ('user_id', 'deleted')),
+                ),
+                'reservations': (
+                    ('ix_reservations_user_id_deleted',
+                     ('user_id', 'deleted')),
+                )
+            }
+
+            meta = sqlalchemy.MetaData()
+            meta.bind = engine
+
+            for table_name, indexes in data.iteritems():
+                table = sqlalchemy.Table(table_name, meta, autoload=True)
+                current_indexes = [(i.name, tuple(i.columns.keys()))
+                           for i in table.indexes]
                 for index in indexes:
                     self.assertNotIn(index, current_indexes)
 
@@ -2648,13 +2776,13 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                 where(table.c.uuid.in_(['m205-uuid1', 'm205-uuid2'])).\
                 order_by(table.c.uuid).execute().fetchall()
             self.assertEqual(rows[0]['locked_by'], 'admin')
-            self.assertEqual(rows[1]['locked_by'], None)
+            self.assertIsNone(rows[1]['locked_by'])
 
     def _post_downgrade_205(self, engine):
         for table_name in ['instances', 'shadow_instances']:
             table = db_utils.get_table(engine, table_name)
             rows = table.select().execute().fetchall()
-            self.assertFalse('locked_by' in rows[0])
+            self.assertNotIn('locked_by', rows[0])
 
     def _pre_upgrade_206(self, engine):
         instances = db_utils.get_table(engine, 'instances')
@@ -2743,13 +2871,13 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
 
         compute_nodes = db_utils.get_table(engine, 'compute_nodes')
         if engine.name == "postgresql":
-            self.assertTrue(isinstance(compute_nodes.c.host_ip.type,
-                            sqlalchemy.dialects.postgresql.INET))
+            self.assertIsInstance(compute_nodes.c.host_ip.type,
+                                  sqlalchemy.dialects.postgresql.INET)
         else:
-            self.assertTrue(isinstance(compute_nodes.c.host_ip.type,
-                            sqlalchemy.types.String))
-        self.assertTrue(isinstance(compute_nodes.c.supported_instances.type,
-                            sqlalchemy.types.Text))
+            self.assertIsInstance(compute_nodes.c.host_ip.type,
+                                  sqlalchemy.types.String)
+        self.assertIsInstance(compute_nodes.c.supported_instances.type,
+                              sqlalchemy.types.Text)
 
     def _post_downgrade_208(self, engine):
         self.assertColumnNotExists(engine, 'compute_nodes', 'host_ip')
@@ -2789,6 +2917,17 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             change_tables[i].delete().execute()
             change_tables[i].insert().values(data[i]).execute()
 
+        # NOTE(jhesketh): Add instance with NULL uuid to check the backups
+        #                 still work correctly and avoid violating the foreign
+        #                 key constraint. If there are NULL values in a NOT IN
+        #                 () set the result is always false. Therefore having
+        #                 this instance inserted here causes migration 209 to
+        #                 fail unless the IN set sub-query is modified
+        #                 appropriately. See bug/1240325
+        db_utils.get_table(engine, 'instances').insert(
+            {'uuid': None}
+        ).execute()
+
     def _check_209(self, engine, data):
         if engine.name == 'sqlite':
             return
@@ -2821,7 +2960,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
         data = self._data_209()
         for i in tables:
             dump_table_name = 'dump_' + i
-            self.assertFalse(dump_table_name in check_tables)
+            self.assertNotIn(dump_table_name, check_tables)
             table = change_tables[i]
             table.insert().values(data[i]).execute()
             self.assertEqual(len(table.select().execute().fetchall()), 2)
@@ -2966,8 +3105,7 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
 
         self.assertColumnExists(engine, 'compute_nodes', 'pci_stats')
         nodes = db_utils.get_table(engine, 'compute_nodes')
-        self.assertTrue(isinstance(nodes.c.pci_stats.type,
-                                   sqlalchemy.types.Text))
+        self.assertIsInstance(nodes.c.pci_stats.type, sqlalchemy.types.Text)
 
     def _post_downgrade_213(self, engine):
         self._213(engine)
@@ -3043,18 +3181,18 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
                                   "local_gb_used": 1, "deleted": 0,
                                   "hypervisor_type": "fake_type",
                                   "hypervisor_version": 1,
-                                  "service_id": 1, "id": 1},
+                                  "service_id": 1, "id": 10001},
                                  {"vcpus": 1, "cpu_info": "info",
                                   "memory_mb": 1, "local_gb": 1,
                                   "vcpus_used": 1, "memory_mb_used": 1,
                                   "local_gb_used": 1, "deleted": 2,
                                   "hypervisor_type": "fake_type",
                                   "hypervisor_version": 1,
-                                  "service_id": 1, "id": 2}],
-               "compute_node_stats": [{"id": 10, "compute_node_id": 1,
+                                  "service_id": 1, "id": 10002}],
+               "compute_node_stats": [{"id": 10, "compute_node_id": 10001,
                                        "key": "fake-1",
                                        "deleted": 0},
-                                      {"id": 20, "compute_node_id": 2,
+                                      {"id": 20, "compute_node_id": 10002,
                                        "key": "fake-2",
                                        "deleted": 0}]}
         return ret
@@ -3187,8 +3325,33 @@ class TestNovaMigrations(BaseMigrationTestCase, CommonTestsMixIn):
             self.assertEqual(1, len(rows))
             self.assertEqual(per_project[resource], rows[0]['in_use'])
 
+    def _check_227(self, engine, data):
+        table = db_utils.get_table(engine, 'project_user_quotas')
 
-class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):
+        # Insert fake_quotas with the longest resource name.
+        fake_quotas = {'id': 5,
+                       'project_id': 'fake_project',
+                       'user_id': 'fake_user',
+                       'resource': 'injected_file_content_bytes',
+                       'hard_limit': 10}
+        table.insert().execute(fake_quotas)
+
+        # Check we can get the longest resource name.
+        quota = table.select(table.c.id == 5).execute().first()
+        self.assertEqual(quota['resource'], 'injected_file_content_bytes')
+
+    def _check_228(self, engine, data):
+        self.assertColumnExists(engine, 'compute_nodes', 'metrics')
+
+        compute_nodes = db_utils.get_table(engine, 'compute_nodes')
+        self.assertTrue(isinstance(compute_nodes.c.metrics.type,
+                            sqlalchemy.types.Text))
+
+    def _post_downgrade_228(self, engine):
+        self.assertColumnNotExists(engine, 'compute_nodes', 'metrics')
+
+
+class TestBaremetalMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
     """Test sqlalchemy-migrate migrations."""
     USER = "openstack_citest"
     PASSWD = "openstack_citest"
@@ -3214,8 +3377,8 @@ class TestBaremetalMigrations(BaseMigrationTestCase, CommonTestsMixIn):
 
         if self.migration is None:
             self.migration = __import__('nova.virt.baremetal.db.migration',
-                    globals(), locals(), ['INIT_VERSION'], -1)
-            self.INIT_VERSION = self.migration.INIT_VERSION
+                    globals(), locals(), ['db_initial_version'], -1)
+            self.INIT_VERSION = self.migration.db_initial_version()
         if self.migration_api is None:
             temp = __import__('nova.virt.baremetal.db.sqlalchemy.migration',
                     globals(), locals(), ['versioning_api'], -1)
@@ -3322,4 +3485,4 @@ class ProjectTestCase(test.NoDBTestCase):
 
         helpful_msg = (_("The following migrations are missing a downgrade:"
                          "\n\t%s") % '\n\t'.join(sorted(missing_downgrade)))
-        self.assert_(not missing_downgrade, helpful_msg)
+        self.assertTrue(not missing_downgrade, helpful_msg)

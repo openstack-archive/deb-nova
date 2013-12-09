@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2013 OpenStack LLC.
+# Copyright 2013 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -184,14 +184,14 @@ def _upgrade_bdm_v2(meta, bdm_table, bdm_shadow_table):
             bdm_v2['destination_type'] = 'volume'
 
         else:  # Log a warning that the bdm is not as expected
-            LOG.warn("Got an unexpected block device %s"
-                     "that cannot be converted to v2 format")
+            LOG.warn(_("Got an unexpected block device %s "
+                       "that cannot be converted to v2 format") % bdm_id)
 
         # NOTE (ndipanov): Mark only the image or the bootable volume
         #                  with boot index, as we don't support it yet.
         #                  Also, make sure that instances started with
         #                  the old syntax of specifying an image *and*
-        #                  a bootable volume still have consistend data.
+        #                  a bootable volume still have consistent data.
         bootable = ((strip_dev(device_name) ==
                     strip_dev(instance_root_device))
                     and bdm_v2['source_type'] != 'blank')

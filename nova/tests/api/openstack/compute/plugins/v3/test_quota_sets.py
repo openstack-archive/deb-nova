@@ -208,6 +208,14 @@ class QuotaSetsTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                           req, 'update_me', body)
 
+    def test_quotas_update_without_quota_set(self):
+        # when without the quota_set para
+        body = {}
+        req = fakes.HTTPRequestV3.blank('/os-quota-sets/update_me',
+                                      use_admin_context=True)
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
+                          req, 'update_me', body)
+
     def test_quotas_delete_as_unauthorized_user(self):
         req = fakes.HTTPRequestV3.blank('/os-quota-sets/1234')
         self.assertRaises(webob.exc.HTTPForbidden, self.controller.delete,
@@ -354,7 +362,7 @@ class QuotaXMLSerializerTest(test.TestCase):
         self.assertEqual('project_id', tree.get('id'))
         self.assertEqual(len(exemplar['quota_set']) - 1, len(tree))
         for child in tree:
-            self.assertTrue(child.tag in exemplar['quota_set'])
+            self.assertIn(child.tag, exemplar['quota_set'])
             self.assertEqual(int(child.text), exemplar['quota_set'][child.tag])
 
     def test_detail_serializer(self):
@@ -381,7 +389,7 @@ class QuotaXMLSerializerTest(test.TestCase):
         self.assertEqual('project_id', tree.get('id'))
         self.assertEqual(len(exemplar['quota_set']) - 1, len(tree))
         for child in tree:
-            self.assertTrue(child.tag in exemplar['quota_set'])
+            self.assertIn(child.tag, exemplar['quota_set'])
             for k in child.attrib.keys():
                 self.assertEqual(int(child.attrib[k]),
                                  exemplar['quota_set'][child.tag][k])

@@ -21,7 +21,7 @@ import tarfile
 
 from nova.image import glance
 from nova import test
-from nova.virt.xenapi import driver
+from nova.virt.xenapi.client import session as xenapi_session
 from nova.virt.xenapi.image import vdi_through_dev
 
 
@@ -44,7 +44,7 @@ class TestDelegatingToCommand(test.NoDBTestCase):
         result = store.upload_image(
             'ctx', 'session', 'instance', 'vdis', 'image_id')
 
-        self.assertEquals('result', result)
+        self.assertEqual('result', result)
 
 
 class TestUploadToGlanceAsRawTgz(test.NoDBTestCase):
@@ -73,7 +73,7 @@ class TestUploadToGlanceAsRawTgz(test.NoDBTestCase):
 
     def test__perform_upload(self):
         producer = self.mox.CreateMock(vdi_through_dev.TarGzProducer)
-        consumer = self.mox.CreateMock(vdi_through_dev.UpdateGlanceImage)
+        consumer = self.mox.CreateMock(glance.UpdateGlanceImage)
         pool = self.mox.CreateMock(eventlet.GreenPool)
         store = vdi_through_dev.UploadToGlanceAsRawTgz(
             'context', 'session', 'instance', ['vdi0', 'vdi1'], 'id')
@@ -81,7 +81,7 @@ class TestUploadToGlanceAsRawTgz(test.NoDBTestCase):
         self.mox.StubOutWithMock(store, '_get_virtual_size')
         self.mox.StubOutWithMock(producer, 'get_metadata')
         self.mox.StubOutWithMock(vdi_through_dev, 'TarGzProducer')
-        self.mox.StubOutWithMock(vdi_through_dev, 'UpdateGlanceImage')
+        self.mox.StubOutWithMock(glance, 'UpdateGlanceImage')
         self.mox.StubOutWithMock(vdi_through_dev, 'eventlet')
 
         producer.get_metadata().AndReturn('metadata')
@@ -90,7 +90,7 @@ class TestUploadToGlanceAsRawTgz(test.NoDBTestCase):
         vdi_through_dev.TarGzProducer(
             'devpath', 'writefile', '324', 'disk.raw').AndReturn(
                 producer)
-        vdi_through_dev.UpdateGlanceImage('context', 'id', 'metadata',
+        glance.UpdateGlanceImage('context', 'id', 'metadata',
             'readfile').AndReturn(consumer)
         vdi_through_dev.eventlet.GreenPool().AndReturn(pool)
         pool.spawn(producer.start)
@@ -102,17 +102,17 @@ class TestUploadToGlanceAsRawTgz(test.NoDBTestCase):
         store._perform_upload('devpath')
 
     def test__get_vdi_ref(self):
-        session = self.mox.CreateMock(driver.XenAPISession)
+        session = self.mox.CreateMock(xenapi_session.XenAPISession)
         store = vdi_through_dev.UploadToGlanceAsRawTgz(
             'context', session, 'instance', ['vdi0', 'vdi1'], 'id')
         session.call_xenapi('VDI.get_by_uuid', 'vdi0').AndReturn('vdi_ref')
 
         self.mox.ReplayAll()
 
-        self.assertEquals('vdi_ref', store._get_vdi_ref())
+        self.assertEqual('vdi_ref', store._get_vdi_ref())
 
     def test__get_virtual_size(self):
-        session = self.mox.CreateMock(driver.XenAPISession)
+        session = self.mox.CreateMock(xenapi_session.XenAPISession)
         store = vdi_through_dev.UploadToGlanceAsRawTgz(
             'context', session, 'instance', ['vdi0', 'vdi1'], 'id')
         self.mox.StubOutWithMock(store, '_get_vdi_ref')
@@ -172,31 +172,13 @@ class TestTarGzProducer(test.NoDBTestCase):
 
         producer.start()
 
-        self.assertEquals(100, tinfo.size)
+        self.assertEqual(100, tinfo.size)
 
     def test_get_metadata(self):
         producer = vdi_through_dev.TarGzProducer('devpath', 'writefile',
             '100', 'fname')
 
-        self.assertEquals({
+        self.assertEqual({
             'disk_format': 'raw',
             'container_format': 'tgz'},
             producer.get_metadata())
-
-
-class TestUpdateGlanceImage(test.NoDBTestCase):
-    def test_start(self):
-        consumer = vdi_through_dev.UpdateGlanceImage(
-            'context', 'id', 'metadata', 'stream')
-        image_service = self.mox.CreateMock(glance.GlanceImageService)
-
-        self.mox.StubOutWithMock(vdi_through_dev, 'glance')
-
-        vdi_through_dev.glance.get_remote_image_service(
-            'context', 'id').AndReturn((image_service, 'image_id'))
-        image_service.update(
-            'context', 'image_id', 'metadata', 'stream', purge_props=False)
-
-        self.mox.ReplayAll()
-
-        consumer.start()

@@ -112,6 +112,7 @@ class ComputeNode(BASE, NovaBase):
     disk_available_least = Column(Integer)
     host_ip = Column(types.IPAddress())
     supported_instances = Column(Text)
+    metrics = Column(Text)
 
     # Note(yongli): json string PCI Stats
     # '{"vendor_id":"8086", "product_id":"1234", "count":3 }'
@@ -134,11 +135,12 @@ class ComputeNodeStat(BASE, NovaBase):
     value = Column(String(255))
     compute_node_id = Column(Integer, ForeignKey('compute_nodes.id'),
                              nullable=False)
-
-    primary_join = ('and_(ComputeNodeStat.compute_node_id == '
-                    'ComputeNode.id, ComputeNodeStat.deleted == 0)')
-    stats = relationship("ComputeNode", backref="stats",
-            primaryjoin=primary_join)
+    compute_node = relationship(ComputeNode, backref=backref('stats'),
+                                foreign_keys=compute_node_id,
+                                primaryjoin='and_('
+                                    'ComputeNodeStat.compute_node_id == '
+                                      'ComputeNode.id,'
+                                    'ComputeNodeStat.deleted == 0)')
 
     def __str__(self):
         return "{%d: %s = %s}" % (self.compute_node_id, self.key, self.value)
@@ -738,7 +740,7 @@ class Migration(BASE, NovaBase):
     # NOTE(tr3buchet): the ____compute variables are instance['host']
     source_compute = Column(String(255))
     dest_compute = Column(String(255))
-    # nodes are equivalent to a compute node's 'hypvervisor_hostname'
+    # nodes are equivalent to a compute node's 'hypervisor_hostname'
     source_node = Column(String(255))
     dest_node = Column(String(255))
     # NOTE(tr3buchet): dest_host, btw, is an ip address

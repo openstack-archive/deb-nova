@@ -195,13 +195,13 @@ class SimpleTenantUsageTest(test.TestCase):
     def test_verify_simple_index(self):
         usages = self._get_tenant_usages(detailed='0')
         for i in xrange(TENANTS):
-            self.assertEqual(usages[i].get('server_usages'), None)
+            self.assertIsNone(usages[i].get('server_usages'))
 
     def test_verify_simple_index_empty_param(self):
         # NOTE(lzyeval): 'detailed=&start=..&end=..'
         usages = self._get_tenant_usages()
         for i in xrange(TENANTS):
-            self.assertEqual(usages[i].get('server_usages'), None)
+            self.assertIsNone(usages[i].get('server_usages'))
 
     def _test_verify_show(self, start, stop):
         tenant_id = 0
@@ -229,7 +229,7 @@ class SimpleTenantUsageTest(test.TestCase):
             uptime = delta.days * 24 * 3600 + delta.seconds
             self.assertEqual(int(servers[j]['uptime']), uptime)
             self.assertEqual(int(servers[j]['hours']), HOURS)
-            self.assertTrue(servers[j]['instance_id'] in uuids)
+            self.assertIn(servers[j]['instance_id'], uuids)
 
     def test_verify_show_cant_view_other_tenant(self):
         req = webob.Request.blank(
@@ -281,7 +281,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
         not_seen = set(raw_usage.keys())
 
         for child in tree:
-            self.assertTrue(child.tag in not_seen)
+            self.assertIn(child.tag, not_seen)
             not_seen.remove(child.tag)
             self.assertEqual(str(raw_usage[child.tag]), child.text)
 
@@ -294,7 +294,7 @@ class SimpleTenantUsageSerializerTest(test.TestCase):
         not_seen = set(raw_usage.keys())
 
         for child in tree:
-            self.assertTrue(child.tag in not_seen)
+            self.assertIn(child.tag, not_seen)
             not_seen.remove(child.tag)
             if child.tag == 'server_usages':
                 for idx, gr_child in enumerate(child):
@@ -450,7 +450,7 @@ class SimpleTenantUsageControllerTest(test.TestCase):
                 if flavor_type == 1:
                     return flavors.get_default_flavor()
                 else:
-                    raise exception.InstanceTypeNotFound(flavor_type)
+                    raise exception.FlavorNotFound(flavor_id=flavor_type)
 
         self.compute_api = FakeComputeAPI()
         self.context = None
@@ -500,4 +500,4 @@ class SimpleTenantUsageControllerTest(test.TestCase):
                                      deleted=1, instance_type_id=2)
         flavor = self.controller._get_flavor(self.context, self.compute_api,
                                              inst_without_sys_meta, {})
-        self.assertEqual(flavor, None)
+        self.assertIsNone(flavor)

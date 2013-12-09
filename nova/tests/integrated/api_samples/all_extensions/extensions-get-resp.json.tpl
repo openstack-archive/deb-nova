@@ -241,14 +241,6 @@
             "updated": "%(timestamp)s"
         },
         {
-            "alias": "os-coverage",
-            "description": "%(text)s",
-            "links": [],
-            "name": "Coverage",
-            "namespace": "http://docs.openstack.org/compute/ext/coverage/api/v2",
-            "updated": "%(timestamp)s"
-        },
-        {
             "alias": "os-create-server-ext",
             "description": "%(text)s",
             "links": [],
@@ -614,6 +606,14 @@
             "links": [],
             "name": "Migrations",
             "namespace": "http://docs.openstack.org/compute/ext/migrations/api/v2.0",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "os-baremetal-ext-status",
+            "description": "%(text)s",
+            "links": [],
+            "name": "BareMetalExtStatus",
+            "namespace": "http://docs.openstack.org/compute/ext/baremetal_ext_status/api/v2",
             "updated": "%(timestamp)s"
         }
     ]

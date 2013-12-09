@@ -30,18 +30,21 @@ from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
+from nova import unit
 from nova import utils
 from nova.virt import images
 
 libvirt_opts = [
-    cfg.BoolOpt('libvirt_snapshot_compression',
+    cfg.BoolOpt('snapshot_compression',
                 default=False,
                 help='Compress snapshot images when possible. This '
-                     'currently applies exclusively to qcow2 images'),
+                     'currently applies exclusively to qcow2 images',
+                deprecated_group='DEFAULT',
+                deprecated_name='libvirt_snashot_compression'),
     ]
 
 CONF = cfg.CONF
-CONF.register_opts(libvirt_opts)
+CONF.register_opts(libvirt_opts, 'libvirt')
 CONF.import_opt('instances_path', 'nova.compute.manager')
 LOG = logging.getLogger(__name__)
 
@@ -237,7 +240,7 @@ def create_lvm_image(vg, lv, size, sparse=False):
                                 'lv': lv})
 
     if sparse:
-        preallocated_space = 64 * 1024 * 1024
+        preallocated_space = 64 * unit.Mi
         check_size(vg, lv, preallocated_space)
         if free_space < size:
             LOG.warning(_('Volume group %(vg)s will not be able'
@@ -339,7 +342,7 @@ def logical_volume_size(path):
 
     :param path: logical volume path
     """
-    # TODO(p-draigbrady) POssibly replace with the more general
+    # TODO(p-draigbrady) Possibly replace with the more general
     # use of blockdev --getsize64 in future
     out, _err = execute('lvs', '-o', 'lv_size', '--noheadings', '--units',
                         'b', '--nosuffix', path, run_as_root=True)
@@ -357,7 +360,7 @@ def clear_logical_volume(path):
     # for more or less security conscious setups.
 
     vol_size = logical_volume_size(path)
-    bs = 1024 * 1024
+    bs = unit.Mi
     direct_flags = ('oflag=direct',)
     sync_flags = ()
     remaining_bytes = vol_size
@@ -405,7 +408,7 @@ def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
     :param is_block_dev:
     :returns: driver_name or None
     """
-    if CONF.libvirt_type == "xen":
+    if CONF.libvirt.virt_type == "xen":
         if is_block_dev:
             return "phy"
         else:
@@ -415,7 +418,7 @@ def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
             else:
                 return "tap2"
 
-    elif CONF.libvirt_type in ('kvm', 'qemu'):
+    elif CONF.libvirt.virt_type in ('kvm', 'qemu'):
         return "qemu"
     else:
         # UML doesn't want a driver_name set
@@ -504,33 +507,11 @@ def chown(path, owner):
     execute('chown', owner, path, run_as_root=True)
 
 
-def create_snapshot(disk_path, snapshot_name):
-    """Create a snapshot in a disk image
+def extract_snapshot(disk_path, source_fmt, out_path, dest_fmt):
+    """Extract a snapshot from a disk image.
+    Note that nobody should write to the disk image during this operation.
 
     :param disk_path: Path to disk image
-    :param snapshot_name: Name of snapshot in disk image
-    """
-    qemu_img_cmd = ('qemu-img', 'snapshot', '-c', snapshot_name, disk_path)
-    # NOTE(vish): libvirt changes ownership of images
-    execute(*qemu_img_cmd, run_as_root=True)
-
-
-def delete_snapshot(disk_path, snapshot_name):
-    """Create a snapshot in a disk image
-
-    :param disk_path: Path to disk image
-    :param snapshot_name: Name of snapshot in disk image
-    """
-    qemu_img_cmd = ('qemu-img', 'snapshot', '-d', snapshot_name, disk_path)
-    # NOTE(vish): libvirt changes ownership of images
-    execute(*qemu_img_cmd, run_as_root=True)
-
-
-def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
-    """Extract a named snapshot from a disk image
-
-    :param disk_path: Path to disk image
-    :param snapshot_name: Name of snapshot in disk image
     :param out_path: Desired path of extracted snapshot
     """
     # NOTE(markmc): ISO is just raw to qemu-img
@@ -540,13 +521,8 @@ def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
     qemu_img_cmd = ('qemu-img', 'convert', '-f', source_fmt, '-O', dest_fmt)
 
     # Conditionally enable compression of snapshots.
-    if CONF.libvirt_snapshot_compression and dest_fmt == "qcow2":
+    if CONF.libvirt.snapshot_compression and dest_fmt == "qcow2":
         qemu_img_cmd += ('-c',)
-
-    # When snapshot name is omitted we do a basic convert, which
-    # is used by live snapshots.
-    if snapshot_name is not None:
-        qemu_img_cmd += ('-s', snapshot_name)
 
     qemu_img_cmd += (disk_path, out_path)
     execute(*qemu_img_cmd)
@@ -590,7 +566,7 @@ def find_disk(virt_dom):
     """
     xml_desc = virt_dom.XMLDesc(0)
     domain = etree.fromstring(xml_desc)
-    if CONF.libvirt_type == 'lxc':
+    if CONF.libvirt.virt_type == 'lxc':
         source = domain.find('devices/filesystem/source')
         disk_path = source.get('dir')
         disk_path = disk_path[0:disk_path.rfind('rootfs')]
@@ -598,7 +574,7 @@ def find_disk(virt_dom):
     else:
         source = domain.find('devices/disk/source')
         disk_path = source.get('file') or source.get('dev')
-        if not disk_path and CONF.libvirt_images_type == 'rbd':
+        if not disk_path and CONF.libvirt.images_type == 'rbd':
             disk_path = source.get('name')
             if disk_path:
                 disk_path = 'rbd:' + disk_path
@@ -639,9 +615,10 @@ def get_fs_info(path):
             'used': used}
 
 
-def fetch_image(context, target, image_id, user_id, project_id):
+def fetch_image(context, target, image_id, user_id, project_id, max_size=0):
     """Grab image."""
-    images.fetch_to_raw(context, image_id, target, user_id, project_id)
+    images.fetch_to_raw(context, image_id, target, user_id, project_id,
+                        max_size=max_size)
 
 
 def get_instance_path(instance, forceold=False, relative=False):

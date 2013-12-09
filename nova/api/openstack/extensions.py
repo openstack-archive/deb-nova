@@ -20,6 +20,7 @@ import abc
 import functools
 import os
 
+import six
 import webob.dec
 import webob.exc
 
@@ -257,7 +258,7 @@ class ExtensionManager(object):
 
         LOG.debug(_("Loading extension %s"), ext_factory)
 
-        if isinstance(ext_factory, basestring):
+        if isinstance(ext_factory, six.string_types):
             # Load the factory
             factory = importutils.import_class(ext_factory)
         else:
@@ -403,6 +404,7 @@ def soft_extension_authorizer(api_name, extension_name):
     return authorize
 
 
+@six.add_metaclass(abc.ABCMeta)
 class V3APIExtensionBase(object):
     """Abstract base class for all V3 API extensions.
 
@@ -411,7 +413,6 @@ class V3APIExtensionBase(object):
     even if they just return an empty list. The extensions must also
     define the abstract properties.
     """
-    __metaclass__ = abc.ABCMeta
 
     def __init__(self, extension_info):
         self.extension_info = extension_info
@@ -481,6 +482,11 @@ def expected_errors(errors):
                     # extension method does not need to wrap authorize
                     # calls. ResourceExceptionHandler silently
                     # converts NotAuthorized to HTTPForbidden
+                    raise
+                elif isinstance(exc, exception.ValidationError):
+                    # Note(oomichi): Handle a validation error, which
+                    # happens due to invalid API parameters, as an
+                    # expected error.
                     raise
 
                 LOG.exception(_("Unexpected exception in API method"))

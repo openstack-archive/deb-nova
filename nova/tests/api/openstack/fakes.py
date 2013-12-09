@@ -20,6 +20,7 @@ import uuid
 
 import glanceclient.v1.images
 import routes
+import six
 import webob
 import webob.dec
 import webob.request
@@ -171,8 +172,12 @@ def stub_out_instance_quota(stubs, allowed, quota, resource='instances'):
             usages[resource]['in_use'] = (quotas[resource] * 0.9 -
                                           allowed)
             usages[resource]['reserved'] = quotas[resource] * 0.1
+            headroom = dict(
+              (res, value - (usages[res]['in_use'] + usages[res]['reserved']))
+                           for res, value in quotas.iteritems()
+            )
             raise exc.OverQuota(overs=[resource], quotas=quotas,
-                                usages=usages)
+                                usages=usages, headroom=headroom)
     stubs.Set(QUOTAS, 'reserve', fake_reserve)
 
 
@@ -414,10 +419,18 @@ def create_info_cache(nw_cache):
                                       {'cidr': 'b33f::/64',
                                        'ips': [_ip(ip) for ip in pub1]}]}}]
 
-    if not isinstance(nw_cache, basestring):
+    if not isinstance(nw_cache, six.string_types):
         nw_cache = jsonutils.dumps(nw_cache)
 
-    return {"info_cache": {"network_info": nw_cache}}
+    return {
+        "info_cache": {
+            "network_info": nw_cache,
+            "deleted": False,
+            "created_at": None,
+            "deleted_at": None,
+            "updated_at": None,
+            }
+        }
 
 
 def get_fake_uuid(token=0):
@@ -427,7 +440,7 @@ def get_fake_uuid(token=0):
 
 
 def fake_instance_get(**kwargs):
-    def _return_server(context, uuid, columns_to_join=None):
+    def _return_server(context, uuid, columns_to_join=None, use_slave=False):
         return stub_instance(1, **kwargs)
     return _return_server
 

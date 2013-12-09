@@ -20,11 +20,14 @@ import os
 import fixtures
 from oslo.config import cfg
 
+import inspect
+
 from nova import exception
 from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests import fake_processutils
 from nova.tests.virt.libvirt import fake_libvirt_utils
+from nova import unit
 from nova.virt.libvirt import imagebackend
 
 CONF = cfg.CONF
@@ -190,7 +193,7 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH, image_id=None)
+        fn(target=self.TEMPLATE_PATH, max_size=None, image_id=None)
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH, self.PATH)
         self.mox.ReplayAll()
 
@@ -211,7 +214,7 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image_extend(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH, image_id=None)
+        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH, image_id=None)
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH, self.PATH)
         imagebackend.disk.extend(self.PATH, self.SIZE, use_cow=False)
         self.mox.ReplayAll()
@@ -241,13 +244,13 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
 
 
 class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
-    SIZE = 1024 * 1024 * 1024
+    SIZE = unit.Gi
 
     def setUp(self):
         self.image_class = imagebackend.Qcow2
         super(Qcow2TestCase, self).setUp()
         self.QCOW2_BASE = (self.TEMPLATE_PATH +
-                           '_%d' % (self.SIZE / (1024 * 1024 * 1024)))
+                           '_%d' % (self.SIZE / unit.Gi))
 
     def prepare_mocks(self):
         fn = self.mox.CreateMockAnything()
@@ -261,7 +264,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
+        fn(max_size=None, target=self.TEMPLATE_PATH)
         imagebackend.libvirt_utils.create_cow_image(self.TEMPLATE_PATH,
                                                     self.PATH)
         self.mox.ReplayAll()
@@ -273,15 +276,12 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image_with_size(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
+        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
-        self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
         if self.OLD_STYLE_INSTANCE_PATH:
             os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
         os.path.exists(self.PATH).AndReturn(False)
-        imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
-                                       ).AndReturn(self.SIZE)
         os.path.exists(self.PATH).AndReturn(False)
         imagebackend.libvirt_utils.create_cow_image(self.TEMPLATE_PATH,
                                                     self.PATH)
@@ -295,27 +295,24 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image_too_small(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
         self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
         if self.OLD_STYLE_INSTANCE_PATH:
             os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
-        os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
-        os.path.exists(self.PATH).AndReturn(False)
+        os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
         imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
                                        ).AndReturn(self.SIZE)
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
-        self.assertRaises(exception.InstanceTypeDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskTooSmall,
                           image.create_image, fn, self.TEMPLATE_PATH, 1)
         self.mox.VerifyAll()
 
     def test_generate_resized_backing_files(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
+        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
-        self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
         self.mox.StubOutWithMock(imagebackend.libvirt_utils,
                                  'get_disk_backing_file')
         if self.OLD_STYLE_INSTANCE_PATH:
@@ -330,8 +327,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
                                               self.QCOW2_BASE)
         imagebackend.disk.extend(self.QCOW2_BASE, self.SIZE, use_cow=True)
 
-        imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
-                                       ).AndReturn(self.SIZE)
         os.path.exists(self.PATH).AndReturn(True)
         self.mox.ReplayAll()
 
@@ -342,9 +337,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_qcow2_exists_and_has_no_backing_file(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
+        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
-        self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
         self.mox.StubOutWithMock(imagebackend.libvirt_utils,
                                  'get_disk_backing_file')
         if self.OLD_STYLE_INSTANCE_PATH:
@@ -354,8 +348,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
         imagebackend.libvirt_utils.get_disk_backing_file(self.PATH)\
             .AndReturn(None)
-        imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
-                                       ).AndReturn(self.SIZE)
         os.path.exists(self.PATH).AndReturn(True)
         self.mox.ReplayAll()
 
@@ -373,7 +365,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
     def setUp(self):
         self.image_class = imagebackend.Lvm
         super(LvmTestCase, self).setUp()
-        self.flags(libvirt_images_volume_group=self.VG)
+        self.flags(images_volume_group=self.VG, group='libvirt')
         self.LV = '%s_%s' % (self.INSTANCE['name'], self.NAME)
         self.OLD_STYLE_INSTANCE_PATH = None
         self.PATH = os.path.join('/dev', self.VG, self.LV)
@@ -392,7 +384,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def _create_image(self, sparse):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
+        fn(max_size=None, target=self.TEMPLATE_PATH)
         self.libvirt_utils.create_lvm_image(self.VG,
                                             self.LV,
                                             self.TEMPLATE_SIZE,
@@ -424,7 +416,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def _create_image_resize(self, sparse):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
+        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
         self.libvirt_utils.create_lvm_image(self.VG, self.LV,
                                             self.SIZE, sparse=sparse)
         self.disk.get_disk_size(self.TEMPLATE_PATH
@@ -444,26 +436,26 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self._create_image(False)
 
     def test_create_image_sparsed(self):
-        self.flags(libvirt_sparse_logical_volumes=True)
+        self.flags(sparse_logical_volumes=True, group='libvirt')
         self._create_image(True)
 
     def test_create_image_generated(self):
         self._create_image_generated(False)
 
     def test_create_image_generated_sparsed(self):
-        self.flags(libvirt_sparse_logical_volumes=True)
+        self.flags(sparse_logical_volumes=True, group='libvirt')
         self._create_image_generated(True)
 
     def test_create_image_resize(self):
         self._create_image_resize(False)
 
     def test_create_image_resize_sparsed(self):
-        self.flags(libvirt_sparse_logical_volumes=True)
+        self.flags(sparse_logical_volumes=True, group='libvirt')
         self._create_image_resize(True)
 
     def test_create_image_negative(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH)
+        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
         self.libvirt_utils.create_lvm_image(self.VG,
                                             self.LV,
                                             self.SIZE,
@@ -511,6 +503,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
             return
 
         self.stubs.Set(os.path, 'exists', lambda _: True)
+        self.stubs.Set(image, 'check_image_exists', lambda: True)
 
         image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
 
@@ -526,16 +519,19 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
     def setUp(self):
         self.image_class = imagebackend.Rbd
         super(RbdTestCase, self).setUp()
-        self.flags(libvirt_images_rbd_pool=self.POOL)
-        self.flags(rbd_user=self.USER)
-        self.flags(libvirt_images_rbd_ceph_conf=self.CONF)
+        self.flags(images_rbd_pool=self.POOL,
+                   rbd_user=self.USER,
+                   images_rbd_ceph_conf=self.CONF,
+                   group='libvirt')
         self.libvirt_utils = imagebackend.libvirt_utils
         self.utils = imagebackend.utils
         self.rbd = self.mox.CreateMockAnything()
+        self.rados = self.mox.CreateMockAnything()
 
     def prepare_mocks(self):
         fn = self.mox.CreateMockAnything()
         self.mox.StubOutWithMock(imagebackend, 'rbd')
+        self.mox.StubOutWithMock(imagebackend, 'rados')
         return fn
 
     def test_cache(self):
@@ -607,10 +603,13 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image(self):
         fn = self.prepare_mocks()
-        fn(rbd=self.rbd, target=self.TEMPLATE_PATH)
+        fn(max_size=None, rbd=self.rbd, target=self.TEMPLATE_PATH)
 
         self.rbd.RBD_FEATURE_LAYERING = 1
 
+        self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
+        imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
+                                       ).AndReturn(self.SIZE)
         rbd_name = "%s/%s" % (self.INSTANCE['name'], self.NAME)
         cmd = ('--pool', self.POOL, self.TEMPLATE_PATH,
                rbd_name, '--new-format', '--id', self.USER,
@@ -629,16 +628,25 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
         fake_processutils.fake_execute_clear_log()
         fake_processutils.stub_out_processutils_execute(self.stubs)
         self.mox.StubOutWithMock(imagebackend, 'rbd')
+        self.mox.StubOutWithMock(imagebackend, 'rados')
         image = self.image_class(self.INSTANCE, self.NAME)
 
         def fake_fetch(target, *args, **kwargs):
             return
 
+        def fake_resize(rbd_name, size):
+            return
+
         self.stubs.Set(os.path, 'exists', lambda _: True)
+        self.stubs.Set(image, 'check_image_exists', lambda: True)
 
         image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
 
         self.assertEqual(fake_processutils.fake_execute_get_log(), [])
+
+    def test_parent_compatible(self):
+        self.assertEqual(inspect.getargspec(imagebackend.Image.libvirt_info),
+                         inspect.getargspec(self.image_class.libvirt_info))
 
 
 class BackendTestCase(test.NoDBTestCase):
@@ -659,7 +667,7 @@ class BackendTestCase(test.NoDBTestCase):
             failure = ('Expected %s,' +
                        ' but got %s.') % (class_object.__name__,
                                           instance.__class__.__name__)
-            self.assertTrue(isinstance(instance, class_object), failure)
+            self.assertIsInstance(instance, class_object, msg=failure)
 
         assertIsInstance(image1, image_not_cow)
         assertIsInstance(image2, image_cow)
@@ -671,14 +679,14 @@ class BackendTestCase(test.NoDBTestCase):
         self._test_image('qcow2', imagebackend.Qcow2, imagebackend.Qcow2)
 
     def test_image_lvm(self):
-        self.flags(libvirt_images_volume_group='FakeVG')
+        self.flags(images_volume_group='FakeVG', group='libvirt')
         self._test_image('lvm', imagebackend.Lvm, imagebackend.Lvm)
 
     def test_image_rbd(self):
         conf = "FakeConf"
         pool = "FakePool"
-        self.flags(libvirt_images_rbd_pool=pool)
-        self.flags(libvirt_images_rbd_ceph_conf=conf)
+        self.flags(images_rbd_pool=pool, group='libvirt')
+        self.flags(images_rbd_ceph_conf=conf, group='libvirt')
         self._test_image('rbd', imagebackend.Rbd, imagebackend.Rbd)
 
     def test_image_default(self):

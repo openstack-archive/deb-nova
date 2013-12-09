@@ -42,8 +42,9 @@ FAKE_FLAVORS = {
         "name": 'flavor 1',
         "memory_mb": '256',
         "root_gb": '10',
-        "swap": '512',
-        "ephemeral_gb": '1',
+        "swap": 0,
+        "ephemeral_gb": 0,
+        "vcpus": 0,
         "disabled": False,
     },
     'flavor 2': {
@@ -51,8 +52,9 @@ FAKE_FLAVORS = {
         "name": 'flavor 2',
         "memory_mb": '512',
         "root_gb": '20',
-        "swap": '1024',
-        "ephemeral_gb": '10',
+        "swap": 1024,
+        "ephemeral_gb": 10,
+        "vcpus": 0,
         "disabled": True,
     },
 }
@@ -65,6 +67,9 @@ def fake_flavor_get_by_flavor_id(flavorid, ctxt=None):
 def fake_get_all_flavors_sorted_list(context=None, inactive=False,
                                      filters=None, sort_key='flavorid',
                                      sort_dir='asc', limit=None, marker=None):
+    if marker in ['99999']:
+        raise exception.MarkerNotFound(marker)
+
     def reject_min(db_attr, filter_attr):
         return (filter_attr in filters and
                 int(flavor[db_attr]) < int(filters[filter_attr]))
@@ -133,9 +138,9 @@ class FlavorsTest(test.TestCase):
                 "name": "flavor 1",
                 "ram": "256",
                 "disk": "10",
-                "vcpus": "",
-                "swap": '512',
-                "ephemeral": "1",
+                "vcpus": 0,
+                "swap": 0,
+                "ephemeral": 0,
                 "disabled": False,
                 "links": [
                     {
@@ -162,9 +167,9 @@ class FlavorsTest(test.TestCase):
                 "name": "flavor 1",
                 "ram": "256",
                 "disk": "10",
-                "vcpus": "",
-                "swap": '512',
-                "ephemeral": "1",
+                "vcpus": 0,
+                "swap": 0,
+                "ephemeral": 0,
                 "disabled": False,
                 "links": [
                     {
@@ -244,6 +249,11 @@ class FlavorsTest(test.TestCase):
             ]
         }
         self.assertThat(flavor, matchers.DictMatches(expected))
+
+    def test_get_flavor_list_with_invalid_marker(self):
+        req = fakes.HTTPRequestV3.blank('/flavors?limit=1&marker=99999')
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.index, req)
 
     def test_get_flavor_detail_with_limit(self):
         req = fakes.HTTPRequestV3.blank('/flavors/detail?limit=1')
@@ -331,9 +341,9 @@ class FlavorsTest(test.TestCase):
                     "name": "flavor 1",
                     "ram": "256",
                     "disk": "10",
-                    "vcpus": "",
-                    "swap": '512',
-                    "ephemeral": "1",
+                    "vcpus": 0,
+                    "swap": 0,
+                    "ephemeral": 0,
                     "disabled": False,
                     "links": [
                         {
@@ -351,9 +361,9 @@ class FlavorsTest(test.TestCase):
                     "name": "flavor 2",
                     "ram": "512",
                     "disk": "20",
-                    "vcpus": "",
-                    "swap": '1024',
-                    "ephemeral": "10",
+                    "vcpus": 0,
+                    "swap": 1024,
+                    "ephemeral": 10,
                     "disabled": True,
                     "links": [
                         {
@@ -453,9 +463,9 @@ class FlavorsTest(test.TestCase):
                     "name": "flavor 2",
                     "ram": "512",
                     "disk": "20",
-                    "vcpus": "",
-                    "swap": '1024',
-                    "ephemeral": "10",
+                    "vcpus": 0,
+                    "swap": 1024,
+                    "ephemeral": 10,
                     "disabled": True,
                     "links": [
                         {
@@ -539,7 +549,7 @@ class FlavorsXMLSerializationTest(test.TestCase):
                 "name": "asdf",
                 "ram": "256",
                 "disk": "10",
-                "vcpus": "",
+                "vcpus": 0,
                 "swap": "512",
                 "ephemeral": "512",
                 "disabled": False,
@@ -717,7 +727,7 @@ class DisabledFlavorsWithRealDBTest(test.TestCase):
         db_flavorids = set(i['flavorid'] for i in self.inst_types)
         disabled_flavorid = str(self.disabled_type['flavorid'])
 
-        self.assert_(disabled_flavorid in db_flavorids)
+        self.assertIn(disabled_flavorid, db_flavorids)
         self.assertEqual(db_flavorids - set([disabled_flavorid]),
                          api_flavorids)
 
@@ -730,7 +740,7 @@ class DisabledFlavorsWithRealDBTest(test.TestCase):
         db_flavorids = set(i['flavorid'] for i in self.inst_types)
         disabled_flavorid = str(self.disabled_type['flavorid'])
 
-        self.assert_(disabled_flavorid in db_flavorids)
+        self.assertIn(disabled_flavorid, db_flavorids)
         self.assertEqual(db_flavorids, api_flavorids)
 
     def test_show_should_include_disabled_flavor_for_user(self):

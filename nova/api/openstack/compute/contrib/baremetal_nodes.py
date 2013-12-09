@@ -15,6 +15,7 @@
 
 """The bare-metal admin extension."""
 
+import netaddr
 import webob
 
 from nova.api.openstack import extensions
@@ -31,14 +32,9 @@ node_fields = ['id', 'cpus', 'local_gb', 'memory_mb', 'pm_address',
                'service_host', 'terminal_port', 'instance_uuid',
                ]
 
+node_ext_fields = ['uuid', 'task_state', 'updated_at', 'pxe_config_path']
+
 interface_fields = ['id', 'address', 'datapath_id', 'port_no']
-
-
-def _node_dict(node_ref):
-    d = {}
-    for f in node_fields:
-        d[f] = node_ref.get(f)
-    return d
 
 
 def _interface_dict(interface_ref):
@@ -51,11 +47,27 @@ def _interface_dict(interface_ref):
 def _make_node_elem(elem):
     for f in node_fields:
         elem.set(f)
+    for f in node_ext_fields:
+        elem.set(f)
 
 
 def _make_interface_elem(elem):
     for f in interface_fields:
         elem.set(f)
+
+
+def is_valid_mac(address):
+    """Verify the format of a MAC addres."""
+
+    class mac_dialect(netaddr.mac_eui48):
+        word_fmt = '%.02x'
+        word_sep = ':'
+
+    try:
+        na = netaddr.EUI(address, dialect=mac_dialect)
+    except Exception:
+        return False
+    return str(na) == address.lower()
 
 
 class NodeTemplate(xmlutil.TemplateBuilder):
@@ -93,6 +105,19 @@ class InterfaceTemplate(xmlutil.TemplateBuilder):
 class BareMetalNodeController(wsgi.Controller):
     """The Bare-Metal Node API controller for the OpenStack API."""
 
+    def __init__(self, ext_mgr=None, *args, **kwargs):
+        super(BareMetalNodeController, self).__init__(*args, **kwargs)
+        self.ext_mgr = ext_mgr
+
+    def _node_dict(self, node_ref):
+        d = {}
+        for f in node_fields:
+            d[f] = node_ref.get(f)
+        if self.ext_mgr.is_loaded('os-baremetal-ext-status'):
+            for f in node_ext_fields:
+                d[f] = node_ref.get(f)
+        return d
+
     @wsgi.serializers(xml=NodesTemplate)
     def index(self, req):
         context = req.environ['nova.context']
@@ -105,7 +130,7 @@ class BareMetalNodeController(wsgi.Controller):
                         context, node_from_db['id'])
             except exception.NodeNotFound:
                 ifs = []
-            node = _node_dict(node_from_db)
+            node = self._node_dict(node_from_db)
             node['interfaces'] = [_interface_dict(i) for i in ifs]
             nodes.append(node)
         return {'nodes': nodes}
@@ -122,7 +147,7 @@ class BareMetalNodeController(wsgi.Controller):
             ifs = db.bm_interface_get_all_by_bm_node_id(context, id)
         except exception.NodeNotFound:
             ifs = []
-        node = _node_dict(node)
+        node = self._node_dict(node)
         node['interfaces'] = [_interface_dict(i) for i in ifs]
         return {'node': node}
 
@@ -132,8 +157,13 @@ class BareMetalNodeController(wsgi.Controller):
         authorize(context)
         values = body['node'].copy()
         prov_mac_address = values.pop('prov_mac_address', None)
+        if (prov_mac_address is not None
+                and not is_valid_mac(prov_mac_address)):
+            raise webob.exc.HTTPBadRequest(
+                    explanation=_("Must specify address "
+                                  "in the form of xx:xx:xx:xx:xx:xx"))
         node = db.bm_node_create(context, values)
-        node = _node_dict(node)
+        node = self._node_dict(node)
         if prov_mac_address:
             if_id = db.bm_interface_create(context,
                                            bm_node_id=node['id'],
@@ -171,6 +201,10 @@ class BareMetalNodeController(wsgi.Controller):
         address = body['address']
         datapath_id = body.get('datapath_id')
         port_no = body.get('port_no')
+        if not is_valid_mac(address):
+            raise webob.exc.HTTPBadRequest(
+                    explanation=_("Must specify address "
+                                  "in the form of xx:xx:xx:xx:xx:xx"))
         if_id = db.bm_interface_create(context,
                                        bm_node_id=id,
                                        address=address,
@@ -213,7 +247,7 @@ class Baremetal_nodes(extensions.ExtensionDescriptor):
     def get_resources(self):
         resources = []
         res = extensions.ResourceExtension('os-baremetal-nodes',
-                BareMetalNodeController(),
+                BareMetalNodeController(self.ext_mgr),
                 member_actions={"action": "POST", })
         resources.append(res)
         return resources

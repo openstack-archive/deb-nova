@@ -17,8 +17,7 @@ from nova.tests.integrated.v3 import api_sample_base
 
 
 class FlavorAccessSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
-    extension_name = 'os-flavor-access'
-    extra_extensions_to_load = ['flavor-manage']
+    extension_name = 'flavor-access'
 
     def _add_tenant(self):
         subs = {
@@ -54,7 +53,7 @@ class FlavorAccessSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
         self._create_flavor()
         self._add_tenant()
         flavor_id = 10
-        response = self._do_get('flavors/%s/os-flavor-access' % flavor_id)
+        response = self._do_get('flavors/%s/flavor-access' % flavor_id)
         subs = {
             'flavor_id': flavor_id,
             'tenant_id': 'fake_tenant',
@@ -83,8 +82,12 @@ class FlavorAccessSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
         response = self._do_post('flavors/10/action',
                                  "flavor-access-remove-tenant-req",
                                  subs)
+        exp_subs = {
+            "tenant_id": self.api.project_id,
+            "flavor_id": "10"
+        }
         self._verify_response('flavor-access-remove-tenant-resp',
-                              {}, response, 200)
+                              exp_subs, response, 200)
 
 
 class FlavorAccessSampleXmlTests(FlavorAccessSampleJsonTests):

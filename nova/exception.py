@@ -248,6 +248,10 @@ class InvalidAttribute(Invalid):
     msg_fmt = _("Attribute not supported: %(attr)s")
 
 
+class ValidationError(Invalid):
+    msg_fmt = "%(detail)s"
+
+
 class VolumeUnattached(Invalid):
     ec2_code = 'IncorrectState'
     msg_fmt = _("Volume %(volume_id)s is not attached to anything")
@@ -275,6 +279,10 @@ class InvalidInput(Invalid):
 class InvalidVolume(Invalid):
     ec2_code = 'UnsupportedOperation'
     msg_fmt = _("Invalid volume") + ": %(reason)s"
+
+
+class InvalidVolumeAccessMode(Invalid):
+    msg_fmt = _("Invalid volume access mode") + ": %(access_mode)s"
 
 
 class InvalidMetadata(Invalid):
@@ -388,8 +396,16 @@ class ComputeResourcesUnavailable(ServiceUnavailable):
     msg_fmt = _("Insufficient compute resources.")
 
 
+class HypervisorUnavailable(NovaException):
+    msg_fmt = _("Connection to the hypervisor is broken on host: %(host)s")
+
+
 class ComputeServiceUnavailable(ServiceUnavailable):
     msg_fmt = _("Compute service of %(host)s is unavailable at this time.")
+
+
+class ComputeServiceInUse(NovaException):
+    msg_fmt = _("Compute service of %(host)s is still in use.")
 
 
 class UnableToMigrateToSelf(Invalid):
@@ -575,6 +591,10 @@ class NoNetworksFound(NotFound):
     msg_fmt = _("No networks defined.")
 
 
+class NoMoreNetworks(NovaException):
+    msg_fmt = _("No more available networks.")
+
+
 class NetworkNotFoundForProject(NotFound):
     msg_fmt = _("Either Network uuid %(network_uuid)s is not present or "
                 "is not assigned to the project %(project_id)s.")
@@ -659,7 +679,7 @@ class FloatingIpExists(NovaException):
 
 
 class FloatingIpNotFound(NotFound):
-    ec2_code = "UnsupportedOpperation"
+    ec2_code = "UnsupportedOperation"
     msg_fmt = _("Floating ip not found for id %(id)s.")
 
 
@@ -690,7 +710,7 @@ class NoMoreFloatingIps(FloatingIpNotFound):
 
 
 class FloatingIpAssociated(NovaException):
-    ec2_code = "UnsupportedOpperation"
+    ec2_code = "UnsupportedOperation"
     msg_fmt = _("Floating ip %(address)s is associated.")
 
 
@@ -703,12 +723,12 @@ class NoFloatingIpsDefined(NotFound):
 
 
 class NoFloatingIpInterface(NotFound):
-    ec2_code = "UnsupportedOpperation"
+    ec2_code = "UnsupportedOperation"
     msg_fmt = _("Interface %(interface)s not found.")
 
 
 class CannotDisassociateAutoAssignedFloatingIP(NovaException):
-    ec2_code = "UnsupportedOpperation"
+    ec2_code = "UnsupportedOperation"
     msg_fmt = _("Cannot disassociate auto assigned floating ip")
 
 
@@ -882,17 +902,12 @@ class ConsoleTypeUnavailable(Invalid):
     msg_fmt = _("Unavailable console type %(console_type)s.")
 
 
-class InstanceTypeNotFound(NotFound):
-    msg_fmt = _("Instance type %(instance_type_id)s could not be found.")
-
-
-class InstanceTypeNotFoundByName(InstanceTypeNotFound):
-    msg_fmt = _("Instance type with name %(instance_type_name)s "
-                "could not be found.")
-
-
 class FlavorNotFound(NotFound):
     msg_fmt = _("Flavor %(flavor_id)s could not be found.")
+
+
+class FlavorNotFoundByName(FlavorNotFound):
+    msg_fmt = _("Flavor with name %(flavor_name)s could not be found.")
 
 
 class FlavorAccessNotFound(NotFound):
@@ -940,8 +955,8 @@ class SchedulerHostFilterNotFound(NotFound):
     msg_fmt = _("Scheduler Host Filter %(filter_name)s could not be found.")
 
 
-class InstanceTypeExtraSpecsNotFound(NotFound):
-    msg_fmt = _("Instance Type %(instance_type_id)s has no extra specs with "
+class FlavorExtraSpecsNotFound(NotFound):
+    msg_fmt = _("Flavor %(flavor_id)s has no extra specs with "
                 "key %(extra_specs_key)s.")
 
 
@@ -987,12 +1002,12 @@ class InstanceExists(NovaException):
     msg_fmt = _("Instance %(name)s already exists.")
 
 
-class InstanceTypeExists(NovaException):
-    msg_fmt = _("Instance Type with name %(name)s already exists.")
+class FlavorExists(NovaException):
+    msg_fmt = _("Flavor with name %(name)s already exists.")
 
 
-class InstanceTypeIdExists(NovaException):
-    msg_fmt = _("Instance Type with ID %(flavor_id)s already exists.")
+class FlavorIdExists(NovaException):
+    msg_fmt = _("Flavor with ID %(flavor_id)s already exists.")
 
 
 class FlavorAccessExists(NovaException):
@@ -1042,12 +1057,12 @@ class CannotResizeDisk(NovaException):
     msg_fmt = _("Server disk was unable to be resized because: %(reason)s")
 
 
-class InstanceTypeMemoryTooSmall(NovaException):
-    msg_fmt = _("Instance type's memory is too small for requested image.")
+class FlavorMemoryTooSmall(NovaException):
+    msg_fmt = _("Flavor's memory is too small for requested image.")
 
 
-class InstanceTypeDiskTooSmall(NovaException):
-    msg_fmt = _("Instance type's disk is too small for requested image.")
+class FlavorDiskTooSmall(NovaException):
+    msg_fmt = _("Flavor's disk is too small for requested image.")
 
 
 class InsufficientFreeMemory(NovaException):
@@ -1134,8 +1149,8 @@ class AggregateHostExists(NovaException):
     msg_fmt = _("Aggregate %(aggregate_id)s already has host %(host)s.")
 
 
-class InstanceTypeCreateFailed(NovaException):
-    msg_fmt = _("Unable to create instance type")
+class FlavorCreateFailed(NovaException):
+    msg_fmt = _("Unable to create flavor")
 
 
 class InstancePasswordSetFailed(NovaException):
@@ -1235,6 +1250,10 @@ class InstanceUserDataMalformed(NovaException):
 class UnexpectedTaskStateError(NovaException):
     msg_fmt = _("unexpected task state: expecting %(expected)s but "
                 "the actual state is %(actual)s")
+
+
+class UnexpectedDeletingTaskStateError(UnexpectedTaskStateError):
+    pass
 
 
 class InstanceActionNotFound(NovaException):
@@ -1382,6 +1401,10 @@ class ImageDownloadModuleNotImplementedError(ImageDownloadModuleError):
 
 class ImageDownloadModuleConfigurationError(ImageDownloadModuleError):
     msg_fmt = _("The module %(module)s is misconfigured: %(reason)s.")
+
+
+class ResourceMonitorError(NovaException):
+    msg_fmt = _("Error when creating resource monitor: %(monitor)s")
 
 
 class PciDeviceWrongAddressFormat(NovaException):

@@ -7,14 +7,12 @@
   <attribute name="updated">    <text/> </attribute>
   <attribute name="created">    <text/> </attribute>
   <attribute name="host_id">     <text/> </attribute>
-  <attribute name="access_ip_v4"> <text/> </attribute>
-  <attribute name="access_ip_v6"> <text/> </attribute>
   <attribute name="status">     <text/> </attribute>
   <optional>
     <attribute name="progress"> <text/> </attribute>
   </optional>
   <optional>
-    <attribute name="admin_pass"><text/> </attribute>
+    <attribute name="admin_password"><text/> </attribute>
   </optional>
   <element name="image">
     <attribute name="id"> <text/> </attribute>

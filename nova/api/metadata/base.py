@@ -32,6 +32,9 @@ from nova.compute import flavors
 from nova import conductor
 from nova import context
 from nova import network
+from nova.objects import base as obj_base
+from nova.objects import instance as instance_obj
+from nova.objects import security_group as secgroup_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
@@ -109,6 +112,14 @@ class InstanceMetadata():
         if not content:
             content = []
 
+        ctxt = context.get_admin_context()
+
+        # NOTE(danms): This should be removed after bp:compute-manager-objects
+        if not isinstance(instance, instance_obj.Instance):
+            instance = instance_obj.Instance._from_db_object(
+                ctxt, instance_obj.Instance(), instance,
+                expected_attrs=['metadata', 'system_metadata'])
+
         self.instance = instance
         self.extra_md = extra_md
 
@@ -117,15 +128,11 @@ class InstanceMetadata():
         else:
             capi = conductor.API()
 
-        ctxt = context.get_admin_context()
-
         self.availability_zone = ec2utils.get_availability_zone_by_host(
                 instance['host'], capi)
 
-        self.ip_info = ec2utils.get_ip_info_for_instance(ctxt, instance)
-
-        self.security_groups = capi.security_group_get_by_instance(ctxt,
-                                                              instance)
+        self.security_groups = secgroup_obj.SecurityGroupList.get_by_instance(
+            ctxt, instance)
 
         self.mappings = _format_instance_mapping(capi, ctxt, instance)
 
@@ -134,7 +141,8 @@ class InstanceMetadata():
         else:
             self.userdata_raw = None
 
-        self.ec2_ids = capi.get_ec2_ids(ctxt, instance)
+        self.ec2_ids = capi.get_ec2_ids(ctxt,
+                                        obj_base.obj_to_primitive(instance))
 
         self.address = address
 
@@ -152,6 +160,9 @@ class InstanceMetadata():
         if network_info is None:
             network_info = network.API().get_instance_nw_info(ctxt,
                                                               instance)
+
+        self.ip_info = \
+                ec2utils.get_ip_info_for_instance_from_nw_info(network_info)
 
         self.network_config = None
         cfg = netutils.get_injected_network_template(network_info)
@@ -192,6 +203,9 @@ class InstanceMetadata():
         floating_ips = self.ip_info['floating_ips']
         floating_ip = floating_ips and floating_ips[0] or ''
 
+        fixed_ips = self.ip_info['fixed_ips']
+        fixed_ip = fixed_ips and fixed_ips[0] or ''
+
         fmt_sgroups = [x['name'] for x in self.security_groups]
 
         meta_data = {
@@ -200,7 +214,7 @@ class InstanceMetadata():
             'ami-manifest-path': 'FIXME',
             'instance-id': self.ec2_ids['instance-id'],
             'hostname': hostname,
-            'local-ipv4': self.address,
+            'local-ipv4': self.address or fixed_ip,
             'reservation-id': self.instance['reservation_id'],
             'security-groups': fmt_sgroups}
 
@@ -460,7 +474,7 @@ def get_metadata_by_address(conductor_api, address):
 def get_metadata_by_instance_id(conductor_api, instance_id, address,
                                 ctxt=None):
     ctxt = ctxt or context.get_admin_context()
-    instance = conductor_api.instance_get_by_uuid(ctxt, instance_id)
+    instance = instance_obj.Instance.get_by_uuid(ctxt, instance_id)
     return InstanceMetadata(instance, address)
 
 

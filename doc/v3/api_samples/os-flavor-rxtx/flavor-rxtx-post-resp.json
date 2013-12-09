@@ -2,7 +2,8 @@
     "flavor": {
         "disabled": false,
         "disk": 10,
-        "ephemeral": "",
+        "ephemeral": 0,
+        "flavor-access:is_public": true,
         "id": "100",
         "links": [
             {
@@ -17,7 +18,7 @@
         "name": "flavortest",
         "ram": 1024,
         "rxtx_factor": 2.0,
-        "swap": "",
+        "swap": 0,
         "vcpus": 2
     }
 }
