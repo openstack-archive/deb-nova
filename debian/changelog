@@ -1,7 +1,8 @@
 nova (2013.2.1-1) unstable; urgency=high
 
   * New upstream release (Closes: #732022). This fixes: CVE-2013-7048: Nova
-    live snapshots use an insecure local directory.
+    live snapshots use an insecure local directory and CVE-2013-6419:
+    Metadata queries from Neutron to Nova are not restricted by tenant.
   * Added | cut -d" " -f1 when searching for the default gateway interface,
     in the nova-common.config script that tries to guess the "my_ip" address,
     just in case there's more than one interface in use (in which case it may
