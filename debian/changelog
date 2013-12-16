@@ -13,6 +13,7 @@ nova (2013.2.1-1) unstable; urgency=high
   * Fixes requirement.txt patch (upstream now includes the python-six fix).
   * Removes patch applied upstream:
     CVE-2013-4463_CVE-2013-4469_ensure_we_dont_boot_oversized_image.patch
+  * Fix typoe in libvirt_vif_driver (had Hybird instead of Hybrid).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 16 Dec 2013 16:33:25 +0800
 
