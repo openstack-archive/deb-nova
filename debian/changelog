@@ -6,6 +6,8 @@ nova (2013.2.1-1) unstable; urgency=high
     in the nova-common.config script that tries to guess the "my_ip" address,
     just in case there's more than one interface in use (in which case it may
     fail in non-interactive mode).
+  * Updates the French debconf translation which was broken, thanks to our
+    cheesemaster for the update (Closes: #732267).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 16 Dec 2013 16:33:25 +0800
 

@@ -94,12 +94,12 @@ msgid ""
 " * a username and password to access the database;\n"
 " * the type of database management software you want to use."
 msgstr ""
-" - le nom d'hôte du serveur de bases de données (qui doit\n
-    autoriser les connexions TCP depuis cette machine) ;\n"
-" - un nom d'utilisateur et un mot de passe pour accéder à\n
-    la base de données ;\n"
-" - le type de gestionnaire de base de données que vous\n
-    souhaitez utiliser."
+" - le nom d'hôte du serveur de bases de données (qui doit\n"
+"   autoriser les connexions TCP depuis cette machine) ;\n"
+" - un nom d'utilisateur et un mot de passe pour accéder à\n"
+"   la base de données ;\n"
+" - le type de gestionnaire de base de données que vous\n"
+"   souhaitez utiliser."
 
 #. Type: boolean
 #. Description
