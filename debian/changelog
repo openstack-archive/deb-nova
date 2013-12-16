@@ -10,6 +10,7 @@ nova (2013.2.1-1) unstable; urgency=high
     cheesemaster for the update (Closes: #732267).
   * Updates the Spanish debconf translation, thanks to jathan
     <jathanblackred@gmail.com> for this update (Closes: #732206).
+  * Fixes requirement.txt patch (upstream now includes the python-six fix).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 16 Dec 2013 16:33:25 +0800
 
