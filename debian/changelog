@@ -17,6 +17,7 @@ nova (2013.2.1-1) unstable; urgency=high
   * Fix typoe in libvirt_vif_driver (had Hybird instead of Hybrid).
   * Updates (build-)depends version of python-six (>= 1.4.1) and
     python-iso8601 (>= 0.1.8).
+  * Removed python-argparse from python-nova depends.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 16 Dec 2013 16:33:25 +0800
 
