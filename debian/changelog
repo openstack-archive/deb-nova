@@ -5,8 +5,15 @@ nova (2014.1~b1-1) experimental; urgency=low
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 09 Dec 2013 22:56:39 +0800
 
-nova (2013.2-4) UNRELEASED; urgency=low
+nova (2013.2.1-2) UNRELEASED; urgency=low
 
+  * Killed the DEFAULTS_FILE feature in init scripts and template.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 19 Dec 2013 17:44:13 +0800
+
+nova (2013.2.1-1) unstable; urgency=high
+
+  * New upstream release.
   * Added | cut -d" " -f1 when searching for the default gateway interface,
     in the nova-common.config script that tries to guess the "my_ip" address,
     just in case there's more than one interface in use (in which case it may

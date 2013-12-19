@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-09-25 23:09+0800\n"
+"POT-Creation-Date: 2013-12-19 17:32+0800\n"
 "PO-Revision-Date: 2013-10-26 18:44+0100\n"
 "Last-Translator: Julien Patriarca <leatherface@debian.org>\n"
 "Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
@@ -17,66 +17,50 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "X-Generator: Poedit 1.5.4\n"
 
-#. Type: boolean
-#. Description
-#: ../nova-common.templates:2001
-msgid "Start nova services at boot?"
-msgstr "Faut-il démarrer les services Nova au démarrage ?"
-
-#. Type: boolean
-#. Description
-#: ../nova-common.templates:2001
-msgid ""
-"Please choose whether you want to start Nova services when the machine is "
-"booted up."
-msgstr ""
-"Veuillez choisir s'il faut démarrer les services Nova lorsque la machine est "
-"démarrée."
-
 #. Type: string
 #. Description
-#: ../nova-common.templates:3001
+#: ../nova-common.templates:2001
 msgid "Auth server hostname:"
 msgstr "Nom d'hôte du serveur d'authentification : "
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:3001
+#: ../nova-common.templates:2001
 msgid ""
 "Please specify the URL of your Nova authentication server. Typically this is "
 "also the URL of your OpenStack Identity Service (Keystone)."
 msgstr ""
-"Veuillez indiquer l'adresse URL du serveur d'authentification Nova. "
-"En général, il s'agit également de l'adresse URL du Service d'identité "
+"Veuillez indiquer l'adresse URL du serveur d'authentification Nova. En "
+"général, il s'agit également de l'adresse URL du Service d'identité "
 "OpenStack (Keystone)."
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:4001
+#: ../nova-common.templates:3001
 msgid "Auth server tenant name:"
 msgstr "Nom d'espace client du serveur d'authentification :"
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:5001
+#: ../nova-common.templates:4001
 msgid "Auth server username:"
 msgstr "Nom d'utilisateur pour le serveur d'authentification :"
 
 #. Type: password
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:5001
 msgid "Auth server password:"
 msgstr "Mot de passe pour le serveur d'authentification :"
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:7001
+#: ../nova-common.templates:6001
 msgid "Set up a database for Nova?"
 msgstr "Faut-il installer une base de données pour Nova ?"
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:7001
+#: ../nova-common.templates:6001
 msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
@@ -87,7 +71,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:7001
+#: ../nova-common.templates:6001
 msgid ""
 " * the host name of the database server (which must allow TCP\n"
 "   connections from this machine);\n"
@@ -103,7 +87,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:7001
+#: ../nova-common.templates:6001
 msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
@@ -113,7 +97,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:7001
+#: ../nova-common.templates:6001
 msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
@@ -123,13 +107,13 @@ msgstr ""
 
 #. Type: multiselect
 #. Description
-#: ../nova-common.templates:8001
+#: ../nova-common.templates:7001
 msgid "API to activate:"
 msgstr "API à activer :"
 
 #. Type: multiselect
 #. Description
-#: ../nova-common.templates:8001
+#: ../nova-common.templates:7001
 msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
@@ -139,27 +123,27 @@ msgstr ""
 
 #. Type: multiselect
 #. Description
-#: ../nova-common.templates:8001
+#: ../nova-common.templates:7001
 msgid ""
 "If it is a compute node that you are setting-up, then you only need to run "
 "the metadata API server. If you run Cinder, then you don't need osapi_volume "
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Si c'est un nœud de calcul que vous installez, alors, vous n'avez qu'à lancer "
-"le serveur API de métadonnées. Si vous utilisez Cinder, alors, vous n'avez "
-"pas besoin d'osapi_volume (vous ne pouvez pas lancer osapi_volume et l'api "
-"de cinder sur le même serveur : ils sont liés au même port)."
+"Si c'est un nœud de calcul que vous installez, alors, vous n'avez qu'à "
+"lancer le serveur API de métadonnées. Si vous utilisez Cinder, alors, vous "
+"n'avez pas besoin d'osapi_volume (vous ne pouvez pas lancer osapi_volume et "
+"l'api de cinder sur le même serveur : ils sont liés au même port)."
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:9001
+#: ../nova-common.templates:8001
 msgid "Value for my_ip:"
 msgstr "Valeur pour my_ip : "
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:9001
+#: ../nova-common.templates:8001
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgstr ""
@@ -168,8 +152,7 @@ msgstr ""
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
-#| msgid "Ip address of your rabbitmq host:"
+#: ../nova-common.templates:9001
 msgid "IP address of your RabbitMQ host:"
 msgstr "Adresse IP de l'hôte RabbitMQ :"
 
@@ -179,8 +162,8 @@ msgstr "Adresse IP de l'hôte RabbitMQ :"
 #. Description
 #. Type: password
 #. Description
-#: ../nova-common.templates:10001 ../nova-common.templates:11001
-#: ../nova-common.templates:12001
+#: ../nova-common.templates:9001 ../nova-common.templates:10001
+#: ../nova-common.templates:11001
 msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
@@ -190,22 +173,19 @@ msgstr ""
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
+#: ../nova-common.templates:9001
 msgid "Please specify the IP address of that server."
 msgstr "Veuillez indiquer l'adresse IP de ce serveur."
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:11001
-#| msgid "Username to connect to XenAPI:"
+#: ../nova-common.templates:10001
 msgid "Username for connection to the RabbitMQ server:"
 msgstr "Identifiant de connexion au serveur RabbitMQ :"
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:11001
-#| msgid ""
-#| "Please enter the username used to connect to your XenAPI (XCP server)."
+#: ../nova-common.templates:10001
 msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
 "Veuillez indiquer l'identifiant à utiliser pour se connecter au serveur "
@@ -213,16 +193,13 @@ msgstr ""
 
 #. Type: password
 #. Description
-#: ../nova-common.templates:12001
-#| msgid "Password to connect to XenAPI:"
+#: ../nova-common.templates:11001
 msgid "Password for connection to the RabbitMQ server:"
 msgstr "Mot de passe de connexion au serveur RabbitMQ :"
 
 #. Type: password
 #. Description
-#: ../nova-common.templates:12001
-#| msgid ""
-#| "Please enter the password used to connect to your XenAPI (XCP server)."
+#: ../nova-common.templates:11001
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
 "Veuillez indiquer le mot de passe à utiliser pour se connecter au serveur "
@@ -326,8 +303,8 @@ msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using the Keystone auth token."
 msgstr ""
-"Veuillez noter que vous aurez besoin d'un serveur Keystone fonctionnel "
-"sur lequel se connecter pour utiliser le jeton d'authentification Keystone."
+"Veuillez noter que vous aurez besoin d'un serveur Keystone fonctionnel sur "
+"lequel se connecter pour utiliser le jeton d'authentification Keystone."
 
 #. Type: string
 #. Description
@@ -343,8 +320,8 @@ msgid ""
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
 "Veuillez indiquer l'adresse IP du serveur Keystone, pour que l'api de Nova "
-"puisse contacter Keystone pour établir le service Nova et créer "
-"le point d'accès."
+"puisse contacter Keystone pour établir le service Nova et créer le point "
+"d'accès."
 
 #. Type: password
 #. Description
@@ -404,9 +381,9 @@ msgid ""
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
 msgstr ""
-"OpenStack prend en charge l'utilisation de zones disponibles, avec chaque région "
-"représentant un lieu. Veuillez entrer la zone que vous souhaitez utiliser "
-"lors de l'enregistrement d'un point d'accès."
+"OpenStack prend en charge l'utilisation de zones disponibles, avec chaque "
+"région représentant un lieu. Veuillez entrer la zone que vous souhaitez "
+"utiliser lors de l'enregistrement d'un point d'accès."
 
 #. Type: select
 #. Description
@@ -437,6 +414,16 @@ msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr ""
 "Ce choix peut être modifié ultérieurement en modifiant le fichier /etc/"
 "default/nova-consoleproxy."
+
+#~ msgid "Start nova services at boot?"
+#~ msgstr "Faut-il démarrer les services Nova au démarrage ?"
+
+#~ msgid ""
+#~ "Please choose whether you want to start Nova services when the machine is "
+#~ "booted up."
+#~ msgstr ""
+#~ "Veuillez choisir s'il faut démarrer les services Nova lorsque la machine "
+#~ "est démarrée."
 
 #~ msgid ""
 #~ "Enter the IP address that will be set in the rabbitmq_host directive of "
