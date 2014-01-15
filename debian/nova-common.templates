@@ -7,13 +7,6 @@
 # Even minor modifications require translation updates and such
 # changes should be coordinated with translators and reviewers.
 
-Template: nova/start_services
-Type: boolean
-Default: true
-_Description: Start nova services at boot?
- Please choose whether you want to start Nova services when the
- machine is booted up.
-
 Template: nova/auth-host
 Type: string
 Default: 127.0.0.1

@@ -23,7 +23,6 @@ PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
 LOCK_DIR=/var/lock/nova/
-DEFAULTS_FILE=/etc/default/nova-common
 
 # Exit if the package is not installed
 [ -x $DAEMON ] || exit 0
@@ -33,20 +32,7 @@ chown ${NOVA_USER} ${LOCK_DIR}
 
 . /lib/lsb/init-functions
 
-# Read configuration variable file if it is present
-if [ -s $DEFAULTS_FILE ]; then
-    . $DEFAULTS_FILE
-    case "x$NOVA_ENABLE" in
-        xtrue|xfalse)   ;;
-        *)              log_failure_msg "Value of NOVA_ENABLE in $DEFAULTS_FILE must be either 'true' or 'false';"
-                        log_failure_msg "not starting $NAME daemon."
-                        exit 1
-                        ;;
-    esac
-fi
-
-do_start()
-{
+do_start() {
 	start-stop-daemon --start --background --quiet --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --startas $DAEMON --test > /dev/null \
 		|| return 1
 	start-stop-daemon --start --background --quiet --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --startas $DAEMON -- \
@@ -54,8 +40,7 @@ do_start()
 		|| return 2
 }
 
-do_stop()
-{
+do_stop() {
 	start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE
 	RETVAL="$?"
 	rm -f $PIDFILE
@@ -63,54 +48,47 @@ do_stop()
 }
 
 case "$1" in
-    start)
-        if "$NOVA_ENABLE"; then
-            log_daemon_msg "Starting $DESC" "$NAME"
-            do_start
-            case "$?" in
-                0|1) log_end_msg 0 ;;
-                2) log_end_msg 1 ;;
-            esac
-        else
-            log_warning_msg "nova daemons not enabled in $DEFAULTS_FILE, not starting..."
-        fi
-        ;;
-    stop)
+start)
+	log_daemon_msg "Starting $DESC" "$NAME"
+	do_start
+	case "$?" in
+		0|1) log_end_msg 0 ;;
+		2) log_end_msg 1 ;;
+	esac
+;;
+stop)
 	log_daemon_msg "Stopping $DESC" "$NAME"
 	do_stop
 	case "$?" in
 		0|1) log_end_msg 0 ;;
 		2) log_end_msg 1 ;;
 	esac
+;;
+status)
+	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+;;
+restart|force-reload)
+	log_daemon_msg "Restarting $DESC" "$NAME"
+	do_stop
+	case "$?" in
+	0|1)
+		do_start
+		case "$?" in
+			0) log_end_msg 0 ;;
+			1) log_end_msg 1 ;; # Old process is still running
+			*) log_end_msg 1 ;; # Failed to start
+		esac
 	;;
-  status)
-       status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
-       ;;
-  restart|force-reload)
-        if "$NOVA_ENABLE"; then
-            log_daemon_msg "Restarting $DESC" "$NAME"
-            do_stop
-            case "$?" in
-                0|1)
-                    do_start
-                    case "$?" in
-                        0) log_end_msg 0 ;;
-                        1) log_end_msg 1 ;; # Old process is still running
-                        *) log_end_msg 1 ;; # Failed to start
-                    esac
-                    ;;
-                *)
-                # Failed to stop
-                    log_end_msg 1
-                    ;;
-            esac
-        else
-            log_warning_msg "nova daemons not enabled in $DEFAULTS_FILE, not starting..."
-        fi
-        ;;
-
-  *)
+	*)
+		# Failed to stop
+		log_end_msg 1
+	;;
+	esac
+;;
+*)
 	echo "Usage: $SCRIPTNAME {start|stop|status|restart|force-reload}" >&2
 	exit 3
-	;;
+;;
 esac
+
+exit 0

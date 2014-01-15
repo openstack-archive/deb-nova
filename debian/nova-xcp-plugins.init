@@ -37,22 +37,8 @@ OVS_CONFIGURE_BASE_FLOWS=/usr/lib/xcp/plugins/ovs_configure_base_flows.py
 IPTABLES=/sbin/iptables
 EBTABLES=/sbin/ebtables
 ARPTABLES=/sbin/arptables
-DEFAULTS_FILE=/etc/default/nova-common
 
 . /lib/lsb/init-functions
-
-# Read configuration variable file if it is present
-if [ -s $DEFAULTS_FILE ]; then
-    . $DEFAULTS_FILE
-    case "x$NOVA_ENABLE" in
-        xtrue|xfalse)   ;;
-        *)              log_failure_msg "Value of NOVA_ENABLE in $DEFAULTS_FILE must be either 'true' or 'false';"
-                        log_failure_msg "not starting $NAME daemon."
-                        exit 1
-                        ;;
-    esac
-fi
-
 
 # Quick check if everything is there...
 if ! [ -x ${OVS_CONFIGURE_BASE_FLOWS} ] ; then
@@ -150,33 +136,25 @@ arptables_down () {
 
 case "${1}" in
 start)
-	if "$NOVA_ENABLE"; then
-	    [ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
-	    iptables_up
-	    ebtables_up
-	    arptables_up
-	    run_ovs_conf_base_flows online
-	    [ "$VERBOSE" != no ] && log_end_msg 0
-	else
-	    [ "$VERBOSE" != no ] && log_warning_msg "nova daemons not enabled in $DEFAULTS_FILE, not starting..."
-	fi
+	log_daemon_msg "Starting $DESC" "$NAME"
+	iptables_up
+	ebtables_up
+	arptables_up
+	run_ovs_conf_base_flows online
+	log_end_msg 0
 	;;
 stop)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
+	log_daemon_msg "Stopping $DESC" "$NAME"
 	run_ovs_conf_base_flows offline
 	iptables_down
 	ebtables_down
 	arptables_down
-	[ "$VERBOSE" != no ] && log_end_msg 0
+	log_end_msg 0
 	;;
 reload|force-reload)
-	if "$NOVA_ENABLE"; then
-	    [ "$VERBOSE" != no ] && log_daemon_msg "Restarting $DESC" "$NAME"
-	    run_ovs_conf_base_flows reset
-	    [ "$VERBOSE" != no ] && log_end_msg 0
-	else
-	    [ "$VERBOSE" != no ] && log_warning_msg "nova daemons not enabled in $DEFAULTS_FILE, not starting..."
-	fi
+	log_daemon_msg "Restarting $DESC" "$NAME"
+	run_ovs_conf_base_flows reset
+	log_end_msg 0
 	;;
 restart)
 	$0 start

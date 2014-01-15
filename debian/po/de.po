@@ -1,13 +1,13 @@
 # GERMAN TRANSLATION OF THE NOVA DEBCONF TEMPLATE.
 # Copyright (c) 2010 OpenStack LLC.
 # This file is distributed under the same license as the NOVA package.
-# Copyright of this file Erik Pfannenstein 2012, Chris Leick 2013.
+# Copyright of this file Erik Pfannenstein 2012, Chris Leick 2013-2014.
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 2013.1.2-4\n"
+"Project-Id-Version: nova 2013.2.1-1\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-05-23 16:12+0800\n"
-"PO-Revision-Date: 2013-11-18 16:36+0100\n"
+"POT-Creation-Date: 2013-09-25 23:09+0800\n"
+"PO-Revision-Date: 2014-01-09 22:24+0100\n"
 "Last-Translator: Chris Leick <c.leick@vollbio.de>\n"
 "Language-Team: German <debian-l10n-german@lists.debian.org>\n"
 "Language: de\n"
@@ -115,8 +115,8 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
 msgstr ""
-"Sie können diese Einstellung später durch Ausführen von "
-"»dpkg-reconfigure -plow nova-common« ändern."
+"Sie können diese Einstellung später durch Ausführen von »dpkg-reconfigure -"
+"plow nova-common« ändern."
 
 #. Type: multiselect
 #. Description
@@ -131,9 +131,9 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
-"Openstack Nova unterstützt verschiedene API-Dienste, von denen jeder einzelne "
-"an einen anderen Port gebunden ist. Wählen Sie aus, welche von »nova-api« "
-"unterstützt werden soll."
+"Openstack Nova unterstützt verschiedene API-Dienste, von denen jeder "
+"einzelne an einen anderen Port gebunden ist. Wählen Sie aus, welche von "
+"»nova-api« unterstützt werden soll."
 
 #. Type: multiselect
 #. Description
@@ -144,10 +144,10 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Falls Sie einen Rechenknoten einrichten, müssen Sie nur den "
-"Metadaten-API-Server starten. Falls Sie Cinder ausführen, benötigen Sie "
-"»osapi_volume« nicht (Sie können »osapi_volume« und »cinder-api« nicht auf "
-"demselben Server ausführen, sie binden sich an den selben Port)."
+"Falls Sie einen Rechenknoten einrichten, müssen Sie nur den Metadaten-API-"
+"Server starten. Falls Sie Cinder ausführen, benötigen Sie »osapi_volume« "
+"nicht (Sie können »osapi_volume« und »cinder-api« nicht auf demselben Server "
+"ausführen, sie binden sich an den selben Port)."
 
 #. Type: string
 #. Description
@@ -167,23 +167,57 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid "Ip address of your rabbitmq host:"
-msgstr "IP-Adresse Ihres Rabbitmq-Rechners:"
+msgid "IP address of your RabbitMQ host:"
+msgstr "IP-Adresse Ihres RabbitMQ-Rechners:"
+
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
+msgid ""
+"In order to interoperate with other components of OpenStack, this package "
+"needs to connect to a central RabbitMQ server."
+msgstr ""
+"Um mit weiteren Bestandteilen von OpenStack zusammenzuarbeiten, muss sich "
+"dieses Paket mit einem zentralen RabbitMQ-Server verbinden."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid ""
-"Enter the IP address that will be set in the rabbitmq_host directive of nova."
-"conf. If you are installing openstack-proxy-node, then the default to use "
-"127.0.0.1 is probably fine. If you are installing openstack-compute-node, "
-"then enter the IP address of your proxy-node host."
+msgid "Please specify the IP address of that server."
+msgstr "Bitte geben Sie die IP-Adresse dieses Servers an."
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+msgid "Username for connection to the RabbitMQ server:"
+msgstr "Benutzername für die Verbindung mit dem RabbitMQ-Server:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
-"Geben Sie die IP-Adresse ein, die in der Direktive »rabbitmq_host« von "
-"nova.conf gesetzt werden wird. Falls Sie »openstack-proxy-node« installieren, "
-"ist die Verwendung der Standardeinstellung 127.0.0.1 wahrscheinlich richtig. "
-"alls Sie »openstack-compute-node« installieren, geben Sie die IP-Adresse "
-"Ihres »proxy-node«-Rechners ein."
+"Bitte geben Sie den Benutzernamen ein, den Sie zum Verbinden mit dem "
+"RabbitMQ-Server verwenden."
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+msgid "Password for connection to the RabbitMQ server:"
+msgstr "Passwort für die Verbindung mit dem RabbitMQ-Server:"
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+msgid "Please specify the password used to connect to the RabbitMQ server."
+msgstr ""
+"Bitte geben Sie das Passwort ein, das Sie zum Verbinden mit dem "
+"RabbitMQ-Server verwenden."
 
 #. Type: string
 #. Description
@@ -389,3 +423,15 @@ msgstr ""
 #: ../nova-consoleproxy.templates:1001
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Dies kann später in /etc/default/nova-consoleproxy geändert werden."
+
+#~ msgid ""
+#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
+#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
+#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
+#~ "compute-node, then enter the IP address of your proxy-node host."
+#~ msgstr ""
+#~ "Geben Sie die IP-Adresse ein, die in der Direktive »rabbitmq_host« von "
+#~ "nova.conf gesetzt werden wird. Falls Sie »openstack-proxy-node« "
+#~ "installieren, ist die Verwendung der Standardeinstellung 127.0.0.1 "
+#~ "wahrscheinlich richtig. alls Sie »openstack-compute-node« installieren, "
+#~ "geben Sie die IP-Adresse Ihres »proxy-node«-Rechners ein."

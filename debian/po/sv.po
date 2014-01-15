@@ -1,22 +1,21 @@
 # Translation of nova debconf template to Swedish
-# Copyright (C) 2012 Martin Bagge <brother@bsnet.se>
+# Copyright (C) 2012-2014 Martin Bagge <brother@bsnet.se>
 # This file is distributed under the same license as the nova package.
-# 
-# Martin Bagge <brother@bsnet.se>, 2012
+#
+# Martin Bagge <brother@bsnet.se>, 2012, 2013, 2014
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2013-09-25 23:09+0800\n"
-"PO-Revision-Date: 2012-06-27 20:48+0100\n"
+"PO-Revision-Date: 2014-01-08 17:05+0100\n"
 "Last-Translator: Martin Bagge / brother <brother@bsnet.se>\n"
 "Language-Team: Swedish <debian-l10n-swedish@lists.debian.org>\n"
-"Language: \n"
+"Language: sv_SE\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Poedit-Language: Swedish\n"
-"X-Poedit-Country: Sweden\n"
+"X-Generator: Poedit 1.5.4\n"
 
 #. Type: boolean
 #. Description
@@ -36,7 +35,7 @@ msgstr "Ange om du vill att Nova-tjänsterna startar när systemet startar."
 #. Description
 #: ../nova-common.templates:3001
 msgid "Auth server hostname:"
-msgstr ""
+msgstr "Värdnamn för identifieringsserver:"
 
 #. Type: string
 #. Description
@@ -45,24 +44,26 @@ msgid ""
 "Please specify the URL of your Nova authentication server. Typically this is "
 "also the URL of your OpenStack Identity Service (Keystone)."
 msgstr ""
+"Ange URL till din Nova-identifieringsserver. Detta är vanligtvis samma URL "
+"som till din OpenStack-identitetstjänst (Keystone)."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:4001
 msgid "Auth server tenant name:"
-msgstr ""
+msgstr "Namn för \"tenant\" (administratör) på identifieringsservern:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:5001
 msgid "Auth server username:"
-msgstr ""
+msgstr "Användarnamn på identifieringsservern:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:6001
 msgid "Auth server password:"
-msgstr ""
+msgstr "Lösenord på identifieringsservern:"
 
 #. Type: boolean
 #. Description
@@ -118,7 +119,7 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:8001
 msgid "API to activate:"
-msgstr ""
+msgstr "API att aktivera:"
 
 #. Type: multiselect
 #. Description
@@ -127,6 +128,8 @@ msgid ""
 "Openstack Nova supports different API services, each of them binding on a "
 "different port. Select which one nova-api should support."
 msgstr ""
+"Openstack Nova har stöd för flera olika API-tjänster, de binder mot olika "
+"portar. Ange vilket nova-api ska stödja."
 
 #. Type: multiselect
 #. Description
@@ -137,25 +140,29 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
+"Om detta är en beräkningsnod som installeras så behöver du bara köra "
+"metadata API-servern. Om du kör Cinder så behövs inte osapi_volume (du kan "
+"inte köra osapi_volume och cinder-api på samma server då de binder till "
+"samma port)."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
 msgid "Value for my_ip:"
-msgstr ""
+msgstr "Värde för my_ip:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
 msgid ""
 "Enter the IP address that will be set in the my_ip directive of nova.conf."
-msgstr ""
+msgstr "Ange IP-adressen som direktivet my_ip ska motsvara i nova.conf."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
 msgid "IP address of your RabbitMQ host:"
-msgstr ""
+msgstr "IP-adress för din RabbitMQ-värd:"
 
 #. Type: string
 #. Description
@@ -169,50 +176,39 @@ msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
 msgstr ""
+"För att interagera med andra Openstack-komponenter behöver detta paketet "
+"kunna ansluta till en central RabbitMQ-server."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
 msgid "Please specify the IP address of that server."
-msgstr ""
+msgstr "Ange IP-adressen för den servern."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#, fuzzy
-#| msgid "Username to connect to XenAPI:"
 msgid "Username for connection to the RabbitMQ server:"
-msgstr "Användarnamn för att ansluta till XenAPI:"
+msgstr "Användarnamn för att ansluta till RabbitMQ-servern:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#, fuzzy
-#| msgid ""
-#| "Please enter the username used to connect to your XenAPI (XCP server)."
 msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
-"Ange användarnamnet som ska användas för att ansluta till din XenAPI (XCP-"
-"server)."
+"Ange användarnamnet som ska användas för att ansluta till RabbitMQ-servern:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#, fuzzy
-#| msgid "Password to connect to XenAPI:"
 msgid "Password for connection to the RabbitMQ server:"
-msgstr "Lösenord för att ansluta till XenAPI:"
+msgstr "Lösenord för att ansluta till RabbitMQ-servern:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#, fuzzy
-#| msgid ""
-#| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please specify the password used to connect to the RabbitMQ server."
-msgstr ""
-"Ange lösenordet som ska användas för att ansluta till din XenAPI (XCP-"
-"server)."
+msgstr "Lösenord för att ansluta till RabbitMQ-servern:"
 
 #. Type: string
 #. Description
@@ -287,7 +283,7 @@ msgstr ""
 #. Description
 #: ../nova-api.templates:1001
 msgid "Register Nova in the keystone endpoint catalog?"
-msgstr ""
+msgstr "Ska Nova registreras i keystones katalog med ändpunkter?"
 
 #. Type: boolean
 #. Description
@@ -297,6 +293,9 @@ msgid ""
 "accessible. This is done using \"keystone service-create\" and \"keystone "
 "endpoint-create\". Select if you want to run these commands now."
 msgstr ""
+"Alla OpenStack-tjänster (varje API) ska registreras för att kunna användas. "
+"Detta görs med kommandona \"keystone service-create\" och \"keystone "
+"endpoint-create\". Detta kan göras automatiskt nu."
 
 #. Type: boolean
 #. Description
@@ -304,13 +303,13 @@ msgstr ""
 msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using the Keystone auth token."
-msgstr ""
+msgstr "OBS. Du behöver ha en fungerande keystone-server att ansluta till."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:2001
 msgid "Keystone IP address:"
-msgstr ""
+msgstr "IP-adress till Keystone:"
 
 #. Type: string
 #. Description
@@ -319,12 +318,14 @@ msgid ""
 "Enter the IP address of your keystone server, so that nova-api can contact "
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
+"Ange IP-adressen till din keystone-server så att glance-api kan kontakta "
+"Keystone för att lägga till Glance-tjänsten som en ändpunkt."
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:3001
 msgid "Keystone Auth Token:"
-msgstr ""
+msgstr "Autetiseringsvärde för Keystone:"
 
 #. Type: password
 #. Description
@@ -333,12 +334,14 @@ msgid ""
 "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
 "token."
 msgstr ""
+"För att lägga till ändpunkt i Keystone behöver nova-api ett "
+"autentiseringsvärde för Keystone."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
 msgid "Nova endpoint IP address:"
-msgstr ""
+msgstr "IP-adress för Nova-ändpunkt:"
 
 #. Type: string
 #. Description
@@ -346,7 +349,7 @@ msgstr ""
 msgid ""
 "Enter the IP address that will be used to contact Nova (eg: the Nova "
 "endpoint IP address)."
-msgstr ""
+msgstr "Ange den IP-adress som ska användas för att kontakta Nova."
 
 #. Type: string
 #. Description
@@ -356,12 +359,15 @@ msgid ""
 "service, so if you are installing a public cloud, this should be a public IP "
 "address."
 msgstr ""
+"Denna IP-adress ska vara nåbar från klienterna som vill använda den här "
+"tjänsten. Om detta är en publik molntjänst så ska det vara en publik IP-"
+"adress."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:5001
 msgid "Name of the region to register:"
-msgstr ""
+msgstr "Regionnamn:"
 
 #. Type: string
 #. Description
@@ -371,12 +377,14 @@ msgid ""
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
 msgstr ""
+"OpenStack kan användas med tillgänglighetszoner. Varje region representerar "
+"en plats. Ange zonen som ska användas när ändpunkten registreras."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
 msgid "Type of console daemon to start at boot time:"
-msgstr ""
+msgstr "Ange vilken konsolltjänst som ska startas vid systemets uppstart."
 
 #. Type: select
 #. Description
@@ -388,26 +396,29 @@ msgid ""
 "sockets in your browser, and that is a feature only very modern browsers "
 "have support for."
 msgstr ""
+"Nova Console har stöd för tre typer av konsoller. En är Xen-specifik och "
+"kallas XVP (Xen VNC Proxy), de övriga tjänsterna stödje KVM. SPICE-"
+"protokollet är vanligen snabbare än VNC men det behöver dock stöd för "
+"webbuttag (web sockets) i din webbläsare - denna funktion finns bara i "
+"mycket moderna webbläsare."
 
 #. Type: select
 #. Description
 #: ../nova-consoleproxy.templates:1001
-#, fuzzy
-#| msgid "This can later be edited in /etc/nova/nova-compute.conf."
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
-msgstr "Detta kan senare justeras i /etc/nova/nova-compute.conf."
+msgstr "Detta kan senare justeras i /etc/default/nova-consoleproxy."
 
-#~ msgid ""
-#~ "Nova Compute Xen needs to know the address of the server running XenAPI. "
-#~ "This can be a server running XenServer, the Citrix CentOS XCP appliance "
-#~ "installed from Citrix ISO image, or even a Debian server running Xen "
-#~ "Cloud Platform (XCP / Kronos project), which is available directly in "
-#~ "Debian under the package name xcp-xapi. You can enter an IP address or a "
-#~ "fully qualified domain name if it resolves correctly."
-#~ msgstr ""
-#~ "Nova Compute Xen behöver veta adressen till servern som kör XenAPI. Det "
-#~ "kan vara adressen till servern som kör XenServer, Citrix CentOS XCP-"
-#~ "installationen från en Citrix ISO-avbildning eller tom en Debian-server "
-#~ "som kör Xen Cloud Platform (XCP/Kronos project), XCP är tillgängligt i "
-#~ "Debian i paketet xcp-xapi. Du kan ange en IP-adresse eller ett komplett "
-#~ "kvalificerat domännamn om det kan slås upp korrekt."
+msgid ""
+"Nova Compute Xen needs to know the address of the server running XenAPI. "
+"This can be a server running XenServer, the Citrix CentOS XCP appliance "
+"installed from Citrix ISO image, or even a Debian server running Xen Cloud "
+"Platform (XCP / Kronos project), which is available directly in Debian under "
+"the package name xcp-xapi. You can enter an IP address or a fully qualified "
+"domain name if it resolves correctly."
+msgstr ""
+"Nova Compute Xen behöver veta adressen till servern som kör XenAPI. Det kan "
+"vara adressen till servern som kör XenServer, Citrix CentOS XCP-"
+"installationen från en Citrix ISO-avbildning eller tom en Debian-server som "
+"kör Xen Cloud Platform (XCP/Kronos project), XCP är tillgängligt i Debian i "
+"paketet xcp-xapi. Du kan ange en IP-adresse eller ett komplett kvalificerat "
+"domännamn om det kan slås upp korrekt."

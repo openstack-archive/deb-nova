@@ -3,7 +3,6 @@ set -e
 
 . /usr/share/debconf/confmodule
 
-NOVA_COM_DEF=/etc/default/nova-common
 NOVA_CONF=/etc/nova/nova.conf
 NOVA_API_CONF=/etc/nova/api-paste.ini
 
@@ -26,22 +25,6 @@ set_enabled_apis_multiselect () {
 	fi
 	db_input high nova/active-api || true
 	db_go
-}
-
-manage_nova_enable () {
-	pkgos_read_config ${NOVA_COM_DEF} NO_SECTION NOVA_ENABLE nova/start_services
-	NOVA_ENABLE=${RET}
-	if [ "${RET}" = "false" ] ; then
-		NOVA_ENABLE=false
-	else
-		NOVA_ENABLE=true
-	fi
-	# Write a default config file
-	echo "# defaults file for nova daemons
-
-# start nova daemons from init.d script?
-#  only allowed values are \"true\" and \"false\"
-NOVA_ENABLE=${NOVA_ENABLE}" >${NOVA_COM_DEF}
 }
 
 manage_nova_my_ip () {
@@ -68,7 +51,6 @@ pkgos_dbc_read_conf -pkg nova-common ${NOVA_CONF} DEFAULT sql_connection nova $@
 pkgos_rabbit_read_conf ${NOVA_CONF} DEFAULT nova
 pkgos_read_admin_creds ${NOVA_API_CONF} filter:authtoken nova
 
-manage_nova_enable
 set_enabled_apis_multiselect
 manage_nova_my_ip
 
