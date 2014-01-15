@@ -1,9 +1,11 @@
-nova (2013.2.1-2) UNRELEASED; urgency=low
+nova (2013.2.1-2) unstable; urgency=medium
 
   * Killed the DEFAULTS_FILE feature in init scripts and template.
-  * Updated Swedish debconf template translation (Closes: #734621).
+  * Updated debconf template translation, with thanks to:
+    - Swedish: Martin Bagge (Closes: #734621).
+    - German: Chris Leick (Closes: #735335).
 
- -- Thomas Goirand <zigo@debian.org>  Thu, 19 Dec 2013 17:44:13 +0800
+ -- Thomas Goirand <zigo@debian.org>  Wed, 15 Jan 2014 10:46:02 +0800
 
 nova (2013.2.1-1) unstable; urgency=high
 
