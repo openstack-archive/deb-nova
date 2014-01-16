@@ -1,21 +1,21 @@
-nova (2013.2.1-3) unstable; urgency=medium
+nova (2013.2.1-2) unstable; urgency=medium
 
+  [ Gonéri Le Bouder ]
   * Add myself in Uploaders
   * nova-compute-kvm directly depends on qemu-kvm since kvm package doesn't
     exist anymore. We keep an alternative dependency on kvm to simplify
     backports.
-  * build_sphinx: pass target dir as an argument to simplify the clean up
+  * build_sphinx: pass target dir as an argument to avoid the following issue
+    with sphinx 1.2 https://bitbucket.org/birkenfeld/sphinx/pull-request/193
+    http://lists.openstack.org/pipermail/openstack-dev/2013-December/021863.html
 
- -- Gonéri Le Bouder <goneri@debian.org>  Thu, 16 Jan 2014 10:21:08 +0100
-
-nova (2013.2.1-2) unstable; urgency=medium
-
+  [ Thomas Goirand ]
   * Killed the DEFAULTS_FILE feature in init scripts and template.
   * Updated debconf template translation, with thanks to:
     - Swedish: Martin Bagge (Closes: #734621).
     - German: Chris Leick (Closes: #735335).
 
- -- Thomas Goirand <zigo@debian.org>  Wed, 15 Jan 2014 10:46:02 +0800
+ -- Gonéri Le Bouder <goneri@debian.org>  Thu, 16 Jan 2014 10:21:08 +0100
 
 nova (2013.2.1-1) unstable; urgency=high
 
