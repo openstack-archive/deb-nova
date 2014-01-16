@@ -4,7 +4,7 @@ Priority: extra
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
-           Mehdi Abaakouk <sileht@sileht.net>
+           Mehdi Abaakouk <sileht@sileht.net>,
            Gonéri Le bouder <goneri@debian.org>
 Build-Depends: debhelper (>= 9),
                openstack-pkg-tools (>= 8~),
