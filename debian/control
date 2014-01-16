@@ -5,6 +5,7 @@ Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
            Mehdi Abaakouk <sileht@sileht.net>
+           Gonéri Le bouder <goneri@debian.org>
 Build-Depends: debhelper (>= 9),
                openstack-pkg-tools (>= 8~),
                po-debconf,
@@ -360,7 +361,7 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dpkg-dev,
-         kvm,
+         qemu-kvm | kvm,
          libvirt-bin,
          nova-common,
          nova-compute,
