@@ -4,6 +4,7 @@ nova (2013.2.1-3) unstable; urgency=medium
   * nova-compute-kvm directly depends on qemu-kvm since kvm package doesn't
     exist anymore. We keep an alternative dependency on kvm to simplify
     backports.
+  * build_sphinx: pass target dir as an argument to simplify the clean up
 
  -- Gonéri Le Bouder <goneri@debian.org>  Thu, 16 Jan 2014 10:21:08 +0100
 

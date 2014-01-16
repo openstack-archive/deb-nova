@@ -35,10 +35,13 @@ override_dh_auto_build:
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-api.config
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-api.postinst
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-compute-xen.postinst
-ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
-	python setup.py build_sphinx
 
+ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
+	sphinx-build doc/source doc/build/html
+	sphinx-build -b man doc/source doc/build/man
 endif
+
+
 
 override_dh_install:
 	python setup.py install -f --install-layout=deb --root=$(debroot)
