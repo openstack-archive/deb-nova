@@ -12,7 +12,7 @@ debroot = debian/tmp
 site_packages_dir=$(debroot)$(call py_libdir,$(shell pyversions -d))
 
 %:
-	dh $@ --with python2
+	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc
 
 override_dh_auto_clean:
 	dh_auto_clean
@@ -36,9 +36,13 @@ override_dh_auto_build:
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-api.postinst
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-compute-xen.postinst
 
+override_dh_sphinxdoc:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	sphinx-build doc/source doc/build/html
 	sphinx-build -b man doc/source doc/build/man
+	dh_sphinxdoc -O--buildsystem=python_distutils
+elif
+	echo "No doc here!"
 endif
 
 
