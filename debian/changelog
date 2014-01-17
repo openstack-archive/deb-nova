@@ -2,6 +2,7 @@ nova (2013.2.1-3) unstable; urgency=medium
 
   * Using dh_sphinxdoc correctly.
   * Explicitly using --buildsystem=python_distutils.
+  * Removed duplicate build-depends: python-d2to1.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 17 Jan 2014 09:49:05 +0000
 
