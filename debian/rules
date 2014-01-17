@@ -41,8 +41,6 @@ ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	sphinx-build doc/source doc/build/html
 	sphinx-build -b man doc/source doc/build/man
 	dh_sphinxdoc -O--buildsystem=python_distutils
-elif
-	echo "No doc here!"
 endif
 
 
