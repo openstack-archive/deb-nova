@@ -38,12 +38,15 @@ override_dh_auto_build:
 
 override_dh_sphinxdoc:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
-	sphinx-build doc/source doc/build/html
+	sphinx-build doc/source $(CURDIR)/debian/nova-doc/usr/share/doc/nova-doc/html
 	sphinx-build -b man doc/source doc/build/man
 	dh_sphinxdoc -O--buildsystem=python_distutils
 endif
 
-
+override_dh_installman:
+ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
+	dh_installman -O-O--buildsystem=python_distutils
+endif
 
 override_dh_install:
 	python setup.py install -f --install-layout=deb --root=$(debroot)
@@ -97,14 +100,6 @@ override_dh_installmenu:
 	dh_installinit --name=nova-xenvncproxy
 	install -D -m 0644 $(CURDIR)/debian/nova-consoleproxy.mydefault $(CURDIR)/debian/nova-consoleproxy/usr/share/nova-consoleproxy/default
 
-override_dh_installdocs:
-ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
-	dh_installdocs
-	ln -sf /usr/share/javascript/jquery/jquery.js $(CURDIR)/debian/nova-doc/usr/share/doc/nova-doc/html/_static/jquery.js
-	ln -sf /usr/share/javascript/underscore/underscore.min.js $(CURDIR)/debian/nova-doc/usr/share/doc/nova-doc/html/_static/underscore.js
-else
-override_dh_installman:
-endif
 
 override_dh_python2:
 	dh_python2
