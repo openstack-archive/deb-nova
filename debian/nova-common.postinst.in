@@ -52,7 +52,7 @@ maintain_var_lib_nova_perms () {
 	chmod 0755 /var/lib/nova
 }
 
-read_neutron_config () {
+write_neutron_config () {
 	db_get nova/neutron_url
 	pkgos_inifile set ${NOVA_CONF} DEFAULT neutron_url ${RET}
 	db_get nova/neutron_admin_tenant_name
@@ -82,6 +82,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	manage_nova_api_field
 	manage_nova_my_ip_field
 	manage_keystone_auth_fields
+	write_neutron_config
 
 	# Needed, because in some cases, it's owned by root:root,
 	# which makes the nova-manage db sync fail.
