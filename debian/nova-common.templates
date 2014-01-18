@@ -64,6 +64,32 @@ Type: string
 _Description: Value for my_ip:
  Enter the IP address that will be set in the my_ip directive of nova.conf.
 
+Template: nova/neutron_url
+Type: string
+Default: http://127.0.0.1:9696
+_Description: Value for neutron_url:
+ Enter the URL of your Neutron server.
+
+Template: nova/neutron_admin_tenant_name
+Type: string
+Default: admin
+_Description: Neutron admin tenant name:
+ Nova needs to be able to communicate with Neutron through Keystone. Therefore
+ Nova needs to know the Neutron admin tenant, username and password.
+ .
+ Enter the name of the admin tenant for Neutron.
+
+Template: nova/neutron_admin_username
+Type: string
+Default: admin
+_Description: Neutron admin username:
+ Enter the username for Neutron.
+
+Template: nova/neutron_admin_password
+Type: password
+_Description: Neutron admin password:
+ Enter the password for the admin username of Neutron.
+
 Template: nova/rabbit_host
 Type: string
 Default: localhost

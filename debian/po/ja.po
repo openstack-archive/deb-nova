@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2013-12-19 17:32+0800\n"
+"POT-Creation-Date: 2014-01-18 23:08+0800\n"
 "PO-Revision-Date: 2013-04-11 23:32+0900\n"
 "Last-Translator: victory <victory.deb@gmail.com>\n"
 "Language-Team: Japanese <debian-japanese@lists.debian.org>\n"
@@ -148,6 +148,66 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:9001
 #, fuzzy
+#| msgid "Value for my_ip:"
+msgid "Value for neutron_url:"
+msgstr "my_ip の値:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid "Enter the URL of your Neutron server."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+#, fuzzy
+#| msgid "Auth server tenant name:"
+msgid "Neutron admin tenant name:"
+msgstr "認証サーバの管理用アカウント (tenant) 名"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid ""
+"Nova needs to be able to communicate with Neutron through Keystone. "
+"Therefore Nova needs to know the Neutron admin tenant, username and password."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:10001
+msgid "Enter the name of the admin tenant for Neutron."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+msgid "Neutron admin username:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:11001
+msgid "Enter the username for Neutron."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+msgid "Neutron admin password:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:12001
+msgid "Enter the password for the admin username of Neutron."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:13001
+#, fuzzy
 #| msgid "Ip address of your rabbitmq host:"
 msgid "IP address of your RabbitMQ host:"
 msgstr "rabbitmq ホストのIPアドレス:"
@@ -158,8 +218,8 @@ msgstr "rabbitmq ホストのIPアドレス:"
 #. Description
 #. Type: password
 #. Description
-#: ../nova-common.templates:9001 ../nova-common.templates:10001
-#: ../nova-common.templates:11001
+#: ../nova-common.templates:13001 ../nova-common.templates:14001
+#: ../nova-common.templates:15001
 msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
@@ -167,13 +227,13 @@ msgstr ""
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:9001
+#: ../nova-common.templates:13001
 msgid "Please specify the IP address of that server."
 msgstr ""
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
+#: ../nova-common.templates:14001
 #, fuzzy
 #| msgid "Username to connect to XenAPI:"
 msgid "Username for connection to the RabbitMQ server:"
@@ -181,7 +241,7 @@ msgstr "XenAPI への接続に使うユーザ名:"
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
+#: ../nova-common.templates:14001
 #, fuzzy
 #| msgid ""
 #| "Please enter the username used to connect to your XenAPI (XCP server)."
@@ -190,7 +250,7 @@ msgstr "XenAPI (XCP サーバ) への接続に使うユーザ名を入力して�
 
 #. Type: password
 #. Description
-#: ../nova-common.templates:11001
+#: ../nova-common.templates:15001
 #, fuzzy
 #| msgid "Password to connect to XenAPI:"
 msgid "Password for connection to the RabbitMQ server:"
@@ -198,7 +258,7 @@ msgstr "XenAPI への接続に使うパスワード:"
 
 #. Type: password
 #. Description
-#: ../nova-common.templates:11001
+#: ../nova-common.templates:15001
 #, fuzzy
 #| msgid ""
 #| "Please enter the password used to connect to your XenAPI (XCP server)."
