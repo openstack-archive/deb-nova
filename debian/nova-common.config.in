@@ -46,10 +46,18 @@ manage_nova_my_ip () {
 	db_go
 }
 
+read_neutron_config () {
+	pkgos_read_config -p high ${NOVA_CONF} DEFAULT neutron_url nova/neutron_url
+	pkgos_read_config -p medium ${NOVA_CONF} DEFAULT neutron_admin_tenant_name nova/neutron_admin_tenant_name
+	pkgos_read_config -p medium ${NOVA_CONF} DEFAULT neutron_admin_username nova/neutron_admin_username
+	pkgos_read_config -p high ${NOVA_CONF} DEFAULT neutron_admin_password nova/neutron_admin_password
+}
+
 pkgos_var_user_group nova
 pkgos_dbc_read_conf -pkg nova-common ${NOVA_CONF} DEFAULT sql_connection nova $@
 pkgos_rabbit_read_conf ${NOVA_CONF} DEFAULT nova
 pkgos_read_admin_creds ${NOVA_API_CONF} filter:authtoken nova
+read_neutron_config
 
 set_enabled_apis_multiselect
 manage_nova_my_ip
