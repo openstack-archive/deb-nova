@@ -609,7 +609,7 @@ Package: nova-doc
 Architecture: all
 Section: doc
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: libjs-jquery, libjs-underscore, ${misc:Depends}
+Depends: ${sphinxdoc:Depends}, ${misc:Depends}
 Description: OpenStack Compute - documentation
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
