@@ -25,11 +25,11 @@ import time
 
 from oslo.config import cfg
 
-from nova.compute import vm_states
 from nova import conductor
 from nova import db
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import processutils
 from nova import test
 from nova import utils
 from nova.virt.libvirt import imagecache
@@ -162,72 +162,6 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                                 '10737418240')
         self.assertNotIn(unexpected, image_cache_manager.originals)
 
-    def test_list_running_instances(self):
-        all_instances = [{'image_ref': '1',
-                          'host': CONF.host,
-                          'name': 'inst-1',
-                          'uuid': '123',
-                          'vm_state': '',
-                          'task_state': ''},
-                         {'image_ref': '2',
-                          'host': CONF.host,
-                          'name': 'inst-2',
-                          'uuid': '456',
-                          'vm_state': '',
-                          'task_state': ''},
-                         {'image_ref': '2',
-                          'kernel_id': '21',
-                          'ramdisk_id': '22',
-                          'host': 'remotehost',
-                          'name': 'inst-3',
-                          'uuid': '789',
-                          'vm_state': '',
-                          'task_state': ''}]
-
-        image_cache_manager = imagecache.ImageCacheManager()
-
-        # The argument here should be a context, but it's mocked out
-        image_cache_manager._list_running_instances(None, all_instances)
-
-        self.assertEqual(len(image_cache_manager.used_images), 4)
-        self.assertTrue(image_cache_manager.used_images['1'] ==
-                        (1, 0, ['inst-1']))
-        self.assertTrue(image_cache_manager.used_images['2'] ==
-                        (1, 1, ['inst-2', 'inst-3']))
-        self.assertTrue(image_cache_manager.used_images['21'] ==
-                        (0, 1, ['inst-3']))
-        self.assertTrue(image_cache_manager.used_images['22'] ==
-                        (0, 1, ['inst-3']))
-
-        self.assertIn('inst-1', image_cache_manager.instance_names)
-        self.assertIn('123', image_cache_manager.instance_names)
-
-        self.assertEqual(len(image_cache_manager.image_popularity), 4)
-        self.assertEqual(image_cache_manager.image_popularity['1'], 1)
-        self.assertEqual(image_cache_manager.image_popularity['2'], 2)
-        self.assertEqual(image_cache_manager.image_popularity['21'], 1)
-        self.assertEqual(image_cache_manager.image_popularity['22'], 1)
-
-    def test_list_resizing_instances(self):
-        all_instances = [{'image_ref': '1',
-                          'host': CONF.host,
-                          'name': 'inst-1',
-                          'uuid': '123',
-                          'vm_state': vm_states.RESIZED,
-                          'task_state': None}]
-
-        image_cache_manager = imagecache.ImageCacheManager()
-        image_cache_manager._list_running_instances(None, all_instances)
-
-        self.assertEqual(len(image_cache_manager.used_images), 1)
-        self.assertTrue(image_cache_manager.used_images['1'] ==
-                        (1, 0, ['inst-1']))
-        self.assertTrue(image_cache_manager.instance_names ==
-                        set(['inst-1', '123', 'inst-1_resize', '123_resize']))
-
-        self.assertEqual(len(image_cache_manager.image_popularity), 1)
-        self.assertEqual(image_cache_manager.image_popularity['1'], 1)
-
     def test_list_backing_images_small(self):
         self.stubs.Set(os, 'listdir',
                        lambda x: ['_base', 'instance-00000001',
@@ -294,6 +228,24 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         self.assertEqual(inuse_images, [found])
         self.assertEqual(len(image_cache_manager.unexplained_images), 0)
+
+    def test_list_backing_images_disk_notexist(self):
+        self.stubs.Set(os, 'listdir',
+                       lambda x: ['_base', 'banana-42-hamster'])
+        self.stubs.Set(os.path, 'exists',
+                       lambda x: x.find('banana-42-hamster') != -1)
+
+        def fake_get_disk(disk_path):
+            raise processutils.ProcessExecutionError()
+
+        self.stubs.Set(virtutils, 'get_disk_backing_file', fake_get_disk)
+
+        image_cache_manager = imagecache.ImageCacheManager()
+        image_cache_manager.unexplained_images = []
+        image_cache_manager.instance_names = self.stock_instance_names
+
+        self.assertRaises(processutils.ProcessExecutionError,
+                          image_cache_manager._list_backing_images)
 
     def test_find_base_file_nothing(self):
         self.stubs.Set(os.path, 'exists', lambda x: False)
@@ -572,8 +524,6 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         self.flags(instances_path='/instance_path',
                    image_cache_subdirectory_name='_base')
-        self.flags(remove_unused_base_images=True,
-                   group='libvirt')
 
         base_file_list = ['00000001',
                           'ephemeral_0_20_None',
@@ -719,12 +669,15 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         # And finally we can make the call we're actually testing...
         # The argument here should be a context, but it is mocked out
-        image_cache_manager.verify_base_images(None, all_instances)
+        image_cache_manager.update(None, all_instances)
 
         # Verify
         active = [fq_path(hashed_1), fq_path('%s_5368709120' % hashed_1),
                   fq_path(hashed_21), fq_path(hashed_22)]
-        self.assertEqual(image_cache_manager.active_base_files, active)
+        for act in active:
+            self.assertIn(act, image_cache_manager.active_base_files)
+        self.assertEqual(len(image_cache_manager.active_base_files),
+                         len(active))
 
         for rem in [fq_path('e97222e91fc4241f49a7f520d1dcf446751129b3_sm'),
                     fq_path('e09c675c2d1cfac32dae3c2d83689c8c94bc693b_sm'),
@@ -738,7 +691,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
     def test_verify_base_images_no_base(self):
         self.flags(instances_path='/tmp/no/such/dir/name/please')
         image_cache_manager = imagecache.ImageCacheManager()
-        image_cache_manager.verify_base_images(None, [])
+        image_cache_manager.update(None, [])
 
     def test_is_valid_info_file(self):
         hashed = 'e97222e91fc4241f49a7f520d1dcf446751129b3'
@@ -762,7 +715,6 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             self.flags(instances_path=tmpdir)
             self.flags(image_info_filename_pattern=('$instances_path/'
                                                     '%(image)s.info'),
-                       remove_unused_base_images=True,
                        group='libvirt')
 
             # Ensure there is a base directory
@@ -797,7 +749,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             os.utime(base_filename + '.info', (old, old))
 
             image_cache_manager = imagecache.ImageCacheManager()
-            image_cache_manager.verify_base_images(None, all_instances)
+            image_cache_manager.update(None, all_instances)
 
             self.assertTrue(os.path.exists(base_filename))
             self.assertTrue(os.path.exists(base_filename + '.info'))

@@ -927,6 +927,12 @@ class _TargetedMessageMethods(_BaseMessageMethods):
                                             backup_type,
                                             rotation)
 
+    def rebuild_instance(self, message, instance, image_href, admin_password,
+                         files_to_inject, kwargs):
+        self._call_compute_api_with_obj(message.ctxt, instance, 'rebuild',
+                                        image_href, admin_password,
+                                        files_to_inject, **kwargs)
+
 
 class _BroadcastMessageMethods(_BaseMessageMethods):
     """These are the methods that can be called as a part of a broadcast
@@ -935,6 +941,56 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
     def _at_the_top(self):
         """Are we the API level?"""
         return not self.state_manager.get_parent_cells()
+
+    def _apply_expected_states(self, instance_info):
+        """To attempt to address out-of-order messages, do some sanity
+        checking on the VM and task states.  Add some requirements for
+        vm_state and task_state to the instance_update() DB call if
+        necessary.
+        """
+        expected_vm_state_map = {
+                # For updates containing 'vm_state' of 'building',
+                # only allow them to occur if the DB already says
+                # 'building' or if the vm_state is None.  None
+                # really shouldn't be possible as instances always
+                # start out in 'building' anyway.. but just in case.
+                vm_states.BUILDING: [vm_states.BUILDING, None]}
+
+        expected_task_state_map = {
+                # Always allow updates when task_state doesn't change,
+                # but also make sure we don't set resize/rebuild task
+                # states for old messages when we've potentially already
+                # processed the ACTIVE/None messages.  Ie, these checks
+                # will prevent stomping on any ACTIVE/None messages
+                # we already processed.
+                task_states.REBUILD_BLOCK_DEVICE_MAPPING:
+                        [task_states.REBUILD_BLOCK_DEVICE_MAPPING,
+                         task_states.REBUILDING],
+                task_states.REBUILD_SPAWNING:
+                        [task_states.REBUILD_SPAWNING,
+                         task_states.REBUILD_BLOCK_DEVICE_MAPPING,
+                         task_states.REBUILDING],
+                task_states.RESIZE_MIGRATING:
+                        [task_states.RESIZE_MIGRATING,
+                         task_states.RESIZE_PREP],
+                task_states.RESIZE_MIGRATED:
+                        [task_states.RESIZE_MIGRATED,
+                         task_states.RESIZE_MIGRATING,
+                         task_states.RESIZE_PREP],
+                task_states.RESIZE_FINISH:
+                        [task_states.RESIZE_FINISH,
+                         task_states.RESIZE_MIGRATED,
+                         task_states.RESIZE_MIGRATING,
+                         task_states.RESIZE_PREP]}
+
+        if 'vm_state' in instance_info:
+            expected = expected_vm_state_map.get(instance_info['vm_state'])
+            if expected is not None:
+                instance_info['expected_vm_state'] = expected
+        if 'task_state' in instance_info:
+            expected = expected_task_state_map.get(instance_info['task_state'])
+            if expected is not None:
+                instance_info['expected_task_state'] = expected
 
     def instance_update_at_top(self, message, instance, **kwargs):
         """Update an instance in the DB if we're a top level cell."""
@@ -967,20 +1023,7 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         LOG.debug(_("Got update for instance: %(instance)s"),
                   {'instance': instance}, instance_uuid=instance_uuid)
 
-        # To attempt to address out-of-order messages, do some sanity
-        # checking on the VM state.
-        expected_vm_state_map = {
-                # For updates containing 'vm_state' of 'building',
-                # only allow them to occur if the DB already says
-                # 'building' or if the vm_state is None.  None
-                # really shouldn't be possible as instances always
-                # start out in 'building' anyway.. but just in case.
-                vm_states.BUILDING: [vm_states.BUILDING, None]}
-
-        expected_vm_states = expected_vm_state_map.get(
-                instance.get('vm_state'))
-        if expected_vm_states:
-                instance['expected_vm_state'] = expected_vm_states
+        self._apply_expected_states(instance)
 
         # It's possible due to some weird condition that the instance
         # was already set as deleted... so we'll attempt to update
@@ -1732,6 +1775,15 @@ class MessageRunner(object):
         extra_kwargs = dict(image_id=image_id, backup_type=backup_type,
                             rotation=rotation)
         self._instance_action(ctxt, instance, 'backup_instance',
+                              extra_kwargs=extra_kwargs)
+
+    def rebuild_instance(self, ctxt, instance, image_href, admin_password,
+                         files_to_inject, kwargs):
+        extra_kwargs = dict(image_href=image_href,
+                            admin_password=admin_password,
+                            files_to_inject=files_to_inject,
+                            kwargs=kwargs)
+        self._instance_action(ctxt, instance, 'rebuild_instance',
                               extra_kwargs=extra_kwargs)
 
     @staticmethod

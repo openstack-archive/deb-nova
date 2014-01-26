@@ -25,6 +25,7 @@ import mox
 import os
 import re
 
+import mock
 import mox
 from oslo.config import cfg
 
@@ -39,6 +40,7 @@ from nova import crypto
 from nova import db
 from nova import exception
 from nova.objects import aggregate as aggregate_obj
+from nova.objects import instance as instance_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
@@ -194,9 +196,9 @@ def stub_vm_utils_with_vdi_attached_here(function):
 
 
 def create_instance_with_system_metadata(context, instance_values):
-    instance_type = db.flavor_get(context,
+    flavor = db.flavor_get(context,
                                   instance_values['instance_type_id'])
-    sys_meta = flavors.save_flavor_info({}, instance_type)
+    sys_meta = flavors.save_flavor_info({}, flavor)
     instance_values['system_metadata'] = sys_meta
     return db.instance_create(context, instance_values)
 
@@ -421,12 +423,12 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.assertThat(fake_diagnostics, matchers.DictMatches(expected))
 
     def test_get_vnc_console(self):
-        instance = self._create_instance()
+        instance = self._create_instance(obj=True)
         session = get_session()
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         vm_ref = vm_utils.lookup(session, instance['name'])
 
-        console = conn.get_vnc_console(instance)
+        console = conn.get_vnc_console(self.context, instance)
 
         # Note(sulo): We dont care about session id in test
         # they will always differ so strip that out
@@ -436,7 +438,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.assertEqual(expected_path, actual_path)
 
     def test_get_vnc_console_for_rescue(self):
-        instance = self._create_instance()
+        instance = self._create_instance(obj=True)
         session = get_session()
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         rescue_vm = xenapi_fake.create_vm(instance['name'] + '-rescue',
@@ -444,7 +446,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         # Set instance state to rescued
         instance['vm_state'] = 'rescued'
 
-        console = conn.get_vnc_console(instance)
+        console = conn.get_vnc_console(self.context, instance)
 
         # Note(sulo): We dont care about session id in test
         # they will always differ so strip that out
@@ -454,25 +456,20 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.assertEqual(expected_path, actual_path)
 
     def test_get_vnc_console_instance_not_ready(self):
-        instance = {}
-        # set instance name and state
-        instance['name'] = 'fake-instance'
-        instance['uuid'] = '00000000-0000-0000-0000-000000000000'
-        instance['vm_state'] = 'building'
+        instance = self._create_instance(obj=True, spawn=False)
+        instance.vm_state = 'building'
 
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.InstanceNotFound,
-                          conn.get_vnc_console, instance)
+                          conn.get_vnc_console, self.context, instance)
 
     def test_get_vnc_console_rescue_not_ready(self):
-        instance = {}
-        instance['name'] = 'fake-rescue'
-        instance['uuid'] = '00000000-0000-0000-0000-000000000001'
-        instance['vm_state'] = 'rescued'
+        instance = self._create_instance(obj=True, spawn=False)
+        instance.vm_state = 'rescued'
 
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.InstanceNotReady,
-                          conn.get_vnc_console, instance)
+                          conn.get_vnc_console, self.context, instance)
 
     def test_instance_snapshot_fails_with_no_primary_vdi(self):
 
@@ -578,11 +575,11 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.vm = vm
 
     def check_vm_record(self, conn, instance_type_id, check_injection):
-        instance_type = db.flavor_get(conn, instance_type_id)
-        mem_kib = long(instance_type['memory_mb']) << 10
+        flavor = db.flavor_get(conn, instance_type_id)
+        mem_kib = long(flavor['memory_mb']) << 10
         mem_bytes = str(mem_kib << 10)
-        vcpus = instance_type['vcpus']
-        vcpu_weight = instance_type['vcpu_weight']
+        vcpus = flavor['vcpus']
+        vcpu_weight = flavor['vcpu_weight']
 
         self.assertEqual(self.vm_info['max_mem'], mem_kib)
         self.assertEqual(self.vm_info['mem'], mem_kib)
@@ -1369,7 +1366,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.stubs.Set(self.conn._vmops, 'get_console_output',
                        fake_get_console_output)
 
-        self.assertEqual(self.conn.get_console_output("instance"),
+        self.assertEqual(self.conn.get_console_output('context', "instance"),
                          "console_log")
 
     def _test_maintenance_mode(self, find_host, find_aggregate):
@@ -1457,9 +1454,9 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
     def test_per_instance_usage_running(self):
         instance = self._create_instance(spawn=True)
-        instance_type = flavors.get_flavor(3)
+        flavor = flavors.get_flavor(3)
 
-        expected = {instance['uuid']: {'memory_mb': instance_type['memory_mb'],
+        expected = {instance['uuid']: {'memory_mb': flavor['memory_mb'],
                                        'uuid': instance['uuid']}}
         actual = self.conn.get_per_instance_usage()
         self.assertEqual(expected, actual)
@@ -1482,7 +1479,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         actual = self.conn.get_per_instance_usage()
         self.assertEqual({}, actual)
 
-    def _create_instance(self, instance_id=1, spawn=True):
+    def _create_instance(self, instance_id=1, spawn=True, obj=False, **attrs):
         """Creates and spawns a test instance."""
         instance_values = {
             'id': instance_id,
@@ -1499,6 +1496,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             'os_type': 'linux',
             'vm_mode': 'hvm',
             'architecture': 'x86-64'}
+        instance_values.update(attrs)
 
         instance = create_instance_with_system_metadata(self.context,
                                                         instance_values)
@@ -1508,6 +1506,10 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         if spawn:
             self.conn.spawn(self.context, instance, image_meta, [], 'herp',
                             network_info)
+        if obj:
+            instance = instance_obj.Instance._from_db_object(
+                self.context, instance_obj.Instance(), instance,
+                expected_attrs=instance_obj.INSTANCE_DEFAULT_FIELDS)
         return instance
 
     def test_destroy_clean_up_kernel_and_ramdisk(self):
@@ -1624,44 +1626,6 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
             pass
         self.stubs.Set(vmops.VMOps, '_inject_instance_metadata',
                        fake_inject_instance_metadata)
-
-    def test_resize_xenserver_6(self):
-        instance = db.instance_create(self.context, self.instance_values)
-        called = {'resize': False}
-
-        def fake_vdi_resize(*args, **kwargs):
-            called['resize'] = True
-
-        self.stubs.Set(stubs.FakeSessionForVMTests,
-                       "VDI_resize", fake_vdi_resize)
-        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests,
-                              product_version=(6, 0, 0),
-                              product_brand='XenServer')
-        conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        vdi_ref = xenapi_fake.create_vdi('hurr', 'fake')
-        vdi_uuid = xenapi_fake.get_record('VDI', vdi_ref)['uuid']
-        conn._vmops._resize_up_root_vdi(instance,
-                                        {'uuid': vdi_uuid, 'ref': vdi_ref})
-        self.assertEqual(called['resize'], True)
-
-    def test_resize_xcp(self):
-        instance = db.instance_create(self.context, self.instance_values)
-        called = {'resize': False}
-
-        def fake_vdi_resize(*args, **kwargs):
-            called['resize'] = True
-
-        self.stubs.Set(stubs.FakeSessionForVMTests,
-                       "VDI_resize", fake_vdi_resize)
-        stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests,
-                              product_version=(1, 4, 99),
-                              product_brand='XCP')
-        conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        vdi_ref = xenapi_fake.create_vdi('hurr', 'fake')
-        vdi_uuid = xenapi_fake.get_record('VDI', vdi_ref)['uuid']
-        conn._vmops._resize_up_root_vdi(instance,
-                                        {'uuid': vdi_uuid, 'ref': vdi_ref})
-        self.assertEqual(called['resize'], True)
 
     def test_migrate_disk_and_power_off(self):
         instance = db.instance_create(self.context, self.instance_values)
@@ -1878,7 +1842,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         instance = {'auto_disk_config': True, 'uuid': 'uuid'}
         vm_ref = "vm_ref"
         dest = "dest"
-        instance_type = "type"
+        flavor = "type"
         sr_path = "sr_path"
 
         virtapi.instance_update(self.context, 'uuid', {'progress': 20.0})
@@ -1891,7 +1855,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         new_vdi_ref = "new_ref"
         new_vdi_uuid = "new_uuid"
         vm_utils.resize_disk(vmops._session, instance, old_vdi_ref,
-            instance_type).AndReturn((new_vdi_ref, new_vdi_uuid))
+            flavor).AndReturn((new_vdi_ref, new_vdi_uuid))
         virtapi.instance_update(self.context, 'uuid', {'progress': 60.0})
         vm_utils.migrate_vhd(vmops._session, instance, new_vdi_uuid, dest,
                              sr_path, 0).AndRaise(
@@ -1904,7 +1868,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
 
         self.assertRaises(exception.InstanceFaultRollback,
                           vmops._migrate_disk_resizing_down, self.context,
-                          instance, dest, instance_type, vm_ref, sr_path)
+                          instance, dest, flavor, vm_ref, sr_path)
 
     def test_resize_ensure_vm_is_shutdown_cleanly(self):
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
@@ -3698,6 +3662,15 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
 
         self.assertEqual({"vdi0": "dest_sr_ref",
                           "vdi1": "dest_sr_ref"}, result)
+
+    def test_rollback_live_migration_at_destination(self):
+        stubs.stubout_session(self.stubs, xenapi_fake.SessionBase)
+        conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
+
+        with mock.patch.object(conn, "destroy") as mock_destroy:
+            conn.rollback_live_migration_at_destination("context",
+                    "instance", [], None)
+            self.assertFalse(mock_destroy.called)
 
 
 class XenAPIInjectMetadataTestCase(stubs.XenAPITestBaseNoDB):

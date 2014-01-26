@@ -35,6 +35,7 @@ LOG = logging.getLogger(__name__)
 
 xenapi_pool_opts = [
     cfg.BoolOpt('use_join_force',
+                #Deprecated in Icehouse
                 deprecated_name='use_join_force',
                 deprecated_group='DEFAULT',
                 default=True,
@@ -51,8 +52,7 @@ class ResourcePool(object):
     Implements resource pool operations.
     """
     def __init__(self, session, virtapi):
-        host_ref = session.get_xenapi_host()
-        host_rec = session.call_xenapi('host.get_record', host_ref)
+        host_rec = session.call_xenapi('host.get_record', session.host_ref)
         self._host_name = host_rec['hostname']
         self._host_addr = host_rec['address']
         self._host_uuid = host_rec['uuid']

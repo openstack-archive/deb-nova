@@ -47,10 +47,12 @@ from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
+from nova.openstack.common import versionutils
 from nova.openstack.common import xmlutils
 from nova import unit
 from nova import utils
 from nova.virt import configdrive
+from nova.virt import cpu
 from nova.virt.disk import api as disk
 from nova.virt.disk.vfs import localfs as vfsimpl
 from nova.virt.xenapi import agent
@@ -138,6 +140,7 @@ xenapi_vm_utils_opts = [
     ]
 
 CONF = cfg.CONF
+# xenapi_vm_utils options in the DEFAULT group were deprecated in Icehouse
 CONF.register_opts(xenapi_vm_utils_opts, 'xenserver')
 CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
 CONF.import_opt('use_cow_images', 'nova.virt.driver')
@@ -161,7 +164,7 @@ PROGRESS_INTERVAL_SECONDS = 300
 
 # Fudge factor to allow for the VHD chain to be slightly larger than
 # the partitioned space. Otherwise, legitimate images near their
-# maximum allowed size can fail on build with InstanceDiskTypeTooSmall.
+# maximum allowed size can fail on build with FlavorDiskTooSmall.
 VHD_SIZE_CHECK_FUDGE_FACTOR_GB = 10
 
 
@@ -237,8 +240,8 @@ def get_vm_device_id(session, image_properties):
 
 
 def _hypervisor_supports_device_id(version):
-    hypervisor_major_minor_version = utils.get_major_minor_version(version)
-    return(hypervisor_major_minor_version >= 6.1)
+    version_as_string = '.'.join(str(v) for v in version)
+    return(versionutils.is_compatible('6.1', version_as_string))
 
 
 def create_vm(session, instance, name_label, kernel, ramdisk,
@@ -254,16 +257,21 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
 
         3. Using hardware virtualization
     """
-    instance_type = flavors.extract_flavor(instance)
-    mem = str(long(instance_type['memory_mb']) * unit.Mi)
-    vcpus = str(instance_type['vcpus'])
+    flavor = flavors.extract_flavor(instance)
+    mem = str(long(flavor['memory_mb']) * unit.Mi)
+    vcpus = str(flavor['vcpus'])
 
-    vcpu_weight = instance_type['vcpu_weight']
+    vcpu_weight = flavor['vcpu_weight']
     vcpu_params = {}
     if vcpu_weight is not None:
         # NOTE(johngarbutt) bug in XenServer 6.1 and 6.2 means
         # we need to specify both weight and cap for either to apply
         vcpu_params = {"weight": str(vcpu_weight), "cap": "0"}
+
+    cpu_mask_list = cpu.get_cpuset_ids()
+    if cpu_mask_list:
+        cpu_mask = ",".join(str(cpu_id) for cpu_id in cpu_mask_list)
+        vcpu_params["mask"] = cpu_mask
 
     rec = {
         'actions_after_crash': 'destroy',
@@ -377,11 +385,10 @@ def is_vm_shutdown(session, vm_ref):
 
 
 def is_enough_free_mem(session, instance):
-    instance_type = flavors.extract_flavor(instance)
-    mem = long(instance_type['memory_mb']) * unit.Mi
-    host = session.get_xenapi_host()
+    flavor = flavors.extract_flavor(instance)
+    mem = long(flavor['memory_mb']) * unit.Mi
     host_free_mem = long(session.call_xenapi("host.compute_free_memory",
-                                             host))
+                                             session.host_ref))
     return host_free_mem >= mem
 
 
@@ -412,14 +419,14 @@ def _should_retry_unplug_vbd(err):
             err == 'INTERNAL_ERROR')
 
 
-def unplug_vbd(session, vbd_ref):
+def unplug_vbd(session, vbd_ref, this_vm_ref):
     max_attempts = CONF.xenserver.num_vbd_unplug_retries + 1
     for num_attempt in xrange(1, max_attempts + 1):
         try:
             if num_attempt > 1:
                 greenthread.sleep(1)
 
-            session.call_xenapi('VBD.unplug', vbd_ref)
+            volume_utils.vbd_unplug(session, vbd_ref, this_vm_ref)
             return
         except session.XenAPI.Failure as exc:
             err = len(exc.details) > 0 and exc.details[0]
@@ -801,10 +808,10 @@ def get_sr_path(session, sr_ref=None):
     """
     if sr_ref is None:
         sr_ref = safe_find_sr(session)
-    host_ref = session.get_xenapi_host()
     pbd_rec = session.call_xenapi("PBD.get_all_records_where",
                                   'field "host"="%s" and '
-                                  'field "SR"="%s"' % (host_ref, sr_ref))
+                                  'field "SR"="%s"' %
+                                  (session.host_ref, sr_ref))
 
     # NOTE(bobball): There can only be one PBD for a host/SR pair, but path is
     # not always present - older versions of XS do not set it.
@@ -900,8 +907,64 @@ def _find_cached_image(session, image_id, sr_ref):
         return recs.keys()[0]
 
 
-def resize_disk(session, instance, vdi_ref, instance_type):
-    size_gb = instance_type['root_gb']
+def _get_resize_func_name(session):
+    brand = session.product_brand
+    version = session.product_version
+
+    # To maintain backwards compatibility. All recent versions
+    # should use VDI.resize
+    if version and brand:
+        xcp = brand == 'XCP'
+        r1_2_or_above = (version[0] == 1 and version[1] > 1) or version[0] > 1
+
+        xenserver = brand == 'XenServer'
+        r6_or_above = version[0] > 5
+
+        if (xcp and not r1_2_or_above) or (xenserver and not r6_or_above):
+            return 'VDI.resize_online'
+
+    return 'VDI.resize'
+
+
+def _vdi_get_virtual_size(session, vdi_ref):
+    size = session.call_xenapi('VDI.get_virtual_size', vdi_ref)
+    return int(size)
+
+
+def _vdi_resize(session, vdi_ref, new_size):
+    resize_func_name = _get_resize_func_name(session)
+    session.call_xenapi(resize_func_name, vdi_ref, str(new_size))
+
+
+def update_vdi_virtual_size(session, instance, vdi_ref, new_gb):
+    virtual_size = _vdi_get_virtual_size(session, vdi_ref)
+    new_disk_size = new_gb * unit.Gi
+
+    msg = _("Resizing up VDI %(vdi_ref)s from %(virtual_size)d "
+            "to %(new_disk_size)d")
+    LOG.debug(msg, {'vdi_ref': vdi_ref, 'virtual_size': virtual_size,
+                    'new_disk_size': new_disk_size},
+              instance=instance)
+
+    if virtual_size < new_disk_size:
+        # For resize up. Simple VDI resize will do the trick
+        _vdi_resize(session, vdi_ref, new_disk_size)
+
+    elif virtual_size == new_disk_size:
+        LOG.debug(_("No need to change vdi virtual size."),
+                  instance=instance)
+
+    else:
+        # NOTE(johngarbutt): we should never get here
+        # but if we don't raise an exception, a user might be able to use
+        # more storage than allowed by their chosen instance flavor
+        LOG.error(_("VDI %s is bigger than requested resize up size."),
+                  vdi_ref, instance=instance)
+        raise exception.ResizeError(_("VDI too big for requested resize up."))
+
+
+def resize_disk(session, instance, vdi_ref, flavor):
+    size_gb = flavor['root_gb']
     if size_gb == 0:
         reason = _("Can't resize a disk to 0 GB.")
         raise exception.ResizeError(reason=reason)
@@ -1045,7 +1108,8 @@ def _generate_disk(session, instance, vm_ref, userdevice, name_label,
                               run_as_root=True)
 
         # 4. Create VBD between instance VM and VDI
-        create_vbd(session, vm_ref, vdi_ref, userdevice, bootable=False)
+        if vm_ref:
+            create_vbd(session, vm_ref, vdi_ref, userdevice, bootable=False)
     except Exception:
         with excutils.save_and_reraise_exception():
             destroy_vdi(session, vdi_ref)
@@ -1078,25 +1142,35 @@ def get_ephemeral_disk_sizes(total_size_gb):
         left_to_allocate -= size_gb
 
 
+def generate_single_ephemeral(session, instance, vm_ref, userdevice,
+                              size_gb, instance_name_label=None):
+    if instance_name_label is None:
+        instance_name_label = instance["name"]
+
+    name_label = "%s ephemeral" % instance_name_label
+    #TODO(johngarbutt) need to move DEVICE_EPHEMERAL from vmops to use it here
+    label_number = int(userdevice) - 4
+    if label_number > 0:
+        name_label = "%s (%d)" % (name_label, label_number)
+
+    return _generate_disk(session, instance, vm_ref, str(userdevice),
+                          name_label, 'ephemeral', size_gb * 1024,
+                          CONF.default_ephemeral_format)
+
+
 def generate_ephemeral(session, instance, vm_ref, first_userdevice,
                        instance_name_label, total_size_gb):
     # NOTE(johngarbutt): max possible size of a VHD disk is 2043GB
-
+    sizes = get_ephemeral_disk_sizes(total_size_gb)
     first_userdevice = int(first_userdevice)
-    userdevice = first_userdevice
-    initial_name_label = instance_name_label + " ephemeral"
-    name_label = initial_name_label
 
     vdi_refs = []
     try:
-        for size_gb in get_ephemeral_disk_sizes(total_size_gb):
-            ref = _generate_disk(session, instance, vm_ref, str(userdevice),
-                                 name_label, 'ephemeral', size_gb * 1024,
-                                 CONF.default_ephemeral_format)
+        for userdevice, size_gb in enumerate(sizes, start=first_userdevice):
+            ref = generate_single_ephemeral(session, instance, vm_ref,
+                                            userdevice, size_gb,
+                                            instance_name_label)
             vdi_refs.append(ref)
-            userdevice += 1
-            label_number = userdevice - first_userdevice
-            name_label = "%s (%d)" % (initial_name_label, label_number)
     except Exception as exc:
         with excutils.save_and_reraise_exception():
             LOG.debug(_("Error when generating ephemeral disk. "
@@ -1439,17 +1513,17 @@ def _get_vdi_chain_size(session, vdi_uuid):
 
 
 def _check_vdi_size(context, session, instance, vdi_uuid):
-    instance_type = flavors.extract_flavor(instance)
-    allowed_size = (instance_type['root_gb'] +
+    flavor = flavors.extract_flavor(instance)
+    allowed_size = (flavor['root_gb'] +
                     VHD_SIZE_CHECK_FUDGE_FACTOR_GB) * unit.Gi
 
-    if not instance_type['root_gb']:
+    if not flavor['root_gb']:
         # root_gb=0 indicates that we're disabling size checks
         return
 
     size = _get_vdi_chain_size(session, vdi_uuid)
     if size > allowed_size:
-        LOG.error(_("Image size %(size)d exceeded instance_type "
+        LOG.error(_("Image size %(size)d exceeded flavor "
                     "allowed size %(allowed_size)d"),
                   {'size': size, 'allowed_size': allowed_size},
                   instance=instance)
@@ -1618,7 +1692,7 @@ def set_vm_name_label(session, vm_ref, name_label):
 
 def list_vms(session):
     for vm_ref, vm_rec in session.get_all_refs_and_recs('VM'):
-        if (vm_rec["resident_on"] != session.get_xenapi_host() or
+        if (vm_rec["resident_on"] != session.host_ref or
                 vm_rec["is_a_template"] or vm_rec["is_control_domain"]):
             continue
         else:
@@ -1796,7 +1870,7 @@ def safe_find_sr(session):
 
 def _find_sr(session):
     """Return the storage repository to hold VM images."""
-    host = session.get_xenapi_host()
+    host = session.host_ref
     try:
         tokens = CONF.xenserver.sr_matching_filter.split(':')
         filter_criteria = tokens[0]
@@ -1843,7 +1917,7 @@ def _safe_find_iso_sr(session):
 
 def _find_iso_sr(session):
     """Return the storage repository to hold ISO images."""
-    host = session.get_xenapi_host()
+    host = session.host_ref
     for sr_ref, sr_rec in session.get_all_refs_and_recs('SR'):
         LOG.debug(_("ISO: looking at SR %s"), sr_rec)
         if not sr_rec['content_type'] == 'iso':
@@ -2081,7 +2155,7 @@ def cleanup_attached_vdis(session):
             # unclean restart
             LOG.info(_('Disconnecting stale VDI %s from compute domU'),
                      vdi_rec['uuid'])
-            unplug_vbd(session, vbd_ref)
+            unplug_vbd(session, vbd_ref, this_vm_ref)
             destroy_vbd(session, vbd_ref)
 
 
@@ -2108,7 +2182,7 @@ def vdi_attached_here(session, vdi_ref, read_only=False):
             yield dev
         finally:
             LOG.debug(_('Destroying VBD for VDI %s ... '), vdi_ref)
-            unplug_vbd(session, vbd_ref)
+            unplug_vbd(session, vbd_ref, this_vm_ref)
     finally:
         try:
             destroy_vbd(session, vbd_ref)
@@ -2126,10 +2200,10 @@ def _get_sys_hypervisor_uuid():
 def get_this_vm_uuid(session):
     if session and session.is_local_connection:
         # UUID is the control domain running on this host
-        host_ref = session.get_xenapi_host()
         vms = session.call_xenapi("VM.get_all_records_where",
                                   'field "is_control_domain"="true" and '
-                                  'field "resident_on"="%s"' % host_ref)
+                                  'field "resident_on"="%s"' %
+                                  session.host_ref)
         return vms[vms.keys()[0]]['uuid']
     try:
         return _get_sys_hypervisor_uuid()

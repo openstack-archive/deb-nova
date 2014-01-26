@@ -20,6 +20,7 @@ Client side of the scheduler manager RPC API.
 
 from oslo.config import cfg
 
+from nova.objects import base as objects_base
 from nova.openstack.common import jsonutils
 from nova import rpcclient
 
@@ -77,6 +78,7 @@ class SchedulerAPI(rpcclient.RpcProxy):
         handle the version_cap being set to 2.9.
 
         ... - Deprecated live_migration() call, moved to conductor
+        ... - Deprecated select_hosts()
     '''
 
     #
@@ -99,6 +101,7 @@ class SchedulerAPI(rpcclient.RpcProxy):
                                                CONF.upgrade_levels.scheduler)
         super(SchedulerAPI, self).__init__(topic=CONF.scheduler_topic,
                 default_version=self.BASE_RPC_API_VERSION,
+                serializer=objects_base.NovaObjectSerializer(),
                 version_cap=version_cap)
         self.client = self.get_client()
 
@@ -134,9 +137,3 @@ class SchedulerAPI(rpcclient.RpcProxy):
                          image=image_p, request_spec=request_spec,
                          filter_properties=filter_properties,
                          reservations=reservations_p)
-
-    def select_hosts(self, ctxt, request_spec, filter_properties):
-        cctxt = self.client.prepare(version='2.6')
-        return cctxt.call(ctxt, 'select_hosts',
-                          request_spec=request_spec,
-                          filter_properties=filter_properties)

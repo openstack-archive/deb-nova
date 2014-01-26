@@ -16,6 +16,7 @@ import contextlib
 import datetime
 import iso8601
 
+import mock
 import netaddr
 import six
 from testtools import matchers
@@ -410,6 +411,15 @@ class _TestObject(object):
         obj = MyObj.obj_from_primitive(primitive)
         self.assertEqual(obj.foo, 1)
 
+    def test_hydration_version_different(self):
+        primitive = {'nova_object.name': 'MyObj',
+                     'nova_object.namespace': 'nova',
+                     'nova_object.version': '1.2',
+                     'nova_object.data': {'foo': 1}}
+        obj = MyObj.obj_from_primitive(primitive)
+        self.assertEqual(obj.foo, 1)
+        self.assertEqual('1.2', obj.VERSION)
+
     def test_hydration_bad_ns(self):
         primitive = {'nova_object.name': 'MyObj',
                      'nova_object.namespace': 'foo',
@@ -488,6 +498,16 @@ class _TestObject(object):
     def test_unknown_objtype(self):
         self.assertRaises(exception.UnsupportedObjectError,
                           base.NovaObject.obj_class_from_name, 'foo', '1.0')
+
+    def test_obj_class_from_name_supported_version(self):
+        error = None
+        try:
+            base.NovaObject.obj_class_from_name('MyObj', '1.25')
+        except exception.IncompatibleObjectVersion as error:
+            pass
+
+        self.assertIsNotNone(error)
+        self.assertEqual('1.5', error.kwargs['supported'])
 
     def test_with_alternate_context(self):
         ctxt1 = context.RequestContext('foo', 'foo')
@@ -712,6 +732,27 @@ class TestObjectListBase(test.TestCase):
         self.assertEqual([x.foo for x in obj],
                          [y.foo for y in obj2])
 
+    def _test_object_list_version_mappings(self, list_obj_class):
+        # Figure out what sort of object this list is for
+        list_field = list_obj_class.fields['objects']
+        item_obj_field = list_field._type._element_type
+        item_obj_name = item_obj_field._type._obj_name
+
+        # Look through all object classes of this type and make sure that
+        # the versions we find are covered by the parent list class
+        for item_class in base.NovaObject._obj_classes[item_obj_name]:
+            self.assertIn(
+                item_class.VERSION,
+                list_obj_class.child_versions.values())
+
+    def test_object_version_mappings(self):
+        # Find all object list classes and make sure that they at least handle
+        # all the current object versions
+        for obj_classes in base.NovaObject._obj_classes.values():
+            for obj_class in obj_classes:
+                if issubclass(obj_class, base.ObjectListBase):
+                    self._test_object_list_version_mappings(obj_class)
+
 
 class TestObjectSerializer(_BaseTestCase):
     def test_serialize_entity_primitive(self):
@@ -723,6 +764,19 @@ class TestObjectSerializer(_BaseTestCase):
         ser = base.NovaObjectSerializer()
         for thing in (1, 'foo', [1, 2], {'foo': 'bar'}):
             self.assertEqual(thing, ser.deserialize_entity(None, thing))
+
+    def test_deserialize_entity_newer_version(self):
+        ser = base.NovaObjectSerializer()
+        ser._conductor = mock.Mock()
+        ser._conductor.object_backport.return_value = 'backported'
+        obj = MyObj()
+        obj.VERSION = '1.25'
+        primitive = obj.obj_to_primitive()
+        result = ser.deserialize_entity(self.context, primitive)
+        self.assertEqual('backported', result)
+        ser._conductor.object_backport.assert_called_with(self.context,
+                                                          primitive,
+                                                          '1.5')
 
     def test_object_serialization(self):
         ser = base.NovaObjectSerializer()

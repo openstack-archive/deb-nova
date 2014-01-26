@@ -289,10 +289,14 @@ def exact_filter(query, model, filters, legal_keys):
     return query
 
 
-def convert_datetimes(values, *datetime_keys):
-    for key in values:
-        if key in datetime_keys and isinstance(values[key], six.string_types):
-            values[key] = timeutils.parse_strtime(values[key])
+def convert_objects_related_datetimes(values, *datetime_keys):
+    for key in datetime_keys:
+        if key in values and values[key]:
+            if isinstance(values[key], six.string_types):
+                values[key] = timeutils.parse_strtime(values[key])
+            # NOTE(danms): Strip UTC timezones from datetimes, since they're
+            # stored that way in the database
+            values[key] = values[key].replace(tzinfo=None)
     return values
 
 
@@ -623,7 +627,8 @@ def compute_node_create(context, values):
     with the most recent data.
     """
     _prep_stats_dict(values)
-    convert_datetimes(values, 'created_at', 'deleted_at', 'updated_at')
+    datetime_keys = ('created_at', 'deleted_at', 'updated_at')
+    convert_objects_related_datetimes(values, *datetime_keys)
 
     compute_node_ref = models.ComputeNode()
     compute_node_ref.update(values)
@@ -680,7 +685,8 @@ def compute_node_update(context, compute_id, values, prune_stats=False):
         # changes in data.  This ensures that we invalidate the
         # scheduler cache of compute node data in case of races.
         values['updated_at'] = timeutils.utcnow()
-        convert_datetimes(values, 'created_at', 'deleted_at', 'updated_at')
+        datetime_keys = ('created_at', 'deleted_at', 'updated_at')
+        convert_objects_related_datetimes(values, *datetime_keys)
         compute_ref.update(values)
     return compute_ref
 
@@ -1434,9 +1440,9 @@ def virtual_interface_create(context, values):
     return vif_ref
 
 
-def _virtual_interface_query(context, session=None):
+def _virtual_interface_query(context, session=None, use_slave=False):
     return model_query(context, models.VirtualInterface, session=session,
-                       read_deleted="no")
+                       read_deleted="no", use_slave=use_slave)
 
 
 @require_context
@@ -1482,12 +1488,12 @@ def virtual_interface_get_by_uuid(context, vif_uuid):
 
 @require_context
 @require_instance_exists_using_uuid
-def virtual_interface_get_by_instance(context, instance_uuid):
+def virtual_interface_get_by_instance(context, instance_uuid, use_slave=False):
     """Gets all virtual interfaces for instance.
 
     :param instance_uuid: = uuid of the instance to retrieve vifs for
     """
-    vif_refs = _virtual_interface_query(context).\
+    vif_refs = _virtual_interface_query(context, use_slave=use_slave).\
                        filter_by(instance_uuid=instance_uuid).\
                        all()
     return vif_refs
@@ -1576,14 +1582,9 @@ def _handle_objects_related_type_conversions(values):
         if key in values and values[key] is not None:
             values[key] = str(values[key])
 
-    # NOTE(danms): Strip UTC timezones from datetimes, since they're
-    # stored that way in the database
-    for key in ('created_at', 'deleted_at', 'updated_at',
-                'launched_at', 'terminated_at', 'scheduled_at'):
-        if key in values and values[key]:
-            if isinstance(values[key], six.string_types):
-                values[key] = timeutils.parse_strtime(values[key])
-            values[key] = values[key].replace(tzinfo=None)
+    datetime_keys = ('created_at', 'deleted_at', 'updated_at',
+                     'launched_at', 'terminated_at', 'scheduled_at')
+    convert_objects_related_datetimes(values, *datetime_keys)
 
 
 @require_context
@@ -1678,6 +1679,9 @@ def instance_destroy(context, instance_uuid, constraint=None):
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
         model_query(context, models.InstanceMetadata, session=session).\
+                filter_by(instance_uuid=instance_uuid).\
+                soft_delete()
+        model_query(context, models.InstanceFault, session=session).\
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
     return instance_ref
@@ -1816,7 +1820,8 @@ def instance_get_all(context, columns_to_join=None):
 
 @require_context
 def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
-                                limit=None, marker=None, columns_to_join=None):
+                                limit=None, marker=None, columns_to_join=None,
+                                use_slave=False):
     """Return instances that match all filters.  Deleted instances
     will be returned by default, unless there's a filter that says
     otherwise.
@@ -1853,7 +1858,10 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
 
     sort_fn = {'desc': desc, 'asc': asc}
 
-    session = get_session()
+    if CONF.database.slave_connection == '':
+        use_slave = False
+
+    session = get_session(slave_session=use_slave)
 
     if columns_to_join is None:
         columns_to_join = ['info_cache', 'security_groups']
@@ -1875,7 +1883,7 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
     if 'changes-since' in filters:
         changes_since = timeutils.normalize_time(filters['changes-since'])
         query_prefix = query_prefix.\
-                            filter(models.Instance.updated_at > changes_since)
+                            filter(models.Instance.updated_at >= changes_since)
 
     if 'deleted' in filters:
         # Instances can be soft or hard deleted and the query needs to
@@ -3720,13 +3728,16 @@ def security_group_create(context, values):
 
 
 @require_context
-def security_group_update(context, security_group_id, values):
+def security_group_update(context, security_group_id, values,
+                          columns_to_join=None):
     session = get_session()
     with session.begin():
-        security_group_ref = model_query(context, models.SecurityGroup,
-                                         session=session).\
-                                filter_by(id=security_group_id).\
-                                first()
+        query = model_query(context, models.SecurityGroup,
+                         session=session).filter_by(id=security_group_id)
+        if columns_to_join:
+            for column in columns_to_join:
+                query = query.options(joinedload_all(column))
+        security_group_ref = query.first()
 
         if not security_group_ref:
             raise exception.SecurityGroupNotFound(
@@ -4173,7 +4184,7 @@ def console_get(context, console_id, instance_uuid=None):
 
 
 @require_admin_context
-def flavor_create(context, values):
+def flavor_create(context, values, projects=None):
     """Create a new instance type. In order to pass in extra specs,
     the values dict should contain a 'extra_specs' key/value pair:
 
@@ -4193,14 +4204,24 @@ def flavor_create(context, values):
     instance_type_ref = models.InstanceTypes()
     instance_type_ref.update(values)
 
-    try:
-        instance_type_ref.save()
-    except db_exc.DBDuplicateEntry as e:
-        if 'flavorid' in e.columns:
-            raise exception.FlavorIdExists(flavor_id=values['flavorid'])
-        raise exception.FlavorExists(name=values['name'])
-    except Exception as e:
-        raise db_exc.DBError(e)
+    if projects is None:
+        projects = []
+
+    session = get_session()
+    with session.begin():
+        try:
+            instance_type_ref.save()
+        except db_exc.DBDuplicateEntry as e:
+            if 'flavorid' in e.columns:
+                raise exception.FlavorIdExists(flavor_id=values['flavorid'])
+            raise exception.FlavorExists(name=values['name'])
+        except Exception as e:
+            raise db_exc.DBError(e)
+        for project in set(projects):
+            access_ref = models.InstanceTypeProjects()
+            access_ref.update({"instance_type_id": instance_type_ref.id,
+                               "project_id": project})
+            access_ref.save()
 
     return _dict_with_extra_specs(instance_type_ref)
 
@@ -4573,6 +4594,7 @@ def instance_metadata_delete(context, instance_uuid, key):
 
 
 @require_context
+@_retry_on_deadlock
 def instance_metadata_update(context, instance_uuid, metadata, delete):
     all_keys = metadata.keys()
     session = get_session()
@@ -5275,7 +5297,7 @@ def instance_fault_get_by_instance_uuids(context, instance_uuids):
 
 
 def action_start(context, values):
-    convert_datetimes(values, 'start_time')
+    convert_objects_related_datetimes(values, 'start_time')
     action_ref = models.InstanceAction()
     action_ref.update(values)
     action_ref.save()
@@ -5283,7 +5305,7 @@ def action_start(context, values):
 
 
 def action_finish(context, values):
-    convert_datetimes(values, 'start_time', 'finish_time')
+    convert_objects_related_datetimes(values, 'start_time', 'finish_time')
     session = get_session()
     with session.begin():
         action_ref = model_query(context, models.InstanceAction,
@@ -5305,7 +5327,7 @@ def actions_get(context, instance_uuid):
     """Get all instance actions for the provided uuid."""
     actions = model_query(context, models.InstanceAction).\
                           filter_by(instance_uuid=instance_uuid).\
-                          order_by(desc("created_at")).\
+                          order_by(desc("created_at"), desc("id")).\
                           all()
     return actions
 
@@ -5327,7 +5349,7 @@ def _action_get_by_request_id(context, instance_uuid, request_id,
 
 def action_event_start(context, values):
     """Start an event on an instance action."""
-    convert_datetimes(values, 'start_time')
+    convert_objects_related_datetimes(values, 'start_time')
     session = get_session()
     with session.begin():
         action = _action_get_by_request_id(context, values['instance_uuid'],
@@ -5348,7 +5370,7 @@ def action_event_start(context, values):
 
 def action_event_finish(context, values):
     """Finish an event on an instance action."""
-    convert_datetimes(values, 'start_time', 'finish_time')
+    convert_objects_related_datetimes(values, 'start_time', 'finish_time')
     session = get_session()
     with session.begin():
         action = _action_get_by_request_id(context, values['instance_uuid'],
@@ -5379,7 +5401,7 @@ def action_event_finish(context, values):
 def action_events_get(context, action_id):
     events = model_query(context, models.InstanceActionEvent).\
                          filter_by(action_id=action_id).\
-                         order_by(desc("created_at")).\
+                         order_by(desc("created_at"), desc("id")).\
                          all()
 
     return events

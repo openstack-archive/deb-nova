@@ -34,6 +34,7 @@ from nova import db
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova import utils
 from nova.virt import driver
 from nova.virt import virtapi
 
@@ -98,7 +99,7 @@ class FakeDriver(driver.ComputeDriver):
           'memory_mb_used': 0,
           'local_gb_used': 100000000000,
           'hypervisor_type': 'fake',
-          'hypervisor_version': '1.0',
+          'hypervisor_version': utils.convert_version_to_int('1.0'),
           'hypervisor_hostname': CONF.host,
           'cpu_info': {},
           'disk_available_least': 500000000000,
@@ -211,6 +212,10 @@ class FakeDriver(driver.ComputeDriver):
                         {'key': key,
                          'inst': self.instances}, instance=instance)
 
+    def cleanup(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
+        pass
+
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       encryption=None):
         """Attach the disk to the instance at mountpoint using info."""
@@ -305,10 +310,10 @@ class FakeDriver(driver.ComputeDriver):
     def interface_stats(self, instance_name, iface_id):
         return [0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L]
 
-    def get_console_output(self, instance):
+    def get_console_output(self, context, instance):
         return 'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE'
 
-    def get_vnc_console(self, instance):
+    def get_vnc_console(self, context, instance):
         return {'internal_access_path': 'FAKE',
                 'host': 'fakevncconsole.com',
                 'port': 6969}

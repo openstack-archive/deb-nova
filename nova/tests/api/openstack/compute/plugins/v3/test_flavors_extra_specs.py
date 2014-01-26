@@ -20,6 +20,7 @@ import webob
 from nova.api.openstack.compute.plugins.v3 import flavors_extraspecs
 import nova.db
 from nova import exception
+from nova.openstack.common.db import exception as db_exc
 from nova import test
 from nova.tests.api.openstack import fakes
 
@@ -151,6 +152,32 @@ class FlavorsExtraSpecsTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
                           req, 1, '')
 
+    def test_create_flavor_not_found(self):
+        def fake_instance_type_extra_specs_update_or_create(*args, **kwargs):
+            raise exception.FlavorNotFound(flavor_id='')
+
+        self.stubs.Set(nova.db,
+                       'flavor_extra_specs_update_or_create',
+                       fake_instance_type_extra_specs_update_or_create)
+        body = {"extra_specs": {"key1": "value1"}}
+        req = fakes.HTTPRequest.blank('/v3/flavors/1/extra-specs',
+                                      use_admin_context=True)
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.create,
+                          req, 1, body)
+
+    def test_create_flavor_db_duplicate(self):
+        def fake_instance_type_extra_specs_update_or_create(*args, **kwargs):
+            raise db_exc.DBDuplicateEntry()
+
+        self.stubs.Set(nova.db,
+                       'flavor_extra_specs_update_or_create',
+                       fake_instance_type_extra_specs_update_or_create)
+        body = {"extra_specs": {"key1": "value1"}}
+        req = fakes.HTTPRequest.blank('/v3/flavors/1/extra-specs',
+                                      use_admin_context=True)
+        self.assertRaises(webob.exc.HTTPConflict, self.controller.create,
+                          req, 1, body)
+
     def test_update_item(self):
         self.stubs.Set(nova.db,
                        'flavor_extra_specs_update_or_create',
@@ -204,6 +231,34 @@ class FlavorsExtraSpecsTest(test.TestCase):
                                      use_admin_context=True)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                           req, 1, 'bad', body)
+
+    def test_update_flavor_not_found(self):
+        def fake_instance_type_extra_specs_update_or_create(*args, **kwargs):
+            raise exception.FlavorNotFound(flavor_id='')
+
+        self.stubs.Set(nova.db,
+                       'flavor_extra_specs_update_or_create',
+                       fake_instance_type_extra_specs_update_or_create)
+        body = {"key1": "value1"}
+
+        req = fakes.HTTPRequest.blank('/v3/flavors/1/extra-specs/key1',
+                                     use_admin_context=True)
+        self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
+                          req, 1, 'key1', body)
+
+    def test_update_flavor_db_duplicate(self):
+        def fake_instance_type_extra_specs_update_or_create(*args, **kwargs):
+            raise db_exc.DBDuplicateEntry()
+
+        self.stubs.Set(nova.db,
+                       'flavor_extra_specs_update_or_create',
+                       fake_instance_type_extra_specs_update_or_create)
+        body = {"key1": "value1"}
+
+        req = fakes.HTTPRequest.blank('/v3/flavors/1/extra-specs/key1',
+                                     use_admin_context=True)
+        self.assertRaises(webob.exc.HTTPConflict, self.controller.update,
+                          req, 1, 'key1', body)
 
 
 class FlavorsExtraSpecsXMLSerializerTest(test.TestCase):

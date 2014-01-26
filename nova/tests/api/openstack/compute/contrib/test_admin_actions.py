@@ -174,13 +174,21 @@ class AdminActionsTest(CommonMixin, test.NoDBTestCase):
             self.mox.StubOutWithMock(self.compute_api, 'get')
 
     def test_actions_raise_conflict_on_invalid_state(self):
-        actions = ['pause', 'unpause', 'suspend', 'resume', 'migrate']
-        method_translations = {'migrate': 'resize'}
+        actions = ['pause', 'unpause', 'suspend', 'resume', 'migrate',
+                   'os-migrateLive']
+        method_translations = {'migrate': 'resize',
+                               'os-migrateLive': 'live_migrate'}
+        body_map = {'os-migrateLive':
+                        {'host': 'hostname',
+                         'block_migration': False,
+                         'disk_over_commit': False}}
+        args_map = {'os-migrateLive': ((False, False, 'hostname'), {})}
 
         for action in actions:
             method = method_translations.get(action)
             self.mox.StubOutWithMock(self.compute_api, method or action)
-            self._test_invalid_state(action, method=method)
+            self._test_invalid_state(action, method=method, body_map=body_map,
+                                     compute_api_args_map=args_map)
             # Re-mock this.
             self.mox.StubOutWithMock(self.compute_api, 'get')
 
@@ -224,7 +232,7 @@ class AdminActionsTest(CommonMixin, test.NoDBTestCase):
                                  {'migrate': None})
         self.assertEqual(expected_result, res.status_int)
 
-    def test_migrate_live_enabled(self):
+    def _test_migrate_live_succeeded(self, param):
         self.mox.StubOutWithMock(self.compute_api, 'live_migrate')
         instance = self._stub_instance_get()
         self.compute_api.live_migrate(self.context, instance, False,
@@ -233,16 +241,39 @@ class AdminActionsTest(CommonMixin, test.NoDBTestCase):
         self.mox.ReplayAll()
 
         res = self._make_request('/servers/%s/action' % instance['uuid'],
-                                 {'os-migrateLive':
-                                  {'host': 'hostname',
-                                   'block_migration': False,
-                                   'disk_over_commit': False}})
+                                 {'os-migrateLive': param})
         self.assertEqual(202, res.status_int)
+
+    def test_migrate_live_enabled(self):
+        param = {'host': 'hostname',
+                 'block_migration': False,
+                 'disk_over_commit': False}
+        self._test_migrate_live_succeeded(param)
+
+    def test_migrate_live_enabled_with_string_param(self):
+        param = {'host': 'hostname',
+                 'block_migration': "False",
+                 'disk_over_commit': "False"}
+        self._test_migrate_live_succeeded(param)
 
     def test_migrate_live_missing_dict_param(self):
         body = {'os-migrateLive': {'dummy': 'hostname',
                                    'block_migration': False,
                                    'disk_over_commit': False}}
+        res = self._make_request('/servers/FAKE/action', body)
+        self.assertEqual(400, res.status_int)
+
+    def test_migrate_live_with_invalid_block_migration(self):
+        body = {'os-migrateLive': {'host': 'hostname',
+                                   'block_migration': "foo",
+                                   'disk_over_commit': False}}
+        res = self._make_request('/servers/FAKE/action', body)
+        self.assertEqual(400, res.status_int)
+
+    def test_migrate_live_with_invalid_disk_over_commit(self):
+        body = {'os-migrateLive': {'host': 'hostname',
+                                   'block_migration': False,
+                                   'disk_over_commit': "foo"}}
         res = self._make_request('/servers/FAKE/action', body)
         self.assertEqual(400, res.status_int)
 
@@ -480,6 +511,17 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
         common.check_img_metadata_properties_quota(self.context, {})
         self._test_non_existing_instance('createBackup',
                                          body_map=body_map)
+
+    def test_create_backup_with_invalid_createBackup(self):
+        body = {
+            'createBackupup': {
+                'name': 'Backup 1',
+                'backup_type': 'daily',
+                'rotation': 1,
+            },
+        }
+        res = self._make_request(self._make_url('fake'), body)
+        self.assertEqual(400, res.status_int)
 
 
 class ResetStateTests(test.NoDBTestCase):

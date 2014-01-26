@@ -45,7 +45,8 @@ class LibvirtConfigObject(object):
         self.ns_prefix = kwargs.get('ns_prefix')
         self.ns_uri = kwargs.get('ns_uri')
 
-    def _text_node(self, name, value):
+    @staticmethod
+    def _text_node(name, value):
         child = etree.Element(name)
         child.text = str(value)
         return child
@@ -486,6 +487,7 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         self.logical_block_size = None
         self.physical_block_size = None
         self.readonly = False
+        self.snapshot = None
 
     def format_dom(self):
         dev = super(LibvirtConfigGuestDisk, self).format_dom()
@@ -902,6 +904,33 @@ class LibvirtConfigGuestGraphics(LibvirtConfigGuestDevice):
             dev.set("keymap", self.keymap)
         if self.listen:
             dev.set("listen", self.listen)
+
+        return dev
+
+
+class LibvirtConfigGuestVideo(LibvirtConfigGuestDevice):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestVideo, self).__init__(root_name="video",
+                                                      **kwargs)
+
+        self.type = 'cirrus'
+        self.vram = None
+        self.heads = None
+
+    def format_dom(self):
+        dev = super(LibvirtConfigGuestVideo, self).format_dom()
+
+        model = etree.Element("model")
+        model.set("type", self.type)
+
+        if self.vram:
+            model.set("vram", str(self.vram))
+
+        if self.heads:
+            model.set("heads", str(self.heads))
+
+        dev.append(model)
 
         return dev
 

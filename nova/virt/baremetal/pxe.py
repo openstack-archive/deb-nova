@@ -140,13 +140,13 @@ def build_network_config(network_info):
                             'use_ipv6': CONF.use_ipv6})
 
 
-def get_deploy_aki_id(instance_type):
-    return instance_type.get('extra_specs', {}).\
+def get_deploy_aki_id(flavor):
+    return flavor.get('extra_specs', {}).\
             get('baremetal:deploy_kernel_id', CONF.baremetal.deploy_kernel)
 
 
-def get_deploy_ari_id(instance_type):
-    return instance_type.get('extra_specs', {}).\
+def get_deploy_ari_id(flavor):
+    return flavor.get('extra_specs', {}).\
             get('baremetal:deploy_ramdisk_id', CONF.baremetal.deploy_ramdisk)
 
 
@@ -165,16 +165,11 @@ def get_pxe_config_file_path(instance):
     return os.path.join(CONF.baremetal.tftp_root, instance['uuid'], 'config')
 
 
-def get_pxe_bootfile_name(instance):
-    """Returns the pxe_bootfile_name option."""
-    return CONF.baremetal.pxe_bootfile_name
-
-
 def get_partition_sizes(instance):
-    instance_type = flavors.extract_flavor(instance)
-    root_mb = instance_type['root_gb'] * 1024
-    swap_mb = instance_type['swap']
-    ephemeral_mb = instance_type['ephemeral_gb'] * 1024
+    flavor = flavors.extract_flavor(instance)
+    root_mb = flavor['root_gb'] * 1024
+    swap_mb = flavor['swap']
+    ephemeral_mb = flavor['ephemeral_gb'] * 1024
 
     # NOTE(deva): For simpler code paths on the deployment side,
     #             we always create a swap partition. If the flavor
@@ -194,13 +189,13 @@ def get_pxe_mac_path(mac):
         )
 
 
-def get_tftp_image_info(instance, instance_type):
+def get_tftp_image_info(instance, flavor):
     """Generate the paths for tftp files for this instance
 
     Raises NovaException if
     - instance does not contain kernel_id or ramdisk_id
     - deploy_kernel_id or deploy_ramdisk_id can not be read from
-      instance_type['extra_specs'] and defaults are not set
+      flavor['extra_specs'] and defaults are not set
 
     """
     image_info = {
@@ -212,8 +207,8 @@ def get_tftp_image_info(instance, instance_type):
     try:
         image_info['kernel'][0] = str(instance['kernel_id'])
         image_info['ramdisk'][0] = str(instance['ramdisk_id'])
-        image_info['deploy_kernel'][0] = get_deploy_aki_id(instance_type)
-        image_info['deploy_ramdisk'][0] = get_deploy_ari_id(instance_type)
+        image_info['deploy_kernel'][0] = get_deploy_aki_id(flavor)
+        image_info['deploy_ramdisk'][0] = get_deploy_ari_id(flavor)
     except KeyError:
         pass
 
@@ -338,9 +333,8 @@ class PXE(base.NodeDriver):
     def cache_images(self, context, node, instance,
             admin_password, image_meta, injected_files, network_info):
         """Prepare all the images for this instance."""
-        instance_type = self.virtapi.flavor_get(
-            context, instance['instance_type_id'])
-        tftp_image_info = get_tftp_image_info(instance, instance_type)
+        flavor = self.virtapi.flavor_get(context, instance['instance_type_id'])
+        tftp_image_info = get_tftp_image_info(instance, flavor)
         self._cache_tftp_images(context, instance, tftp_image_info)
 
         self._cache_image(context, instance, image_meta)
@@ -352,6 +346,15 @@ class PXE(base.NodeDriver):
         """Delete instance's image file."""
         bm_utils.unlink_without_raise(get_image_file_path(instance))
         bm_utils.rmtree_without_raise(get_image_dir_path(instance))
+
+    def dhcp_options_for_instance(self, instance):
+        return [{'opt_name': 'bootfile-name',
+                 'opt_value': CONF.baremetal.pxe_bootfile_name},
+                 {'opt_name': 'server-ip-address',
+                  'opt_value': CONF.my_ip},
+                 {'opt_name': 'tftp-server',
+                  'opt_value': CONF.my_ip}
+                 ]
 
     def activate_bootloader(self, context, node, instance, network_info):
         """Configure PXE boot loader for an instance
@@ -374,9 +377,8 @@ class PXE(base.NodeDriver):
             ./pxelinux.cfg/
                  {mac} -> ../{uuid}/config
         """
-        instance_type = self.virtapi.flavor_get(
-            context, instance['instance_type_id'])
-        image_info = get_tftp_image_info(instance, instance_type)
+        flavor = self.virtapi.flavor_get(context, instance['instance_type_id'])
+        image_info = get_tftp_image_info(instance, flavor)
         (root_mb, swap_mb, ephemeral_mb) = get_partition_sizes(instance)
         pxe_config_file_path = get_pxe_config_file_path(instance)
         image_file_path = get_image_file_path(instance)
@@ -420,14 +422,14 @@ class PXE(base.NodeDriver):
         except exception.NodeNotFound:
             pass
 
-        # NOTE(danms): the instance_type extra_specs do not need to be
+        # NOTE(danms): the flavor extra_specs do not need to be
         # present/correct at deactivate time, so pass something empty
         # to avoid an extra lookup
-        instance_type = dict(extra_specs={
+        flavor = dict(extra_specs={
             'baremetal:deploy_ramdisk_id': 'ignore',
             'baremetal:deploy_kernel_id': 'ignore'})
         try:
-            image_info = get_tftp_image_info(instance, instance_type)
+            image_info = get_tftp_image_info(instance, flavor)
         except exception.NovaException:
             pass
         else:

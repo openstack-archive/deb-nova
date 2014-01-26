@@ -246,6 +246,32 @@ class NotDbApiTestCase(DbTestCase):
                           self.context, {'display_name': '%test%'},
                           marker=str(stdlib_uuid.uuid4()))
 
+    def test_convert_objects_related_datetimes(self):
+
+        t1 = timeutils.utcnow()
+        t2 = t1 + datetime.timedelta(seconds=10)
+        t3 = t2 + datetime.timedelta(hours=1)
+
+        t2_utc = t2.replace(tzinfo=iso8601.iso8601.Utc())
+        t3_utc = t3.replace(tzinfo=iso8601.iso8601.Utc())
+
+        datetime_keys = ('created_at', 'deleted_at')
+
+        test1 = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
+        expected_dict = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
+        sqlalchemy_api.convert_objects_related_datetimes(test1, *datetime_keys)
+        self.assertEqual(test1, expected_dict)
+
+        test2 = {'created_at': t1, 'deleted_at': t2_utc, 'updated_at': t3}
+        expected_dict = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
+        sqlalchemy_api.convert_objects_related_datetimes(test2, *datetime_keys)
+        self.assertEqual(test2, expected_dict)
+
+        test3 = {'deleted_at': t2_utc, 'updated_at': t3_utc}
+        expected_dict = {'deleted_at': t2, 'updated_at': t3_utc}
+        sqlalchemy_api.convert_objects_related_datetimes(test3, *datetime_keys)
+        self.assertEqual(test3, expected_dict)
+
 
 class AggregateDBApiTestCase(test.TestCase):
     def setUp(self):
@@ -855,6 +881,13 @@ class ModelsObjectComparatorMixin(object):
 
         self.assertEqual(conv_and_sort(objs1), conv_and_sort(objs2))
 
+    def _assertEqualOrderedListOfObjects(self, objs1, objs2,
+                                         ignored_keys=None):
+        obj_to_dict = lambda o: self._dict_from_object(o, ignored_keys)
+        conv = lambda obj: map(obj_to_dict, obj)
+
+        self.assertEqual(conv(objs1), conv(objs2))
+
     def _assertEqualListsOfPrimitivesAsSets(self, primitives1, primitives2):
         self.assertEqual(len(primitives1), len(primitives2))
         for primitive in primitives1:
@@ -1297,11 +1330,15 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
                     'user_id': 'fake_user1',
                     'project_id': 'fake_proj1',
         }
+
+        columns_to_join = ['rules.grantee_group']
         updated_group = db.security_group_update(self.ctxt,
-                                                 security_group['id'],
-                                                 new_values)
+                                    security_group['id'],
+                                    new_values,
+                                    columns_to_join=['rules.grantee_group'])
         for key, value in new_values.iteritems():
             self.assertEqual(updated_group[key], value)
+        self.assertEqual(updated_group['rules'], [])
 
     def test_security_group_update_to_duplicate(self):
         security_group1 = self._create_security_group(
@@ -1517,6 +1554,23 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         result = db.instance_get_all_by_filters(self.ctxt,
                                                 {'display_name': 't.*st.'})
         self._assertEqualListsOfInstances(result, [i1, i2])
+
+    def test_instance_get_all_by_filters_changes_since(self):
+        i1 = self.create_instance_with_args(updated_at=
+                                            '2013-12-05T15:03:25.000000')
+        i2 = self.create_instance_with_args(updated_at=
+                                            '2013-12-05T15:03:26.000000')
+        changes_since = iso8601.parse_date('2013-12-05T15:03:25.000000')
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'changes-since':
+                                                 changes_since})
+        self._assertEqualListsOfInstances([i1, i2], result)
+
+        changes_since = iso8601.parse_date('2013-12-05T15:03:26.000000')
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'changes-since':
+                                                 changes_since})
+        self._assertEqualListsOfInstances([i2], result)
 
     def test_instance_get_all_by_filters_exact_match(self):
         instance = self.create_instance_with_args(host='host1')
@@ -1757,6 +1811,30 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         instance_meta = db.instance_metadata_get(ctxt, instance['uuid'])
         # Make sure instance metadata is deleted as well
         self.assertEqual({}, instance_meta)
+
+    def test_delete_instance_faults_on_instance_destroy(self):
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+        # Create faults
+        db.instance_create(ctxt, {'uuid': uuid})
+
+        fault_values = {
+            'message': 'message',
+            'details': 'detail',
+            'instance_uuid': uuid,
+            'code': 404,
+            'host': 'localhost'
+        }
+        fault = db.instance_fault_create(ctxt, fault_values)
+
+        # Retrieve the fault to ensure it was successfully added
+        faults = db.instance_fault_get_by_instance_uuids(ctxt, [uuid])
+        self.assertEqual(1, len(faults[uuid]))
+        self._assertEqualObjects(fault, faults[uuid][0])
+        db.instance_destroy(ctxt, uuid)
+        faults = db.instance_fault_get_by_instance_uuids(ctxt, [uuid])
+        # Make sure instance faults is deleted as well
+        self.assertEqual(0, len(faults[uuid]))
 
     def test_instance_update_with_and_get_original(self):
         instance = self.create_instance_with_args(vm_state='building')
@@ -2163,10 +2241,10 @@ class BaseInstanceTypeTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'is_public': True
         }
 
-    def _create_flavor(self, values):
+    def _create_flavor(self, values, projects=None):
         v = self._get_base_values()
         v.update(values)
-        return db.flavor_create(self.ctxt, v)
+        return db.flavor_create(self.ctxt, v, projects)
 
 
 class InstanceActionTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -2182,13 +2260,14 @@ class InstanceActionTestCase(test.TestCase, ModelsObjectComparatorMixin):
         super(InstanceActionTestCase, self).setUp()
         self.ctxt = context.get_admin_context()
 
-    def _create_action_values(self, uuid, action='run_instance', ctxt=None):
+    def _create_action_values(self, uuid, action='run_instance',
+                              ctxt=None, extra=None):
         if ctxt is None:
             ctxt = self.ctxt
 
         db.instance_create(ctxt, {'uuid': uuid})
 
-        return {
+        values = {
             'action': action,
             'instance_uuid': uuid,
             'request_id': ctxt.request_id,
@@ -2197,6 +2276,9 @@ class InstanceActionTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'start_time': timeutils.utcnow(),
             'message': 'action-message'
         }
+        if extra is not None:
+            values.update(extra)
+        return values
 
     def _create_event_values(self, uuid, event='schedule',
                              ctxt=None, extra=None):
@@ -2283,6 +2365,25 @@ class InstanceActionTestCase(test.TestCase, ModelsObjectComparatorMixin):
         # Retrieve the action to ensure it was successfully added
         actions = db.actions_get(self.ctxt, uuid1)
         self._assertEqualListsOfObjects(expected, actions)
+
+    def test_instance_actions_get_are_in_order(self):
+        """Ensure retrived actions are in order."""
+        uuid1 = str(stdlib_uuid.uuid4())
+
+        extra = {
+            'created_at': timeutils.utcnow()
+        }
+
+        action_values = self._create_action_values(uuid1, extra=extra)
+        action1 = db.action_start(self.ctxt, action_values)
+
+        action_values['action'] = 'delete'
+        action2 = db.action_start(self.ctxt, action_values)
+
+        actions = db.actions_get(self.ctxt, uuid1)
+        self.assertEqual(2, len(actions))
+
+        self._assertEqualOrderedListOfObjects([action2, action1], actions)
 
     def test_instance_action_get_by_instance_and_action(self):
         """Ensure we can get an action by instance UUID and action id."""
@@ -2407,6 +2508,34 @@ class InstanceActionTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
         self._assertActionEventSaved(event, action['id'])
 
+    def test_instance_action_events_get_are_in_order(self):
+        """Ensure retrived action events are in order."""
+        uuid1 = str(stdlib_uuid.uuid4())
+
+        action = db.action_start(self.ctxt,
+                                 self._create_action_values(uuid1))
+
+        extra1 = {
+            'created_at': timeutils.utcnow()
+        }
+        extra2 = {
+            'created_at': timeutils.utcnow() + datetime.timedelta(seconds=5)
+        }
+
+        event_val1 = self._create_event_values(uuid1, 'schedule', extra=extra1)
+        event_val2 = self._create_event_values(uuid1, 'run', extra=extra1)
+        event_val3 = self._create_event_values(uuid1, 'stop', extra=extra2)
+
+        event1 = db.action_event_start(self.ctxt, event_val1)
+        event2 = db.action_event_start(self.ctxt, event_val2)
+        event3 = db.action_event_start(self.ctxt, event_val3)
+
+        events = db.action_events_get(self.ctxt, action['id'])
+        self.assertEqual(3, len(events))
+
+        self._assertEqualOrderedListOfObjects([event3, event2, event1], events,
+                                              ['instance_uuid', 'request_id'])
+
     def test_instance_action_event_get_by_id(self):
         """Get a specific instance action event."""
         ctxt2 = context.get_admin_context()
@@ -2515,6 +2644,13 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
         self.assertIsNotNone(flavor['id'])
         self._assertEqualObjects(flavor, self._get_base_values(),
                                  ignored_keys)
+
+    def test_flavor_create_with_projects(self):
+        projects = ['fake-project1', 'fake-project2']
+        flavor = self._create_flavor({}, projects + ['fake-project2'])
+        access = db.flavor_access_get_by_flavor_id(self.ctxt,
+                                                   flavor['flavorid'])
+        self.assertEqual(projects, [x.project_id for x in access])
 
     def test_flavor_destroy(self):
         specs1 = {'a': '1', 'b': '2'}
@@ -5298,7 +5434,8 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  host_ip='127.0.0.1',
                                  supported_instances='',
                                  pci_stats='',
-                                 metrics='')
+                                 metrics='',
+                                 extra_resources='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
                      num_proj_23456=2, num_vm_building=3)

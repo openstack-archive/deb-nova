@@ -1468,7 +1468,6 @@ class _BaseTaskTestCase(object):
                 db_instance['uuid'], expected_attrs=['system_metadata'])
         instance.vm_state = vm_states.SHELVED_OFFLOADED
         instance.save()
-        filter_properties = {}
         system_metadata = instance.system_metadata
 
         def fake_schedule_instances(context, image, filter_properties,
@@ -1581,16 +1580,11 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         live_migrate.execute(self.context, mox.IsA(instance_obj.Instance),
                              'destination', 'block_migration',
                              'disk_over_commit').AndRaise(ex)
-        scheduler_utils.set_vm_state_and_notify(self.context,
-                'compute_task', 'migrate_server',
-                {'vm_state': vm_states.ERROR},
-                ex, self._build_request_spec(inst_obj),
-                self.conductor_manager.db)
         self.mox.ReplayAll()
 
         self.conductor = utils.ExceptionHelper(self.conductor)
 
-        self.assertRaises(IOError,
+        self.assertRaises(exc.MigrationError,
             self.conductor.migrate_server, self.context, inst_obj,
             {'host': 'destination'}, True, False, None, 'block_migration',
             'disk_over_commit')
@@ -1701,7 +1695,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                      'flavor', filter_props, resvs)
 
     def test_cold_migrate_exception_host_in_error_state_and_raise(self):
-        inst = fake_instance.fake_db_instance(image_ref='fake-image_ref')
+        inst = fake_instance.fake_db_instance(image_ref='fake-image_ref',
+                                              vm_state=vm_states.STOPPED)
         inst_obj = instance_obj.Instance._from_db_object(
                 self.context, instance_obj.Instance(), inst,
                 expected_attrs=[])
@@ -1731,8 +1726,6 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 self.context, image, [inst_obj],
                 instance_type='flavor').AndReturn(request_spec)
 
-        exc_info = exc.NoValidHost(reason="")
-
         self.conductor.scheduler_rpcapi.select_destinations(
                 self.context, request_spec, filter_props).AndReturn(hosts)
 
@@ -1753,7 +1746,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 filter_properties=expected_filter_props,
                 node=hosts[0]['nodename']).AndRaise(exc_info)
 
-        updates = {'vm_state': vm_states.ERROR,
+        updates = {'vm_state': vm_states.STOPPED,
                    'task_state': None}
 
         self.conductor._set_vm_state_and_notify(self.context,

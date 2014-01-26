@@ -262,8 +262,6 @@ class ActionDeserializer(CommonDeserializer):
         else:
             raise AttributeError("No flavor_ref was specified in request")
 
-        if self.controller:
-            self.controller.server_resize_xml_deserialize(node, resize)
         return resize
 
     def _action_confirm_resize(self, node):
@@ -310,10 +308,6 @@ class ServersController(wsgi.Controller):
     EXTENSION_REBUILD_NAMESPACE = 'nova.api.v3.extensions.server.rebuild'
     EXTENSION_DESERIALIZE_EXTRACT_REBUILD_NAMESPACE = (
         'nova.api.v3.extensions.server.rebuild.deserialize')
-
-    EXTENSION_RESIZE_NAMESPACE = 'nova.api.v3.extensions.server.resize'
-    EXTENSION_DESERIALIZE_EXTRACT_RESIZE_NAMESPACE = (
-        'nova.api.v3.extensions.server.resize.deserialize')
 
     EXTENSION_UPDATE_NAMESPACE = 'nova.api.v3.extensions.server.update'
 
@@ -431,31 +425,6 @@ class ServersController(wsgi.Controller):
                 propagate_map_exceptions=True)
         if not list(self.rebuild_xml_deserialize_manager):
             LOG.debug(_("Did not find any server rebuild xml deserializer"
-                        " extensions"))
-
-        # Look for implementation of extension point of server resize
-        self.resize_extension_manager = \
-            stevedore.enabled.EnabledExtensionManager(
-                namespace=self.EXTENSION_RESIZE_NAMESPACE,
-                check_func=_check_load_extension('server_resize'),
-                invoke_on_load=True,
-                invoke_kwds={"extension_info": self.extension_info},
-                propagate_map_exceptions=True)
-        if not list(self.resize_extension_manager):
-            LOG.debug(_("Did not find any server resize extensions"))
-
-        # Look for implementation of extension point of server resize
-        # XML deserialization
-        self.resize_xml_deserialize_manager = \
-            stevedore.enabled.EnabledExtensionManager(
-                namespace=self.EXTENSION_DESERIALIZE_EXTRACT_RESIZE_NAMESPACE,
-                check_func=_check_load_extension(
-                    'server_xml_extract_resize_deserialize'),
-                invoke_on_load=True,
-                invoke_kwds={"extension_info": self.extension_info},
-                propagate_map_exceptions=True)
-        if not list(self.resize_xml_deserialize_manager):
-            LOG.debug(_("Did not find any server resize xml deserializer"
                         " extensions"))
 
         # Look for implementation of extension point of server update
@@ -579,10 +548,8 @@ class ServersController(wsgi.Controller):
         limit, marker = common.get_limit_and_marker(req)
         try:
             instance_list = self.compute_api.get_all(context,
-                                                     search_opts=search_opts,
-                                                     limit=limit,
-                                                     marker=marker,
-                                                     want_objects=True)
+                    search_opts=search_opts, limit=limit, marker=marker,
+                    want_objects=True, expected_attrs=['pci_devices'])
         except exception.MarkerNotFound:
             msg = _('marker [%s] not found') % marker
             raise exc.HTTPBadRequest(explanation=msg)
@@ -603,7 +570,8 @@ class ServersController(wsgi.Controller):
         """Utility function for looking up an instance by uuid."""
         try:
             instance = self.compute_api.get(context, instance_uuid,
-                                            want_objects=True)
+                                            want_objects=True,
+                                            expected_attrs=['pci_devices'])
         except exception.NotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -716,7 +684,8 @@ class ServersController(wsgi.Controller):
         """Returns server details by server id."""
         try:
             context = req.environ['nova.context']
-            instance = self.compute_api.get(context, id, want_objects=True)
+            instance = self.compute_api.get(context, id, want_objects=True,
+                    expected_attrs=['pci_devices'])
             req.cache_db_instance(instance)
             return self._view_builder.show(req, instance)
         except exception.NotFound:
@@ -729,7 +698,7 @@ class ServersController(wsgi.Controller):
     def create(self, req, body):
         """Creates a new server for a given user."""
         if not self.is_valid_body(body, 'server'):
-            raise exc.HTTPUnprocessableEntity()
+            raise exc.HTTPBadRequest(_("The request body is invalid"))
 
         context = req.environ['nova.context']
         server_dict = body['server']
@@ -803,7 +772,8 @@ class ServersController(wsgi.Controller):
                             admin_password=password,
                             requested_networks=requested_networks,
                             **create_kwargs)
-        except exception.QuotaError as error:
+        except (exception.QuotaError,
+                exception.PortLimitExceeded) as error:
             raise exc.HTTPRequestEntityTooLarge(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
@@ -835,12 +805,13 @@ class ServersController(wsgi.Controller):
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
                 exception.MultiplePortsNotApplicable,
+                exception.InstanceUserDataMalformed,
+                exception.PortNotFound,
                 exception.SecurityGroupNotFound,
-                exception.InstanceUserDataMalformed) as error:
+                exception.NetworkNotFound) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
-        except exception.PortNotFound as error:
-            raise exc.HTTPNotFound(explanation=error.format_message())
-        except exception.PortInUse as error:
+        except (exception.PortInUse,
+                exception.NoUniqueMatch) as error:
             raise exc.HTTPConflict(explanation=error.format_message())
 
         # If the caller wanted a reservation_id, return it
@@ -899,7 +870,7 @@ class ServersController(wsgi.Controller):
     def update(self, req, id, body):
         """Update server then pass on to version-specific controller."""
         if not self.is_valid_body(body, 'server'):
-            raise exc.HTTPUnprocessableEntity()
+            raise exc.HTTPBadRequest(_("The request body is invalid"))
 
         ctxt = req.environ['nova.context']
         update_dict = {}
@@ -918,7 +889,8 @@ class ServersController(wsgi.Controller):
                                               body['server'], update_dict)
 
         try:
-            instance = self.compute_api.get(ctxt, id, want_objects=True)
+            instance = self.compute_api.get(ctxt, id, want_objects=True,
+                    expected_attrs=['pci_devices'])
             req.cache_db_instance(instance)
             policy.enforce(ctxt, 'compute:update', instance)
             instance.update(update_dict)
@@ -941,6 +913,8 @@ class ServersController(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'confirm_resize')
@@ -960,6 +934,8 @@ class ServersController(wsgi.Controller):
         except exception.FlavorNotFound:
             msg = _("Flavor used by the instance could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'revert_resize')
@@ -971,6 +947,10 @@ class ServersController(wsgi.Controller):
     @wsgi.action('reboot')
     def _action_reboot(self, req, id, body):
         if 'reboot' in body and 'type' in body['reboot']:
+            if not isinstance(body['reboot']['type'], six.string_types):
+                msg = _("Argument 'type' for reboot must be a string")
+                LOG.error(msg)
+                raise exc.HTTPBadRequest(explanation=msg)
             valid_reboot_types = ['HARD', 'SOFT']
             reboot_type = body['reboot']['type'].upper()
             if not valid_reboot_types.count(reboot_type):
@@ -987,6 +967,8 @@ class ServersController(wsgi.Controller):
 
         try:
             self.compute_api.reboot(context, instance, reboot_type)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'reboot')
@@ -999,12 +981,18 @@ class ServersController(wsgi.Controller):
 
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
+        except exception.QuotaError as error:
+            raise exc.HTTPRequestEntityTooLarge(
+                explanation=error.format_message(),
+                headers={'Retry-After': 0})
         except exception.FlavorNotFound:
             msg = _("Unable to locate requested flavor.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.CannotResizeToSameFlavor:
             msg = _("Resize requires a flavor change.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'resize')
@@ -1030,6 +1018,8 @@ class ServersController(wsgi.Controller):
         except exception.NotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'delete')
@@ -1089,10 +1079,6 @@ class ServersController(wsgi.Controller):
 
         resize_kwargs = {}
 
-        if list(self.resize_extension_manager):
-            self.resize_extension_manager.map(self._resize_extension_point,
-                                              resize_dict, resize_kwargs)
-
         return self._resize(req, id, flavor_ref, **resize_kwargs)
 
     @wsgi.response(202)
@@ -1146,6 +1132,8 @@ class ServersController(wsgi.Controller):
                                      image_href,
                                      password,
                                      **rebuild_kwargs)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'rebuild')

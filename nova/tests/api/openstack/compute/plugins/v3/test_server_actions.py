@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import base64
 import uuid
 
 import mox
@@ -25,10 +24,14 @@ from nova.api.openstack.compute.plugins.v3 import servers
 from nova.compute import api as compute_api
 from nova.compute import task_states
 from nova.compute import vm_states
+from nova import context
 from nova import db
 from nova import exception
 from nova.image import glance
+from nova.objects import instance as instance_obj
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import fake_instance
@@ -71,6 +74,8 @@ class MockSetAdminPassword(object):
 
 
 class ServerActionsControllerTest(test.TestCase):
+    image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+    image_href = 'http://localhost/v3/images/%s' % image_uuid
 
     def setUp(self):
         super(ServerActionsControllerTest, self).setUp()
@@ -84,7 +89,6 @@ class ServerActionsControllerTest(test.TestCase):
 
         fakes.stub_out_glance(self.stubs)
         fakes.stub_out_nw_api(self.stubs)
-        fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_compute_api_snapshot(self.stubs)
         fake.stub_out_image_service(self.stubs)
         service_class = 'nova.image.glance.GlanceImageService'
@@ -99,6 +103,76 @@ class ServerActionsControllerTest(test.TestCase):
 
         ext_info = plugins.LoadedExtensionInfo()
         self.controller = servers.ServersController(extension_info=ext_info)
+        self.compute_api = self.controller.compute_api
+        self.context = context.RequestContext('fake', 'fake')
+        self.app = fakes.wsgi_app_v3(init_only=('servers',),
+                                     fake_auth_context=self.context)
+
+    def _make_request(self, url, body):
+        req = webob.Request.blank('/v3' + url)
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.content_type = 'application/json'
+        return req.get_response(self.app)
+
+    def _stub_instance_get(self, uuid=None):
+        self.mox.StubOutWithMock(compute_api.API, 'get')
+        if uuid is None:
+            uuid = uuidutils.generate_uuid()
+        instance = fake_instance.fake_db_instance(
+            id=1, uuid=uuid, vm_state=vm_states.ACTIVE, task_state=None)
+        instance = instance_obj.Instance._from_db_object(
+            self.context, instance_obj.Instance(), instance)
+
+        self.compute_api.get(self.context, uuid, want_objects=True,
+                expected_attrs=['pci_devices']).AndReturn(instance)
+        return instance
+
+    def _test_locked_instance(self, action, method=None, body_map=None,
+                              compute_api_args_map=None):
+        if method is None:
+            method = action
+        if body_map is None:
+            body_map = {}
+        if compute_api_args_map is None:
+            compute_api_args_map = {}
+
+        instance = self._stub_instance_get()
+        args, kwargs = compute_api_args_map.get(action, ((), {}))
+
+        getattr(compute_api.API, method)(self.context, instance,
+                                         *args, **kwargs).AndRaise(
+            exception.InstanceIsLocked(instance_uuid=instance['uuid']))
+
+        self.mox.ReplayAll()
+
+        res = self._make_request('/servers/%s/action' % instance['uuid'],
+                                 {action: body_map.get(action)})
+        self.assertEqual(409, res.status_int)
+        # Do these here instead of tearDown because this method is called
+        # more than once for the same test case
+        self.mox.VerifyAll()
+        self.mox.UnsetStubs()
+
+    def test_actions_with_locked_instance(self):
+        actions = ['resize', 'confirm_resize', 'revert_resize', 'reboot',
+                   'rebuild']
+
+        body_map = {'resize': {'flavor_ref': '2'},
+                    'reboot': {'type': 'HARD'},
+                    'rebuild': {'image_ref': self.image_uuid,
+                                'admin_password': 'TNc53Dr8s7vw'}}
+
+        args_map = {'resize': (('2'), {}),
+                    'confirm_resize': ((), {}),
+                    'reboot': (('HARD',), {}),
+                    'rebuild': ((self.image_uuid, 'TNc53Dr8s7vw'), {})}
+
+        for action in actions:
+            self.mox.StubOutWithMock(compute_api.API, action)
+            self._test_locked_instance(action, method=None,
+                                       body_map=body_map,
+                                       compute_api_args_map=args_map)
 
     def test_reboot_hard(self):
         body = dict(reboot=dict(type="HARD"))
@@ -120,6 +194,13 @@ class ServerActionsControllerTest(test.TestCase):
     def test_reboot_missing_type(self):
         body = dict(reboot=dict())
         req = fakes.HTTPRequestV3.blank(self.url)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_reboot,
+                          req, FAKE_UUID, body)
+
+    def test_reboot_none(self):
+        body = dict(reboot=dict(type=None))
+        req = fakes.HTTPRequest.blank(self.url)
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._action_reboot,
                           req, FAKE_UUID, body)
@@ -210,17 +291,15 @@ class ServerActionsControllerTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'rebuild', rebuild)
 
         # proper local hrefs must start with 'http://localhost/v3/'
-        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-        image_href = 'http://localhost/v3/images/%s' % image_uuid
         body = {
             'rebuild': {
-                'image_ref': image_uuid,
+                'image_ref': self.image_uuid,
             },
         }
 
         req = fakes.HTTPRequestV3.blank('/v3/servers/a/action')
         self.controller._action_rebuild(req, FAKE_UUID, body)
-        self.assertEqual(info['image_href_in_call'], image_uuid)
+        self.assertEqual(info['image_href_in_call'], self.image_uuid)
 
     def test_rebuild_instance_with_image_href_uses_uuid(self):
         info = dict(image_href_in_call=None)
@@ -233,17 +312,15 @@ class ServerActionsControllerTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'rebuild', rebuild)
 
         # proper local hrefs must start with 'http://localhost/v3/'
-        image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-        image_href = 'http://localhost/v3/images/%s' % image_uuid
         body = {
             'rebuild': {
-                'image_ref': image_href,
+                'image_ref': self.image_href,
             },
         }
 
         req = fakes.HTTPRequestV3.blank('/v3/servers/a/action')
         self.controller._action_rebuild(req, FAKE_UUID, body)
-        self.assertEqual(info['image_href_in_call'], image_uuid)
+        self.assertEqual(info['image_href_in_call'], self.image_uuid)
 
     def test_rebuild_accepted_minimum_pass_disabled(self):
         # run with enable_instance_password disabled to verify admin_password
@@ -348,22 +425,6 @@ class ServerActionsControllerTest(test.TestCase):
                           self.controller._action_rebuild,
                           req, FAKE_UUID, body)
 
-    def test_rebuild_personality(self):
-        body = {
-            "rebuild": {
-                "image_ref": self._image_href,
-                "personality": [{
-                    "path": "/path/to/file",
-                    "contents": base64.b64encode("Test String"),
-                }]
-            },
-        }
-
-        req = fakes.HTTPRequestV3.blank(self.url)
-        body = self.controller._action_rebuild(req, FAKE_UUID, body).obj
-
-        self.assertNotIn('personality', body['server'])
-
     def test_rebuild_admin_password(self):
         return_server = fakes.fake_instance_get(image_ref='2',
                 vm_state=vm_states.ACTIVE, host='fake_host')
@@ -463,12 +524,18 @@ class ServerActionsControllerTest(test.TestCase):
     def test_rebuild_proper_kernel_ram(self):
         instance_meta = {'kernel_id': None, 'ramdisk_id': None}
 
-        def fake_show(*args, **kwargs):
-            instance_meta['kernel_id'] = kwargs.get('kernel_id')
-            instance_meta['ramdisk_id'] = kwargs.get('ramdisk_id')
-            inst = fakes.stub_instance(INSTANCE_IDS[FAKE_UUID],
-                                       host='fake_host')
+        orig_get = compute_api.API.get
+
+        def wrap_get(*args, **kwargs):
+            inst = orig_get(*args, **kwargs)
+            instance_meta['instance'] = inst
             return inst
+
+        def fake_save(context, **kwargs):
+            instance = instance_meta['instance']
+            for key in instance_meta.keys():
+                if key in instance.obj_what_changed():
+                    instance_meta[key] = instance[key]
 
         def return_image_meta(*args, **kwargs):
             image_meta_table = {
@@ -487,7 +554,8 @@ class ServerActionsControllerTest(test.TestCase):
             return image_meta
 
         self.stubs.Set(fake._FakeImageService, 'show', return_image_meta)
-        self.stubs.Set(compute_api.API, 'update', fake_show)
+        self.stubs.Set(compute_api.API, 'get', wrap_get)
+        self.stubs.Set(instance_obj.Instance, 'save', fake_save)
         body = {
             "rebuild": {
                 "image_ref": "155d900f-4e14-4e4c-a73d-069cbf4541e6",
@@ -495,8 +563,8 @@ class ServerActionsControllerTest(test.TestCase):
         }
         req = fakes.HTTPRequestV3.blank(self.url)
         self.controller._action_rebuild(req, FAKE_UUID, body).obj
-        self.assertEqual(instance_meta['kernel_id'], 1)
-        self.assertEqual(instance_meta['ramdisk_id'], 2)
+        self.assertEqual(instance_meta['kernel_id'], '1')
+        self.assertEqual(instance_meta['ramdisk_id'], '2')
 
     def test_resize_server(self):
 
@@ -577,7 +645,7 @@ class ServerActionsControllerTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'resize', fake_resize)
 
         req = fakes.HTTPRequestV3.blank(self.url)
-        self.assertRaises(exception.TooManyInstances,
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
                           self.controller._action_resize,
                           req, FAKE_UUID, body)
 
@@ -959,19 +1027,6 @@ class ServerActionsControllerTest(test.TestCase):
                           self.controller._action_create_image,
                           req, FAKE_UUID, body)
 
-    def test_locked(self):
-        def fake_locked(context, instance_uuid,
-                        columns_to_join=None, use_slave=False):
-            return fake_instance.fake_db_instance(name="foo",
-                                                  uuid=FAKE_UUID,
-                                                  locked=True)
-        self.stubs.Set(db, 'instance_get_by_uuid', fake_locked)
-        body = dict(reboot=dict(type="HARD"))
-        req = fakes.HTTPRequestV3.blank(self.url)
-        self.assertRaises(webob.exc.HTTPConflict,
-                          self.controller._action_reboot,
-                          req, FAKE_UUID, body)
-
 
 class TestServerActionXMLDeserializer(test.TestCase):
 
@@ -1081,9 +1136,6 @@ class TestServerActionXMLDeserializer(test.TestCase):
                     <metadata>
                         <meta key="My Server Name">Apache1</meta>
                     </metadata>
-                    <personality>
-                        <file path="/etc/banner.txt">Mg==</file>
-                    </personality>
                 </rebuild>"""
         request = self.deserializer.deserialize(serial_request, 'action')
         expected = {
@@ -1093,9 +1145,6 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 "metadata": {
                     "My Server Name": "Apache1",
                 },
-                "personality": [
-                    {"path": "/etc/banner.txt", "contents": "Mg=="},
-                ],
             },
         }
         self.assertThat(request['body'], matchers.DictMatches(expected))
@@ -1121,9 +1170,6 @@ class TestServerActionXMLDeserializer(test.TestCase):
                     <metadata>
                         <meta key="My Server Name">Apache1</meta>
                     </metadata>
-                    <personality>
-                        <file path="/etc/banner.txt">Mg==</file>
-                    </personality>
                 </rebuild>"""
         self.assertRaises(AttributeError,
                           self.deserializer.deserialize,

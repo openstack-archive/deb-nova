@@ -47,7 +47,8 @@ class ComputeRPCAPIRedirect(object):
                         'unpause_instance', 'revert_resize',
                         'confirm_resize', 'reset_network',
                         'inject_network_info',
-                        'backup_instance', 'snapshot_instance']
+                        'backup_instance', 'snapshot_instance',
+                        'rebuild_instance']
 
     def __init__(self, cells_rpcapi):
         self.cells_rpcapi = cells_rpcapi
@@ -149,11 +150,12 @@ class ComputeCellsAPI(compute_api.API):
         return self.cells_rpcapi.call_compute_api_method(context, cell_name,
                 method, instance_uuid, *args, **kwargs)
 
-    def _check_requested_networks(self, context, requested_networks):
+    def _check_requested_networks(self, context, requested_networks,
+                                  max_count):
         """Override compute API's checking of this.  It'll happen in
         child cell
         """
-        return
+        return max_count
 
     def create(self, *args, **kwargs):
         """We can use the base functionality, but I left this here just
@@ -222,13 +224,6 @@ class ComputeCellsAPI(compute_api.API):
         """Force delete a previously deleted (but not reclaimed) instance."""
         super(ComputeCellsAPI, self).force_delete(context, instance)
         self._cast_to_cells(context, instance, 'force_delete')
-
-    @check_instance_cell
-    def rebuild(self, context, instance, *args, **kwargs):
-        """Rebuild the given instance with the provided attributes."""
-        super(ComputeCellsAPI, self).rebuild(context, instance, *args,
-                **kwargs)
-        self._cast_to_cells(context, instance, 'rebuild', *args, **kwargs)
 
     @check_instance_cell
     def evacuate(self, context, instance, *args, **kwargs):

@@ -38,6 +38,7 @@ from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import quota
 from nova import test
+from nova.tests import fake_instance
 from nova.tests.image import fake as fake_image
 from nova.tests import matchers
 from nova.tests.objects import test_migration
@@ -331,7 +332,6 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(self.compute_api, 'update')
         self.mox.StubOutWithMock(inst, 'save')
         inst.save(expected_task_state=[None, task_states.REBOOTING])
-        self.context.elevated().AndReturn(self.context)
         self.compute_api._record_action_start(self.context, inst,
                                               instance_actions.REBOOT)
 
@@ -427,8 +427,6 @@ class _ComputeAPIUnitTestMixIn(object):
         self.context.elevated().AndReturn(self.context)
         self.compute_api.network_api.deallocate_for_instance(
                 self.context, inst)
-        db.instance_system_metadata_get(self.context,
-                                        inst.uuid).AndReturn('sys-meta')
         state = ('soft' in delete_type and vm_states.SOFT_DELETED or
                 vm_states.DELETED)
         updates.update({'vm_state': state,
@@ -436,11 +434,15 @@ class _ComputeAPIUnitTestMixIn(object):
                         'terminated_at': delete_time})
         inst.save()
 
-        db.instance_destroy(self.context, inst.uuid, constraint=None)
+        updates.update({'deleted_at': delete_time,
+                        'deleted': True})
+        fake_inst = fake_instance.fake_db_instance(**updates)
+        db.instance_destroy(self.context, inst.uuid,
+                            constraint=None).AndReturn(fake_inst)
         compute_utils.notify_about_instance_usage(
                 mox.IgnoreArg(),
                 self.context, inst, '%s.end' % delete_type,
-                system_metadata='sys-meta')
+                system_metadata=inst.system_metadata)
 
     def _test_delete(self, delete_type, **attrs):
         reservations = 'fake-resv'
@@ -615,8 +617,13 @@ class _ComputeAPIUnitTestMixIn(object):
                                                       inst,
                                                       'delete.start')
             db.constraint(host=mox.IgnoreArg()).AndReturn('constraint')
+            delete_time = datetime.datetime(1955, 11, 5, 9, 30,
+                                            tzinfo=iso8601.iso8601.Utc())
+            updates['deleted_at'] = delete_time
+            updates['deleted'] = True
+            fake_inst = fake_instance.fake_db_instance(**updates)
             db.instance_destroy(self.context, inst.uuid,
-                                constraint='constraint')
+                                constraint='constraint').AndReturn(fake_inst)
             compute_utils.notify_about_instance_usage(
                     mox.IgnoreArg(), self.context, inst, 'delete.end',
                     system_metadata=inst.system_metadata)
@@ -659,8 +666,6 @@ class _ComputeAPIUnitTestMixIn(object):
         if self.cell_type != 'api':
             self.compute_api.network_api.deallocate_for_instance(
                         self.context, inst)
-        db.instance_system_metadata_get(self.context, inst.uuid
-                                            ).AndReturn('sys-meta')
 
         self.compute_api.volume_api.terminate_connection(
             mox.IgnoreArg(), mox.IgnoreArg(), mox.IgnoreArg()).\
@@ -671,7 +676,7 @@ class _ComputeAPIUnitTestMixIn(object):
         compute_utils.notify_about_instance_usage(
                 mox.IgnoreArg(),
                 self.context, inst, 'delete.end',
-                system_metadata='sys-meta')
+                system_metadata=inst.system_metadata)
 
         self.mox.ReplayAll()
         self.compute_api._local_delete(self.context, inst, bdms,
@@ -1444,6 +1449,7 @@ class _ComputeAPIUnitTestMixIn(object):
             'name': 'test-snapshot',
             'properties': {'root_device_name': 'vda', 'mappings': 'DONTCARE'},
             'size': 0,
+            'is_public': False
         }
 
         def fake_get_instance_bdms(context, instance):
@@ -1565,11 +1571,13 @@ class _ComputeAPIUnitTestMixIn(object):
         self.compute_api.volume_snapshot_delete(self.context, volume_id,
                 snapshot_id, {})
 
-    def _create_instance_with_disabled_disk_config(self):
+    def _create_instance_with_disabled_disk_config(self, object=False):
         sys_meta = {"image_auto_disk_config": "Disabled"}
         params = {"system_metadata": sys_meta}
-        return obj_base.obj_to_primitive(self._create_instance_obj(
-                                                            params=params))
+        instance = self._create_instance_obj(params=params)
+        if object:
+            return instance
+        return obj_base.obj_to_primitive(instance)
 
     def _setup_fake_image_with_disabled_disk_config(self):
         self.fake_image = {
@@ -1601,7 +1609,8 @@ class _ComputeAPIUnitTestMixIn(object):
             "fake_flavor", image_id, auto_disk_config=True)
 
     def test_rebuild_with_disabled_auto_disk_config_fails(self):
-        fake_inst = self._create_instance_with_disabled_disk_config()
+        fake_inst = self._create_instance_with_disabled_disk_config(
+            object=True)
         image_id = self._setup_fake_image_with_disabled_disk_config()
         self.assertRaises(exception.AutoDiskConfigDisabledByImage,
                           self.compute_api.rebuild,

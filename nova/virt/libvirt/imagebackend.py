@@ -73,17 +73,17 @@ __imagebackend_opts = [
                default='rbd',
                help='the RADOS pool in which rbd volumes are stored',
                deprecated_group='DEFAULT',
-               deprecated_name='libvirt_images_rdb_pool'),
+               deprecated_name='libvirt_images_rbd_pool'),
     cfg.StrOpt('images_rbd_ceph_conf',
                default='',  # default determined by librados
                help='path to the ceph configuration file to use',
                deprecated_group='DEFAULT',
-               deprecated_name='libvirt_images_rdb_ceph_conf'),
+               deprecated_name='libvirt_images_rbd_ceph_conf'),
         ]
 
 CONF = cfg.CONF
 CONF.register_opts(__imagebackend_opts, 'libvirt')
-CONF.import_opt('image_cache_subdirectory_name', 'nova.compute.manager')
+CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
 CONF.import_opt('preallocate_images', 'nova.virt.driver')
 
 LOG = logging.getLogger(__name__)
@@ -173,12 +173,8 @@ class Image(object):
         :size: Size of created image in bytes (optional)
         """
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
-        def call_if_not_exists(target, *args, **kwargs):
-            if not os.path.exists(target):
-                fetch_func(target=target, *args, **kwargs)
-            elif CONF.libvirt.images_type == "lvm" and \
-                    'ephemeral_size' in kwargs:
-                fetch_func(target=target, *args, **kwargs)
+        def fetch_func_sync(target, *args, **kwargs):
+            fetch_func(target=target, *args, **kwargs)
 
         base_dir = os.path.join(CONF.instances_path,
                                 CONF.image_cache_subdirectory_name)
@@ -187,7 +183,7 @@ class Image(object):
         base = os.path.join(base_dir, filename)
 
         if not self.check_image_exists() or not os.path.exists(base):
-            self.create_image(call_if_not_exists, base, size,
+            self.create_image(fetch_func_sync, base, size,
                               *args, **kwargs)
 
         if (size and self.preallocate and self._can_fallocate() and
@@ -206,8 +202,9 @@ class Image(object):
             can_fallocate = not err
             self.__class__.can_fallocate = can_fallocate
             if not can_fallocate:
-                LOG.error('Unable to preallocate_images=%s at path: %s' %
-                          (CONF.preallocate_images, self.path))
+                LOG.error(_('Unable to preallocate_images=%(imgs)s at path: '
+                            '%(path)s'), {'imgs': CONF.preallocate_images,
+                                           'path': self.path})
         return can_fallocate
 
     @staticmethod
@@ -270,10 +267,12 @@ class Raw(Image):
 
         generating = 'image_id' not in kwargs
         if generating:
-            #Generating image in place
-            prepare_template(target=self.path, *args, **kwargs)
+            if not self.check_image_exists():
+                #Generating image in place
+                prepare_template(target=self.path, *args, **kwargs)
         else:
-            prepare_template(target=base, max_size=size, *args, **kwargs)
+            if not os.path.exists(base):
+                prepare_template(target=base, max_size=size, *args, **kwargs)
             self.verify_base_size(base, size)
             if not os.path.exists(self.path):
                 with fileutils.remove_path_on_error(self.path):
@@ -396,7 +395,8 @@ class Lvm(Image):
             with self.remove_volume_on_error(self.path):
                 prepare_template(target=self.path, *args, **kwargs)
         else:
-            prepare_template(target=base, max_size=size, *args, **kwargs)
+            if not os.path.exists(base):
+                prepare_template(target=base, max_size=size, *args, **kwargs)
             with self.remove_volume_on_error(self.path):
                 create_lvm_image(base, size)
 
@@ -479,6 +479,12 @@ class Rbd(Image):
         self.rbd = kwargs.get('rbd', rbd)
         self.rados = kwargs.get('rados', rados)
 
+        self.path = 'rbd:%s/%s' % (self.pool, self.rbd_name)
+        if self.rbd_user:
+            self.path += ':id=' + self.rbd_user
+        if self.ceph_conf:
+            self.path += ':conf=' + self.ceph_conf
+
     def _connect_to_rados(self, pool=None):
         client = self.rados.Rados(rados_id=self.rbd_user,
                                   conffile=self.ceph_conf)
@@ -502,8 +508,10 @@ class Rbd(Image):
 
     def _ceph_args(self):
         args = []
-        args.extend(['--id', self.rbd_user])
-        args.extend(['--conf', self.ceph_conf])
+        if self.rbd_user:
+            args.extend(['--id', self.rbd_user])
+        if self.ceph_conf:
+            args.extend(['--conf', self.ceph_conf])
         return args
 
     def _get_mon_addrs(self):
@@ -578,12 +586,6 @@ class Rbd(Image):
         if self.rbd is None:
             raise RuntimeError(_('rbd python libraries not found'))
 
-        old_format = True
-        features = 0
-        if self._supports_layering():
-            old_format = False
-            features = self.rbd.RBD_FEATURE_LAYERING
-
         if not os.path.exists(base):
             prepare_template(target=base, max_size=size, *args, **kwargs)
         else:
@@ -603,8 +605,7 @@ class Rbd(Image):
             self._resize(self.rbd_name, size)
 
     def snapshot_extract(self, target, out_format):
-        snap = 'rbd:%s/%s' % (self.pool, self.rbd_name)
-        images.convert_image(snap, target, out_format)
+        images.convert_image(self.path, target, out_format)
 
 
 class Backend(object):

@@ -14,11 +14,13 @@
 
 from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
+from nova.compute import flavors
 from nova import db
 from nova import exception
 from nova import notifications
 from nova.objects import base
 from nova.objects import fields
+from nova.objects import flavor as flavor_obj
 from nova.objects import instance_fault
 from nova.objects import instance_info_cache
 from nova.objects import pci_device
@@ -70,7 +72,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
     # Version 1.8: 'security_groups' and 'pci_devices' cannot be None
     # Version 1.9: Make uuid a non-None real string
     # Version 1.10: Added use_slave to refresh and get_by_uuid
-    VERSION = '1.10'
+    # Version 1.11: Update instance from database during destroy
+    VERSION = '1.11'
 
     fields = {
         'id': fields.IntegerField(),
@@ -182,6 +185,35 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             changes.add('system_metadata')
         return changes
 
+    def obj_make_compatible(self, primitive, target_version):
+        target_version = (int(target_version.split('.')[0]),
+                          int(target_version.split('.')[1]))
+        unicode_attributes = ['user_id', 'project_id', 'image_ref',
+                              'kernel_id', 'ramdisk_id', 'hostname',
+                              'key_name', 'key_data', 'host', 'node',
+                              'user_data', 'availability_zone',
+                              'display_name', 'display_description',
+                              'launched_on', 'locked_by', 'os_type',
+                              'architecture', 'vm_mode', 'root_device_name',
+                              'default_ephemeral_device',
+                              'default_swap_device', 'config_drive',
+                              'cell_name']
+        if target_version < (1, 10) and 'info_cache' in primitive:
+            # NOTE(danms): Instance <= 1.9 (havana) had info_cache 1.4
+            self.info_cache.obj_make_compatible(primitive['info_cache'],
+                                                '1.4')
+            primitive['info_cache']['nova_object.version'] = '1.4'
+        if target_version < (1, 7):
+            # NOTE(danms): Before 1.7, we couldn't handle unicode in
+            # string fields, so squash it here
+            for field in [x for x in unicode_attributes if x in primitive
+                          and primitive[x] is not None]:
+                primitive[field] = primitive[field].encode('ascii', 'replace')
+        if target_version < (1, 6):
+            # NOTE(danms): Before 1.6 there was no pci_devices list
+            if 'pci_devices' in primitive:
+                del primitive['pci_devices']
+
     @property
     def name(self):
         try:
@@ -240,12 +272,14 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             instance['pci_devices'] = pci_devices
         if 'info_cache' in expected_attrs:
             if db_inst['info_cache'] is None:
-                info_cache = None
-            else:
-                info_cache = instance_info_cache.InstanceInfoCache()
+                instance.info_cache = None
+            elif not instance.obj_attr_is_set('info_cache'):
+                # TODO(danms): If this ever happens on a backlevel instance
+                # passed to us by a backlevel service, things will break
+                instance.info_cache = instance_info_cache.InstanceInfoCache()
+            if instance.info_cache is not None:
                 instance_info_cache.InstanceInfoCache._from_db_object(
-                        context, info_cache, db_inst['info_cache'])
-            instance['info_cache'] = info_cache
+                    context, instance.info_cache, db_inst['info_cache'])
         if 'security_groups' in expected_attrs:
             sec_groups = security_group._make_secgroup_list(
                     context, security_group.SecurityGroupList(),
@@ -311,7 +345,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             constraint = None
 
         try:
-            db.instance_destroy(context, self.uuid, constraint=constraint)
+            db_inst = db.instance_destroy(context, self.uuid,
+                                          constraint=constraint)
+            Instance._from_db_object(context, self, db_inst)
         except exception.ConstraintNotMet:
             raise exception.ObjectActionError(action='destroy',
                                               reason='host changed')
@@ -400,6 +436,13 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                 updates['cleaned'] = 0
 
         if expected_task_state is not None:
+            if (self.VERSION == '1.9' and
+                    expected_task_state == 'image_snapshot'):
+                # NOTE(danms): Icehouse introduced a pending state which
+                # Havana doesn't know about. If we're an old instance,
+                # tolerate the pending state as well
+                expected_task_state = [
+                    expected_task_state, 'image_snapshot_pending']
             updates['expected_task_state'] = expected_task_state
         if expected_vm_state is not None:
             updates['expected_vm_state'] = expected_vm_state
@@ -438,8 +481,13 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         current._context = None
 
         for field in self.fields:
-            if self.obj_attr_is_set(field) and self[field] != current[field]:
-                self[field] = current[field]
+            if self.obj_attr_is_set(field):
+                if field == 'info_cache':
+                    self.info_cache.refresh()
+                    # NOTE(danms): Make sure this shows up as touched
+                    self.info_cache = self.info_cache
+                elif self[field] != current[field]:
+                    self[field] = current[field]
         self.obj_reset_changes()
 
     def obj_load_attr(self, attrname):
@@ -469,6 +517,27 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                 action='obj_load_attr',
                 reason='loading %s requires recursion' % attrname)
 
+    def get_flavor(self, namespace=None):
+        prefix = ('%s_' % namespace) if namespace is not None else ''
+
+        db_flavor = flavors.extract_flavor(self, prefix)
+        flavor = flavor_obj.Flavor()
+        for key in flavors.system_metadata_flavor_props:
+            flavor[key] = db_flavor[key]
+        return flavor
+
+    def set_flavor(self, flavor, namespace=None):
+        prefix = ('%s_' % namespace) if namespace is not None else ''
+
+        self.system_metadata = flavors.save_flavor_info(
+            self.system_metadata, flavor, prefix)
+        self.save()
+
+    def delete_flavor(self, namespace):
+        self.system_metadata = flavors.delete_flavor_info(
+            self.system_metadata, "%s_" % namespace)
+        self.save()
+
 
 def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):
     get_fault = expected_attrs and 'fault' in expected_attrs
@@ -497,19 +566,29 @@ def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):
 class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added use_slave to get_by_host
-    VERSION = '1.1'
+    #              Instance <= version 1.9
+    # Version 1.2: Instance <= version 1.11
+    # Version 1.3: Added use_slave to get_by_filters
+    VERSION = '1.3'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
     }
+    child_versions = {
+        '1.1': '1.9',
+        # NOTE(danms): Instance was at 1.9 before we added this
+        '1.2': '1.11',
+        '1.3': '1.11',
+        }
 
     @base.remotable_classmethod
     def get_by_filters(cls, context, filters,
                        sort_key='created_at', sort_dir='desc', limit=None,
-                       marker=None, expected_attrs=None):
+                       marker=None, expected_attrs=None, use_slave=False):
         db_inst_list = db.instance_get_all_by_filters(
             context, filters, sort_key, sort_dir, limit=limit, marker=marker,
-            columns_to_join=_expected_cols(expected_attrs))
+            columns_to_join=_expected_cols(expected_attrs),
+            use_slave=use_slave)
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 

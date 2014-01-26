@@ -206,8 +206,8 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.ctxt = test_utils.get_test_admin_context()
         self.image_service = fake_image.FakeImageService()
 
-    def _get_running_instance(self):
-        instance_ref = test_utils.get_test_instance()
+    def _get_running_instance(self, obj=False):
+        instance_ref = test_utils.get_test_instance(obj=obj)
         network_info = test_utils.get_test_network_info()
         network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = \
             '1.1.1.1'
@@ -312,9 +312,9 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_migrate_disk_and_power_off(self):
         instance_ref, network_info = self._get_running_instance()
-        instance_type_ref = test_utils.get_test_instance_type()
+        flavor_ref = test_utils.get_test_flavor()
         self.connection.migrate_disk_and_power_off(
-            self.ctxt, instance_ref, 'dest_host', instance_type_ref,
+            self.ctxt, instance_ref, 'dest_host', flavor_ref,
             network_info)
 
     @catch_notimplementederror
@@ -497,13 +497,14 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     def test_get_console_output(self):
         fake_libvirt_utils.files['dummy.log'] = ''
         instance_ref, network_info = self._get_running_instance()
-        console_output = self.connection.get_console_output(instance_ref)
+        console_output = self.connection.get_console_output(self.ctxt,
+            instance_ref)
         self.assertIsInstance(console_output, six.string_types)
 
     @catch_notimplementederror
     def test_get_vnc_console(self):
-        instance_ref, network_info = self._get_running_instance()
-        vnc_console = self.connection.get_vnc_console(instance_ref)
+        instance, network_info = self._get_running_instance(obj=True)
+        vnc_console = self.connection.get_vnc_console(self.ctxt, instance)
         self.assertIn('internal_access_path', vnc_console)
         self.assertIn('host', vnc_console)
         self.assertIn('port', vnc_console)
@@ -563,7 +564,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                                        lambda *a: None, lambda *a: None)
 
     @catch_notimplementederror
-    def _check_available_resouce_fields(self, host_status):
+    def _check_available_resource_fields(self, host_status):
         keys = ['vcpus', 'memory_mb', 'local_gb', 'vcpus_used',
                 'memory_mb_used', 'hypervisor_type', 'hypervisor_version',
                 'hypervisor_hostname', 'cpu_info', 'disk_available_least']
@@ -573,13 +574,14 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_get_host_stats(self):
         host_status = self.connection.get_host_stats()
-        self._check_available_resouce_fields(host_status)
+        self._check_available_resource_fields(host_status)
+        self.assertTrue(isinstance(host_status['hypervisor_version'], int))
 
     @catch_notimplementederror
     def test_get_available_resource(self):
         available_resource = self.connection.get_available_resource(
                 'myhostname')
-        self._check_available_resouce_fields(available_resource)
+        self._check_available_resource_fields(available_resource)
 
     @catch_notimplementederror
     def _check_host_cpu_status_fields(self, host_cpu_status):
@@ -735,7 +737,7 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
 
         # Previous status of the service: disabled: False
         # service_mock.__getitem__.return_value = False
-        service_mock.configure_mock(disabled_reason='',
+        service_mock.configure_mock(disabled_reason='None',
                                     disabled=False)
         from nova.objects import service as service_obj
         self.mox.StubOutWithMock(service_obj.Service,
@@ -762,7 +764,7 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
         self.mox.ReplayAll()
         self.connection.set_host_enabled('my_test_host', True)
         self.assertFalse(service_mock.disabled)
-        self.assertEqual(service_mock.disabled_reason, '')
+        self.assertEqual(service_mock.disabled_reason, 'None')
 
     def test_set_host_enabled_when_manually_disabled(self):
         self.mox.UnsetStubs()

@@ -26,6 +26,7 @@ import time
 
 from oslo.config import cfg
 
+from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
@@ -58,11 +59,6 @@ LOG = log.getLogger(__name__)
 
 class DockerDriver(driver.ComputeDriver):
     """Docker hypervisor driver."""
-
-    capabilities = {
-        'has_imagecache': True,
-        'supports_recreate': True,
-    }
 
     def __init__(self, virtapi):
         super(DockerDriver, self).__init__(virtapi)
@@ -171,13 +167,8 @@ class DockerDriver(driver.ComputeDriver):
         }
         return stats
 
-    def _find_cgroup_devices_path(self):
-        for ln in open('/proc/mounts'):
-            if ln.startswith('cgroup ') and 'devices' in ln:
-                return ln.split(' ')[1]
-
     def _find_container_pid(self, container_id):
-        cgroup_path = self._find_cgroup_devices_path()
+        cgroup_path = hostinfo.get_cgroup_devices_path()
         lxc_path = os.path.join(cgroup_path, 'lxc')
         tasks_path = os.path.join(lxc_path, container_id, 'tasks')
         n = 0
@@ -287,7 +278,8 @@ class DockerDriver(driver.ComputeDriver):
         args = {
             'Hostname': instance['name'],
             'Image': image_name,
-            'Memory': self._get_memory_limit_bytes(instance)
+            'Memory': self._get_memory_limit_bytes(instance),
+            'CpuShares': self._get_cpu_shares(instance)
         }
         default_cmd = self._get_default_cmd(image_name)
         if default_cmd:
@@ -322,6 +314,11 @@ class DockerDriver(driver.ComputeDriver):
         self.docker.stop_container(container_id)
         self.docker.destroy_container(container_id)
 
+    def cleanup(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
+        """Cleanup after instance being destroyed by Hypervisor."""
+        pass
+
     def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None, bad_volumes_callback=None):
         container_id = self.find_container_by_name(instance['name']).get('id')
@@ -346,8 +343,8 @@ class DockerDriver(driver.ComputeDriver):
             return
         self.docker.stop_container(container_id)
 
-    def get_console_output(self, instance):
-        container_id = self.find_container_by_name(instance['name']).get('id')
+    def get_console_output(self, context, instance):
+        container_id = self.find_container_by_name(instance.name).get('id')
         if not container_id:
             return
         return self.docker.get_container_logs(container_id)
@@ -391,3 +388,21 @@ class DockerDriver(driver.ComputeDriver):
                           expected_state=task_states.IMAGE_PENDING_UPLOAD)
         headers = {'X-Meta-Glance-Image-Id': image_href}
         self.docker.push_repository(name, headers=headers)
+
+    def _get_cpu_shares(self, instance):
+        """Get allocated CPUs from configured flavor.
+
+        Docker/lxc supports relative CPU allocation.
+
+        cgroups specifies following:
+         /sys/fs/cgroup/lxc/cpu.shares = 1024
+         /sys/fs/cgroup/cpu.shares = 1024
+
+        For that reason we use 1024 as multiplier.
+        This multiplier allows to divide the CPU
+        resources fair with containers started by
+        the user (e.g. docker registry) which has
+        the default CpuShares value of zero.
+        """
+        flavor = flavors.extract_flavor(instance)
+        return int(flavor['vcpus']) * 1024

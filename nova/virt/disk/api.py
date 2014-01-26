@@ -95,6 +95,10 @@ for s in CONF.virt_mkfs:
         _DEFAULT_MKFS_COMMAND = mkfs_command
 
 
+def get_fs_type_for_os_type(os_type):
+    return os_type if _MKFS_COMMAND.get(os_type) else 'default'
+
+
 def mkfs(os_type, fs_label, target, run_as_root=True):
     """Format a file or block device using
        a user provided command for each os type.
@@ -216,8 +220,6 @@ class _DiskImage(object):
         self.mount_dir = mount_dir
         self.use_cow = use_cow
 
-        self.device = None
-
         # Internal
         self._mkdir = False
         self._mounter = None
@@ -249,7 +251,6 @@ class _DiskImage(object):
 
         mount_name = os.path.basename(self.mount_dir or '')
         self._mkdir = mount_name.startswith(self.tmp_prefix)
-        self.device = self._mounter.device
 
     @property
     def errors(self):
@@ -281,11 +282,11 @@ class _DiskImage(object):
                                                   imgfmt)
         if mounter.do_mount():
             self._mounter = mounter
+            return self._mounter.device
         else:
             LOG.debug(mounter.error)
             self._errors.append(mounter.error)
-
-        return bool(self._mounter)
+            return None
 
     def umount(self):
         """Umount a mount point from the filesystem."""
@@ -361,14 +362,15 @@ def setup_container(image, container_dir, use_cow=False):
     Returns path of image device which is mounted to the container directory.
     """
     img = _DiskImage(image=image, use_cow=use_cow, mount_dir=container_dir)
-    if not img.mount():
+    dev = img.mount()
+    if dev is None:
         LOG.error(_("Failed to mount container filesystem '%(image)s' "
                     "on '%(target)s': %(errors)s"),
                   {"image": img, "target": container_dir,
                    "errors": img.errors})
         raise exception.NovaException(img.errors)
-    else:
-        return img.device
+
+    return dev
 
 
 def teardown_container(container_dir, container_root_device=None):
@@ -548,11 +550,6 @@ def _inject_admin_password_into_fs(admin_passwd, fs):
     LOG.debug(_("Inject admin password fs=%(fs)s "
                 "admin_passwd=<SANITIZED>"), {'fs': fs})
     admin_user = 'root'
-
-    fd, tmp_passwd = tempfile.mkstemp()
-    os.close(fd)
-    fd, tmp_shadow = tempfile.mkstemp()
-    os.close(fd)
 
     passwd_path = os.path.join('etc', 'passwd')
     shadow_path = os.path.join('etc', 'shadow')

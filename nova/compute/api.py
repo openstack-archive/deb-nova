@@ -54,6 +54,7 @@ from nova import notifications
 from nova import notifier
 from nova.objects import aggregate as aggregate_obj
 from nova.objects import base as obj_base
+from nova.objects import flavor as flavor_obj
 from nova.objects import instance as instance_obj
 from nova.objects import instance_action
 from nova.objects import instance_info_cache
@@ -345,7 +346,6 @@ class API(base.Base):
         except exception.OverQuota as exc:
             # OK, we exceeded quota; let's figure out why...
             quotas = exc.kwargs['quotas']
-            usages = exc.kwargs['usages']
             overs = exc.kwargs['overs']
             headroom = exc.kwargs['headroom']
 
@@ -421,6 +421,13 @@ class API(base.Base):
         # In future, we may support more variable length strings, so we act
         #  as if this is quota-controlled for forwards compatibility
         for k, v in metadata.iteritems():
+            if not isinstance(k, six.string_types):
+                msg = _("Metadata property key '%s' is not a string.") % k
+                raise exception.InvalidMetadata(reason=msg)
+            if not isinstance(v, six.string_types):
+                msg = (_("Metadata property value '%(v)s' for key '%(k)s' is "
+                         "not a string.") % {'v': v, 'k': k})
+                raise exception.InvalidMetadata(reason=msg)
             if len(k) == 0:
                 msg = _("Metadata property key blank")
                 raise exception.InvalidMetadata(reason=msg)
@@ -444,13 +451,15 @@ class API(base.Base):
                 raise exception.SecurityGroupNotFoundForProject(
                     project_id=context.project_id, security_group_id=secgroup)
 
-    def _check_requested_networks(self, context, requested_networks):
+    def _check_requested_networks(self, context, requested_networks,
+                                  max_count):
         """
         Check if the networks requested belongs to the project
         and the fixed IP address for each network provided is within
         same the network block
         """
-        self.network_api.validate_networks(context, requested_networks)
+        return self.network_api.validate_networks(context, requested_networks,
+                                                  max_count)
 
     @staticmethod
     def _handle_kernel_and_ramdisk(context, kernel_id, ramdisk_id, image):
@@ -663,7 +672,8 @@ class API(base.Base):
                                          access_ip_v4, access_ip_v6,
                                          requested_networks, config_drive,
                                          block_device_mapping,
-                                         auto_disk_config, reservation_id):
+                                         auto_disk_config, reservation_id,
+                                         max_count):
         """Verify all the input parameters regardless of the provisioning
         strategy being performed.
         """
@@ -695,7 +705,12 @@ class API(base.Base):
                 instance_type, metadata, injected_files)
 
         self._check_requested_secgroups(context, security_groups)
-        self._check_requested_networks(context, requested_networks)
+
+        # Note:  max_count is the number of instances requested by the user,
+        # max_network_count is the maximum number of instances taking into
+        # account any network quotas
+        max_network_count = self._check_requested_networks(context,
+                                     requested_networks, max_count)
 
         kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
                 context, kernel_id, ramdisk_id, boot_meta)
@@ -748,7 +763,9 @@ class API(base.Base):
 
         base_options.update(options_from_image)
 
-        return base_options
+        # return the validated options and maximum number of instances allowed
+        # by the network quotas
+        return base_options, max_network_count
 
     def _build_filter_properties(self, context, scheduler_hints, forced_host,
             forced_node, instance_type):
@@ -875,13 +892,27 @@ class API(base.Base):
         availability_zone, forced_host, forced_node = handle_az(context,
                                                             availability_zone)
 
-        base_options = self._validate_and_build_base_options(context,
+        base_options, max_net_count = self._validate_and_build_base_options(
+                context,
                 instance_type, boot_meta, image_href, image_id, kernel_id,
                 ramdisk_id, display_name, display_description,
                 key_name, key_data, security_groups, availability_zone,
                 forced_host, user_data, metadata, injected_files, access_ip_v4,
                 access_ip_v6, requested_networks, config_drive,
-                block_device_mapping, auto_disk_config, reservation_id)
+                block_device_mapping, auto_disk_config, reservation_id,
+                max_count)
+
+        # max_net_count is the maximum number of instances requested by the
+        # user adjusted for any network quota constraints, including
+        # considertaion of connections to each requested network
+        if max_net_count == 0:
+            raise exception.PortLimitExceeded()
+        elif max_net_count < max_count:
+            LOG.debug(_("max count reduced from %(max_count)d to "
+                        "%(max_net_count)d due to network port quota"),
+                       {'max_count': max_count,
+                        'max_net_count': max_net_count})
+            max_count = max_net_count
 
         block_device_mapping = self._check_and_transform_bdm(
             base_options, boot_meta, min_count, max_count,
@@ -1295,7 +1326,7 @@ class API(base.Base):
                                                image_ref)
 
     def _delete(self, context, instance, delete_type, cb, **instance_attrs):
-        if instance['disable_terminate']:
+        if instance.disable_terminate:
             LOG.info(_('instance termination disabled'),
                      instance=instance)
             return
@@ -1303,15 +1334,15 @@ class API(base.Base):
         host = instance['host']
         bdms = block_device.legacy_mapping(
                     self.db.block_device_mapping_get_all_by_instance(
-                    context, instance['uuid']))
+                    context, instance.uuid))
         reservations = None
 
-        if context.is_admin and context.project_id != instance['project_id']:
-            project_id = instance['project_id']
+        if context.is_admin and context.project_id != instance.project_id:
+            project_id = instance.project_id
         else:
             project_id = context.project_id
-        if context.user_id != instance['user_id']:
-            user_id = instance['user_id']
+        if context.user_id != instance.user_id:
+            user_id = instance.user_id
         else:
             user_id = context.user_id
 
@@ -1363,7 +1394,7 @@ class API(base.Base):
                 except exception.ObjectActionError:
                     instance.refresh()
 
-            if instance['vm_state'] == vm_states.RESIZED:
+            if instance.vm_state == vm_states.RESIZED:
                 self._confirm_resize_on_deleting(context, instance)
 
             is_up = False
@@ -1495,7 +1526,6 @@ class API(base.Base):
     def _local_delete(self, context, instance, bdms, delete_type, cb):
         LOG.warning(_("instance's host %s is down, deleting from "
                       "database") % instance['host'], instance=instance)
-        instance_uuid = instance['uuid']
         instance.info_cache.delete()
         compute_utils.notify_about_instance_usage(
             self.notifier, context, instance, "%s.start" % delete_type)
@@ -1504,8 +1534,6 @@ class API(base.Base):
         if self.cell_type != 'api':
             self.network_api.deallocate_for_instance(elevated,
                                                      instance)
-        system_meta = self.db.instance_system_metadata_get(context,
-                instance_uuid)
 
         # cleanup volumes
         for bdm in bdms:
@@ -1527,10 +1555,11 @@ class API(base.Base):
                     LOG.warn(err_str % exc, instance=instance)
             self.db.block_device_mapping_destroy(context, bdm['id'])
         cb(context, instance, bdms, local=True)
+        sys_meta = instance.system_metadata
         instance.destroy()
         compute_utils.notify_about_instance_usage(
             self.notifier, context, instance, "%s.end" % delete_type,
-            system_metadata=system_meta)
+            system_metadata=sys_meta)
 
     def _do_delete(self, context, instance, bdms, reservations=None,
                    local=False):
@@ -1589,9 +1618,9 @@ class API(base.Base):
     def restore(self, context, instance):
         """Restore a previously deleted (but not reclaimed) instance."""
         # Reserve quotas
-        instance_type = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         num_instances, quota_reservations = self._check_num_instances_quota(
-                context, instance_type, 1, 1)
+                context, flavor, 1, 1)
 
         self._record_action_start(context, instance, instance_actions.RESTORE)
 
@@ -1675,11 +1704,14 @@ class API(base.Base):
         """Get an instance type by instance type id."""
         return flavors.get_flavor(instance_type_id, ctxt=context)
 
-    def get(self, context, instance_id, want_objects=False):
+    def get(self, context, instance_id, want_objects=False,
+            expected_attrs=None):
         """Get a single instance with the given instance_id."""
+        if not expected_attrs:
+            expected_attrs = []
+        expected_attrs.extend(['metadata', 'system_metadata',
+                               'security_groups', 'info_cache'])
         # NOTE(ameade): we still need to support integer ids for ec2
-        expected_attrs = ['metadata', 'system_metadata',
-                          'security_groups', 'info_cache']
         try:
             if uuidutils.is_uuid_like(instance_id):
                 instance = instance_obj.Instance.get_by_uuid(
@@ -1699,7 +1731,8 @@ class API(base.Base):
         return instance
 
     def get_all(self, context, search_opts=None, sort_key='created_at',
-                sort_dir='desc', limit=None, marker=None, want_objects=False):
+                sort_dir='desc', limit=None, marker=None, want_objects=False,
+                expected_attrs=None):
         """Get all instances filtered by one of the given parameters.
 
         If there is no filter and the context is an admin, it will retrieve
@@ -1730,10 +1763,8 @@ class API(base.Base):
         filters = {}
 
         def _remap_flavor_filter(flavor_id):
-            instance_type = flavors.get_flavor_by_flavor_id(
-                    flavor_id)
-
-            filters['instance_type_id'] = instance_type['id']
+            flavor = flavor_obj.Flavor.get_by_flavor_id(context, flavor_id)
+            filters['instance_type_id'] = flavor.id
 
         def _remap_fixed_ip_filter(fixed_ip):
             # Turn fixed_ip into a regexp match. Since '.' matches
@@ -1773,9 +1804,9 @@ class API(base.Base):
                         return []
 
         inst_models = self._get_instances_by_filters(context, filters,
-                                                     sort_key, sort_dir,
-                                                     limit=limit,
-                                                     marker=marker)
+                sort_key, sort_dir, limit=limit, marker=marker,
+                expected_attrs=expected_attrs)
+
         if want_objects:
             return inst_models
 
@@ -1789,7 +1820,7 @@ class API(base.Base):
     def _get_instances_by_filters(self, context, filters,
                                   sort_key, sort_dir,
                                   limit=None,
-                                  marker=None):
+                                  marker=None, expected_attrs=None):
         if 'ip6' in filters or 'ip' in filters:
             res = self.network_api.get_instance_uuids_by_ip_filter(context,
                                                                    filters)
@@ -1800,6 +1831,8 @@ class API(base.Base):
 
         fields = ['metadata', 'system_metadata', 'info_cache',
                   'security_groups']
+        if expected_attrs:
+            fields.extend(expected_attrs)
         return instance_obj.InstanceList.get_by_filters(
             context, filters=filters, sort_key=sort_key, sort_dir=sort_dir,
             limit=limit, marker=marker, expected_attrs=fields)
@@ -1911,6 +1944,7 @@ class API(base.Base):
         :returns: the new image metadata
         """
         image_meta['name'] = name
+        image_meta['is_public'] = False
         properties = image_meta['properties']
         if instance['root_device_name']:
             properties['root_device_name'] = instance['root_device_name']
@@ -2014,7 +2048,6 @@ class API(base.Base):
                  'HARD': task_states.REBOOTING_HARD}[reboot_type]
         instance.task_state = state
         instance.save(expected_task_state=[None, task_states.REBOOTING])
-        elevated = context.elevated()
 
         self._record_action_start(context, instance, instance_actions.REBOOT)
 
@@ -2024,21 +2057,23 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_lock
+    @check_instance_cell
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
                                     vm_states.ERROR],
                           task_state=[None])
-    def rebuild(self, context, instance, image_href, admin_password, **kwargs):
+    def rebuild(self, context, instance, image_href, admin_password,
+                files_to_inject=None, **kwargs):
         """Rebuild the given instance with the provided attributes."""
-        orig_image_ref = instance['image_ref'] or ''
-        files_to_inject = kwargs.pop('files_to_inject', [])
+        orig_image_ref = instance.image_ref or ''
+        files_to_inject = files_to_inject or []
         metadata = kwargs.get('metadata', {})
 
         image_id, image = self._get_image(context, image_href)
         self._check_auto_disk_config(image=image, **kwargs)
 
-        instance_type = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         self._checks_for_create_and_rebuild(context, image_id, image,
-                instance_type, metadata, files_to_inject)
+                flavor, metadata, files_to_inject)
 
         kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
                 context, None, None, image)
@@ -2049,38 +2084,34 @@ class API(base.Base):
             system metadata.  These properties start with 'image_'.
             Then add the properties for the new image.
             """
+            # FIXME(comstud): There's a race condition here in that if
+            # the system_metadata for this instance is updated after
+            # we do the previous save() and before we update.. those
+            # other updates will be lost. Since this problem exists in
+            # a lot of other places, I think it should be addressed in
+            # a DB layer overhaul.
 
-            # FIXME(comstud): There's a race condition here in that
-            # if the system_metadata for this instance is updated
-            # after we do the get and before we update.. those other
-            # updates will be lost. Since this problem exists in a lot
-            # of other places, I think it should be addressed in a DB
-            # layer overhaul.
-            sys_metadata = self.db.instance_system_metadata_get(context,
-                    instance['uuid'])
-            orig_sys_metadata = dict(sys_metadata)
+            orig_sys_metadata = dict(instance.system_metadata)
             # Remove the old keys
-            for key in sys_metadata.keys():
+            for key in instance.system_metadata.keys():
                 if key.startswith(utils.SM_IMAGE_PROP_PREFIX):
-                    del sys_metadata[key]
+                    del instance.system_metadata[key]
 
             # Add the new ones
             new_sys_metadata = utils.get_system_metadata_from_image(
-                image, instance_type)
+                image, flavor)
 
-            sys_metadata.update(new_sys_metadata)
-            self.db.instance_system_metadata_update(context,
-                    instance['uuid'], sys_metadata, True)
+            instance.system_metadata.update(new_sys_metadata)
+            instance.save()
             return orig_sys_metadata
 
-        instance = self.update(context, instance,
-                               task_state=task_states.REBUILDING,
-                               expected_task_state=[None],
-                               # Unfortunately we need to set image_ref early,
-                               # so API users can see it.
-                               image_ref=image_href, kernel_id=kernel_id or "",
-                               ramdisk_id=ramdisk_id or "",
-                               progress=0, **kwargs)
+        instance.task_state = task_states.REBUILDING
+        instance.image_ref = image_href
+        instance.kernel_id = kernel_id or ""
+        instance.ramdisk_id = ramdisk_id or ""
+        instance.progress = 0
+        instance.update(kwargs)
+        instance.save(expected_task_state=[None])
 
         # On a rebuild, since we're potentially changing images, we need to
         # wipe out the old image properties that we're storing as instance
@@ -2090,14 +2121,15 @@ class API(base.Base):
         bdms = block_device.legacy_mapping(
             self.db.block_device_mapping_get_all_by_instance(
                 context,
-                instance['uuid']))
+                instance.uuid))
 
         self._record_action_start(context, instance, instance_actions.REBUILD)
 
         self.compute_rpcapi.rebuild_instance(context, instance=instance,
                 new_pass=admin_password, injected_files=files_to_inject,
                 image_ref=image_href, orig_image_ref=orig_image_ref,
-                orig_sys_metadata=orig_sys_metadata, bdms=bdms)
+                orig_sys_metadata=orig_sys_metadata, bdms=bdms,
+                kwargs=kwargs)
 
     @wrap_check_policy
     @check_instance_lock
@@ -2169,8 +2201,8 @@ class API(base.Base):
                                            reservations)
 
     @staticmethod
-    def _resize_quota_delta(context, new_instance_type,
-                            old_instance_type, sense, compare):
+    def _resize_quota_delta(context, new_flavor,
+                            old_flavor, sense, compare):
         """
         Calculate any quota adjustment required at a particular point
         in the resize cycle.
@@ -2186,8 +2218,7 @@ class API(base.Base):
                         -1 indicates negative deltas
         """
         def _quota_delta(resource):
-            return sense * (new_instance_type[resource] -
-                            old_instance_type[resource])
+            return sense * (new_flavor[resource] - old_flavor[resource])
 
         deltas = {}
         if compare * _quota_delta('vcpus') > 0:
@@ -2198,12 +2229,11 @@ class API(base.Base):
         return deltas
 
     @staticmethod
-    def _upsize_quota_delta(context, new_instance_type, old_instance_type):
+    def _upsize_quota_delta(context, new_flavor, old_flavor):
         """
         Calculate deltas required to adjust quota for an instance upsize.
         """
-        return API._resize_quota_delta(context, new_instance_type,
-                                       old_instance_type, 1, 1)
+        return API._resize_quota_delta(context, new_flavor, old_flavor, 1, 1)
 
     @staticmethod
     def _reverse_upsize_quota_delta(context, migration_ref):
@@ -2211,25 +2241,21 @@ class API(base.Base):
         Calculate deltas required to reverse a prior upsizing
         quota adjustment.
         """
-        old_instance_type = flavors.get_flavor(
-            migration_ref['old_instance_type_id'])
-        new_instance_type = flavors.get_flavor(
-            migration_ref['new_instance_type_id'])
+        old_flavor = flavor_obj.Flavor.get_by_id(
+            context, migration_ref['old_instance_type_id'])
+        new_flavor = flavor_obj.Flavor.get_by_id(
+            context, migration_ref['new_instance_type_id'])
 
-        return API._resize_quota_delta(context, new_instance_type,
-                                       old_instance_type, -1, -1)
+        return API._resize_quota_delta(context, new_flavor, old_flavor, -1, -1)
 
     @staticmethod
     def _downsize_quota_delta(context, instance):
         """
         Calculate deltas required to adjust quota for an instance downsize.
         """
-        old_instance_type = flavors.extract_flavor(instance,
-                                                                 'old_')
-        new_instance_type = flavors.extract_flavor(instance,
-                                                                 'new_')
-        return API._resize_quota_delta(context, new_instance_type,
-                                       old_instance_type, 1, -1)
+        old_flavor = instance.get_flavor('old')
+        new_flavor = instance.get_flavor('new')
+        return API._resize_quota_delta(context, new_flavor, old_flavor, 1, -1)
 
     @staticmethod
     def _reserve_quota_delta(context, deltas, project_id=None):
@@ -2316,7 +2342,6 @@ class API(base.Base):
                                                          'project_id'])
         except exception.OverQuota as exc:
             quotas = exc.kwargs['quotas']
-            usages = exc.kwargs['usages']
             overs = exc.kwargs['overs']
             headroom = exc.kwargs['headroom']
 
@@ -2932,8 +2957,13 @@ class API(base.Base):
 
         self._record_action_start(context, instance, instance_actions.EVACUATE)
 
+        # NODE(danms): Transitional until evacuate supports objects
+        inst_obj = instance_obj.Instance._from_db_object(
+            context, instance_obj.Instance(), instance,
+            expected_attrs=['metadata', 'system_metadata'])
+
         return self.compute_rpcapi.rebuild_instance(context,
-                                        instance=instance,
+                                        instance=inst_obj,
                                         new_pass=admin_password,
                                         injected_files=None,
                                         image_ref=None,
@@ -3450,9 +3480,11 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         group = {'name': name,
                  'description': description}
 
+        columns_to_join = ['rules.grantee_group']
         group_ref = self.db.security_group_update(context,
-                                                  security_group['id'],
-                                                  group)
+                security_group['id'],
+                group,
+                columns_to_join=columns_to_join)
         return group_ref
 
     def get(self, context, name=None, id=None, map_exception=False):

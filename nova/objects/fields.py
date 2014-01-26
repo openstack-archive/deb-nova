@@ -214,7 +214,7 @@ class String(FieldType):
                               datetime.datetime)):
             return unicode(value)
         else:
-            raise ValueError(_('A string is required here, not %s'),
+            raise ValueError(_('A string is required here, not %s') %
                              value.__class__.__name__)
 
 
@@ -262,11 +262,11 @@ class DateTime(FieldType):
         return timeutils.isotime(value)
 
 
-class IPV4Address(FieldType):
+class IPAddress(FieldType):
     @staticmethod
     def coerce(obj, attr, value):
         try:
-            return netaddr.IPAddress(value, version=4)
+            return netaddr.IPAddress(value)
         except netaddr.AddrFormatError as e:
             raise ValueError(str(e))
 
@@ -278,20 +278,49 @@ class IPV4Address(FieldType):
         return str(value)
 
 
-class IPV6Address(FieldType):
+class IPV4Address(IPAddress):
+    @staticmethod
+    def coerce(obj, attr, value):
+        result = IPAddress.coerce(obj, attr, value)
+        if result.version != 4:
+            raise ValueError(_('Network "%s" is not valid') % value)
+        return result
+
+
+class IPV6Address(IPAddress):
+    @staticmethod
+    def coerce(obj, attr, value):
+        result = IPAddress.coerce(obj, attr, value)
+        if result.version != 6:
+            raise ValueError(_('Network "%s" is not valid') % value)
+        return result
+
+
+class IPNetwork(IPAddress):
     @staticmethod
     def coerce(obj, attr, value):
         try:
-            return netaddr.IPAddress(value, version=6)
+            return netaddr.IPNetwork(value)
         except netaddr.AddrFormatError as e:
             raise ValueError(str(e))
 
-    def from_primitive(self, obj, attr, value):
-        return self.coerce(obj, attr, value)
 
+class IPV4Network(IPNetwork):
     @staticmethod
-    def to_primitive(obj, attr, value):
-        return str(value)
+    def coerce(obj, attr, value):
+        try:
+            return netaddr.IPNetwork(value, version=4)
+        except netaddr.AddrFormatError as e:
+            raise ValueError(str(e))
+
+
+class IPV6Network(IPNetwork):
+    @staticmethod
+    def coerce(obj, attr, value):
+        try:
+            return netaddr.IPNetwork(value, version=6)
+        except netaddr.AddrFormatError as e:
+            raise ValueError(str(e))
 
 
 class CompoundFieldType(FieldType):
@@ -395,30 +424,6 @@ class NetworkModel(FieldType):
         return network_model.NetworkInfo.hydrate(value)
 
 
-class CIDR(FieldType):
-    @staticmethod
-    def coerce(obj, attr, value):
-        try:
-            network, length = value.split('/')
-        except (ValueError, AttributeError):
-            raise ValueError(_('CIDR "%s" is not in proper form') % value)
-        try:
-            network = netaddr.IPAddress(network)
-        except netaddr.AddrFormatError:
-            raise ValueError(_('Network "%s" is not valid') % network)
-        try:
-            length = int(length)
-            assert (length >= 0)
-        except (ValueError, AssertionError):
-            raise ValueError(_('Netmask length "%s" is not valid') % length)
-        if ((network.version == 4 and length > 32) or
-                (network.version == 6 and length > 128)):
-            raise ValueError(_('Netmask length "%(length)s" is not valid '
-                               'for IPv%(version)i address') %
-                             {'length': length, 'version': network.version})
-        return value
-
-
 class AutoTypedField(Field):
     AUTO_TYPE = None
 
@@ -450,12 +455,28 @@ class DateTimeField(AutoTypedField):
     AUTO_TYPE = DateTime()
 
 
+class IPAddressField(AutoTypedField):
+    AUTO_TYPE = IPAddress()
+
+
 class IPV4AddressField(AutoTypedField):
     AUTO_TYPE = IPV4Address()
 
 
 class IPV6AddressField(AutoTypedField):
     AUTO_TYPE = IPV6Address()
+
+
+class IPNetworkField(AutoTypedField):
+    AUTO_TYPE = IPNetwork()
+
+
+class IPV4NetworkField(AutoTypedField):
+    AUTO_TYPE = IPV4Network()
+
+
+class IPV6NetworkField(AutoTypedField):
+    AUTO_TYPE = IPV6Network()
 
 
 class DictOfStringsField(AutoTypedField):

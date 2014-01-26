@@ -51,6 +51,7 @@ from nova.objects import instance as instance_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import policy as common_policy
+from nova.openstack.common import timeutils
 from nova import policy
 from nova import test
 from nova.tests.api.openstack import fakes
@@ -659,7 +660,7 @@ class ServersControllerTest(ControllerTest):
     def test_tenant_id_filter_converts_to_project_id_for_admin(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
-                         columns_to_join=None):
+                         columns_to_join=None, use_slave=False):
             self.assertIsNotNone(filters)
             self.assertEqual(filters['project_id'], 'newfake')
             self.assertFalse(filters.get('tenant_id'))
@@ -678,7 +679,7 @@ class ServersControllerTest(ControllerTest):
     def test_all_tenants_param_normal(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
-                         columns_to_join=None):
+                         columns_to_join=None, use_slave=False):
             self.assertNotIn('project_id', filters)
             return [fakes.stub_instance(100)]
 
@@ -694,7 +695,7 @@ class ServersControllerTest(ControllerTest):
     def test_all_tenants_param_one(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
-                         columns_to_join=None):
+                         columns_to_join=None, use_slave=False):
             self.assertNotIn('project_id', filters)
             return [fakes.stub_instance(100)]
 
@@ -710,7 +711,7 @@ class ServersControllerTest(ControllerTest):
     def test_all_tenants_param_zero(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
-                         columns_to_join=None):
+                         columns_to_join=None, use_slave=False):
             self.assertNotIn('all_tenants', filters)
             return [fakes.stub_instance(100)]
 
@@ -726,7 +727,7 @@ class ServersControllerTest(ControllerTest):
     def test_all_tenants_param_false(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
-                         columns_to_join=None):
+                         columns_to_join=None, use_slave=False):
             self.assertNotIn('all_tenants', filters)
             return [fakes.stub_instance(100)]
 
@@ -757,7 +758,7 @@ class ServersControllerTest(ControllerTest):
     def test_admin_restricted_tenant(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
-                         columns_to_join=None):
+                         columns_to_join=None, use_slave=False):
             self.assertIsNotNone(filters)
             self.assertEqual(filters['project_id'], 'fake')
             return [fakes.stub_instance(100)]
@@ -774,7 +775,7 @@ class ServersControllerTest(ControllerTest):
     def test_all_tenants_pass_policy(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
-                         columns_to_join=None):
+                         columns_to_join=None, use_slave=False):
             self.assertIsNotNone(filters)
             self.assertNotIn('project_id', filters)
             return [fakes.stub_instance(100)]
@@ -1369,6 +1370,8 @@ class ServersControllerDeleteTest(ControllerTest):
 
         def instance_destroy_mock(*args, **kwargs):
             self.server_delete_called = True
+            deleted_at = timeutils.utcnow()
+            return fake_instance.fake_db_instance(deleted_at=deleted_at)
 
         self.stubs.Set(db, 'instance_destroy', instance_destroy_mock)
 
@@ -1392,6 +1395,16 @@ class ServersControllerDeleteTest(ControllerTest):
         self.assertRaises(webob.exc.HTTPNotFound,
                           self._delete_server_instance,
                           uuid='non-existent-uuid')
+
+    def test_delete_locked_server(self):
+        req = self._create_delete_request(FAKE_UUID)
+        self.stubs.Set(compute_api.API, 'soft_delete',
+                       fakes.fake_actions_to_locked_server)
+        self.stubs.Set(compute_api.API, 'delete',
+                       fakes.fake_actions_to_locked_server)
+
+        self.assertRaises(webob.exc.HTTPConflict, self.controller.delete,
+                          req, FAKE_UUID)
 
     def test_delete_server_instance_while_building(self):
         fakes.stub_out_instance_quota(self.stubs, 0, 10)
@@ -1423,6 +1436,8 @@ class ServersControllerDeleteTest(ControllerTest):
 
         def instance_destroy_mock(*args, **kwargs):
             self.server_delete_called = True
+            deleted_at = timeutils.utcnow()
+            return fake_instance.fake_db_instance(deleted_at=deleted_at)
         self.stubs.Set(db, 'instance_destroy', instance_destroy_mock)
 
         self.controller.delete(req, FAKE_UUID)
@@ -2062,6 +2077,20 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', create)
         self._test_create_extra({'security_groups': [{'name': group}]})
 
+    def test_create_instance_with_non_unique_secgroup_name(self):
+        self.flags(network_api_class='nova.network.neutronv2.api.API')
+        network = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'uuid': network}]
+        params = {'networks': requested_networks,
+                  'security_groups': [{'name': 'dup'}, {'name': 'dup'}]}
+
+        def fake_create(*args, **kwargs):
+            raise exception.NoUniqueMatch("No Unique match found for ...")
+
+        self.stubs.Set(compute_api.API, 'create', fake_create)
+        self.assertRaises(webob.exc.HTTPConflict,
+                          self._test_create_extra, params)
+
     def test_create_instance_with_access_ip(self):
         # proper local hrefs must start with 'http://localhost/v2/'
         image_href = 'http://localhost/v2/fake/images/%s' % self.image_uuid
@@ -2195,6 +2224,30 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, self.req, self.body)
+
+    def test_create_instance_metadata_key_not_string(self):
+        self.flags(quota_metadata_items=1)
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['imageRef'] = image_href
+        self.body['server']['metadata'] = {1: 'test'}
+        self.req.body = jsonutils.dumps(self.body)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, self.req, self.body)
+
+    def test_create_instance_metadata_value_not_string(self):
+        self.flags(quota_metadata_items=1)
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['imageRef'] = image_href
+        self.body['server']['metadata'] = {'test': ['a', 'list']}
+        self.req.body = jsonutils.dumps(self.body)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, self.req, self.body)
+
+    def test_create_user_data_malformed_bad_request(self):
+        self.ext_mgr.extensions = {'os-user-data': 'fake'}
+        params = {'user_data': 'u1234!'}
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
 
     def test_create_instance_invalid_key_name(self):
         image_href = 'http://localhost/v2/images/2'
@@ -2948,6 +3001,19 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', fake_create)
         self.assertRaises(webob.exc.HTTPConflict,
                                           self._test_create_extra, params)
+
+    def test_create_instance_with_neturonv2_not_found_network(self):
+        self.flags(network_api_class='nova.network.neutronv2.api.API')
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        requested_networks = [{'uuid': network}]
+        params = {'networks': requested_networks}
+
+        def fake_create(*args, **kwargs):
+            raise exception.NetworkNotFound(network_id=network)
+
+        self.stubs.Set(compute_api.API, 'create', fake_create)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
 
     def test_create_instance_with_neutronv2_port_not_found(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')

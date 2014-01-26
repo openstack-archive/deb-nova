@@ -17,6 +17,7 @@
 import __builtin__
 import datetime
 import functools
+import hashlib
 import importlib
 import os
 import os.path
@@ -302,6 +303,12 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertRaises(netaddr.AddrFormatError,
                           utils.get_shortened_ipv6_cidr,
                           "failure")
+
+    def test_get_hash_str(self):
+        base_str = "foo"
+        value = hashlib.md5(base_str).hexdigest()
+        self.assertEqual(
+            value, utils.get_hash_str(base_str))
 
 
 class MonkeyPatchTestCase(test.NoDBTestCase):
@@ -738,6 +745,10 @@ class ValidateIntegerTestCase(test.NoDBTestCase):
                           utils.validate_integer,
                           55, "doing 55 in a 54",
                           max_value=54)
+        self.assertRaises(exception.InvalidInput,
+                          utils.validate_integer,
+                          unichr(129), "UnicodeError",
+                          max_value=1000)
 
 
 class ValidateNeutronConfiguration(test.NoDBTestCase):
@@ -782,13 +793,13 @@ class GetSystemMetadataFromImageTestCase(test.NoDBTestCase):
 
         return image_meta
 
-    def get_instance_type(self):
-        instance_type = {
+    def get_flavor(self):
+        flavor = {
             "id": "fake.flavor",
             "root_gb": 10,
         }
 
-        return instance_type
+        return flavor
 
     def test_base_image_properties(self):
         image = self.get_image()
@@ -815,16 +826,16 @@ class GetSystemMetadataFromImageTestCase(test.NoDBTestCase):
 
     def test_vhd_min_disk_image(self):
         image = self.get_image()
-        instance_type = self.get_instance_type()
+        flavor = self.get_flavor()
 
         image["disk_format"] = "vhd"
 
-        sys_meta = utils.get_system_metadata_from_image(image, instance_type)
+        sys_meta = utils.get_system_metadata_from_image(image, flavor)
 
         # Verify that the min_disk property is taken from
-        # instance_type's root_gb when using vhd disk format
+        # flavor's root_gb when using vhd disk format
         sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, "min_disk")
-        self.assertEqual(sys_meta[sys_key], instance_type["root_gb"])
+        self.assertEqual(sys_meta[sys_key], flavor["root_gb"])
 
     def test_dont_inherit_empty_values(self):
         image = self.get_image()
@@ -909,17 +920,3 @@ class VersionTestCase(test.NoDBTestCase):
 
     def test_convert_version_to_tuple(self):
         self.assertEqual(utils.convert_version_to_tuple('6.7.0'), (6, 7, 0))
-
-    def test_get_major_minor_version_from_string(self):
-        self.assertEqual(utils.get_major_minor_version('6.1.3'), 6.1)
-        self.assertEqual(utils.get_major_minor_version('6.4'), 6.4)
-        self.assertEqual(utils.get_major_minor_version('6'), 6)
-
-    def test_get_major_minor_version_from_float(self):
-        self.assertEqual(utils.get_major_minor_version(6.1), 6.1)
-        self.assertEqual(utils.get_major_minor_version(6), 6.0)
-
-    def test_get_major_minor_version_raises_exception(self):
-        exc = self.assertRaises(exception.NovaException,
-                                utils.get_major_minor_version, '5a.6b')
-        self.assertEqual("Version 5a.6b invalid", exc.message)

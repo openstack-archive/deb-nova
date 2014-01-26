@@ -201,10 +201,17 @@ class NovaObject(object):
                         '%(objtype)s') % dict(objtype=objname))
             raise exception.UnsupportedObjectError(objtype=objname)
 
+        latest = None
         compatible_match = None
         for objclass in cls._obj_classes[objname]:
             if objclass.VERSION == objver:
                 return objclass
+
+            version_bits = tuple([int(x) for x in objclass.VERSION.split(".")])
+            if latest is None:
+                latest = version_bits
+            elif latest < version_bits:
+                latest = version_bits
 
             if versionutils.is_compatible(objver, objclass.VERSION):
                 compatible_match = objclass
@@ -212,8 +219,10 @@ class NovaObject(object):
         if compatible_match:
             return compatible_match
 
+        latest_ver = '%i.%i' % latest
         raise exception.IncompatibleObjectVersion(objname=objname,
-                                                  objver=objver)
+                                                  objver=objver,
+                                                  supported=latest_ver)
 
     @classmethod
     def obj_from_primitive(cls, primitive, context=None):
@@ -230,6 +239,7 @@ class NovaObject(object):
         objclass = cls.obj_class_from_name(objname, objver)
         self = objclass()
         self._context = context
+        self.VERSION = objver
         for name, field in self.fields.items():
             if name in objdata:
                 setattr(self, name, field.from_primitive(self, name,
@@ -434,6 +444,11 @@ class ObjectListBase(object):
         'objects': fields.ListOfObjectsField('NovaObject'),
         }
 
+    # This is a dictionary of my_version:child_version mappings so that
+    # we can support backleveling our contents based on the version
+    # requested of the list object.
+    child_versions = {}
+
     def __iter__(self):
         """List iterator interface."""
         return iter(self.objects)
@@ -477,6 +492,15 @@ class ObjectListBase(object):
             objects.append(obj)
         return objects
 
+    def obj_make_compatible(self, primitive, target_version):
+        primitives = primitive['objects']
+        child_target_version = self.child_versions.get(target_version, '1.0')
+        for index, item in enumerate(self.objects):
+            self.objects[index].obj_make_compatible(
+                primitives[index]['nova_object.data'],
+                child_target_version)
+            primitives[index]['nova_object.version'] = child_target_version
+
 
 class NovaObjectSerializer(nova.openstack.common.rpc.serializer.Serializer):
     """A NovaObject-aware Serializer.
@@ -486,6 +510,22 @@ class NovaObjectSerializer(nova.openstack.common.rpc.serializer.Serializer):
     that needs to accept or return NovaObjects as arguments or result values
     should pass this to its RpcProxy and RpcDispatcher objects.
     """
+
+    @property
+    def conductor(self):
+        if not hasattr(self, '_conductor'):
+            from nova.conductor import api as conductor_api
+            self._conductor = conductor_api.API()
+        return self._conductor
+
+    def _process_object(self, context, objprim):
+        try:
+            objinst = NovaObject.obj_from_primitive(objprim, context=context)
+        except exception.IncompatibleObjectVersion as e:
+            objinst = self.conductor.object_backport(context, objprim,
+                                                     e.kwargs['supported'])
+        return objinst
+
     def _process_iterable(self, context, action_fn, values):
         """Process an iterable, taking an action on each value.
         :param:context: Request context
@@ -513,7 +553,7 @@ class NovaObjectSerializer(nova.openstack.common.rpc.serializer.Serializer):
 
     def deserialize_entity(self, context, entity):
         if isinstance(entity, dict) and 'nova_object.name' in entity:
-            entity = NovaObject.obj_from_primitive(entity, context=context)
+            entity = self._process_object(context, entity)
         elif isinstance(entity, (tuple, list, set)):
             entity = self._process_iterable(context, self.deserialize_entity,
                                             entity)

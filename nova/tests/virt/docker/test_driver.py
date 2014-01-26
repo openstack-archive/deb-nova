@@ -22,6 +22,7 @@ import mock
 
 from nova import context
 from nova import exception
+from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests import utils
 import nova.tests.virt.docker.mock_client
@@ -57,18 +58,22 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
 
         self.context = context.RequestContext('fake_user', 'fake_project')
 
+    def test_driver_capabilities(self):
+        self.assertFalse(self.connection.capabilities['has_imagecache'])
+        self.assertFalse(self.connection.capabilities['supports_recreate'])
+
     #NOTE(bcwaldon): This exists only because _get_running_instance on the
     # base class will not let us set a custom disk/container_format.
-    def _get_running_instance(self):
-        instance_ref = utils.get_test_instance()
+    def _get_running_instance(self, obj=False):
+        instance_ref = utils.get_test_instance(obj=obj)
         network_info = utils.get_test_network_info()
         network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = \
             '1.1.1.1'
         image_info = utils.get_test_image_info(None, instance_ref)
         image_info['disk_format'] = 'raw'
         image_info['container_format'] = 'docker'
-        self.connection.spawn(self.ctxt, instance_ref, image_info,
-                              [], 'herp', network_info=network_info)
+        self.connection.spawn(self.ctxt, jsonutils.to_primitive(instance_ref),
+                image_info, [], 'herp', network_info=network_info)
         return instance_ref, network_info
 
     def test_get_host_stats(self):
@@ -146,6 +151,28 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
             image_info['container_format'] = 'docker'
         self.connection.spawn(self.context, instance_href, image_info,
                               'fake_files', 'fake_password')
+        self._assert_cpu_shares(instance_href)
+
+    def test_create_container_vcpus_2(self, image_info=None):
+        flavor = utils.get_test_flavor(options={
+            'name': 'vcpu_2',
+            'flavorid': 'vcpu_2',
+            'vcpus': 2
+        })
+        instance_href = utils.get_test_instance(flavor=flavor)
+        if image_info is None:
+            image_info = utils.get_test_image_info(None, instance_href)
+            image_info['disk_format'] = 'raw'
+            image_info['container_format'] = 'docker'
+        self.connection.spawn(self.context, instance_href, image_info,
+                              'fake_files', 'fake_password')
+        self._assert_cpu_shares(instance_href, vcpus=2)
+
+    def _assert_cpu_shares(self, instance_href, vcpus=4):
+        container_id = self.connection.find_container_by_name(
+            instance_href['name']).get('id')
+        container_info = self.connection.docker.inspect_container(container_id)
+        self.assertEqual(vcpus * 1024, container_info['Config']['CpuShares'])
 
     def test_create_container_wrong_image(self):
         instance_href = utils.get_test_instance()

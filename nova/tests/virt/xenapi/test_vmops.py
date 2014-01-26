@@ -73,11 +73,6 @@ class VMOpsTestCase(VMOpsTestBase):
         mock_session.product_version = product_version
         return mock_session
 
-    def test_check_resize_func_name_defaults_to_VDI_resize(self):
-        self.assertEqual(
-            'VDI.resize',
-            self._vmops.check_resize_func_name())
-
     def _test_finish_revert_migration_after_crash(self, backup_made, new_made,
                                                   vm_shutdown=True):
         instance = {'name': 'foo',
@@ -216,7 +211,7 @@ class SpawnTestCase(VMOpsTestBase):
         self.mox.StubOutWithMock(vm_utils, 'determine_disk_image_type')
         self.mox.StubOutWithMock(vm_utils, 'get_vdis_for_instance')
         self.mox.StubOutWithMock(vm_utils, 'safe_destroy_vdis')
-        self.mox.StubOutWithMock(self.vmops, '_resize_up_root_vdi')
+        self.mox.StubOutWithMock(self.vmops, '_resize_up_vdis')
         self.mox.StubOutWithMock(vm_utils,
                                  'create_kernel_and_ramdisk')
         self.mox.StubOutWithMock(vm_utils, 'destroy_kernel_ramdisk')
@@ -278,8 +273,7 @@ class SpawnTestCase(VMOpsTestBase):
         vm_utils.get_vdis_for_instance(context, session, instance, name_label,
                     "image_id", di_type,
                     block_device_info=block_device_info).AndReturn(vdis)
-        if include_root_vdi:
-            self.vmops._resize_up_root_vdi(instance, vdis["root"])
+        self.vmops._resize_up_vdis(instance, vdis)
         step += 1
         self.vmops._update_instance_progress(context, instance, step, steps)
 
@@ -405,7 +399,7 @@ class SpawnTestCase(VMOpsTestBase):
                 ramdisk_file, image_meta).AndReturn(vm_ref)
 
         if resize_instance:
-            self.vmops._resize_up_root_vdi(instance, root_vdi)
+            self.vmops._resize_up_vdis(instance, vdis)
         self.vmops._attach_disks(instance, vm_ref, name_label, vdis, di_type,
                                  network_info, None, None)
         self.vmops._attach_mapped_block_devices(instance, block_device_info)
@@ -598,10 +592,10 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
         self.assertFalse(migrate_up.called)
         self.assertTrue(migrate_down.called)
 
-    def test_migrate_disk_and_power_off_works_ephemeral_same_up(self,
+    def test_migrate_disk_and_power_off_works_up(self,
                 migrate_up, migrate_down, *mocks):
         instance = {"root_gb": 1, "ephemeral_gb": 1, "uuid": "uuid"}
-        flavor = {"root_gb": 2, "ephemeral_gb": 1}
+        flavor = {"root_gb": 2, "ephemeral_gb": 2}
 
         self.vmops.migrate_disk_and_power_off(None, instance, None,
                 flavor, None)
@@ -613,15 +607,6 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
                 migrate_up, migrate_down, *mocks):
         instance = {"ephemeral_gb": 2}
         flavor = {"ephemeral_gb": 1}
-
-        self.assertRaises(exception.ResizeError,
-                          self.vmops.migrate_disk_and_power_off,
-                          None, instance, None, flavor, None)
-
-    def test_migrate_disk_and_power_off_resize_up_ephemeral_fails(self,
-                migrate_up, migrate_down, *mocks):
-        instance = {"ephemeral_gb": 1}
-        flavor = {"ephemeral_gb": 2}
 
         self.assertRaises(exception.ResizeError,
                           self.vmops.migrate_disk_and_power_off,
@@ -814,3 +799,49 @@ class BootableTestCase(VMOpsTestBase):
         self.vmops.set_bootable(self.instance, False)
         blocked = self._get_blocked()
         self.assertIn('start', blocked)
+
+
+@mock.patch.object(vm_utils, 'update_vdi_virtual_size')
+class ResizeVdisTestCase(VMOpsTestBase):
+    def test_resize_up_vdis_root(self, mock_resize):
+        instance = {"root_gb": 20, "ephemeral_gb": 0}
+        self.vmops._resize_up_vdis(instance, {"root": {"ref": "vdi_ref"}})
+        mock_resize.assert_called_once_with(self.vmops._session, instance,
+                                            "vdi_ref", 20)
+
+    def test_resize_up_vdis_zero_disks(self, mock_resize):
+        instance = {"root_gb": 0, "ephemeral_gb": 0}
+        self.vmops._resize_up_vdis(instance, {"root": {}})
+        self.assertFalse(mock_resize.called)
+
+    @mock.patch.object(vm_utils, 'get_ephemeral_disk_sizes')
+    def test_resize_up_vdis_ephemeral(self, mock_sizes, mock_resize):
+        mock_sizes.return_value = [2000, 1000]
+        instance = {"root_gb": 0, "ephemeral_gb": 3000}
+        ephemerals = {"4": {"ref": 4}, "5": {"ref": 5}}
+        vdis = {"ephemerals": ephemerals}
+
+        self.vmops._resize_up_vdis(instance, vdis)
+
+        mock_sizes.assert_called_once_with(3000)
+        expected = [mock.call(self.vmops._session, instance, 4, 2000),
+                    mock.call(self.vmops._session, instance, 5, 1000)]
+        self.assertEqual(expected, mock_resize.call_args_list)
+
+    @mock.patch.object(vm_utils, 'generate_single_ephemeral')
+    @mock.patch.object(vm_utils, 'get_ephemeral_disk_sizes')
+    def test_resize_up_vdis_ephemeral_with_generate(self, mock_sizes,
+                                                    mock_generate,
+                                                    mock_resize):
+        mock_sizes.return_value = [2000, 1000]
+        instance = {"root_gb": 0, "ephemeral_gb": 3000, "uuid": "a"}
+        ephemerals = {"4": {"ref": 4}}
+        vdis = {"ephemerals": ephemerals}
+
+        self.vmops._resize_up_vdis(instance, vdis)
+
+        mock_sizes.assert_called_once_with(3000)
+        mock_resize.assert_called_once_with(self.vmops._session, instance,
+                                            4, 2000)
+        mock_generate.assert_called_once_with(self.vmops._session, instance,
+                                              None, 5, 1000)

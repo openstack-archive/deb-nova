@@ -34,7 +34,6 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import db
-from nova.virt.baremetal import pxe
 from nova.virt import driver
 from nova.virt import firewall
 from nova.virt.libvirt import imagecache
@@ -48,12 +47,13 @@ opts = [
     cfg.StrOpt('volume_driver',
                default='nova.virt.baremetal.volume_driver.LibvirtVolumeDriver',
                help='Baremetal volume driver.'),
-    cfg.ListOpt('instance_type_extra_specs',
+    cfg.ListOpt('flavor_extra_specs',
                default=[],
                help='a list of additional capabilities corresponding to '
-               'instance_type_extra_specs for this compute '
+               'flavor_extra_specs for this compute '
                'host to advertise. Valid entries are name=value, pairs '
-               'For example, "key1:val1, key2:val2"'),
+               'For example, "key1:val1, key2:val2"',
+               deprecated_name='instance_type_extra_specs'),
     cfg.StrOpt('driver',
                default='nova.virt.baremetal.pxe.PXE',
                help='Baremetal driver back-end (pxe or tilera)'),
@@ -129,14 +129,14 @@ class BareMetalDriver(driver.ComputeDriver):
 
         extra_specs = {}
         extra_specs["baremetal_driver"] = CONF.baremetal.driver
-        for pair in CONF.baremetal.instance_type_extra_specs:
+        for pair in CONF.baremetal.flavor_extra_specs:
             keyval = pair.split(':', 1)
             keyval[0] = keyval[0].strip()
             keyval[1] = keyval[1].strip()
             extra_specs[keyval[0]] = keyval[1]
         if 'cpu_arch' not in extra_specs:
             LOG.warning(
-                    _('cpu_arch is not found in instance_type_extra_specs'))
+                    _('cpu_arch is not found in flavor_extra_specs'))
             extra_specs['cpu_arch'] = ''
         self.extra_specs = extra_specs
 
@@ -218,8 +218,8 @@ class BareMetalDriver(driver.ComputeDriver):
         return set(iface['address'] for iface in ifaces)
 
     def _set_default_ephemeral_device(self, instance):
-        instance_type = flavors.extract_flavor(instance)
-        if instance_type['ephemeral_gb']:
+        flavor = flavors.extract_flavor(instance)
+        if flavor['ephemeral_gb']:
             self.virtapi.instance_update(
                 nova_context.get_admin_context(), instance['uuid'],
                 {'default_ephemeral_device':
@@ -257,6 +257,8 @@ class BareMetalDriver(driver.ComputeDriver):
             self.power_off(instance, node)
             self.power_on(context, instance, network_info, block_device_info,
                           node)
+            _update_state(context, node, instance, baremetal_states.PREPARED)
+
             self.driver.activate_node(context, node, instance)
             _update_state(context, node, instance, baremetal_states.ACTIVE)
         except Exception:
@@ -324,6 +326,11 @@ class BareMetalDriver(driver.ComputeDriver):
                 except Exception:
                     LOG.error(_("Error while recording destroy failure in "
                                 "baremetal database: %s") % e)
+
+    def cleanup(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
+        """Cleanup after instance being destroyed."""
+        pass
 
     def power_off(self, instance, node=None):
         """Power off the specified instance."""
@@ -496,10 +503,10 @@ class BareMetalDriver(driver.ComputeDriver):
 
     def manage_image_cache(self, context, all_instances):
         """Manage the local cache of images."""
-        self.image_cache_manager.verify_base_images(context, all_instances)
+        self.image_cache_manager.update(context, all_instances)
 
-    def get_console_output(self, instance):
-        node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
+    def get_console_output(self, context, instance):
+        node = _get_baremetal_node_by_instance_uuid(instance.uuid)
         return self.driver.get_console_output(node, instance)
 
     def get_available_nodes(self, refresh=False):
@@ -508,17 +515,4 @@ class BareMetalDriver(driver.ComputeDriver):
                 db.bm_node_get_all(context, service_host=CONF.host)]
 
     def dhcp_options_for_instance(self, instance):
-        # NOTE(deva): This only works for PXE driver currently:
-        # If not running the PXE driver, you should not enable
-        # DHCP updates in nova.conf.
-        bootfile_name = pxe.get_pxe_bootfile_name(instance)
-
-        opts = [{'opt_name': 'bootfile-name',
-                 'opt_value': bootfile_name},
-                {'opt_name': 'server-ip-address',
-                 'opt_value': CONF.my_ip},
-                {'opt_name': 'tftp-server',
-                 'opt_value': CONF.my_ip}
-               ]
-
-        return opts
+        return self.driver.dhcp_options_for_instance(instance)

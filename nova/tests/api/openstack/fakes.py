@@ -241,8 +241,8 @@ def stub_out_nw_api(stubs, cls=None, private=None, publics=None):
         def get_floating_ips_by_fixed_address(*args, **kwargs):
             return publics
 
-        def validate_networks(*args, **kwargs):
-            pass
+        def validate_networks(self, context, networks, max_count):
+            return max_count
 
     if cls is None:
         cls = Fake
@@ -445,6 +445,10 @@ def fake_instance_get(**kwargs):
     return _return_server
 
 
+def fake_actions_to_locked_server(self, context, instance, *args):
+    raise exc.InstanceIsLocked(instance_uuid=instance['uuid'])
+
+
 def fake_instance_get_all_by_filters(num_servers=5, **kwargs):
     def _return_servers(context, *args, **kwargs):
         servers_list = []
@@ -458,6 +462,10 @@ def fake_instance_get_all_by_filters(num_servers=5, **kwargs):
 
         if 'columns_to_join' in kwargs:
             kwargs.pop('columns_to_join')
+
+        if 'use_slave' in kwargs:
+            kwargs.pop('use_slave')
+
         for i in xrange(num_servers):
             uuid = get_fake_uuid(i)
             server = stub_instance(id=i + 1, uuid=uuid,
@@ -710,3 +718,7 @@ def stub_bdm_get_all_by_instance(context, instance_uuid):
 def fake_get_available_languages(domain):
     existing_translations = ['en_GB', 'en_AU', 'de', 'zh_CN', 'en_US']
     return existing_translations
+
+
+def fake_not_implemented(*args, **kwargs):
+    raise NotImplementedError()

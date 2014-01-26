@@ -44,6 +44,11 @@ class SessionOverLoadException(VimException):
     pass
 
 
+class SessionConnectionException(VimException):
+    """Session Connection Exception."""
+    pass
+
+
 class VimAttributeError(VimException):
     """VI Attribute Error."""
     pass
@@ -85,7 +90,7 @@ class FaultCheckers(object):
             # fault to NotAuthenticated fault.
             fault_list = ["NotAuthenticated"]
         else:
-            for obj_cont in resp_obj:
+            for obj_cont in resp_obj.objects:
                 if hasattr(obj_cont, "missingSet"):
                     for missing_elem in obj_cont.missingSet:
                         fault_type = missing_elem.fault.fault.__class__

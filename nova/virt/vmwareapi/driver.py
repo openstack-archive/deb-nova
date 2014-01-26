@@ -47,27 +47,13 @@ LOG = logging.getLogger(__name__)
 
 vmwareapi_opts = [
     cfg.StrOpt('host_ip',
-               deprecated_name='vmwareapi_host_ip',
-               deprecated_group='DEFAULT',
-               help='URL for connection to VMware ESX/VC host. Required if '
-                    'compute_driver is vmwareapi.VMwareESXDriver or '
-                    'vmwareapi.VMwareVCDriver.'),
+               help='URL for connection to VMware ESX/VC host.'),
     cfg.StrOpt('host_username',
-               deprecated_name='vmwareapi_host_username',
-               deprecated_group='DEFAULT',
-               help='Username for connection to VMware ESX/VC host. '
-                    'Used only if compute_driver is '
-                    'vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.'),
+               help='Username for connection to VMware ESX/VC host.'),
     cfg.StrOpt('host_password',
-               deprecated_name='vmwareapi_host_password',
-               deprecated_group='DEFAULT',
-               help='Password for connection to VMware ESX/VC host. '
-                    'Used only if compute_driver is '
-                    'vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.',
+               help='Password for connection to VMware ESX/VC host.',
                secret=True),
     cfg.MultiStrOpt('cluster_name',
-               deprecated_name='vmwareapi_cluster_name',
-               deprecated_group='DEFAULT',
                help='Name of a VMware Cluster ComputeResource. Used only if '
                     'compute_driver is vmwareapi.VMwareVCDriver.'),
     cfg.StrOpt('datastore_regex',
@@ -76,41 +62,26 @@ vmwareapi_opts = [
                     'vmwareapi.VMwareVCDriver.'),
     cfg.FloatOpt('task_poll_interval',
                  default=5.0,
-                 deprecated_name='vmwareapi_task_poll_interval',
-                 deprecated_group='DEFAULT',
-                 help='The interval used for polling of remote tasks. '
-                       'Used only if compute_driver is '
-                       'vmwareapi.VMwareESXDriver or '
-                       'vmwareapi.VMwareVCDriver.'),
+                 help='The interval used for polling of remote tasks.'),
     cfg.IntOpt('api_retry_count',
                default=10,
-               deprecated_name='vmwareapi_api_retry_count',
-               deprecated_group='DEFAULT',
                help='The number of times we retry on failures, e.g., '
-                    'socket error, etc. '
-                    'Used only if compute_driver is '
-                    'vmwareapi.VMwareESXDriver or vmwareapi.VMwareVCDriver.'),
+                    'socket error, etc.'),
     cfg.IntOpt('vnc_port',
                default=5900,
-               deprecated_name='vnc_port',
-               deprecated_group='DEFAULT',
                help='VNC starting port'),
     cfg.IntOpt('vnc_port_total',
                default=10000,
-               deprecated_name='vnc_port_total',
-               deprecated_group='DEFAULT',
                help='Total number of VNC ports'),
     cfg.BoolOpt('use_linked_clone',
                 default=True,
-                deprecated_name='use_linked_clone',
-                deprecated_group='DEFAULT',
                 help='Whether to use linked clone'),
     ]
 
 CONF = cfg.CONF
 CONF.register_opts(vmwareapi_opts, 'vmware')
 
-TIME_BETWEEN_API_CALL_RETRIES = 2.0
+TIME_BETWEEN_API_CALL_RETRIES = 1.0
 
 
 class Failure(Exception):
@@ -191,6 +162,11 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Destroy VM instance."""
         self._vmops.destroy(instance, network_info, destroy_disks)
 
+    def cleanup(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
+        """Cleanup after instance being destroyed by Hypervisor."""
+        pass
+
     def pause(self, instance):
         """Pause VM instance."""
         self._vmops.pause(instance)
@@ -259,15 +235,7 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Return data about VM diagnostics."""
         return self._vmops.get_diagnostics(instance)
 
-    def get_console_output(self, instance):
-        """Return snapshot of console."""
-        # The method self._vmops.get_console_output(instance) returns
-        # a PNG format. The vCenter and ESX do not provide a way
-        # to get the text based console format.
-        return _("Currently there is no log available for "
-                 "instance %s") % instance['uuid']
-
-    def get_vnc_console(self, instance):
+    def get_vnc_console(self, context, instance):
         """Return link to instance's VNC console."""
         return self._vmops.get_vnc_console(instance)
 
@@ -378,7 +346,7 @@ class VMwareESXDriver(driver.ComputeDriver):
 
 
 class VMwareVCDriver(VMwareESXDriver):
-    """The ESX host connection object."""
+    """The vCenter connection object."""
 
     # The vCenter driver includes several additional VMware vSphere
     # capabilities that include API that act on hosts or groups of
@@ -470,7 +438,13 @@ class VMwareVCDriver(VMwareESXDriver):
                                    post_method, recover_method,
                                    block_migration)
 
-    def get_vnc_console(self, instance):
+    def rollback_live_migration_at_destination(self, context, instance,
+                                               network_info,
+                                               block_device_info):
+        """Clean up destination node after a failed live migration."""
+        self.destroy(context, instance, network_info, block_device_info)
+
+    def get_vnc_console(self, context, instance):
         """Return link to instance's VNC console using vCenter logic."""
         # In this situation, ESXi and vCenter require different
         # API logic to create a valid VNC console connection object.
@@ -751,7 +725,7 @@ class VMwareAPISession(object):
         self._host_password = password
         self._api_retry_count = retry_count
         self._scheme = scheme
-        self._session_id = None
+        self._session = None
         self.vim = None
         self._create_session()
 
@@ -776,11 +750,11 @@ class VMwareAPISession(object):
                 # Terminate the earlier session, if possible ( For the sake of
                 # preserving sessions as there is a limit to the number of
                 # sessions we can have )
-                if self._session_id:
+                if self._session:
                     try:
                         self.vim.TerminateSession(
                                 self.vim.get_service_content().sessionManager,
-                                sessionId=[self._session_id])
+                                sessionId=[self._session.key])
                     except Exception as excep:
                         # This exception is something we can live with. It is
                         # just an extra caution on our side. The session may
@@ -788,7 +762,7 @@ class VMwareAPISession(object):
                         # SessionIsActive, but that is an overhead because we
                         # anyway would have to call TerminateSession.
                         LOG.debug(excep)
-                self._session_id = session.key
+                self._session = session
                 return
             except Exception as excep:
                 LOG.critical(_("Unable to connect to server at %(server)s, "
@@ -799,20 +773,24 @@ class VMwareAPISession(object):
 
     def __del__(self):
         """Logs-out the session."""
-        # Logout to avoid un-necessary increase in session count at the
-        # ESX host
-        try:
-            # May not have been able to connect to VC, so vim is still None
-            if self.vim:
-                self.vim.Logout(self.vim.get_service_content().sessionManager)
-        except Exception as excep:
-            # It is just cautionary on our part to do a logout in del just
-            # to ensure that the session is not left active.
-            LOG.debug(excep)
+        if hasattr(self, 'vim') and self.vim:
+            self.vim.Logout(self.vim.get_service_content().sessionManager)
 
     def _is_vim_object(self, module):
         """Check if the module is a VIM Object instance."""
         return isinstance(module, vim.Vim)
+
+    def _session_is_active(self):
+        active = False
+        try:
+            active = self.vim.SessionIsActive(
+                    self.vim.get_service_content().sessionManager,
+                    sessionID=self._session.key,
+                    userName=self._session.userName)
+        except Exception as e:
+            LOG.warning(_("Unable to validate session %s!"),
+                        self._session.key)
+        return active
 
     def _call_method(self, module, method, *args, **kwargs):
         """
@@ -822,7 +800,6 @@ class VMwareAPISession(object):
         args = list(args)
         retry_count = 0
         exc = None
-        last_fault_list = []
         while True:
             try:
                 if not self._is_vim_object(module):
@@ -848,14 +825,12 @@ class VMwareAPISession(object):
                     # RetrievePropertiesResponse and also the same is returned
                     # when there is say empty answer to the query for
                     # VMs on the host ( as in no VMs on the host), we have no
-                    # way to differentiate.
-                    # So if the previous response was also am empty response
-                    # and after creating a new session, we get the same empty
-                    # response, then we are sure of the response being supposed
-                    # to be empty.
-                    if error_util.FAULT_NOT_AUTHENTICATED in last_fault_list:
+                    # way to differentiate. We thus check if the session is
+                    # active
+                    if self._session_is_active():
                         return []
-                    last_fault_list = excep.fault_list
+                    LOG.warning(_("Session %s is inactive!"),
+                                self._session.key)
                     self._create_session()
                 else:
                     # No re-trying for errors for API call has gone through
@@ -866,6 +841,10 @@ class VMwareAPISession(object):
                 # For exceptions which may come because of session overload,
                 # we retry
                 exc = excep
+            except error_util.SessionConnectionException as excep:
+                # For exceptions with connections we create the session
+                exc = excep
+                self._create_session()
             except Exception as excep:
                 # If it is a proper exception, say not having furnished
                 # proper data in the SOAP call or the retry limit having
@@ -878,8 +857,8 @@ class VMwareAPISession(object):
                 break
             time.sleep(TIME_BETWEEN_API_CALL_RETRIES)
 
-        LOG.critical(_("In vmwareapi:_call_method, "
-                     "got this exception: %s") % exc)
+        LOG.critical(_("In vmwareapi: _call_method (session=%s)"),
+                     self._session.key, exc_info=True)
         raise
 
     def _get_vim(self):

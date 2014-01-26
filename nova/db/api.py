@@ -584,9 +584,10 @@ def virtual_interface_get_by_uuid(context, vif_uuid):
     return IMPL.virtual_interface_get_by_uuid(context, vif_uuid)
 
 
-def virtual_interface_get_by_instance(context, instance_id):
+def virtual_interface_get_by_instance(context, instance_id, use_slave=False):
     """Gets all virtual_interfaces for instance."""
-    return IMPL.virtual_interface_get_by_instance(context, instance_id)
+    return IMPL.virtual_interface_get_by_instance(context, instance_id,
+                                                  use_slave=use_slave)
 
 
 def virtual_interface_get_by_instance_and_network(context, instance_id,
@@ -646,12 +647,13 @@ def instance_get_all(context, columns_to_join=None):
 
 def instance_get_all_by_filters(context, filters, sort_key='created_at',
                                 sort_dir='desc', limit=None, marker=None,
-                                columns_to_join=None):
+                                columns_to_join=None, use_slave=False):
     """Get all instances that match all filters."""
     return IMPL.instance_get_all_by_filters(context, filters, sort_key,
                                             sort_dir, limit=limit,
                                             marker=marker,
-                                            columns_to_join=columns_to_join)
+                                            columns_to_join=columns_to_join,
+                                            use_slave=use_slave)
 
 
 def instance_get_active_by_window_joined(context, begin, end=None,
@@ -1248,9 +1250,11 @@ def security_group_create(context, values):
     return IMPL.security_group_create(context, values)
 
 
-def security_group_update(context, security_group_id, values):
+def security_group_update(context, security_group_id, values,
+                          columns_to_join=None):
     """Update a security group."""
-    return IMPL.security_group_update(context, security_group_id, values)
+    return IMPL.security_group_update(context, security_group_id, values,
+                                      columns_to_join=columns_to_join)
 
 
 def security_group_ensure_default(context):
@@ -1410,9 +1414,9 @@ def console_get(context, console_id, instance_uuid=None):
 
     ##################
 
-def flavor_create(context, values):
+def flavor_create(context, values, projects=None):
     """Create a new instance type."""
-    return IMPL.flavor_create(context, values)
+    return IMPL.flavor_create(context, values, projects=projects)
 
 
 def flavor_get_all(context, inactive=False, filters=None, sort_key='flavorid',

@@ -53,7 +53,7 @@ def create_sr(session, label, params):
     LOG.debug(_('Creating SR %s'), label)
     sr_type, sr_desc = _handle_sr_params(params)
     sr_ref = session.call_xenapi("SR.create",
-                session.get_xenapi_host(),
+                session.host_ref,
                 params,
                 '0', label, sr_desc, sr_type, '', False, {})
     return sr_ref
@@ -109,7 +109,7 @@ def find_sr_from_vbd(session, vbd_ref):
 
 def create_pbd(session, sr_ref, params):
     pbd_rec = {}
-    pbd_rec['host'] = session.get_xenapi_host()
+    pbd_rec['host'] = session.host_ref
     pbd_rec['SR'] = sr_ref
     pbd_rec['device_config'] = params
     pbd_ref = session.call_xenapi("PBD.create", pbd_rec)
@@ -315,11 +315,20 @@ def _get_target_port(iscsi_string):
 
 
 def vbd_plug(session, vbd_ref, vm_ref):
-    @utils.synchronized('xenapi-vbd-plug-' + vm_ref)
+    @utils.synchronized('xenapi-events-' + vm_ref)
     def synchronized_plug():
         session.call_xenapi("VBD.plug", vbd_ref)
 
     # NOTE(johngarbutt) we need to ensure there is only ever one VBD.plug
-    # happening at once per VM due to a bug in XenServer 6.1 and greater
-    # where there is a race condition in VBD.plug that causes tapdisk to hang
+    # happening at once per VM due to a bug in XenServer 6.1 and 6.2
     synchronized_plug()
+
+
+def vbd_unplug(session, vbd_ref, vm_ref):
+    @utils.synchronized('xenapi-events-' + vm_ref)
+    def synchronized_unplug():
+        session.call_xenapi("VBD.unplug", vbd_ref)
+
+    # NOTE(johngarbutt) we need to ensure there is only ever one VBD.unplug
+    # happening at once per VM due to a bug in XenServer 6.1 and 6.2
+    synchronized_unplug()

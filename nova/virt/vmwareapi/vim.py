@@ -21,6 +21,7 @@ Classes for making VMware VI SOAP calls.
 """
 
 import httplib
+import urllib2
 
 from oslo.config import cfg
 import suds
@@ -34,8 +35,6 @@ CONN_ABORT_ERROR = 'Software caused connection abort'
 ADDRESS_IN_USE_ERROR = 'Address already in use'
 
 vmwareapi_wsdl_loc_opt = cfg.StrOpt('wsdl_location',
-        deprecated_name='vmwareapi_wsdl_loc',
-        deprecated_group='DEFAULT',
         help='Optional VIM Service WSDL Location '
              'e.g http://<server>/vimService.wsdl. '
              'Optional over-ride to default location for bug work-arounds')
@@ -118,8 +117,10 @@ class Vim:
         self.url = Vim.get_soap_url(protocol, host)
         self.client = suds.client.Client(self.wsdl_url, location=self.url,
                                          plugins=[VIMMessagePlugin()])
-        self._service_content = self.RetrieveServiceContent(
-                                        "ServiceInstance")
+        self._service_content = self.retrieve_service_content()
+
+    def retrieve_service_content(self):
+        return self.RetrieveServiceContent("ServiceInstance")
 
     @staticmethod
     def get_wsdl_url(protocol, host_name):
@@ -187,7 +188,9 @@ class Vim:
                 return response
             # Catch the VimFaultException that is raised by the fault
             # check of the SOAP response
-            except error_util.VimFaultException as excep:
+            except error_util.VimFaultException:
+                raise
+            except suds.MethodNotFound:
                 raise
             except suds.WebFault as excep:
                 doc = excep.document
@@ -204,6 +207,10 @@ class Vim:
                     httplib.CannotSendHeader) as excep:
                 raise error_util.SessionOverLoadException(_("httplib "
                                 "error in %s: ") % (attr_name), excep)
+            except (urllib2.URLError,
+                    urllib2.HTTPError) as excep:
+                raise error_util.SessionConnectionException(_("urllib2 "
+                            "error in  %s: ") % (attr_name), excep)
             except Exception as excep:
                 # Socket errors which need special handling for they
                 # might be caused by ESX API call overload

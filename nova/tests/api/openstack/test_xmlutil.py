@@ -724,6 +724,32 @@ class TemplateTest(test.NoDBTestCase):
         result = master.serialize(obj)
         self.assertEqual(expected_xml, result)
 
+    def test__serialize_with_empty_datum_selector(self):
+        # Our test object to serialize
+        obj = {
+            'test': {
+                'name': 'foobar',
+                'image': ''
+                },
+            }
+
+        root = xmlutil.TemplateElement('test', selector='test',
+                                       name='name')
+        master = xmlutil.MasterTemplate(root, 1)
+        root_slave = xmlutil.TemplateElement('test', selector='test')
+        image = xmlutil.SubTemplateElement(root_slave, 'image',
+                                           selector='image')
+        image.set('id')
+        xmlutil.make_links(image, 'links')
+        slave = xmlutil.SlaveTemplate(root_slave, 1)
+        master.attach(slave)
+
+        siblings = master._siblings()
+        result = master._serialize(None, obj, siblings)
+        self.assertEqual(result.tag, 'test')
+        self.assertEqual(result[0].tag, 'image')
+        self.assertEqual(result[0].get('id'), str(obj['test']['image']))
+
 
 class MasterTemplateBuilder(xmlutil.TemplateBuilder):
     def construct(self):
@@ -824,6 +850,42 @@ class MiscellaneousXMLUtilTests(test.NoDBTestCase):
                     '</extra_specs>'))
         # Set up our master template
         root = xmlutil.make_flat_dict('extra_specs', colon_ns=True)
+        master = xmlutil.MasterTemplate(root, 1)
+        result = master.serialize(obj)
+        self.assertEqual(expected_xml, result)
+
+    def test_make_flat_dict_with_parent(self):
+        # Our test object to serialize
+        obj = {"device": {"id": 1,
+                          "extra_info": {"key1": "value1",
+                                         "key2": "value2"}}}
+
+        expected_xml = (("<?xml version='1.0' encoding='UTF-8'?>\n"
+                    '<device id="1"><extra_info><key2>value2</key2>'
+                    '<key1>value1</key1></extra_info></device>'))
+
+        root = xmlutil.TemplateElement('device', selector='device')
+        root.set('id')
+        extra = xmlutil.make_flat_dict('extra_info', root=root)
+        root.append(extra)
+        master = xmlutil.MasterTemplate(root, 1)
+        result = master.serialize(obj)
+        self.assertEqual(expected_xml, result)
+
+    def test_make_flat_dict_with_dicts(self):
+        # Our test object to serialize
+        obj = {"device": {"id": 1,
+                          "extra_info": {"key1": "value1",
+                                         "key2": "value2"}}}
+
+        expected_xml = (("<?xml version='1.0' encoding='UTF-8'?>\n"
+                    '<device><id>1</id><extra_info><key2>value2</key2>'
+                    '<key1>value1</key1></extra_info></device>'))
+
+        root = xmlutil.make_flat_dict('device', selector='device',
+                                      ignore_sub_dicts=True)
+        extra = xmlutil.make_flat_dict('extra_info', selector='extra_info')
+        root.append(extra)
         master = xmlutil.MasterTemplate(root, 1)
         result = master.serialize(obj)
         self.assertEqual(expected_xml, result)

@@ -79,6 +79,7 @@ xenapi_vmops_opts = [
     ]
 
 CONF = cfg.CONF
+# xenapi_vmops options in the DEFAULT group were deprecated in Icehouse
 CONF.register_opts(xenapi_vmops_opts, 'xenserver')
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('vncserver_proxyclient_address', 'nova.vnc')
@@ -317,7 +318,7 @@ class VMOps(object):
                         None, instance['name'], device_name)
 
         self._session.call_xenapi('VM.start_on', vm_ref,
-                                  self._session.get_xenapi_host(),
+                                  self._session.host_ref,
                                   False, False)
 
         # Allow higher-layers a chance to detach bad-volumes as well (in order
@@ -413,9 +414,8 @@ class VMOps(object):
                     LOG.warning(_('ipxe_boot is True but no ISO image found'),
                                 instance=instance)
 
-            root_vdi = vdis.get('root')
-            if root_vdi and resize:
-                self._resize_up_root_vdi(instance, root_vdi)
+            if resize:
+                self._resize_up_vdis(instance, vdis)
 
             self._attach_disks(instance, vm_ref, name_label, vdis,
                                disk_image_type, network_info, admin_password,
@@ -553,12 +553,12 @@ class VMOps(object):
                       disk_image_type, network_info,
                       admin_password=None, files=None):
         ctx = nova_context.get_admin_context()
-        instance_type = flavors.extract_flavor(instance)
+        flavor = flavors.extract_flavor(instance)
 
         # Attach (required) root disk
         if disk_image_type == vm_utils.ImageType.DISK_ISO:
             # DISK_ISO needs two VBDs: the ISO disk and a blank RW disk
-            root_disk_size = instance_type['root_gb']
+            root_disk_size = flavor['root_gb']
             if root_disk_size > 0:
                 vm_utils.generate_iso_blank_root_disk(self._session, instance,
                     vm_ref, DEVICE_ROOT, name_label, root_disk_size)
@@ -574,7 +574,7 @@ class VMOps(object):
                             "resize root disk..."), instance=instance)
                 vm_utils.try_auto_configure_disk(self._session,
                                                  root_vdi['ref'],
-                                                 instance_type['root_gb'])
+                                                 flavor['root_gb'])
 
             vm_utils.create_vbd(self._session, vm_ref, root_vdi['ref'],
                                 DEVICE_ROOT, bootable=True,
@@ -594,12 +594,12 @@ class VMOps(object):
                                 osvol=vdi_info.get('osvol'))
 
         # Attach (optional) swap disk
-        swap_mb = instance_type['swap']
+        swap_mb = flavor['swap']
         if swap_mb:
             vm_utils.generate_swap(self._session, instance, vm_ref,
                                    DEVICE_SWAP, name_label, swap_mb)
 
-        ephemeral_gb = instance_type['ephemeral_gb']
+        ephemeral_gb = flavor['ephemeral_gb']
         if ephemeral_gb:
             ephemeral_vdis = vdis.get('ephemerals')
             if ephemeral_vdis:
@@ -772,7 +772,7 @@ class VMOps(object):
                     reason=_("Unable to terminate instance."))
 
     def _migrate_disk_resizing_down(self, context, instance, dest,
-                                    instance_type, vm_ref, sr_path):
+                                    flavor, vm_ref, sr_path):
         step = make_step_decorator(context, instance,
                                    self._update_instance_progress)
 
@@ -794,7 +794,7 @@ class VMOps(object):
         @step
         def create_copy_vdi_and_resize(undo_mgr, old_vdi_ref):
             new_vdi_ref, new_vdi_uuid = vm_utils.resize_disk(self._session,
-                instance, old_vdi_ref, instance_type)
+                instance, old_vdi_ref, flavor)
 
             def cleanup_vdi_copy():
                 vm_utils.destroy_vdi(self._session, new_vdi_ref)
@@ -1000,12 +1000,12 @@ class VMOps(object):
         name_label = self._get_orig_vm_name_label(instance)
         vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
 
-    def _ensure_not_resize_ephemeral(self, instance, instance_type):
+    def _ensure_not_resize_down_ephemeral(self, instance, flavor):
         old_gb = instance["ephemeral_gb"]
-        new_gb = instance_type["ephemeral_gb"]
+        new_gb = flavor["ephemeral_gb"]
 
-        if old_gb != new_gb:
-            reason = _("Unable to resize ephemeral disks")
+        if old_gb > new_gb:
+            reason = _("Can't resize down ephemeral disks.")
             raise exception.ResizeError(reason)
 
     def migrate_disk_and_power_off(self, context, instance, dest,
@@ -1017,7 +1017,7 @@ class VMOps(object):
         :param dest: the destination host machine.
         :param flavor: flavor to resize to
         """
-        self._ensure_not_resize_ephemeral(instance, flavor)
+        self._ensure_not_resize_down_ephemeral(instance, flavor)
 
         # 0. Zero out the progress to begin
         self._update_instance_progress(context, instance,
@@ -1060,59 +1060,33 @@ class VMOps(object):
             self._volumeops.detach_volume(connection_info, name_label,
                                           mount_device)
 
-    def _resize_up_root_vdi(self, instance, root_vdi):
-        """Resize an instances root disk."""
+    def _resize_up_vdis(self, instance, vdis):
+        new_root_gb = instance['root_gb']
+        root_vdi = vdis.get('root')
+        if new_root_gb and root_vdi:
+            vdi_ref = root_vdi['ref']
+            vm_utils.update_vdi_virtual_size(self._session, instance,
+                                             vdi_ref, new_root_gb)
 
-        new_disk_size = instance['root_gb'] * unit.Gi
-        if not new_disk_size:
-            return
-
-        # Get current size of VDI
-        virtual_size = self._session.call_xenapi('VDI.get_virtual_size',
-                                                 root_vdi['ref'])
-        virtual_size = int(virtual_size)
-
-        old_gb = virtual_size / unit.Gi
-        new_gb = instance['root_gb']
-
-        if virtual_size < new_disk_size:
-            # Resize up. Simple VDI resize will do the trick
-            vdi_uuid = root_vdi['uuid']
-            LOG.debug(_("Resizing up VDI %(vdi_uuid)s from %(old_gb)dGB to "
-                        "%(new_gb)dGB"),
-                      {'vdi_uuid': vdi_uuid, 'old_gb': old_gb,
-                       'new_gb': new_gb}, instance=instance)
-            resize_func_name = self.check_resize_func_name()
-            self._session.call_xenapi(resize_func_name, root_vdi['ref'],
-                    str(new_disk_size))
-            LOG.debug(_("Resize complete"), instance=instance)
-
-    def check_resize_func_name(self):
-        """Check the function name used to resize an instance based
-        on product_brand and product_version.
-        """
-
-        brand = self._session.product_brand
-        version = self._session.product_version
-
-        # To maintain backwards compatibility. All recent versions
-        # should use VDI.resize
-        if bool(version) and bool(brand):
-            xcp = brand == 'XCP'
-            r1_2_or_above = (
-                (
-                    version[0] == 1
-                    and version[1] > 1
-                )
-                or version[0] > 1)
-
-            xenserver = brand == 'XenServer'
-            r6_or_above = version[0] > 5
-
-            if (xcp and not r1_2_or_above) or (xenserver and not r6_or_above):
-                return 'VDI.resize_online'
-
-        return 'VDI.resize'
+        total_ephemeral_gb = instance['ephemeral_gb']
+        if total_ephemeral_gb:
+            sizes = vm_utils.get_ephemeral_disk_sizes(total_ephemeral_gb)
+            ephemeral_vdis = vdis.get('ephemerals')
+            for userdevice, new_size in enumerate(sizes,
+                                                  start=int(DEVICE_EPHEMERAL)):
+                vdi = ephemeral_vdis.get(str(userdevice))
+                if vdi:
+                    vdi_ref = vdi['ref']
+                    vm_utils.update_vdi_virtual_size(self._session, instance,
+                                                     vdi_ref, new_size)
+                else:
+                    LOG.debug("Generating new ephemeral vdi %d during resize",
+                              userdevice, instance=instance)
+                    # NOTE(johngarbutt) we generate but don't attach
+                    # the new disk to make up any additional ephemeral space
+                    vdi_ref = vm_utils.generate_single_ephemeral(
+                        self._session, instance, None, userdevice, new_size)
+                    vdis[str(userdevice)] = {'ref': vdi_ref, 'generated': True}
 
     def reboot(self, instance, reboot_type, bad_volumes_callback=None):
         """Reboot VM instance."""
@@ -1565,17 +1539,17 @@ class VMOps(object):
 
     def get_vnc_console(self, instance):
         """Return connection info for a vnc console."""
-        if instance['vm_state'] == vm_states.RESCUED:
-            name = '%s-rescue' % instance['name']
+        if instance.vm_state == vm_states.RESCUED:
+            name = '%s-rescue' % instance.name
             vm_ref = vm_utils.lookup(self._session, name)
             if vm_ref is None:
                 # The rescue instance might not be ready at this point.
-                raise exception.InstanceNotReady(instance_id=instance['uuid'])
+                raise exception.InstanceNotReady(instance_id=instance.uuid)
         else:
-            vm_ref = vm_utils.lookup(self._session, instance['name'])
+            vm_ref = vm_utils.lookup(self._session, instance.name)
             if vm_ref is None:
                 # The compute manager expects InstanceNotFound for this case.
-                raise exception.InstanceNotFound(instance_id=instance['uuid'])
+                raise exception.InstanceNotFound(instance_id=instance.uuid)
 
         session_id = self._session.get_session_id()
         path = "/console?ref=%s&session_id=%s" % (str(vm_ref), session_id)
@@ -1855,7 +1829,7 @@ class VMOps(object):
         return self._session.call_xenapi("host.get_by_uuid", host_uuid)
 
     def _migrate_receive(self, ctxt):
-        destref = self._session.get_xenapi_host()
+        destref = self._session.host_ref
         # Get the network to for migrate.
         # This is the one associated with the pif marked management. From cli:
         # uuid=`xe pif-list --minimal management=true`
@@ -1967,8 +1941,9 @@ class VMOps(object):
                 self._call_live_migrate_command(
                     "VM.assert_can_migrate", vm_ref, migrate_data)
             except self._session.XenAPI.Failure as exc:
-                LOG.exception(exc)
-                msg = _('VM.assert_can_migrate failed')
+                reason = exc.details[0]
+                msg = _('assert_can_migrate failed because: %s') % reason
+                LOG.debug(msg, exc_info=True)
                 raise exception.MigrationPreCheckError(reason=msg)
         return dest_check_data
 

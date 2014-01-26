@@ -22,6 +22,7 @@
 import contextlib
 import datetime
 import functools
+import hashlib
 import inspect
 import os
 import pyclbr
@@ -84,16 +85,6 @@ CONF.register_opts(utils_opts)
 CONF.import_opt('network_api_class', 'nova.network')
 
 LOG = logging.getLogger(__name__)
-
-# Used for looking up extensions of text
-# to their 'multiplied' byte amount
-BYTE_MULTIPLIERS = {
-    '': 1,
-    't': 1024 ** 4,
-    'g': 1024 ** 3,
-    'm': 1024 ** 2,
-    'k': 1024,
-}
 
 # used in limits
 TIME_UNITS = {
@@ -753,7 +744,7 @@ def read_file_as_root(file_path):
 def temporary_chown(path, owner_uid=None):
     """Temporarily chown a path.
 
-    :params owner_uid: UID of temporary owner (defaults to current user)
+    :param owner_uid: UID of temporary owner (defaults to current user)
     """
     if owner_uid is None:
         owner_uid = os.getuid()
@@ -968,7 +959,7 @@ def validate_integer(value, name, min_value=None, max_value=None):
     """Make sure that value is a valid integer, potentially within range."""
     try:
         value = int(str(value))
-    except ValueError:
+    except (ValueError, UnicodeEncodeError):
         msg = _('%(value_name)s must be an integer')
         raise exception.InvalidInput(reason=(
             msg % {'value_name': name}))
@@ -1034,18 +1025,6 @@ def convert_version_to_tuple(version_str):
     return tuple(int(part) for part in version_str.split('.'))
 
 
-def get_major_minor_version(version):
-    try:
-        if type(version) == int or type(version) == float:
-            return version
-        if type(version) == str:
-            major_minor_versions = version.split(".")[0:2]
-            version_as_float = float(".".join(major_minor_versions))
-            return version_as_float
-    except Exception:
-        raise exception.NovaException(_("Version %s invalid") % version)
-
-
 def is_neutron():
     global _IS_NEUTRON_ATTEMPTED
     global _IS_NEUTRON
@@ -1096,7 +1075,7 @@ def get_auto_disk_config_from_image_props(image_properties):
     return image_properties.get("auto_disk_config")
 
 
-def get_system_metadata_from_image(image_meta, instance_type=None):
+def get_system_metadata_from_image(image_meta, flavor=None):
     system_meta = {}
     prefix_format = SM_IMAGE_PROP_PREFIX + '%s'
 
@@ -1107,11 +1086,11 @@ def get_system_metadata_from_image(image_meta, instance_type=None):
     for key in SM_INHERITABLE_KEYS:
         value = image_meta.get(key)
 
-        if key == 'min_disk' and instance_type:
+        if key == 'min_disk' and flavor:
             if image_meta.get('disk_format') == 'vhd':
-                value = instance_type['root_gb']
+                value = flavor['root_gb']
             else:
-                value = max(value, instance_type['root_gb'])
+                value = max(value, flavor['root_gb'])
 
         if value is None:
             continue
@@ -1149,3 +1128,8 @@ def get_image_from_system_metadata(system_meta):
         image_meta['properties'] = properties
 
     return image_meta
+
+
+def get_hash_str(base_str):
+    """returns string that represents hash of base_str (in hex format)."""
+    return hashlib.md5(base_str).hexdigest()

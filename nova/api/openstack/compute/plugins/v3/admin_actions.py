@@ -25,6 +25,7 @@ from nova.compute import vm_states
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova.openstack.common import strutils
 
 LOG = logging.getLogger(__name__)
 ALIAS = "os-admin-actions"
@@ -124,6 +125,10 @@ class AdminActionsController(wsgi.Controller):
         try:
             instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.resize(req.environ['nova.context'], instance)
+        except exception.QuotaError as error:
+            raise exc.HTTPRequestEntityTooLarge(
+                explanation=error.format_message(),
+                headers={'Retry-After': 0})
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
@@ -210,11 +215,7 @@ class AdminActionsController(wsgi.Controller):
         """
         context = req.environ["nova.context"]
         authorize(context, 'create_backup')
-
-        try:
-            entity = body["create_backup"]
-        except (KeyError, TypeError):
-            raise exc.HTTPBadRequest(_("Malformed request body"))
+        entity = body["create_backup"]
 
         try:
             image_name = entity["name"]
@@ -285,6 +286,14 @@ class AdminActionsController(wsgi.Controller):
             msg = _("host, block_migration and disk_over_commit must "
                     "be specified for live migration.")
             raise exc.HTTPBadRequest(explanation=msg)
+
+        try:
+            block_migration = strutils.bool_from_string(block_migration,
+                                                        strict=True)
+            disk_over_commit = strutils.bool_from_string(disk_over_commit,
+                                                         strict=True)
+        except ValueError as err:
+            raise exc.HTTPBadRequest(explanation=str(err))
 
         try:
             instance = self.compute_api.get(context, id, want_objects=True)

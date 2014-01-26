@@ -43,13 +43,11 @@ metadata_proxy_opts = [
     cfg.BoolOpt(
         'service_neutron_metadata_proxy',
         default=False,
-        deprecated_name='service_quantum_metadata_proxy',
         help='Set flag to indicate Neutron will proxy metadata requests and '
              'resolve instance ids.'),
      cfg.StrOpt(
          'neutron_metadata_proxy_shared_secret',
          default='',
-         deprecated_name='quantum_metadata_proxy_shared_secret',
          help='Shared secret to validate proxies Neutron metadata requests')
 ]
 
@@ -148,6 +146,7 @@ class MetadataRequestHandler(wsgi.Application):
 
     def _handle_instance_id_request(self, req):
         instance_id = req.headers.get('X-Instance-ID')
+        tenant_id = req.headers.get('X-Tenant-ID')
         signature = req.headers.get('X-Instance-ID-Signature')
         remote_address = req.headers.get('X-Forwarded-For')
 
@@ -155,8 +154,12 @@ class MetadataRequestHandler(wsgi.Application):
 
         if instance_id is None:
             msg = _('X-Instance-ID header is missing from request.')
+        elif tenant_id is None:
+            msg = _('X-Tenant-ID header is missing from request.')
         elif not isinstance(instance_id, six.string_types):
             msg = _('Multiple X-Instance-ID headers found within request.')
+        elif not isinstance(tenant_id, six.string_types):
+            msg = _('Multiple X-Tenant-ID headers found within request.')
         else:
             msg = None
 
@@ -195,5 +198,13 @@ class MetadataRequestHandler(wsgi.Application):
         if meta_data is None:
             LOG.error(_('Failed to get metadata for instance id: %s'),
                       instance_id)
+
+        if meta_data.instance['project_id'] != tenant_id:
+            LOG.warning(_("Tenant_id %(tenant_id)s does not match tenant_id "
+                          "of instance %(instance_id)s."),
+                        {'tenant_id': tenant_id,
+                         'instance_id': instance_id})
+            # causes a 404 to be raised
+            meta_data = None
 
         return meta_data

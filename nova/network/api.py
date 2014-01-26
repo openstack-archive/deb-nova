@@ -291,14 +291,14 @@ class API(base.Base):
         #             this is called from compute.manager which shouldn't
         #             have db access so we do it on the other side of the
         #             rpc.
-        instance_type = flavors.extract_flavor(instance)
+        flavor = flavors.extract_flavor(instance)
         args = {}
         args['vpn'] = vpn
         args['requested_networks'] = requested_networks
         args['instance_id'] = instance['uuid']
         args['project_id'] = instance['project_id']
         args['host'] = instance['host']
-        args['rxtx_factor'] = instance_type['rxtx_factor']
+        args['rxtx_factor'] = flavor['rxtx_factor']
         args['macs'] = macs
         args['dhcp_options'] = dhcp_options
         nw_info = self.network_rpcapi.allocate_for_instance(context, **args)
@@ -341,9 +341,9 @@ class API(base.Base):
     @refresh_cache
     def add_fixed_ip_to_instance(self, context, instance, network_id):
         """Adds a fixed ip to instance from specified network."""
-        instance_type = flavors.extract_flavor(instance)
+        flavor = flavors.extract_flavor(instance)
         args = {'instance_id': instance['uuid'],
-                'rxtx_factor': instance_type['rxtx_factor'],
+                'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
                 'network_id': network_id}
         self.network_rpcapi.add_fixed_ip_to_instance(context, **args)
@@ -353,9 +353,9 @@ class API(base.Base):
     def remove_fixed_ip_from_instance(self, context, instance, address):
         """Removes a fixed ip from instance from specified network."""
 
-        instance_type = flavors.extract_flavor(instance)
+        flavor = flavors.extract_flavor(instance)
         args = {'instance_id': instance['uuid'],
-                'rxtx_factor': instance_type['rxtx_factor'],
+                'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
                 'address': address}
         self.network_rpcapi.remove_fixed_ip_from_instance(context, **args)
@@ -400,9 +400,9 @@ class API(base.Base):
 
     def _get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
-        instance_type = flavors.extract_flavor(instance)
+        flavor = flavors.extract_flavor(instance)
         args = {'instance_id': instance['uuid'],
-                'rxtx_factor': instance_type['rxtx_factor'],
+                'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
                 'project_id': instance['project_id']}
         nw_info = self.network_rpcapi.get_instance_nw_info(context, **args)
@@ -410,15 +410,22 @@ class API(base.Base):
         return network_model.NetworkInfo.hydrate(nw_info)
 
     @wrap_check_policy
-    def validate_networks(self, context, requested_networks):
+    def validate_networks(self, context, requested_networks, num_instances):
         """validate the networks passed at the time of creating
-        the server
-        """
-        if not requested_networks:
-            return
+        the server.
 
-        return self.network_rpcapi.validate_networks(context,
-                                                     requested_networks)
+        Return the number of instances that can be successfully allocated
+        with the requested network configuration.
+        """
+        if requested_networks:
+            self.network_rpcapi.validate_networks(context,
+                                                  requested_networks)
+
+        # Neutron validation checks and returns how many of num_instances
+        # instances can be supported by the quota.  For Nova network
+        # this is part of the subsequent quota check, so we just return
+        # the requested number in this case.
+        return num_instances
 
     @wrap_check_policy
     def get_instance_uuids_by_ip_filter(self, context, filters):
@@ -521,10 +528,10 @@ class API(base.Base):
     @wrap_check_policy
     def migrate_instance_start(self, context, instance, migration):
         """Start to migrate the network of an instance."""
-        instance_type = flavors.extract_flavor(instance)
+        flavor = flavors.extract_flavor(instance)
         args = dict(
             instance_uuid=instance['uuid'],
-            rxtx_factor=instance_type['rxtx_factor'],
+            rxtx_factor=flavor['rxtx_factor'],
             project_id=instance['project_id'],
             source_compute=migration['source_compute'],
             dest_compute=migration['dest_compute'],
@@ -541,10 +548,10 @@ class API(base.Base):
     @wrap_check_policy
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
-        instance_type = flavors.extract_flavor(instance)
+        flavor = flavors.extract_flavor(instance)
         args = dict(
             instance_uuid=instance['uuid'],
-            rxtx_factor=instance_type['rxtx_factor'],
+            rxtx_factor=flavor['rxtx_factor'],
             project_id=instance['project_id'],
             source_compute=migration['source_compute'],
             dest_compute=migration['dest_compute'],

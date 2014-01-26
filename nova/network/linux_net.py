@@ -123,6 +123,10 @@ linux_net_opts = [
                default='DROP',
                help=('The table that iptables to jump to when a packet is '
                      'to be dropped.')),
+    cfg.IntOpt('ovs_vsctl_timeout',
+               default=120,
+               help='Amount of time, in seconds, that ovs_vsctl should wait '
+                    'for a response from the database. 0 is to wait forever.'),
     ]
 
 CONF = cfg.CONF
@@ -805,12 +809,19 @@ def clean_conntrack(fixed_ip):
         LOG.exception(_('Error deleting conntrack entries for %s'), fixed_ip)
 
 
+def _enable_ipv4_forwarding():
+    sysctl_key = 'net.ipv4.ip_forward'
+    stdout, stderr = _execute('sysctl', '-n', sysctl_key)
+    if stdout.strip() is not '1':
+        _execute('sysctl', '-w', '%s=1' % sysctl_key, run_as_root=True)
+
+
 @utils.synchronized('lock_gateway', external=True)
 def initialize_gateway_device(dev, network_ref):
     if not network_ref:
         return
 
-    _execute('sysctl', '-w', 'net.ipv4.ip_forward=1', run_as_root=True)
+    _enable_ipv4_forwarding()
 
     # NOTE(vish): The ip for dnsmasq has to be the first address on the
     #             bridge for it to respond to reqests properly
@@ -819,7 +830,7 @@ def initialize_gateway_device(dev, network_ref):
     new_ip_params = [[full_ip, 'brd', network_ref['broadcast']]]
     old_ip_params = []
     out, err = _execute('ip', 'addr', 'show', 'dev', dev,
-                        'scope', 'global', run_as_root=True)
+                        'scope', 'global')
     for line in out.split('\n'):
         fields = line.split()
         if fields and fields[0] == 'inet':
@@ -829,8 +840,7 @@ def initialize_gateway_device(dev, network_ref):
                 new_ip_params.append(ip_params)
     if not old_ip_params or old_ip_params[0][0] != full_ip:
         old_routes = []
-        result = _execute('ip', 'route', 'show', 'dev', dev,
-                          run_as_root=True)
+        result = _execute('ip', 'route', 'show', 'dev', dev)
         if result:
             out, err = result
             for line in out.split('\n'):
@@ -1029,8 +1039,7 @@ def restart_dhcp(context, dev, network_ref):
         write_to_file(optsfile, get_dhcp_opts(context, network_ref))
         os.chmod(optsfile, 0o644)
 
-    if network_ref['multi_host']:
-        _add_dhcp_mangle_rule(dev)
+    _add_dhcp_mangle_rule(dev)
 
     # Make sure dnsmasq can actually read it (it setuid()s to "nobody")
     os.chmod(conffile, 0o644)
@@ -1193,11 +1202,7 @@ def _execute(*cmd, **kwargs):
 
 def device_exists(device):
     """Check if ethernet device exists."""
-    try:
-        _execute('ip', 'link', 'show', 'dev', device, run_as_root=True)
-    except processutils.ProcessExecutionError:
-        return False
-    return True
+    return os.path.exists('/sys/class/net/%s' % device)
 
 
 def _dhcp_file(dev, kind):
@@ -1270,22 +1275,38 @@ def _create_veth_pair(dev1_name, dev2_name):
         utils.execute('ip', 'link', 'set', dev, 'up', run_as_root=True)
         utils.execute('ip', 'link', 'set', dev, 'promisc', 'on',
                       run_as_root=True)
+        if CONF.network_device_mtu:
+            utils.execute('ip', 'link', 'set', dev, 'mtu',
+                          CONF.network_device_mtu, run_as_root=True,
+                          check_exit_code=[0, 2, 254])
+
+
+def _ovs_vsctl(args):
+    full_args = ['ovs-vsctl', '--timeout=%s' % CONF.ovs_vsctl_timeout] + args
+    try:
+        return utils.execute(*full_args, run_as_root=True)
+    except Exception as e:
+        LOG.error(_("Unable to execute %(cmd)s. Exception: %(exception)s"),
+                  {'cmd': full_args, 'exception': e})
+        raise exception.AgentError(method=full_args)
 
 
 def create_ovs_vif_port(bridge, dev, iface_id, mac, instance_id):
-    utils.execute('ovs-vsctl', '--', '--may-exist', 'add-port',
-                  bridge, dev,
-                  '--', 'set', 'Interface', dev,
-                  'external-ids:iface-id=%s' % iface_id,
-                  'external-ids:iface-status=active',
-                  'external-ids:attached-mac=%s' % mac,
-                  'external-ids:vm-uuid=%s' % instance_id,
-                  run_as_root=True)
+    _ovs_vsctl(['--', '--may-exist', 'add-port',
+                bridge, dev,
+                '--', 'set', 'Interface', dev,
+                'external-ids:iface-id=%s' % iface_id,
+                'external-ids:iface-status=active',
+                'external-ids:attached-mac=%s' % mac,
+                'external-ids:vm-uuid=%s' % instance_id])
+    if CONF.network_device_mtu:
+        utils.execute('ip', 'link', 'set', dev, 'mtu',
+                      CONF.network_device_mtu, run_as_root=True,
+                      check_exit_code=[0, 2, 254])
 
 
 def delete_ovs_vif_port(bridge, dev):
-    utils.execute('ovs-vsctl', 'del-port', bridge, dev,
-                  run_as_root=True)
+    _ovs_vsctl(['del-port', bridge, dev])
     delete_net_dev(dev)
 
 
@@ -1522,7 +1543,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                     _execute('ip', 'route', 'del', *fields,
                              run_as_root=True)
             out, err = _execute('ip', 'addr', 'show', 'dev', interface,
-                                'scope', 'global', run_as_root=True)
+                                'scope', 'global')
             for line in out.split('\n'):
                 fields = line.split()
                 if fields and fields[0] == 'inet':
@@ -1700,21 +1721,20 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
         dev = self.get_dev(network)
         if not device_exists(dev):
             bridge = CONF.linuxnet_ovs_integration_bridge
-            _execute('ovs-vsctl',
-                     '--', '--may-exist', 'add-port', bridge, dev,
-                     '--', 'set', 'Interface', dev, 'type=internal',
-                     '--', 'set', 'Interface', dev,
-                     'external-ids:iface-id=%s' % dev,
-                     '--', 'set', 'Interface', dev,
-                     'external-ids:iface-status=active',
-                     '--', 'set', 'Interface', dev,
-                     'external-ids:attached-mac=%s' % mac_address,
-                     run_as_root=True)
+            _ovs_vsctl(['--', '--may-exist', 'add-port', bridge, dev,
+                        '--', 'set', 'Interface', dev, 'type=internal',
+                        '--', 'set', 'Interface', dev,
+                        'external-ids:iface-id=%s' % dev,
+                        '--', 'set', 'Interface', dev,
+                        'external-ids:iface-status=active',
+                        '--', 'set', 'Interface', dev,
+                        'external-ids:attached-mac=%s' % mac_address])
             _execute('ip', 'link', 'set', dev, 'address', mac_address,
                      run_as_root=True)
             if CONF.network_device_mtu:
                 _execute('ip', 'link', 'set', dev, 'mtu',
-                         CONF.network_device_mtu, run_as_root=True)
+                         CONF.network_device_mtu, run_as_root=True,
+                         check_exit_code=[0, 2, 254])
             _execute('ip', 'link', 'set', dev, 'up', run_as_root=True)
             if not gateway:
                 # If we weren't instructed to act as a gateway then add the
@@ -1741,8 +1761,7 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
     def unplug(self, network):
         dev = self.get_dev(network)
         bridge = CONF.linuxnet_ovs_integration_bridge
-        _execute('ovs-vsctl', '--', '--if-exists', 'del-port',
-                 bridge, dev, run_as_root=True)
+        _ovs_vsctl(['--', '--if-exists', 'del-port', bridge, dev])
         return dev
 
     def get_dev(self, network):

@@ -21,7 +21,6 @@
 """Tests for the base baremetal driver class."""
 
 import mox
-
 from oslo.config import cfg
 
 from nova.compute import power_state
@@ -36,7 +35,6 @@ from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import db
 from nova.virt.baremetal import driver as bm_driver
 from nova.virt.baremetal import fake
-from nova.virt.baremetal import pxe
 from nova.virt import fake as fake_virt
 
 
@@ -49,7 +47,7 @@ COMMON_FLAGS = dict(
 
 BAREMETAL_FLAGS = dict(
     driver='nova.virt.baremetal.fake.FakeDriver',
-    instance_type_extra_specs=['cpu_arch:test', 'test_spec:test_value'],
+    flavor_extra_specs=['cpu_arch:test', 'test_spec:test_value'],
     power_manager='nova.virt.baremetal.fake.FakePowerManager',
     vif_driver='nova.virt.baremetal.fake.FakeVifDriver',
     volume_driver='nova.virt.baremetal.fake.FakeVolumeDriver',
@@ -116,8 +114,8 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         if ephemeral:
             result['instance'] = utils.get_test_instance()
         else:
-            flavor = utils.get_test_instance_type(options={'ephemeral_gb': 0})
-            result['instance'] = utils.get_test_instance(instance_type=flavor)
+            flavor = utils.get_test_flavor(options={'ephemeral_gb': 0})
+            result['instance'] = utils.get_test_instance(flavor=flavor)
         result['instance']['node'] = result['node']['uuid']
         result['spawn_params'] = dict(
                 admin_password='test_pass',
@@ -241,6 +239,41 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
 
         row = db.bm_node_get(self.context, node['node']['id'])
         self.assertEqual(row['task_state'], baremetal_states.DELETED)
+
+    def test_spawn_prepared(self):
+        node = self._create_node()
+
+        def update_2prepared(context, node, instance, state):
+            row = db.bm_node_get(context, node['id'])
+            self.assertEqual(row['task_state'], baremetal_states.BUILDING)
+            db.bm_node_update(
+                context, node['id'],
+                {'task_state': baremetal_states.PREPARED})
+
+        self.mox.StubOutWithMock(fake.FakeDriver, 'activate_node')
+        self.mox.StubOutWithMock(bm_driver, '_update_state')
+
+        bm_driver._update_state(
+            self.context,
+            mox.IsA(node['node']),
+            node['instance'],
+            baremetal_states.PREPARED).WithSideEffects(update_2prepared)
+        fake.FakeDriver.activate_node(
+            self.context,
+            mox.IsA(node['node']),
+            node['instance']).AndRaise(test.TestingException)
+        bm_driver._update_state(
+            self.context,
+            mox.IsA(node['node']),
+            node['instance'],
+            baremetal_states.ERROR).AndRaise(test.TestingException)
+        self.mox.ReplayAll()
+
+        self.assertRaises(test.TestingException,
+                          self.driver.spawn, **node['spawn_params'])
+
+        row = db.bm_node_get(self.context, node['node']['id'])
+        self.assertEqual(row['task_state'], baremetal_states.PREPARED)
 
     def test_spawn_fails_to_cleanup(self):
         node = self._create_node()
@@ -387,20 +420,6 @@ class BareMetalDriverWithDBTestCase(bm_db_base.BMDBTestCase):
         res = self.driver.get_info(node['instance'])
         # prior to the fix, returned power_state was SHUTDOWN
         self.assertEqual(res['state'], power_state.NOSTATE)
-        self.mox.VerifyAll()
-
-    def test_dhcp_options_for_instance(self):
-        node = self._create_node()
-        fake_bootfile = "pxelinux.0"
-        self.mox.StubOutWithMock(pxe, 'get_pxe_bootfile_name')
-        pxe.get_pxe_bootfile_name(mox.IgnoreArg()).AndReturn(fake_bootfile)
-        self.mox.ReplayAll()
-        expected = [{'opt_name': 'bootfile-name', 'opt_value': fake_bootfile},
-                    {'opt_name': 'server-ip-address', 'opt_value': CONF.my_ip},
-                    {'opt_name': 'tftp-server', 'opt_value': CONF.my_ip}]
-
-        res = self.driver.dhcp_options_for_instance(node['instance'])
-        self.assertEqual(expected.sort(), res.sort())
         self.mox.VerifyAll()
 
     def test_attach_volume(self):

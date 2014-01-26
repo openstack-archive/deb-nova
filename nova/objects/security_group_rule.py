@@ -29,7 +29,7 @@ class SecurityGroupRule(base.NovaPersistentObject, base.NovaObject):
         'protocol': fields.StringField(nullable=True),
         'from_port': fields.IntegerField(nullable=True),
         'to_port': fields.IntegerField(nullable=True),
-        'cidr': fields.Field(fields.CIDR(), nullable=True),
+        'cidr': fields.IPNetworkField(nullable=True),
         'parent_group': fields.ObjectField('SecurityGroup', nullable=True),
         'grantee_group': fields.ObjectField('SecurityGroup', nullable=True),
         }
@@ -63,6 +63,9 @@ class SecurityGroupRule(base.NovaPersistentObject, base.NovaObject):
 class SecurityGroupRuleList(base.ObjectListBase, base.NovaObject):
     fields = {
         'objects': fields.ListOfObjectsField('SecurityGroupRule'),
+        }
+    child_versions = {
+        '1.0': '1.0',
         }
 
     @base.remotable_classmethod

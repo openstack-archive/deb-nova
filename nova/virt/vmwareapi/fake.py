@@ -49,8 +49,28 @@ def log_db_contents(msg=None):
               {'text': msg or "", 'content': pprint.pformat(_db_content)})
 
 
-def reset():
+def reset(vc=False):
     """Resets the db contents."""
+    cleanup()
+    create_network()
+    create_host_network_system()
+    create_host_storage_system()
+    create_host()
+    ds_ref1 = create_datastore('ds1', 1024, 500)
+    if vc:
+        create_host()
+        ds_ref2 = create_datastore('ds2', 1024, 500)
+    create_datacenter('dc1', ds_ref1)
+    if vc:
+        create_datacenter('dc2', ds_ref2)
+    create_res_pool()
+    if vc:
+        create_cluster('test_cluster', ds_ref1)
+        create_cluster('test_cluster2', ds_ref2)
+
+
+def cleanup():
+    """Clear the db contents."""
     for c in _CLASSES:
         # We fake the datastore by keeping the file references as a list of
         # names in the db
@@ -58,22 +78,6 @@ def reset():
             _db_content[c] = []
         else:
             _db_content[c] = {}
-    create_network()
-    create_host_network_system()
-    create_host_storage_system()
-    create_host()
-    create_host()
-    create_datacenter()
-    create_datastore()
-    create_res_pool()
-    create_cluster('test_cluster')
-    create_cluster('test_cluster2')
-
-
-def cleanup():
-    """Clear the db contents."""
-    for c in _CLASSES:
-        _db_content[c] = {}
 
 
 def _create_object(table, table_obj):
@@ -109,6 +113,16 @@ class FakeRetrieveResult(object):
 
     def add_object(self, object):
         self.objects.append(object)
+
+
+class MissingProperty(object):
+    """Missing object in ObjectContent's missing set."""
+    def __init__(self, path='fake-path', message='fake_message',
+                 method_fault=None):
+        self.path = path
+        self.fault = DataObject()
+        self.fault.localizedMessage = message
+        self.fault.fault = method_fault
 
 
 def _get_object_refs(obj_type):
@@ -523,13 +537,14 @@ class ClusterComputeResource(ManagedObject):
 class Datastore(ManagedObject):
     """Datastore class."""
 
-    def __init__(self, name="fake-ds"):
+    def __init__(self, name="fake-ds", capacity=1024, free=500):
         super(Datastore, self).__init__("ds")
         self.set("summary.type", "VMFS")
         self.set("summary.name", name)
-        self.set("summary.capacity", unit.Ti)
-        self.set("summary.freeSpace", 500 * unit.Gi)
+        self.set("summary.capacity", capacity * unit.Gi)
+        self.set("summary.freeSpace", free * unit.Gi)
         self.set("summary.accessible", True)
+        self.set("browser", "")
 
 
 class HostNetworkSystem(ManagedObject):
@@ -705,7 +720,7 @@ class HostSystem(ManagedObject):
 class Datacenter(ManagedObject):
     """Datacenter class."""
 
-    def __init__(self, name="ha-datacenter"):
+    def __init__(self, name="ha-datacenter", ds_ref=None):
         super(Datacenter, self).__init__("dc")
         self.set("name", name)
         self.set("vmFolder", "vm_folder_ref")
@@ -715,6 +730,9 @@ class Datacenter(ManagedObject):
         network_do = DataObject()
         network_do.ManagedObjectReference = [net_ref]
         self.set("network", network_do)
+        datastore = DataObject()
+        datastore.ManagedObjectReference = [ds_ref]
+        self.set("datastore", datastore)
 
 
 class Task(ManagedObject):
@@ -744,14 +762,15 @@ def create_host():
     _create_object('HostSystem', host_system)
 
 
-def create_datacenter():
-    data_center = Datacenter()
+def create_datacenter(name, ds_ref=None):
+    data_center = Datacenter(name, ds_ref)
     _create_object('Datacenter', data_center)
 
 
-def create_datastore():
-    data_store = Datastore()
+def create_datastore(name, capacity, free):
+    data_store = Datastore(name, capacity, free)
     _create_object('Datastore', data_store)
+    return data_store.obj
 
 
 def create_res_pool():
@@ -764,11 +783,11 @@ def create_network():
     _create_object('Network', network)
 
 
-def create_cluster(name):
+def create_cluster(name, ds_ref):
     cluster = ClusterComputeResource(name=name)
     cluster._add_host(_get_object_refs("HostSystem")[0])
     cluster._add_host(_get_object_refs("HostSystem")[1])
-    cluster._add_datastore(_get_object_refs("Datastore")[0])
+    cluster._add_datastore(ds_ref)
     cluster._add_root_resource_pool(_get_object_refs("ResourcePool")[0])
     _create_object('ClusterComputeResource', cluster)
 
@@ -904,6 +923,7 @@ class FakeVim(object):
         self._session = uuidutils.generate_uuid()
         session = DataObject()
         session.key = self._session
+        session.userName = 'sessionUserName'
         _db_content['session'][self._session] = session
         return session
 
@@ -932,6 +952,13 @@ class FakeVim(object):
             raise error_util.VimFaultException(
                                [error_util.FAULT_NOT_AUTHENTICATED],
                                _("Session Invalid"))
+
+    def _session_is_active(self, *args, **kwargs):
+        try:
+            self._check_session()
+            return True
+        except Exception:
+            return False
 
     def _create_vm(self, method, *args, **kwargs):
         """Creates and registers a VM object with the Host System."""
@@ -1028,6 +1055,23 @@ class FakeVim(object):
         task_mdo = create_task(method, "error")
         return task_mdo.obj
 
+    def _move_file(self, method, *args, **kwargs):
+        source = kwargs.get('sourceName')
+        destination = kwargs.get('destinationName')
+        new_files = []
+        if source != destination:
+            for file in _db_content.get("files"):
+                if source in file:
+                    new_file = file.replace(source, destination)
+                    new_files.append(new_file)
+            # if source is not a file then the children will also
+            # be deleted
+            _remove_file(source)
+        for file in new_files:
+            _add_file(file)
+        task_mdo = create_task(method, "success")
+        return task_mdo.obj
+
     def _make_dir(self, method, *args, **kwargs):
         """Creates a directory in the datastore."""
         ds_path = kwargs.get("name")
@@ -1101,6 +1145,9 @@ class FakeVim(object):
             return lambda *args, **kwargs: self._login()
         elif attr_name == "Logout":
             self._logout()
+        elif attr_name == "SessionIsActive":
+            return lambda *args, **kwargs: self._session_is_active(
+                                               *args, **kwargs)
         elif attr_name == "TerminateSession":
             return lambda *args, **kwargs: self._terminate_session(
                                                *args, **kwargs)
@@ -1151,6 +1198,9 @@ class FakeVim(object):
             return lambda *args, **kwargs: self._just_return_task(attr_name)
         elif attr_name == "SearchDatastore_Task":
             return lambda *args, **kwargs: self._search_ds(attr_name,
+                                                *args, **kwargs)
+        elif attr_name == "MoveDatastoreFile_Task":
+            return lambda *args, **kwargs: self._move_file(attr_name,
                                                 *args, **kwargs)
         elif attr_name == "MakeDirectory":
             return lambda *args, **kwargs: self._make_dir(attr_name,

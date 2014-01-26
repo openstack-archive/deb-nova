@@ -18,7 +18,6 @@
 
 import inspect
 import math
-import re
 import time
 from xml.dom import minidom
 
@@ -74,16 +73,9 @@ _ROUTES_METHODS = [
     'update',
 ]
 
-_SANITIZE_KEYS = ['adminPass', 'admin_password']
-
-_SANITIZE_PATTERNS = [
-    re.compile(r'(adminPass\s*[=]\s*[\"\']).*?([\"\'])', re.DOTALL),
-    re.compile(r'(admin_password\s*[=]\s*[\"\']).*?([\"\'])', re.DOTALL),
-    re.compile(r'(<adminPass>).*?(</adminPass>)', re.DOTALL),
-    re.compile(r'(<admin_password>).*?(</admin_password>)', re.DOTALL),
-    re.compile(r'([\"\']adminPass[\"\']\s*:\s*[\"\']).*?([\"\'])', re.DOTALL),
-    re.compile(r'([\"\']admin_password[\"\']\s*:\s*[\"\']).*?([\"\'])',
-               re.DOTALL)
+_METHODS_WITH_BODY = [
+    'POST',
+    'PUT',
 ]
 
 
@@ -726,15 +718,6 @@ class ResourceExceptionHandler(object):
         return False
 
 
-def sanitize(msg):
-    if not (key in msg for key in _SANITIZE_KEYS):
-        return msg
-
-    for pattern in _SANITIZE_PATTERNS:
-        msg = re.sub(pattern, r'\1****\2', msg)
-    return msg
-
-
 class Resource(wsgi.Application):
     """WSGI app that handles (de)serialization and controller dispatch.
 
@@ -845,14 +828,6 @@ class Resource(wsgi.Application):
             LOG.debug(_("Unrecognized Content-Type provided in request"))
             return None, ''
 
-        if not content_type:
-            LOG.debug(_("No Content-Type provided in request"))
-            return None, ''
-
-        if len(request.body) <= 0:
-            LOG.debug(_("Empty body provided in request"))
-            return None, ''
-
         return content_type, request.body
 
     def deserialize(self, meth, content_type, body):
@@ -932,6 +907,9 @@ class Resource(wsgi.Application):
 
         return None
 
+    def _should_have_body(self, request):
+        return request.method in _METHODS_WITH_BODY
+
     @webob.dec.wsgify(RequestClass=Request)
     def __call__(self, request):
         """WSGI method that controls (de)serialization and method dispatch."""
@@ -972,15 +950,18 @@ class Resource(wsgi.Application):
             msg = _("Action: '%(action)s', body: "
                     "%(body)s") % {'action': action,
                                    'body': unicode(body, 'utf-8')}
-            LOG.debug(sanitize(msg))
+            LOG.debug(logging.mask_password(msg))
         LOG.debug(_("Calling method %s") % str(meth))
 
         # Now, deserialize the request body...
         try:
-            if content_type:
-                contents = self.deserialize(meth, content_type, body)
-            else:
-                contents = {}
+            contents = {}
+            if self._should_have_body(request):
+                #allow empty body with PUT and POST
+                if request.content_length == 0:
+                    contents = {'body': None}
+                else:
+                    contents = self.deserialize(meth, content_type, body)
         except exception.InvalidContentType:
             msg = _("Unsupported Content-Type")
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))

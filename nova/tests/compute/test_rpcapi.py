@@ -281,7 +281,13 @@ class ComputeRpcAPITestCase(test.TestCase):
 
     def test_get_vnc_console(self):
         self._test_compute_api('get_vnc_console', 'call',
-                instance=self.fake_instance, console_type='type')
+                instance=self.fake_instance, console_type='type',
+                version='3.2')
+
+        self.flags(compute='3.0', group='upgrade_levels')
+        self._test_compute_api('get_vnc_console', 'call',
+                instance=self.fake_instance, console_type='type',
+                version='3.0')
 
         # NOTE(russellb) Havana compat
         self.flags(compute='havana', group='upgrade_levels')
@@ -308,7 +314,12 @@ class ComputeRpcAPITestCase(test.TestCase):
     def test_validate_console_port(self):
         self._test_compute_api('validate_console_port', 'call',
                 instance=self.fake_instance, port="5900",
-                console_type="novnc")
+                console_type="novnc", version='3.3')
+
+        self.flags(compute='3.0', group='upgrade_levels')
+        self._test_compute_api('validate_console_port', 'call',
+                instance=self.fake_instance, port="5900",
+                console_type="novnc", version='3.0')
 
         # NOTE(russellb) Havana compat
         self.flags(compute='havana', group='upgrade_levels')
@@ -367,7 +378,7 @@ class ComputeRpcAPITestCase(test.TestCase):
                 migrate_data={}, version='2.0')
 
     def test_post_live_migration_at_destination(self):
-        self._test_compute_api('post_live_migration_at_destination', 'call',
+        self._test_compute_api('post_live_migration_at_destination', 'cast',
                 instance=self.fake_instance, block_migration='block_migration',
                 host='host')
 
@@ -465,7 +476,8 @@ class ComputeRpcAPITestCase(test.TestCase):
         self._test_compute_api('rebuild_instance', 'cast', new_pass='None',
                 injected_files='None', image_ref='None', orig_image_ref='None',
                 bdms=[], instance=self.fake_instance, host='new_host',
-                orig_sys_metadata=None, recreate=True, on_shared_storage=True)
+                orig_sys_metadata=None, recreate=True, on_shared_storage=True,
+                version='3.4')
 
         # NOTE(russellb) Havana compat
         self.flags(compute='havana', group='upgrade_levels')

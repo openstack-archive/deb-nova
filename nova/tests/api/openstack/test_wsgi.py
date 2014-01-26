@@ -1,8 +1,21 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 import inspect
 import webob
 
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import exception
 from nova.openstack.common import gettextutils
@@ -324,16 +337,108 @@ class XMLDeserializerTest(test.NoDBTestCase):
 
 
 class ResourceTest(test.NoDBTestCase):
-    def test_resource_call(self):
+    def test_resource_call_with_method_get(self):
         class Controller(object):
             def index(self, req):
-                return 'off'
+                return 'success'
 
-        req = webob.Request.blank('/tests')
         app = fakes.TestRouter(Controller())
+        # the default method is GET
+        req = webob.Request.blank('/tests')
         response = req.get_response(app)
-        self.assertEqual(response.body, 'off')
+        self.assertEqual(response.body, 'success')
         self.assertEqual(response.status_int, 200)
+        req.body = '{"body": {"key": "value"}}'
+        response = req.get_response(app)
+        self.assertEqual(response.body, 'success')
+        self.assertEqual(response.status_int, 200)
+        req.content_type = 'application/json'
+        response = req.get_response(app)
+        self.assertEqual(response.body, 'success')
+        self.assertEqual(response.status_int, 200)
+
+    def test_resource_call_with_method_post(self):
+        class Controller(object):
+            @extensions.expected_errors(400)
+            def create(self, req, body):
+                if expected_body != body:
+                    msg = "The request body invalid"
+                    raise webob.exc.HTTPBadRequest(explanation=msg)
+                return "success"
+        # verify the method: POST
+        app = fakes.TestRouter(Controller())
+        req = webob.Request.blank('/tests', method="POST",
+                                  content_type='application/json')
+        req.body = '{"body": {"key": "value"}}'
+        expected_body = {'body': {
+            "key": "value"
+            }
+        }
+        response = req.get_response(app)
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(response.body, 'success')
+        # verify without body
+        expected_body = None
+        req.body = None
+        response = req.get_response(app)
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(response.body, 'success')
+        # the body is validated in the controller
+        expected_body = {'body': None}
+        response = req.get_response(app)
+        expected_unsupported_type_body = ('{"badRequest": '
+            '{"message": "The request body invalid", "code": 400}}')
+        self.assertEqual(response.status_int, 400)
+        self.assertEqual(expected_unsupported_type_body, response.body)
+
+    def test_resource_call_with_method_put(self):
+        class Controller(object):
+            def update(self, req, id, body):
+                if expected_body != body:
+                    msg = "The request body invalid"
+                    raise webob.exc.HTTPBadRequest(explanation=msg)
+                return "success"
+        # verify the method: PUT
+        app = fakes.TestRouter(Controller())
+        req = webob.Request.blank('/tests/test_id', method="PUT",
+                                  content_type='application/json')
+        req.body = '{"body": {"key": "value"}}'
+        expected_body = {'body': {
+            "key": "value"
+            }
+        }
+        response = req.get_response(app)
+        self.assertEqual(response.body, 'success')
+        self.assertEqual(response.status_int, 200)
+        req.body = None
+        expected_body = None
+        response = req.get_response(app)
+        self.assertEqual(response.status_int, 200)
+        #verify no content_type is contained in the request
+        req.content_type = None
+        req.body = '{"body": {"key": "value"}}'
+        response = req.get_response(app)
+        expected_unsupported_type_body = ('{"badRequest": '
+            '{"message": "Unsupported Content-Type", "code": 400}}')
+        self.assertEqual(response.status_int, 400)
+        self.assertEqual(expected_unsupported_type_body, response.body)
+
+    def test_resource_call_with_method_delete(self):
+        class Controller(object):
+            def delete(self, req, id):
+                return "success"
+
+        # verify the method: DELETE
+        app = fakes.TestRouter(Controller())
+        req = webob.Request.blank('/tests/test_id', method="DELETE")
+        response = req.get_response(app)
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(response.body, 'success')
+        # ignore the body
+        req.body = '{"body": {"key": "value"}}'
+        response = req.get_response(app)
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(response.body, 'success')
 
     def test_resource_not_authorized(self):
         class Controller(object):
@@ -493,7 +598,7 @@ class ResourceTest(test.NoDBTestCase):
 
         content_type, body = resource.get_body(request)
         self.assertIsNone(content_type)
-        self.assertEqual(body, '')
+        self.assertEqual(body, 'foo')
 
     def test_get_body_no_content_body(self):
         class Controller(object):
@@ -508,7 +613,7 @@ class ResourceTest(test.NoDBTestCase):
         request.body = ''
 
         content_type, body = resource.get_body(request)
-        self.assertIsNone(content_type)
+        self.assertEqual('application/json', content_type)
         self.assertEqual(body, '')
 
     def test_get_body(self):
@@ -945,10 +1050,10 @@ class ResourceTest(test.NoDBTestCase):
 
     def test_resource_valid_utf8_body(self):
         class Controller(object):
-            def index(self, req, body):
+            def update(self, req, id, body):
                 return body
 
-        req = webob.Request.blank('/tests')
+        req = webob.Request.blank('/tests/test_id', method="PUT")
         body = """ {"name": "\xe6\xa6\x82\xe5\xbf\xb5" } """
         expected_body = '{"name": "\\u6982\\u5ff5"}'
         req.body = body
@@ -960,10 +1065,10 @@ class ResourceTest(test.NoDBTestCase):
 
     def test_resource_invalid_utf8(self):
         class Controller(object):
-            def index(self, req, body):
+            def update(self, req, id, body):
                 return body
 
-        req = webob.Request.blank('/tests')
+        req = webob.Request.blank('/tests/test_id', method="PUT")
         body = """ {"name": "\xf0\x28\x8c\x28" } """
         req.body = body
         req.headers['Content-Type'] = 'application/json'
@@ -1098,99 +1203,3 @@ class ValidBodyTest(test.NoDBTestCase):
         resource = wsgi.Resource(controller=None)
         body = {'foo': 'bar'}
         self.assertFalse(self.controller.is_valid_body(body, 'foo'))
-
-
-class TestSanitize(test.NoDBTestCase):
-    def test_json(self):
-        payload = """{'adminPass':'mypassword'}"""
-        expected = """{'adminPass':'****'}"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """{ 'adminPass' : 'mypassword' }"""
-        expected = """{ 'adminPass' : '****' }"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """{'admin_password':'mypassword'}"""
-        expected = """{'admin_password':'****'}"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """{ 'admin_password' : 'mypassword' }"""
-        expected = """{ 'admin_password' : '****' }"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-
-    def test_xml(self):
-        payload = """<adminPass>mypassword</adminPass>"""
-        expected = """<adminPass>****</adminPass>"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """<adminPass>
-                        mypassword
-                     </adminPass>"""
-        expected = """<adminPass>****</adminPass>"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """<admin_password>mypassword</admin_password>"""
-        expected = """<admin_password>****</admin_password>"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """<admin_password>
-                        mypassword
-                     </admin_password>"""
-        expected = """<admin_password>****</admin_password>"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-
-    def test_xml_attribute(self):
-        payload = """adminPass='mypassword'"""
-        expected = """adminPass='****'"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """adminPass = 'mypassword'"""
-        expected = """adminPass = '****'"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """adminPass = "mypassword\""""
-        expected = """adminPass = "****\""""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """admin_password='mypassword'"""
-        expected = """admin_password='****'"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """admin_password = 'mypassword'"""
-        expected = """admin_password = '****'"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """admin_password = "mypassword\""""
-        expected = """admin_password = "****\""""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-
-    def test_json_message(self):
-        payload = """body: {"changePassword": {"adminPass": "1234567"}}"""
-        expected = """body: {"changePassword": {"adminPass": "****"}}"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """body: {"rescue": {"admin_password": "1234567"}}"""
-        expected = """body: {"rescue": {"admin_password": "****"}}"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-
-    def test_xml_message(self):
-        payload = """<?xml version="1.0" encoding="UTF-8"?>
-<rebuild
-    xmlns="http://docs.openstack.org/compute/api/v1.1"
-    name="foobar"
-    imageRef="http://openstack.example.com/v1.1/32278/images/70a599e0-31e7"
-    accessIPv4="1.2.3.4"
-    accessIPv6="fe80::100"
-    adminPass="seekr3t">
-  <metadata>
-    <meta key="My Server Name">Apache1</meta>
-  </metadata>
-</rebuild>"""
-        expected = """<?xml version="1.0" encoding="UTF-8"?>
-<rebuild
-    xmlns="http://docs.openstack.org/compute/api/v1.1"
-    name="foobar"
-    imageRef="http://openstack.example.com/v1.1/32278/images/70a599e0-31e7"
-    accessIPv4="1.2.3.4"
-    accessIPv6="fe80::100"
-    adminPass="****">
-  <metadata>
-    <meta key="My Server Name">Apache1</meta>
-  </metadata>
-</rebuild>"""
-        self.assertEqual(expected, wsgi.sanitize(payload))
-        payload = """<?xml version="1.0" encoding="UTF-8"?>
-<rescue xmlns="http://docs.openstack.org/compute/api/v1.1"
-    admin_password="MySecretPass"/>"""
-        expected = """<?xml version="1.0" encoding="UTF-8"?>
-<rescue xmlns="http://docs.openstack.org/compute/api/v1.1"
-    admin_password="****"/>"""
-        self.assertEqual(expected, wsgi.sanitize(payload))

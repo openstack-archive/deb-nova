@@ -63,6 +63,11 @@ class HyperVDriver(driver.ComputeDriver):
         self._vmops.destroy(instance, network_info, block_device_info,
                             destroy_disks)
 
+    def cleanup(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
+        """Cleanup after instance being destroyed by Hypervisor."""
+        pass
+
     def get_info(self, instance):
         return self._vmops.get_info(instance)
 
@@ -116,6 +121,11 @@ class HyperVDriver(driver.ComputeDriver):
         self._livemigrationops.live_migration(context, instance_ref, dest,
                                               post_method, recover_method,
                                               block_migration, migrate_data)
+
+    def rollback_live_migration_at_destination(self, context, instance,
+                                               network_info,
+                                               block_device_info):
+        self.destroy(context, instance, network_info, block_device_info)
 
     def pre_live_migration(self, context, instance, block_device_info,
                            network_info, disk, migrate_data=None):
@@ -195,7 +205,3 @@ class HyperVDriver(driver.ComputeDriver):
 
     def get_host_ip_addr(self):
         return self._hostops.get_host_ip_addr()
-
-    def get_console_output(self, instance):
-        LOG.debug(_("get_console_output called"), instance=instance)
-        return ''

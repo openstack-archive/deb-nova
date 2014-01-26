@@ -76,7 +76,7 @@ class ConductorManager(manager.Manager):
     namespace.  See the ComputeTaskManager class for details.
     """
 
-    RPC_API_VERSION = '1.61'
+    RPC_API_VERSION = '1.62'
 
     def __init__(self, *args, **kwargs):
         super(ConductorManager, self).__init__(service_name='conductor',
@@ -616,6 +616,9 @@ class ConductorManager(manager.Manager):
     def compute_reboot(self, context, instance, reboot_type):
         self.compute_api.reboot(context, instance, reboot_type)
 
+    def object_backport(self, context, objinst, target_version):
+        return objinst.obj_to_primitive(target_version=target_version)
+
 
 class ComputeTaskManager(base.Base):
     """Namespace for compute methods.
@@ -713,8 +716,8 @@ class ComputeTaskManager(base.Base):
                 filter_properties=filter_properties, node=node)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
-                updates = {'vm_state': vm_states.ERROR,
-                            'task_state': None}
+                updates = {'vm_state': instance['vm_state'],
+                           'task_state': None}
                 self._set_vm_state_and_notify(context, 'migrate_server',
                                               updates, ex, request_spec)
                 if reservations:
@@ -739,6 +742,7 @@ class ComputeTaskManager(base.Base):
                 exception.DestinationHypervisorTooOld,
                 exception.InvalidLocalStorage,
                 exception.InvalidSharedStorage,
+                exception.HypervisorUnavailable,
                 exception.MigrationPreCheckError) as ex:
             with excutils.save_and_reraise_exception():
                 #TODO(johngarbutt) - eventually need instance actions here
@@ -752,14 +756,11 @@ class ComputeTaskManager(base.Base):
                              expected_task_state=task_states.MIGRATING,),
                         ex, request_spec, self.db)
         except Exception as ex:
-            with excutils.save_and_reraise_exception():
-                request_spec = {'instance_properties': {
-                    'uuid': instance['uuid'], },
-                }
-                scheduler_utils.set_vm_state_and_notify(context,
-                        'compute_task', 'migrate_server',
-                        {'vm_state': vm_states.ERROR},
-                        ex, request_spec, self.db)
+            LOG.error(_('Migration of instance %(instance_id)s to host'
+                       ' %(dest)s unexpectedly failed.'),
+                       {'instance_id': instance['uuid'], 'dest': destination},
+                       exc_info=True)
+            raise exception.MigrationError(reason=ex)
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
