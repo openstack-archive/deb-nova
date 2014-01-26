@@ -3,3 +3,4 @@ install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
 fixes-requirements.txt-for-sid.patch
+fix-webob-requirements.txt
