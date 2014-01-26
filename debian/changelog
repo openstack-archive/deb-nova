@@ -1,4 +1,4 @@
-nova (2014.1~b1-1) experimental; urgency=low
+nova (2014.1~b2-1) experimental; urgency=low
 
   * New upstream release (Icehouse beta 1).
   * Removed CVE-2013-4463_CVE-2013-4469 now applied upstream.
