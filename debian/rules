@@ -45,7 +45,7 @@ endif
 
 override_dh_installman:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
-	dh_installman -O-O--buildsystem=python_distutils
+	dh_installman -O--buildsystem=python_distutils
 endif
 
 override_dh_install:
