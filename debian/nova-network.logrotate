@@ -1,9 +1,15 @@
 /var/log/nova/nova-network.log {
     daily
     missingok
+    compress
+    delaycompress
+    notifempty
 }
 
 /var/log/nova/nova-dhcpbridge.log {
     daily
     missingok
+    compress
+    delaycompress
+    notifempty
 }

@@ -1,7 +1,8 @@
-nova (2013.2.1-4) UNRELEASED; urgency=low
+nova (2013.2.1-4) unstable; urgency=medium
 
   * Configures Neutron credentials through Debconf.
   * Adds a backport of Ceph support into Nova.
+  * Restarts daemons after logrotate.
 
  -- Thomas Goirand <zigo@debian.org>  Sat, 18 Jan 2014 23:48:48 +0800
 

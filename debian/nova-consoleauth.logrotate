@@ -4,4 +4,11 @@
     compress
     delaycompress
     notifempty
+    postrotate
+        if dpkg-vendor --derives-from ubuntu ; then
+            service nova-consoleauth restart >/dev/null 2>&1 || true
+        else
+            invoke-rc.d nova-consoleauth restart >/dev/null 2>&1 || true
+        fi
+    endscript
 }
