@@ -1,4 +1,14 @@
 /var/log/nova/nova-cert.log {
     daily
     missingok
+    compress
+    delaycompress
+    notifempty
+    postrotate
+        if dpkg-vendor --derives-from ubuntu ; then
+            service nova-cert restart >/dev/null 2>&1 || true
+        else
+            invoke-rc.d nova-cert restart >/dev/null 2>&1 || true
+        fi
+    endscript
 }
