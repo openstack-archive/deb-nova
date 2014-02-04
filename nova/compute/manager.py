@@ -574,8 +574,6 @@ class ComputeManager(manager.Manager):
         self._last_host_check = 0
         self._last_bw_usage_poll = 0
         self._bw_usage_supported = True
-        self._last_vol_usage_poll = 0
-        self._last_info_cache_heal = 0
         self._last_bw_usage_cell_update = 0
         self.compute_api = compute.API()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
@@ -4761,7 +4759,8 @@ class ComputeManager(manager.Manager):
                         context, instance, "live_migration.rollback.dest.end",
                         network_info=network_info)
 
-    @periodic_task.periodic_task
+    @periodic_task.periodic_task(
+        spacing=CONF.heal_instance_info_cache_interval)
     def _heal_instance_info_cache(self, context):
         """Called periodically.  On every call, try to update the
         info_cache's network information for another instance by
@@ -4776,10 +4775,6 @@ class ComputeManager(manager.Manager):
         heal_interval = CONF.heal_instance_info_cache_interval
         if not heal_interval:
             return
-        curr_time = time.time()
-        if self._last_info_cache_heal + heal_interval > curr_time:
-            return
-        self._last_info_cache_heal = curr_time
 
         instance_uuids = getattr(self, '_instance_uuids_to_heal', None)
         instance = None
@@ -5110,7 +5105,7 @@ class ComputeManager(manager.Manager):
                                                 usage['wr_bytes'],
                                                 usage['instance'])
 
-    @periodic_task.periodic_task
+    @periodic_task.periodic_task(spacing=CONF.volume_usage_poll_interval)
     def _poll_volume_usage(self, context, start_time=None):
         if CONF.volume_usage_poll_interval == 0:
             return
@@ -5118,12 +5113,6 @@ class ComputeManager(manager.Manager):
         if not start_time:
             start_time = utils.last_completed_audit_period()[1]
 
-        curr_time = time.time()
-        if (curr_time - self._last_vol_usage_poll) < \
-                CONF.volume_usage_poll_interval:
-            return
-
-        self._last_vol_usage_poll = curr_time
         compute_host_bdms = self._get_host_volume_bdms(context)
         if not compute_host_bdms:
             return
