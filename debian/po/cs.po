@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2013.1.2-3\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-01-18 23:08+0800\n"
+"POT-Creation-Date: 2014-02-08 17:20+0800\n"
 "PO-Revision-Date: 2013-08-27 12:31+0200\n"
 "Last-Translator: Michal Simunek <michal.simunek@gmail.com>\n"
 "Language-Team: Czech <debian-l10n-czech@lists.debian.org>\n"
@@ -133,29 +133,37 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
-msgid "Value for my_ip:"
-msgstr "Hodnota pro my_ip:"
+msgid "IP address on Nova management network:"
+msgstr ""
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
 msgid ""
-"Enter the IP address that will be set in the my_ip directive of nova.conf."
+"Please enter the IP address for this physical node on the private network "
+"being used for OpenStack Compute management."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:8001
+#, fuzzy
+#| msgid ""
+#| "Enter the IP address that will be set in the my_ip directive of nova.conf."
+msgid "This value will be stored in the my_ip directive of nova.conf."
 msgstr ""
 "Zadejte IP adresu, která se nastaví v souboru nova.conf v direktivě my_ip."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
-#, fuzzy
-#| msgid "Value for my_ip:"
-msgid "Value for neutron_url:"
-msgstr "Hodnota pro my_ip:"
+msgid "Neutron server URL:"
+msgstr ""
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
-msgid "Enter the URL of your Neutron server."
+msgid "Please enter the URL of the Neutron server."
 msgstr ""
 
 #. Type: string
@@ -168,7 +176,12 @@ msgstr "Název nájemce pro autentizační server:"
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
 msgid ""
 "Nova needs to be able to communicate with Neutron through Keystone. "
 "Therefore Nova needs to know the Neutron admin tenant, username and password."
@@ -177,32 +190,43 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid "Enter the name of the admin tenant for Neutron."
+msgid "Please enter the name of the admin tenant for Neutron."
 msgstr ""
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Neutron admin username:"
-msgstr ""
+#, fuzzy
+#| msgid "Auth server tenant name:"
+msgid "Neutron administrator username:"
+msgstr "Název nájemce pro autentizační server:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Enter the username for Neutron."
+#, fuzzy
+#| msgid ""
+#| "Please enter the username used to connect to your XenAPI (XCP server)."
+msgid "Please enter the username of the Neutron administrator."
 msgstr ""
+"Zadejte prosím uživatelské jméno pro připojení ke XenAPI (XCP serveru)."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Neutron admin password:"
-msgstr ""
+#, fuzzy
+#| msgid "Auth server tenant name:"
+msgid "Neutron administrator password:"
+msgstr "Název nájemce pro autentizační server:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Enter the password for the admin username of Neutron."
-msgstr ""
+#, fuzzy
+#| msgid ""
+#| "Please enter the password used to connect to your XenAPI (XCP server)."
+msgid "Please enter the password of the Neutron administrator."
+msgstr "Zadejte prosím heslo pro připojení ke XenAPI (XCP serveru)."
 
 #. Type: string
 #. Description
@@ -467,6 +491,14 @@ msgstr ""
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr ""
 "Toto nastavení lze později upravit v souboru /etc/default/nova-consoleproxy."
+
+#~ msgid "Value for my_ip:"
+#~ msgstr "Hodnota pro my_ip:"
+
+#, fuzzy
+#~| msgid "Value for my_ip:"
+#~ msgid "Value for neutron_url:"
+#~ msgstr "Hodnota pro my_ip:"
 
 #~ msgid "Start nova services at boot?"
 #~ msgstr "Spouštět služby Nova při zavádění?"

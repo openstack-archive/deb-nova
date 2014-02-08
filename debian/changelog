@@ -1,3 +1,9 @@
+nova (2013.2.1-5) unstable; urgency=medium
+
+  * Updated debconf template thanks to the intl team.
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 08 Feb 2014 17:19:47 +0800
+
 nova (2013.2.1-4) unstable; urgency=medium
 
   * Configures Neutron credentials through Debconf.
