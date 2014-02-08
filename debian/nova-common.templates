@@ -1,4 +1,4 @@
-# These templates have been reviewed by the debian-l10n-english
+ These templates have been reviewed by the debian-l10n-english
 # team
 #
 # If modifications/additions/rewording are needed, please ask
@@ -61,14 +61,17 @@ _Description: API to activate:
 
 Template: nova/my-ip
 Type: string
-_Description: Value for my_ip:
- Enter the IP address that will be set in the my_ip directive of nova.conf.
+_Description: IP address on Nova management network:
+ Please enter the IP address for this physical node on the private
+ network being used for OpenStack Compute management.
+ .
+ This value will be stored in the my_ip directive of nova.conf.
 
 Template: nova/neutron_url
 Type: string
 Default: http://127.0.0.1:9696
-_Description: Value for neutron_url:
- Enter the URL of your Neutron server.
+_Description: Neutron server URL:
+ Please enter the URL of the Neutron server.
 
 Template: nova/neutron_admin_tenant_name
 Type: string
@@ -77,18 +80,24 @@ _Description: Neutron admin tenant name:
  Nova needs to be able to communicate with Neutron through Keystone. Therefore
  Nova needs to know the Neutron admin tenant, username and password.
  .
- Enter the name of the admin tenant for Neutron.
+ Please enter the name of the admin tenant for Neutron.
 
 Template: nova/neutron_admin_username
 Type: string
 Default: admin
-_Description: Neutron admin username:
- Enter the username for Neutron.
+_Description: Neutron administrator username:
+ Nova needs to be able to communicate with Neutron through Keystone. Therefore
+ Nova needs to know the Neutron admin tenant, username and password.
+ .
+ Please enter the username of the Neutron administrator.
 
 Template: nova/neutron_admin_password
 Type: password
-_Description: Neutron admin password:
- Enter the password for the admin username of Neutron.
+_Description: Neutron administrator password:
+ Nova needs to be able to communicate with Neutron through Keystone. Therefore
+ Nova needs to know the Neutron admin tenant, username and password.
+ .
+ Please enter the password of the Neutron administrator.
 
 Template: nova/rabbit_host
 Type: string

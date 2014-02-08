@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2013.2.1-1\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-01-18 23:08+0800\n"
+"POT-Creation-Date: 2014-02-08 17:20+0800\n"
 "PO-Revision-Date: 2014-01-09 22:24+0100\n"
 "Last-Translator: Chris Leick <c.leick@vollbio.de>\n"
 "Language-Team: German <debian-l10n-german@lists.debian.org>\n"
@@ -135,14 +135,24 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
-msgid "Value for my_ip:"
-msgstr "Wert für »my_ip«:"
+msgid "IP address on Nova management network:"
+msgstr ""
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
 msgid ""
-"Enter the IP address that will be set in the my_ip directive of nova.conf."
+"Please enter the IP address for this physical node on the private network "
+"being used for OpenStack Compute management."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:8001
+#, fuzzy
+#| msgid ""
+#| "Enter the IP address that will be set in the my_ip directive of nova.conf."
+msgid "This value will be stored in the my_ip directive of nova.conf."
 msgstr ""
 "Geben Sie die IP-Adresse ein, die in der Direktive »my_ip« der nova.conf "
 "gesetzt werden wird."
@@ -150,16 +160,16 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
-#, fuzzy
-#| msgid "Value for my_ip:"
-msgid "Value for neutron_url:"
-msgstr "Wert für »my_ip«:"
+msgid "Neutron server URL:"
+msgstr ""
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
-msgid "Enter the URL of your Neutron server."
-msgstr ""
+#, fuzzy
+#| msgid "Please specify the IP address of that server."
+msgid "Please enter the URL of the Neutron server."
+msgstr "Bitte geben Sie die IP-Adresse dieses Servers an."
 
 #. Type: string
 #. Description
@@ -171,7 +181,12 @@ msgstr "Tenant-Name des Authentifizierungsservers:"
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
 msgid ""
 "Nova needs to be able to communicate with Neutron through Keystone. "
 "Therefore Nova needs to know the Neutron admin tenant, username and password."
@@ -180,32 +195,46 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid "Enter the name of the admin tenant for Neutron."
+msgid "Please enter the name of the admin tenant for Neutron."
 msgstr ""
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Neutron admin username:"
-msgstr ""
+#, fuzzy
+#| msgid "Auth server tenant name:"
+msgid "Neutron administrator username:"
+msgstr "Tenant-Name des Authentifizierungsservers:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Enter the username for Neutron."
+#, fuzzy
+#| msgid ""
+#| "Please enter the username used to connect to your XenAPI (XCP server)."
+msgid "Please enter the username of the Neutron administrator."
 msgstr ""
+"Bitte geben Sie den Benutzernamen ein, mit dem Sie sich mit Ihrer XenAPI "
+"(XCP-Server) verbinden."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Neutron admin password:"
-msgstr ""
+#, fuzzy
+#| msgid "Auth server tenant name:"
+msgid "Neutron administrator password:"
+msgstr "Tenant-Name des Authentifizierungsservers:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Enter the password for the admin username of Neutron."
+#, fuzzy
+#| msgid ""
+#| "Please enter the password used to connect to your XenAPI (XCP server)."
+msgid "Please enter the password of the Neutron administrator."
 msgstr ""
+"Bitte geben Sie das Passwort ein, mit dem Sie sich mit Ihrer XenAPI (XCP-"
+"Server) verbinden."
 
 #. Type: string
 #. Description
@@ -466,6 +495,14 @@ msgstr ""
 #: ../nova-consoleproxy.templates:1001
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Dies kann später in /etc/default/nova-consoleproxy geändert werden."
+
+#~ msgid "Value for my_ip:"
+#~ msgstr "Wert für »my_ip«:"
+
+#, fuzzy
+#~| msgid "Value for my_ip:"
+#~ msgid "Value for neutron_url:"
+#~ msgstr "Wert für »my_ip«:"
 
 #~ msgid "Start nova services at boot?"
 #~ msgstr "Nova-Dienste beim Hochfahren starten?"
