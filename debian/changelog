@@ -1,8 +1,9 @@
 nova (2013.2.2-1) unstable; urgency=high
 
   [ Thomas Goirand ]
-  * New upstream point release.
+  * New upstream point release (Closes: #736926, #736465).
   * Added gustavo panizzo <gfa@zumbi.com.ar> as uploader.
+  * Standards-Version: is now 3.9.5.
 
   [ gustavo panizzo ]
   * nova-manage db sync failure is not fatal in nova-common.postinst 

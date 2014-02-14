@@ -91,7 +91,7 @@ Build-Depends-Indep: bpython,
                      websockify (>= 0.5.1)
 #                     python-xenapi,
 Build-Conflicts: python-cjson
-Standards-Version: 3.9.4
+Standards-Version: 3.9.5
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/nova.git
 Homepage: http://www.openstack.org/software/openstack-compute/
