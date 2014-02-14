@@ -5,7 +5,8 @@ Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
            Mehdi Abaakouk <sileht@sileht.net>,
-           Gonéri Le bouder <goneri@debian.org>
+           Gonéri Le bouder <goneri@debian.org>,
+           gustavo panizzo <gfa@zumbi.com.ar>
 Build-Depends: debhelper (>= 9),
                openstack-pkg-tools (>= 8~),
                po-debconf,
