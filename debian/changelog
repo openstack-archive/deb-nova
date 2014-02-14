@@ -1,8 +1,12 @@
-nova (2013.2.1-7) UNRELEASED; urgency=medium
+nova (2013.2.2-1) unstable; urgency=high
 
+  [ Thomas Goirand ]
+  * New upstream point release.
+
+  [ gustavo panizzo ]
   * nova-manage db sync failure is not fatal in nova-common.postinst 
 
- -- gustavo panizzo <gfa@zumbi.com.ar>  Thu, 13 Feb 2014 17:03:26 -0300
+ -- Thomas Goirand <zigo@debian.org>  Fri, 14 Feb 2014 13:53:10 +0800
 
 nova (2013.2.1-6) unstable; urgency=medium
 
