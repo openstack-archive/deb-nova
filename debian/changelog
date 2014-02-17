@@ -5,11 +5,71 @@ nova (2014.1~b2-1) experimental; urgency=low
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 09 Dec 2013 22:56:39 +0800
 
-nova (2013.2.1-2) UNRELEASED; urgency=low
+nova (2013.2.2-2) unstable; urgency=medium
 
+  * Rebuilt using openstack-pkg-tools >= 9~.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 14 Feb 2014 17:52:57 +0000
+
+nova (2013.2.2-1) unstable; urgency=high
+
+  [ Thomas Goirand ]
+  * New upstream point release (Closes: #736926, #736465).
+  * Added gustavo panizzo <gfa@zumbi.com.ar> as uploader.
+  * Standards-Version: is now 3.9.5.
+  * Refreshed Ceph backport patch.
+
+  [ gustavo panizzo ]
+  * nova-manage db sync failure is not fatal in nova-common.postinst
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 14 Feb 2014 13:53:10 +0800
+
+nova (2013.2.1-6) unstable; urgency=medium
+
+  * Fix broken template given by Christian PERRIER (Closes: #738271).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 09 Feb 2014 18:11:40 +0800
+
+nova (2013.2.1-5) unstable; urgency=medium
+
+  * Updated debconf template thanks to the intl team. (Closes: #737819)
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 08 Feb 2014 17:19:47 +0800
+
+nova (2013.2.1-4) unstable; urgency=medium
+
+  * Configures Neutron credentials through Debconf.
+  * Adds a backport of Ceph support into Nova.
+  * Restarts daemons after logrotate.
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 18 Jan 2014 23:48:48 +0800
+
+nova (2013.2.1-3) unstable; urgency=medium
+
+  * Using dh_sphinxdoc correctly.
+  * Explicitly using --buildsystem=python_distutils.
+  * Removed duplicate build-depends: python-d2to1.  
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 17 Jan 2014 09:49:05 +0000
+
+nova (2013.2.1-2) unstable; urgency=medium
+
+  [ Gonéri Le Bouder ]
+  * Add myself in Uploaders
+  * nova-compute-kvm directly depends on qemu-kvm since kvm package doesn't
+    exist anymore. We keep an alternative dependency on kvm to simplify
+    backports.
+  * build_sphinx: pass target dir as an argument to avoid the following issue
+    with sphinx 1.2 https://bitbucket.org/birkenfeld/sphinx/pull-request/193 
+    http://lists.openstack.org/pipermail/openstack-dev/2013-December/021863.html
+
+  [ Thomas Goirand ]
   * Killed the DEFAULTS_FILE feature in init scripts and template.
+  * Updated debconf template translation, with thanks to:
+    - Swedish: Martin Bagge (Closes: #734621).
+    - German: Chris Leick (Closes: #735335).  
 
- -- Thomas Goirand <zigo@debian.org>  Thu, 19 Dec 2013 17:44:13 +0800
+ -- Gonéri Le Bouder <goneri@debian.org>  Thu, 16 Jan 2014 10:21:08 +0100
 
 nova (2013.2.1-1) unstable; urgency=high
 
