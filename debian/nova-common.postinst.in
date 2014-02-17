@@ -91,7 +91,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	db_get nova/configure_db
 	if [ "$RET" = "true" ]; then
 		echo "nova-common: Now running \"nova-manage db sync\", this may take a while..."
-		su nova -c "nova-manage db sync"
+		su nova -c "nova-manage db sync" || true
 	fi
 
 	db_stop
