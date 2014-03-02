@@ -1,14 +1,14 @@
 # Danish translation nova.
-# Copyright (C) 2013 nova & nedenstående oversættere.
+# Copyright (C) 2014 nova & nedenstående oversættere.
 # This file is distributed under the same license as the nova package.
-# Joe Hansen <joedalton2@yahoo.dk>, 2012, 2013.
+# Joe Hansen <joedalton2@yahoo.dk>, 2012, 2013, 2014.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-01-18 23:08+0800\n"
-"PO-Revision-Date: 2013-08-17 23:51+0200\n"
+"POT-Creation-Date: 2014-02-08 17:20+0800\n"
+"PO-Revision-Date: 2014-02-22 23:51+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
 "Language: \n"
@@ -20,7 +20,7 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:2001
 msgid "Auth server hostname:"
-msgstr "Værtsnavn for authserver:"
+msgstr "Værtsnavn for godkendelsesserver:"
 
 #. Type: string
 #. Description
@@ -30,25 +30,25 @@ msgid ""
 "also the URL of your OpenStack Identity Service (Keystone)."
 msgstr ""
 "Angiv venligst adressen for din Novagodkendelsesserver. Typisk er dette også "
-"adresesn for din OpenStack Identity Service (Keystone)."
+"adressen for din OpenStack Identity Service (Keystone)."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:3001
 msgid "Auth server tenant name:"
-msgstr "Tenantnavn for authserver:"
+msgstr "Tenantnavn for godkendelsesserver:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:4001
 msgid "Auth server username:"
-msgstr "Brugernavn for authserver:"
+msgstr "Brugernavn for godkendelsesserver:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:5001
 msgid "Auth server password:"
-msgstr "Adgangskode for authserver:"
+msgstr "Adgangskode for godkendelsesserver:"
 
 #. Type: boolean
 #. Description
@@ -125,7 +125,7 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Hvis det er en beregningsknude, som du opstætter, så skal du kun køre "
+"Hvis det er en beregningsknude, som du opsætter, så skal du kun køre "
 "metadata-API-serveren. Hvis du kører Cinder, så skal du ikke bruge "
 "osapi_volume (du kan ikke køre osapi_volume og cinder-api på den samme "
 "server: de binder på den samme port)."
@@ -133,83 +133,96 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
-msgid "Value for my_ip:"
-msgstr "Værdi for my_ip:"
+msgid "IP address on Nova management network:"
+msgstr "IP-adresse for Nova-håndteringsnetværket:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
 msgid ""
-"Enter the IP address that will be set in the my_ip directive of nova.conf."
-msgstr "Indtast IP-adressen som bliver sat i my_ip-direktivet i nova.conf."
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:9001
-#, fuzzy
-#| msgid "Value for my_ip:"
-msgid "Value for neutron_url:"
-msgstr "Værdi for my_ip:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:9001
-msgid "Enter the URL of your Neutron server."
+"Please enter the IP address for this physical node on the private network "
+"being used for OpenStack Compute management."
 msgstr ""
+"Indtast IP-adressen, for denne fysiske knude på det private netværk, der "
+"bruges for håndtering af OpenStack Compute."
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:8001
+msgid "This value will be stored in the my_ip directive of nova.conf."
+msgstr "Denne værdi vil blive gemt i my_ip-direktivet i nova.conf."
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid "Neutron server URL:"
+msgstr "Adresse for Neutronserver:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid "Please enter the URL of the Neutron server."
+msgstr "Indtast venligst adressen for Neutronserveren."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-#, fuzzy
-#| msgid "Auth server tenant name:"
 msgid "Neutron admin tenant name:"
-msgstr "Tenantnavn for authserver:"
+msgstr "Tenantnavn for Neutronadministrator:"
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
 msgid ""
 "Nova needs to be able to communicate with Neutron through Keystone. "
 "Therefore Nova needs to know the Neutron admin tenant, username and password."
 msgstr ""
+"Nova skal kunne kommunikere med Neutron via Keystone. "
+"Derfor har Nova behov for at kende Neutrons administratortenant, brugernavn "
+"og adgangskode."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid "Enter the name of the admin tenant for Neutron."
-msgstr ""
+msgid "Please enter the name of the admin tenant for Neutron."
+msgstr "Indtast venligst navnet på administratortenanten for Neutron."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Neutron admin username:"
-msgstr ""
+msgid "Neutron administrator username:"
+msgstr "Brugernavn for Neutronadministratoren:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Enter the username for Neutron."
+msgid "Please enter the username of the Neutron administrator."
 msgstr ""
+"Indtast venligst brugernavnet for Neutronadministratoren."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Neutron admin password:"
-msgstr ""
+msgid "Neutron administrator password:"
+msgstr "Adgangskode for Neutronadministratoren:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Enter the password for the admin username of Neutron."
+msgid "Please enter the password of the Neutron administrator."
 msgstr ""
+"Indtast venligst adgangskoden for Neutronadministratoren."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:13001
-#, fuzzy
-#| msgid "Ip address of your rabbitmq host:"
 msgid "IP address of your RabbitMQ host:"
-msgstr "IP-adresse for din rabbitmq-vært:"
+msgstr "IP-adresse for din RabbitMQ-vært:"
 
 #. Type: string
 #. Description
@@ -223,50 +236,40 @@ msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
 msgstr ""
+"Denne pakke har brug for at forbinde til en central RabbitMQ-server, for at "
+"kunne fungere med andre komponenter i OpenStack."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:13001
 msgid "Please specify the IP address of that server."
-msgstr ""
+msgstr "Angiv IP-adressen for denne server."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:14001
-#, fuzzy
-#| msgid "Username to connect to XenAPI:"
 msgid "Username for connection to the RabbitMQ server:"
-msgstr "Brugernavn til at forbinde til XenAPI:"
+msgstr "Brugernavn til at forbinde til RabbitMQ-serveren:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:14001
-#, fuzzy
-#| msgid ""
-#| "Please enter the username used to connect to your XenAPI (XCP server)."
 msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
-"Indtast venligst brugernavnet brugt til at forbinde til din XenAPI XCP-"
-"server)."
+"Indtast venligst brugernavnet brugt til at forbinde til RabbitMQ-serveren."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:15001
-#, fuzzy
-#| msgid "Password to connect to XenAPI:"
 msgid "Password for connection to the RabbitMQ server:"
-msgstr "Adgangskode til at forbinde til XenAPI:"
+msgstr "Adgangskode til at forbinde til RabbitMQ-serveren:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:15001
-#, fuzzy
-#| msgid ""
-#| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
-"Indtast venligst adgangskoden brugt til at forbinde til din XenAPI (XCP-"
-"server)."
+"Indtast venligst adgangskoden brugt til at forbinde til RabbitMQ-serveren."
 
 #. Type: string
 #. Description
@@ -294,8 +297,8 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
-"Dette kan være en server der kører Citrix XenServer, CentOS Xen Cloud "
-"Platform- apparatet (XCP) installeret fra et ISO-aftryk, eller endda "
+"Dette kan være en server, der kører Citrix XenServer, CentOS Xen Cloud "
+"Platform-apparatet (XCP) installeret fra et ISO-aftryk eller endda "
 "Kronosprojektets XCP (tilgængelig i Debian og Ubuntu som pakken xcp-xapi)."
 
 #. Type: string
@@ -363,7 +366,7 @@ msgid ""
 "to connect using the Keystone auth token."
 msgstr ""
 "Bemærk at du skal bruge en op og kørende keystoneserver til at forbinde til "
-"med brug af Keystone auth-symbolet."
+"med brug af Keystone-godkendelsessymbolet."
 
 #. Type: string
 #. Description
@@ -379,13 +382,13 @@ msgid ""
 "Keystone to do the Nova service and endpoint creation."
 msgstr ""
 "Indtast IP-adressen for din keystone-server, så at nova-api kan kontakte "
-"Keystone for at udføre Novatjenesten og slutpunktsoprettelse."
+"Keystone for at udføre Novatjenesten og slutpunktsoprettelsen."
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:3001
 msgid "Keystone Auth Token:"
-msgstr "Authsymbol for keystone:"
+msgstr "Godkendelsessymbol for keystone:"
 
 #. Type: password
 #. Description
@@ -394,7 +397,7 @@ msgid ""
 "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
 "token."
 msgstr ""
-"For at konfigurere si slutpunkt i Keystone, skal nova-api bruge authsymbolet "
+"For at konfigurere sit slutpunkt i Keystone, skal nova-api bruge godkendelsessymbolet "
 "for Keystone."
 
 #. Type: string
@@ -421,7 +424,7 @@ msgid ""
 "service, so if you are installing a public cloud, this should be a public IP "
 "address."
 msgstr ""
-"Denne IP-adresse skal være tilgængelig fra klienterne, som vil brug denne "
+"Denne IP-adresse skal være tilgængelig fra klienterne, som vil bruge denne "
 "tjeneste, så hvis du installerer en offentlig sky, skal dette være en "
 "offentlig IP-adresse."
 
@@ -440,7 +443,7 @@ msgid ""
 "registering the endpoint."
 msgstr ""
 "Openstack kan bruges med tilgængelighedszoner, hvor hver region "
-"repræsenterer et sted. Indtast venligst zonen du ønsker at bruge når du "
+"repræsenterer et sted. Indtast venligst zonen du ønsker at bruge, når du "
 "registrerer slutpunktet."
 
 #. Type: select
@@ -471,23 +474,4 @@ msgstr ""
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Dette kan senere redigeres i /etc/default/nova-consoleproxy."
 
-#~ msgid "Start nova services at boot?"
-#~ msgstr "Start Novatjenester ved opstart?"
 
-#~ msgid ""
-#~ "Please choose whether you want to start Nova services when the machine is "
-#~ "booted up."
-#~ msgstr ""
-#~ "Vælg venligst hvorvidt du ønsker at starte Novatjenester når maskinen "
-#~ "startes op."
-
-#~ msgid ""
-#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
-#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
-#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
-#~ "compute-node, then enter the IP address of your proxy-node host."
-#~ msgstr ""
-#~ "Indtast IP-adressen som vil blive sat i rabbitmq_host-direktivet i nova."
-#~ "conf. Hvis du installerer openstack-proxy-node, så er standarden "
-#~ "127.0.0.1 sikkert fin. Hvis du installerer openstack-compute-node, så "
-#~ "indtast IP-adressen for din proxy-node-vært."
