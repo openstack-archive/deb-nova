@@ -1,3 +1,11 @@
+nova (2013.2.2-3) UNRELEASED; urgency=low
+
+  * Updated Debconf translation, with thanks to:
+    - French, Julien Patriarca (Closes: #740224).
+    - Danish, Joe Dalton (Closes: #739754).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 02 Mar 2014 16:56:25 +0800
+
 nova (2013.2.2-2) unstable; urgency=medium
 
   * Rebuilt using openstack-pkg-tools >= 9~.
