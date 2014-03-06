@@ -664,7 +664,8 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(rpcapi, 'terminate_instance')
 
         db.block_device_mapping_get_all_by_instance(self.context,
-                                                    inst.uuid).AndReturn([])
+                                                 inst.uuid,
+                                                 use_slave=False).AndReturn([])
         inst.save()
         self.compute_api._create_reservations(self.context,
                                               inst, inst.instance_type_id,
@@ -768,7 +769,7 @@ class _ComputeAPIUnitTestMixIn(object):
         timeutils.set_time_override(delete_time)
 
         db.block_device_mapping_get_all_by_instance(
-            self.context, inst.uuid).AndReturn([])
+            self.context, inst.uuid, use_slave=False).AndReturn([])
         inst.save().AndRaise(test.TestingException)
 
         self.mox.ReplayAll()
@@ -1522,7 +1523,7 @@ class _ComputeAPIUnitTestMixIn(object):
             'is_public': False
         }
 
-        def fake_get_all_by_instance(context, instance):
+        def fake_get_all_by_instance(context, instance, use_slave=False):
             return copy.deepcopy(instance_bdms)
 
         def fake_image_create(context, image_meta, data):
