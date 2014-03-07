@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -19,10 +17,11 @@ import functools
 import itertools
 import os
 import re
-import urlparse
 
 from oslo.config import cfg
+import six.moves.urllib.parse as urlparse
 import webob
+from webob import exc
 
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
@@ -37,7 +36,7 @@ from nova import quota
 osapi_opts = [
     cfg.IntOpt('osapi_max_limit',
                default=1000,
-               help='the maximum number of items returned in a single '
+               help='The maximum number of items returned in a single '
                     'response from a collection resource'),
     cfg.StrOpt('osapi_compute_link_prefix',
                help='Base URL that will be presented to users in links '
@@ -477,8 +476,7 @@ class ViewBuilder(object):
     """Model API responses as dictionaries."""
 
     def _get_project_id(self, request):
-        """
-        Get project id from request url if present or empty string
+        """Get project id from request url if present or empty string
         otherwise
         """
         project_id = request.environ["nova.context"].project_id
@@ -564,3 +562,14 @@ class ViewBuilder(object):
     def _update_compute_link_prefix(self, orig_url):
         return self._update_link_prefix(orig_url,
                                         CONF.osapi_compute_link_prefix)
+
+
+def get_instance(compute_api, context, instance_id, want_objects=False,
+                 expected_attrs=None):
+    """Fetch an instance from the compute API, handling error checking."""
+    try:
+        return compute_api.get(context, instance_id,
+                               want_objects=want_objects,
+                               expected_attrs=expected_attrs)
+    except exception.InstanceNotFound as e:
+        raise exc.HTTPNotFound(explanation=e.format_message())

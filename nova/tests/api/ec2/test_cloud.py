@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -51,11 +49,13 @@ from nova.objects import instance as instance_obj
 from nova.objects import instance_info_cache as instance_info_cache_obj
 from nova.objects import security_group as security_group_obj
 from nova.openstack.common import log as logging
+from nova.openstack.common import policy as common_policy
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.api.openstack.compute.contrib import (
     test_neutron_security_groups as test_neutron)
 from nova.tests import cast_as_call
+from nova.tests import fake_block_device
 from nova.tests import fake_network
 from nova.tests import fake_utils
 from nova.tests.image import fake
@@ -116,6 +116,7 @@ def get_instances_with_cached_ips(orig_func, get_floating,
     if kwargs.get('want_objects', False):
         info_cache = instance_info_cache_obj.InstanceInfoCache()
         info_cache.network_info = get_fake_cache(get_floating)
+        info_cache.obj_reset_changes()
     else:
         info_cache = {'network_info': get_fake_cache(get_floating)}
 
@@ -449,7 +450,7 @@ class CloudTestCase(test.TestCase):
 
     def test_security_group_quota_limit(self):
         self.flags(quota_security_groups=10)
-        for i in range(1, CONF.quota_security_groups + 1):
+        for i in range(1, CONF.quota_security_groups):
             name = 'test name %i' % i
             descript = 'test description %i' % i
             create = self.cloud.create_security_group
@@ -1861,6 +1862,70 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(instance['instanceState']['name'], 'running')
         self.assertEqual(instance['instanceType'], 'm1.small')
 
+    def test_run_instances_invalid_maxcount(self):
+        kwargs = {'image_id': 'ami-00000001',
+                  'instance_type': CONF.default_flavor,
+                  'max_count': 0}
+        run_instances = self.cloud.run_instances
+
+        def fake_show(self, context, id):
+            return {'id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'name': 'fake_name',
+                    'container_format': 'ami',
+                    'status': 'active',
+                    'properties': {
+                    'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'ramdisk_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'type': 'machine'},
+                    'status': 'active'}
+        self.stubs.UnsetAll()
+        self.stubs.Set(fake._FakeImageService, 'show', fake_show)
+        self.assertRaises(exception.InvalidInput, run_instances,
+                          self.context, **kwargs)
+
+    def test_run_instances_invalid_mincount(self):
+        kwargs = {'image_id': 'ami-00000001',
+                  'instance_type': CONF.default_flavor,
+                  'min_count': 0}
+        run_instances = self.cloud.run_instances
+
+        def fake_show(self, context, id):
+            return {'id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'name': 'fake_name',
+                    'container_format': 'ami',
+                    'status': 'active',
+                    'properties': {
+                    'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'ramdisk_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'type': 'machine'},
+                    'status': 'active'}
+        self.stubs.UnsetAll()
+        self.stubs.Set(fake._FakeImageService, 'show', fake_show)
+        self.assertRaises(exception.InvalidInput, run_instances,
+                          self.context, **kwargs)
+
+    def test_run_instances_invalid_count(self):
+        kwargs = {'image_id': 'ami-00000001',
+                  'instance_type': CONF.default_flavor,
+                  'max_count': 1,
+                  'min_count': 2}
+        run_instances = self.cloud.run_instances
+
+        def fake_show(self, context, id):
+            return {'id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'name': 'fake_name',
+                    'container_format': 'ami',
+                    'status': 'active',
+                    'properties': {
+                    'kernel_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'ramdisk_id': 'cedef40a-ed67-4d10-800e-17455edce175',
+                    'type': 'machine'},
+                    'status': 'active'}
+        self.stubs.UnsetAll()
+        self.stubs.Set(fake._FakeImageService, 'show', fake_show)
+        self.assertRaises(exception.InvalidInput, run_instances,
+                          self.context, **kwargs)
+
     def test_run_instances_availability_zone(self):
         kwargs = {'image_id': 'ami-00000001',
                   'instance_type': CONF.default_flavor,
@@ -2104,6 +2169,22 @@ class CloudTestCase(test.TestCase):
         self.assertEqual(result, expected)
         self._restart_compute_service()
 
+    def test_start_instances_policy_failed(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': CONF.default_flavor,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+        rules = {
+            "compute:start":
+                common_policy.parse_rule("project_id:non_fake"),
+        }
+        common_policy.set_rules(common_policy.Rules(rules))
+        exc = self.assertRaises(exception.PolicyNotAuthorized,
+                                self.cloud.start_instances,
+                                self.context, [instance_id])
+        self.assertIn("compute:start", exc.format_message())
+        self._restart_compute_service()
+
     def test_stop_instances(self):
         kwargs = {'image_id': 'ami-1',
                   'instance_type': CONF.default_flavor,
@@ -2121,6 +2202,22 @@ class CloudTestCase(test.TestCase):
                                            'name': 'terminated'}}]}
         result = self.cloud.terminate_instances(self.context, [instance_id])
         self.assertEqual(result, expected)
+        self._restart_compute_service()
+
+    def test_stop_instances_policy_failed(self):
+        kwargs = {'image_id': 'ami-1',
+                  'instance_type': CONF.default_flavor,
+                  'max_count': 1, }
+        instance_id = self._run_instance(**kwargs)
+        rules = {
+            "compute:stop":
+                common_policy.parse_rule("project_id:non_fake")
+        }
+        common_policy.set_rules(common_policy.Rules(rules))
+        exc = self.assertRaises(exception.PolicyNotAuthorized,
+                                self.cloud.stop_instances,
+                                self.context, [instance_id])
+        self.assertIn("compute:stop", exc.format_message())
         self._restart_compute_service()
 
     def test_terminate_instances(self):
@@ -2283,18 +2380,17 @@ class CloudTestCase(test.TestCase):
         self.stubs.Set(fake._FakeImageService, 'show', fake_show)
 
         def fake_block_device_mapping_get_all_by_instance(context, inst_id):
-            return [dict(id=1,
-                         source_type='snapshot',
-                         destination_type='volume',
-                         instance_uuid=inst_id,
-                         snapshot_id=snapshots[0],
-                         volume_id=volumes[0],
-                         volume_size=1,
-                         device_name='sda1',
-                         delete_on_termination=False,
-                         no_device=None,
-                         boot_index=0,
-                         connection_info='{"foo":"bar"}')]
+            return [fake_block_device.FakeDbBlockDeviceDict(
+                        {'volume_id': volumes[0],
+                         'snapshot_id': snapshots[0],
+                         'source_type': 'snapshot',
+                         'destination_type': 'volume',
+                         'volume_size': 1,
+                         'device_name': 'sda1',
+                         'boot_index': 0,
+                         'delete_on_termination': False,
+                         'connection_info': '{"foo":"bar"}',
+                         'no_device': None})]
 
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        fake_block_device_mapping_get_all_by_instance)
@@ -2343,8 +2439,7 @@ class CloudTestCase(test.TestCase):
         self._do_test_create_image(False)
 
     def test_create_image_instance_store(self):
-        """
-        Ensure CreateImage fails as expected for an instance-store-backed
+        """Ensure CreateImage fails as expected for an instance-store-backed
         instance
         """
         # enforce periodic tasks run in short time to avoid wait for 60s.
@@ -2359,14 +2454,15 @@ class CloudTestCase(test.TestCase):
         ec2_instance_id = self._run_instance(**kwargs)
 
         def fake_block_device_mapping_get_all_by_instance(context, inst_id):
-            return [dict(snapshot_id=snapshots[0],
-                         volume_id=volumes[0],
-                         source_type='snapshot',
-                         destination_type='volume',
-                         volume_size=1,
-                         device_name='vda',
-                         delete_on_termination=False,
-                         no_device=None)]
+            return [fake_block_device.FakeDbBlockDeviceDict(
+                        {'volume_id': volumes[0],
+                         'snapshot_id': snapshots[0],
+                         'source_type': 'snapshot',
+                         'destination_type': 'volume',
+                         'volume_size': 1,
+                         'device_name': 'vda',
+                         'delete_on_termination': False,
+                         'no_device': None})]
 
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        fake_block_device_mapping_get_all_by_instance)
@@ -2396,6 +2492,7 @@ class CloudTestCase(test.TestCase):
                     {'volume_id': None,
                      'snapshot_id': None,
                      'no_device': True,
+                     'source_type': 'blank',
                      'delete_on_termination': None,
                      'device_name': None},
                     {'volume_id': None,
@@ -2854,6 +2951,7 @@ class CloudTestCase(test.TestCase):
 
 class CloudTestCaseNeutronProxy(test.TestCase):
     def setUp(self):
+        super(CloudTestCaseNeutronProxy, self).setUp()
         cfg.CONF.set_override('security_group_api', 'neutron')
         self.cloud = cloud.CloudController()
         self.original_client = neutronv2.get_client
@@ -2863,7 +2961,6 @@ class CloudTestCaseNeutronProxy(test.TestCase):
         self.context = context.RequestContext(self.user_id,
                                               self.project_id,
                                               is_admin=True)
-        super(CloudTestCaseNeutronProxy, self).setUp()
 
     def tearDown(self):
         neutronv2.get_client = self.original_client

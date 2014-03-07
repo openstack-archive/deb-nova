@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 Midokura Japan K.K.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -47,10 +45,12 @@ class ServerStartStopActionController(wsgi.Controller):
         """Start an instance."""
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
+        extensions.check_compute_policy(context, 'start', instance)
         LOG.debug(_('start instance'), instance=instance)
         try:
             self.compute_api.start(context, instance)
-        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
+        except (exception.InstanceNotReady, exception.InstanceIsLocked,
+                exception.InstanceInvalidState) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 
@@ -59,10 +59,12 @@ class ServerStartStopActionController(wsgi.Controller):
         """Stop an instance."""
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
+        extensions.check_compute_policy(context, 'stop', instance)
         LOG.debug(_('stop instance'), instance=instance)
         try:
             self.compute_api.stop(context, instance)
-        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
+        except (exception.InstanceNotReady, exception.InstanceIsLocked,
+                exception.InstanceInvalidState) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
         return webob.Response(status_int=202)
 

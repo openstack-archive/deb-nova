@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright (c) 2013 dotCloud, Inc.
 # All Rights Reserved.
 #
@@ -25,11 +23,12 @@ import nova.virt.docker.client
 class MockClient(object):
     def __init__(self, endpoint=None):
         self._containers = {}
+        self.name = None
 
     def _fake_id(self):
         return uuid.uuid4().hex + uuid.uuid4().hex
 
-    def is_daemon_running(self):
+    def _is_daemon_running(self):
         return True
 
     @nova.virt.docker.client.filter_data
@@ -46,7 +45,8 @@ class MockClient(object):
             })
         return containers
 
-    def create_container(self, args):
+    def create_container(self, args, name):
+        self.name = name
         data = {
             'Hostname': '',
             'User': '',
@@ -123,9 +123,20 @@ class MockClient(object):
         self._containers[container_id]['running'] = False
         return True
 
+    def kill_container(self, container_id):
+        if container_id not in self._containers:
+            return False
+        self._containers[container_id]['running'] = False
+        return True
+
     def destroy_container(self, container_id):
         if container_id not in self._containers:
             return False
+
+        # Docker doesn't allow to destroy a running container.
+        if self._containers[container_id]['running']:
+            return False
+
         del self._containers[container_id]
         return True
 

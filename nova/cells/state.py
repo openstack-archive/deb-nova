@@ -31,12 +31,15 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
+from nova.openstack.common import units
+from nova import rpc
 from nova import utils
 
 cell_state_manager_opts = [
         cfg.IntOpt('db_check_interval',
                 default=60,
-                help='Seconds between getting fresh cell info from db.'),
+                help='Interval, in seconds, for getting fresh cell '
+                   'information from the database.'),
         cfg.StrOpt('cells_config',
                    help='Configuration file from which to read cells '
                    'configuration.  If given, overrides reading cells '
@@ -97,10 +100,10 @@ class CellState(object):
             for field in db_fields_to_return:
                 cell_info[field] = self.db_info[field]
 
-            url_info = rpc_driver.parse_transport_url(
-                self.db_info['transport_url'])
-            for field, canonical in url_fields_to_return.items():
-                cell_info[canonical] = url_info[field]
+            url = rpc.get_transport_url(self.db_info['transport_url'])
+            if url.hosts:
+                for field, canonical in url_fields_to_return.items():
+                    cell_info[canonical] = getattr(url.hosts[0], field)
         return cell_info
 
     def send_message(self, message):
@@ -218,9 +221,10 @@ class CellStateManager(base.Base):
         {'total_mb': <total_memory_free_in_the_cell>,
          'units_by_mb: <units_dictionary>}
 
-        <units_dictionary> contains the number of units that we can
-        build for every instance_type that we have.  This number is
-        computed by looking at room available on every compute_node.
+        <units_dictionary> contains the number of units that we can build for
+        every distinct memory or disk requirement that we have based on
+        instance types.  This number is computed by looking at room available
+        on every compute_node.
 
         Take the following instance_types as an example:
 
@@ -280,26 +284,26 @@ class CellStateManager(base.Base):
             else:
                 return 0
 
-        def _update_from_values(values, instance_type):
-            memory_mb = instance_type['memory_mb']
-            disk_mb = (instance_type['root_gb'] +
-                    instance_type['ephemeral_gb']) * 1024
-            ram_mb_free_units.setdefault(str(memory_mb), 0)
-            disk_mb_free_units.setdefault(str(disk_mb), 0)
-            ram_free_units = _free_units(compute_values['total_ram_mb'],
-                    compute_values['free_ram_mb'], memory_mb)
-            disk_free_units = _free_units(compute_values['total_disk_mb'],
-                    compute_values['free_disk_mb'], disk_mb)
-            ram_mb_free_units[str(memory_mb)] += ram_free_units
-            disk_mb_free_units[str(disk_mb)] += disk_free_units
-
         instance_types = self.db.flavor_get_all(ctxt)
+        memory_mb_slots = frozenset(
+                [inst_type['memory_mb'] for inst_type in instance_types])
+        disk_mb_slots = frozenset(
+                [(inst_type['root_gb'] + inst_type['ephemeral_gb']) * units.Ki
+                    for inst_type in instance_types])
 
         for compute_values in compute_hosts.values():
             total_ram_mb_free += compute_values['free_ram_mb']
             total_disk_mb_free += compute_values['free_disk_mb']
-            for instance_type in instance_types:
-                _update_from_values(compute_values, instance_type)
+            for memory_mb_slot in memory_mb_slots:
+                ram_mb_free_units.setdefault(str(memory_mb_slot), 0)
+                free_units = _free_units(compute_values['total_ram_mb'],
+                        compute_values['free_ram_mb'], memory_mb_slot)
+                ram_mb_free_units[str(memory_mb_slot)] += free_units
+            for disk_mb_slot in disk_mb_slots:
+                disk_mb_free_units.setdefault(str(disk_mb_slot), 0)
+                free_units = _free_units(compute_values['total_disk_mb'],
+                        compute_values['free_disk_mb'], disk_mb_slot)
+                disk_mb_free_units[str(disk_mb_slot)] += free_units
 
         capacities = {'ram_free': {'total_mb': total_ram_mb_free,
                                    'units_by_mb': ram_mb_free_units},
@@ -417,8 +421,7 @@ class CellStateManager(base.Base):
 class CellStateManagerDB(CellStateManager):
     @utils.synchronized('cell-db-sync')
     def _cell_data_sync(self, force=False):
-        """
-        Update cell status for all cells from the backing data store
+        """Update cell status for all cells from the backing data store
         when necessary.
 
         :param force: If True, cell status will be updated regardless
@@ -452,8 +455,7 @@ class CellStateManagerFile(CellStateManager):
         super(CellStateManagerFile, self).__init__(cell_state_cls)
 
     def _cell_data_sync(self, force=False):
-        """
-        Update cell status for all cells from the backing data store
+        """Update cell status for all cells from the backing data store
         when necessary.
 
         :param force: If True, cell status will be updated regardless

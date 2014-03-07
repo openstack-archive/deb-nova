@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 #
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 import time
 
@@ -24,7 +23,6 @@ import six
 
 from nova.compute import flavors
 from nova import conductor
-from nova import context
 from nova.db import base
 from nova import exception
 from nova.network import api as network_api
@@ -44,25 +42,31 @@ neutron_opts = [
                help='URL for connecting to neutron'),
     cfg.IntOpt('neutron_url_timeout',
                default=30,
-               help='timeout value for connecting to neutron in seconds'),
+               help='Timeout value for connecting to neutron in seconds'),
     cfg.StrOpt('neutron_admin_username',
-               help='username for connecting to neutron in admin context'),
+               help='Username for connecting to neutron in admin context'),
     cfg.StrOpt('neutron_admin_password',
-               help='password for connecting to neutron in admin context',
+               help='Password for connecting to neutron in admin context',
                secret=True),
+    cfg.StrOpt('neutron_admin_tenant_id',
+               help='Tenant id for connecting to neutron in admin context'),
     cfg.StrOpt('neutron_admin_tenant_name',
-               help='tenant name for connecting to neutron in admin context'),
+               help='DEPRECATED: Tenant name for connecting to neutron in '
+                    'admin context.  This option is deprecated.  Please use '
+                    'neutron_admin_tenant_id instead. Note that with Keystone '
+                    'V3 tenant names may not be unique.'),
     cfg.StrOpt('neutron_region_name',
-               help='region name for connecting to neutron in admin context'),
+               help='Region name for connecting to neutron in admin context'),
     cfg.StrOpt('neutron_admin_auth_url',
                default='http://localhost:5000/v2.0',
-               help='auth url for connecting to neutron in admin context'),
+               help='Authorization URL for connecting to neutron in admin '
+               'context'),
     cfg.BoolOpt('neutron_api_insecure',
                 default=False,
-                help='if set, ignore any SSL validation issues'),
+                help='If set, ignore any SSL validation issues'),
     cfg.StrOpt('neutron_auth_strategy',
                default='keystone',
-               help='auth strategy for connecting to '
+               help='Authorization strategy for connecting to '
                     'neutron in admin context'),
     # TODO(berrange) temporary hack until Neutron can pass over the
     # name of the OVS bridge it is configured with
@@ -74,7 +78,7 @@ neutron_opts = [
                 help='Number of seconds before querying neutron for'
                      ' extensions'),
     cfg.StrOpt('neutron_ca_certificates_file',
-                help='Location of ca certificates file to use for '
+                help='Location of CA certificates file to use for '
                      'neutron client requests.'),
    ]
 
@@ -172,12 +176,13 @@ class API(base.Base):
                       instance=instance)
             return port_id
         except neutron_client_exc.NeutronClientException as e:
-            LOG.exception(_('Neutron error creating port on network %s') %
-                          network_id, instance=instance)
             # NOTE(mriedem): OverQuota in neutron is a 409
             if e.status_code == 409:
+                LOG.warning(_('Neutron error: quota exceeded'))
                 raise exception.PortLimitExceeded()
-            raise
+            with excutils.save_and_reraise_exception():
+                LOG.exception(_('Neutron error creating port on network %s'),
+                              network_id, instance=instance)
 
     def allocate_for_instance(self, context, instance, **kwargs):
         """Allocate network resources for the instance.
@@ -264,10 +269,11 @@ class API(base.Base):
             for user_security_group in user_security_groups:
                 if user_security_group['name'] == security_group:
                     if name_match:
-                        msg = (_("Multiple security groups found matching"
-                                 " '%s'. Use an ID to be more specific."),
-                                 security_group)
-                        raise exception.NoUniqueMatch(msg)
+                        raise exception.NoUniqueMatch(
+                            _("Multiple security groups found matching"
+                              " '%s'. Use an ID to be more specific.") %
+                               security_group)
+
                     name_match = user_security_group['id']
                 if user_security_group['id'] == security_group:
                     uuid_match = user_security_group['id']
@@ -302,11 +308,11 @@ class API(base.Base):
                                       'device_owner': zone}}
             try:
                 port = ports.get(network_id)
-                self._populate_neutron_extension_values(instance,
+                self._populate_neutron_extension_values(context, instance,
                                                         port_req_body)
                 # Requires admin creds to set port bindings
                 port_client = (neutron if not
-                               self._has_port_binding_extension() else
+                               self._has_port_binding_extension(context) else
                                neutronv2.get_client(context, admin=True))
                 if port:
                     port_client.update_port(port['id'], port_req_body)
@@ -322,7 +328,7 @@ class API(base.Base):
                         try:
                             port_req_body = {'port': {'device_id': None}}
                             # Requires admin creds to set port bindings
-                            if self._has_port_binding_extension():
+                            if self._has_port_binding_extension(context):
                                 port_req_body['port']['binding:host_id'] = None
                                 port_client = neutronv2.get_client(
                                     context, admin=True)
@@ -350,35 +356,35 @@ class API(base.Base):
                                           if port['id'] in created_port_ids +
                                                            touched_port_ids])
 
-    def _refresh_neutron_extensions_cache(self):
+    def _refresh_neutron_extensions_cache(self, context):
         """Refresh the neutron extensions cache when necessary."""
         if (not self.last_neutron_extension_sync or
             ((time.time() - self.last_neutron_extension_sync)
              >= CONF.neutron_extension_sync_interval)):
-            neutron = neutronv2.get_client(context.get_admin_context(),
-                                           admin=True)
+            neutron = neutronv2.get_client(context)
             extensions_list = neutron.list_extensions()['extensions']
             self.last_neutron_extension_sync = time.time()
             self.extensions.clear()
             self.extensions = dict((ext['name'], ext)
                                    for ext in extensions_list)
 
-    def _has_port_binding_extension(self, refresh_cache=False):
+    def _has_port_binding_extension(self, context, refresh_cache=False):
         if refresh_cache:
-            self._refresh_neutron_extensions_cache()
+            self._refresh_neutron_extensions_cache(context)
         return constants.PORTBINDING_EXT in self.extensions
 
-    def _populate_neutron_extension_values(self, instance, port_req_body):
+    def _populate_neutron_extension_values(self, context, instance,
+                                           port_req_body):
         """Populate neutron extension values for the instance.
 
         If the extension contains nvp-qos then get the rxtx_factor.
         """
-        self._refresh_neutron_extensions_cache()
+        self._refresh_neutron_extensions_cache(context)
         if 'nvp-qos' in self.extensions:
             flavor = flavors.extract_flavor(instance)
             rxtx_factor = flavor.get('rxtx_factor')
             port_req_body['port']['rxtx_factor'] = rxtx_factor
-        if self._has_port_binding_extension():
+        if self._has_port_binding_extension(context):
             port_req_body['port']['binding:host_id'] = instance.get('host')
 
     def deallocate_for_instance(self, context, instance, **kwargs):
@@ -386,7 +392,8 @@ class API(base.Base):
         LOG.debug(_('deallocate_for_instance() for %s'),
                   instance['display_name'])
         search_opts = {'device_id': instance['uuid']}
-        data = neutronv2.get_client(context).list_ports(**search_opts)
+        neutron = neutronv2.get_client(context)
+        data = neutron.list_ports(**search_opts)
         ports = [port['id'] for port in data.get('ports', [])]
 
         requested_networks = kwargs.get('requested_networks') or {}
@@ -395,10 +402,14 @@ class API(base.Base):
 
         for port in ports:
             try:
-                neutronv2.get_client(context).delete_port(port)
-            except Exception:
-                LOG.exception(_("Failed to delete neutron port %(portid)s")
-                              % {'portid': port})
+                neutron.delete_port(port)
+            except neutronv2.exceptions.NeutronClientException as e:
+                if e.status_code == 404:
+                    LOG.warning(_("Port %s does not exist"), port)
+                else:
+                    with excutils.save_and_reraise_exception():
+                        LOG.exception(_("Failed to delete neutron port %s"),
+                                      port)
 
     def allocate_port_for_instance(self, context, instance, port_id,
                                    network_id=None, requested_ip=None):
@@ -545,7 +556,9 @@ class API(base.Base):
                         if e.status_code == 404:
                             port = None
                         else:
-                            raise
+                            with excutils.save_and_reraise_exception():
+                                LOG.exception(_("Failed to access port %s"),
+                                              port_id)
                     if not port:
                         raise exception.PortNotFound(port_id=port_id)
                     if port.get('device_id', None):
@@ -734,7 +747,8 @@ class API(base.Base):
             if e.status_code == 404:
                 raise exception.FloatingIpNotFound(id=id)
             else:
-                raise
+                with excutils.save_and_reraise_exception():
+                    LOG.exception(_('Unable to access floating IP %s'), id)
         pool_dict = self._setup_net_dict(client,
                                          fip['floating_network_id'])
         port_dict = self._setup_port_dict(client, fip['port_id'])
@@ -861,7 +875,10 @@ class API(base.Base):
         except neutronv2.exceptions.NeutronClientException as e:
             if e.status_code == 404:
                 return []
-            raise
+            with excutils.save_and_reraise_exception():
+                LOG.exception(_('Unable to access floating IP %(fixed_ip)s '
+                                'for port %(port_id)'),
+                              {'fixed_ip': fixed_ip, 'port_id': port})
         return data['floatingips']
 
     def release_floating_ip(self, context, address,
@@ -904,7 +921,7 @@ class API(base.Base):
 
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
-        if not self._has_port_binding_extension(refresh_cache=True):
+        if not self._has_port_binding_extension(context, refresh_cache=True):
             return
         neutron = neutronv2.get_client(context, admin=True)
         search_opts = {'device_id': instance['uuid'],
@@ -946,12 +963,18 @@ class API(base.Base):
         return subnets
 
     def _nw_info_build_network(self, port, networks, subnets):
-        # NOTE(danms): This loop can't fail to find a network since we
-        # filtered ports to only the ones matching networks in our parent
+        network_name = None
         for net in networks:
             if port['network_id'] == net['id']:
                 network_name = net['name']
+                tenant_id = net['tenant_id']
                 break
+        else:
+            tenant_id = port['tenant_id']
+            LOG.warning(_("Network %(id)s not matched with the tenants "
+                          "network! The ports tenant %(tenant_id)s will be "
+                          "used."),
+                        {'id': port['network_id'], 'tenant_id': tenant_id})
 
         bridge = None
         ovs_interfaceid = None
@@ -975,7 +998,7 @@ class API(base.Base):
             bridge=bridge,
             injected=CONF.flat_injected,
             label=network_name,
-            tenant_id=net['tenant_id']
+            tenant_id=tenant_id
             )
         network['subnets'] = subnets
         port_profile = port.get('binding:profile')
@@ -1008,7 +1031,8 @@ class API(base.Base):
         if networks is None:
             net_ids = [iface['network']['id'] for iface in ifaces]
             networks = self._get_available_networks(context,
-                                                    instance['project_id'])
+                                                    instance['project_id'],
+                                                    net_ids)
 
         # ensure ports are in preferred network order, and filter out
         # those not attached to one of the provided list of networks

@@ -29,7 +29,6 @@ from nova.compute import flavors
 from nova import db
 from nova.network import manager
 from nova.openstack.common import jsonutils
-from nova.openstack.common import rpc
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import fake_instance
@@ -136,10 +135,8 @@ class ServersControllerCreateTest(test.TestCase):
                        fake_method)
         self.stubs.Set(db, 'instance_get', instance_get)
         self.stubs.Set(db, 'instance_update', instance_update)
-        self.stubs.Set(rpc, 'cast', fake_method)
         self.stubs.Set(db, 'instance_update_and_get_original',
                        server_update)
-        self.stubs.Set(rpc, 'queue_get_for', queue_get_for)
         self.stubs.Set(manager.VlanManager, 'allocate_fixed_ip',
                        fake_method)
 
@@ -156,9 +153,9 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         if override_controller:
-            server = override_controller.create(req, body).obj['server']
+            server = override_controller.create(req, body=body).obj['server']
         else:
-            server = self.controller.create(req, body).obj['server']
+            server = self.controller.create(req, body=body).obj['server']
 
     def test_create_instance_with_user_data_disabled(self):
         params = {user_data.ATTRIBUTE_NAME: base64.b64encode('fake')}
@@ -205,7 +202,7 @@ class ServersControllerCreateTest(test.TestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
-        res = self.controller.create(req, body).obj
+        res = self.controller.create(req, body=body).obj
 
         server = res['server']
         self.assertEqual(FAKE_UUID, server['id'])
@@ -232,34 +229,4 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller.create, req, body)
-
-
-class TestServerCreateRequestXMLDeserializer(test.TestCase):
-
-    def setUp(self):
-        super(TestServerCreateRequestXMLDeserializer, self).setUp()
-        ext_info = plugins.LoadedExtensionInfo()
-        controller = servers.ServersController(extension_info=ext_info)
-        self.deserializer = servers.CreateDeserializer(controller)
-
-    def test_request_with_user_data(self):
-        serial_request = """
-    <server xmlns="http://docs.openstack.org/compute/api/v3"
-        xmlns:%(alias)s="%(namespace)s"
-        name="user_data_test"
-        image_ref="1"
-        flavor_ref="1"
-        %(alias)s:user_data="IyEvYmluL2Jhc2gKL2Jpbi9"/>""" % {
-            'alias': user_data.ALIAS,
-            'namespace': user_data.UserData.namespace}
-        request = self.deserializer.deserialize(serial_request)
-        expected = {
-            "server": {
-                "name": "user_data_test",
-                "image_ref": "1",
-                "flavor_ref": "1",
-                user_data.ATTRIBUTE_NAME: "IyEvYmluL2Jhc2gKL2Jpbi9"
-            },
-        }
-        self.assertEqual(request['body'], expected)
+                          self.controller.create, req, body=body)

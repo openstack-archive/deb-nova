@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2011 Justin Santa Barbara
@@ -24,6 +22,7 @@ import datetime
 import functools
 import hashlib
 import inspect
+import multiprocessing
 import os
 import pyclbr
 import random
@@ -38,6 +37,7 @@ from xml.sax import saxutils
 import eventlet
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
 import six
 
 from nova import exception
@@ -48,7 +48,6 @@ from nova.openstack.common import importutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
-from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 
 notify_decorator = 'nova.notifications.notify_decorator'
@@ -70,7 +69,7 @@ utils_opts = [
                help='Length of generated instance admin passwords'),
     cfg.StrOpt('instance_usage_audit_period',
                default='month',
-               help='time period to generate instance usages for.  '
+               help='Time period to generate instance usages for.  '
                     'Time period must be hour, day, month or year'),
     cfg.StrOpt('rootwrap_config',
                default="/etc/nova/rootwrap.conf",
@@ -95,8 +94,7 @@ TIME_UNITS = {
 }
 
 
-_IS_NEUTRON_ATTEMPTED = False
-_IS_NEUTRON = False
+_IS_NEUTRON = None
 
 synchronized = lockutils.synchronized_with_prefix('nova-')
 
@@ -460,8 +458,7 @@ def check_isinstance(obj, cls):
 
 
 def parse_server_string(server_str):
-    """
-    Parses the given server_string and returns a list of host and port.
+    """Parses the given server_string and returns a list of host and port.
     If it's not a combination of host part and port, the port element
     is a null string. If the input is invalid expression, return a null
     list.
@@ -569,7 +566,7 @@ def get_ip_version(network):
 
 
 def monkey_patch():
-    """If the Flags.monkey_patch set as True,
+    """If the CONF.monkey_patch set as True,
     this function patches a decorator
     for all functions in specified modules.
     You can set decorators for each modules
@@ -928,8 +925,8 @@ class ExceptionHelper(object):
         def wrapper(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
-            except rpc_common.ClientException as e:
-                raise (e._exc_info[1], None, e._exc_info[2])
+            except messaging.ExpectedException as e:
+                raise (e.exc_info[1], None, e.exc_info[2])
         return wrapper
 
 
@@ -991,8 +988,7 @@ def spawn_n(func, *args, **kwargs):
 
 
 def is_none_string(val):
-    """
-    Check if a string represents a None value.
+    """Check if a string represents a None value.
     """
     if not isinstance(val, six.string_types):
         return False
@@ -1002,9 +998,9 @@ def is_none_string(val):
 
 def convert_version_to_int(version):
     try:
-        if type(version) == str:
+        if isinstance(version, six.string_types):
             version = convert_version_to_tuple(version)
-        if type(version) == tuple:
+        if isinstance(version, tuple):
             return reduce(lambda x, y: (x * 1000) + y, version)
     except Exception:
         raise exception.NovaException(message="Hypervisor version invalid.")
@@ -1026,10 +1022,9 @@ def convert_version_to_tuple(version_str):
 
 
 def is_neutron():
-    global _IS_NEUTRON_ATTEMPTED
     global _IS_NEUTRON
 
-    if _IS_NEUTRON_ATTEMPTED:
+    if _IS_NEUTRON is not None:
         return _IS_NEUTRON
 
     try:
@@ -1037,7 +1032,6 @@ def is_neutron():
         cls_name = CONF.network_api_class
         if cls_name == 'nova.network.quantumv2.api.API':
             cls_name = 'nova.network.neutronv2.api.API'
-        _IS_NEUTRON_ATTEMPTED = True
 
         from nova.network.neutronv2 import api as neutron_api
         _IS_NEUTRON = issubclass(importutils.import_class(cls_name),
@@ -1049,11 +1043,8 @@ def is_neutron():
 
 
 def reset_is_neutron():
-    global _IS_NEUTRON_ATTEMPTED
     global _IS_NEUTRON
-
-    _IS_NEUTRON_ATTEMPTED = False
-    _IS_NEUTRON = False
+    _IS_NEUTRON = None
 
 
 def is_auto_disk_config_disabled(auto_disk_config_raw):
@@ -1133,3 +1124,10 @@ def get_image_from_system_metadata(system_meta):
 def get_hash_str(base_str):
     """returns string that represents hash of base_str (in hex format)."""
     return hashlib.md5(base_str).hexdigest()
+
+
+def cpu_count():
+    try:
+        return multiprocessing.cpu_count()
+    except NotImplementedError:
+        return 1

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -30,6 +28,7 @@ from oslo.config import cfg
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
 from nova.api.metadata import password
+from nova.api.openstack import extensions
 from nova.api import validator
 from nova import availability_zones
 from nova import block_device
@@ -56,23 +55,23 @@ from nova import volume
 ec2_opts = [
     cfg.StrOpt('ec2_host',
                default='$my_ip',
-               help='the ip of the ec2 api server'),
+               help='The IP address of the EC2 API server'),
     cfg.StrOpt('ec2_dmz_host',
                default='$my_ip',
-               help='the internal ip of the ec2 api server'),
+               help='The internal IP address of the EC2 API server'),
     cfg.IntOpt('ec2_port',
                default=8773,
-               help='the port of the ec2 api server'),
+               help='The port of the EC2 API server'),
     cfg.StrOpt('ec2_scheme',
                default='http',
-               help='the protocol to use when connecting to the ec2 api '
+               help='The protocol to use when connecting to the EC2 API '
                     'server (http, https)'),
     cfg.StrOpt('ec2_path',
                default='/services/Cloud',
-               help='the path prefix used to call the ec2 api server'),
+               help='The path prefix used to call the ec2 API server'),
     cfg.ListOpt('region_list',
                 default=[],
-                help='list of region=fqdn pairs separated by commas'),
+                help='List of region=fqdn pairs separated by commas'),
 ]
 
 CONF = cfg.CONF
@@ -698,7 +697,7 @@ class CloudController(object):
 
     def create_security_group(self, context, group_name, group_description):
         if isinstance(group_name, unicode):
-            group_name = group_name.encode('utf-8')
+            group_name = utils.utf8(group_name)
         if CONF.ec2_strict_validation:
             # EC2 specification gives constraints for name and description:
             # Accepts alphanumeric characters, spaces, dashes, and underscores
@@ -861,7 +860,8 @@ class CloudController(object):
         validate_ec2_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, instance_id)
-        instance = self.compute_api.get(context, instance_uuid)
+        instance = self.compute_api.get(context, instance_uuid,
+                                        want_objects=True)
         LOG.audit(_('Attach volume %(volume_id)s to instance %(instance_id)s '
                     'at %(device)s'),
                   {'volume_id': volume_id,
@@ -1266,6 +1266,18 @@ class CloudController(object):
 
     def run_instances(self, context, **kwargs):
         min_count = int(kwargs.get('min_count', 1))
+        max_count = int(kwargs.get('max_count', min_count))
+        try:
+            min_count = utils.validate_integer(
+                min_count, "min_count", min_value=1)
+            max_count = utils.validate_integer(
+                max_count, "max_count", min_value=1)
+        except exception.InvalidInput as e:
+            raise exception.InvalidInput(message=e.format_message())
+
+        if min_count > max_count:
+            msg = _('min_count must be <= max_count')
+            raise exception.InvalidInput(message=msg)
 
         client_token = kwargs.get('client_token')
         if client_token:
@@ -1408,6 +1420,7 @@ class CloudController(object):
         instances = self._ec2_ids_to_instances(context, instance_id, True)
         LOG.debug(_("Going to stop instances"))
         for instance in instances:
+            extensions.check_compute_policy(context, 'stop', instance)
             self.compute_api.stop(context, instance)
         return True
 
@@ -1418,6 +1431,7 @@ class CloudController(object):
         instances = self._ec2_ids_to_instances(context, instance_id, True)
         LOG.debug(_("Going to start instances"))
         for instance in instances:
+            extensions.check_compute_policy(context, 'start', instance)
             self.compute_api.start(context, instance)
         return True
 
@@ -1759,7 +1773,8 @@ class CloudController(object):
 
         for ec2_id in resources:
             instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
-            instance = self.compute_api.get(context, instance_uuid)
+            instance = self.compute_api.get(context, instance_uuid,
+                                            want_objects=True)
             self.compute_api.update_instance_metadata(context,
                 instance, metadata)
 
@@ -1793,7 +1808,8 @@ class CloudController(object):
 
         for ec2_id in resources:
             instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
-            instance = self.compute_api.get(context, instance_uuid)
+            instance = self.compute_api.get(context, instance_uuid,
+                                            want_objects=True)
             for tag in tags:
                 if not isinstance(tag, dict):
                     msg = _('Expecting tagSet to be key/value pairs')

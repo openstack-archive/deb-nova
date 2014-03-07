@@ -1,6 +1,4 @@
 
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -24,14 +22,19 @@ import sys
 from nova import config
 from nova.objectstore import s3server
 from nova.openstack.common import log as logging
+from nova.openstack.common.report import guru_meditation_report as gmr
 from nova import service
 from nova import utils
+from nova import version
 
 
 def main():
     config.parse_args(sys.argv)
     logging.setup("nova")
     utils.monkey_patch()
+
+    gmr.TextGuruMeditation.setup_autorun(version)
+
     server = s3server.get_wsgi_server()
     service.serve(server)
     service.wait()

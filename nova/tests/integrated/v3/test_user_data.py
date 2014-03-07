@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -35,7 +34,3 @@ class UserDataJsonTest(api_sample_base.ApiSampleTestBaseV3):
 
         subs.update(self._get_regexes())
         self._verify_response('userdata-post-resp', subs, response, 202)
-
-
-class UserDataXmlTest(UserDataJsonTest):
-    ctype = 'xml'

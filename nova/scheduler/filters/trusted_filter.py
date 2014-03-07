@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 Intel, Inc.
 # Copyright (c) 2011-2012 OpenStack Foundation
 # All Rights Reserved.
@@ -62,17 +60,17 @@ LOG = logging.getLogger(__name__)
 
 trusted_opts = [
     cfg.StrOpt('attestation_server',
-               help='attestation server http'),
+               help='Attestation server HTTP'),
     cfg.StrOpt('attestation_server_ca_file',
-               help='attestation server Cert file for Identity verification'),
+               help='Attestation server Cert file for Identity verification'),
     cfg.StrOpt('attestation_port',
                default='8443',
-               help='attestation server port'),
+               help='Attestation server port'),
     cfg.StrOpt('attestation_api_url',
                default='/OpenAttestationWebServices/V1.0',
-               help='attestation web API URL'),
+               help='Attestation web API URL'),
     cfg.StrOpt('attestation_auth_blob',
-               help='attestation authorization blob - must change'),
+               help='Attestation authorization blob - must change'),
     cfg.IntOpt('attestation_auth_timeout',
                default=60,
                help='Attestation status cache valid period length'),
@@ -85,8 +83,7 @@ CONF.register_opts(trusted_opts, group=trust_group)
 
 
 class HTTPSClientAuthConnection(httplib.HTTPSConnection):
-    """
-    Class to make a HTTPS connection, with support for full client-based
+    """Class to make a HTTPS connection, with support for full client-based
     SSL Authentication
     """
 
@@ -102,8 +99,7 @@ class HTTPSClientAuthConnection(httplib.HTTPSConnection):
         self.timeout = timeout
 
     def connect(self):
-        """
-        Connect to a host on a given (SSL) port.
+        """Connect to a host on a given (SSL) port.
         If ca_file is pointing somewhere, use it to check Server Certificate.
 
         Redefined/copied and extended from httplib.py:1105 (Python 2.6.x).

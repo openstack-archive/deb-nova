@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -56,7 +54,7 @@ if CONF.enable_network_quota:
     opts = [
         cfg.IntOpt('quota_networks',
                    default=3,
-                   help='number of private networks allowed per project'),
+                   help='Number of private networks allowed per project'),
         ]
     CONF.register_opts(opts)
 
@@ -82,7 +80,7 @@ class NetworkController(object):
             try:
                 self._default_networks = self._get_default_networks()
             except Exception:
-                LOG.exception("Failed to get default networks")
+                LOG.exception(_("Failed to get default networks"))
 
     def _get_default_networks(self):
         project_id = CONF.neutron_default_tenant_id

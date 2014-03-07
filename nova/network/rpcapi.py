@@ -1,6 +1,4 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
-# Copyright 2012, Red Hat, Inc.
+# Copyright 2013, Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -19,14 +17,16 @@ Client side of the network RPC API.
 """
 
 from oslo.config import cfg
+from oslo import messaging
 
+from nova.objects import base as objects_base
 from nova.openstack.common import jsonutils
-from nova import rpcclient
+from nova import rpc
 
 rpcapi_opts = [
     cfg.StrOpt('network_topic',
                default='network',
-               help='the topic network nodes listen on'),
+               help='The topic network nodes listen on'),
     cfg.BoolOpt('multi_host',
                 default=False,
                 help='Default value for multi_host in networks. Also, if set, '
@@ -41,7 +41,7 @@ rpcapi_cap_opt = cfg.StrOpt('network',
 CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
 
-class NetworkAPI(rpcclient.RpcProxy):
+class NetworkAPI(object):
     '''Client side of the network rpc API.
 
     API version history:
@@ -67,17 +67,15 @@ class NetworkAPI(rpcclient.RpcProxy):
         ... Havana supports message version 1.10.  So, any changes to existing
         methods in 1.x after that point should be done such that they can
         handle the version_cap being set to 1.10.
-    '''
 
-    #
-    # NOTE(russellb): This is the default minimum version that the server
-    # (manager) side must implement unless otherwise specified using a version
-    # argument to self.call()/cast()/etc. here.  It should be left as X.0 where
-    # X is the current major API version (1.0, 2.0, ...).  For more information
-    # about rpc API versioning, see the docs in
-    # openstack/common/rpc/dispatcher.py.
-    #
-    BASE_RPC_API_VERSION = '1.0'
+        NOTE: remove unused method get_vifs_by_instance()
+        NOTE: remove unused method get_vif_by_mac_address()
+        NOTE: remove unused method get_network()
+        NOTE: remove unused method get_all_networks()
+        1.11 - Add instance to deallocate_for_instance().  Remove instance_id,
+               project_id, and host.
+        1.12 - Add instance to deallocate_fixed_ip()
+    '''
 
     VERSION_ALIASES = {
         'grizzly': '1.9',
@@ -85,21 +83,13 @@ class NetworkAPI(rpcclient.RpcProxy):
     }
 
     def __init__(self, topic=None):
-        topic = topic if topic else CONF.network_topic
+        super(NetworkAPI, self).__init__()
+        topic = topic or CONF.network_topic
+        target = messaging.Target(topic=topic, version='1.0')
         version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.network,
                                                CONF.upgrade_levels.network)
-        super(NetworkAPI, self).__init__(
-                topic=topic,
-                default_version=self.BASE_RPC_API_VERSION,
-                version_cap=version_cap)
-        self.client = self.get_client()
-
-    def get_all_networks(self, ctxt):
-        return self.client.call(ctxt, 'get_all_networks')
-
-    def get_network(self, ctxt, network_uuid):
-        return self.client.call(ctxt, 'get_network',
-                                network_uuid=network_uuid)
+        serializer = objects_base.NovaObjectSerializer()
+        self.client = rpc.get_client(target, version_cap, serializer)
 
     # TODO(russellb): Convert this to named arguments.  It's a pretty large
     # list, so unwinding it all is probably best done in its own patch so it's
@@ -144,16 +134,6 @@ class NetworkAPI(rpcclient.RpcProxy):
         return self.client.call(ctxt, 'get_instance_id_by_floating_address',
                                 address=address)
 
-    def get_vifs_by_instance(self, ctxt, instance_id):
-        # NOTE(vish): When the db calls are converted to store network
-        #             data by instance_uuid, this should pass uuid instead.
-        return self.client.call(ctxt, 'get_vifs_by_instance',
-                                instance_id=instance_id)
-
-    def get_vif_by_mac_address(self, ctxt, mac_address):
-        return self.client.call(ctxt, 'get_vif_by_mac_address',
-                                mac_address=mac_address)
-
     def allocate_floating_ip(self, ctxt, project_id, pool, auto_assigned):
         return self.client.call(ctxt, 'allocate_floating_ip',
                                 project_id=project_id, pool=pool,
@@ -189,14 +169,25 @@ class NetworkAPI(rpcclient.RpcProxy):
                           requested_networks=requested_networks,
                           macs=jsonutils.to_primitive(macs))
 
-    def deallocate_for_instance(self, ctxt, instance_id, project_id,
-                                host, requested_networks=None):
+    def deallocate_for_instance(self, ctxt, instance, requested_networks=None):
         cctxt = self.client
+        kwargs = {}
+        if self.client.can_send_version('1.11'):
+            version = '1.11'
+            kwargs['instance'] = instance
+            kwargs['requested_networks'] = requested_networks
+        else:
+            if self.client.can_send_version('1.10'):
+                version = '1.10'
+                kwargs['requested_networks'] = requested_networks
+            else:
+                version = '1.0'
+            kwargs['host'] = instance['host']
+            kwargs['instance_id'] = instance.uuid
+            kwargs['project_id'] = instance.project_id
         if CONF.multi_host:
-            cctxt = cctxt.prepare(server=host)
-        return cctxt.call(ctxt, 'deallocate_for_instance',
-                          instance_id=instance_id, project_id=project_id,
-                          host=host, requested_networks=requested_networks)
+            cctxt = cctxt.prepare(server=instance['host'], version=version)
+        return cctxt.call(ctxt, 'deallocate_for_instance', **kwargs)
 
     def add_fixed_ip_to_instance(self, ctxt, instance_id, rxtx_factor,
                                  host, network_id):
@@ -300,14 +291,20 @@ class NetworkAPI(rpcclient.RpcProxy):
                           instance_id=instance_id, network_id=network_id,
                           address=address, vpn=vpn)
 
-    def deallocate_fixed_ip(self, ctxt, address, host):
-        cctxt = self.client.prepare(server=host)
+    def deallocate_fixed_ip(self, ctxt, address, host, instance):
+        kwargs = {}
+        if self.client.can_send_version('1.12'):
+            version = '1.12'
+            kwargs['instance'] = instance
+        else:
+            version = '1.0'
+        cctxt = self.client.prepare(server=host, version=version)
         return cctxt.call(ctxt, 'deallocate_fixed_ip',
-                          address=address, host=host)
+                          address=address, host=host, **kwargs)
 
     def update_dns(self, ctxt, network_ids):
         cctxt = self.client.prepare(fanout=True, version='1.3')
-        return cctxt.cast(ctxt, 'update_dns', network_ids=network_ids)
+        cctxt.cast(ctxt, 'update_dns', network_ids=network_ids)
 
     # NOTE(russellb): Ideally this would not have a prefix of '_' since it is
     # a part of the rpc API. However, this is how it was being called when the

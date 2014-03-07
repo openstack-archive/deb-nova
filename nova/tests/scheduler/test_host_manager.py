@@ -24,7 +24,6 @@ from nova.openstack.common import timeutils
 from nova.scheduler import filters
 from nova.scheduler import host_manager
 from nova import test
-from nova.tests import matchers
 from nova.tests.scheduler import fakes
 from nova import utils
 
@@ -267,53 +266,6 @@ class HostManagerTestCase(test.NoDBTestCase):
                 fake_properties)
         self._verify_result(info, result, False)
 
-    def test_update_service_capabilities(self):
-        service_states = self.host_manager.service_states
-        self.assertEqual(len(service_states.keys()), 0)
-        self.mox.StubOutWithMock(timeutils, 'utcnow')
-        timeutils.utcnow().AndReturn(31337)
-        timeutils.utcnow().AndReturn(31339)
-
-        host1_compute_capabs = dict(free_memory=1234, host_memory=5678,
-                timestamp=1, hypervisor_hostname='node1')
-        host2_compute_capabs = dict(free_memory=8756, timestamp=1,
-                hypervisor_hostname='node2')
-
-        self.mox.ReplayAll()
-        self.host_manager.update_service_capabilities('compute', 'host1',
-                host1_compute_capabs)
-        self.host_manager.update_service_capabilities('compute', 'host2',
-                host2_compute_capabs)
-
-        # Make sure original dictionary wasn't copied
-        self.assertEqual(host1_compute_capabs['timestamp'], 1)
-
-        host1_compute_capabs['timestamp'] = 31337
-        host2_compute_capabs['timestamp'] = 31339
-
-        expected = {('host1', 'node1'): host1_compute_capabs,
-                    ('host2', 'node2'): host2_compute_capabs}
-        self.assertThat(service_states, matchers.DictMatches(expected))
-
-    def test_update_service_capabilities_node_key(self):
-        service_states = self.host_manager.service_states
-        self.assertThat(service_states, matchers.DictMatches({}))
-
-        host1_cap = {'hypervisor_hostname': 'host1-hvhn'}
-        host2_cap = {}
-
-        timeutils.set_time_override(31337)
-        self.host_manager.update_service_capabilities('compute', 'host1',
-                host1_cap)
-        timeutils.set_time_override(31338)
-        self.host_manager.update_service_capabilities('compute', 'host2',
-                host2_cap)
-        host1_cap['timestamp'] = 31337
-        host2_cap['timestamp'] = 31338
-        expected = {('host1', 'host1-hvhn'): host1_cap,
-                    ('host2', None): host2_cap}
-        self.assertThat(service_states, matchers.DictMatches(expected))
-
     def test_get_all_host_states(self):
 
         context = 'fake_context'
@@ -322,6 +274,9 @@ class HostManagerTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(host_manager.LOG, 'warn')
 
         db.compute_node_get_all(context).AndReturn(fakes.COMPUTE_NODES)
+        # node 3 host physical disk space is greater than database
+        host_manager.LOG.warn("Host has more disk space than database expected"
+                              " (3333gb > 3072gb)")
         # Invalid service
         host_manager.LOG.warn("No service for compute ID 5")
 
@@ -425,18 +380,20 @@ class HostStateTestCase(test.NoDBTestCase):
     # in HostManagerTestCase.test_get_all_host_states()
 
     def test_stat_consumption_from_compute_node(self):
-        stats = [
-            dict(key='num_instances', value='5'),
-            dict(key='num_proj_12345', value='3'),
-            dict(key='num_proj_23456', value='1'),
-            dict(key='num_vm_%s' % vm_states.BUILDING, value='2'),
-            dict(key='num_vm_%s' % vm_states.SUSPENDED, value='1'),
-            dict(key='num_task_%s' % task_states.RESIZE_MIGRATING, value='1'),
-            dict(key='num_task_%s' % task_states.MIGRATING, value='2'),
-            dict(key='num_os_type_linux', value='4'),
-            dict(key='num_os_type_windoze', value='1'),
-            dict(key='io_workload', value='42'),
-        ]
+        stats = {
+            'num_instances': '5',
+            'num_proj_12345': '3',
+            'num_proj_23456': '1',
+            'num_vm_%s' % vm_states.BUILDING: '2',
+            'num_vm_%s' % vm_states.SUSPENDED: '1',
+            'num_task_%s' % task_states.RESIZE_MIGRATING: '1',
+            'num_task_%s' % task_states.MIGRATING: '2',
+            'num_os_type_linux': '4',
+            'num_os_type_windoze': '1',
+            'io_workload': '42',
+        }
+        stats = jsonutils.dumps(stats)
+
         hyper_ver_int = utils.convert_version_to_int('6.0.0')
         compute = dict(stats=stats, memory_mb=1, free_disk_gb=0, local_gb=0,
                        local_gb_used=0, free_ram_mb=0, vcpus=0, vcpus_used=0,
@@ -469,18 +426,20 @@ class HostStateTestCase(test.NoDBTestCase):
         self.assertEqual(hyper_ver_int, host.hypervisor_version)
 
     def test_stat_consumption_from_compute_node_non_pci(self):
-        stats = [
-            dict(key='num_instances', value='5'),
-            dict(key='num_proj_12345', value='3'),
-            dict(key='num_proj_23456', value='1'),
-            dict(key='num_vm_%s' % vm_states.BUILDING, value='2'),
-            dict(key='num_vm_%s' % vm_states.SUSPENDED, value='1'),
-            dict(key='num_task_%s' % task_states.RESIZE_MIGRATING, value='1'),
-            dict(key='num_task_%s' % task_states.MIGRATING, value='2'),
-            dict(key='num_os_type_linux', value='4'),
-            dict(key='num_os_type_windoze', value='1'),
-            dict(key='io_workload', value='42'),
-        ]
+        stats = {
+            'num_instances': '5',
+            'num_proj_12345': '3',
+            'num_proj_23456': '1',
+            'num_vm_%s' % vm_states.BUILDING: '2',
+            'num_vm_%s' % vm_states.SUSPENDED: '1',
+            'num_task_%s' % task_states.RESIZE_MIGRATING: '1',
+            'num_task_%s' % task_states.MIGRATING: '2',
+            'num_os_type_linux': '4',
+            'num_os_type_windoze': '1',
+            'io_workload': '42',
+        }
+        stats = jsonutils.dumps(stats)
+
         hyper_ver_int = utils.convert_version_to_int('6.0.0')
         compute = dict(stats=stats, memory_mb=0, free_disk_gb=0, local_gb=0,
                        local_gb_used=0, free_ram_mb=0, vcpus=0, vcpus_used=0,

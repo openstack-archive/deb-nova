@@ -13,6 +13,23 @@ Nova Specific Commandments
   This enforces a guideline defined in ``nova.openstack.common.db.sqlalchemy.session``
 - [N310] timeutils.utcnow() wrapper must be used instead of direct calls to
   datetime.datetime.utcnow() to make it easy to override its return value in tests
+- [N311] importing code from other virt drivers forbidden
+  Code that needs to be shared between virt drivers should be moved
+  into a common module
+- [N312] using config vars from other virt drivers forbidden
+  Config parameters that need to be shared between virt drivers
+  should be moved into a common module
+- [N313] capitalize help string
+  Config parameter help strings should have a capitalized first letter
+- [N314] vim configuration should not be kept in source files.
+- [N315] We do not use @authors tags in source files. We have git to track
+  authorship.
+- [N316] Change assertTrue(isinstance(A, B)) by optimal assert like
+  assertIsInstance(A, B).
+- [N317] Change assertEqual(type(A), B) by optimal assert like
+  assertIsInstance(A, B)
+- [N318] Change assertEqual(A, None) or assertEqual(None, A) by optimal assert like
+  assertIsNone(A)
 
 Creating Unit Tests
 -------------------

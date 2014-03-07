@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -129,10 +127,27 @@ class S3APITestCase(test.NoDBTestCase):
         self._ensure_no_buckets(bucket.get_all_keys())
 
     def test_unknown_bucket(self):
+        # NOTE(unicell): Since Boto v2.25.0, the underlying implementation
+        # of get_bucket method changed from GET to HEAD.
+        #
+        # Prior to v2.25.0, default validate=True fetched a list of keys in the
+        # bucket and raises S3ResponseError. As a side effect of switching to
+        # HEAD request, get_bucket call now generates less error message.
+        #
+        # To keep original semantics, additional get_all_keys call is
+        # suggestted per Boto document. This case tests both validate=False and
+        # validate=True case for completeness.
+        #
+        # http://docs.pythonboto.org/en/latest/releasenotes/v2.25.0.html
+        # http://docs.pythonboto.org/en/latest/s3_tut.html#accessing-a-bucket
         bucket_name = 'falalala'
         self.assertRaises(boto_exception.S3ResponseError,
                           self.conn.get_bucket,
                           bucket_name)
+        bucket = self.conn.get_bucket(bucket_name, validate=False)
+        self.assertRaises(boto_exception.S3ResponseError,
+                          bucket.get_all_keys,
+                          maxkeys=0)
 
     def tearDown(self):
         """Tear down test server."""

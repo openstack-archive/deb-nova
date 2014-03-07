@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010-2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -80,10 +78,6 @@ EXP_VERSIONS = {
         "status": "EXPERIMENTAL",
         "updated": "2013-07-23T11:33:21Z",
         "media-types": [
-            {
-                "base": "application/xml",
-                "type": "application/vnd.openstack.compute+xml;version=3",
-            },
             {
                 "base": "application/json",
                 "type": "application/vnd.openstack.compute+json;version=3",
@@ -367,11 +361,6 @@ class VersionsTest(test.NoDBTestCase):
                 ],
                 "media-types": [
                     {
-                        "base": "application/xml",
-                        "type":
-                        "application/vnd.openstack.compute+xml;version=3",
-                    },
-                    {
                         "base": "application/json",
                         "type":
                         "application/vnd.openstack.compute+json;version=3",
@@ -446,8 +435,7 @@ class VersionsTest(test.NoDBTestCase):
             [{'rel': 'self', 'href': 'http://localhost/v3/images/1'}]))
 
     def test_multi_choice_server_atom(self):
-        """
-        Make sure multi choice responses do not have content-type
+        """Make sure multi choice responses do not have content-type
         application/atom+xml (should use default of json)
         """
         req = webob.Request.blank('/servers')
@@ -476,11 +464,6 @@ class VersionsTest(test.NoDBTestCase):
                     },
                 ],
                 "media-types": [
-                    {
-                        "base": "application/xml",
-                        "type":
-                        "application/vnd.openstack.compute+xml;version=3",
-                    },
                     {
                         "base": "application/json",
                         "type":

@@ -18,6 +18,8 @@ import collections
 import copy
 import functools
 
+import netaddr
+from oslo import messaging
 import six
 
 from nova import context
@@ -25,8 +27,6 @@ from nova import exception
 from nova.objects import fields
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.openstack.common.rpc import common as rpc_common
-import nova.openstack.common.rpc.serializer
 from nova.openstack.common import versionutils
 
 
@@ -127,8 +127,7 @@ def remotable(fn):
     def wrapper(self, *args, **kwargs):
         ctxt = self._context
         try:
-            if isinstance(args[0], (context.RequestContext,
-                                    rpc_common.CommonRpcContext)):
+            if isinstance(args[0], (context.RequestContext)):
                 ctxt = args[0]
                 args = args[1:]
         except IndexError:
@@ -225,6 +224,20 @@ class NovaObject(object):
                                                   supported=latest_ver)
 
     @classmethod
+    def _obj_from_primitive(cls, context, objver, primitive):
+        self = cls()
+        self._context = context
+        self.VERSION = objver
+        objdata = primitive['nova_object.data']
+        changes = primitive.get('nova_object.changes', [])
+        for name, field in self.fields.items():
+            if name in objdata:
+                setattr(self, name, field.from_primitive(self, name,
+                                                         objdata[name]))
+        self._changed_fields = set([x for x in changes if x in self.fields])
+        return self
+
+    @classmethod
     def obj_from_primitive(cls, primitive, context=None):
         """Object field-by-field hydration."""
         if primitive['nova_object.namespace'] != 'nova':
@@ -235,18 +248,8 @@ class NovaObject(object):
                                    primitive['nova_object.name']))
         objname = primitive['nova_object.name']
         objver = primitive['nova_object.version']
-        objdata = primitive['nova_object.data']
         objclass = cls.obj_class_from_name(objname, objver)
-        self = objclass()
-        self._context = context
-        self.VERSION = objver
-        for name, field in self.fields.items():
-            if name in objdata:
-                setattr(self, name, field.from_primitive(self, name,
-                                                         objdata[name]))
-        changes = primitive.get('nova_object.changes', [])
-        self._changed_fields = set([x for x in changes if x in self.fields])
-        return self
+        return objclass._obj_from_primitive(context, objver, primitive)
 
     def __deepcopy__(self, memo):
         """Efficiently make a deep copy of this object."""
@@ -480,6 +483,9 @@ class ObjectListBase(object):
         """List index of value."""
         return self.objects.index(value)
 
+    def sort(self, cmp=None, key=None, reverse=False):
+        self.objects.sort(cmp=cmp, key=key, reverse=reverse)
+
     def _attr_objects_to_primitive(self):
         """Serialization of object list."""
         return [x.obj_to_primitive() for x in self.objects]
@@ -502,13 +508,13 @@ class ObjectListBase(object):
             primitives[index]['nova_object.version'] = child_target_version
 
 
-class NovaObjectSerializer(nova.openstack.common.rpc.serializer.Serializer):
+class NovaObjectSerializer(messaging.NoOpSerializer):
     """A NovaObject-aware Serializer.
 
     This implements the Oslo Serializer interface and provides the
     ability to serialize and deserialize NovaObject entities. Any service
     that needs to accept or return NovaObjects as arguments or result values
-    should pass this to its RpcProxy and RpcDispatcher objects.
+    should pass this to its RPCClient and RPCServer objects.
     """
 
     @property
@@ -573,6 +579,10 @@ def obj_to_primitive(obj):
         for key, value in obj.iteritems():
             result[key] = obj_to_primitive(value)
         return result
+    elif isinstance(obj, netaddr.IPAddress):
+        return str(obj)
+    elif isinstance(obj, netaddr.IPNetwork):
+        return str(obj)
     else:
         return obj
 

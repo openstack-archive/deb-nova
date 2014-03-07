@@ -30,14 +30,15 @@ from nova import conductor
 from nova import context
 from nova import exception
 from nova.objects import base as obj_base
+from nova.objects import flavor as flavor_obj
 from nova.objects import instance as instance_obj
 from nova.objects import migration as migration_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common.notifier import api as notifier
 from nova.pci import pci_manager
+from nova import rpc
 from nova import utils
 
 resource_tracker_opts = [
@@ -76,6 +77,7 @@ class ResourceTracker(object):
         self.conductor_api = conductor.API()
         monitor_handler = monitors.ResourceMonitorHandler()
         self.monitors = monitor_handler.choose_monitors(self)
+        self.notifier = rpc.get_notifier()
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def instance_claim(self, context, instance_ref, limits=None):
@@ -116,23 +118,19 @@ class ResourceTracker(object):
                     "MB"), {'flavor': instance_ref['memory_mb'],
                             'overhead': overhead['memory_mb']})
 
-        claim = claims.Claim(instance_ref, self, overhead=overhead)
+        claim = claims.Claim(instance_ref, self, self.compute_node,
+                             overhead=overhead, limits=limits)
 
-        if claim.test(self.compute_node, limits):
+        self._set_instance_host_and_node(context, instance_ref)
 
-            self._set_instance_host_and_node(context, instance_ref)
+        # Mark resources in-use and update stats
+        self._update_usage_from_instance(self.compute_node, instance_ref)
 
-            # Mark resources in-use and update stats
-            self._update_usage_from_instance(self.compute_node, instance_ref)
+        elevated = context.elevated()
+        # persist changes to the compute node:
+        self._update(elevated, self.compute_node)
 
-            elevated = context.elevated()
-            # persist changes to the compute node:
-            self._update(elevated, self.compute_node)
-
-            return claim
-
-        else:
-            raise exception.ComputeResourcesUnavailable()
+        return claim
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def resize_claim(self, context, instance, instance_type, limits=None):
@@ -162,25 +160,21 @@ class ResourceTracker(object):
 
         instance_ref = obj_base.obj_to_primitive(instance)
         claim = claims.ResizeClaim(instance_ref, instance_type, self,
-                                   overhead=overhead)
+                                   self.compute_node, overhead=overhead,
+                                   limits=limits)
 
-        if claim.test(self.compute_node, limits):
+        migration = self._create_migration(context, instance_ref,
+                                           instance_type)
+        claim.migration = migration
 
-            migration = self._create_migration(context, instance_ref,
-                                               instance_type)
-            claim.migration = migration
-
-            # Mark the resources in-use for the resize landing on this
-            # compute host:
-            self._update_usage_from_migration(context, instance_ref,
+        # Mark the resources in-use for the resize landing on this
+        # compute host:
+        self._update_usage_from_migration(context, instance_ref,
                                               self.compute_node, migration)
-            elevated = context.elevated()
-            self._update(elevated, self.compute_node)
+        elevated = context.elevated()
+        self._update(elevated, self.compute_node)
 
-            return claim
-
-        else:
-            raise exception.ComputeResourcesUnavailable()
+        return claim
 
     def _create_migration(self, context, instance, instance_type):
         """Create a migration record for the upcoming resize.  This should
@@ -241,7 +235,7 @@ class ResourceTracker(object):
                     self.pci_tracker.update_pci_for_migration(instance,
                                                               sign=-1)
                 self._update_usage(self.compute_node, itype, sign=-1)
-                self.compute_node['stats'] = self.stats
+                self.compute_node['stats'] = jsonutils.dumps(self.stats)
 
                 ctxt = context.get_admin_context()
                 self._update(ctxt, self.compute_node)
@@ -282,9 +276,8 @@ class ResourceTracker(object):
             metrics_info['metrics'] = metrics
             metrics_info['host'] = self.host
             metrics_info['host_ip'] = CONF.my_ip
-            notifier.notify(context, 'compute.%s' % nodename,
-                            'compute.metrics.update', notifier.INFO,
-                            metrics_info)
+            notifier = rpc.get_notifier(service='compute', host=nodename)
+            notifier.info(context, 'compute.metrics.update', metrics_info)
         return metrics
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
@@ -344,7 +337,7 @@ class ResourceTracker(object):
             self.pci_tracker.clean_usage(instances, migrations, orphans)
             resources['pci_stats'] = jsonutils.dumps(self.pci_tracker.stats)
         else:
-            resources['pci_stats'] = jsonutils.dumps({})
+            resources['pci_stats'] = jsonutils.dumps([])
 
         self._report_final_resource_view(resources)
 
@@ -381,7 +374,7 @@ class ResourceTracker(object):
 
         else:
             # just update the record:
-            self._update(context, resources, prune_stats=True)
+            self._update(context, resources)
             LOG.info(_('Compute_service record updated for %(host)s:%(node)s')
                     % {'host': self.host, 'node': self.nodename})
 
@@ -448,12 +441,12 @@ class ResourceTracker(object):
         if 'pci_devices' in resources:
             LOG.audit(_("Free PCI devices: %s") % resources['pci_devices'])
 
-    def _update(self, context, values, prune_stats=False):
+    def _update(self, context, values):
         """Persist the compute node updates to the DB."""
         if "service" in self.compute_node:
             del self.compute_node['service']
         self.compute_node = self.conductor_api.compute_node_update(
-            context, self.compute_node, values, prune_stats)
+            context, self.compute_node, values)
         if self.pci_tracker:
             self.pci_tracker.save(context)
 
@@ -521,12 +514,12 @@ class ResourceTracker(object):
             if self.pci_tracker:
                 self.pci_tracker.update_pci_for_migration(instance)
             self._update_usage(resources, itype)
-            resources['stats'] = self.stats
+            resources['stats'] = jsonutils.dumps(self.stats)
             if self.pci_tracker:
                 resources['pci_stats'] = jsonutils.dumps(
                         self.pci_tracker.stats)
             else:
-                resources['pci_stats'] = jsonutils.dumps({})
+                resources['pci_stats'] = jsonutils.dumps([])
             self.tracked_migrations[uuid] = (migration, itype)
 
     def _update_usage_from_migrations(self, context, resources, migrations):
@@ -594,11 +587,11 @@ class ResourceTracker(object):
             self._update_usage(resources, instance, sign=sign)
 
         resources['current_workload'] = self.stats.calculate_workload()
-        resources['stats'] = self.stats
+        resources['stats'] = jsonutils.dumps(self.stats)
         if self.pci_tracker:
             resources['pci_stats'] = jsonutils.dumps(self.pci_tracker.stats)
         else:
-            resources['pci_stats'] = jsonutils.dumps({})
+            resources['pci_stats'] = jsonutils.dumps([])
 
     def _update_usage_from_instances(self, resources, instances):
         """Calculate resource usage based on instance utilization.  This is
@@ -689,7 +682,7 @@ class ResourceTracker(object):
     def _get_instance_type(self, context, instance, prefix,
             instance_type_id=None):
         """Get the instance type from sys metadata if it's stashed.  If not,
-        fall back to fetching it via the conductor API.
+        fall back to fetching it via the object API.
 
         See bug 1164110
         """
@@ -699,5 +692,5 @@ class ResourceTracker(object):
         try:
             return flavors.extract_flavor(instance, prefix)
         except KeyError:
-            return self.conductor_api.instance_type_get(context,
-                    instance_type_id)
+            return flavor_obj.Flavor.get_by_id(context,
+                                               instance_type_id)

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
@@ -174,8 +172,7 @@ def upload_image(context, image, instance, **kwargs):
 
 
 def get_vmdk_size_and_properties(context, image, instance):
-    """
-    Get size of the vmdk file that is to be downloaded for attach in spawn.
+    """Get size of the vmdk file that is to be downloaded for attach in spawn.
     Need this to create the dummy virtual disk for the meta-data file. The
     geometry of the disk created depends on the size.
     """

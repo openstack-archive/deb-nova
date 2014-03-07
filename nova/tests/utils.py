@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 #    Copyright 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -188,6 +186,7 @@ def is_ipv6_supported():
     has_ipv6_support = socket.has_ipv6
     try:
         s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        s.close()
     except socket.error as e:
         if e.errno == errno.EAFNOSUPPORT:
             has_ipv6_support = False

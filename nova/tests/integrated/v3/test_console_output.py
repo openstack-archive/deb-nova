@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -26,7 +25,3 @@ class ConsoleOutputSampleJsonTest(test_servers.ServersSampleBase):
                                  'console-output-post-req', {})
         subs = self._get_regexes()
         self._verify_response('console-output-post-resp', subs, response, 200)
-
-
-class ConsoleOutputSampleXmlTest(ConsoleOutputSampleJsonTest):
-    ctype = 'xml'

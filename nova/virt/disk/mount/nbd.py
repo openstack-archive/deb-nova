@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 Red Hat, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -32,7 +30,8 @@ LOG = logging.getLogger(__name__)
 nbd_opts = [
     cfg.IntOpt('timeout_nbd',
                default=10,
-               help='time to wait for a NBD device coming up'),
+               help='Amount of time, in seconds, to wait for NBD '
+               'device start up.'),
     ]
 
 CONF = cfg.CONF
@@ -52,7 +51,11 @@ class NbdMount(api.Mount):
     def _find_unused(self, devices):
         for device in devices:
             if not os.path.exists(os.path.join('/sys/block/', device, 'pid')):
-                return device
+                if not os.path.exists('/var/lock/qemu-nbd-%s' % device):
+                    return device
+                else:
+                    LOG.error(_('NBD error - previous umount did not cleanup '
+                              '/var/lock/qemu-nbd-%s.'), device)
         LOG.warn(_('No free nbd devices'))
         return None
 
@@ -70,12 +73,6 @@ class NbdMount(api.Mount):
             self.error = _('No free nbd devices')
             return None
         return os.path.join('/dev', device)
-
-    def _read_pid_file(self, pidfile):
-        # This is for unit test convenience
-        with open(pidfile) as f:
-            pid = int(f.readline())
-        return pid
 
     @utils.synchronized('nbd-allocation-lock')
     def _inner_get_dev(self):

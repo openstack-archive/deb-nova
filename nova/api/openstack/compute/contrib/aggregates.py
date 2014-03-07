@@ -59,8 +59,7 @@ class AggregateController(object):
                                for a in aggregates]}
 
     def create(self, req, body):
-        """
-        Creates an aggregate, given its name and
+        """Creates an aggregate, given its name and
         optional availability zone.
         """
         context = _get_context(req)
@@ -131,6 +130,8 @@ class AggregateController(object):
         except exception.AggregateNotFound:
             LOG.info(_('Cannot update aggregate: %s'), id)
             raise exc.HTTPNotFound()
+        except exception.InvalidAggregateAction as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         return self._marshall_aggregate(aggregate)
 
@@ -212,6 +213,8 @@ class AggregateController(object):
             LOG.info(_('Cannot set metadata %(metadata)s in aggregate %(id)s'),
                      {'metadata': metadata, 'id': id})
             raise exc.HTTPNotFound()
+        except exception.InvalidAggregateAction as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         return self._marshall_aggregate(aggregate)
 
@@ -232,9 +235,6 @@ class Aggregates(extensions.ExtensionDescriptor):
     alias = "os-aggregates"
     namespace = "http://docs.openstack.org/compute/ext/aggregates/api/v1.1"
     updated = "2012-01-12T00:00:00+00:00"
-
-    def __init__(self, ext_mgr):
-        ext_mgr.register(self)
 
     def get_resources(self):
         resources = []

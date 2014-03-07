@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -34,7 +33,3 @@ class ExtendedStatusSampleJsonTests(test_servers.ServersSampleBase):
         subs['id'] = uuid
         subs['hostid'] = '[a-f0-9]+'
         self._verify_response('servers-detail-resp', subs, response, 200)
-
-
-class ExtendedStatusSampleXmlTests(ExtendedStatusSampleJsonTests):
-    ctype = 'xml'

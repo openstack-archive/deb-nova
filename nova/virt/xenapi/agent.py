@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Citrix Systems, Inc.
 # Copyright 2010-2012 OpenStack Foundation
 #
@@ -53,28 +51,28 @@ xenapi_agent_opts = [
                default=30,
                deprecated_name='agent_timeout',
                deprecated_group='DEFAULT',
-               help='number of seconds to wait for agent reply'),
+               help='Number of seconds to wait for agent reply'),
     cfg.IntOpt('agent_version_timeout',
                default=300,
                deprecated_name='agent_version_timeout',
                deprecated_group='DEFAULT',
-               help='number of seconds to wait for agent '
+               help='Number of seconds to wait for agent '
                     'to be fully operational'),
     cfg.IntOpt('agent_resetnetwork_timeout',
                deprecated_name='agent_resetnetwork_timeout',
                deprecated_group='DEFAULT',
                default=60,
-               help='number of seconds to wait for agent reply '
+               help='Number of seconds to wait for agent reply '
                     'to resetnetwork request'),
     cfg.StrOpt('agent_path',
                default='usr/sbin/xe-update-networking',
                deprecated_name='xenapi_agent_path',
                deprecated_group='DEFAULT',
-               help='Specifies the path in which the xenapi guest agent '
+               help='Specifies the path in which the XenAPI guest agent '
                     'should be located. If the agent is present, network '
                     'configuration is not injected into the image. '
                     'Used if compute_driver=xenapi.XenAPIDriver and '
-                    ' flat_injected=True'),
+                    'flat_injected=True'),
     cfg.BoolOpt('disable_agent',
                 default=False,
                 deprecated_name='xenapi_disable_agent',
@@ -85,11 +83,11 @@ xenapi_agent_opts = [
                 default=False,
                 deprecated_name='xenapi_use_agent_default',
                 deprecated_group='DEFAULT',
-                help='Determines if the xenapi agent should be used when '
+                help='Determines if the XenAPI agent should be used when '
                      'the image used does not contain a hint to declare if '
                      'the agent is present or not. '
                      'The hint is a glance property "' + USE_AGENT_KEY + '" '
-                     'that has the value "true" or "false". '
+                     'that has the value "True" or "False". '
                      'Note that waiting for the agent when it is not present '
                      'will significantly increase server boot times.'),
 ]
@@ -109,11 +107,12 @@ def _call_agent(session, instance, vm_ref, method, addl_args=None,
     if success_codes is None:
         success_codes = ['0']
 
-    vm_rec = session.call_xenapi("VM.get_record", vm_ref)
+    # always fetch domid because VM may have rebooted
+    dom_id = session.VM.get_domid(vm_ref)
 
     args = {
         'id': str(uuid.uuid4()),
-        'dom_id': vm_rec['domid'],
+        'dom_id': str(dom_id),
         'timeout': str(timeout),
     }
     args.update(addl_args)
@@ -369,8 +368,7 @@ class XenAPIBasedAgent(object):
 
 
 def find_guest_agent(base_dir):
-    """
-    tries to locate a guest agent at the path
+    """tries to locate a guest agent at the path
     specified by agent_rel_path
     """
     if CONF.xenserver.disable_agent:
@@ -417,8 +415,7 @@ def should_use_agent(instance):
 
 
 class SimpleDH(object):
-    """
-    This class wraps all the functionality needed to implement
+    """This class wraps all the functionality needed to implement
     basic Diffie-Hellman-Merkle key exchange in Python. It features
     intelligent defaults for the prime and base numbers needed for the
     calculation, while allowing you to supply your own. It requires that

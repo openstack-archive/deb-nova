@@ -19,11 +19,12 @@ import webob
 from webob import exc
 
 from nova.api.openstack import common
+from nova.api.openstack.compute.schemas.v3 import rescue
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import compute
 from nova import exception
-from nova.openstack.common.gettextutils import _
 from nova import utils
 
 
@@ -40,16 +41,10 @@ class RescueController(wsgi.Controller):
         super(RescueController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
-    def _get_instance(self, context, instance_id):
-        try:
-            return self.compute_api.get(context, instance_id)
-        except exception.InstanceNotFound:
-            msg = _("Server not found")
-            raise exc.HTTPNotFound(msg)
-
     @wsgi.response(202)
     @extensions.expected_errors((400, 404, 409))
     @wsgi.action('rescue')
+    @validation.schema(rescue.rescue)
     def _rescue(self, req, id, body):
         """Rescue an instance."""
         context = req.environ["nova.context"]
@@ -60,7 +55,8 @@ class RescueController(wsgi.Controller):
         else:
             password = utils.generate_password()
 
-        instance = self._get_instance(context, id)
+        instance = common.get_instance(self.compute_api, context, id,
+                                       want_objects=True)
         try:
             self.compute_api.rescue(context, instance,
                                     rescue_password=password)
@@ -84,7 +80,8 @@ class RescueController(wsgi.Controller):
         """Unrescue an instance."""
         context = req.environ["nova.context"]
         authorize(context)
-        instance = self._get_instance(context, id)
+        instance = common.get_instance(self.compute_api, context, id,
+                                       want_objects=True)
         try:
             self.compute_api.unrescue(context, instance)
         except exception.InstanceInvalidState as state_error:
@@ -98,7 +95,6 @@ class Rescue(extensions.V3APIExtensionBase):
 
     name = "Rescue"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/rescue/api/v3"
     version = 1
 
     def get_resources(self):

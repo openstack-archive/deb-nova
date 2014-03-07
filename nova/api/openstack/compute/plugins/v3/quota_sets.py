@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -15,12 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import urlparse
+import six.moves.urllib.parse as urlparse
 import webob
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 import nova.context
 from nova import db
 from nova import exception
@@ -46,35 +43,6 @@ authorize_detail = extensions.extension_authorizer('compute',
                                                    'v3:%s:detail' % ALIAS)
 
 
-class QuotaTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('quota_set', selector='quota_set')
-        root.set('id')
-
-        for resource in QUOTAS.resources:
-            if resource not in FILTERED_QUOTAS:
-                elem = xmlutil.SubTemplateElement(root, resource)
-                elem.text = resource
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class QuotaDetailTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('quota_set', selector='quota_set')
-        root.set('id')
-
-        for resource in QUOTAS.resources:
-            if resource not in FILTERED_QUOTAS:
-                elem = xmlutil.SubTemplateElement(root, resource,
-                                                  selector=resource)
-                elem.set('in_use')
-                elem.set('reserved')
-                elem.set('limit')
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
 class QuotaSetsController(wsgi.Controller):
 
     def _format_quota_set(self, project_id, quota_set):
@@ -89,10 +57,10 @@ class QuotaSetsController(wsgi.Controller):
             raise webob.exc.HTTPBadRequest(explanation=msg)
         if ((limit < minimum) and
            (maximum != -1 or (maximum == -1 and limit != -1))):
-            msg = _("Quota limit must greater than %s.") % minimum
+            msg = _("Quota limit must be greater than %s.") % minimum
             raise webob.exc.HTTPBadRequest(explanation=msg)
         if maximum != -1 and limit > maximum:
-            msg = _("Quota limit must less than %s.") % maximum
+            msg = _("Quota limit must be less than %s.") % maximum
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
     def _get_quotas(self, context, id, user_id=None, usages=False):
@@ -110,7 +78,6 @@ class QuotaSetsController(wsgi.Controller):
             return dict((k, v['limit']) for k, v in values.items())
 
     @extensions.expected_errors(403)
-    @wsgi.serializers(xml=QuotaTemplate)
     def show(self, req, id):
         context = req.environ['nova.context']
         authorize_show(context)
@@ -124,7 +91,6 @@ class QuotaSetsController(wsgi.Controller):
             raise webob.exc.HTTPForbidden()
 
     @extensions.expected_errors(403)
-    @wsgi.serializers(xml=QuotaDetailTemplate)
     def detail(self, req, id):
         context = req.environ['nova.context']
         authorize_detail(context)
@@ -138,7 +104,6 @@ class QuotaSetsController(wsgi.Controller):
             raise webob.exc.HTTPForbidden()
 
     @extensions.expected_errors((400, 403))
-    @wsgi.serializers(xml=QuotaTemplate)
     def update(self, req, id, body):
         context = req.environ['nova.context']
         authorize_update(context)
@@ -227,7 +192,6 @@ class QuotaSetsController(wsgi.Controller):
                                                            user_id=user_id))
 
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=QuotaTemplate)
     def defaults(self, req, id):
         context = req.environ['nova.context']
         authorize_show(context)
@@ -259,7 +223,6 @@ class QuotaSets(extensions.V3APIExtensionBase):
 
     name = "Quotas"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/os-quotas-sets/api/v3"
     version = 1
 
     def get_resources(self):

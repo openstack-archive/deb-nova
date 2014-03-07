@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -58,6 +56,8 @@ _BACKEND_MAPPING = {'sqlalchemy': 'nova.db.sqlalchemy.api'}
 IMPL = db_api.DBAPI(backend_mapping=_BACKEND_MAPPING)
 LOG = logging.getLogger(__name__)
 
+# The maximum value a signed INT type may have
+MAX_INT = 0x7FFFFFFF
 
 ###################
 
@@ -155,7 +155,7 @@ def compute_node_get(context, compute_id):
     :param compute_id: ID of the compute node
 
     :returns: Dictionary-like object containing properties of the compute node,
-              including its corresponding service and statistics
+              including its corresponding service
 
     Raises ComputeHostNotFound if compute node with the given ID doesn't exist.
     """
@@ -186,7 +186,7 @@ def compute_node_get_all(context, no_date_fields=False):
                            Set to False by default
 
     :returns: List of dictionaries each containing compute node properties,
-              including corresponding service and stats
+              including corresponding service
     """
     return IMPL.compute_node_get_all(context, no_date_fields)
 
@@ -215,23 +215,19 @@ def compute_node_create(context, values):
     return IMPL.compute_node_create(context, values)
 
 
-def compute_node_update(context, compute_id, values, prune_stats=False):
+def compute_node_update(context, compute_id, values):
     """Set the given properties on a compute node and update it.
 
     :param context: The security context
     :param compute_id: ID of the compute node
     :param values: Dictionary containing compute node properties to be updated
-    :param prune_stats: If set to True, forces the compute node statistics
-                        entries corresponding to the given compute node with
-                        keys not present in the values['stats'] dictionary to
-                        be deleted from the database. Set to False by default
 
     :returns: Dictionary-like object containing the properties of the updated
               compute node, including its corresponding service and statistics
 
     Raises ComputeHostNotFound if compute node with the given ID doesn't exist.
     """
-    return IMPL.compute_node_update(context, compute_id, values, prune_stats)
+    return IMPL.compute_node_update(context, compute_id, values)
 
 
 def compute_node_delete(context, compute_id):
@@ -397,6 +393,11 @@ def dnsdomain_list(context):
     return IMPL.dnsdomain_list(context)
 
 
+def dnsdomain_get_all(context):
+    """Get a list of all dnsdomains in our database."""
+    return IMPL.dnsdomain_get_all(context)
+
+
 def dnsdomain_register_for_zone(context, fqdomain, zone):
     """Associated a DNS domain with an availability zone."""
     return IMPL.dnsdomain_register_for_zone(context, fqdomain, zone)
@@ -443,8 +444,7 @@ def migration_get_by_instance_and_status(context, instance_uuid, status):
 
 def migration_get_unconfirmed_by_dest_compute(context, confirm_window,
         dest_compute, use_slave=False):
-    """
-    Finds all unconfirmed migrations within the confirmation window for
+    """Finds all unconfirmed migrations within the confirmation window for
     a specific destination compute host.
     """
     return IMPL.migration_get_unconfirmed_by_dest_compute(context,
@@ -521,9 +521,10 @@ def fixed_ip_get_all(context):
     return IMPL.fixed_ip_get_all(context)
 
 
-def fixed_ip_get_by_address(context, address):
+def fixed_ip_get_by_address(context, address, columns_to_join=None):
     """Get a fixed ip by address or raise if it does not exist."""
-    return IMPL.fixed_ip_get_by_address(context, address)
+    return IMPL.fixed_ip_get_by_address(context, address,
+                                        columns_to_join=columns_to_join)
 
 
 def fixed_ip_get_by_address_detailed(context, address):
@@ -670,7 +671,9 @@ def instance_get_active_by_window_joined(context, begin, end=None,
 def instance_get_all_by_host(context, host,
                              columns_to_join=None, use_slave=False):
     """Get all instances belonging to a host."""
-    return IMPL.instance_get_all_by_host(context, host, columns_to_join)
+    return IMPL.instance_get_all_by_host(context, host,
+                                         columns_to_join,
+                                         use_slave=use_slave)
 
 
 def instance_get_all_by_host_and_node(context, host, node):
@@ -1612,7 +1615,7 @@ def agent_build_update(context, agent_build_id, values):
 ####################
 
 
-def bw_usage_get(context, uuid, start_period, mac):
+def bw_usage_get(context, uuid, start_period, mac, use_slave=False):
     """Return bw usage for instance and mac in a given audit period."""
     return IMPL.bw_usage_get(context, uuid, start_period, mac)
 

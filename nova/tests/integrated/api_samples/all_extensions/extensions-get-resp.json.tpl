@@ -105,6 +105,14 @@
             "updated": "%(timestamp)s"
         },
         {
+            "alias": "os-console-auth-tokens",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ConsoleAuthTokens",
+            "namespace": "http://docs.openstack.org/compute/ext/consoles-auth-tokens/api/v2",
+            "updated": "%(timestamp)s"
+        },
+        {
             "alias": "OS-SCH-HNT",
             "description": "%(text)s",
             "links": [],
@@ -401,6 +409,14 @@
             "updated": "%(timestamp)s"
         },
         {
+            "alias": "os-extended-hypervisors",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ExtendedHypervisors",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_hypervisors/api/v1.1",
+            "updated": "%(timestamp)s"
+        },
+        {
             "alias": "os-instance_usage_audit_log",
             "description": "%(text)s",
             "links": [],
@@ -446,14 +462,6 @@
             "links": [],
             "name": "NetworkAssociationSupport",
             "namespace": "http://docs.openstack.org/compute/ext/networks_associate/api/v2",
-            "updated": "%(timestamp)s"
-        },
-        {
-            "alias": "os-quota-class-sets",
-            "description": "%(text)s",
-            "links": [],
-            "name": "QuotaClasses",
-            "namespace": "http://docs.openstack.org/compute/ext/quota-classes-sets/api/v1.1",
             "updated": "%(timestamp)s"
         },
         {
@@ -614,6 +622,22 @@
             "links": [],
             "name": "BareMetalExtStatus",
             "namespace": "http://docs.openstack.org/compute/ext/baremetal_ext_status/api/v2",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "os-preserve-ephemeral-rebuild",
+            "description": "%(text)s",
+            "links": [],
+            "name": "PreserveEphemeralOnRebuild",
+            "namespace": "http://docs.openstack.org/compute/ext/preserve_ephemeral_rebuild/api/v2",
+            "updated": "%(timestamp)s"
+        },
+        {
+            "alias": "os-extended-services-delete",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ExtendedServicesDelete",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_services_delete/api/v2",
             "updated": "%(timestamp)s"
         }
     ]

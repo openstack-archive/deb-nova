@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -28,11 +26,11 @@ from nova.compute import flavors
 from nova import exception
 from nova.network import model as network_model
 from nova import notifications
-from nova import notifier as notify
 from nova.objects import instance as instance_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log
 from nova.openstack.common import timeutils
+from nova import rpc
 from nova import utils
 from nova.virt import driver
 
@@ -41,12 +39,11 @@ CONF.import_opt('host', 'nova.netconf')
 LOG = log.getLogger(__name__)
 
 
-def add_instance_fault_from_exc(context, conductor,
-                                instance, fault, exc_info=None):
-    """Adds the specified fault to the database."""
+def exception_to_dict(fault):
+    """Converts exceptions to a dict for use in notifications."""
+    #TODO(johngarbutt) move to nova/exception.py to share with wrap_exception
 
     code = 500
-
     if hasattr(fault, "kwargs"):
         code = fault.kwargs.get('code', 500)
 
@@ -67,17 +64,35 @@ def add_instance_fault_from_exc(context, conductor,
     # MySQL silently truncates overly long messages, but PostgreSQL throws an
     # error if we don't truncate it.
     u_message = unicode(message)[:255]
-    details = ''
 
-    if exc_info and code == 500:
+    fault_dict = dict(exception=fault)
+    fault_dict["message"] = u_message
+    fault_dict["code"] = code
+    return fault_dict
+
+
+def _get_fault_details(exc_info, error_code):
+    details = ''
+    if exc_info and error_code == 500:
         tb = exc_info[2]
-        details += ''.join(traceback.format_tb(tb))
+        if tb:
+            details = ''.join(traceback.format_tb(tb))
+    return unicode(details)
+
+
+def add_instance_fault_from_exc(context, conductor,
+                                instance, fault, exc_info=None):
+    """Adds the specified fault to the database."""
+
+    fault_dict = exception_to_dict(fault)
+    code = fault_dict["code"]
+    details = _get_fault_details(exc_info, code)
 
     values = {
         'instance_uuid': instance['uuid'],
         'code': code,
-        'message': u_message,
-        'details': unicode(details),
+        'message': fault_dict["message"],
+        'details': details,
         'host': CONF.host
     }
     conductor.instance_fault_create(context, values)
@@ -296,9 +311,8 @@ def notify_usage_exists(notifier, context, instance_ref, current_period=False,
 
 def notify_about_instance_usage(notifier, context, instance, event_suffix,
                                 network_info=None, system_metadata=None,
-                                extra_usage_info=None):
-    """
-    Send a notification about an instance.
+                                extra_usage_info=None, fault=None):
+    """Send a notification about an instance.
 
     :param notifier: a messaging.Notifier
     :param event_suffix: Event type like "delete.start" or "exists"
@@ -314,6 +328,13 @@ def notify_about_instance_usage(notifier, context, instance, event_suffix,
     usage_info = notifications.info_from_instance(context, instance,
             network_info, system_metadata, **extra_usage_info)
 
+    if fault:
+        # NOTE(johngarbutt) mirrors the format in wrap_exception
+        fault_payload = exception_to_dict(fault)
+        LOG.debug(fault_payload["message"], instance=instance,
+                  exc_info=True)
+        usage_info.update(fault_payload)
+
     if event_suffix.endswith("error"):
         method = notifier.error
     else:
@@ -323,8 +344,7 @@ def notify_about_instance_usage(notifier, context, instance, event_suffix,
 
 
 def notify_about_aggregate_update(context, event_suffix, aggregate_payload):
-    """
-    Send a notification about aggregate update.
+    """Send a notification about aggregate update.
 
     :param event_suffix: Event type like "create.start" or "create.end"
     :param aggregate_payload: payload for aggregate update
@@ -337,15 +357,14 @@ def notify_about_aggregate_update(context, event_suffix, aggregate_payload):
                         "notification and it will be ignored"))
             return
 
-    notifier = notify.get_notifier(service='aggregate',
-                                   host=aggregate_identifier)
+    notifier = rpc.get_notifier(service='aggregate',
+                                host=aggregate_identifier)
 
     notifier.info(context, 'aggregate.%s' % event_suffix, aggregate_payload)
 
 
 def notify_about_host_update(context, event_suffix, host_payload):
-    """
-    Send a notification about host update.
+    """Send a notification about host update.
 
     :param event_suffix: Event type like "create.start" or "create.end"
     :param host_payload: payload for host update. It is a dict and there
@@ -358,8 +377,7 @@ def notify_about_host_update(context, event_suffix, host_payload):
                    "HostAPI.%s and it will be ignored"), event_suffix)
         return
 
-    notifier = notify.get_notifier(service='api',
-                                   host=host_identifier)
+    notifier = rpc.get_notifier(service='api', host=host_identifier)
 
     notifier.info(context, 'HostAPI.%s' % event_suffix, host_payload)
 

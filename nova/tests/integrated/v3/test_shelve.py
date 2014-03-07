@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -50,7 +49,3 @@ class ShelveJsonTest(test_servers.ServersSampleBase):
         uuid = self._post_server()
         self._test_server_action(uuid, 'shelve')
         self._test_server_action(uuid, 'unshelve')
-
-
-class ShelveXmlTest(ShelveJsonTest):
-    ctype = 'xml'

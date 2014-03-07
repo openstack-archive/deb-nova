@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 Grid Dynamics
 # All Rights Reserved.
 #
@@ -23,11 +21,11 @@ from oslo.config import cfg
 import inspect
 
 from nova import exception
+from nova.openstack.common import units
 from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests import fake_processutils
 from nova.tests.virt.libvirt import fake_libvirt_utils
-from nova import unit
 from nova.virt.libvirt import imagebackend
 
 CONF = cfg.CONF
@@ -242,13 +240,13 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
 
 
 class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
-    SIZE = unit.Gi
+    SIZE = units.Gi
 
     def setUp(self):
         self.image_class = imagebackend.Qcow2
         super(Qcow2TestCase, self).setUp()
         self.QCOW2_BASE = (self.TEMPLATE_PATH +
-                           '_%d' % (self.SIZE / unit.Gi))
+                           '_%d' % (self.SIZE / units.Gi))
 
     def prepare_mocks(self):
         fn = self.mox.CreateMockAnything()
@@ -364,7 +362,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.image_class = imagebackend.Lvm
         super(LvmTestCase, self).setUp()
         self.flags(images_volume_group=self.VG, group='libvirt')
-        self.LV = '%s_%s' % (self.INSTANCE['name'], self.NAME)
+        self.LV = '%s_%s' % (self.INSTANCE['uuid'], self.NAME)
         self.OLD_STYLE_INSTANCE_PATH = None
         self.PATH = os.path.join('/dev', self.VG, self.LV)
 

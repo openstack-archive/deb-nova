@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -83,6 +81,16 @@ class ServiceManagerTestCase(test.TestCase):
         serv.start()
         self.assertEqual(serv.test_method(), 'service')
 
+    def test_service_with_min_down_time(self):
+        CONF.set_override('service_down_time', 10)
+        CONF.set_override('report_interval', 10)
+        serv = service.Service('test',
+                               'test',
+                               'test',
+                               'nova.tests.test_service.FakeManager')
+        serv.start()
+        self.assertEqual(CONF.service_down_time, 25)
+
 
 class ServiceFlagsTestCase(test.TestCase):
     def test_service_enabled_on_create_based_on_flag(self):
@@ -152,10 +160,12 @@ class ServiceTestCase(test.TestCase):
                 'FakeManager', use_mock_anything=True)
         self.mox.StubOutWithMock(self.manager_mock, 'init_host')
         self.mox.StubOutWithMock(self.manager_mock, 'pre_start_hook')
-        self.mox.StubOutWithMock(self.manager_mock, 'create_rpc_dispatcher')
         self.mox.StubOutWithMock(self.manager_mock, 'post_start_hook')
 
         FakeManager(host=self.host).AndReturn(self.manager_mock)
+
+        self.manager_mock.service_name = self.topic
+        self.manager_mock.additional_endpoints = []
 
         # init_host is called before any service record is created
         self.manager_mock.init_host()
@@ -163,7 +173,6 @@ class ServiceTestCase(test.TestCase):
         # pre_start_hook is called after service record is created,
         # but before RPC consumer is created
         self.manager_mock.pre_start_hook()
-        self.manager_mock.create_rpc_dispatcher(None)
         # post_start_hook is called after RPC consumer is created.
         self.manager_mock.post_start_hook()
 
@@ -175,18 +184,53 @@ class ServiceTestCase(test.TestCase):
                                'nova.tests.test_service.FakeManager')
         serv.start()
 
+    def test_service_check_create_race(self):
+        self.manager_mock = self.mox.CreateMock(FakeManager)
+        self.mox.StubOutWithMock(sys.modules[__name__], 'FakeManager',
+                                 use_mock_anything=True)
+        self.mox.StubOutWithMock(self.manager_mock, 'init_host')
+        self.mox.StubOutWithMock(self.manager_mock, 'pre_start_hook')
+        self.mox.StubOutWithMock(self.manager_mock, 'post_start_hook')
+
+        FakeManager(host=self.host).AndReturn(self.manager_mock)
+
+        # init_host is called before any service record is created
+        self.manager_mock.init_host()
+
+        db.service_get_by_args(mox.IgnoreArg(), self.host, self.binary
+                               ).AndRaise(exception.NotFound)
+        ex = exception.ServiceTopicExists(host='foo', topic='bar')
+        db.service_create(mox.IgnoreArg(), mox.IgnoreArg()
+                          ).AndRaise(ex)
+
+        class TestException(Exception):
+            pass
+
+        db.service_get_by_args(mox.IgnoreArg(), self.host, self.binary
+                               ).AndRaise(TestException)
+
+        self.mox.ReplayAll()
+
+        serv = service.Service(self.host,
+                               self.binary,
+                               self.topic,
+                               'nova.tests.test_service.FakeManager')
+        self.assertRaises(TestException, serv.start)
+
     def test_parent_graceful_shutdown(self):
         self.manager_mock = self.mox.CreateMock(FakeManager)
         self.mox.StubOutWithMock(sys.modules[__name__],
                 'FakeManager', use_mock_anything=True)
         self.mox.StubOutWithMock(self.manager_mock, 'init_host')
         self.mox.StubOutWithMock(self.manager_mock, 'pre_start_hook')
-        self.mox.StubOutWithMock(self.manager_mock, 'create_rpc_dispatcher')
         self.mox.StubOutWithMock(self.manager_mock, 'post_start_hook')
 
         self.mox.StubOutWithMock(_service.Service, 'stop')
 
         FakeManager(host=self.host).AndReturn(self.manager_mock)
+
+        self.manager_mock.service_name = self.topic
+        self.manager_mock.additional_endpoints = []
 
         # init_host is called before any service record is created
         self.manager_mock.init_host()
@@ -194,7 +238,6 @@ class ServiceTestCase(test.TestCase):
         # pre_start_hook is called after service record is created,
         # but before RPC consumer is created
         self.manager_mock.pre_start_hook()
-        self.manager_mock.create_rpc_dispatcher(None)
         # post_start_hook is called after RPC consumer is created.
         self.manager_mock.post_start_hook()
 
@@ -222,6 +265,11 @@ class TestWSGIService(test.TestCase):
         test_service.start()
         self.assertNotEqual(0, test_service.port)
         test_service.stop()
+
+    def test_service_start_with_illegal_workers(self):
+        CONF.set_override("osapi_compute_workers", -1)
+        self.assertRaises(exception.InvalidInput,
+                          service.WSGIService, "osapi_compute")
 
     @testtools.skipIf(not utils.is_ipv6_supported(), "no ipv6 support")
     def test_service_random_port_with_ipv6(self):

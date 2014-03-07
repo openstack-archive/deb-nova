@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from lxml import etree
 import testtools
 import webob.exc
 
@@ -38,9 +37,8 @@ def stub_service_get_by_host_and_topic(context, host_name, topic):
 
 
 def stub_set_host_enabled(context, host_name, enabled):
-    """
-    Simulates three possible behaviours for VM drivers or compute drivers when
-    enabling or disabling a host.
+    """Simulates three possible behaviours for VM drivers or compute
+    drivers when enabling or disabling a host.
 
     'enabled' means new instances can go to this host
     'disabled' means they can't
@@ -133,6 +131,16 @@ class FakeRequestWithNovaZone(object):
     GET = {"zone": "nova"}
 
 
+class FakeRequestWithNovaService(object):
+    environ = {"nova.context": context_maker.get_admin_context()}
+    GET = {"service": "compute"}
+
+
+class FakeRequestWithInvalidNovaService(object):
+    environ = {"nova.context": context_maker.get_admin_context()}
+    GET = {"service": "invalid"}
+
+
 class HostTestCase(test.TestCase):
     """Test Case for hosts."""
 
@@ -174,6 +182,14 @@ class HostTestCase(test.TestCase):
         self.assertIn('hosts', result)
         hosts = result['hosts']
         self.assertEqual(fake_hosts.HOST_LIST_NOVA_ZONE, hosts)
+
+    def test_list_hosts_with_service(self):
+        result = self.controller.index(FakeRequestWithNovaService())
+        self.assertEqual(fake_hosts.HOST_LIST_NOVA_ZONE, result['hosts'])
+
+    def test_list_hosts_with_invalid_service(self):
+        result = self.controller.index(FakeRequestWithInvalidNovaService())
+        self.assertEqual([], result['hosts'])
 
     def test_disable_host(self):
         self._test_host_update('host_c1', 'status', 'disable', 'disabled')
@@ -357,7 +373,7 @@ class HostTestCase(test.TestCase):
                'vcpus': 16, 'memory_mb': 32, 'local_gb': 100,
                'vcpus_used': 16, 'memory_mb_used': 32, 'local_gb_used': 10,
                'hypervisor_type': 'qemu', 'hypervisor_version': 12003,
-               'cpu_info': '', 'stats': {}}
+               'cpu_info': '', 'stats': ''}
         db.compute_node_create(ctxt, dic)
 
         return db.service_get(ctxt, s_ref['id'])
@@ -398,25 +414,3 @@ class HostTestCase(test.TestCase):
         db.service_destroy(ctxt, s_ref['id'])
         db.instance_destroy(ctxt, i_ref1['uuid'])
         db.instance_destroy(ctxt, i_ref2['uuid'])
-
-
-class HostSerializerTest(test.TestCase):
-    def setUp(self):
-        super(HostSerializerTest, self).setUp()
-
-    def test_index_serializer(self):
-        serializer = os_hosts.HostIndexTemplate()
-        text = serializer.serialize(fake_hosts.OS_API_HOST_LIST)
-
-        tree = etree.fromstring(text)
-
-        self.assertEqual('hosts', tree.tag)
-        self.assertEqual(len(fake_hosts.HOST_LIST), len(tree))
-        for i in range(len(fake_hosts.HOST_LIST)):
-            self.assertEqual('host', tree[i].tag)
-            self.assertEqual(fake_hosts.HOST_LIST[i]['host_name'],
-                             tree[i].get('host_name'))
-            self.assertEqual(fake_hosts.HOST_LIST[i]['service'],
-                             tree[i].get('service'))
-            self.assertEqual(fake_hosts.HOST_LIST[i]['zone'],
-                             tree[i].get('zone'))

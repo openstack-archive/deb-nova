@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 IBM Corp.
 # All Rights Reserved.
 #
@@ -23,16 +21,34 @@ from nova import context
 from nova import db
 from nova.network import nova_ipam_lib
 from nova import test
+from nova.tests.objects import test_fixed_ip
+from nova.tests.objects import test_network
+
+
+fake_vif = {
+    'created_at': None,
+    'updated_at': None,
+    'deleted_at': None,
+    'deleted': 0,
+    'id': 1,
+    'address': '00:00:00:00:00:00',
+    'network_id': 123,
+    'instance_uuid': 'fake-uuid',
+    'uuid': 'fake-uuid-2',
+}
 
 
 class NeutronNovaIPAMTestCase(test.NoDBTestCase):
     def test_get_v4_ips_by_interface(self):
+        fake_ips = [dict(test_fixed_ip.fake_fixed_ip,
+                         address='192.168.1.101'),
+                    dict(test_fixed_ip.fake_fixed_ip,
+                         address='192.168.1.102')]
         with contextlib.nested(
                 mock.patch.object(db, 'virtual_interface_get_by_uuid',
-                                  return_value={'id': 'fakeid'}),
+                                  return_value=fake_vif),
                 mock.patch.object(db, 'fixed_ips_by_virtual_interface',
-                                  return_value=[{'address': '192.168.1.101'},
-                                                {'address': '192.168.1.102'}])
+                                  return_value=fake_ips)
         ):
             ipam_lib = nova_ipam_lib.NeutronNovaIPAMLib(None)
             v4_IPs = ipam_lib.get_v4_ips_by_interface(None,
@@ -58,12 +74,13 @@ class NeutronNovaIPAMTestCase(test.NoDBTestCase):
             def elevated(self):
                 pass
 
+        net = dict(test_network.fake_network,
+                   cidr_v6='2001:db8::')
         with contextlib.nested(
                 mock.patch.object(db, 'network_get_by_uuid',
-                                  return_value={'cidr_v6': '2001:db8::'}),
+                                  return_value=net),
                 mock.patch.object(db, 'virtual_interface_get_by_uuid',
-                                  return_value={'address':
-                                                '02:16:3e:33:44:55'})
+                                  return_value=fake_vif)
         ):
             ipam_lib = nova_ipam_lib.NeutronNovaIPAMLib(None)
             ctx = FakeContext('user_id', 'project_id')
@@ -71,16 +88,18 @@ class NeutronNovaIPAMTestCase(test.NoDBTestCase):
                                                       'net_id',
                                                       'vif_id',
                                                       'project_id')
-            self.assertEqual(['2001:db8::16:3eff:fe33:4455'], v6_IPs)
+            self.assertEqual(['2001:db8::200:ff:fe00:0'], v6_IPs)
 
     def test_get_v6_ips_by_interface_bad_id(self):
         class FakeContext(context.RequestContext):
             def elevated(self):
                 pass
 
+        net = dict(test_network.fake_network,
+                   cidr_v6='2001:db8::')
         with contextlib.nested(
                 mock.patch.object(db, 'network_get_by_uuid',
-                                  return_value={'cidr_v6': '2001:db8::'}),
+                                  return_value=net),
                 mock.patch.object(db, 'virtual_interface_get_by_uuid',
                                   return_value=None)
         ):

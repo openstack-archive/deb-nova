@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright 2013 NEC Corporation.  All rights reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -471,6 +469,59 @@ class HostnameIPaddressTestCase(APIValidationTestCase):
         detail = ("Invalid input for field/attribute foo. Value: my$host."
                   " 'my$host' does not match '^[a-zA-Z0-9-_.:]*$'")
         self.check_validation_error(self.post, body={'foo': 'my$host'},
+                                    expected_detail=detail)
+
+
+class NameTestCase(APIValidationTestCase):
+
+    def setUp(self):
+        super(NameTestCase, self).setUp()
+        schema = {
+            'type': 'object',
+            'properties': {
+                'foo': parameter_types.name,
+            },
+        }
+
+        @validation.schema(request_body_schema=schema)
+        def post(body):
+            return 'Validation succeeded.'
+
+        self.post = post
+
+    def test_validate_name(self):
+        self.assertEqual('Validation succeeded.',
+                         self.post(body={'foo': 'm1.small'}))
+        self.assertEqual('Validation succeeded.',
+                         self.post(body={'foo': 'my server'}))
+        self.assertEqual('Validation succeeded.',
+                         self.post(body={'foo': 'a'}))
+
+    def test_validate_name_fails(self):
+        pattern = "'^(?! )[a-zA-Z0-9. _-]+(?<! )$'"
+        detail = ("Invalid input for field/attribute foo. Value:  ."
+                  " ' ' does not match %s") % pattern
+        self.check_validation_error(self.post, body={'foo': ' '},
+                                    expected_detail=detail)
+
+        detail = ("Invalid input for field/attribute foo. Value:  server."
+                  " ' server' does not match %s") % pattern
+        self.check_validation_error(self.post, body={'foo': ' server'},
+                                    expected_detail=detail)
+
+        detail = ("Invalid input for field/attribute foo. Value: server ."
+                  " 'server ' does not match %s") % pattern
+        self.check_validation_error(self.post, body={'foo': 'server '},
+                                    expected_detail=detail)
+
+        detail = ("Invalid input for field/attribute foo. Value:  a."
+                  " ' a' does not match %s") % pattern
+        self.check_validation_error(self.post, body={'foo': ' a'},
+                                    expected_detail=detail)
+
+        detail = ("Invalid input for field/attribute foo. Value: a ."
+                  " 'a ' does not match %s") % pattern
+        self.check_validation_error(self.post, body={'foo': 'a '},
                                     expected_detail=detail)
 
 

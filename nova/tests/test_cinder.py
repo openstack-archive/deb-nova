@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -14,7 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import urlparse
+import six.moves.urllib.parse as urlparse
 
 from cinderclient import exceptions as cinder_exception
 from nova import context

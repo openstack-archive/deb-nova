@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 Cloudbase Solutions Srl
 # All Rights Reserved.
 #
@@ -26,7 +24,7 @@ from oslo.config import cfg
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova import unit
+from nova.openstack.common import units
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import utilsfactory
 
@@ -81,8 +79,8 @@ class HostOps(object):
         drive = os.path.splitdrive(self._pathutils.get_instances_dir())[0]
         (size, free_space) = self._hostutils.get_volume_info(drive)
 
-        total_gb = size / unit.Gi
-        free_gb = free_space / unit.Gi
+        total_gb = size / units.Gi
+        free_gb = free_space / units.Gi
         used_gb = total_gb - free_gb
         return (total_gb, free_gb, used_gb)
 

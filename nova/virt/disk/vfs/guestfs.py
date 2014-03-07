@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 Red Hat, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -30,8 +28,7 @@ guestfs = None
 
 class VFSGuestFS(vfs.VFS):
 
-    """
-    This class implements a VFS module that uses the libguestfs APIs
+    """This class implements a VFS module that uses the libguestfs APIs
     to access the disk image. The disk image is never mapped into
     the host filesystem, thus avoiding any potential for symlink
     attacks from the guest filesystem.
@@ -108,7 +105,16 @@ class VFSGuestFS(vfs.VFS):
     def setup(self):
         LOG.debug(_("Setting up appliance for %(imgfile)s %(imgfmt)s") %
                   {'imgfile': self.imgfile, 'imgfmt': self.imgfmt})
-        self.handle = tpool.Proxy(guestfs.GuestFS(close_on_exit=False))
+        try:
+            self.handle = tpool.Proxy(guestfs.GuestFS(close_on_exit=False))
+        except TypeError as e:
+            if 'close_on_exit' in str(e):
+                # NOTE(russellb) In case we're not using a version of
+                # libguestfs new enough to support the close_on_exit paramater,
+                # which was added in libguestfs 1.20.
+                self.handle = tpool.Proxy(guestfs.GuestFS())
+            else:
+                raise
 
         try:
             self.handle.add_drive_opts(self.imgfile, format=self.imgfmt)
@@ -118,13 +124,18 @@ class VFSGuestFS(vfs.VFS):
 
             self.handle.aug_init("/", 0)
         except RuntimeError as e:
-            # dereference object and implicitly close()
-            self.handle = None
+            # explicitly teardown instead of implicit close()
+            # to prevent orphaned VMs in cases when an implicit
+            # close() is not enough
+            self.teardown()
             raise exception.NovaException(
                 _("Error mounting %(imgfile)s with libguestfs (%(e)s)") %
                 {'imgfile': self.imgfile, 'e': e})
         except Exception:
-            self.handle = None
+            # explicitly teardown instead of implicit close()
+            # to prevent orphaned VMs in cases when an implicit
+            # close() is not enough
+            self.teardown()
             raise
 
     def teardown(self):

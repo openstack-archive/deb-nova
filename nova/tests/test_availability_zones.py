@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Netease Corporation
 # All Rights Reserved.
 #
@@ -84,8 +82,23 @@ class AvailabilityZoneTestCases(test.TestCase):
                                         aggregate['id'], service['host'])
 
     def test_rest_availability_zone_reset_cache(self):
+        az._get_cache().add('cache', 'fake_value')
         az.reset_cache()
         self.assertIsNone(az._get_cache().get('cache'))
+
+    def test_update_host_availability_zone_cache(self):
+        """Test availability zone cache could be update."""
+        service = self._create_service_with_topic('compute', self.host)
+
+        # Create a new aggregate with an AZ and add the host to the AZ
+        az_name = 'az1'
+        cache_key = az._make_cache_key(self.host)
+        agg_az1 = self._create_az('agg-az1', az_name)
+        self._add_to_aggregate(service, agg_az1)
+        az.update_host_availability_zone_cache(self.context, self.host)
+        self.assertEqual(az._get_cache().get(cache_key), 'az1')
+        az.update_host_availability_zone_cache(self.context, self.host, 'az2')
+        self.assertEqual(az._get_cache().get(cache_key), 'az2')
 
     def test_set_availability_zone_compute_service(self):
         """Test for compute service get right availability zone."""
@@ -112,9 +125,9 @@ class AvailabilityZoneTestCases(test.TestCase):
         service = self._create_service_with_topic('network', self.host)
         services = db.service_get_all(self.context)
         new_service = az.set_availability_zones(self.context, services)[0]
-        self.assertEqual(type(services[0]['host']), unicode)
+        self.assertIsInstance(services[0]['host'], unicode)
         cached_key = az._make_cache_key(services[0]['host'])
-        self.assertEqual(type(cached_key), str)
+        self.assertIsInstance(cached_key, str)
         self._destroy_service(service)
 
     def test_set_availability_zone_not_compute_service(self):

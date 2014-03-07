@@ -18,12 +18,12 @@ Tests For CellsManager
 import copy
 import datetime
 
+import mock
 from oslo.config import cfg
 
 from nova.cells import messaging
 from nova.cells import utils as cells_utils
 from nova import context
-from nova.openstack.common import rpc
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.cells import fakes
@@ -73,11 +73,11 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         self.cells_manager.get_cell_info_for_neighbors(self.ctxt)
 
     def test_post_start_hook_child_cell(self):
-        self.mox.StubOutWithMock(self.driver, 'start_consumers')
+        self.mox.StubOutWithMock(self.driver, 'start_servers')
         self.mox.StubOutWithMock(context, 'get_admin_context')
         self.mox.StubOutWithMock(self.cells_manager, '_update_our_parents')
 
-        self.driver.start_consumers(self.msg_runner)
+        self.driver.start_servers(self.msg_runner)
         context.get_admin_context().AndReturn(self.ctxt)
         self.cells_manager._update_our_parents(self.ctxt)
         self.mox.ReplayAll()
@@ -88,14 +88,14 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         msg_runner = cells_manager.msg_runner
         driver = cells_manager.driver
 
-        self.mox.StubOutWithMock(driver, 'start_consumers')
+        self.mox.StubOutWithMock(driver, 'start_servers')
         self.mox.StubOutWithMock(context, 'get_admin_context')
         self.mox.StubOutWithMock(msg_runner,
                                  'ask_children_for_capabilities')
         self.mox.StubOutWithMock(msg_runner,
                                  'ask_children_for_capacities')
 
-        driver.start_consumers(msg_runner)
+        driver.start_servers(msg_runner)
         context.get_admin_context().AndReturn(self.ctxt)
         msg_runner.ask_children_for_capabilities(self.ctxt)
         msg_runner.ask_children_for_capacities(self.ctxt)
@@ -342,13 +342,23 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
             params_to_update=params_to_update)
         self.assertEqual(expected_response, response)
 
+    def test_service_delete(self):
+        fake_cell = 'fake-cell'
+        service_id = '1'
+        cell_service_id = cells_utils.cell_with_item(fake_cell, service_id)
+
+        with mock.patch.object(self.msg_runner,
+                               'service_delete') as service_delete:
+            self.cells_manager.service_delete(self.ctxt, cell_service_id)
+            service_delete.assert_called_once_with(
+                self.ctxt, fake_cell, service_id)
+
     def test_proxy_rpc_to_manager(self):
         self.mox.StubOutWithMock(self.msg_runner,
                                  'proxy_rpc_to_manager')
         fake_response = self._get_fake_response()
         cell_and_host = cells_utils.cell_with_item('fake-cell', 'fake-host')
-        topic = rpc.queue_get_for(self.ctxt, CONF.compute_topic,
-                                  cell_and_host)
+        topic = "%s.%s" % (CONF.compute_topic, cell_and_host)
         self.msg_runner.proxy_rpc_to_manager(self.ctxt, 'fake-cell',
                 'fake-host', topic, 'fake-rpc-msg',
                 True, -1).AndReturn(fake_response)

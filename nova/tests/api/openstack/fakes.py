@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -290,9 +288,8 @@ def _make_image_fixtures():
 
 
 def stub_out_glanceclient_create(stubs, sent_to_glance):
-    """
-    We return the metadata sent to glance by modifying the sent_to_glance dict
-    in place.
+    """We return the metadata sent to glance by modifying the sent_to_glance
+    dict in place
     """
     orig_add_image = glanceclient.v1.images.ImageManager.create
 
@@ -445,7 +442,7 @@ def fake_instance_get(**kwargs):
     return _return_server
 
 
-def fake_actions_to_locked_server(self, context, instance, *args):
+def fake_actions_to_locked_server(self, context, instance, *args, **kwargs):
     raise exc.InstanceIsLocked(instance_uuid=instance['uuid'])
 
 
@@ -554,6 +551,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "vcpus": 0,
         "root_gb": 0,
         "ephemeral_gb": 0,
+        "ephemeral_key_uuid": None,
         "hostname": display_name or server_name,
         "host": host,
         "node": node,

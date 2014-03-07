@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 IBM Corp.
 # Copyright 2011 OpenStack Foundation
 #
@@ -27,6 +25,7 @@ from nova.tests.virt.vmwareapi import stubs
 from nova.virt import fake
 from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import fake as vmwareapi_fake
+from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
 from nova.virt.vmwareapi import vmware_images
 
@@ -34,6 +33,7 @@ from nova.virt.vmwareapi import vmware_images
 class ConfigDriveTestCase(test.NoDBTestCase):
     def setUp(self):
         super(ConfigDriveTestCase, self).setUp()
+        vm_util.vm_refs_cache_reset()
         self.context = context.RequestContext('fake', 'fake', is_admin=False)
         cluster_name = 'test_cluster'
         self.flags(cluster_name=[cluster_name],
@@ -65,7 +65,7 @@ class ConfigDriveTestCase(test.NoDBTestCase):
                                   {'address': 'de:ad:be:ef:be:ef'}
                               ],
                               'memory_mb': 8192,
-                              'instance_type': 'm1.large',
+                              'flavor': 'm1.large',
                               'vcpus': 4,
                               'root_gb': 80,
                               'image_ref': '1',
@@ -120,7 +120,6 @@ class ConfigDriveTestCase(test.NoDBTestCase):
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg())
         self.conn._vmops._attach_cdrom_to_vm(mox.IgnoreArg(),
-                                               mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg())

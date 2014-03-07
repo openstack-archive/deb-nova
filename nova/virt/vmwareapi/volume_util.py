@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 VMware, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -19,9 +17,6 @@ Helper methods for operations related to the management of volumes,
 and storage repositories
 """
 
-import re
-import string
-
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import vim_util
@@ -38,9 +33,7 @@ class StorageError(Exception):
 
 
 def get_host_iqn(session, cluster=None):
-    """
-    Return the host iSCSI IQN.
-    """
+    """Return the host iSCSI IQN."""
     host_mor = vm_util.get_host_ref(session, cluster)
     hbas_ret = session._call_method(vim_util, "get_dynamic_property",
                                     host_mor, "HostSystem",
@@ -58,9 +51,7 @@ def get_host_iqn(session, cluster=None):
 
 
 def find_st(session, data, cluster=None):
-    """
-    Return the iSCSI Target given a volume info.
-    """
+    """Return the iSCSI Target given a volume info."""
     target_portal = data['target_portal']
     target_iqn = data['target_iqn']
     host_mor = vm_util.get_host_ref(session, cluster)
@@ -131,9 +122,7 @@ def find_st(session, data, cluster=None):
 
 
 def rescan_iscsi_hba(session, cluster=None):
-    """
-    Rescan the iSCSI HBA to discover iSCSI targets.
-    """
+    """Rescan the iSCSI HBA to discover iSCSI targets."""
     host_mor = vm_util.get_host_ref(session, cluster)
     storage_system_mor = session._call_method(vim_util, "get_dynamic_property",
                                               host_mor, "HostSystem",
@@ -160,16 +149,3 @@ def rescan_iscsi_hba(session, cluster=None):
     session._call_method(session._get_vim(), "RescanHba", storage_system_mor,
                          hbaDevice=hba_device)
     LOG.debug(_("Rescanned HBA %s ") % hba_device)
-
-
-def mountpoint_to_number(mountpoint):
-    """Translate a mountpoint like /dev/sdc into a numeric."""
-    if mountpoint.startswith('/dev/'):
-        mountpoint = mountpoint[5:]
-    if re.match('^[hsv]d[a-p]$', mountpoint):
-        return (ord(mountpoint[2:3]) - ord('a'))
-    elif re.match('^[0-9]+$', mountpoint):
-        return string.atoi(mountpoint, 10)
-    else:
-        LOG.warn(_("Mountpoint cannot be translated: %s") % mountpoint)
-        return -1

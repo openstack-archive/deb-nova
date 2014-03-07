@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2011 Justin Santa Barbara
@@ -43,7 +41,7 @@ BUILDING = 0x09
 # TODO(justinsb): Power state really needs to be a proper class,
 # so that we're not locked into the libvirt status codes and can put mapping
 # logic here rather than spread throughout the code
-_STATE_MAP = {
+STATE_MAP = {
     NOSTATE: 'pending',
     RUNNING: 'running',
     PAUSED: 'paused',
@@ -52,11 +50,3 @@ _STATE_MAP = {
     SUSPENDED: 'suspended',
     BUILDING: 'building',
 }
-
-
-def name(code):
-    return _STATE_MAP[code]
-
-
-def valid_states():
-    return _STATE_MAP.keys()

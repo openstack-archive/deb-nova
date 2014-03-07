@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright 2013 NEC Corporation.  All rights reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -24,8 +22,7 @@ from validators import _SchemaValidator
 
 
 def schema(request_body_schema):
-    """
-    Register a schema to validate request body.
+    """Register a schema to validate request body.
 
     Registered schema will be used for validating request body just before
     API method executing.

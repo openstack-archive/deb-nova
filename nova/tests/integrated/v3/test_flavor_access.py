@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2013 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -88,7 +87,3 @@ class FlavorAccessSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
         }
         self._verify_response('flavor-access-remove-tenant-resp',
                               exp_subs, response, 200)
-
-
-class FlavorAccessSampleXmlTests(FlavorAccessSampleJsonTests):
-    ctype = 'xml'

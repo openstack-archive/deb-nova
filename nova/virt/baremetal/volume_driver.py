@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright (c) 2012 NTT DOCOMO, INC.
@@ -29,7 +28,7 @@ from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
 from nova.virt.baremetal import db as bmdb
-from nova.virt.libvirt import utils as libvirt_utils
+from nova.virt import volumeutils
 
 opts = [
     cfg.BoolOpt('use_unsafe_iscsi',
@@ -39,7 +38,8 @@ opts = [
                       'volumes are exported with globally opened ACL'),
     cfg.StrOpt('iscsi_iqn_prefix',
                default='iqn.2010-10.org.openstack.baremetal',
-               help='iSCSI IQN prefix used in baremetal volume connections.'),
+               help='The iSCSI IQN prefix used in baremetal volume '
+                    'connections.'),
     ]
 
 baremetal_group = cfg.OptGroup(name='baremetal',
@@ -190,7 +190,7 @@ class VolumeDriver(object):
 
     def get_volume_connector(self, instance):
         if not self._initiator:
-            self._initiator = libvirt_utils.get_iscsi_initiator()
+            self._initiator = volumeutils.get_iscsi_initiator()
             if not self._initiator:
                 LOG.warn(_('Could not determine iscsi initiator name'),
                          instance=instance)
@@ -289,13 +289,9 @@ class LibvirtVolumeDriver(VolumeDriver):
                      instance=instance)
 
     def get_all_block_devices(self):
-        """
-        Return all block devices in use on this node.
-        """
+        """Return all block devices in use on this node."""
         return _list_backingstore_path()
 
     def get_hypervisor_version(self):
-        """
-        A dummy method for LibvirtBaseVolumeDriver.connect_volume.
-        """
+        """A dummy method for LibvirtBaseVolumeDriver.connect_volume."""
         return 1

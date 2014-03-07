@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -16,8 +14,8 @@
 #    under the License.
 
 from nova.api.openstack import compute
+import nova.compute.api
 from nova.openstack.common import jsonutils
-import nova.openstack.common.rpc
 from nova import test
 from nova.tests.api.openstack import fakes
 

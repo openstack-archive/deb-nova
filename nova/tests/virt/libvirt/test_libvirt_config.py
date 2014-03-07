@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 #    Copyright (C) 2012 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,9 +14,9 @@
 
 from lxml import etree
 
+from nova.openstack.common import units
 from nova import test
 from nova.tests import matchers
-from nova import unit
 from nova.virt.libvirt import config
 
 
@@ -86,7 +84,7 @@ class LibvirtConfigCapsTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigCaps()
         obj.parse_str(xmlin)
 
-        self.assertEqual(type(obj.host), config.LibvirtConfigCapsHost)
+        self.assertIsInstance(obj.host, config.LibvirtConfigCapsHost)
         self.assertEqual(obj.host.uuid, "c7a5fdbd-edaf-9455-926a-d65c16db1809")
 
         xmlout = obj.to_xml()
@@ -959,7 +957,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_lxc(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "lxc"
-        obj.memory = 100 * unit.Mi
+        obj.memory = 100 * units.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.name = "demo"
@@ -995,7 +993,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_xen_pv(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "xen"
-        obj.memory = 100 * unit.Mi
+        obj.memory = 100 * units.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.name = "demo"
@@ -1003,7 +1001,6 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.os_type = "linux"
         obj.os_kernel = "/tmp/vmlinuz"
         obj.os_initrd = "/tmp/ramdisk"
-        obj.os_root = "root=xvda"
         obj.os_cmdline = "console=xvc0"
 
         disk = config.LibvirtConfigGuestDisk()
@@ -1026,7 +1023,6 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
                 <kernel>/tmp/vmlinuz</kernel>
                 <initrd>/tmp/ramdisk</initrd>
                 <cmdline>console=xvc0</cmdline>
-                <root>root=xvda</root>
               </os>
               <devices>
                 <disk type="file" device="disk">
@@ -1039,7 +1035,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_xen_hvm(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "xen"
-        obj.memory = 100 * unit.Mi
+        obj.memory = 100 * units.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.name = "demo"
@@ -1087,7 +1083,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
     def test_config_kvm(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "kvm"
-        obj.memory = 100 * unit.Mi
+        obj.memory = 100 * units.Mi
         obj.vcpus = 2
         obj.cpuset = "0-3,^2,4-5"
         obj.cpu_shares = 100
@@ -1152,6 +1148,28 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               </devices>
             </domain>""")
 
+    def test_config_machine_type(self):
+        obj = config.LibvirtConfigGuest()
+        obj.virt_type = "kvm"
+        obj.memory = 100 * units.Mi
+        obj.vcpus = 2
+        obj.name = "demo"
+        obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
+        obj.os_type = "hvm"
+        obj.os_mach_type = "fake_machine_type"
+        xml = obj.to_xml()
+
+        self.assertXmlEqual(xml, """
+            <domain type="kvm">
+              <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
+              <name>demo</name>
+              <memory>104857600</memory>
+              <vcpu>2</vcpu>
+              <os>
+                <type machine="fake_machine_type">hvm</type>
+              </os>
+            </domain>""")
+
     def test_ConfigGuest_parse_devices(self):
         xmldoc = """ <domain type="kvm">
                       <devices>
@@ -1163,8 +1181,8 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigGuest()
         obj.parse_str(xmldoc)
         self.assertEqual(len(obj.devices), 1)
-        self.assertEqual(type(obj.devices[0]),
-                         config.LibvirtConfigGuestHostdevPCI)
+        self.assertIsInstance(obj.devices[0],
+                              config.LibvirtConfigGuestHostdevPCI)
         self.assertEqual(obj.devices[0].mode, 'subsystem')
         self.assertEqual(obj.devices[0].managed, 'no')
 
@@ -1287,10 +1305,10 @@ class LibvirtConfigNodeDeviceTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigNodeDevice()
         obj.parse_str(xmlin)
 
-        self.assertEqual(type(obj.pci_capability),
-                         config.LibvirtConfigNodeDevicePciCap)
-        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
-                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertIsInstance(obj.pci_capability,
+                              config.LibvirtConfigNodeDevicePciCap)
+        self.assertIsInstance(obj.pci_capability.fun_capability[0],
+                              config.LibvirtConfigNodeDevicePciSubFunctionCap)
         self.assertEqual(obj.pci_capability.fun_capability[0].type,
                           "virt_functions")
         self.assertEqual(len(obj.pci_capability.fun_capability[0].
@@ -1322,10 +1340,10 @@ class LibvirtConfigNodeDeviceTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigNodeDevice()
         obj.parse_str(xmlin)
 
-        self.assertEqual(type(obj.pci_capability),
-                         config.LibvirtConfigNodeDevicePciCap)
-        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
-                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertIsInstance(obj.pci_capability,
+                              config.LibvirtConfigNodeDevicePciCap)
+        self.assertIsInstance(obj.pci_capability.fun_capability[0],
+                              config.LibvirtConfigNodeDevicePciSubFunctionCap)
         self.assertEqual(obj.pci_capability.fun_capability[0].type,
                           "phys_function")
         self.assertEqual(len(obj.pci_capability.fun_capability[0].
@@ -1354,10 +1372,10 @@ class LibvirtConfigNodeDeviceTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigNodeDevice()
         obj.parse_str(xmlin)
 
-        self.assertEqual(type(obj.pci_capability),
-                         config.LibvirtConfigNodeDevicePciCap)
-        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
-                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertIsInstance(obj.pci_capability,
+                              config.LibvirtConfigNodeDevicePciCap)
+        self.assertIsInstance(obj.pci_capability.fun_capability[0],
+                              config.LibvirtConfigNodeDevicePciSubFunctionCap)
         self.assertEqual(obj.pci_capability.fun_capability[0].type,
                           "virt_functions")
 
@@ -1384,10 +1402,10 @@ class LibvirtConfigNodeDeviceTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigNodeDevice()
         obj.parse_str(xmlin)
 
-        self.assertEqual(type(obj.pci_capability),
-                         config.LibvirtConfigNodeDevicePciCap)
-        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
-                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertIsInstance(obj.pci_capability,
+                              config.LibvirtConfigNodeDevicePciCap)
+        self.assertIsInstance(obj.pci_capability.fun_capability[0],
+                              config.LibvirtConfigNodeDevicePciSubFunctionCap)
         self.assertEqual(obj.pci_capability.fun_capability[0].type,
                           "virt_functions")
 
@@ -1418,10 +1436,10 @@ class LibvirtConfigNodeDeviceTest(LibvirtConfigBaseTest):
         obj = config.LibvirtConfigNodeDevice()
         obj.parse_str(xmlin)
 
-        self.assertEqual(type(obj.pci_capability),
-                          config.LibvirtConfigNodeDevicePciCap)
-        self.assertEqual(type(obj.pci_capability.fun_capability[0]),
-                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertIsInstance(obj.pci_capability,
+                              config.LibvirtConfigNodeDevicePciCap)
+        self.assertIsInstance(obj.pci_capability.fun_capability[0],
+                              config.LibvirtConfigNodeDevicePciSubFunctionCap)
         self.assertEqual(obj.pci_capability.fun_capability[0].type,
                           "phys_function")
         self.assertEqual(obj.pci_capability.fun_capability[1].type,
@@ -1455,8 +1473,8 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.product_id, '0x8086-3')
         self.assertEqual(obj.vendor, "Intel Inc.")
         self.assertEqual(obj.vendor_id, "0x8086")
-        self.assertEqual(type(obj.fun_capability[0]),
-                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertIsInstance(obj.fun_capability[0],
+                              config.LibvirtConfigNodeDevicePciSubFunctionCap)
 
         self.assertEqual(obj.fun_capability[0].type, 'virt_functions')
         self.assertEqual(obj.fun_capability[0].device_addrs,
@@ -1491,8 +1509,8 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.product_id, '0x8086-3')
         self.assertEqual(obj.vendor, "Intel Inc.")
         self.assertEqual(obj.vendor_id, "0x8086")
-        self.assertEqual(type(obj.fun_capability[0]),
-                         config.LibvirtConfigNodeDevicePciSubFunctionCap)
+        self.assertIsInstance(obj.fun_capability[0],
+                              config.LibvirtConfigNodeDevicePciSubFunctionCap)
 
         self.assertEqual(obj.fun_capability[0].type, 'virt_functions')
         self.assertEqual(obj.fun_capability[0].device_addrs,
@@ -1567,3 +1585,77 @@ class LibvirtConfigGuestVideoTest(LibvirtConfigBaseTest):
                 <video>
                     <model type='qxl' vram='9216' heads='1'/>
                 </video>""")
+
+
+class LibvirtConfigGuestSeclabel(LibvirtConfigBaseTest):
+
+    def test_config_seclabel_config(self):
+        obj = config.LibvirtConfigSeclabel()
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+              <seclabel type='dynamic'/>""")
+
+    def test_config_seclabel_baselabel(self):
+        obj = config.LibvirtConfigSeclabel()
+        obj.type = 'dynamic'
+        obj.baselabel = 'system_u:system_r:my_svirt_t:s0'
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+              <seclabel type='dynamic'>
+                <baselabel>system_u:system_r:my_svirt_t:s0</baselabel>
+              </seclabel>""")
+
+
+class LibvirtConfigGuestRngTest(LibvirtConfigBaseTest):
+
+    def test_config_rng_driver(self):
+        obj = config.LibvirtConfigGuestRng()
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+<rng model='virtio'>
+    <backend model='random'/>
+</rng>""")
+
+    def test_config_rng_driver_with_rate(self):
+        obj = config.LibvirtConfigGuestRng()
+        obj.backend = '/dev/random'
+        obj.rate_period = '12'
+        obj.rate_bytes = '34'
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+<rng model='virtio'>
+    <rate period='12' bytes='34'/>
+    <backend model='random'>/dev/random</backend>
+</rng>""")
+
+
+class LibvirtConfigGuestControllerTest(LibvirtConfigBaseTest):
+
+    def test_config_guest_contoller(self):
+        obj = config.LibvirtConfigGuestController()
+        obj.type = 'scsi'
+        obj.index = 0
+        obj.model = 'virtio-scsi'
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+                <controller type='scsi' index='0' model='virtio-scsi'/>""")
+
+
+class LibvirtConfigGuestWatchdogTest(LibvirtConfigBaseTest):
+    def test_config_watchdog(self):
+        obj = config.LibvirtConfigGuestWatchdog()
+        obj.action = 'none'
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, "<watchdog model='i6300esb' action='none'/>")
+
+    def test_config_watchdog_default_action(self):
+        obj = config.LibvirtConfigGuestWatchdog()
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, "<watchdog model='i6300esb' action='reset'/>")

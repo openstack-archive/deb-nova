@@ -19,7 +19,6 @@ import webob.exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
 from nova.openstack.common.gettextutils import _
@@ -30,27 +29,6 @@ ALIAS = 'os-hosts'
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
 
 
-class HostIndexTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hosts')
-        elem = xmlutil.SubTemplateElement(root, 'host', selector='hosts')
-        elem.set('host_name')
-        elem.set('service')
-        elem.set('zone')
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class HostShowTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('host')
-        elem = xmlutil.make_flat_dict('resource', selector='host',
-                                      subselector='resource')
-        root.append(elem)
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
 class HostController(wsgi.Controller):
     """The Hosts API controller for the OpenStack API."""
     def __init__(self):
@@ -58,10 +36,8 @@ class HostController(wsgi.Controller):
         super(HostController, self).__init__()
 
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=HostIndexTemplate)
     def index(self, req):
-        """
-        :returns: A dict in the format:
+        """:returns: A dict in the format:
 
             {'hosts': [{'host_name': 'some.host.name',
                'service': 'cells',
@@ -103,6 +79,9 @@ class HostController(wsgi.Controller):
         zone = req.GET.get('zone', None)
         if zone:
             filters['availability_zone'] = zone
+        service = req.GET.get('service')
+        if service:
+            filters['topic'] = service
         services = self.api.service_get_all(context, filters=filters,
                                             set_zones=True)
         hosts = []
@@ -114,19 +93,17 @@ class HostController(wsgi.Controller):
 
     @extensions.expected_errors((400, 404, 501))
     def update(self, req, id, body):
-        """
-        :param body: example format {'host': {'status': 'enable',
+        """:param body: example format {'host': {'status': 'enable',
                                      'maintenance_mode': 'enable'}}
-        :returns:
+           :returns:
         """
         def read_enabled(orig_val, msg):
-            """
-            :param orig_val: A string with either 'enable' or 'disable'. May
-                             be surrounded by whitespace, and case doesn't
-                             matter
-            :param msg: The message to be passed to HTTPBadRequest. A single
-                        %s will be replaced with orig_val.
-            :returns:   True for 'enabled' and False for 'disabled'
+            """:param orig_val: A string with either 'enable' or 'disable'. May
+                                be surrounded by whitespace, and case doesn't
+                                matter
+               :param msg: The message to be passed to HTTPBadRequest. A single
+                           %s will be replaced with orig_val.
+               :returns: True for 'enabled' and False for 'disabled'
             """
             val = orig_val.strip().lower()
             if val == "enable":
@@ -290,7 +267,6 @@ class HostController(wsgi.Controller):
         return project_map
 
     @extensions.expected_errors((403, 404))
-    @wsgi.serializers(xml=HostShowTemplate)
     def show(self, req, id):
         """Shows the physical/usage resource given by hosts.
 
@@ -334,7 +310,6 @@ class Hosts(extensions.V3APIExtensionBase):
 
     name = "Hosts"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/hosts/api/v3"
     version = 1
 
     def get_resources(self):

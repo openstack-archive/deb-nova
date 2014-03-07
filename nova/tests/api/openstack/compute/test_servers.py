@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010-2011 OpenStack Foundation
 # Copyright 2011 Piston Cloud Computing, Inc.
 # All Rights Reserved.
@@ -20,13 +18,13 @@
 import base64
 import datetime
 import testtools
-import urlparse
 import uuid
 
 import iso8601
 from lxml import etree
 import mox
 from oslo.config import cfg
+import six.moves.urllib.parse as urlparse
 import webob
 
 from nova.api.openstack import compute
@@ -48,6 +46,7 @@ from nova.image import glance
 from nova.network import manager
 from nova.network.neutronv2 import api as neutron_api
 from nova.objects import instance as instance_obj
+from nova.objects import service as service_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import policy as common_policy
@@ -1142,12 +1141,11 @@ class ServersControllerTest(ControllerTest):
             self.assertEqual(s['metadata']['seq'], str(i + 1))
 
     def test_get_all_server_details_with_host(self):
-        '''
-        We want to make sure that if two instances are on the same host, then
-        they return the same hostId. If two instances are on different hosts,
-        they should return different hostId's. In this test, there are 5
-        instances - 2 on one host and 3 on another.
-        '''
+        """We want to make sure that if two instances are on the same host,
+        then they return the same hostId. If two instances are on different
+        hosts, they should return different hostId's. In this test, there
+        are 5 instances - 2 on one host and 3 on another.
+        """
 
         def return_servers_with_host(context, *args, **kwargs):
             return [fakes.stub_instance(i + 1, 'fake', 'fake', host=i % 2,
@@ -1411,6 +1409,47 @@ class ServersControllerDeleteTest(ControllerTest):
         request = self._create_delete_request(FAKE_UUID)
         self.controller.delete(request, FAKE_UUID)
 
+        self.assertTrue(self.server_delete_called)
+
+    def test_delete_server_instance_while_deleting_host_up(self):
+        req = self._create_delete_request(FAKE_UUID)
+        self.stubs.Set(db, 'instance_get_by_uuid',
+            fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                    task_state=task_states.DELETING,
+                                    host='fake_host'))
+        self.stubs.Set(instance_obj.Instance, 'save',
+                       lambda *args, **kwargs: None)
+
+        @classmethod
+        def fake_get_by_compute_host(cls, context, host):
+            return {'updated_at': timeutils.utcnow()}
+        self.stubs.Set(service_obj.Service, 'get_by_compute_host',
+                       fake_get_by_compute_host)
+
+        self.controller.delete(req, FAKE_UUID)
+        # Delete request can be ignored, because it's been accepted and
+        # forwarded to the compute service already.
+        self.assertFalse(self.server_delete_called)
+
+    def test_delete_server_instance_while_deleting_host_down(self):
+        fake_network.stub_out_network_cleanup(self.stubs)
+        req = self._create_delete_request(FAKE_UUID)
+        self.stubs.Set(db, 'instance_get_by_uuid',
+            fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                    task_state=task_states.DELETING,
+                                    host='fake_host'))
+        self.stubs.Set(instance_obj.Instance, 'save',
+                       lambda *args, **kwargs: None)
+
+        @classmethod
+        def fake_get_by_compute_host(cls, context, host):
+            return {'updated_at': datetime.datetime.min}
+        self.stubs.Set(service_obj.Service, 'get_by_compute_host',
+                       fake_get_by_compute_host)
+
+        self.controller.delete(req, FAKE_UUID)
+        # Delete request would be ignored, because it's been accepted before
+        # but since the host is down, api should remove the instance anyway.
         self.assertTrue(self.server_delete_called)
 
     def test_delete_server_instance_while_resize(self):
@@ -1962,8 +2001,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertTrue(len(reservation_id) > 1)
 
     def test_create_multiple_instances_with_multiple_volume_bdm(self):
-        """
-        Test that a BadRequest is raised if multiple instances
+        """Test that a BadRequest is raised if multiple instances
         are requested with a list of block device mappings for volumes.
         """
         self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
@@ -1987,8 +2025,7 @@ class ServersControllerCreateTest(test.TestCase):
                           self._test_create_extra, params, no_image=True)
 
     def test_create_multiple_instances_with_single_volume_bdm(self):
-        """
-        Test that a BadRequest is raised if multiple instances
+        """Test that a BadRequest is raised if multiple instances
         are requested to boot from a single volume.
         """
         self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
@@ -2465,8 +2502,7 @@ class ServersControllerCreateTest(test.TestCase):
         self._test_create_extra(params)
 
     def test_create_instance_with_volumes_enabled_no_image(self):
-        """
-        Test that the create will fail if there is no image
+        """Test that the create will fail if there is no image
         and no bdms supplied in the request
         """
         self.ext_mgr.extensions = {'os-volumes': 'fake'}
@@ -2493,8 +2529,7 @@ class ServersControllerCreateTest(test.TestCase):
                           self._test_create_extra, {}, no_image=True)
 
     def test_create_instance_with_volumes_enabled_and_bdms_no_image(self):
-        """
-        Test that the create works if there is no image supplied but
+        """Test that the create works if there is no image supplied but
         os-volumes extension is enabled and bdms are supplied
         """
         self.ext_mgr.extensions = {'os-volumes': 'fake'}
@@ -2683,15 +2718,16 @@ class ServersControllerCreateTest(test.TestCase):
             self.validation_fail_instance_destroy_called = True
 
         self.stubs.Set(compute_api.API, '_validate_bdm', _validate_bdm)
-        self.stubs.Set(db, 'instance_destroy', _instance_destroy)
+        self.stubs.Set(instance_obj.Instance, 'destroy', _instance_destroy)
 
         for _ in xrange(len(bdm_exceptions)):
             params = {'block_device_mapping_v2': [bdm.copy()]}
             self.assertRaises(webob.exc.HTTPBadRequest,
                               self._test_create_extra, params)
             self.assertTrue(self.validation_fail_test_validate_called)
+            self.assertTrue(self.validation_fail_instance_destroy_called)
             self.validation_fail_test_validate_called = False
-            self.validation_fail_test_validate_called = True
+            self.validation_fail_instance_destroy_called = False
 
     def test_create_instance_with_bdm_delete_on_termination(self):
         self.ext_mgr.extensions = {'os-volumes': 'fake'}
@@ -3968,7 +4004,8 @@ class ServersViewBuilderTest(test.TestCase):
 
     def test_build_server_detail_with_fault(self):
         self.instance['vm_state'] = vm_states.ERROR
-        self.instance['fault'] = fake_instance.fake_fault_obj(self.uuid)
+        self.instance['fault'] = fake_instance.fake_fault_obj(
+                                     self.request.context, self.uuid)
 
         self.expected_detailed_server["server"]["status"] = "ERROR"
         self.expected_detailed_server["server"]["fault"] = {
@@ -3987,7 +4024,8 @@ class ServersViewBuilderTest(test.TestCase):
     def test_build_server_detail_with_fault_that_has_been_deleted(self):
         self.instance['deleted'] = 1
         self.instance['vm_state'] = vm_states.ERROR
-        fault = fake_instance.fake_fault_obj(self.uuid, code=500,
+        fault = fake_instance.fake_fault_obj(self.request.context,
+                                             self.uuid, code=500,
                                              message="No valid host was found")
         self.instance['fault'] = fault
 
@@ -4008,6 +4046,7 @@ class ServersViewBuilderTest(test.TestCase):
     def test_build_server_detail_with_fault_no_details_not_admin(self):
         self.instance['vm_state'] = vm_states.ERROR
         self.instance['fault'] = fake_instance.fake_fault_obj(
+                                                   self.request.context,
                                                    self.uuid,
                                                    code=500,
                                                    message='Error')
@@ -4024,6 +4063,7 @@ class ServersViewBuilderTest(test.TestCase):
     def test_build_server_detail_with_fault_admin(self):
         self.instance['vm_state'] = vm_states.ERROR
         self.instance['fault'] = fake_instance.fake_fault_obj(
+                                                   self.request.context,
                                                    self.uuid,
                                                    code=500,
                                                    message='Error')
@@ -4041,6 +4081,7 @@ class ServersViewBuilderTest(test.TestCase):
     def test_build_server_detail_with_fault_no_details_admin(self):
         self.instance['vm_state'] = vm_states.ERROR
         self.instance['fault'] = fake_instance.fake_fault_obj(
+                                                   self.request.context,
                                                    self.uuid,
                                                    code=500,
                                                    message='Error',
@@ -4058,7 +4099,8 @@ class ServersViewBuilderTest(test.TestCase):
     def test_build_server_detail_with_fault_but_active(self):
         self.instance['vm_state'] = vm_states.ACTIVE
         self.instance['progress'] = 100
-        self.instance['fault'] = fake_instance.fake_fault_obj(self.uuid)
+        self.instance['fault'] = fake_instance.fake_fault_obj(
+                                     self.request.context, self.uuid)
 
         output = self.view_builder.show(self.request, self.instance)
         self.assertNotIn('fault', output['server'])
@@ -4610,8 +4652,7 @@ class ServerXMLSerializationTest(test.TestCase):
 
 
 class ServersAllExtensionsTestCase(test.TestCase):
-    """
-    Servers tests using default API router with all extensions enabled.
+    """Servers tests using default API router with all extensions enabled.
 
     The intent here is to catch cases where extensions end up throwing
     an exception because of a malformed request before the core API
@@ -4670,9 +4711,7 @@ class ServersAllExtensionsTestCase(test.TestCase):
 
 
 class ServersUnprocessableEntityTestCase(test.TestCase):
-    """
-    Tests of places we throw 422 Unprocessable Entity from
-    """
+    """Tests of places we throw 422 Unprocessable Entity from."""
 
     def setUp(self):
         super(ServersUnprocessableEntityTestCase, self).setUp()

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -27,8 +25,7 @@ CONF = cfg.CONF
 
 
 def _get_my_ip():
-    """
-    Returns the actual ip of the local machine.
+    """Returns the actual ip of the local machine.
 
     This code figures out what source address would be used if some traffic
     were to be sent out to some well known address on the Internet. In this
@@ -48,7 +45,7 @@ def _get_my_ip():
 netconf_opts = [
     cfg.StrOpt('my_ip',
                default=_get_my_ip(),
-               help='ip address of this host'),
+               help='IP address of this host'),
     cfg.StrOpt('host',
                default=socket.gethostname(),
                help='Name of this node.  This can be an opaque identifier.  '
@@ -58,7 +55,7 @@ netconf_opts = [
                     'hostname, FQDN, or IP address'),
     cfg.BoolOpt('use_ipv6',
                 default=False,
-                help='use ipv6'),
+                help='Use IPv6'),
 ]
 
 CONF.register_opts(netconf_opts)

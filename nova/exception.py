@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -40,7 +38,7 @@ LOG = logging.getLogger(__name__)
 exc_log_opts = [
     cfg.BoolOpt('fatal_exception_format_errors',
                 default=False,
-                help='make exception message format errors fatal'),
+                help='Make exception message format errors fatal'),
 ]
 
 CONF = cfg.CONF
@@ -154,8 +152,8 @@ class VirtualInterfaceCreateException(NovaException):
 
 
 class VirtualInterfaceMacAddressException(NovaException):
-    msg_fmt = _("5 attempts to create virtual interface"
-                "with unique mac address failed")
+    msg_fmt = _("Creation of virtual interface with "
+                "unique mac address failed")
 
 
 class GlanceConnectionFailed(NovaException):
@@ -265,7 +263,7 @@ class VolumeNotCreated(NovaException):
 
 class InvalidKeypair(Invalid):
     ec2_code = 'InvalidKeyPair.Format'
-    msg_fmt = _("Keypair data is invalid") + ": %(reason)s"
+    msg_fmt = _("Keypair data is invalid: %(reason)s")
 
 
 class InvalidRequest(Invalid):
@@ -273,12 +271,12 @@ class InvalidRequest(Invalid):
 
 
 class InvalidInput(Invalid):
-    msg_fmt = _("Invalid input received") + ": %(reason)s"
+    msg_fmt = _("Invalid input received: %(reason)s")
 
 
 class InvalidVolume(Invalid):
     ec2_code = 'UnsupportedOperation'
-    msg_fmt = _("Invalid volume") + ": %(reason)s"
+    msg_fmt = _("Invalid volume: %(reason)s")
 
 
 class InvalidVolumeAccessMode(Invalid):
@@ -286,11 +284,11 @@ class InvalidVolumeAccessMode(Invalid):
 
 
 class InvalidMetadata(Invalid):
-    msg_fmt = _("Invalid metadata") + ": %(reason)s"
+    msg_fmt = _("Invalid metadata: %(reason)s")
 
 
 class InvalidMetadataSize(Invalid):
-    msg_fmt = _("Invalid metadata size") + ": %(reason)s"
+    msg_fmt = _("Invalid metadata size: %(reason)s")
 
 
 class InvalidPortRange(Invalid):
@@ -357,35 +355,35 @@ class InstanceNotReady(Invalid):
 
 
 class InstanceSuspendFailure(Invalid):
-    msg_fmt = _("Failed to suspend instance") + ": %(reason)s"
+    msg_fmt = _("Failed to suspend instance: %(reason)s")
 
 
 class InstanceResumeFailure(Invalid):
-    msg_fmt = _("Failed to resume instance: %(reason)s.")
+    msg_fmt = _("Failed to resume instance: %(reason)s")
 
 
 class InstancePowerOnFailure(Invalid):
-    msg_fmt = _("Failed to power on instance: %(reason)s.")
+    msg_fmt = _("Failed to power on instance: %(reason)s")
 
 
 class InstancePowerOffFailure(Invalid):
-    msg_fmt = _("Failed to power off instance: %(reason)s.")
+    msg_fmt = _("Failed to power off instance: %(reason)s")
 
 
 class InstanceRebootFailure(Invalid):
-    msg_fmt = _("Failed to reboot instance") + ": %(reason)s"
+    msg_fmt = _("Failed to reboot instance: %(reason)s")
 
 
 class InstanceTerminationFailure(Invalid):
-    msg_fmt = _("Failed to terminate instance") + ": %(reason)s"
+    msg_fmt = _("Failed to terminate instance: %(reason)s")
 
 
 class InstanceDeployFailure(Invalid):
-    msg_fmt = _("Failed to deploy instance") + ": %(reason)s"
+    msg_fmt = _("Failed to deploy instance: %(reason)s")
 
 
 class MultiplePortsNotApplicable(Invalid):
-    msg_fmt = _("Failed to launch instances") + ": %(reason)s"
+    msg_fmt = _("Failed to launch instances: %(reason)s")
 
 
 class ServiceUnavailable(Invalid):
@@ -393,7 +391,7 @@ class ServiceUnavailable(Invalid):
 
 
 class ComputeResourcesUnavailable(ServiceUnavailable):
-    msg_fmt = _("Insufficient compute resources.")
+    msg_fmt = _("Insufficient compute resources: %(reason)s.")
 
 
 class HypervisorUnavailable(NovaException):
@@ -441,7 +439,7 @@ class DeviceIsBusy(Invalid):
 
 
 class InvalidCPUInfo(Invalid):
-    msg_fmt = _("Unacceptable CPU info") + ": %(reason)s"
+    msg_fmt = _("Unacceptable CPU info: %(reason)s")
 
 
 class InvalidIpAddressError(Invalid):
@@ -509,6 +507,10 @@ class VolumeNotFound(NotFound):
     msg_fmt = _("Volume %(volume_id)s could not be found.")
 
 
+class VolumeBDMNotFound(NotFound):
+    msg_fmt = _("No volume Block Device Mapping with id %(volume_id)s.")
+
+
 class SnapshotNotFound(NotFound):
     ec2_code = 'InvalidSnapshotID.NotFound'
     msg_fmt = _("Snapshot %(snapshot_id)s could not be found.")
@@ -533,6 +535,11 @@ class AutoDiskConfigDisabledByImage(Invalid):
 
 class ImageNotFound(NotFound):
     msg_fmt = _("Image %(image_id)s could not be found.")
+
+
+class PreserveEphemeralNotSupported(Invalid):
+    msg_fmt = _("The current driver does not support "
+                "preserving ephemeral partitions.")
 
 
 # NOTE(jruzicka): ImageNotFound is not a valid EC2 error code.
@@ -902,6 +909,11 @@ class ConsoleTypeUnavailable(Invalid):
     msg_fmt = _("Unavailable console type %(console_type)s.")
 
 
+class ConsolePortRangeExhausted(NovaException):
+    msg_fmt = _("The console port range %(min_port)d-%(max_port)d is "
+                "exhausted.")
+
+
 class FlavorNotFound(NotFound):
     msg_fmt = _("Flavor %(flavor_id)s could not be found.")
 
@@ -1029,11 +1041,11 @@ class InvalidLocalStorage(NovaException):
 
 
 class MigrationError(NovaException):
-    msg_fmt = _("Migration error") + ": %(reason)s"
+    msg_fmt = _("Migration error: %(reason)s")
 
 
 class MigrationPreCheckError(MigrationError):
-    msg_fmt = _("Migration pre-check error") + ": %(reason)s"
+    msg_fmt = _("Migration pre-check error: %(reason)s")
 
 
 class MalformedRequestBody(NovaException):
@@ -1080,7 +1092,7 @@ class NoValidHost(NovaException):
 
 class QuotaError(NovaException):
     ec2_code = 'ResourceLimitExceeded'
-    msg_fmt = _("Quota exceeded") + ": code=%(code)s"
+    msg_fmt = _("Quota exceeded: code=%(code)s")
     code = 413
     headers = {'Retry-After': 0}
     safe = True
@@ -1284,7 +1296,7 @@ class CryptoCRLFileNotFound(FileNotFound):
 
 
 class InstanceRecreateNotSupported(Invalid):
-    msg_fmt = _('Instance recreate is not implemented by this virt driver.')
+    msg_fmt = _('Instance recreate is not supported.')
 
 
 class ServiceGroupUnavailable(NovaException):
@@ -1494,3 +1506,22 @@ class KeyManagerError(NovaException):
 
 class InvalidVideoMode(Invalid):
     msg_fmt = _("Provided video model (%(model)s) is not supported.")
+
+
+class RngDeviceNotExist(Invalid):
+    msg_fmt = _("The provided RNG device path: (%(path)s) is not "
+                "present on the host.")
+
+
+class RequestedVRamTooHigh(NovaException):
+    msg_fmt = _("The requested amount of video memory %(req_vram)d is higher"
+                "than the maximum allowed by flavor %(max_vram)d.")
+
+
+class InvalidWatchdogAction(Invalid):
+    msg_fmt = _("Provided watchdog action (%(action)s) is not supported.")
+
+
+class NoImageHandlerAvailable(NovaException):
+    msg_fmt = _("No image handlers specified in the configuration "
+                "are available for image %(image_id)s.")

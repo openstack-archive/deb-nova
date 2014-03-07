@@ -1,6 +1,4 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
-# Copyright 2012 Hewlett-Packard Development Company, L.P.
+# Copyright 2012,2014 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 NTT DOCOMO, INC.
 # All Rights Reserved.
 #
@@ -28,12 +26,14 @@ from oslo.config import cfg
 
 from nova.compute import flavors
 from nova import exception
+from nova.objects import flavor as flavor_obj
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import fileutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
 from nova.openstack.common import timeutils
+from nova import utils
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import base
 from nova.virt.baremetal import db
@@ -50,14 +50,14 @@ pxe_opts = [
                help='Template file for injected network config'),
     cfg.StrOpt('pxe_append_params',
                default='nofb nomodeset vga=normal',
-               help='additional append parameters for baremetal PXE boot'),
+               help='Additional append parameters for baremetal PXE boot'),
     cfg.StrOpt('pxe_config_template',
                default='$pybasedir/nova/virt/baremetal/pxe_config.template',
                help='Template file for PXE configuration'),
     cfg.BoolOpt('use_file_injection',
                 help='If True, enable file injection for network info, '
                 'files and admin password',
-                default=True),
+                default=False),
     cfg.IntOpt('pxe_deploy_timeout',
                 help='Timeout for PXE deployments. Default: 0 (unlimited)',
                 default=0),
@@ -283,7 +283,8 @@ class PXE(base.NodeDriver):
                              target=image_path,
                              image_id=image_meta['id'],
                              user_id=instance['user_id'],
-                             project_id=instance['project_id']
+                             project_id=instance['project_id'],
+                             clean=True,
                         )
 
         return [image_meta['id'], image_path]
@@ -324,7 +325,7 @@ class PXE(base.NodeDriver):
                     image=get_image_file_path(instance),
                     key=ssh_key,
                     net=net_config,
-                    metadata=instance['metadata'],
+                    metadata=utils.instance_meta(instance),
                     admin_password=admin_password,
                     files=injected_files,
                     partition=partition,
@@ -333,7 +334,8 @@ class PXE(base.NodeDriver):
     def cache_images(self, context, node, instance,
             admin_password, image_meta, injected_files, network_info):
         """Prepare all the images for this instance."""
-        flavor = self.virtapi.flavor_get(context, instance['instance_type_id'])
+        flavor = flavor_obj.Flavor.get_by_id(context,
+                                             instance['instance_type_id'])
         tftp_image_info = get_tftp_image_info(instance, flavor)
         self._cache_tftp_images(context, instance, tftp_image_info)
 
@@ -377,7 +379,8 @@ class PXE(base.NodeDriver):
             ./pxelinux.cfg/
                  {mac} -> ../{uuid}/config
         """
-        flavor = self.virtapi.flavor_get(context, instance['instance_type_id'])
+        flavor = flavor_obj.Flavor.get_by_id(context,
+                                             instance['instance_type_id'])
         image_info = get_tftp_image_info(instance, flavor)
         (root_mb, swap_mb, ephemeral_mb) = get_partition_sizes(instance)
         pxe_config_file_path = get_pxe_config_file_path(instance)

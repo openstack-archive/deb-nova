@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Intel Corporation
 # All Rights Reserved.
 #
@@ -14,7 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-# @author: Yongli He, Intel Corporation.
 
 import copy
 import functools
@@ -240,16 +237,6 @@ class PciDevice(base.NovaPersistentObject, base.NovaObject):
                 self._from_db_object(context, self, db_pci)
 
 
-def _make_pci_list(context, pci_list, db_list):
-    pci_list.objects = []
-    for pci in db_list:
-        pci_obj = PciDevice._from_db_object(context, PciDevice(), pci)
-        pci_list.objects.append(pci_obj)
-
-    pci_list.obj_reset_changes()
-    return pci_list
-
-
 class PciDeviceList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial version
     #              PciDevice <= 1.1
@@ -271,9 +258,11 @@ class PciDeviceList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def get_by_compute_node(cls, context, node_id):
         db_dev_list = db.pci_device_get_all_by_node(context, node_id)
-        return _make_pci_list(context, cls(), db_dev_list)
+        return base.obj_make_list(context, PciDeviceList(), PciDevice,
+                                  db_dev_list)
 
     @base.remotable_classmethod
     def get_by_instance_uuid(cls, context, uuid):
         db_dev_list = db.pci_device_get_all_by_instance_uuid(context, uuid)
-        return _make_pci_list(context, cls(), db_dev_list)
+        return base.obj_make_list(context, PciDeviceList(), PciDevice,
+                                  db_dev_list)

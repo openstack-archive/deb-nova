@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -20,7 +18,6 @@ import datetime
 from nova.api.openstack import compute
 from nova import db
 from nova.openstack.common import jsonutils
-import nova.openstack.common.rpc
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import fake_instance

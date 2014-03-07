@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 #
@@ -34,9 +32,7 @@ LOG = logging.getLogger(__name__)
 
 
 class VMwareVolumeOps(object):
-    """
-    Management class for Volume-related tasks
-    """
+    """Management class for Volume-related tasks."""
 
     def __init__(self, session, cluster=None, vc_support=False):
         self._session = session
@@ -46,39 +42,45 @@ class VMwareVolumeOps(object):
     def attach_disk_to_vm(self, vm_ref, instance,
                           adapter_type, disk_type, vmdk_path=None,
                           disk_size=None, linked_clone=False,
-                          controller_key=None, unit_number=None,
                           device_name=None):
-        """
-        Attach disk to VM by reconfiguration.
-        """
+        """Attach disk to VM by reconfiguration."""
         instance_name = instance['name']
-        instance_uuid = instance['uuid']
         client_factory = self._session._get_vim().client.factory
+        devices = self._session._call_method(vim_util,
+                                    "get_dynamic_property", vm_ref,
+                                    "VirtualMachine", "config.hardware.device")
+        (controller_key, unit_number,
+         controller_spec) = vm_util.allocate_controller_key_and_unit_number(
+                                                              client_factory,
+                                                              devices,
+                                                              adapter_type)
+
         vmdk_attach_config_spec = vm_util.get_vmdk_attach_config_spec(
-                                    client_factory, adapter_type, disk_type,
-                                    vmdk_path, disk_size, linked_clone,
-                                    controller_key, unit_number, device_name)
+                                    client_factory, disk_type, vmdk_path,
+                                    disk_size, linked_clone, controller_key,
+                                    unit_number, device_name)
+        if controller_spec:
+            vmdk_attach_config_spec.deviceChange.append(controller_spec)
 
         LOG.debug(_("Reconfiguring VM instance %(instance_name)s to attach "
                     "disk %(vmdk_path)s or device %(device_name)s with type "
                     "%(disk_type)s"),
                   {'instance_name': instance_name, 'vmdk_path': vmdk_path,
-                   'device_name': device_name, 'disk_type': disk_type})
+                   'device_name': device_name, 'disk_type': disk_type},
+                  instance=instance)
         reconfig_task = self._session._call_method(
                                         self._session._get_vim(),
                                         "ReconfigVM_Task", vm_ref,
                                         spec=vmdk_attach_config_spec)
-        self._session._wait_for_task(instance_uuid, reconfig_task)
+        self._session._wait_for_task(reconfig_task)
         LOG.debug(_("Reconfigured VM instance %(instance_name)s to attach "
                     "disk %(vmdk_path)s or device %(device_name)s with type "
                     "%(disk_type)s"),
                   {'instance_name': instance_name, 'vmdk_path': vmdk_path,
-                   'device_name': device_name, 'disk_type': disk_type})
+                   'device_name': device_name, 'disk_type': disk_type},
+                  instance=instance)
 
     def _update_volume_details(self, vm_ref, instance, volume_uuid):
-        instance_name = instance['name']
-        instance_uuid = instance['uuid']
-
         # Store the uuid of the volume_device
         hw_devices = self._session._call_method(vim_util,
                                                 'get_dynamic_property',
@@ -97,7 +99,7 @@ class VMwareVolumeOps(object):
                                         self._session._get_vim(),
                                         "ReconfigVM_Task", vm_ref,
                                         spec=extra_config_specs)
-        self._session._wait_for_task(instance_uuid, reconfig_task)
+        self._session._wait_for_task(reconfig_task)
 
     def _get_volume_uuid(self, vm_ref, volume_uuid):
         volume_option = 'volume-%s' % volume_uuid
@@ -113,26 +115,25 @@ class VMwareVolumeOps(object):
 
     def detach_disk_from_vm(self, vm_ref, instance, device,
                             destroy_disk=False):
-        """
-        Detach disk from VM by reconfiguration.
-        """
+        """Detach disk from VM by reconfiguration."""
         instance_name = instance['name']
-        instance_uuid = instance['uuid']
         client_factory = self._session._get_vim().client.factory
         vmdk_detach_config_spec = vm_util.get_vmdk_detach_config_spec(
                                     client_factory, device, destroy_disk)
         disk_key = device.key
         LOG.debug(_("Reconfiguring VM instance %(instance_name)s to detach "
                     "disk %(disk_key)s"),
-                  {'instance_name': instance_name, 'disk_key': disk_key})
+                  {'instance_name': instance_name, 'disk_key': disk_key},
+                  instance=instance)
         reconfig_task = self._session._call_method(
                                         self._session._get_vim(),
                                         "ReconfigVM_Task", vm_ref,
                                         spec=vmdk_detach_config_spec)
-        self._session._wait_for_task(instance_uuid, reconfig_task)
+        self._session._wait_for_task(reconfig_task)
         LOG.debug(_("Reconfigured VM instance %(instance_name)s to detach "
                     "disk %(disk_key)s"),
-                  {'instance_name': instance_name, 'disk_key': disk_key})
+                  {'instance_name': instance_name, 'disk_key': disk_key},
+                  instance=instance)
 
     def discover_st(self, data):
         """Discover iSCSI targets."""
@@ -165,7 +166,6 @@ class VMwareVolumeOps(object):
 
     def get_volume_connector(self, instance):
         """Return volume connector information."""
-        instance_name = instance['name']
         try:
             vm_ref = vm_util.get_vm_ref(self._session, instance)
         except exception.InstanceNotFound:
@@ -177,16 +177,6 @@ class VMwareVolumeOps(object):
         if vm_ref:
             connector['instance'] = vm_ref.value
         return connector
-
-    def _get_unit_number(self, mountpoint, unit_number):
-        """Get a unit number for the device."""
-        mount_unit = volume_util.mountpoint_to_number(mountpoint)
-        # Figure out the correct unit number
-        if unit_number < mount_unit:
-            new_unit_number = mount_unit
-        else:
-            new_unit_number = unit_number + 1
-        return new_unit_number
 
     def _get_volume_ref(self, volume_ref_name):
         """Get the volume moref from the ref name."""
@@ -211,28 +201,25 @@ class VMwareVolumeOps(object):
         volume_vmdk_path = volume_device.backing.fileName
 
         # Get details required for adding disk device such as
-        # adapter_type, unit_number, controller_key
+        # adapter_type, disk_type
         hw_devices = self._session._call_method(vim_util,
                                                 'get_dynamic_property',
                                                 vm_ref, 'VirtualMachine',
                                                 'config.hardware.device')
-        (vmdk_file_path, controller_key, adapter_type, disk_type,
-         unit_number) = vm_util.get_vmdk_path_and_adapter_type(hw_devices)
+        (vmdk_file_path, adapter_type,
+         disk_type) = vm_util.get_vmdk_path_and_adapter_type(hw_devices)
 
-        unit_number = self._get_unit_number(mountpoint, unit_number)
         # Attach the disk to virtual machine instance
-        volume_device = self.attach_disk_to_vm(vm_ref, instance, adapter_type,
-                                               disk_type,
-                                               vmdk_path=volume_vmdk_path,
-                                               controller_key=controller_key,
-                                               unit_number=unit_number)
+        self.attach_disk_to_vm(vm_ref, instance, adapter_type,
+                               disk_type, vmdk_path=volume_vmdk_path)
 
         # Store the uuid of the volume_device
         self._update_volume_details(vm_ref, instance, data['volume_id'])
 
         LOG.info(_("Mountpoint %(mountpoint)s attached to "
                    "instance %(instance_name)s"),
-                 {'mountpoint': mountpoint, 'instance_name': instance_name})
+                 {'mountpoint': mountpoint, 'instance_name': instance_name},
+                 instance=instance)
 
     def _attach_volume_iscsi(self, connection_info, instance, mountpoint):
         """Attach iscsi volume storage to VM instance."""
@@ -243,7 +230,8 @@ class VMwareVolumeOps(object):
                     "%(mountpoint)s"),
                   {'connection_info': connection_info,
                    'instance_name': instance_name,
-                   'mountpoint': mountpoint})
+                   'mountpoint': mountpoint},
+                  instance=instance)
 
         data = connection_info['data']
 
@@ -256,18 +244,16 @@ class VMwareVolumeOps(object):
         hardware_devices = self._session._call_method(vim_util,
                         "get_dynamic_property", vm_ref,
                         "VirtualMachine", "config.hardware.device")
-        vmdk_file_path, controller_key, adapter_type, disk_type, unit_number \
-            = vm_util.get_vmdk_path_and_adapter_type(hardware_devices)
+        (vmdk_file_path, adapter_type,
+         disk_type) = vm_util.get_vmdk_path_and_adapter_type(hardware_devices)
 
-        unit_number = self._get_unit_number(mountpoint, unit_number)
         self.attach_disk_to_vm(vm_ref, instance,
                                adapter_type, 'rdmp',
-                               controller_key=controller_key,
-                               unit_number=unit_number,
                                device_name=device_name)
         LOG.info(_("Mountpoint %(mountpoint)s attached to "
                    "instance %(instance_name)s"),
-                 {'mountpoint': mountpoint, 'instance_name': instance_name})
+                 {'mountpoint': mountpoint, 'instance_name': instance_name},
+                 instance=instance)
 
     def attach_volume(self, connection_info, instance, mountpoint):
         """Attach volume storage to VM instance."""
@@ -293,7 +279,7 @@ class VMwareVolumeOps(object):
         task = self._session._call_method(self._session._get_vim(),
                                           "RelocateVM_Task", volume_ref,
                                           spec=spec)
-        self._session._wait_for_task(task.value, task)
+        self._session._wait_for_task(task)
 
     def _get_res_pool_of_vm(self, vm_ref):
         """Get resource pool to which the VM belongs."""
@@ -364,19 +350,17 @@ class VMwareVolumeOps(object):
                                  destroy_disk=True)
         # Attach the current disk to the volume_ref
         # Get details required for adding disk device such as
-        # adapter_type, unit_number, controller_key
+        # adapter_type, disk_type
         hw_devices = self._session._call_method(vim_util,
                                                 'get_dynamic_property',
                                                 volume_ref, 'VirtualMachine',
                                                 'config.hardware.device')
-        (vmdk_file_path, controller_key, adapter_type, disk_type,
-         unit_number) = vm_util.get_vmdk_path_and_adapter_type(hw_devices)
+        (vmdk_file_path, adapter_type,
+         disk_type) = vm_util.get_vmdk_path_and_adapter_type(hw_devices)
         # Attach the current volume to the volume_ref
-        volume_device = self.attach_disk_to_vm(volume_ref, instance,
-                                               adapter_type, disk_type,
-                                               vmdk_path=current_device_path,
-                                               controller_key=controller_key,
-                                               unit_number=unit_number)
+        self.attach_disk_to_vm(volume_ref, instance,
+                               adapter_type, disk_type,
+                               vmdk_path=current_device_path)
 
     def _get_vmdk_backed_disk_device(self, vm_ref, connection_info_data):
         # Get the vmdk file name that the VM is pointing to
@@ -399,7 +383,8 @@ class VMwareVolumeOps(object):
         vm_ref = vm_util.get_vm_ref(self._session, instance)
         # Detach Volume from VM
         LOG.debug(_("Detach_volume: %(instance_name)s, %(mountpoint)s"),
-                  {'mountpoint': mountpoint, 'instance_name': instance_name})
+                  {'mountpoint': mountpoint, 'instance_name': instance_name},
+                  instance=instance)
         data = connection_info['data']
 
         device = self._get_vmdk_backed_disk_device(vm_ref, data)
@@ -411,7 +396,8 @@ class VMwareVolumeOps(object):
         self.detach_disk_from_vm(vm_ref, instance, device)
         LOG.info(_("Mountpoint %(mountpoint)s detached from "
                    "instance %(instance_name)s"),
-                 {'mountpoint': mountpoint, 'instance_name': instance_name})
+                 {'mountpoint': mountpoint, 'instance_name': instance_name},
+                 instance=instance)
 
     def _detach_volume_iscsi(self, connection_info, instance, mountpoint):
         """Detach volume storage to VM instance."""
@@ -419,7 +405,8 @@ class VMwareVolumeOps(object):
         vm_ref = vm_util.get_vm_ref(self._session, instance)
         # Detach Volume from VM
         LOG.debug(_("Detach_volume: %(instance_name)s, %(mountpoint)s"),
-                  {'mountpoint': mountpoint, 'instance_name': instance_name})
+                  {'mountpoint': mountpoint, 'instance_name': instance_name},
+                  instance=instance)
         data = connection_info['data']
 
         # Discover iSCSI Target
@@ -438,7 +425,8 @@ class VMwareVolumeOps(object):
         self.detach_disk_from_vm(vm_ref, instance, device, destroy_disk=True)
         LOG.info(_("Mountpoint %(mountpoint)s detached from "
                    "instance %(instance_name)s"),
-                 {'mountpoint': mountpoint, 'instance_name': instance_name})
+                 {'mountpoint': mountpoint, 'instance_name': instance_name},
+                 instance=instance)
 
     def detach_volume(self, connection_info, instance, mountpoint):
         """Detach volume storage to VM instance."""

@@ -20,6 +20,7 @@ import datetime
 import time
 
 from oslo.config import cfg
+from oslo import messaging as oslo_messaging
 
 from nova.cells import messaging
 from nova.cells import state as cells_state
@@ -27,7 +28,9 @@ from nova.cells import utils as cells_utils
 from nova import context
 from nova import exception
 from nova import manager
+from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
+from nova.openstack.common import log as logging
 from nova.openstack.common import periodic_task
 from nova.openstack.common import timeutils
 
@@ -49,6 +52,8 @@ CONF = cfg.CONF
 CONF.import_opt('name', 'nova.cells.opts', group='cells')
 CONF.register_opts(cell_manager_opts, group='cells')
 
+LOG = logging.getLogger(__name__)
+
 
 class CellsManager(manager.Manager):
     """The nova-cells manager class.  This class defines RPC
@@ -56,8 +61,8 @@ class CellsManager(manager.Manager):
     messages coming from other cells.  That communication is
     driver-specific.
 
-    Communication to other cells happens via the messaging module.  The
-    MessageRunner from that module will handle routing the message to
+    Communication to other cells happens via the nova.cells.messaging module.
+    The MessageRunner from that module will handle routing the message to
     the correct cell via the communications driver.  Most methods below
     create 'targeted' (where we want to route a message to a specific cell)
     or 'broadcast' (where we want a message to go to multiple cells)
@@ -65,9 +70,16 @@ class CellsManager(manager.Manager):
 
     Scheduling requests get passed to the scheduler class.
     """
-    RPC_API_VERSION = '1.25'
+
+    target = oslo_messaging.Target(version='1.26')
 
     def __init__(self, *args, **kwargs):
+        LOG.warn(_('The cells feature of Nova is considered experimental '
+                   'by the OpenStack project because it receives much '
+                   'less testing than the rest of Nova. This may change '
+                   'in the future, but current deployers should be aware '
+                   'that the use of it in production right now may be '
+                   'risky.'))
         # Mostly for tests.
         cell_state_manager = kwargs.pop('cell_state_manager', None)
         super(CellsManager, self).__init__(service_name='cells',
@@ -82,7 +94,7 @@ class CellsManager(manager.Manager):
         self.instances_to_heal = iter([])
 
     def post_start_hook(self):
-        """Have the driver start its consumers for inter-cell communication.
+        """Have the driver start its servers for inter-cell communication.
         Also ask our child cells for their capacities and capabilities so
         we get them more quickly than just waiting for the next periodic
         update.  Receiving the updates from the children will cause us to
@@ -90,8 +102,8 @@ class CellsManager(manager.Manager):
         our parents immediately.
         """
         # FIXME(comstud): There's currently no hooks when services are
-        # stopping, so we have no way to stop consumers cleanly.
-        self.driver.start_consumers(self.msg_runner)
+        # stopping, so we have no way to stop servers cleanly.
+        self.driver.start_servers(self.msg_runner)
         ctxt = context.get_admin_context()
         if self.state_manager.get_child_cells():
             self.msg_runner.ask_children_for_capabilities(ctxt)
@@ -262,8 +274,7 @@ class CellsManager(manager.Manager):
         return service
 
     def get_host_uptime(self, ctxt, host_name):
-        """
-        Return host uptime for a compute host in a certain cell
+        """Return host uptime for a compute host in a certain cell
 
         :param host_name: fully qualified hostname. It should be in format of
          parent!child@host_id
@@ -274,8 +285,7 @@ class CellsManager(manager.Manager):
         return response.value_or_raise()
 
     def service_update(self, ctxt, host_name, binary, params_to_update):
-        """
-        Used to enable/disable a service. For compute services, setting to
+        """Used to enable/disable a service. For compute services, setting to
         disabled stops new builds arriving on that host.
 
         :param host_name: the name of the host machine that the service is
@@ -290,6 +300,12 @@ class CellsManager(manager.Manager):
         service = response.value_or_raise()
         cells_utils.add_cell_to_service(service, response.cell_name)
         return service
+
+    def service_delete(self, ctxt, cell_service_id):
+        """Deletes the specified service."""
+        cell_name, service_id = cells_utils.split_cell_and_item(
+            cell_service_id)
+        self.msg_runner.service_delete(ctxt, cell_name, service_id)
 
     def proxy_rpc_to_manager(self, ctxt, topic, rpc_message, call, timeout):
         """Proxy an RPC message as-is to a manager."""
@@ -529,7 +545,7 @@ class CellsManager(manager.Manager):
                                         backup_type, rotation)
 
     def rebuild_instance(self, ctxt, instance, image_href, admin_password,
-                         files_to_inject, kwargs):
+                         files_to_inject, preserve_ephemeral, kwargs):
         self.msg_runner.rebuild_instance(ctxt, instance, image_href,
                                          admin_password, files_to_inject,
-                                         kwargs)
+                                         preserve_ephemeral, kwargs)

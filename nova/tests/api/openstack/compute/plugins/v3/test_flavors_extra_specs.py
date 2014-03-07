@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 University of Southern California
 # All Rights Reserved.
 #
@@ -15,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import mock
 import webob
 
 from nova.api.openstack.compute.plugins.v3 import flavors_extraspecs
@@ -178,6 +177,33 @@ class FlavorsExtraSpecsTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPConflict, self.controller.create,
                           req, 1, body)
 
+    @mock.patch('nova.db.flavor_extra_specs_update_or_create')
+    def test_create_invalid_specs_key(self, mock_flavor_extra_specs):
+        invalid_keys = ("key1/", "<key>", "$$akey$", "!akey", "")
+        mock_flavor_extra_specs.side_effects = return_create_flavor_extra_specs
+
+        for key in invalid_keys:
+            body = {"extra_specs": {key: "value1"}}
+
+            req = fakes.HTTPRequest.blank('/v3/flavors/1/extra-specs',
+                                       use_admin_context=True)
+            self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+                          req, 1, body)
+
+    @mock.patch('nova.db.flavor_extra_specs_update_or_create')
+    def test_create_valid_specs_key(self, mock_flavor_extra_specs):
+        valid_keys = ("key1", "month.price", "I_am-a Key", "finance:g2")
+        mock_flavor_extra_specs.side_effects = return_create_flavor_extra_specs
+
+        for key in valid_keys:
+            body = {"extra_specs": {key: "value1"}}
+
+            req = fakes.HTTPRequest.blank('/v3/flavors/1/extra-specs',
+                                       use_admin_context=True)
+            res_dict = self.controller.create(req, 1, body)
+            self.assertEqual('value1', res_dict['extra_specs'][key])
+            self.assertEqual(self.controller.create.wsgi_code, 201)
+
     def test_update_item(self):
         self.stubs.Set(nova.db,
                        'flavor_extra_specs_update_or_create',
@@ -259,29 +285,3 @@ class FlavorsExtraSpecsTest(test.TestCase):
                                      use_admin_context=True)
         self.assertRaises(webob.exc.HTTPConflict, self.controller.update,
                           req, 1, 'key1', body)
-
-
-class FlavorsExtraSpecsXMLSerializerTest(test.TestCase):
-    def test_serializer(self):
-        serializer = flavors_extraspecs.ExtraSpecsTemplate()
-        expected = ("<?xml version='1.0' encoding='UTF-8'?>\n"
-                    '<extra_specs><key1>value1</key1></extra_specs>')
-        text = serializer.serialize(dict(extra_specs={"key1": "value1"}))
-        self.assertEqual(text, expected)
-
-    def test_show_update_serializer(self):
-        serializer = flavors_extraspecs.ExtraSpecTemplate()
-        expected = ("<?xml version='1.0' encoding='UTF-8'?>\n"
-                    '<extra_spec key="key1">value1</extra_spec>')
-        text = serializer.serialize(dict({"key1": "value1"}))
-        self.assertEqual(text, expected)
-
-    def test_serializer_with_colon_tagname(self):
-        # Our test object to serialize
-        obj = {'extra_specs': {'foo:bar': '999'}}
-        serializer = flavors_extraspecs.ExtraSpecsTemplate()
-        expected_xml = (("<?xml version='1.0' encoding='UTF-8'?>\n"
-                    '<extra_specs><foo:bar xmlns:foo="foo">999</foo:bar>'
-                    '</extra_specs>'))
-        result = serializer.serialize(obj)
-        self.assertEqual(expected_xml, result)

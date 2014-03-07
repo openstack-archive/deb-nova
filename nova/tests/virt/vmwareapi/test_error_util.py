@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -23,7 +21,7 @@ class ExpectedMethodFault:
     pass
 
 
-class ErrorUtilTestCase(test.TestCase):
+class ErrorUtilTestCase(test.NoDBTestCase):
     def setUp(self):
         super(ErrorUtilTestCase, self).setUp()
 
@@ -32,7 +30,7 @@ class ErrorUtilTestCase(test.TestCase):
         # perform additional checks on the exception raised, instead of
         # try/catch block in the below tests, but it's available
         # only from  Py 2.7.
-        exp_fault_list = [error_util.FAULT_NOT_AUTHENTICATED]
+        exp_fault_list = [error_util.NOT_AUTHENTICATED]
         try:
             error_util.FaultCheckers.retrievepropertiesex_fault_checker(None)
         except error_util.VimFaultException as e:

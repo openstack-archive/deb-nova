@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # (c) Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
@@ -22,10 +20,10 @@ import glob
 import os
 import time
 import urllib2
-import urlparse
 
 from oslo.config import cfg
 import six
+import six.moves.urllib.parse as urlparse
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
@@ -42,45 +40,46 @@ LOG = logging.getLogger(__name__)
 
 volume_opts = [
     cfg.IntOpt('num_iscsi_scan_tries',
-               default=3,
-               help='number of times to rescan iSCSI target to find volume',
+               default=5,
+               help='Number of times to rescan iSCSI target to find volume',
                deprecated_group='DEFAULT'),
     cfg.IntOpt('num_iser_scan_tries',
-               default=3,
-               help='number of times to rescan iSER target to find volume',
+               default=5,
+               help='Number of times to rescan iSER target to find volume',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('rbd_user',
-               help='the RADOS client name for accessing rbd volumes',
+               help='The RADOS client name for accessing rbd volumes',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('rbd_secret_uuid',
-               help='the libvirt uuid of the secret for the rbd_user'
+               help='The libvirt UUID of the secret for the rbd_user'
                     'volumes',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('nfs_mount_point_base',
                default=paths.state_path_def('mnt'),
-               help='Dir where the nfs volume is mounted on the compute node',
+               help='Directory where the NFS volume is mounted on the'
+               ' compute node',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('nfs_mount_options',
-               help='Mount options passed to the nfs client. See section '
+               help='Mount options passedf to the NFS client. See section '
                     'of the nfs man page for details',
                deprecated_group='DEFAULT'),
     cfg.IntOpt('num_aoe_discover_tries',
                default=3,
-               help='number of times to rediscover AoE target to find volume',
+               help='Number of times to rediscover AoE target to find volume',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('glusterfs_mount_point_base',
                default=paths.state_path_def('mnt'),
-               help='Dir where the glusterfs volume is mounted on the '
+               help='Directory where the glusterfs volume is mounted on the '
                     'compute node',
                deprecated_group='DEFAULT'),
     cfg.BoolOpt('iscsi_use_multipath',
                 default=False,
-                help='use multipath connection of the iSCSI volume',
+                help='Use multipath connection of the iSCSI volume',
                 deprecated_group='DEFAULT',
                 deprecated_name='libvirt_iscsi_use_multipath'),
     cfg.BoolOpt('iser_use_multipath',
                 default=False,
-                help='use multipath connection of the iSER volume',
+                help='Use multipath connection of the iSER volume',
                 deprecated_group='DEFAULT',
                 deprecated_name='libvirt_iser_use_multipath'),
     cfg.StrOpt('scality_sofs_config',
@@ -234,7 +233,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
     """Driver to attach Network volumes to libvirt."""
     def __init__(self, connection):
         super(LibvirtISCSIVolumeDriver, self).__init__(connection,
-                                                       is_block_dev=False)
+                                                       is_block_dev=True)
         self.num_scan_tries = CONF.libvirt.num_iscsi_scan_tries
         self.use_multipath = CONF.libvirt.iscsi_use_multipath
 
@@ -256,7 +255,8 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
         return self._run_iscsiadm(iscsi_properties, iscsi_command, **kwargs)
 
     def _get_target_portals_from_iscsiadm_output(self, output):
-        return [line.split()[0] for line in output.splitlines()]
+        # return both portals and iqns
+        return [line.split() for line in output.splitlines()]
 
     @utils.synchronized('connect_volume')
     def connect_volume(self, connection_info, disk_info):
@@ -280,9 +280,10 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                           check_exit_code=[0, 255])[0] \
                 or ""
 
-            for ip in self._get_target_portals_from_iscsiadm_output(out):
+            for ip, iqn in self._get_target_portals_from_iscsiadm_output(out):
                 props = iscsi_properties.copy()
                 props['target_portal'] = ip
+                props['target_iqn'] = iqn
                 self._connect_to_iscsi_portal(props)
 
             self._rescan_iscsi()
@@ -401,21 +402,46 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                 if mpdev:
                     devices.append(mpdev)
 
+        # Do a discovery to find all targets.
+        # Targets for multiple paths for the same multipath device
+        # may not be the same.
+        out = self._run_iscsiadm_bare(['-m',
+                                      'discovery',
+                                      '-t',
+                                      'sendtargets',
+                                      '-p',
+                                      iscsi_properties['target_portal']],
+                                      check_exit_code=[0, 255])[0] \
+            or ""
+
+        ips_iqns = self._get_target_portals_from_iscsiadm_output(out)
+
         if not devices:
             # disconnect if no other multipath devices
-            self._disconnect_mpath(iscsi_properties)
+            self._disconnect_mpath(iscsi_properties, ips_iqns)
             return
 
+        # Get a target for all other multipath devices
         other_iqns = [self._get_multipath_iqn(device)
                       for device in devices]
+        # Get all the targets for the current multipath device
+        current_iqns = [iqn for ip, iqn in ips_iqns]
 
-        if iscsi_properties['target_iqn'] not in other_iqns:
+        in_use = False
+        for current in current_iqns:
+            if current in other_iqns:
+                in_use = True
+                break
+
+        # If no other multipath device attached has the same iqn
+        # as the current device
+        if not in_use:
             # disconnect if no other multipath devices with same iqn
-            self._disconnect_mpath(iscsi_properties)
+            self._disconnect_mpath(iscsi_properties, ips_iqns)
             return
         elif multipath_device not in devices:
             # delete the devices associated w/ the unused multipath
-            self._delete_mpath(iscsi_properties, multipath_device)
+            self._delete_mpath(iscsi_properties, multipath_device, ips_iqns)
 
         # else do not disconnect iscsi portals,
         # as they are used for other luns,
@@ -512,23 +538,26 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
             return []
         return [entry for entry in devices if entry.startswith("ip-")]
 
-    def _delete_mpath(self, iscsi_properties, multipath_device):
+    def _delete_mpath(self, iscsi_properties, multipath_device, ips_iqns):
         entries = self._get_iscsi_devices()
-        iqn_lun = '%s-lun-%s' % (iscsi_properties['target_iqn'],
-                                 iscsi_properties.get('target_lun', 0))
-        for dev in ['/dev/disk/by-path/%s' % dev for dev in entries
-                    if iqn_lun in dev]:
-            self._delete_device(dev)
+        # Loop through ips_iqns to construct all paths
+        iqn_luns = []
+        for ip, iqn in ips_iqns:
+            iqn_lun = '%s-lun-%s' % (iqn,
+                                     iscsi_properties.get('target_lun', 0))
+            iqn_luns.append(iqn_lun)
+        for dev in ['/dev/disk/by-path/%s' % dev for dev in entries]:
+            for iqn_lun in iqn_luns:
+                if iqn_lun in dev:
+                    self._delete_device(dev)
 
         self._rescan_multipath()
 
-    def _disconnect_mpath(self, iscsi_properties):
-        entries = self._get_iscsi_devices()
-        ips = [ip.split("-")[1] for ip in entries
-               if iscsi_properties['target_iqn'] in ip]
-        for ip in ips:
+    def _disconnect_mpath(self, iscsi_properties, ips_iqns):
+        for ip, iqn in ips_iqns:
             props = iscsi_properties.copy()
             props['target_portal'] = ip
+            props['target_iqn'] = iqn
             self._disconnect_from_iscsi_portal(props)
 
         self._rescan_multipath()
@@ -636,9 +665,8 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
         return conf
 
     def _ensure_mounted(self, nfs_export, options=None):
-        """
-        @type nfs_export: string
-        @type options: string
+        """@type nfs_export: string
+           @type options: string
         """
         mount_path = os.path.join(CONF.libvirt.nfs_mount_point_base,
                                   utils.get_hash_str(nfs_export))
@@ -768,9 +796,8 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
         return conf
 
     def _ensure_mounted(self, glusterfs_export, options=None):
-        """
-        @type glusterfs_export: string
-        @type options: string
+        """@type glusterfs_export: string
+           @type options: string
         """
         mount_path = os.path.join(CONF.libvirt.glusterfs_mount_point_base,
                                   utils.get_hash_str(glusterfs_export))

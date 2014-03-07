@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -34,8 +32,6 @@ class MultipleCreate(extensions.V3APIExtensionBase):
 
     name = "MultipleCreate"
     alias = ALIAS
-    namespace = ("http://docs.openstack.org/compute/ext/"
-                 "multiplecreate/api/v3")
     version = 1
 
     def get_resources(self):
@@ -53,12 +49,14 @@ class MultipleCreate(extensions.V3APIExtensionBase):
         # 'max_count' to be 'min_count'.
         min_count = server_dict.get(MIN_ATTRIBUTE_NAME, 1)
         max_count = server_dict.get(MAX_ATTRIBUTE_NAME, min_count)
+        return_id = server_dict.get(RRID_ATTRIBUTE_NAME, False)
 
         try:
             min_count = utils.validate_integer(min_count,
                                                "min_count", min_value=1)
             max_count = utils.validate_integer(max_count,
                                                "max_count", min_value=1)
+            return_id = strutils.bool_from_string(return_id, strict=True)
         except exception.InvalidInput as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
@@ -68,17 +66,4 @@ class MultipleCreate(extensions.V3APIExtensionBase):
 
         create_kwargs['min_count'] = min_count
         create_kwargs['max_count'] = max_count
-        create_kwargs['return_reservation_id'] = server_dict.get(
-            RRID_ATTRIBUTE_NAME, False)
-
-    def server_xml_extract_server_deserialize(self, server_node, server_dict):
-        res_id = server_node.getAttribute(RRID_ATTRIBUTE_NAME)
-        if res_id:
-            server_dict[RRID_ATTRIBUTE_NAME] = strutils.bool_from_string(
-                res_id)
-        min_count = server_node.getAttribute(MIN_ATTRIBUTE_NAME)
-        if min_count:
-            server_dict[MIN_ATTRIBUTE_NAME] = min_count
-        max_count = server_node.getAttribute(MAX_ATTRIBUTE_NAME)
-        if max_count:
-            server_dict[MAX_ATTRIBUTE_NAME] = max_count
+        create_kwargs['return_reservation_id'] = return_id

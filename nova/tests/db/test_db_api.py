@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # encoding=UTF8
 
 # Copyright 2010 United States Government as represented by the
@@ -47,6 +46,7 @@ from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common.db.sqlalchemy import session as db_session
+from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import quota
@@ -166,6 +166,9 @@ class DecoratorTestCase(test.TestCase):
 
     def test_require_admin_context_decorator_wraps_functions_properly(self):
         self._test_decorator_wraps_helper(sqlalchemy_api.require_admin_context)
+
+    def test_require_deadlock_retry_wraps_functions_properly(self):
+        self._test_decorator_wraps_helper(sqlalchemy_api._retry_on_deadlock)
 
 
 def _get_fake_aggr_values():
@@ -335,11 +338,6 @@ class AggregateDBApiTestCase(test.TestCase):
         expected_metadata = db.aggregate_metadata_get(ctxt, result['id'])
         self.assertEqual(expected_metadata, {'availability_zone':
             'fake_avail_zone'})
-
-    def test_aggregate_create_low_privi_context(self):
-        self.assertRaises(exception.AdminRequired,
-                          db.aggregate_create,
-                          self.context, _get_fake_aggr_values())
 
     def test_aggregate_get(self):
         ctxt = context.get_admin_context()
@@ -735,6 +733,7 @@ class MigrationTestCase(test.TestCase):
         self._create()
         self._create(status='reverted')
         self._create(status='confirmed')
+        self._create(status='error')
         self._create(source_compute='host2', source_node='b',
                 dest_compute='host1', dest_node='a')
         self._create(source_compute='host2', dest_compute='host3')
@@ -759,6 +758,7 @@ class MigrationTestCase(test.TestCase):
         for migration in migrations:
             self.assertNotEqual('confirmed', migration['status'])
             self.assertNotEqual('reverted', migration['status'])
+            self.assertNotEqual('error', migration['status'])
 
     def test_migration_get_in_progress_joins(self):
         self._create(source_compute='foo', system_metadata={'foo': 'bar'})
@@ -1309,6 +1309,8 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(expected, real)
 
     def test_security_group_ensure_default(self):
+        self.ctxt.project_id = 'fake'
+        self.ctxt.user_id = 'fake'
         self.assertEqual(0, len(db.security_group_get_by_project(
                                     self.ctxt,
                                     self.ctxt.project_id)))
@@ -1321,6 +1323,12 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
         self.assertEqual(1, len(security_groups))
         self.assertEqual("default", security_groups[0]["name"])
+
+        usage = db.quota_usage_get(self.ctxt,
+                                   self.ctxt.project_id,
+                                   'security_groups',
+                                   self.ctxt.user_id)
+        self.assertEqual(1, usage.in_use)
 
     def test_security_group_update(self):
         security_group = self._create_security_group({})
@@ -2288,7 +2296,9 @@ class InstanceActionTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'event': event,
             'instance_uuid': uuid,
             'request_id': ctxt.request_id,
-            'start_time': timeutils.utcnow()
+            'start_time': timeutils.utcnow(),
+            'host': 'fake-host',
+            'details': 'fake-details',
         }
         if extra is not None:
             values.update(extra)
@@ -3515,6 +3525,16 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
         ignored_keys = ['created_at', 'id', 'deleted_at', 'updated_at']
         self._assertEqualObjects(param, fixed_ip_data, ignored_keys)
 
+    def test_fixed_ip_get_by_address(self):
+        instance_uuid = self._create_instance()
+        db.fixed_ip_create(self.ctxt, {'address': '1.2.3.4',
+                                       'instance_uuid': instance_uuid,
+                                       })
+        fixed_ip = db.fixed_ip_get_by_address(self.ctxt, '1.2.3.4',
+                                              columns_to_join=['instance'])
+        self.assertIn('instance', fixed_ip.__dict__)
+        self.assertEqual(instance_uuid, fixed_ip.instance.uuid)
+
     def test_fixed_ip_get_by_address_detailed_not_found_exception(self):
         self.assertRaises(exception.FixedIpNotFoundForAddress,
                           db.fixed_ip_get_by_address_detailed, self.ctxt,
@@ -3730,22 +3750,44 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
         ips_for_delete = []
         ips_for_non_delete = []
 
-        def create_ips(i):
-            return [{'address': '1.1.%s.%s' % (i, k)} for k in range(1, 256)]
+        def create_ips(i, j):
+            return [{'address': '1.1.%s.%s' % (i, k)} for k in range(1, j + 1)]
 
         # NOTE(boris-42): Create more then 256 ip to check that
         #                 _ip_range_splitter works properly.
         for i in range(1, 3):
-            ips_for_delete.extend(create_ips(i))
-        ips_for_non_delete.extend(create_ips(3))
+            ips_for_delete.extend(create_ips(i, 255))
+        ips_for_non_delete.extend(create_ips(3, 255))
 
         db.floating_ip_bulk_create(self.ctxt,
                                    ips_for_delete + ips_for_non_delete)
+
+        non_bulk_ips_for_delete = create_ips(4, 3)
+        non_bulk_ips_for_non_delete = create_ips(5, 3)
+        non_bulk_ips = non_bulk_ips_for_delete + non_bulk_ips_for_non_delete
+        project_id = 'fake_project'
+        reservations = quota.QUOTAS.reserve(self.ctxt,
+                                      floating_ips=len(non_bulk_ips),
+                                      project_id=project_id)
+        for dct in non_bulk_ips:
+            self._create_floating_ip(dct)
+        quota.QUOTAS.commit(self.ctxt, reservations, project_id=project_id)
+        self.assertEqual(db.quota_usage_get_all_by_project(
+                            self.ctxt, project_id),
+                            {'project_id': project_id,
+                             'floating_ips': {'in_use': 6, 'reserved': 0}})
+        ips_for_delete.extend(non_bulk_ips_for_delete)
+        ips_for_non_delete.extend(non_bulk_ips_for_non_delete)
+
         db.floating_ip_bulk_destroy(self.ctxt, ips_for_delete)
 
         expected_addresses = map(lambda x: x['address'], ips_for_non_delete)
         self._assertEqualListsOfPrimitivesAsSets(self._get_existing_ips(),
                                                  expected_addresses)
+        self.assertEqual(db.quota_usage_get_all_by_project(
+                            self.ctxt, project_id),
+                            {'project_id': project_id,
+                             'floating_ips': {'in_use': 3, 'reserved': 0}})
 
     def test_floating_ip_create(self):
         floating_ip = self._create_floating_ip({})
@@ -4065,13 +4107,8 @@ class VolumeUsageDBApiTestCase(test.TestCase):
     def test_vol_usage_update_no_totals_update(self):
         ctxt = context.get_admin_context()
         now = timeutils.utcnow()
+        timeutils.set_time_override(now)
         start_time = now - datetime.timedelta(seconds=10)
-
-        self.mox.StubOutWithMock(timeutils, 'utcnow')
-        timeutils.utcnow().AndReturn(now)
-        timeutils.utcnow().AndReturn(now)
-        timeutils.utcnow().AndReturn(now)
-        self.mox.ReplayAll()
 
         expected_vol_usages = {
             u'1': {'volume_id': u'1',
@@ -4138,17 +4175,11 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         now = datetime.datetime(1, 1, 1, 1, 0, 0)
         start_time = now - datetime.timedelta(seconds=10)
-
-        self.mox.StubOutWithMock(timeutils, 'utcnow')
-        timeutils.utcnow().AndReturn(now)
         now1 = now + datetime.timedelta(minutes=1)
-        timeutils.utcnow().AndReturn(now1)
         now2 = now + datetime.timedelta(minutes=2)
-        timeutils.utcnow().AndReturn(now2)
         now3 = now + datetime.timedelta(minutes=3)
-        timeutils.utcnow().AndReturn(now3)
-        self.mox.ReplayAll()
 
+        timeutils.set_time_override(now)
         db.vol_usage_update(ctxt, u'1', rd_req=100, rd_bytes=200,
                             wr_req=300, wr_bytes=400,
                             instance_id='fake-instance-uuid',
@@ -4159,6 +4190,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         self.assertEqual(current_usage['tot_reads'], 0)
         self.assertEqual(current_usage['curr_reads'], 100)
 
+        timeutils.set_time_override(now1)
         db.vol_usage_update(ctxt, u'1', rd_req=200, rd_bytes=300,
                             wr_req=400, wr_bytes=500,
                             instance_id='fake-instance-uuid',
@@ -4170,6 +4202,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         self.assertEqual(current_usage['tot_reads'], 200)
         self.assertEqual(current_usage['curr_reads'], 0)
 
+        timeutils.set_time_override(now2)
         db.vol_usage_update(ctxt, u'1', rd_req=300, rd_bytes=400,
                             wr_req=500, wr_bytes=600,
                             instance_id='fake-instance-uuid',
@@ -4180,6 +4213,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         self.assertEqual(current_usage['tot_reads'], 200)
         self.assertEqual(current_usage['curr_reads'], 300)
 
+        timeutils.set_time_override(now3)
         db.vol_usage_update(ctxt, u'1', rd_req=400, rd_bytes=500,
                             wr_req=600, wr_bytes=700,
                             instance_id='fake-instance-uuid',
@@ -5435,31 +5469,21 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  supported_instances='',
                                  pci_stats='',
                                  metrics='',
-                                 extra_resources='')
+                                 extra_resources='',
+                                 stats='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
                      num_proj_23456=2, num_vm_building=3)
-        self.compute_node_dict['stats'] = self.stats
+        self.compute_node_dict['stats'] = jsonutils.dumps(self.stats)
         self.flags(reserved_host_memory_mb=0)
         self.flags(reserved_host_disk_mb=0)
         self.item = db.compute_node_create(self.ctxt, self.compute_node_dict)
 
-    def _stats_as_dict(self, stats):
-        d = {}
-        for s in stats:
-            key = s['key']
-            d[key] = s['value']
-        return d
-
-    def _stats_equal(self, stats, new_stats):
-        for k, v in stats.iteritems():
-            self.assertEqual(v, int(new_stats[k]))
-
     def test_compute_node_create(self):
         self._assertEqualObjects(self.compute_node_dict, self.item,
                                 ignored_keys=self._ignored_keys + ['stats'])
-        new_stats = self._stats_as_dict(self.item['stats'])
-        self._stats_equal(self.stats, new_stats)
+        new_stats = jsonutils.loads(self.item['stats'])
+        self.assertEqual(self.stats, new_stats)
 
     def test_compute_node_get_all(self):
         date_fields = set(['created_at', 'updated_at',
@@ -5476,8 +5500,8 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 self.assertFalse(date_fields & node_fields)
             else:
                 self.assertTrue(date_fields <= node_fields)
-            new_stats = self._stats_as_dict(node['stats'])
-            self._stats_equal(self.stats, new_stats)
+            new_stats = jsonutils.loads(node['stats'])
+            self.assertEqual(self.stats, new_stats)
 
     def test_compute_node_get_all_deleted_compute_node(self):
         # Create a service and compute node and ensure we can find its stats;
@@ -5491,7 +5515,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
             # Create a compute node
             compute_node_data = self.compute_node_dict.copy()
             compute_node_data['service_id'] = service['id']
-            compute_node_data['stats'] = self.stats.copy()
+            compute_node_data['stats'] = jsonutils.dumps(self.stats.copy())
             compute_node_data['hypervisor_hostname'] = 'hypervisor-%s' % x
             node = db.compute_node_create(self.ctxt, compute_node_data)
 
@@ -5505,7 +5529,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                     break
             self.assertIsNotNone(found)
             # Now ensure the match has stats!
-            self.assertNotEqual(self._stats_as_dict(found['stats']), {})
+            self.assertNotEqual(jsonutils.loads(found['stats']), {})
 
             # Now delete the newly-created compute node to ensure the related
             # compute node stats are wiped in a cascaded fashion
@@ -5526,7 +5550,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         for name in ['bm_node1', 'bm_node2']:
             compute_node_data = self.compute_node_dict.copy()
             compute_node_data['service_id'] = service['id']
-            compute_node_data['stats'] = self.stats
+            compute_node_data['stats'] = jsonutils.dumps(self.stats)
             compute_node_data['hypervisor_hostname'] = 'bm_node_1'
             node = db.compute_node_create(self.ctxt, compute_node_data)
 
@@ -5546,24 +5570,24 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         node = db.compute_node_get(self.ctxt, compute_node_id)
         self._assertEqualObjects(self.compute_node_dict, node,
                         ignored_keys=self._ignored_keys + ['stats', 'service'])
-        new_stats = self._stats_as_dict(node['stats'])
-        self._stats_equal(self.stats, new_stats)
+        new_stats = jsonutils.loads(node['stats'])
+        self.assertEqual(self.stats, new_stats)
 
     def test_compute_node_update(self):
         compute_node_id = self.item['id']
-        stats = self._stats_as_dict(self.item['stats'])
+        stats = jsonutils.loads(self.item['stats'])
         # change some values:
         stats['num_instances'] = 8
         stats['num_tribbles'] = 1
         values = {
             'vcpus': 4,
-            'stats': stats,
+            'stats': jsonutils.dumps(stats),
         }
         item_updated = db.compute_node_update(self.ctxt, compute_node_id,
                                               values)
         self.assertEqual(4, item_updated['vcpus'])
-        new_stats = self._stats_as_dict(item_updated['stats'])
-        self._stats_equal(stats, new_stats)
+        new_stats = jsonutils.loads(item_updated['stats'])
+        self.assertEqual(stats, new_stats)
 
     def test_compute_node_delete(self):
         compute_node_id = self.item['id']
@@ -5580,7 +5604,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
             service = db.service_create(self.ctxt, new_service)
             self.compute_node_dict['service_id'] = service['id']
             self.compute_node_dict['hypervisor_hostname'] = 'testhost' + str(i)
-            self.compute_node_dict['stats'] = self.stats
+            self.compute_node_dict['stats'] = jsonutils.dumps(self.stats)
             node = db.compute_node_create(self.ctxt, self.compute_node_dict)
             nodes_created.append(node)
         nodes = db.compute_node_search_by_hypervisor(self.ctxt, 'host')
@@ -5616,39 +5640,6 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                         {'updated_at': first.updated_at,
                                          'free_ram_mb': '13'})
         self.assertNotEqual(first['updated_at'], second['updated_at'])
-
-    def test_compute_node_stat_unchanged(self):
-        # don't update unchanged stat values:
-        stats = self.item['stats']
-        stats_updated_at = dict([(stat['key'], stat['updated_at'])
-                                  for stat in stats])
-        stats_values = self._stats_as_dict(stats)
-        new_values = {'stats': stats_values}
-        compute_node_id = self.item['id']
-        db.compute_node_update(self.ctxt, compute_node_id, new_values)
-        updated_node = db.compute_node_get(self.ctxt, compute_node_id)
-        updated_stats = updated_node['stats']
-        for stat in updated_stats:
-            self.assertEqual(stat['updated_at'], stats_updated_at[stat['key']])
-
-    def test_compute_node_stat_prune(self):
-        for stat in self.item['stats']:
-            if stat['key'] == 'num_instances':
-                num_instance_stat = stat
-                break
-
-        values = {
-            'stats': dict(num_instances=1)
-        }
-        db.compute_node_update(self.ctxt, self.item['id'], values,
-                               prune_stats=True)
-        item_updated = db.compute_node_get_all(self.ctxt)[0]
-        self.assertEqual(1, len(item_updated['stats']))
-
-        stat = item_updated['stats'][0]
-        self.assertEqual(num_instance_stat['id'], stat['id'])
-        self.assertEqual(num_instance_stat['key'], stat['key'])
-        self.assertEqual(1, int(stat['value']))
 
 
 class ProviderFwRuleTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -6069,6 +6060,14 @@ class DnsdomainTestCase(test.TestCase):
         domain = db.dnsdomain_get(self.ctxt, self.domain)
         self.assertIsNone(domain)
 
+    def test_dnsdomain_get_all(self):
+        d_list = ['test.domain.one', 'test.domain.two']
+        db.dnsdomain_register_for_zone(self.ctxt, d_list[0], 'zone')
+        db.dnsdomain_register_for_zone(self.ctxt, d_list[1], 'zone')
+        db_list = db.dnsdomain_get_all(self.ctxt)
+        db_domain_list = [d.domain for d in db_list]
+        self.assertEqual(sorted(d_list), sorted(db_domain_list))
+
 
 class BwUsageTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
@@ -6387,9 +6386,7 @@ class ArchiveTestCase(test.TestCase):
                 self.uuid_tablenames_to_cleanup.add(tablename)
 
     def _test_archive_deleted_rows_for_one_uuid_table(self, tablename):
-        """
-        :returns: 0 on success, 1 if no uuid column, 2 if insert failed
-        """
+        """:returns: 0 on success, 1 if no uuid column, 2 if insert failed."""
         main_table = db_utils.get_table(self.engine, tablename)
         if not hasattr(main_table.c, "uuid"):
             # Not a uuid table, so skip it.
@@ -7109,3 +7106,22 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           self.admin_context,
                           v2['compute_node_id'],
                           v2['address'])
+
+
+class RetryOnDeadlockTestCase(test.TestCase):
+    def test_without_deadlock(self):
+        @sqlalchemy_api._retry_on_deadlock
+        def call_api(*args, **kwargs):
+            return True
+        self.assertTrue(call_api())
+
+    def test_raise_deadlock(self):
+        self.attempts = 2
+
+        @sqlalchemy_api._retry_on_deadlock
+        def call_api(*args, **kwargs):
+            while self.attempts:
+                self.attempts = self.attempts - 1
+                raise db_exc.DBDeadlock("fake exception")
+            return True
+        self.assertTrue(call_api())

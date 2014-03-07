@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Intel Corporation
 # All Rights Reserved.
 #
@@ -16,9 +14,13 @@
 #    under the License.
 
 
+import webob.exc
+
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
+from nova import compute
+from nova import exception
+from nova.objects import pci_device
 from nova.openstack.common import jsonutils
 
 
@@ -26,31 +28,12 @@ ALIAS = 'os-pci'
 instance_authorize = extensions.soft_extension_authorizer(
     'compute', 'v3:' + ALIAS + ':pci_servers')
 
+authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
 
-def make_server(elem):
-    pci_devices = xmlutil.TemplateElement('%s:pci_devices' % Pci.alias,
-                                          colon_ns=True)
-    elem.append(pci_devices)
-    device = xmlutil.SubTemplateElement(pci_devices,
-                                        '%s:pci_device' % Pci.alias,
-                                        selector='%s:pci_devices' % Pci.alias,
-                                        colon_ns=True)
-    device.set('id')
-
-
-class PciServerTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('server', selector='server')
-        make_server(root)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={Pci.alias: Pci.namespace})
-
-
-class PciServersTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('servers')
-        elem = xmlutil.SubTemplateElement(root, 'server', selector='servers')
-        make_server(elem)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={Pci.alias: Pci.namespace})
+PCI_ADMIN_KEYS = ['id', 'address', 'vendor_id', 'product_id', 'status',
+                  'compute_node_id']
+PCI_DETAIL_KEYS = ['dev_type', 'label', 'instance_uuid', 'dev_id',
+                   'extra_info']
 
 
 class PciServerController(wsgi.Controller):
@@ -64,7 +47,6 @@ class PciServerController(wsgi.Controller):
     def show(self, req, resp_obj, id):
         context = req.environ['nova.context']
         if instance_authorize(context):
-            resp_obj.attach(xml=PciServerTemplate())
             server = resp_obj.obj['server']
             instance = req.get_db_instance(server['id'])
             self._extend_server(server, instance)
@@ -73,41 +55,10 @@ class PciServerController(wsgi.Controller):
     def detail(self, req, resp_obj):
         context = req.environ['nova.context']
         if instance_authorize(context):
-            resp_obj.attach(xml=PciServersTemplate())
             servers = list(resp_obj.obj['servers'])
             for server in servers:
                 instance = req.get_db_instance(server['id'])
                 self._extend_server(server, instance)
-
-
-def make_hypervisor(elem):
-    pci_stats = xmlutil.TemplateElement('%s:pci_stats' % Pci.alias,
-                                        colon_ns=True)
-    elem.append(pci_stats)
-    pci_stat = xmlutil.make_flat_dict('%s:pci_stat' % Pci.alias,
-                                      selector='%s:pci_stats' % Pci.alias,
-                                      colon_ns=True,
-                                      root=pci_stats,
-                                      ignore_sub_dicts=True)
-    extra = xmlutil.make_flat_dict('extra_info', selector='extra_info')
-    pci_stat.append(extra)
-    pci_stats.append(pci_stat)
-
-
-class PciHypervisorTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisor', selector='hypervisor')
-        make_hypervisor(root)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={Pci.alias: Pci.namespace})
-
-
-class HypervisorDetailTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisors')
-        elem = xmlutil.SubTemplateElement(root, 'hypervisor',
-                                          selector='hypervisors')
-        make_hypervisor(elem)
-        return xmlutil.SlaveTemplate(root, 1, nsmap={Pci.alias: Pci.namespace})
 
 
 class PciHypervisorController(wsgi.Controller):
@@ -117,29 +68,80 @@ class PciHypervisorController(wsgi.Controller):
 
     @wsgi.extends
     def show(self, req, resp_obj, id):
-        resp_obj.attach(xml=PciHypervisorTemplate())
         hypervisor = resp_obj.obj['hypervisor']
         compute_node = req.get_db_compute_node(hypervisor['id'])
         self._extend_hypervisor(hypervisor, compute_node)
 
     @wsgi.extends
     def detail(self, req, resp_obj):
-        resp_obj.attach(xml=HypervisorDetailTemplate())
         hypervisors = list(resp_obj.obj['hypervisors'])
         for hypervisor in hypervisors:
             compute_node = req.get_db_compute_node(hypervisor['id'])
             self._extend_hypervisor(hypervisor, compute_node)
 
 
+class PciController(object):
+
+    def __init__(self):
+        self.host_api = compute.HostAPI()
+
+    def _view_pcidevice(self, device, detail=False):
+        dev_dict = {}
+        for key in PCI_ADMIN_KEYS:
+            dev_dict[key] = device[key]
+        if detail:
+            for field in PCI_DETAIL_KEYS:
+                if field == 'instance_uuid':
+                    dev_dict['server_uuid'] = device[field]
+                else:
+                    dev_dict[field] = device[field]
+        return dev_dict
+
+    def _get_all_nodes_pci_devices(self, req, detail, action):
+        context = req.environ['nova.context']
+        authorize(context, action=action)
+        compute_nodes = self.host_api.compute_node_get_all(context)
+        results = []
+        for node in compute_nodes:
+            pci_devs = pci_device.PciDeviceList.get_by_compute_node(
+                context, node['id'])
+            results.extend([self._view_pcidevice(dev, detail)
+                            for dev in pci_devs])
+        return results
+
+    @extensions.expected_errors(())
+    def detail(self, req):
+        results = self._get_all_nodes_pci_devices(req, True, 'detail')
+        return dict(pci_devices=results)
+
+    @extensions.expected_errors(404)
+    def show(self, req, id):
+        context = req.environ['nova.context']
+        authorize(context, action='show')
+        try:
+            pci_dev = pci_device.PciDevice.get_by_dev_id(context, id)
+        except exception.PciDeviceNotFoundById as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
+        result = self._view_pcidevice(pci_dev, True)
+        return dict(pci_device=result)
+
+    @extensions.expected_errors(())
+    def index(self, req):
+        results = self._get_all_nodes_pci_devices(req, False, 'index')
+        return dict(pci_devices=results)
+
+
 class Pci(extensions.V3APIExtensionBase):
     """Pci access support."""
     name = "PCIAccess"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/%s/api/v3" % ALIAS
     version = 1
 
     def get_resources(self):
-        return []
+        resources = [extensions.ResourceExtension(ALIAS,
+                     PciController(),
+                     collection_actions={'detail': 'GET'})]
+        return resources
 
     def get_controller_extensions(self):
         server_extension = extensions.ControllerExtension(

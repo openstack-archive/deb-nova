@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
 #
@@ -38,13 +36,19 @@ def fake_is_vim_object(arg, module):
 
 def fake_temp_method_exception():
     raise error_util.VimFaultException(
-            [error_util.FAULT_NOT_AUTHENTICATED],
+            [error_util.NOT_AUTHENTICATED],
             "Session Empty/Not Authenticated")
 
 
 def fake_temp_session_exception():
     raise error_util.SessionConnectionException([],
             "Session Exception")
+
+
+def fake_session_file_exception():
+    fault_list = [error_util.FILE_ALREADY_EXISTS]
+    raise error_util.VimFaultException(fault_list,
+                                       Exception('fake'))
 
 
 def set_stubs(stubs):

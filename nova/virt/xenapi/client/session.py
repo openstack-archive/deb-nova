@@ -28,6 +28,7 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import versionutils
 from nova import utils
+from nova.virt.xenapi.client import objects
 from nova.virt.xenapi import pool
 from nova.virt.xenapi import pool_states
 
@@ -52,6 +53,19 @@ CONF.register_opts(xenapi_session_opts, 'xenserver')
 CONF.import_opt('host', 'nova.netconf')
 
 
+def apply_session_helpers(session):
+    session.VM = objects.VM(session)
+    session.SR = objects.SR(session)
+    session.VDI = objects.VDI(session)
+    session.VBD = objects.VBD(session)
+    session.PBD = objects.PBD(session)
+    session.PIF = objects.PIF(session)
+    session.VLAN = objects.VLAN(session)
+    session.host = objects.Host(session)
+    session.network = objects.Network(session)
+    session.pool = objects.Pool(session)
+
+
 class XenAPISession(object):
     """The session to invoke XenAPI SDK calls."""
 
@@ -59,7 +73,7 @@ class XenAPISession(object):
     # changed in development environments.
     # MAJOR VERSION: Incompatible changes with the plugins
     # MINOR VERSION: Compatible changes, new plguins, etc
-    PLUGIN_REQUIRED_VERSION = '1.0'
+    PLUGIN_REQUIRED_VERSION = '1.2'
 
     def __init__(self, url, user, pw):
         import XenAPI
@@ -76,6 +90,8 @@ class XenAPISession(object):
             self._get_product_version_and_brand()
 
         self._verify_plugin_version()
+
+        apply_session_helpers(self)
 
     def _verify_plugin_version(self):
         requested_version = self.PLUGIN_REQUIRED_VERSION
@@ -273,9 +289,4 @@ class XenAPISession(object):
         the `get_all` call and the `get_record` call.
         """
 
-        for ref in self.call_xenapi('%s.get_all' % record_type):
-            rec = self.get_rec(record_type, ref)
-            # Check to make sure the record still exists. It may have
-            # been deleted between the get_all call and get_record call
-            if rec:
-                yield ref, rec
+        return self.call_xenapi('%s.get_all_records' % record_type).items()

@@ -15,13 +15,13 @@
 """Handles all requests to the conductor service."""
 
 from oslo.config import cfg
+from oslo import messaging
 
 from nova import baserpc
 from nova.conductor import manager
 from nova.conductor import rpcapi
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.openstack.common.rpc import common as rpc_common
 from nova import utils
 
 conductor_opts = [
@@ -30,12 +30,13 @@ conductor_opts = [
                 help='Perform nova-conductor operations locally'),
     cfg.StrOpt('topic',
                default='conductor',
-               help='the topic conductor nodes listen on'),
+               help='The topic on which conductor nodes listen'),
     cfg.StrOpt('manager',
                default='nova.conductor.manager.ConductorManager',
-               help='full class name for the Manager for conductor'),
+               help='Full class name for the Manager for conductor'),
     cfg.IntOpt('workers',
-               help='Number of workers for OpenStack Conductor service')
+               help='Number of workers for OpenStack Conductor service. '
+                    'The default will be the number of CPUs available.')
 ]
 conductor_group = cfg.OptGroup(name='conductor',
                                title='Conductor Options')
@@ -86,12 +87,13 @@ class LocalAPI(object):
     def instance_get_all_by_filters(self, context, filters,
                                     sort_key='created_at',
                                     sort_dir='desc',
-                                    columns_to_join=None):
+                                    columns_to_join=None, use_slave=False):
         return self._manager.instance_get_all_by_filters(context,
                                                          filters,
                                                          sort_key,
                                                          sort_dir,
-                                                         columns_to_join)
+                                                         columns_to_join,
+                                                         use_slave)
 
     def instance_get_active_by_window_joined(self, context, begin, end=None,
                                              project_id=None, host=None):
@@ -100,9 +102,6 @@ class LocalAPI(object):
 
     def instance_info_cache_delete(self, context, instance):
         return self._manager.instance_info_cache_delete(context, instance)
-
-    def instance_type_get(self, context, instance_type_id):
-        return self._manager.instance_type_get(context, instance_type_id)
 
     def instance_fault_create(self, context, values):
         return self._manager.instance_fault_create(context, values)
@@ -236,8 +235,8 @@ class LocalAPI(object):
         return self._manager.compute_node_create(context, values)
 
     def compute_node_update(self, context, node, values, prune_stats=False):
-        return self._manager.compute_node_update(context, node, values,
-                                                 prune_stats)
+        # NOTE(belliott) ignore prune_stats param, it's no longer relevant
+        return self._manager.compute_node_update(context, node, values)
 
     def compute_node_delete(self, context, node):
         return self._manager.compute_node_delete(context, node)
@@ -381,7 +380,7 @@ class API(LocalAPI):
                 self.base_rpcapi.ping(context, '1.21 GigaWatts',
                                       timeout=timeout)
                 break
-            except rpc_common.Timeout:
+            except messaging.MessagingTimeout:
                 LOG.warning(_('Timed out waiting for nova-conductor. '
                                 'Is it running? Or did this service start '
                                 'before nova-conductor?'))

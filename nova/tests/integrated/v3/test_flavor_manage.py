@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -42,7 +41,3 @@ class FlavorManageSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
         response = self._do_delete("flavors/10")
         self.assertEqual(response.status, 204)
         self.assertEqual(response.read(), '')
-
-
-class FlavorManageSampleXmlTests(FlavorManageSampleJsonTests):
-    ctype = "xml"

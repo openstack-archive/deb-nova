@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -42,25 +40,11 @@ class VirtAPI(object):
         """
         raise NotImplementedError()
 
-    def flavor_get(self, context, flavor_id):
-        """Get information about a flavor
-        :param context: security context
-        :param flavor_id: the id of the flavor in question
-        """
-        raise NotImplementedError()
-
     def block_device_mapping_get_all_by_instance(self, context, instance,
                                                  legacy=True):
         """Get block device mappings for an instance
         :param context: security context
         :param instance: the instance we're getting bdms for
         :param legacy: get bdm info in legacy format (or not)
-        """
-        raise NotImplementedError()
-
-    def block_device_mapping_update(self, context, bdm_id, bdm_values):
-        """Update the database for the passed block device mapping
-        :param context: security context
-        :param bdm: the block device mapping dict
         """
         raise NotImplementedError()

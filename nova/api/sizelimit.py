@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -29,7 +27,7 @@ from nova import wsgi
 #default request size is 112k
 max_request_body_size_opt = cfg.IntOpt('osapi_max_request_body_size',
                                        default=114688,
-                                       help='the maximum body size '
+                                       help='The maximum body size '
                                             'per each osapi request(bytes)')
 
 CONF = cfg.CONF
@@ -39,9 +37,10 @@ CONF.register_opt(max_request_body_size_opt)
 class LimitingReader(object):
     """Reader to limit the size of an incoming request."""
     def __init__(self, data, limit):
-        """
-        :param data: Underlying data object
-        :param limit: maximum number of bytes the reader should allow
+        """Initialize a new `LimitingReader`.
+
+           :param data: underlying data object
+           :param limit: maximum number of bytes the reader should allow
         """
         self.data = data
         self.limit = limit

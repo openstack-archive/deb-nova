@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Boris Pavlovic (boris@pavlovic.me).
 # All Rights Reserved.
 #
@@ -185,10 +183,9 @@ def _drop_unique_constraint_in_sqlite(migrate_engine, table_name, uc_name,
 
 def drop_unique_constraint(migrate_engine, table_name, uc_name, *columns,
                            **col_name_col_instance):
-    """
-    This method drops UC from table and works for mysql, postgresql and sqlite.
-    In mysql and postgresql we are able to use "alter table" construction. In
-    sqlite is only one way to drop UC:
+    """This method drops UC from table and works for mysql, postgresql and
+    sqlite. In mysql and postgresql we are able to use "alter table"
+    construction. In sqlite is only one way to drop UC:
         1) Create new table with same columns, indexes and constraints
            (except one that we want to drop).
         2) Copy data from old table to new.
@@ -217,8 +214,7 @@ def drop_unique_constraint(migrate_engine, table_name, uc_name, *columns,
 
 def drop_old_duplicate_entries_from_table(migrate_engine, table_name,
                                           use_soft_delete, *uc_column_names):
-    """
-    This method is used to drop all old rows that have the same values for
+    """This method is used to drop all old rows that have the same values for
     columns in uc_columns.
     """
     meta = MetaData()
@@ -259,9 +255,8 @@ def drop_old_duplicate_entries_from_table(migrate_engine, table_name,
 
 
 def check_shadow_table(migrate_engine, table_name):
-    """
-    This method checks that table with ``table_name`` and corresponding shadow
-    table have same columns.
+    """This method checks that table with ``table_name`` and
+    corresponding shadow table have same columns.
     """
     meta = MetaData()
     meta.bind = migrate_engine
@@ -298,9 +293,8 @@ def check_shadow_table(migrate_engine, table_name):
 
 def create_shadow_table(migrate_engine, table_name=None, table=None,
                         **col_name_col_instance):
-    """
-    This method create shadow table for table with name ``table_name`` or table
-    instance ``table``.
+    """This method create shadow table for table with name ``table_name``
+    or table instance ``table``.
     :param table_name: Autoload table with this name and create shadow table
     :param table: Autoloaded table, so just create corresponding shadow table.
     :param col_name_col_instance:   contains pair column_name=column_instance.
@@ -514,8 +508,17 @@ def _change_deleted_column_type_to_id_type_sqlite(migrate_engine, table_name,
         if not isinstance(constraint, CheckConstraint):
             return False
         sqltext = str(constraint.sqltext)
-        return (sqltext.endswith("deleted in (0, 1)") or
-                sqltext.endswith("deleted IN (:deleted_1, :deleted_2)"))
+        # NOTE(I159): when the type of column `deleted` is changed from boolean
+        # to int, the corresponding CHECK constraint is dropped too. But
+        # starting from SQLAlchemy version 0.8.3, those CHECK constraints
+        # aren't dropped anymore. So despite the fact that column deleted is
+        # of type int now, we still restrict its values to be either 0 or 1.
+        constraint_markers = (
+            "deleted in (0, 1)",
+            "deleted IN (:deleted_1, :deleted_2)",
+            "deleted IN (:param_1, :param_2)"
+        )
+        return any(sqltext.endswith(marker) for marker in constraint_markers)
 
     constraints = []
     for constraint in table.constraints:
@@ -576,16 +579,8 @@ def _drop_index(migrate_engine, table, index_name, idx_columns):
 
 def _change_index_columns(migrate_engine, table, index_name,
                           new_columns, old_columns):
-    if _index_exists(migrate_engine, table.name, index_name):
-        Index(
-            index_name,
-            *[getattr(table.c, col) for col in old_columns]
-        ).drop(migrate_engine)
-
-    Index(
-        index_name,
-        *[getattr(table.c, col) for col in new_columns]
-    ).create()
+    _drop_index(migrate_engine, table, index_name, old_columns)
+    _add_index(migrate_engine, table, index_name, new_columns)
 
 
 def modify_indexes(migrate_engine, data, upgrade=True):

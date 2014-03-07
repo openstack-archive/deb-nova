@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -69,7 +68,3 @@ class QuotaSetsSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
                                 {})
         return self._verify_response('user-quotas-update-post-resp', {},
                                      response, 200)
-
-
-class QuotaSetsSampleXmlTests(QuotaSetsSampleJsonTests):
-    ctype = "xml"

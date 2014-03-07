@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -35,6 +33,7 @@ class ServicesIndexTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('services')
         elem = xmlutil.SubTemplateElement(root, 'service', selector='services')
+        elem.set('id')
         elem.set('binary')
         elem.set('host')
         elem.set('zone')
@@ -108,6 +107,8 @@ class ServiceController(object):
                      'zone': svc['availability_zone'],
                      'status': active, 'state': state,
                      'updated_at': svc['updated_at']}
+        if self.ext_mgr.is_loaded('os-extended-services-delete'):
+            service_detail['id'] = svc['id']
         if detailed:
             service_detail['disabled_reason'] = svc['disabled_reason']
 
@@ -130,11 +131,24 @@ class ServiceController(object):
 
         return True
 
+    @wsgi.response(204)
+    def delete(self, req, id):
+        """Deletes the specified service."""
+        if not self.ext_mgr.is_loaded('os-extended-services-delete'):
+            raise webob.exc.HTTPMethodNotAllowed()
+
+        context = req.environ['nova.context']
+        authorize(context)
+
+        try:
+            self.host_api.service_delete(context, id)
+        except exception.ServiceNotFound:
+            explanation = _("Service %s not found.") % id
+            raise webob.exc.HTTPNotFound(explanation=explanation)
+
     @wsgi.serializers(xml=ServicesIndexTemplate)
     def index(self, req):
-        """
-        Return a list of all running services. Filter by host & service name.
-        """
+        """Return a list of all running services."""
         detailed = self.ext_mgr.is_loaded('os-extended-services')
         services = self._get_services_list(req, detailed)
 
@@ -174,8 +188,9 @@ class ServiceController(object):
             if id == "disable-log-reason":
                 reason = body['disabled_reason']
                 if not self._is_valid_as_reason(reason):
-                    msg = _('Disabled reason contains invalid characters '
-                            'or is too long')
+                    msg = _('The string containing the reason for disabling '
+                            'the service contains invalid characters or is '
+                            'too long.')
                     raise webob.exc.HTTPUnprocessableEntity(detail=msg)
 
                 status_detail['disabled_reason'] = reason

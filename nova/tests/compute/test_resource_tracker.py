@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -18,7 +16,6 @@
 """Tests for compute resource tracking."""
 
 import mock
-import re
 import uuid
 
 from oslo.config import cfg
@@ -32,8 +29,8 @@ from nova import db
 from nova.objects import base as obj_base
 from nova.objects import migration as migration_obj
 from nova.openstack.common import jsonutils
-from nova.openstack.common.notifier import api as notifier_api
 from nova.openstack.common import timeutils
+from nova import rpc
 from nova import test
 from nova.tests.compute.monitors import test_monitors
 from nova.tests.objects import test_migration
@@ -72,6 +69,20 @@ class FakeVirtDriver(driver.ComputeDriver):
         self.memory_mb_used = 0
         self.local_gb_used = 0
         self.pci_support = pci_support
+        self.pci_devices = [{
+            'label': 'forza-napoli',
+            'dev_type': 'foo',
+            'compute_node_id': 1,
+            'address': '0000:00:00.1',
+            'product_id': 'p1',
+            'vendor_id': 'v1',
+            'status': 'available',
+            'extra_k1': 'v1'}] if self.pci_support else []
+        self.pci_stats = [{
+            'count': 1,
+            'vendor_id': 'v1',
+            'product_id': 'p1',
+            'extra_info': {'extra_k1': 'v1'}}] if self.pci_support else []
 
     def get_host_ip_addr(self):
         return '127.0.0.1'
@@ -90,15 +101,8 @@ class FakeVirtDriver(driver.ComputeDriver):
             'cpu_info': '',
         }
         if self.pci_support:
-            d['pci_passthrough_devices'] = jsonutils.dumps([{
-                    'label': 'forza-napoli',
-                    'dev_type': 'foo',
-                    'compute_node_id': 1,
-                    'address': '0000:00:00.1',
-                    'product_id': 'p1',
-                    'vendor_id': 'v1',
-                    'status': 'available',
-                    'extra_k1': 'v1'}])
+            d['pci_passthrough_devices'] = jsonutils.dumps(self.pci_devices)
+
         return d
 
     def estimate_instance_overhead(self, instance_info):
@@ -200,6 +204,7 @@ class BaseTestCase(test.TestCase):
             'memory_mb': 2,
             'root_gb': 3,
             'ephemeral_gb': 1,
+            'ephemeral_key_uuid': None,
             'os_type': 'Linux',
             'project_id': '123456',
             'vcpus': 1,
@@ -255,6 +260,12 @@ class BaseTestCase(test.TestCase):
     def _fake_flavor_create(self, **kwargs):
         instance_type = {
             'id': 1,
+            'created_at': None,
+            'updated_at': None,
+            'deleted_at': None,
+            'deleted': False,
+            'disabled': False,
+            'is_public': True,
             'name': 'fakeitype',
             'memory_mb': FAKE_VIRT_MEMORY_MB,
             'vcpus': FAKE_VIRT_VCPUS,
@@ -263,7 +274,8 @@ class BaseTestCase(test.TestCase):
             'swap': 0,
             'rxtx_factor': 1.0,
             'vcpu_weight': 1,
-            'flavorid': 'fakeflavor'
+            'flavorid': 'fakeflavor',
+            'extra_specs': {},
         }
         instance_type.update(**kwargs)
 
@@ -447,7 +459,7 @@ class BaseTrackerTestCase(BaseTestCase):
 
     def _fake_migration_get_in_progress_by_host_and_node(self, ctxt, host,
                                                          node):
-        status = ['confirmed', 'reverted']
+        status = ['confirmed', 'reverted', 'error']
         migrations = []
 
         for migration in self._migrations.values():
@@ -508,6 +520,7 @@ class TrackerTestCase(BaseTrackerTestCase):
         self.assertTrue(self.updated)
 
     def test_init(self):
+        driver = self._driver()
         self._assert(FAKE_VIRT_MEMORY_MB, 'memory_mb')
         self._assert(FAKE_VIRT_LOCAL_GB, 'local_gb')
         self._assert(FAKE_VIRT_VCPUS, 'vcpus')
@@ -519,7 +532,8 @@ class TrackerTestCase(BaseTrackerTestCase):
         self._assert(FAKE_VIRT_LOCAL_GB, 'free_disk_gb')
         self.assertFalse(self.tracker.disabled)
         self.assertEqual(0, self.tracker.compute_node['current_workload'])
-        self._assert('{}', 'pci_stats')
+        self.assertEqual(driver.pci_stats,
+            jsonutils.loads(self.tracker.compute_node['pci_stats']))
 
 
 class TrackerPciStatsTestCase(BaseTrackerTestCase):
@@ -529,6 +543,7 @@ class TrackerPciStatsTestCase(BaseTrackerTestCase):
         self.assertTrue(self.updated)
 
     def test_init(self):
+        driver = self._driver()
         self._assert(FAKE_VIRT_MEMORY_MB, 'memory_mb')
         self._assert(FAKE_VIRT_LOCAL_GB, 'local_gb')
         self._assert(FAKE_VIRT_VCPUS, 'vcpus')
@@ -540,13 +555,8 @@ class TrackerPciStatsTestCase(BaseTrackerTestCase):
         self._assert(FAKE_VIRT_LOCAL_GB, 'free_disk_gb')
         self.assertFalse(self.tracker.disabled)
         self.assertEqual(0, self.tracker.compute_node['current_workload'])
-        expected = """[{"count": 1,
-                        "vendor_id": "v1",
-                        "product_id": "p1",
-                        "extra_info": {"extra_k1": "v1"}}]"""
-        expected = re.sub(r'\s+', '', expected)
-        pci = re.sub(r'\s+', '', self.tracker.compute_node['pci_stats'])
-        self.assertEqual(expected, pci)
+        self.assertEqual(driver.pci_stats,
+            jsonutils.loads(self.tracker.compute_node['pci_stats']))
 
     def _driver(self):
         return FakeVirtDriver(pci_support=True)
@@ -1076,21 +1086,35 @@ class ComputeMonitorTestCase(BaseTestCase):
         class2 = test_monitors.FakeMonitorClass2(self.tracker)
         self.tracker.monitors = [class1, class2]
 
-        def fake_notify(context, publisher, event, priority, payload):
-            self.info['publisher'] = publisher
-            self.info['event'] = event
-            self.info['payload'] = payload
+        mock_notifier = mock.Mock()
 
-        with mock.patch.object(notifier_api, 'notify',
-                               side_effect=fake_notify):
+        with mock.patch.object(rpc, 'get_notifier',
+                               return_value=mock_notifier) as mock_get:
             metrics = self.tracker._get_host_metrics(self.context,
                                                      self.node_name)
-        self.assertEqual(metrics, [{'timestamp': 1232,
-                                    'name': 'key1',
-                                    'value': 2600,
-                                    'source': 'libvirt'},
-                                   {'name': 'key2',
-                                    'source': 'libvirt',
-                                    'timestamp': 123,
-                                    'value': 1600}])
-        self.assertTrue(len(self.info) > 0)
+            mock_get.assert_called_once_with(service='compute',
+                                             host=self.node_name)
+
+        expected_metrics = [{
+                    'timestamp': 1232,
+                    'name': 'key1',
+                    'value': 2600,
+                    'source': 'libvirt'
+                }, {
+                    'name': 'key2',
+                    'source': 'libvirt',
+                    'timestamp': 123,
+                    'value': 1600
+                }]
+
+        payload = {
+            'metrics': expected_metrics,
+            'host': self.tracker.host,
+            'host_ip': CONF.my_ip,
+            'nodename': self.node_name
+        }
+
+        mock_notifier.info.assert_called_once_with(
+            self.context, 'compute.metrics.update', payload)
+
+        self.assertEqual(metrics, expected_metrics)

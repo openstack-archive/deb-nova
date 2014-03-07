@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 NTT DOCOMO, INC.
 # All Rights Reserved.
 #
@@ -42,6 +40,7 @@ class BareMetalNode(BASE, models.NovaBase):
     cpus = Column(Integer)
     memory_mb = Column(Integer)
     local_gb = Column(Integer)
+    preserve_ephemeral = Column(Boolean)
     pm_address = Column(Text)
     pm_user = Column(Text)
     pm_password = Column(Text)

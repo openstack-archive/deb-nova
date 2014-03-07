@@ -27,7 +27,9 @@ from nova import exception
 from nova.objects import base
 from nova.objects import fields
 from nova.objects import utils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
+from nova import rpc
 from nova import test
 
 
@@ -268,6 +270,15 @@ class TestUtils(test.TestCase):
         self.assertEqual([{'foo': 0}, {'foo': 1}],
                          base.obj_to_primitive(mylist))
 
+    def test_obj_to_primitive_with_ip_addr(self):
+        class TestObject(base.NovaObject):
+            fields = {'addr': fields.IPAddressField(),
+                      'cidr': fields.IPNetworkField()}
+
+        obj = TestObject(addr='1.2.3.4', cidr='1.1.1.1/16')
+        self.assertEqual({'addr': '1.2.3.4', 'cidr': '1.1.1.1/16'},
+                         base.obj_to_primitive(obj))
+
     def test_obj_make_list(self):
         class MyList(base.ObjectListBase, base.NovaObject):
             pass
@@ -284,7 +295,8 @@ class TestUtils(test.TestCase):
             self.assertEqual(db_objs[index]['missing'], item.missing)
 
 
-def compare_obj(test, obj, db_obj, subs=None, allow_missing=None):
+def compare_obj(test, obj, db_obj, subs=None, allow_missing=None,
+                comparators=None):
     """Compare a NovaObject and a dict-like database object.
 
     This automatically converts TZ-aware datetimes and iterates over
@@ -295,12 +307,15 @@ def compare_obj(test, obj, db_obj, subs=None, allow_missing=None):
     :param:db_obj: The dict-like database object to use as reference
     :param:subs: A dict of objkey=dbkey field substitutions
     :param:allow_missing: A list of fields that may not be in db_obj
+    :param:comparators: Map of comparator functions to use for certain fields
     """
 
     if subs is None:
         subs = {}
     if allow_missing is None:
         allow_missing = []
+    if comparators is None:
+        comparators = {}
 
     for key in obj.fields:
         if key in allow_missing and not obj.obj_attr_is_set(key):
@@ -310,7 +325,12 @@ def compare_obj(test, obj, db_obj, subs=None, allow_missing=None):
         db_val = db_obj[db_key]
         if isinstance(obj_val, datetime.datetime):
             obj_val = obj_val.replace(tzinfo=None)
-        test.assertEqual(db_val, obj_val)
+
+        if key in comparators:
+            comparator = comparators[key]
+            comparator(db_val, obj_val)
+        else:
+            test.assertEqual(db_val, obj_val)
 
 
 class _BaseTestCase(test.TestCase):
@@ -319,8 +339,15 @@ class _BaseTestCase(test.TestCase):
         self.remote_object_calls = list()
         self.context = context.RequestContext('fake-user', 'fake-project')
 
-    def compare_obj(self, obj, db_obj, subs=None, allow_missing=None):
-        compare_obj(self, obj, db_obj, subs=subs, allow_missing=allow_missing)
+    def compare_obj(self, obj, db_obj, subs=None, allow_missing=None,
+                    comparators=None):
+        compare_obj(self, obj, db_obj, subs=subs, allow_missing=allow_missing,
+                    comparators=comparators)
+
+    def json_comparator(self, expected, obj_val):
+        # json-ify an object field for comparison with its db str
+        #equivalent
+        self.assertEqual(expected, jsonutils.dumps(obj_val))
 
     def assertNotIsInstance(self, obj, cls, msg=None):
         """Python < v2.7 compatibility.  Assert 'not isinstance(obj, cls)."""
@@ -387,6 +414,14 @@ class _RemoteTest(_BaseTestCase):
         # Things are remoted by default in this session
         base.NovaObject.indirection_api = conductor_rpcapi.ConductorAPI()
 
+        # To make sure local and remote contexts match
+        self.stubs.Set(rpc.RequestContextSerializer,
+                       'serialize_context',
+                       lambda s, c: c)
+        self.stubs.Set(rpc.RequestContextSerializer,
+                       'deserialize_context',
+                       lambda s, c: c)
+
     def setUp(self):
         super(_RemoteTest, self).setUp()
         self._testable_conductor()
@@ -408,7 +443,15 @@ class _TestObject(object):
                      'nova_object.namespace': 'nova',
                      'nova_object.version': '1.5',
                      'nova_object.data': {'foo': 1}}
-        obj = MyObj.obj_from_primitive(primitive)
+        real_method = MyObj._obj_from_primitive
+
+        def _obj_from_primitive(*args):
+            return real_method(*args)
+
+        with mock.patch.object(MyObj, '_obj_from_primitive') as ofp:
+            ofp.side_effect = _obj_from_primitive
+            obj = MyObj.obj_from_primitive(primitive)
+            ofp.assert_called_once_with(None, '1.5', primitive)
         self.assertEqual(obj.foo, 1)
 
     def test_hydration_version_different(self):
@@ -714,6 +757,9 @@ class TestObjectListBase(test.TestCase):
         self.assertEqual(objlist[2], objlist.objects[2])
         self.assertEqual(objlist.count(objlist.objects[0]), 1)
         self.assertEqual(objlist.index(objlist.objects[1]), 1)
+        objlist.sort(key=lambda x: x.foo, reverse=True)
+        self.assertEqual([3, 2, 1],
+                         [x.foo for x in objlist])
 
     def test_serialization(self):
         class Foo(base.ObjectListBase, base.NovaObject):

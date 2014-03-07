@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -26,7 +25,3 @@ class ServerDiagnosticsSamplesJsonTest(test_servers.ServersSampleBase):
         subs = self._get_regexes()
         self._verify_response('server-diagnostics-get-resp', subs,
                               response, 200)
-
-
-class ServerDiagnosticsSamplesXmlTest(ServerDiagnosticsSamplesJsonTest):
-    ctype = "xml"

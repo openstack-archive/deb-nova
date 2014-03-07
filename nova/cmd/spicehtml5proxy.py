@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -29,6 +27,8 @@ from oslo.config import cfg
 
 from nova import config
 from nova.console import websocketproxy
+from nova.openstack.common.report import guru_meditation_report as gmr
+from nova import version
 
 opts = [
     cfg.StrOpt('spicehtml5proxy_host',
@@ -62,6 +62,8 @@ def main():
     if not os.path.exists(CONF.web):
         print("Can not find spice html/js/css files at %s." % CONF.web)
         return(-1)
+
+    gmr.TextGuruMeditation.setup_autorun(version)
 
     # Create and start the NovaWebSockets proxy
     server = websocketproxy.NovaWebSocketProxy(

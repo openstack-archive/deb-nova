@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 NTT
 # All Rights Reserved.
 #
@@ -168,31 +166,55 @@ fixed_ips = [{'id': 0,
 
 
 vifs = [{'id': 0,
+         'created_at': None,
+         'updated_at': None,
+         'deleted_at': None,
+         'deleted': 0,
          'address': 'DE:AD:BE:EF:00:00',
          'uuid': '00000000-0000-0000-0000-0000000000000000',
          'network_id': 0,
          'instance_uuid': '00000000-0000-0000-0000-0000000000000000'},
         {'id': 1,
+         'created_at': None,
+         'updated_at': None,
+         'deleted_at': None,
+         'deleted': 0,
          'address': 'DE:AD:BE:EF:00:01',
          'uuid': '00000000-0000-0000-0000-0000000000000001',
          'network_id': 1,
          'instance_uuid': '00000000-0000-0000-0000-0000000000000000'},
         {'id': 2,
+         'created_at': None,
+         'updated_at': None,
+         'deleted_at': None,
+         'deleted': 0,
          'address': 'DE:AD:BE:EF:00:02',
          'uuid': '00000000-0000-0000-0000-0000000000000002',
          'network_id': 1,
          'instance_uuid': '00000000-0000-0000-0000-0000000000000001'},
         {'id': 3,
+         'created_at': None,
+         'updated_at': None,
+         'deleted_at': None,
+         'deleted': 0,
          'address': 'DE:AD:BE:EF:00:03',
          'uuid': '00000000-0000-0000-0000-0000000000000003',
          'network_id': 0,
          'instance_uuid': '00000000-0000-0000-0000-0000000000000001'},
         {'id': 4,
+         'created_at': None,
+         'updated_at': None,
+         'deleted_at': None,
+         'deleted': 0,
          'address': 'DE:AD:BE:EF:00:04',
          'uuid': '00000000-0000-0000-0000-0000000000000004',
          'network_id': 0,
          'instance_uuid': '00000000-0000-0000-0000-0000000000000000'},
         {'id': 5,
+         'created_at': None,
+         'updated_at': None,
+         'deleted_at': None,
+         'deleted': 0,
          'address': 'DE:AD:BE:EF:00:05',
          'uuid': '00000000-0000-0000-0000-0000000000000005',
          'network_id': 1,
@@ -235,7 +257,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         self.context = context.RequestContext('testuser', 'testproject',
                                               is_admin=True)
 
-        def get_vifs(_context, instance_uuid):
+        def get_vifs(_context, instance_uuid, use_slave):
             return [vif for vif in vifs if vif['instance_uuid'] ==
                         instance_uuid]
 
@@ -987,6 +1009,23 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             device_exists.assert_has_calls(calls['device_exists'])
             _execute.assert_has_calls(calls['_execute'])
 
+    def test_set_device_mtu_configured(self):
+        self.flags(network_device_mtu=10000)
+        calls = [
+                mock.call('ip', 'link', 'set', 'fake-dev', 'mtu',
+                          10000, run_as_root=True,
+                          check_exit_code=[0, 2, 254])
+                ]
+        with mock.patch.object(utils, 'execute', return_value=('', '')) as ex:
+            linux_net._set_device_mtu('fake-dev')
+            ex.assert_has_calls(calls)
+
+    def test_set_device_mtu_default(self):
+        calls = []
+        with mock.patch.object(utils, 'execute', return_value=('', '')) as ex:
+            linux_net._set_device_mtu('fake-dev')
+            ex.assert_has_calls(calls)
+
     def _ovs_vif_port(self, calls):
         with mock.patch.object(utils, 'execute', return_value=('', '')) as ex:
             linux_net.create_ovs_vif_port('fake-bridge', 'fake-dev',
@@ -996,8 +1035,9 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
 
     def test_ovs_vif_port(self):
         calls = [
-                mock.call('ovs-vsctl', '--timeout=120', '--', '--may-exist',
-                          'add-port', 'fake-bridge', 'fake-dev',
+                mock.call('ovs-vsctl', '--timeout=120', '--', '--if-exists',
+                          'del-port', 'fake-dev', '--', 'add-port',
+                          'fake-bridge', 'fake-dev',
                           '--', 'set', 'Interface', 'fake-dev',
                           'external-ids:iface-id=fake-iface-id',
                           'external-ids:iface-status=active',
@@ -1010,8 +1050,9 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
     def test_ovs_vif_port_with_mtu(self):
         self.flags(network_device_mtu=10000)
         calls = [
-                mock.call('ovs-vsctl', '--timeout=120', '--', '--may-exist',
-                          'add-port', 'fake-bridge', 'fake-dev',
+                mock.call('ovs-vsctl', '--timeout=120', '--', '--if-exists',
+                          'del-port', 'fake-dev', '--', 'add-port',
+                          'fake-bridge', 'fake-dev',
                           '--', 'set', 'Interface', 'fake-dev',
                           'external-ids:iface-id=fake-iface-id',
                           'external-ids:iface-status=active',

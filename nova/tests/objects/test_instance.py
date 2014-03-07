@@ -70,7 +70,7 @@ class _TestInstanceObject(object):
         primitive = inst.obj_to_primitive()
         expected = {'nova_object.name': 'Instance',
                     'nova_object.namespace': 'nova',
-                    'nova_object.version': '1.11',
+                    'nova_object.version': '1.13',
                     'nova_object.data':
                         {'uuid': 'fake-uuid',
                          'launched_at': '1955-11-05T00:00:00Z'},
@@ -86,7 +86,7 @@ class _TestInstanceObject(object):
         primitive = inst.obj_to_primitive()
         expected = {'nova_object.name': 'Instance',
                     'nova_object.namespace': 'nova',
-                    'nova_object.version': '1.11',
+                    'nova_object.version': '1.13',
                     'nova_object.data':
                         {'uuid': 'fake-uuid',
                          'access_ip_v4': '1.2.3.4',
@@ -816,6 +816,26 @@ class _TestInstanceObject(object):
         self.assertRaises(KeyError, inst.delete_flavor, None)
         self.assertRaises(KeyError, inst.delete_flavor, '')
 
+    @mock.patch.object(db, 'instance_metadata_delete')
+    def test_delete_metadata_key(self, db_delete):
+        inst = instance.Instance(context=self.context,
+                                 id=1, uuid='fake-uuid')
+        inst.metadata = {'foo': '1', 'bar': '2'}
+        inst.obj_reset_changes()
+        inst.delete_metadata_key('foo')
+        self.assertEqual({'bar': '2'}, inst.metadata)
+        self.assertEqual({}, inst.obj_get_changes())
+        db_delete.assert_called_once_with(self.context, inst.uuid, 'foo')
+
+    def test_reset_changes(self):
+        inst = instance.Instance()
+        inst.metadata = {'1985': 'present'}
+        inst.system_metadata = {'1955': 'past'}
+        self.assertEqual({}, inst._orig_metadata)
+        inst.obj_reset_changes(['metadata'])
+        self.assertEqual({'1985': 'present'}, inst._orig_metadata)
+        self.assertEqual({}, inst._orig_system_metadata)
+
 
 class TestInstanceObject(test_objects._LocalTest,
                          _TestInstanceObject):
@@ -945,6 +965,30 @@ class _TestInstanceListObject(object):
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], instance.Instance)
             self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+        self.assertRemotes()
+
+    def test_get_active_by_window_joined(self):
+        fakes = [self.fake_instance(1), self.fake_instance(2)]
+        # NOTE(mriedem): Send in a timezone-naive datetime since the
+        # InstanceList.get_active_by_window_joined method should convert it
+        # to tz-aware for the DB API call, which we'll assert with our stub.
+        dt = timeutils.utcnow()
+
+        def fake_instance_get_active_by_window_joined(context, begin, end,
+                                                      project_id, host):
+            # make sure begin is tz-aware
+            self.assertIsNotNone(begin.utcoffset())
+            self.assertIsNone(end)
+            return fakes
+
+        with mock.patch.object(db, 'instance_get_active_by_window_joined',
+                               fake_instance_get_active_by_window_joined):
+            inst_list = instance.InstanceList.get_active_by_window_joined(
+                            self.context, dt)
+
+        for fake, obj in zip(fakes, inst_list.objects):
+            self.assertIsInstance(obj, instance.Instance)
+            self.assertEqual(obj.uuid, fake['uuid'])
         self.assertRemotes()
 
     def test_with_fault(self):

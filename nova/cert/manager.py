@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -26,12 +24,15 @@ Cert manager manages x509 certificates.
 
 import base64
 
+from oslo import messaging
+
 from nova import crypto
 from nova import manager
 
 
 class CertManager(manager.Manager):
-    RPC_API_VERSION = '2.0'
+
+    target = messaging.Target(version='2.0')
 
     def __init__(self, *args, **kwargs):
         super(CertManager, self).__init__(service_name='cert',

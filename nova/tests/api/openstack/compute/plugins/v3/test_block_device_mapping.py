@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -84,9 +82,9 @@ class BlockDeviceMappingTest(test.TestCase):
         req.body = jsonutils.dumps(body)
 
         if override_controller:
-            override_controller.create(req, body).obj['server']
+            override_controller.create(req, body=body).obj['server']
         else:
-            self.controller.create(req, body).obj['server']
+            self.controller.create(req, body=body).obj['server']
 
     def test_create_instance_with_block_device_mapping_disabled(self):
         bdm = [{'device_name': 'foo'}]
@@ -104,8 +102,7 @@ class BlockDeviceMappingTest(test.TestCase):
                           override_controller=self.no_volumes_controller)
 
     def test_create_instance_with_volumes_enabled_no_image(self):
-        """
-        Test that the create will fail if there is no image
+        """Test that the create will fail if there is no image
         and no bdms supplied in the request
         """
         old_create = compute_api.API.create
@@ -274,61 +271,3 @@ class BlockDeviceMappingTest(test.TestCase):
 
         params = {block_device_mapping.ATTRIBUTE_NAME: self.bdm}
         self.assertRaises(exc.HTTPBadRequest, self._test_create, params)
-
-
-class TestServerCreateRequestXMLDeserializer(test.TestCase):
-
-    def setUp(self):
-        super(TestServerCreateRequestXMLDeserializer, self).setUp()
-        ext_info = plugins.LoadedExtensionInfo()
-        servers_controller = servers.ServersController(extension_info=ext_info)
-        self.deserializer = servers.CreateDeserializer(servers_controller)
-
-    def test_request_with_block_device_mapping(self):
-        serial_request = """
-    <server xmlns="http://docs.openstack.org/compute/api/v3"
-            xmlns:%(alias)s="%(namespace)s"
-            name="new-server-test" image_ref="1" flavor_ref="1">
-       <%(alias)s:block_device_mapping>
-         <mapping uuid="7329b667-50c7-46a6-b913-cb2a09dfeee0"
-                  device_name="/dev/vda" source_type="volume"
-                  destination_type="volume" delete_on_termination="False" />
-         <mapping uuid="f31efb24-34d2-43e1-8b44-316052956a39"
-                  device_name="/dev/vdb" source_type="snapshot"
-                  destination_type="volume" delete_on_termination="False" />
-         <mapping device_name="/dev/vdc" source_type="blank"
-                  destination_type="local" />
-       </%(alias)s:block_device_mapping>
-    </server>""" % {
-           'alias': block_device_mapping.ALIAS,
-           'namespace': block_device_mapping.BlockDeviceMapping.namespace}
-
-        request = self.deserializer.deserialize(serial_request)
-
-        expected = {'server': {
-                'name': 'new-server-test',
-                'image_ref': '1',
-                'flavor_ref': '1',
-                block_device_mapping.ATTRIBUTE_NAME: [
-                    {
-                        'uuid': '7329b667-50c7-46a6-b913-cb2a09dfeee0',
-                        'device_name': '/dev/vda',
-                        'source_type': 'volume',
-                        'destination_type': 'volume',
-                        'delete_on_termination': 'False',
-                    },
-                    {
-                        'uuid': 'f31efb24-34d2-43e1-8b44-316052956a39',
-                        'device_name': '/dev/vdb',
-                        'source_type': 'snapshot',
-                        'destination_type': 'volume',
-                        'delete_on_termination': 'False',
-                    },
-                    {
-                        'device_name': '/dev/vdc',
-                        'source_type': 'blank',
-                        'destination_type': 'local',
-                    },
-                ]
-                }}
-        self.assertEqual(expected, request['body'])

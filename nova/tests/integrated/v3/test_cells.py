@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -106,7 +105,3 @@ class CellsSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
         self.cells.manager.state_manager.get_our_capacities(). \
             AndReturn(response)
         self.mox.ReplayAll()
-
-
-class CellsSampleXmlTest(CellsSampleJsonTest):
-    ctype = 'xml'

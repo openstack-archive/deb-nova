@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -25,17 +23,19 @@ import mox
 from oslo.config import cfg
 
 from nova.compute import flavors
+from nova.compute import power_state
 from nova.compute import vm_mode
 from nova import context
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import processutils
 from nova.openstack.common import timeutils
+from nova.openstack.common import units
 from nova import test
 from nova.tests.virt.xenapi import stubs
 from nova.tests.virt.xenapi import test_xenapi
-from nova import unit
 from nova import utils
+from nova.virt.xenapi.client import session as xenapi_session
 from nova.virt.xenapi import driver as xenapi_conn
 from nova.virt.xenapi import fake
 from nova.virt.xenapi import vm_utils
@@ -65,14 +65,16 @@ def get_fake_connection_data(sr_type):
     return fakes[sr_type]
 
 
-def _get_fake_session_and_exception(error):
+def _get_fake_session(error=None):
     session = mock.Mock()
+    xenapi_session.apply_session_helpers(session)
 
-    class FakeException(Exception):
-        details = [error, "a", "b", "c"]
+    if error is not None:
+        class FakeException(Exception):
+            details = [error, "a", "b", "c"]
 
-    session.XenAPI.Failure = FakeException
-    session.call_xenapi.side_effect = FakeException
+        session.XenAPI.Failure = FakeException
+        session.call_xenapi.side_effect = FakeException
 
     return session
 
@@ -147,11 +149,6 @@ class LookupTestCase(VMUtilsTestBase):
 
 class GenerateConfigDriveTestCase(VMUtilsTestBase):
     def test_no_admin_pass(self):
-        # This is here to avoid masking errors, it shouldn't be used normally
-        self.useFixture(fixtures.MonkeyPatch(
-                'nova.virt.xenapi.vm_utils.destroy_vdi', _fake_noop))
-
-        # Mocks
         instance = {}
 
         self.mox.StubOutWithMock(vm_utils, 'safe_find_sr')
@@ -160,7 +157,7 @@ class GenerateConfigDriveTestCase(VMUtilsTestBase):
         self.mox.StubOutWithMock(vm_utils, 'create_vdi')
         vm_utils.create_vdi('session', 'sr_ref', instance, 'config-2',
                             'configdrive',
-                            64 * unit.Mi).AndReturn('vdi_ref')
+                            64 * units.Mi).AndReturn('vdi_ref')
 
         self.mox.StubOutWithMock(vm_utils, 'vdi_attached_here')
         vm_utils.vdi_attached_here(
@@ -186,7 +183,7 @@ class GenerateConfigDriveTestCase(VMUtilsTestBase):
                       '-J', '-r', '-V', 'config-2', mox.IgnoreArg(),
                       attempts=1, run_as_root=False).AndReturn(None)
         utils.execute('dd', mox.IgnoreArg(), mox.IgnoreArg(),
-                      run_as_root=True).AndReturn(None)
+                      mox.IgnoreArg(), run_as_root=True).AndReturn(None)
 
         self.mox.StubOutWithMock(vm_utils, 'create_vbd')
         vm_utils.create_vbd('session', 'vm_ref', 'vdi_ref', mox.IgnoreArg(),
@@ -197,6 +194,23 @@ class GenerateConfigDriveTestCase(VMUtilsTestBase):
         # And the actual call we're testing
         vm_utils.generate_configdrive('session', instance, 'vm_ref',
                                       'userdevice', "nw_info")
+
+    @mock.patch.object(vm_utils, "destroy_vdi")
+    @mock.patch.object(vm_utils, "vdi_attached_here")
+    @mock.patch.object(vm_utils, "create_vdi")
+    @mock.patch.object(vm_utils, "safe_find_sr")
+    def test_vdi_cleaned_up(self, mock_find, mock_create_vdi, mock_attached,
+                            mock_destroy):
+        mock_create_vdi.return_value = 'vdi_ref'
+        mock_attached.side_effect = test.TestingException
+        mock_destroy.side_effect = volume_utils.StorageError
+
+        instance = {"uuid": "asdf"}
+        self.assertRaises(test.TestingException,
+                          vm_utils.generate_configdrive,
+                          'session', instance, 'vm_ref', 'userdevice',
+                          'nw_info')
+        mock_destroy.assert_called_once_with('session', 'vdi_ref')
 
 
 class XenAPIGetUUID(VMUtilsTestBase):
@@ -374,7 +388,8 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
         self.session.call_xenapi("VDI.get_by_uuid", "vdi").AndReturn("ref")
 
         self.mox.StubOutWithMock(vm_utils, 'destroy_vdi')
-        vm_utils.destroy_vdi(self.session, "ref")
+        vm_utils.destroy_vdi(self.session,
+                             "ref").AndRaise(volume_utils.StorageError)
 
         self.mox.ReplayAll()
 
@@ -872,7 +887,7 @@ class CreateVBDTestCase(VMUtilsTestBase):
 class UnplugVbdTestCase(VMUtilsTestBase):
     @mock.patch.object(greenthread, 'sleep')
     def test_unplug_vbd_works(self, mock_sleep):
-        session = mock.Mock()
+        session = _get_fake_session()
         vbd_ref = "vbd_ref"
         vm_ref = 'vm_ref'
 
@@ -882,7 +897,7 @@ class UnplugVbdTestCase(VMUtilsTestBase):
         self.assertEqual(0, mock_sleep.call_count)
 
     def test_unplug_vbd_raises_unexpected_error(self):
-        session = mock.Mock()
+        session = _get_fake_session()
         vbd_ref = "vbd_ref"
         vm_ref = 'vm_ref'
         session.call_xenapi.side_effect = test.TestingException()
@@ -893,7 +908,7 @@ class UnplugVbdTestCase(VMUtilsTestBase):
 
     def test_unplug_vbd_already_detached_works(self):
         error = "DEVICE_ALREADY_DETACHED"
-        session = _get_fake_session_and_exception(error)
+        session = _get_fake_session(error)
         vbd_ref = "vbd_ref"
         vm_ref = 'vm_ref'
 
@@ -901,7 +916,7 @@ class UnplugVbdTestCase(VMUtilsTestBase):
         self.assertEqual(1, session.call_xenapi.call_count)
 
     def test_unplug_vbd_already_raises_unexpected_xenapi_error(self):
-        session = _get_fake_session_and_exception("")
+        session = _get_fake_session("")
         vbd_ref = "vbd_ref"
         vm_ref = 'vm_ref'
 
@@ -910,7 +925,7 @@ class UnplugVbdTestCase(VMUtilsTestBase):
         self.assertEqual(1, session.call_xenapi.call_count)
 
     def _test_uplug_vbd_retries(self, mock_sleep, error):
-        session = _get_fake_session_and_exception(error)
+        session = _get_fake_session(error)
         vbd_ref = "vbd_ref"
         vm_ref = 'vm_ref'
 
@@ -981,13 +996,10 @@ class VDIOtherConfigTestCase(VMUtilsTestBase):
         def VDI_add_to_other_config(ref, key, value):
             other_config[key] = value
 
-        def VDI_get_record(ref):
-            return {'other_config': {}}
-
         # Stubbing on the session object and not class so we don't pollute
         # other tests
         self.session.VDI_add_to_other_config = VDI_add_to_other_config
-        self.session.VDI_get_record = VDI_get_record
+        self.session.VDI_get_other_config = lambda vdi: {}
 
         vm_utils._create_image(self.context, self.session, self.fake_instance,
                 'myvdi', 'image1', vm_utils.ImageType.DISK_VHD)
@@ -1004,16 +1016,13 @@ class VDIOtherConfigTestCase(VMUtilsTestBase):
         def VDI_add_to_other_config(ref, key, value):
             other_config[key] = value
 
-        def VDI_get_record(ref):
-            return {'other_config': {}}
-
         def call_plugin_serialized(*args, **kwargs):
             return {'root': {'uuid': 'aaaa-bbbb-cccc-dddd'}}
 
         # Stubbing on the session object and not class so we don't pollute
         # other tests
         self.session.VDI_add_to_other_config = VDI_add_to_other_config
-        self.session.VDI_get_record = VDI_get_record
+        self.session.VDI_get_other_config = lambda vdi: {}
         self.session.call_plugin_serialized = call_plugin_serialized
 
         self.stubs.Set(vm_utils, 'get_sr_path', lambda *a, **k: None)
@@ -1071,7 +1080,7 @@ class GenerateDiskTestCase(VMUtilsTestBase):
 
     def _check_vdi(self, vdi_ref, check_attached=True):
         vdi_rec = self.session.call_xenapi("VDI.get_record", vdi_ref)
-        self.assertEqual(str(10 * unit.Mi), vdi_rec["virtual_size"])
+        self.assertEqual(str(10 * units.Mi), vdi_rec["virtual_size"])
         if check_attached:
             vbd_ref = vdi_rec["VBDs"][0]
             vbd_rec = self.session.call_xenapi("VBD.get_record", vbd_ref)
@@ -1114,7 +1123,8 @@ class GenerateDiskTestCase(VMUtilsTestBase):
         self._expect_parted_calls()
         utils.execute('mkfs', '-t', 'ext4', '/dev/fakedev1',
             run_as_root=True).AndRaise(test.TestingException)
-        vm_utils.destroy_vdi(self.session, mox.IgnoreArg())
+        vm_utils.destroy_vdi(self.session,
+            mox.IgnoreArg()).AndRaise(volume_utils.StorageError)
 
         self.mox.ReplayAll()
         self.assertRaises(test.TestingException, vm_utils._generate_disk,
@@ -1194,7 +1204,7 @@ class GenerateEphemeralTestCase(VMUtilsTestBase):
 
         vm_utils._generate_disk(self.session, self.instance, self.vm_ref,
             str(self.userdevice + 2), "name ephemeral (2)", 'ephemeral',
-            unit.Mi, None).AndRaise(exception.NovaException)
+            units.Mi, None).AndRaise(exception.NovaException)
 
         vm_utils.safe_destroy_vdis(self.session, [4, 5])
 
@@ -1442,9 +1452,9 @@ class ScanSrTestCase(VMUtilsTestBase):
 class CreateVmTestCase(VMUtilsTestBase):
     def test_vss_provider(self, mock_extract):
         self.flags(vcpu_pin_set="2,3")
-        session = mock.Mock()
+        session = _get_fake_session()
         instance = {
-            "uuid": "uuid",
+            "uuid": "uuid", "os_type": "windows"
         }
 
         vm_utils.create_vm(session, instance, "label",
@@ -1498,6 +1508,29 @@ class CreateVmTestCase(VMUtilsTestBase):
                           vm_utils.create_vm,
                           session, instance, "label",
                           "kernel", "ramdisk")
+
+    def test_destroy_vm(self, mock_extract):
+        session = mock.Mock()
+        instance = {
+            "uuid": "uuid",
+        }
+
+        vm_utils.destroy_vm(session, instance, "vm_ref")
+
+        session.VM.destroy.assert_called_once_with("vm_ref")
+
+    def test_destroy_vm_silently_fails(self, mock_extract):
+        session = mock.Mock()
+        exc = test.TestingException()
+        session.XenAPI.Failure = test.TestingException
+        session.VM.destroy.side_effect = exc
+        instance = {
+            "uuid": "uuid",
+        }
+
+        vm_utils.destroy_vm(session, instance, "vm_ref")
+
+        session.VM.destroy.assert_called_once_with("vm_ref")
 
 
 class DetermineVmModeTestCase(VMUtilsTestBase):
@@ -1705,6 +1738,22 @@ class GetAllVdisTestCase(VMUtilsTestBase):
         session.call_xenapi.assert_called_once_with("SR.get_VDIs", sr_ref)
 
 
+class VDIAttachedHere(VMUtilsTestBase):
+    @mock.patch.object(vm_utils, 'destroy_vbd')
+    @mock.patch.object(vm_utils, '_get_this_vm_ref')
+    @mock.patch.object(vm_utils, 'create_vbd')
+    @mock.patch.object(vm_utils, '_remap_vbd_dev')
+    @mock.patch.object(vm_utils, '_wait_for_device')
+    @mock.patch.object(utils, 'execute')
+    def test_sync_called(self, mock_execute, mock_wait_for_device,
+                         mock_remap_vbd_dev, mock_create_vbd,
+                         mock_get_this_vm_ref, mock_destroy_vbd):
+        session = _get_fake_session()
+        with vm_utils.vdi_attached_here(session, 'vdi_ref'):
+            pass
+        mock_execute.assert_called_with('sync', run_as_root=True)
+
+
 class SnapshotAttachedHereTestCase(VMUtilsTestBase):
     @mock.patch.object(vm_utils, '_snapshot_attached_here_impl')
     def test_snapshot_attached_here(self, mock_impl):
@@ -1769,6 +1818,54 @@ class SnapshotAttachedHereTestCase(VMUtilsTestBase):
         mock_callback.assert_called_once_with(
                 task_state="image_pending_upload")
         mock_safe_destroy_vdis.assert_called_once_with(session, ["snap_ref"])
+
+    @mock.patch.object(greenthread, 'sleep')
+    @mock.patch.object(vm_utils, '_get_vhd_parent_uuid')
+    @mock.patch.object(vm_utils, '_another_child_vhd')
+    @mock.patch.object(vm_utils, '_scan_sr')
+    def test_wait_for_vhd_coalesce(self, mock_scan_sr, mock_another_child_vhd,
+            mock_get_vhd_parent_uuid, mock_sleep):
+
+        cfg.CONF.import_opt('vhd_coalesce_max_attempts',
+                            'nova.virt.xenapi.driver', group="xenserver")
+        max_sr_scan_count = cfg.CONF.xenserver.vhd_coalesce_max_attempts - 1
+
+        vhd_chain = ['vdi_base_ref', 'vdi_coalescable_ref', 'vdi_leaf_ref']
+        instance = {"uuid": "uuid"}
+        sr_ref = 'sr_ref'
+        session = mock.Mock()
+
+        def fake_scan_sr(session, sr_ref):
+            fake_scan_sr.count += 1
+            if fake_scan_sr.count == max_sr_scan_count:
+                vhd_chain.remove('vdi_coalescable_ref')
+
+        def fake_get_vhd_parent_uuid(session, vdi_ref):
+            index = vhd_chain.index(vdi_ref)
+            if index > 0:
+                return vhd_chain[index - 1].replace('ref', 'uuid')
+            return None
+
+        def fake_call_xenapi(method, *args):
+            if method == 'VDI.get_by_uuid':
+                return args[0].replace('uuid', 'ref')
+
+        fake_scan_sr.count = 0
+        fake_scan_sr.running = True
+        mock_scan_sr.side_effect = fake_scan_sr
+        session.call_xenapi.side_effect = fake_call_xenapi
+        mock_get_vhd_parent_uuid.side_effect = fake_get_vhd_parent_uuid
+
+        mock_another_child_vhd.return_value = False
+
+        self.assertEqual(('vdi_base_uuid', None),
+             vm_utils._wait_for_vhd_coalesce(session, instance, sr_ref,
+                                             'vdi_leaf_ref', 'vdi_base_uuid'))
+        self.assertEqual(max_sr_scan_count, mock_scan_sr.call_count)
+        session.call_plugin_serialized.has_calls(session, "vdi_ref")
+        # We'll sleep one fewer times than we scan the SR due to
+        # the scan at the start
+        self.assertEqual(max_sr_scan_count - 1, mock_sleep.call_count)
 
 
 class ImportMigratedDisksTestCase(VMUtilsTestBase):
@@ -1837,6 +1934,15 @@ class ImportMigratedDisksTestCase(VMUtilsTestBase):
         mock_set_info.assert_called_once_with(session, 'vdi_ref', 'disk_type',
                 'vdi_label', 'disk_type', instance)
 
+    def test_get_vhd_parent_uuid_rec_provided(self):
+        session = mock.Mock()
+        vdi_ref = 'vdi_ref'
+        vdi_rec = {'sm_config': {}}
+        self.assertIsNone(vm_utils._get_vhd_parent_uuid(session,
+                                                             vdi_ref,
+                                                             vdi_rec))
+        self.assertFalse(session.call_xenapi.called)
+
 
 class MigrateVHDTestCase(VMUtilsTestBase):
     def _assert_transfer_called(self, session, label):
@@ -1892,16 +1998,25 @@ class StripBaseMirrorTestCase(VMUtilsTestBase):
 
     @mock.patch.object(vm_utils, '_try_strip_base_mirror_from_vdi')
     def test_strip_base_mirror_from_vdis(self, mock_strip):
+        def call_xenapi(method, arg):
+            if method == "VM.get_VBDs":
+                return ['VBD_ref_1', 'VBD_ref_2']
+            if method == "VBD.get_VDI":
+                return 'VDI' + arg[3:]
+            return "Unexpected call_xenapi: %s.%s" % (method, arg)
+
         session = mock.Mock()
-        session.call_xenapi.return_value = {"VDI": "ref", "foo": "bar"}
+        session.call_xenapi.side_effect = call_xenapi
 
         vm_utils.strip_base_mirror_from_vdis(session, "vm_ref")
 
         expected = [mock.call('VM.get_VBDs', "vm_ref"),
-                    mock.call('VBD.get_record', "VDI"),
-                    mock.call('VBD.get_record', "foo")]
+                    mock.call('VBD.get_VDI', "VBD_ref_1"),
+                    mock.call('VBD.get_VDI', "VBD_ref_2")]
         self.assertEqual(expected, session.call_xenapi.call_args_list)
-        expected = [mock.call(session, "ref"), mock.call(session, "ref")]
+
+        expected = [mock.call(session, "VDI_ref_1"),
+                    mock.call(session, "VDI_ref_2")]
         self.assertEqual(expected, mock_strip.call_args_list)
 
 
@@ -1939,14 +2054,25 @@ class DeviceIdTestCase(VMUtilsTestBase):
 
 class CreateVmRecordTestCase(VMUtilsTestBase):
     @mock.patch.object(flavors, 'extract_flavor')
-    def test_create_vm_record(self, mock_extract_flavor):
-        session = mock.Mock()
-        instance = {"uuid": "uuid123"}
+    def test_create_vm_record_linux(self, mock_extract_flavor):
+        instance = {"uuid": "uuid123", "os_type": "linux"}
+        self._test_create_vm_record(mock_extract_flavor, instance, False)
+
+    @mock.patch.object(flavors, 'extract_flavor')
+    def test_create_vm_record_windows(self, mock_extract_flavor):
+        instance = {"uuid": "uuid123", "os_type": "windows"}
+        self._test_create_vm_record(mock_extract_flavor, instance, True)
+
+    def _test_create_vm_record(self, mock_extract_flavor, instance,
+                               is_viridian):
+        session = _get_fake_session()
         flavor = {"memory_mb": 1024, "vcpus": 1, "vcpu_weight": 2}
         mock_extract_flavor.return_value = flavor
 
         vm_utils.create_vm(session, instance, "name", "kernel", "ramdisk",
                            device_id="0002")
+
+        is_viridian_str = str(is_viridian).lower()
 
         expected_vm_rec = {
             'VCPUs_params': {'cap': '0', 'weight': '2'},
@@ -1977,8 +2103,8 @@ class CreateVmRecordTestCase(VMUtilsTestBase):
             'VCPUs_at_startup': '1',
             'HVM_boot_params': {'order': 'dc'},
             'platform': {'nx': 'true', 'pae': 'true', 'apic': 'true',
-                         'timeoffset': '0', 'viridian': 'true', 'acpi': 'true',
-                         'device_id': '0002'},
+                         'timeoffset': '0', 'viridian': is_viridian_str,
+                         'acpi': 'true', 'device_id': '0002'},
             'PV_legacy_args': '',
             'PV_kernel': '',
             'affinity': '',
@@ -1986,6 +2112,31 @@ class CreateVmRecordTestCase(VMUtilsTestBase):
             'ha_always_run': False}
 
         session.call_xenapi.assert_called_with('VM.create', expected_vm_rec)
+
+    def test_list_vms(self):
+        self.flags(disable_process_locking=True,
+                   instance_name_template='%d',
+                   firewall_driver='nova.virt.xenapi.firewall.'
+                                   'Dom0IptablesFirewallDriver')
+        self.flags(connection_url='test_url',
+                   connection_password='test_pass',
+                   group='xenserver')
+
+        fake.create_vm("foo1", "Halted")
+        vm_ref = fake.create_vm("foo2", "Running")
+
+        stubs.stubout_session(self.stubs, fake.SessionBase)
+        driver = xenapi_conn.XenAPIDriver(False)
+
+        result = list(vm_utils.list_vms(driver._session))
+
+        # Will have 3 VMs - but one is Dom0 and one is not running on the host
+        self.assertEqual(len(driver._session.call_xenapi('VM.get_all')), 3)
+        self.assertEqual(len(result), 1)
+
+        result_keys = [key for (key, value) in result]
+
+        self.assertIn(vm_ref, result_keys)
 
 
 class ResizeFunctionTestCase(test.NoDBTestCase):
@@ -2030,3 +2181,58 @@ class ResizeFunctionTestCase(test.NoDBTestCase):
 
     def test_bad_version(self):
         self._test_is_resize("XenServer", "asdf")
+
+
+class VMInfoTests(VMUtilsTestBase):
+    def setUp(self):
+        super(VMInfoTests, self).setUp()
+        self.session = mock.Mock()
+
+    def test_get_power_state_valid(self):
+        # Save on test setup calls by having these simple tests in one method
+        self.session.call_xenapi.return_value = "Running"
+        self.assertEqual(vm_utils.get_power_state(self.session, "ref"),
+                         power_state.RUNNING)
+
+        self.session.call_xenapi.return_value = "Halted"
+        self.assertEqual(vm_utils.get_power_state(self.session, "ref"),
+                         power_state.SHUTDOWN)
+
+        self.session.call_xenapi.return_value = "Paused"
+        self.assertEqual(vm_utils.get_power_state(self.session, "ref"),
+                         power_state.PAUSED)
+
+        self.session.call_xenapi.return_value = "Suspended"
+        self.assertEqual(vm_utils.get_power_state(self.session, "ref"),
+                         power_state.SUSPENDED)
+
+        self.session.call_xenapi.return_value = "Crashed"
+        self.assertEqual(vm_utils.get_power_state(self.session, "ref"),
+                         power_state.CRASHED)
+
+    def test_get_power_state_invalid(self):
+        self.session.call_xenapi.return_value = "Invalid"
+        self.assertRaises(KeyError,
+                          vm_utils.get_power_state, self.session, "ref")
+
+    _XAPI_record = {'power_state': 'Running',
+                    'memory_static_max': str(10 << 10),
+                    'memory_dynamic_max': str(9 << 10),
+                    'VCPUs_max': '5'}
+
+    def test_compile_info(self):
+
+        def call_xenapi(method, *args):
+            if method.startswith('VM.get_') and args[0] == 'dummy':
+                return self._XAPI_record[method[7:]]
+
+        self.session.call_xenapi.side_effect = call_xenapi
+
+        expected = {'state': power_state.RUNNING,
+                    'max_mem': 10L,
+                    'mem': 9L,
+                    'num_cpu': '5',
+                    'cpu_time': 0}
+
+        self.assertEqual(vm_utils.compile_info(self.session, "dummy"),
+                         expected)

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright (c) 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -205,4 +203,8 @@ def list_rbd_volumes(pool):
 
 
 def remove_rbd_volumes(pool, *names):
+    pass
+
+
+def get_arch(image_meta):
     pass

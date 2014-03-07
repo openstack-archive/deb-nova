@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
@@ -318,8 +316,7 @@ class XMLExpectedChild(XMLMismatch):
 
 
 class XMLMatchState(object):
-    """
-    Maintain some state for matching.
+    """Maintain some state for matching.
 
     Tracks the XML node path and saves the expected and actual full
     XML text, for use by the XMLMismatch subclasses.
@@ -341,8 +338,7 @@ class XMLMatchState(object):
         return '/' + '/'.join(self.path)
 
     def node(self, tag, idx):
-        """
-        Adds tag and index to the path; they will be popped off when
+        """Adds tag and index to the path; they will be popped off when
         the corresponding 'with' statement exits.
 
         :param tag: The element tag

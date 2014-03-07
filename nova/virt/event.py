@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,7 +16,7 @@
 Asynchronous event notifications from virtualization drivers.
 
 This module defines a set of classes representing data for
-various asynchronous events that can occurr in a virtualization
+various asynchronous events that can occur in a virtualization
 driver.
 """
 

@@ -18,8 +18,6 @@
 import webob.exc
 
 from nova.api.openstack import extensions
-from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
 from nova.openstack.common.gettextutils import _
@@ -27,97 +25,6 @@ from nova.openstack.common.gettextutils import _
 
 ALIAS = "os-hypervisors"
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
-
-
-def make_hypervisor(elem, detail):
-    elem.set('hypervisor_hostname')
-    elem.set('id')
-    if detail:
-        elem.set('vcpus')
-        elem.set('memory_mb')
-        elem.set('local_gb')
-        elem.set('vcpus_used')
-        elem.set('memory_mb_used')
-        elem.set('local_gb_used')
-        elem.set('hypervisor_type')
-        elem.set('hypervisor_version')
-        elem.set('free_ram_mb')
-        elem.set('free_disk_gb')
-        elem.set('current_workload')
-        elem.set('running_vms')
-        elem.set('cpu_info')
-        elem.set('disk_available_least')
-
-        service = xmlutil.SubTemplateElement(elem, 'service',
-                                             selector='service')
-        service.set('id')
-        service.set('host')
-
-
-class HypervisorIndexTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisors')
-        elem = xmlutil.SubTemplateElement(root, 'hypervisor',
-                                          selector='hypervisors')
-        make_hypervisor(elem, False)
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class HypervisorDetailTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisors')
-        elem = xmlutil.SubTemplateElement(root, 'hypervisor',
-                                          selector='hypervisors')
-        make_hypervisor(elem, True)
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class HypervisorTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisor', selector='hypervisor')
-        make_hypervisor(root, True)
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class HypervisorUptimeTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisor', selector='hypervisor')
-        make_hypervisor(root, False)
-        root.set('uptime')
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class HypervisorServersTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisor', selector='hypervisor')
-        make_hypervisor(root, False)
-        servers = xmlutil.SubTemplateElement(root, 'servers')
-        server = xmlutil.SubTemplateElement(servers, 'server',
-                                            selector='servers')
-        server.set('name')
-        server.set('id')
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class HypervisorStatisticsTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('hypervisor_statistics',
-                                       selector='hypervisor_statistics')
-        root.set('count')
-        root.set('vcpus')
-        root.set('memory_mb')
-        root.set('local_gb')
-        root.set('vcpus_used')
-        root.set('memory_mb_used')
-        root.set('local_gb_used')
-        root.set('free_ram_mb')
-        root.set('free_disk_gb')
-        root.set('current_workload')
-        root.set('running_vms')
-        root.set('disk_available_least')
-
-        return xmlutil.MasterTemplate(root, 1)
 
 
 class HypervisorsController(object):
@@ -138,7 +45,8 @@ class HypervisorsController(object):
                           'memory_mb_used', 'local_gb_used',
                           'hypervisor_type', 'hypervisor_version',
                           'free_ram_mb', 'free_disk_gb', 'current_workload',
-                          'running_vms', 'cpu_info', 'disk_available_least'):
+                          'running_vms', 'cpu_info', 'disk_available_least',
+                          'host_ip'):
                 hyp_dict[field] = hypervisor[field]
 
             hyp_dict['service'] = {
@@ -157,7 +65,6 @@ class HypervisorsController(object):
         return hyp_dict
 
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=HypervisorIndexTemplate)
     def index(self, req):
         context = req.environ['nova.context']
         authorize(context)
@@ -167,7 +74,6 @@ class HypervisorsController(object):
                                  for hyp in compute_nodes])
 
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=HypervisorDetailTemplate)
     def detail(self, req):
         context = req.environ['nova.context']
         authorize(context)
@@ -177,7 +83,6 @@ class HypervisorsController(object):
                                  for hyp in compute_nodes])
 
     @extensions.expected_errors(404)
-    @wsgi.serializers(xml=HypervisorTemplate)
     def show(self, req, id):
         context = req.environ['nova.context']
         authorize(context)
@@ -190,7 +95,6 @@ class HypervisorsController(object):
         return dict(hypervisor=self._view_hypervisor(hyp, True))
 
     @extensions.expected_errors((404, 501))
-    @wsgi.serializers(xml=HypervisorUptimeTemplate)
     def uptime(self, req, id):
         context = req.environ['nova.context']
         authorize(context)
@@ -213,7 +117,6 @@ class HypervisorsController(object):
                                                      uptime=uptime))
 
     @extensions.expected_errors(400)
-    @wsgi.serializers(xml=HypervisorIndexTemplate)
     def search(self, req):
         context = req.environ['nova.context']
         authorize(context)
@@ -228,7 +131,6 @@ class HypervisorsController(object):
                                  for hyp in hypervisors])
 
     @extensions.expected_errors(404)
-    @wsgi.serializers(xml=HypervisorServersTemplate)
     def servers(self, req, id):
         context = req.environ['nova.context']
         authorize(context)
@@ -243,7 +145,6 @@ class HypervisorsController(object):
             instances))
 
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=HypervisorStatisticsTemplate)
     def statistics(self, req):
         context = req.environ['nova.context']
         authorize(context)
@@ -256,7 +157,6 @@ class Hypervisors(extensions.V3APIExtensionBase):
 
     name = "Hypervisors"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/hypervisors/api/v3"
     version = 1
 
     def get_resources(self):

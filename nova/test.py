@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -35,6 +33,7 @@ import uuid
 
 import fixtures
 from oslo.config import cfg
+from oslo.messaging import conffixture as messaging_conffixture
 import testtools
 
 from nova import context
@@ -43,10 +42,12 @@ from nova.db import migration
 from nova.network import manager as network_manager
 from nova.objects import base as objects_base
 from nova.openstack.common.db.sqlalchemy import session
+from nova.openstack.common.fixture import logging as log_fixture
 from nova.openstack.common.fixture import moxstubout
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import paths
+from nova import rpc
 from nova import service
 from nova.tests import conf_fixture
 from nova.tests import policy_fixture
@@ -224,6 +225,7 @@ class TestCase(testtools.TestCase):
         self.useFixture(fixtures.NestedTempfile())
         self.useFixture(fixtures.TempHomeDir())
         self.useFixture(TranslationFixture())
+        self.useFixture(log_fixture.get_logging_handle_error_fixture())
 
         if os.environ.get('OS_STDOUT_CAPTURE') in _TRUE_VALUES:
             stdout = self.useFixture(fixtures.StringStream('stdout')).stream
@@ -232,9 +234,20 @@ class TestCase(testtools.TestCase):
             stderr = self.useFixture(fixtures.StringStream('stderr')).stream
             self.useFixture(fixtures.MonkeyPatch('sys.stderr', stderr))
 
+        rpc.add_extra_exmods('nova.test')
+        self.addCleanup(rpc.clear_extra_exmods)
+        self.addCleanup(rpc.cleanup)
+
         fs = '%(levelname)s [%(name)s] %(message)s'
         self.log_fixture = self.useFixture(fixtures.FakeLogger(format=fs))
         self.useFixture(conf_fixture.ConfFixture(CONF))
+
+        self.messaging_conf = messaging_conffixture.ConfFixture(CONF)
+        self.messaging_conf.transport_driver = 'fake'
+        self.messaging_conf.response_timeout = 15
+        self.useFixture(self.messaging_conf)
+
+        rpc.init(CONF)
 
         if self.USES_DB:
             global _DB_CACHE
@@ -310,8 +323,7 @@ class TimeOverride(fixtures.Fixture):
 
 
 class NoDBTestCase(TestCase):
-    """
-    `NoDBTestCase` differs from TestCase in that DB access is not supported.
+    """`NoDBTestCase` differs from TestCase in that DB access is not supported.
     This makes tests run significantly faster. If possible, all new tests
     should derive from this class.
     """

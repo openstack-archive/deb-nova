@@ -19,6 +19,7 @@ import os
 import re
 
 from oslo.config import cfg
+from oslo import messaging
 import six
 import webob
 from webob import exc
@@ -32,9 +33,9 @@ from nova import block_device
 from nova import compute
 from nova.compute import flavors
 from nova import exception
+from nova.objects import block_device as block_device_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
@@ -58,6 +59,8 @@ CONF.import_opt('reclaim_instance_interval', 'nova.compute.manager')
 
 LOG = logging.getLogger(__name__)
 
+XML_WARNING = False
+
 
 def make_fault(elem):
     fault = xmlutil.SubTemplateElement(elem, 'fault', selector='fault')
@@ -72,6 +75,12 @@ def make_fault(elem):
 def make_server(elem, detailed=False):
     elem.set('name')
     elem.set('id')
+
+    global XML_WARNING
+    if not XML_WARNING:
+        LOG.warning(_('XML support has been deprecated and will be removed '
+                      'in the Juno release.'))
+        XML_WARNING = True
 
     if detailed:
         elem.set('userId', 'user_id')
@@ -413,6 +422,10 @@ class ActionDeserializer(CommonDeserializer):
         if node.hasAttribute("accessIPv6"):
             rebuild["accessIPv6"] = node.getAttribute("accessIPv6")
 
+        if node.hasAttribute("preserve_ephemeral"):
+            rebuild["preserve_ephemeral"] = strutils.bool_from_string(
+                node.getAttribute("preserve_ephemeral"), strict=True)
+
         return rebuild
 
     def _action_resize(self, node):
@@ -480,7 +493,7 @@ class Controller(wsgi.Controller):
         link = filter(lambda l: l['rel'] == 'self',
                       robj.obj['server']['links'])
         if link:
-            robj['Location'] = link[0]['href'].encode('utf-8')
+            robj['Location'] = utils.utf8(link[0]['href'])
 
         # Convenience return
         return robj
@@ -958,7 +971,7 @@ class Controller(wsgi.Controller):
         except exception.ConfigDriveInvalidValue:
             msg = _("Invalid config_drive provided.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except rpc_common.RemoteError as err:
+        except messaging.RemoteError as err:
             msg = "%(err_type)s: %(err_msg)s" % {'err_type': err.exc_type,
                                                  'err_msg': err.value}
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1205,8 +1218,7 @@ class Controller(wsgi.Controller):
         return image_uuid
 
     def _image_from_req_data(self, data):
-        """
-        Get image data from the request or raise appropriate
+        """Get image data from the request or raise appropriate
         exceptions
 
         If no image is supplied - checks to see if there is
@@ -1291,11 +1303,7 @@ class Controller(wsgi.Controller):
     @wsgi.action('rebuild')
     def _action_rebuild(self, req, id, body):
         """Rebuild an instance with the given attributes."""
-        try:
-            body = body['rebuild']
-        except (KeyError, TypeError):
-            msg = _('Invalid request body')
-            raise exc.HTTPBadRequest(explanation=msg)
+        body = body['rebuild']
 
         try:
             image_href = body["imageRef"]
@@ -1319,6 +1327,15 @@ class Controller(wsgi.Controller):
             'auto_disk_config': 'auto_disk_config',
         }
 
+        kwargs = {}
+
+        # take the preserve_ephemeral value into account only when the
+        # corresponding extension is active
+        if (self.ext_mgr.is_loaded('os-preserve-ephemeral-rebuild')
+                and 'preserve_ephemeral' in body):
+            kwargs['preserve_ephemeral'] = strutils.bool_from_string(
+                body['preserve_ephemeral'], strict=True)
+
         if 'accessIPv4' in body:
             self._validate_access_ipv4(body['accessIPv4'])
 
@@ -1327,8 +1344,6 @@ class Controller(wsgi.Controller):
 
         if 'name' in body:
             self._validate_server_name(body['name'])
-
-        kwargs = {}
 
         for request_attribute, instance_attribute in attr_map.items():
             try:
@@ -1410,21 +1425,18 @@ class Controller(wsgi.Controller):
 
         instance = self._get_server(context, req, id)
 
-        bdms = self.compute_api.get_instance_bdms(context, instance,
-                                                  legacy=False)
+        bdms = block_device_obj.BlockDeviceMappingList.get_by_instance_uuid(
+                    context, instance.uuid)
 
         try:
             if self.compute_api.is_volume_backed_instance(context, instance,
                                                           bdms):
                 img = instance['image_ref']
                 if not img:
-                    # NOTE(Vincent Hou) The private method
-                    # _get_bdm_image_metadata only works, when boot
-                    # device is set to 'vda'. It needs to be fixed later,
-                    # but tentatively we use it here.
-                    image_meta = {'properties': self.compute_api.
-                                    _get_bdm_image_metadata(context, bdms,
-                                                            legacy_bdm=False)}
+                    props = bdms.root_metadata(
+                            context, self.compute_api.image_service,
+                            self.compute_api.volume_api)
+                    image_meta = {'properties': props}
                 else:
                     src_image = self.compute_api.image_service.\
                                                 show(context, img)

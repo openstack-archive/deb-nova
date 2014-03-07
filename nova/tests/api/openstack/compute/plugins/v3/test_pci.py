@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Intel Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,10 +13,13 @@
 #    under the License.
 
 
+from webob import exc
+
 from nova.api.openstack.compute.plugins.v3 import pci
 from nova.api.openstack import wsgi
 from nova import context
 from nova import db
+from nova import exception
 from nova.objects import instance
 from nova.objects import pci_device
 from nova.openstack.common import jsonutils
@@ -37,36 +38,6 @@ fake_compute_node = {
 
 class FakeResponse(wsgi.ResponseObject):
     pass
-
-
-class PciServerTemplateTest(test.NoDBTestCase):
-    def test_pci_server_serializer(self):
-        fake_server = {"server": {'os-pci:pci_devices': [{"id": 1}]}}
-        expected = ("<?xml version='1.0' encoding='UTF-8'?>\n"
-                    '<server xmlns:os-pci="http://docs.openstack.org/compute'
-                    '/ext/os-pci/api/v3"><os-pci:pci_devices xmlns:'
-                    'os-pci="os-pci"><os-pci:pci_device id="1"/>'
-                    '</os-pci:pci_devices></server>'
-                    )
-        serializer = pci.PciServerTemplate()
-        text = serializer.serialize(fake_server)
-        self.assertEqual(expected, text)
-
-    def test_pci_servers_serializer(self):
-        fake_servers = {"servers": [{'os-pci:pci_devices': [{"id": 1}]},
-                                    {'os-pci:pci_devices': [{"id": 2}]}]}
-        expected = ("<?xml version='1.0' encoding='UTF-8'?>\n"
-                    '<servers xmlns:os-pci="http://docs.openstack.org/'
-                    'compute/ext/os-pci/api/v3"><server><os-pci:pci_devices'
-                    ' xmlns:os-pci="os-pci"><os-pci:pci_device id="1"/>'
-                    '</os-pci:pci_devices></server><server>'
-                    '<os-pci:pci_devices xmlns:os-pci="os-pci">'
-                    '<os-pci:pci_device id="2"/></os-pci:pci_devices>'
-                    '</server></servers>'
-                   )
-        serializer = pci.PciServersTemplate()
-        text = serializer.serialize(fake_servers)
-        self.assertEqual(expected, text)
 
 
 class PciServerControllerTest(test.NoDBTestCase):
@@ -130,54 +101,6 @@ class PciServerControllerTest(test.NoDBTestCase):
                          resp.obj['servers'][0]['os-pci:pci_devices'])
 
 
-class PciHypervisorTemplateTest(test.NoDBTestCase):
-    def test_pci_hypervisor_serializer(self):
-        exemplar = {"hypervisor": {'os-pci:pci_stats': [
-            {"count": 3,
-             "vendor_id": "8086",
-             "product_id": "1520",
-             "extra_info": {"phys_function": '[["0x0000", "0x04", '
-                                             '"0x00", "0x2"]]'}
-             }]}}
-
-        expected = ("<?xml version='1.0' encoding='UTF-8'?>\n"
-                    '<hypervisor xmlns:os-pci="http://docs.openstack.org/'
-                    'compute/ext/os-pci/api/v3"><os-pci:pci_stats xmlns:'
-                    'os-pci="os-pci"><os-pci:pci_stat><count>3</count>'
-                    '<vendor_id>8086</vendor_id><product_id>1520</product_id>'
-                    '<extra_info><phys_function>'
-                    '[["0x0000", "0x04", "0x00", "0x2"]]</phys_function>'
-                    '</extra_info></os-pci:pci_stat></os-pci:pci_stats>'
-                    '</hypervisor>'
-                    )
-        serializer = pci.PciHypervisorTemplate()
-        text = serializer.serialize(exemplar)
-        self.assertEqual(expected, text)
-
-    def test_pci_hypervisors_serializer(self):
-        exemplar = {"hypervisors": [{'os-pci:pci_stats': [
-            {"count": 3,
-             "vendor_id": "8086",
-             "product_id": "1520",
-             "extra_info": {"phys_function": '[["0x0000", "0x04", '
-                                             '"0x00", "0x2"]]'}
-                                                       }]}]}
-
-        expected = ("<?xml version='1.0' encoding='UTF-8'?>\n"
-                    '<hypervisors xmlns:os-pci="http://docs.openstack.org/'
-                    'compute/ext/os-pci/api/v3"><hypervisor><os-pci:pci_stats'
-                    ' xmlns:os-pci="os-pci"><os-pci:pci_stat><count>3'
-                    '</count><vendor_id>8086</vendor_id><product_id>1520'
-                    '</product_id><extra_info><phys_function>'
-                    '[["0x0000", "0x04", "0x00", "0x2"]]</phys_function>'
-                    '</extra_info></os-pci:pci_stat></os-pci:pci_stats>'
-                    '</hypervisor></hypervisors>'
-                    )
-        serializer = pci.HypervisorDetailTemplate()
-        text = serializer.serialize(exemplar)
-        self.assertEqual(expected, text)
-
-
 class PciHypervisorControllerTest(test.NoDBTestCase):
     def setUp(self):
         super(PciHypervisorControllerTest, self).setUp()
@@ -228,3 +151,86 @@ class PciHypervisorControllerTest(test.NoDBTestCase):
         self.assertIn('os-pci:pci_stats', resp.obj['hypervisors'][0])
         self.assertEqual(fake_compute_node['pci_stats'][0],
                          resp.obj['hypervisors'][0]['os-pci:pci_stats'][0])
+
+
+class PciControlletest(test.NoDBTestCase):
+    def setUp(self):
+        super(PciControlletest, self).setUp()
+        self.controller = pci.PciController()
+
+    def test_show(self):
+        def fake_pci_device_get_by_id(context, id):
+            return test_pci_device.fake_db_dev
+
+        self.stubs.Set(db, 'pci_device_get_by_id', fake_pci_device_get_by_id)
+        req = fakes.HTTPRequestV3.blank('/os-pci/1', use_admin_context=True)
+        result = self.controller.show(req, '1')
+        dist = {'pci_device': {'address': 'a',
+                               'compute_node_id': 1,
+                               'dev_id': 'i',
+                               'extra_info': {},
+                               'dev_type': 't',
+                               'id': 1,
+                               'server_uuid': None,
+                               'label': 'l',
+                               'product_id': 'p',
+                               'status': 'available',
+                               'vendor_id': 'v'}}
+        self.assertEqual(dist, result)
+
+    def test_show_error_id(self):
+        def fake_pci_device_get_by_id(context, id):
+            raise exception.PciDeviceNotFoundById(id=id)
+
+        self.stubs.Set(db, 'pci_device_get_by_id', fake_pci_device_get_by_id)
+        req = fakes.HTTPRequestV3.blank('/os-pci/0', use_admin_context=True)
+        self.assertRaises(exc.HTTPNotFound, self.controller.show, req, '0')
+
+    def _fake_compute_node_get_all(self, context):
+        return [dict(id=1,
+                     service_id=1,
+                     cpu_info='cpu_info',
+                     disk_available_least=100)]
+
+    def _fake_pci_device_get_all_by_node(self, context, node):
+        return [test_pci_device.fake_db_dev, test_pci_device.fake_db_dev_1]
+
+    def test_index(self):
+        self.stubs.Set(db, 'compute_node_get_all',
+                       self._fake_compute_node_get_all)
+        self.stubs.Set(db, 'pci_device_get_all_by_node',
+                       self._fake_pci_device_get_all_by_node)
+
+        req = fakes.HTTPRequestV3.blank('/os-pci', use_admin_context=True)
+        result = self.controller.index(req)
+        dist = {'pci_devices': [test_pci_device.fake_db_dev,
+                                test_pci_device.fake_db_dev_1]}
+        for i in range(len(result['pci_devices'])):
+            self.assertEqual(dist['pci_devices'][i]['vendor_id'],
+                             result['pci_devices'][i]['vendor_id'])
+            self.assertEqual(dist['pci_devices'][i]['id'],
+                             result['pci_devices'][i]['id'])
+            self.assertEqual(dist['pci_devices'][i]['status'],
+                             result['pci_devices'][i]['status'])
+            self.assertEqual(dist['pci_devices'][i]['address'],
+                             result['pci_devices'][i]['address'])
+
+    def test_detail(self):
+        self.stubs.Set(db, 'compute_node_get_all',
+                       self._fake_compute_node_get_all)
+        self.stubs.Set(db, 'pci_device_get_all_by_node',
+                       self._fake_pci_device_get_all_by_node)
+        req = fakes.HTTPRequestV3.blank('/os-pci/detail',
+                                        use_admin_context=True)
+        result = self.controller.detail(req)
+        dist = {'pci_devices': [test_pci_device.fake_db_dev,
+                                test_pci_device.fake_db_dev_1]}
+        for i in range(len(result['pci_devices'])):
+            self.assertEqual(dist['pci_devices'][i]['vendor_id'],
+                             result['pci_devices'][i]['vendor_id'])
+            self.assertEqual(dist['pci_devices'][i]['id'],
+                             result['pci_devices'][i]['id'])
+            self.assertEqual(dist['pci_devices'][i]['label'],
+                             result['pci_devices'][i]['label'])
+            self.assertEqual(dist['pci_devices'][i]['dev_id'],
+                             result['pci_devices'][i]['dev_id'])

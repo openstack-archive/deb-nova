@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 Michael Still and Canonical Inc
 # All Rights Reserved.
 #
@@ -27,7 +25,7 @@ from nova import exception
 from nova.openstack.common import fileutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova import unit
+from nova.openstack.common import units
 from nova import utils
 from nova import version
 
@@ -56,7 +54,7 @@ CONF = cfg.CONF
 CONF.register_opts(configdrive_opts)
 
 # Config drives are 64mb, if we can't size to the exact size of the data
-CONFIGDRIVESIZE_BYTES = 64 * unit.Mi
+CONFIGDRIVESIZE_BYTES = 64 * units.Mi
 
 
 class ConfigDriveBuilder(object):

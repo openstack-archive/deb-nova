@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -71,7 +69,6 @@ class CertificatesController(object):
         authorize(context)
         pk, cert = self.cert_rpcapi.generate_x509_cert(context,
                 user_id=context.user_id, project_id=context.project_id)
-        context = req.environ['nova.context']
         return {'certificate': _translate_certificate_view(cert, pk)}
 
 

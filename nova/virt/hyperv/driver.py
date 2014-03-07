@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Cloud.com, Inc
 # Copyright (c) 2012 Cloudbase Solutions Srl
 #
@@ -25,6 +23,7 @@ from nova.virt import driver
 from nova.virt.hyperv import hostops
 from nova.virt.hyperv import livemigrationops
 from nova.virt.hyperv import migrationops
+from nova.virt.hyperv import rdpconsoleops
 from nova.virt.hyperv import snapshotops
 from nova.virt.hyperv import vmops
 from nova.virt.hyperv import volumeops
@@ -42,6 +41,7 @@ class HyperVDriver(driver.ComputeDriver):
         self._snapshotops = snapshotops.SnapshotOps()
         self._livemigrationops = livemigrationops.LiveMigrationOps()
         self._migrationops = migrationops.MigrationOps()
+        self._rdpconsoleops = rdpconsoleops.RDPConsoleOps()
 
     def init_host(self, host):
         pass
@@ -72,7 +72,7 @@ class HyperVDriver(driver.ComputeDriver):
         return self._vmops.get_info(instance)
 
     def attach_volume(self, context, connection_info, instance, mountpoint,
-                      encryption=None):
+                      disk_bus=None, device_type=None, encryption=None):
         return self._volumeops.attach_volume(connection_info,
                                              instance['name'])
 
@@ -205,3 +205,6 @@ class HyperVDriver(driver.ComputeDriver):
 
     def get_host_ip_addr(self):
         return self._hostops.get_host_ip_addr()
+
+    def get_rdp_console(self, context, instance):
+        return self._rdpconsoleops.get_rdp_console(instance)

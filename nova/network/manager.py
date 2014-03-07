@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -52,6 +50,7 @@ import uuid
 import eventlet
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
 
 from nova import context
 from nova import exception
@@ -63,16 +62,19 @@ from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
 from nova.network.security_group import openstack_driver
+from nova.objects import base as obj_base
+from nova.objects import dns_domain as dns_domain_obj
+from nova.objects import fixed_ip as fixed_ip_obj
 from nova.objects import instance as instance_obj
 from nova.objects import instance_info_cache as info_cache_obj
+from nova.objects import network as network_obj
 from nova.objects import service as service_obj
+from nova.objects import virtual_interface as vif_obj
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import periodic_task
-from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
@@ -88,7 +90,7 @@ network_opts = [
                help='Bridge for simple network instances'),
     cfg.StrOpt('flat_network_dns',
                default='8.8.4.4',
-               help='Dns for simple network'),
+               help='DNS server for simple network'),
     cfg.BoolOpt('flat_injected',
                 default=False,
                 help='Whether to attempt to inject network setup into guest'),
@@ -98,7 +100,7 @@ network_opts = [
                default=100,
                help='First VLAN for private networks'),
     cfg.StrOpt('vlan_interface',
-               help='vlans will bridge into this interface if set'),
+               help='VLANs will bridge into this interface if set'),
     cfg.IntOpt('num_networks',
                default=1,
                help='Number of networks to support'),
@@ -123,13 +125,10 @@ network_opts = [
                help='Number of addresses reserved for vpn clients'),
     cfg.IntOpt('fixed_ip_disassociate_timeout',
                default=600,
-               help='Seconds after which a deallocated ip is disassociated'),
+               help='Seconds after which a deallocated IP is disassociated'),
     cfg.IntOpt('create_unique_mac_address_attempts',
                default=5,
                help='Number of attempts to create unique mac address'),
-    cfg.BoolOpt('fake_network',
-                default=False,
-                help='If passed, use fake network devices and addresses'),
     cfg.BoolOpt('fake_call',
                 default=False,
                 help='If True, skip using the queue and make local calls'),
@@ -158,7 +157,7 @@ network_opts = [
                     'entries.'),
     cfg.StrOpt('dhcp_domain',
                default='novalocal',
-               help='domain to use for building the hostnames'),
+               help='Domain to use for building the hostnames'),
     cfg.StrOpt('l3_lib',
                default='nova.network.l3.LinuxNetL3',
                help="Indicates underlying L3 management library"),
@@ -169,6 +168,7 @@ CONF.register_opts(network_opts)
 CONF.import_opt('use_ipv6', 'nova.netconf')
 CONF.import_opt('my_ip', 'nova.netconf')
 CONF.import_opt('network_topic', 'nova.network.rpcapi')
+CONF.import_opt('fake_network', 'nova.network.linux_net')
 
 
 class RPCAllocateFixedIP(object):
@@ -201,7 +201,9 @@ class RPCAllocateFixedIP(object):
                 host = network['host']
             # NOTE(vish): if there is no network host, set one
             if host is None:
-                host = self.network_rpcapi.set_network_host(context, network)
+                network_p = obj_base.obj_to_primitive(network)
+                host = self.network_rpcapi.set_network_host(context,
+                                                            network_p)
             if host != self.host:
                 # need to call allocate_fixed_ip to correct network host
                 green_threads.append(eventlet.spawn(
@@ -225,32 +227,35 @@ class RPCAllocateFixedIP(object):
         network = self._get_network_by_id(context, network_id)
         return self.allocate_fixed_ip(context, instance_id, network, **kwargs)
 
-    def deallocate_fixed_ip(self, context, address, host=None, teardown=True):
+    def deallocate_fixed_ip(self, context, address, host=None, teardown=True,
+            instance=None):
         """Call the superclass deallocate_fixed_ip if i'm the correct host
         otherwise call to the correct host
         """
-        fixed_ip = self.db.fixed_ip_get_by_address(context, address)
-        network = self._get_network_by_id(context, fixed_ip['network_id'])
+        fixed_ip = fixed_ip_obj.FixedIP.get_by_address(
+            context, address, expected_attrs=['network'])
+        network = fixed_ip.network
 
         # NOTE(vish): if we are not multi_host pass to the network host
         # NOTE(tr3buchet): but if we are, host came from instance['host']
-        if not network['multi_host']:
-            host = network['host']
+        if not network.multi_host:
+            host = network.host
         if host == self.host:
             # NOTE(vish): deallocate the fixed ip locally
             return super(RPCAllocateFixedIP, self).deallocate_fixed_ip(context,
-                    address)
+                    address, instance=instance)
 
-        if network['multi_host']:
+        if network.multi_host:
             service = service_obj.Service.get_by_host_and_topic(
                 context, host, CONF.network_topic)
             if not service or not self.servicegroup_api.service_is_up(service):
                 # NOTE(vish): deallocate the fixed ip locally but don't
                 #             teardown network devices
                 return super(RPCAllocateFixedIP, self).deallocate_fixed_ip(
-                        context, address, teardown=False)
+                        context, address, teardown=False, instance=instance)
 
-        self.network_rpcapi.deallocate_fixed_ip(context, address, host)
+        self.network_rpcapi.deallocate_fixed_ip(context, address, host,
+                instance)
 
 
 class NetworkManager(manager.Manager):
@@ -266,7 +271,7 @@ class NetworkManager(manager.Manager):
         The one at a time part is to flatten the layout to help scale
     """
 
-    RPC_API_VERSION = '1.10'
+    target = messaging.Target(version='1.12')
 
     # If True, this manager requires VIF to create a bridge.
     SHOULD_CREATE_BRIDGE = False
@@ -321,15 +326,16 @@ class NetworkManager(manager.Manager):
             host = self.host
         network_id = network_ref['id']
         try:
-            fip = self.db.fixed_ip_get_by_network_host(context,
-                                                       network_id,
-                                                       host)
-            return fip['address']
+            fip = fixed_ip_obj.FixedIP.get_by_network_and_host(context,
+                                                               network_id,
+                                                               host)
+            return fip.address
         except exception.FixedIpNotFoundForNetworkHost:
             elevated = context.elevated()
-            return self.db.fixed_ip_associate_pool(elevated,
-                                                   network_id,
-                                                   host=host)
+            fip = fixed_ip_obj.FixedIP.associate_pool(elevated,
+                                                      network_id,
+                                                      host=host)
+            return fip.address
 
     def get_dhcp_leases(self, ctxt, network_ref):
         """Broker the request to the driver to fetch the dhcp leases."""
@@ -342,7 +348,7 @@ class NetworkManager(manager.Manager):
         # NOTE(vish): Set up networks for which this host already has
         #             an ip address.
         ctxt = context.get_admin_context()
-        for network in self.db.network_get_all_by_host(ctxt, self.host):
+        for network in network_obj.NetworkList.get_by_host(ctxt, self.host):
             self._setup_network_on_host(ctxt, network)
             if CONF.update_dns_entries:
                 dev = self.driver.get_dev(network)
@@ -354,19 +360,21 @@ class NetworkManager(manager.Manager):
             now = timeutils.utcnow()
             timeout = CONF.fixed_ip_disassociate_timeout
             time = now - datetime.timedelta(seconds=timeout)
-            num = self.db.fixed_ip_disassociate_all_by_timeout(context,
-                                                               self.host,
-                                                               time)
+            num = fixed_ip_obj.FixedIP.disassociate_all_by_timeout(context,
+                                                                   self.host,
+                                                                   time)
             if num:
                 LOG.debug(_('Disassociated %s stale fixed ip(s)'), num)
 
     def set_network_host(self, context, network_ref):
         """Safely sets the host of the network."""
+        if not isinstance(network_ref, network_obj.Network):
+            network_ref = network_obj.Network._from_db_object(
+                context, network_obj.Network(), network_ref)
         LOG.debug(_('setting network host'), context=context)
-        host = self.db.network_set_host(context,
-                                        network_ref['id'],
-                                        self.host)
-        return host
+        network_ref.host = self.host
+        network_ref.save()
+        return self.host
 
     def _do_trigger_security_group_members_refresh_for_instance(self,
                                                                 instance_id):
@@ -410,44 +418,43 @@ class NetworkManager(manager.Manager):
         #                this. But for now it "works", this could suck on
         #                large installs.
 
-        vifs = self.db.virtual_interface_get_all(context)
+        vifs = vif_obj.VirtualInterfaceList.get_all(context)
         results = []
 
         for vif in vifs:
-            if vif['instance_uuid'] is None:
+            if vif.instance_uuid is None:
                 continue
 
-            network = self._get_network_by_id(context, vif['network_id'])
+            network = self._get_network_by_id(context, vif.network_id)
             fixed_ipv6 = None
             if network['cidr_v6'] is not None:
                 fixed_ipv6 = ipv6.to_global(network['cidr_v6'],
-                                            vif['address'],
+                                            vif.address,
                                             context.project_id)
 
             if fixed_ipv6 and ipv6_filter.match(fixed_ipv6):
-                results.append({'instance_uuid': vif['instance_uuid'],
+                results.append({'instance_uuid': vif.instance_uuid,
                                 'ip': fixed_ipv6})
 
-            vif_id = vif['id']
-            fixed_ips = self.db.fixed_ips_by_virtual_interface(context,
-                                                               vif_id)
+            fixed_ips = fixed_ip_obj.FixedIPList.get_by_virtual_interface_id(
+                context, vif.id)
             for fixed_ip in fixed_ips:
-                if not fixed_ip or not fixed_ip['address']:
+                if not fixed_ip or not fixed_ip.address:
                     continue
-                if fixed_ip['address'] == fixed_ip_filter:
-                    results.append({'instance_uuid': vif['instance_uuid'],
-                                    'ip': fixed_ip['address']})
+                if str(fixed_ip.address) == fixed_ip_filter:
+                    results.append({'instance_uuid': vif.instance_uuid,
+                                    'ip': fixed_ip.address})
                     continue
-                if ip_filter.match(fixed_ip['address']):
-                    results.append({'instance_uuid': vif['instance_uuid'],
-                                    'ip': fixed_ip['address']})
+                if ip_filter.match(str(fixed_ip.address)):
+                    results.append({'instance_uuid': vif.instance_uuid,
+                                    'ip': fixed_ip.address})
                     continue
-                for floating_ip in fixed_ip.get('floating_ips', []):
-                    if not floating_ip or not floating_ip['address']:
+                for floating_ip in fixed_ip.floating_ips:
+                    if not floating_ip or not floating_ip.address:
                         continue
-                    if ip_filter.match(floating_ip['address']):
-                        results.append({'instance_uuid': vif['instance_uuid'],
-                                        'ip': floating_ip['address']})
+                    if ip_filter.match(str(floating_ip.address)):
+                        results.append({'instance_uuid': vif.instance_uuid,
+                                        'ip': floating_ip.address})
                         continue
 
         return results
@@ -463,12 +470,11 @@ class NetworkManager(manager.Manager):
             networks = self._get_networks_by_uuids(context, network_uuids)
         else:
             try:
-                networks = self.db.network_get_all(context)
+                networks = network_obj.NetworkList.get_all(context)
             except exception.NoNetworksFound:
                 return []
         # return only networks which are not vlan networks
-        return [network for network in networks if
-                not network['vlan']]
+        return [network for network in networks if not network.vlan]
 
     def allocate_for_instance(self, context, **kwargs):
         """Handles allocating the various network resources for an instance.
@@ -502,8 +508,8 @@ class NetworkManager(manager.Manager):
             with excutils.save_and_reraise_exception():
                 # If we fail to allocate any one mac address, clean up all
                 # allocated VIFs
-                self.db.virtual_interface_delete_by_instance(context,
-                                                             instance_uuid)
+                vif_obj.VirtualInterface.delete_by_instance_uuid(context,
+                        instance_uuid)
 
         self._allocate_fixed_ips(admin_context, instance_uuid,
                                  host, networks, vpn=vpn,
@@ -526,35 +532,46 @@ class NetworkManager(manager.Manager):
         # deleted before the IPs are released, so we need to get deleted
         # instances too
         read_deleted_context = context.elevated(read_deleted='yes')
-        instance_uuid = kwargs['instance_id']
-        if not uuidutils.is_uuid_like(instance_uuid):
-            instance = instance_obj.Instance.get_by_id(read_deleted_context,
-                                                       instance_uuid)
+        if 'instance' in kwargs:
+            instance = kwargs['instance']
             instance_uuid = instance.uuid
-
-        host = kwargs.get('host')
+            host = instance.host
+        else:
+            instance_id = kwargs['instance_id']
+            if uuidutils.is_uuid_like(instance_id):
+                instance = instance_obj.Instance.get_by_uuid(
+                        read_deleted_context, instance_id)
+            else:
+                instance = instance_obj.Instance.get_by_id(
+                        read_deleted_context, instance_id)
+            # NOTE(russellb) in case instance_id was an ID and not UUID
+            instance_uuid = instance.uuid
+            host = kwargs.get('host')
 
         try:
-            fixed_ips = (kwargs.get('fixed_ips') or
-                         self.db.fixed_ip_get_by_instance(read_deleted_context,
-                                                          instance_uuid))
+            if 'fixed_ips' in kwargs:
+                fixed_ips = kwargs['fixed_ips']
+            else:
+                fixed_ips = fixed_ip_obj.FixedIPList.get_by_instance_uuid(
+                    read_deleted_context, instance_uuid)
         except exception.FixedIpNotFoundForInstance:
             fixed_ips = []
         LOG.debug(_("network deallocation for instance"),
                   context=context, instance_uuid=instance_uuid)
         # deallocate fixed ips
         for fixed_ip in fixed_ips:
-            self.deallocate_fixed_ip(context, fixed_ip['address'], host=host)
+            self.deallocate_fixed_ip(context, str(fixed_ip.address), host=host,
+                    instance=instance)
 
         if CONF.update_dns_entries:
-            network_ids = [fixed_ip['network_id'] for fixed_ip in fixed_ips]
+            network_ids = [fixed_ip.network_id for fixed_ip in fixed_ips]
             self.network_rpcapi.update_dns(context, network_ids)
 
         # deallocate vifs (mac addresses)
-        self.db.virtual_interface_delete_by_instance(read_deleted_context,
-                                                     instance_uuid)
+        vif_obj.VirtualInterface.delete_by_instance_uuid(read_deleted_context,
+                instance_uuid)
 
-    @rpc_common.client_exceptions(exception.InstanceNotFound)
+    @messaging.expected_exceptions(exception.InstanceNotFound)
     def get_instance_nw_info(self, context, instance_id, rxtx_factor,
                              host, instance_uuid=None, **kwargs):
         """Creates network info list for instance.
@@ -571,17 +588,14 @@ class NetworkManager(manager.Manager):
             instance_id = instance_uuid
         instance_uuid = instance_id
 
-        # TODO(geekinutah): Is this worth objectifying as it's slated for
-        #                   deprecation?
-        vifs = self.db.virtual_interface_get_by_instance(context,
-                                                         instance_uuid,
-                                                         use_slave=use_slave)
+        vifs = vif_obj.VirtualInterfaceList.get_by_instance_uuid(context,
+                instance_uuid, use_slave=use_slave)
         networks = {}
 
         for vif in vifs:
-            if vif.get('network_id') is not None:
-                network = self._get_network_by_id(context, vif['network_id'])
-                networks[vif['uuid']] = network
+            if vif.network_id is not None:
+                network = self._get_network_by_id(context, vif.network_id)
+                networks[vif.uuid] = network
 
         nw_info = self.build_network_info_model(context, vifs, networks,
                                                          rxtx_factor, host)
@@ -594,18 +608,18 @@ class NetworkManager(manager.Manager):
         """
         nw_info = network_model.NetworkInfo()
         for vif in vifs:
-            vif_dict = {'id': vif['uuid'],
+            vif_dict = {'id': vif.uuid,
                         'type': network_model.VIF_TYPE_BRIDGE,
-                        'address': vif['address']}
+                        'address': vif.address}
 
             # handle case where vif doesn't have a network
-            if not networks.get(vif['uuid']):
+            if not networks.get(vif.uuid):
                 vif = network_model.VIF(**vif_dict)
                 nw_info.append(vif)
                 continue
 
             # get network dict for vif from args and build the subnets
-            network = networks[vif['uuid']]
+            network = networks[vif.uuid]
             subnets = self._get_subnets_from_network(context, network, vif,
                                                      instance_host)
 
@@ -618,11 +632,11 @@ class NetworkManager(manager.Manager):
             # get fixed_ips
             v4_IPs = self.ipam.get_v4_ips_by_interface(context,
                                                        network['uuid'],
-                                                       vif['uuid'],
+                                                       vif.uuid,
                                                        network['project_id'])
             v6_IPs = self.ipam.get_v6_ips_by_interface(context,
                                                        network['uuid'],
-                                                       vif['uuid'],
+                                                       vif.uuid,
                                                        network['project_id'])
 
             # create model FixedIPs from these fixed_ips
@@ -636,7 +650,7 @@ class NetworkManager(manager.Manager):
                     continue
                 gfipbfa = self.ipam.get_floating_ips_by_fixed_address
                 floating_ips = gfipbfa(context, fixed_ip['address'])
-                floating_ips = [network_model.IP(address=ip['address'],
+                floating_ips = [network_model.IP(address=str(ip['address']),
                                                  type='floating')
                                 for ip in floating_ips]
                 for ip in floating_ips:
@@ -683,7 +697,7 @@ class NetworkManager(manager.Manager):
         """Returns the 1 or 2 possible subnets for a nova network."""
         # get subnets
         ipam_subnets = self.ipam.get_subnets_by_net_id(context,
-                           network['project_id'], network['uuid'], vif['uuid'])
+                           network['project_id'], network['uuid'], vif.uuid)
 
         subnets = []
         for subnet in ipam_subnets:
@@ -746,24 +760,21 @@ class NetworkManager(manager.Manager):
 
     def _add_virtual_interface(self, context, instance_uuid, network_id,
                               mac=None):
-        vif = {'address': mac,
-               'instance_uuid': instance_uuid,
-               'network_id': network_id,
-               'uuid': str(uuid.uuid4())}
-
-        if mac is None:
-            vif['address'] = utils.generate_mac_address()
-            attempts = CONF.create_unique_mac_address_attempts
-        else:
-            attempts = 1
-
+        attempts = 1 if mac else CONF.create_unique_mac_address_attempts
         for i in range(attempts):
             try:
-                return self.db.virtual_interface_create(context, vif)
+                vif = vif_obj.VirtualInterface()
+                vif.address = mac or utils.generate_mac_address()
+                vif.instance_uuid = instance_uuid
+                vif.network_id = network_id
+                vif.uuid = str(uuid.uuid4())
+                vif.create(context)
+                return vif
             except exception.VirtualInterfaceCreateException:
-                vif['address'] = utils.generate_mac_address()
-        else:
-            raise exception.VirtualInterfaceMacAddressException()
+                # Try again up to max number of attempts
+                pass
+
+        raise exception.VirtualInterfaceMacAddressException()
 
     def add_fixed_ip_to_instance(self, context, instance_id, host, network_id,
                                  rxtx_factor=None):
@@ -785,16 +796,17 @@ class NetworkManager(manager.Manager):
     def remove_fixed_ip_from_instance(self, context, instance_id, host,
                                       address, rxtx_factor=None):
         """Removes a fixed ip from an instance from specified network."""
-        fixed_ips = self.db.fixed_ip_get_by_instance(context, instance_id)
+        fixed_ips = fixed_ip_obj.FixedIPList.get_by_instance_uuid(context,
+                                                                  instance_id)
         for fixed_ip in fixed_ips:
-            if fixed_ip['address'] == address:
+            if str(fixed_ip.address) == address:
                 self.deallocate_fixed_ip(context, address, host)
                 # NOTE(vish): this probably isn't a dhcp ip so just
                 #             deallocate it now. In the extremely rare
                 #             case that this is a race condition, we
                 #             will just get a warn in lease or release.
-                if not fixed_ip.get('leased'):
-                    self.db.fixed_ip_disassociate(context, address)
+                if not fixed_ip.leased:
+                    fixed_ip.disassociate()
                 return self.get_instance_nw_info(context, instance_id,
                                                  rxtx_factor, host)
         raise exception.FixedIpNotFoundForSpecificInstance(
@@ -805,7 +817,8 @@ class NetworkManager(manager.Manager):
             return True
         instance_domain = self.instance_dns_domain
 
-        domainref = self.db.dnsdomain_get(context, instance_domain)
+        domainref = dns_domain_obj.DNSDomain.get_by_domain(context,
+                instance_domain)
         if domainref is None:
             LOG.warn(_('instance-dns-zone not found |%s|.'),
                      instance_domain, instance=instance)
@@ -847,18 +860,17 @@ class NetworkManager(manager.Manager):
             if network['cidr']:
                 address = kwargs.get('address', None)
                 if address:
-                    address = self.db.fixed_ip_associate(context,
-                                                         address,
+                    fip = fixed_ip_obj.FixedIP.associate(context, address,
                                                          instance_id,
                                                          network['id'])
                 else:
-                    address = self.db.fixed_ip_associate_pool(
+                    fip = fixed_ip_obj.FixedIP.associate_pool(
                         context.elevated(), network['id'], instance_id)
-                get_vif = self.db.virtual_interface_get_by_instance_and_network
-                vif = get_vif(context, instance_id, network['id'])
-                values = {'allocated': True,
-                          'virtual_interface_id': vif['id']}
-                self.db.fixed_ip_update(context, address, values)
+                vif = vif_obj.VirtualInterface.get_by_instance_and_network(
+                        context, instance_id, network['id'])
+                fip.allocated = True
+                fip.virtual_interface_id = vif.id
+                fip.save()
                 self._do_trigger_security_group_members_refresh_for_instance(
                     instance_id)
 
@@ -869,9 +881,10 @@ class NetworkManager(manager.Manager):
 
             if self._validate_instance_zone_for_dns_domain(context, instance):
                 self.instance_dns_manager.create_entry(
-                    name, address, "A", self.instance_dns_domain)
+                    name, str(fip.address), "A", self.instance_dns_domain)
                 self.instance_dns_manager.create_entry(
-                    instance_id, address, "A", self.instance_dns_domain)
+                    instance_id, str(fip.address), "A",
+                    self.instance_dns_domain)
             self._setup_network_on_host(context, network)
 
             self.quotas.commit(context, reservations)
@@ -881,16 +894,23 @@ class NetworkManager(manager.Manager):
             with excutils.save_and_reraise_exception():
                 self.quotas.rollback(context, reservations)
 
-    def deallocate_fixed_ip(self, context, address, host=None, teardown=True):
+    def deallocate_fixed_ip(self, context, address, host=None, teardown=True,
+            instance=None):
         """Returns a fixed ip to the pool."""
-        fixed_ip_ref = self.db.fixed_ip_get_by_address(context, address)
-        instance_uuid = fixed_ip_ref['instance_uuid']
-        vif_id = fixed_ip_ref['virtual_interface_id']
+        fixed_ip_ref = fixed_ip_obj.FixedIP.get_by_address(
+            context, address, expected_attrs=['network'])
+        instance_uuid = fixed_ip_ref.instance_uuid
+        vif_id = fixed_ip_ref.virtual_interface_id
 
-        # NOTE(vish) This db query could be removed if we pass az and name
-        #            (or the whole instance object).
-        instance = instance_obj.Instance.get_by_uuid(
-            context.elevated(read_deleted='yes'), instance_uuid)
+        if not instance:
+            # NOTE(vish) This db query could be removed if we pass az and name
+            #            (or the whole instance object).
+            # NOTE(danms) We can't use fixed_ip_ref.instance because
+            #             instance may be deleted and the relationship
+            #             doesn't extend to deleted instances
+            instance = instance_obj.Instance.get_by_uuid(
+                context.elevated(read_deleted='yes'), instance_uuid)
+
         project_id = instance.project_id
         try:
             reservations = self.quotas.reserve(context,
@@ -910,13 +930,12 @@ class NetworkManager(manager.Manager):
                 self.instance_dns_manager.delete_entry(n,
                                                       self.instance_dns_domain)
 
-        self.db.fixed_ip_update(context, address,
-                                {'allocated': False,
-                                 'virtual_interface_id': None})
+        fixed_ip_ref.allocated = False
+        fixed_ip_ref.virtual_interface_id = None
+        fixed_ip_ref.save()
 
         if teardown:
-            network = self._get_network_by_id(context,
-                                              fixed_ip_ref['network_id'])
+            network = fixed_ip_ref.network
 
             if CONF.force_dhcp_release:
                 dev = self.driver.get_dev(network)
@@ -929,7 +948,7 @@ class NetworkManager(manager.Manager):
                     LOG.error(msg % address)
                     return
 
-                vif = self.db.virtual_interface_get(context, vif_id)
+                vif = vif_obj.VirtualInterface.get_by_id(context, vif_id)
 
                 if not vif:
                     LOG.error(msg % address)
@@ -941,18 +960,17 @@ class NetworkManager(manager.Manager):
                 self._teardown_network_on_host(context, network)
                 # NOTE(vish): This forces a packet so that the release_fixed_ip
                 #             callback will get called by nova-dhcpbridge.
-                self.driver.release_dhcp(dev, address, vif['address'])
+                self.driver.release_dhcp(dev, address, vif.address)
 
                 # NOTE(yufang521247): This is probably a failed dhcp fixed ip.
                 # DHCPRELEASE packet sent to dnsmasq would not trigger
                 # dhcp-bridge to run. Thus it is better to disassociate such
                 # fixed ip here.
-                fixed_ip_ref = self.db.fixed_ip_get_by_address(context,
-                                                               address)
-                if (instance_uuid == fixed_ip_ref['instance_uuid'] and
-                        not fixed_ip_ref.get('leased')):
-                    self.db.fixed_ip_disassociate(context, address)
-
+                fixed_ip_ref = fixed_ip_obj.FixedIP.get_by_address(
+                    context, address)
+                if (instance_uuid == fixed_ip_ref.instance_uuid and
+                        not fixed_ip_ref.leased):
+                    fixed_ip_ref.disassociate()
             else:
                 # We can't try to free the IP address so just call teardown
                 self._teardown_network_on_host(context, network)
@@ -964,38 +982,34 @@ class NetworkManager(manager.Manager):
     def lease_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is leased."""
         LOG.debug(_('Leased IP |%s|'), address, context=context)
-        fixed_ip = self.db.fixed_ip_get_by_address(context, address)
+        fixed_ip = fixed_ip_obj.FixedIP.get_by_address(context, address)
 
-        if fixed_ip['instance_uuid'] is None:
+        if fixed_ip.instance_uuid is None:
             LOG.warn(_('IP %s leased that is not associated'), address,
                        context=context)
             return
-        now = timeutils.utcnow()
-        self.db.fixed_ip_update(context,
-                                fixed_ip['address'],
-                                {'leased': True,
-                                 'updated_at': now})
-        if not fixed_ip['allocated']:
+        fixed_ip.leased = True
+        fixed_ip.save()
+        if not fixed_ip.allocated:
             LOG.warn(_('IP |%s| leased that isn\'t allocated'), address,
                      context=context)
 
     def release_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is released."""
         LOG.debug(_('Released IP |%s|'), address, context=context)
-        fixed_ip = self.db.fixed_ip_get_by_address(context, address)
+        fixed_ip = fixed_ip_obj.FixedIP.get_by_address(context, address)
 
-        if fixed_ip['instance_uuid'] is None:
+        if fixed_ip.instance_uuid is None:
             LOG.warn(_('IP %s released that is not associated'), address,
                        context=context)
             return
-        if not fixed_ip['leased']:
+        if not fixed_ip.leased:
             LOG.warn(_('IP %s released that was not leased'), address,
                      context=context)
-        self.db.fixed_ip_update(context,
-                                fixed_ip['address'],
-                                {'leased': False})
-        if not fixed_ip['allocated']:
-            self.db.fixed_ip_disassociate(context, address)
+        fixed_ip.leased = False
+        fixed_ip.save()
+        if not fixed_ip.allocated:
+            fixed_ip.disassociate()
 
     @staticmethod
     def _convert_int_args(kwargs):
@@ -1114,11 +1128,11 @@ class NetworkManager(manager.Manager):
             # NOTE(jkoelker): This replaces the _validate_cidrs call and
             #                 prevents looping multiple times
             try:
-                nets = self.db.network_get_all(context)
+                nets = network_obj.NetworkList.get_all(context)
             except exception.NoNetworksFound:
                 nets = []
             num_used_nets = len(nets)
-            used_subnets = [netaddr.IPNetwork(net['cidr']) for net in nets]
+            used_subnets = [net.cidr for net in nets]
 
             def find_next(subnet):
                 next_subnet = subnet.next()
@@ -1155,73 +1169,70 @@ class NetworkManager(manager.Manager):
                             raise exception.CidrConflict(
                                 msg % {'cidr': subnet, 'smaller': used_subnet})
 
-        networks = []
+        networks = network_obj.NetworkList(context=context,
+                                           objects=[])
         subnets = itertools.izip_longest(subnets_v4, subnets_v6)
         for index, (subnet_v4, subnet_v6) in enumerate(subnets):
-            net = {}
-            net['bridge'] = bridge
-            net['bridge_interface'] = bridge_interface
-            net['multi_host'] = multi_host
+            net = network_obj.Network(context=context)
+            net.bridge = bridge
+            net.bridge_interface = bridge_interface
+            net.multi_host = multi_host
 
-            net['dns1'] = dns1
-            net['dns2'] = dns2
+            net.dns1 = dns1
+            net.dns2 = dns2
 
-            net['project_id'] = kwargs.get('project_id')
+            net.project_id = kwargs.get('project_id')
 
             if num_networks > 1:
-                net['label'] = '%s_%d' % (label, index)
+                net.label = '%s_%d' % (label, index)
             else:
-                net['label'] = label
+                net.label = label
 
             if cidr and subnet_v4:
-                net['cidr'] = str(subnet_v4)
-                net['netmask'] = str(subnet_v4.netmask)
-                net['gateway'] = gateway or str(subnet_v4[1])
-                net['broadcast'] = str(subnet_v4.broadcast)
-                net['dhcp_start'] = str(subnet_v4[2])
+                net.cidr = str(subnet_v4)
+                net.netmask = str(subnet_v4.netmask)
+                net.gateway = gateway or str(subnet_v4[1])
+                net.broadcast = str(subnet_v4.broadcast)
+                net.dhcp_start = str(subnet_v4[2])
 
             if cidr_v6 and subnet_v6:
-                net['cidr_v6'] = str(subnet_v6)
+                net.cidr_v6 = str(subnet_v6)
                 if gateway_v6:
                     # use a pre-defined gateway if one is provided
-                    net['gateway_v6'] = str(gateway_v6)
+                    net.gateway_v6 = str(gateway_v6)
                 else:
-                    net['gateway_v6'] = str(subnet_v6[1])
+                    net.gateway_v6 = str(subnet_v6[1])
 
-                net['netmask_v6'] = str(subnet_v6._prefixlen)
+                net.netmask_v6 = str(subnet_v6.netmask)
 
             if CONF.network_manager == 'nova.network.manager.VlanManager':
                 vlan = kwargs.get('vlan', None)
                 if not vlan:
                     index_vlan = index + num_used_nets
                     vlan = kwargs['vlan_start'] + index_vlan
-                    used_vlans = [x['vlan'] for x in nets]
+                    used_vlans = [x.vlan for x in nets]
                     if vlan in used_vlans:
                         # That vlan is used, try to get another one
                         used_vlans.sort()
                         vlan = used_vlans[-1] + 1
 
-                net['vpn_private_address'] = str(subnet_v4[2])
-                net['dhcp_start'] = str(subnet_v4[3])
-                net['vlan'] = vlan
-                net['bridge'] = 'br%s' % vlan
+                net.vpn_private_address = str(subnet_v4[2])
+                net.dhcp_start = str(subnet_v4[3])
+                net.vlan = vlan
+                net.bridge = 'br%s' % vlan
 
                 # NOTE(vish): This makes ports unique across the cloud, a more
                 #             robust solution would be to make them uniq per ip
                 index_vpn = index + num_used_nets
-                net['vpn_public_port'] = kwargs['vpn_start'] + index_vpn
+                net.vpn_public_port = kwargs['vpn_start'] + index_vpn
 
-            # None if network with cidr or cidr_v6 already exists
-            network = self.db.network_create_safe(context, net)
+            net.create()
+            networks.objects.append(net)
 
-            if not network:
-                raise ValueError(_('Network already exists!'))
-            else:
-                networks.append(network)
-
-            if network and cidr and subnet_v4:
-                self._create_fixed_ips(context, network['id'], fixed_cidr)
-        return jsonutils.to_primitive(networks)
+            if cidr and subnet_v4:
+                self._create_fixed_ips(context, net.id, fixed_cidr)
+        # NOTE(danms): Remove this in RPC API v2.0
+        return obj_base.obj_to_primitive(networks)
 
     def delete_network(self, context, fixed_range, uuid,
             require_disassociated=True):
@@ -1229,14 +1240,14 @@ class NetworkManager(manager.Manager):
         # Prefer uuid but we'll also take cidr for backwards compatibility
         elevated = context.elevated()
         if uuid:
-            network = self.db.network_get_by_uuid(elevated, uuid)
+            network = network_obj.Network.get_by_uuid(elevated, uuid)
         elif fixed_range:
-            network = self.db.network_get_by_cidr(elevated, fixed_range)
+            network = network_obj.Network.get_by_cidr(elevated, fixed_range)
 
-        if require_disassociated and network['project_id'] is not None:
+        if require_disassociated and network.project_id is not None:
             raise ValueError(_('Network must be disassociated from project %s'
-                               ' before delete') % network['project_id'])
-        self.db.network_delete_safe(context, network['id'])
+                               ' before delete') % network.project_id)
+        network.destroy()
 
     @property
     def _bottom_reserved_ips(self):  # pylint: disable=R0201
@@ -1269,7 +1280,7 @@ class NetworkManager(manager.Manager):
             ips.append({'network_id': network_id,
                         'address': address,
                         'reserved': reserved})
-        self.db.fixed_ip_bulk_create(context, ips)
+        fixed_ip_obj.FixedIPList.bulk_create(context, ips)
 
     def _allocate_fixed_ips(self, context, instance_id, host, networks,
                             **kwargs):
@@ -1287,11 +1298,11 @@ class NetworkManager(manager.Manager):
             call_func = self._setup_network_on_host
 
         instance = instance_obj.Instance.get_by_id(context, instance_id)
-        vifs = self.db.virtual_interface_get_by_instance(context,
-                                                         instance.uuid)
+        vifs = vif_obj.VirtualInterfaceList.get_by_instance_uuid(context,
+                instance['uuid'])
         for vif in vifs:
-            network = self.db.network_get(context, vif['network_id'])
-            if not network['multi_host']:
+            network = network_obj.Network.get_by_id(context, vif.network_id)
+            if not network.multi_host:
                 #NOTE (tr3buchet): if using multi_host, host is instance[host]
                 host = network['host']
             if self.host == host or host is None:
@@ -1302,7 +1313,7 @@ class NetworkManager(manager.Manager):
                 # i'm not the right host, run call on correct host
                 green_threads.append(eventlet.spawn(
                         self.network_rpcapi.rpc_setup_network_on_host, context,
-                        network['id'], teardown, host))
+                        network.id, teardown, host))
 
         # wait for all of the setups (if any) to finish
         for gt in green_threads:
@@ -1315,7 +1326,7 @@ class NetworkManager(manager.Manager):
             call_func = self._setup_network_on_host
 
         # subcall from original setup_networks_on_host
-        network = self.db.network_get(context, network_id)
+        network = network_obj.Network.get_by_id(context, network_id)
         call_func(context, network)
 
     def _setup_network_on_host(self, context, network):
@@ -1344,26 +1355,25 @@ class NetworkManager(manager.Manager):
                 if not utils.is_valid_ipv4(address):
                     raise exception.FixedIpInvalid(address=address)
 
-                fixed_ip_ref = self.db.fixed_ip_get_by_address(context,
-                                                               address)
-                network = self._get_network_by_id(context,
-                                                  fixed_ip_ref['network_id'])
-                if network['uuid'] != network_uuid:
+                fixed_ip_ref = fixed_ip_obj.FixedIP.get_by_address(
+                    context, address, expected_attrs=['network'])
+                network = fixed_ip_ref.network
+                if network.uuid != network_uuid:
                     raise exception.FixedIpNotFoundForNetwork(
                         address=address, network_uuid=network_uuid)
-                if fixed_ip_ref['instance_uuid'] is not None:
+                if fixed_ip_ref.instance_uuid is not None:
                     raise exception.FixedIpAlreadyInUse(
                         address=address,
-                        instance_uuid=fixed_ip_ref['instance_uuid'])
+                        instance_uuid=fixed_ip_ref.instance_uuid)
 
     def _get_network_by_id(self, context, network_id):
-        return self.db.network_get(context, network_id,
-                                   project_only="allow_none")
+        return network_obj.Network.get_by_id(context, network_id,
+                                             project_only='allow_none')
 
     def _get_networks_by_uuids(self, context, network_uuids):
-        networks = self.db.network_get_all_by_uuids(context, network_uuids,
-                                                    project_only="allow_none")
-        networks.sort(key=lambda x: network_uuids.index(x['uuid']))
+        networks = network_obj.NetworkList.get_by_uuids(
+            context, network_uuids, project_only="allow_none")
+        networks.sort(key=lambda x: network_uuids.index(x.uuid))
         return networks
 
     def get_vifs_by_instance(self, context, instance_id):
@@ -1371,6 +1381,8 @@ class NetworkManager(manager.Manager):
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
         instance = instance_obj.Instance.get_by_id(context, instance_id)
+        # NOTE(russellb) No need to object-ify this since
+        # get_vifs_by_instance() is unused and set to be removed.
         vifs = self.db.virtual_interface_get_by_instance(context,
                                                          instance.uuid)
         for vif in vifs:
@@ -1383,50 +1395,51 @@ class NetworkManager(manager.Manager):
         """Returns the instance id a floating ip's fixed ip is allocated to."""
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
-        fixed_ip = self.db.fixed_ip_get_by_floating_address(context, address)
+        fixed_ip = fixed_ip_obj.FixedIP.get_by_floating_address(context,
+                                                                address)
         if fixed_ip is None:
             return None
         else:
-            return fixed_ip['instance_uuid']
+            return fixed_ip.instance_uuid
 
     def get_network(self, context, network_uuid):
         # NOTE(vish): used locally
 
-        network = self.db.network_get_by_uuid(context.elevated(), network_uuid)
-        return jsonutils.to_primitive(network)
+        return network_obj.Network.get_by_uuid(context.elevated(),
+                                               network_uuid)
 
     def get_all_networks(self, context):
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
         try:
-            networks = self.db.network_get_all(context)
+            return obj_base.obj_to_primitive(
+                network_obj.NetworkList.get_all(context))
         except exception.NoNetworksFound:
             return []
-        return [jsonutils.to_primitive(network) for network in networks]
 
     def disassociate_network(self, context, network_uuid):
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
         network = self.get_network(context, network_uuid)
-        self.db.network_disassociate(context, network['id'])
+        network.disassociate(context, network.id)
 
     def get_fixed_ip(self, context, id):
         """Return a fixed ip."""
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
-        fixed = self.db.fixed_ip_get(context, id)
-        return jsonutils.to_primitive(fixed)
+        return fixed_ip_obj.FixedIP.get_by_id(context, id)
 
     def get_fixed_ip_by_address(self, context, address):
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
-        fixed = self.db.fixed_ip_get_by_address(context, address)
-        return jsonutils.to_primitive(fixed)
+        return fixed_ip_obj.FixedIP.get_by_address(context, address)
 
     def get_vif_by_mac_address(self, context, mac_address):
         """Returns the vifs record for the mac_address."""
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
+        # NOTE(russellb) No need to object-ify this since
+        # get_vifs_by_instance() is unused and set to be removed.
         vif = self.db.virtual_interface_get_by_address(context,
                                                         mac_address)
         if vif.get('network_id') is not None:
@@ -1438,7 +1451,7 @@ class NetworkManager(manager.Manager):
         spacing=CONF.dns_update_periodic_interval)
     def _periodic_update_dns(self, context):
         """Update local DNS entries of all networks on this host."""
-        networks = self.db.network_get_all_by_host(context, self.host)
+        networks = network_obj.NetworkList.get_by_host(context, self.host)
         for network in networks:
             dev = self.driver.get_dev(network)
             self.driver.update_dns(context, dev, network)
@@ -1449,8 +1462,8 @@ class NetworkManager(manager.Manager):
             return
 
         networks = [network for network in
-                    self.db.network_get_all_by_host(context, self.host)
-                    if network['multi_host'] and network['id'] in network_ids]
+                    network_obj.NetworkList.get_by_host(context, self.host)
+                    if network.multi_host and network.id in network_ids]
         for network in networks:
             dev = self.driver.get_dev(network)
             self.driver.update_dns(context, dev, network)
@@ -1505,20 +1518,21 @@ class FlatManager(NetworkManager):
             self.allocate_fixed_ip(context, instance_id,
                                    network, address=address)
 
-    def deallocate_fixed_ip(self, context, address, host=None, teardown=True):
+    def deallocate_fixed_ip(self, context, address, host=None, teardown=True,
+            instance=None):
         """Returns a fixed ip to the pool."""
         super(FlatManager, self).deallocate_fixed_ip(context, address, host,
-                                                     teardown)
-        self.db.fixed_ip_disassociate(context, address)
+                                                     teardown,
+                                                     instance=instance)
+        fixed_ip_obj.FixedIP.disassociate_by_address(context, address)
 
     def _setup_network_on_host(self, context, network):
         """Setup Network on this host."""
         # NOTE(tr3buchet): this does not need to happen on every ip
         # allocation, this functionality makes more sense in create_network
         # but we'd have to move the flat_injected flag to compute
-        net = {}
-        net['injected'] = CONF.flat_injected
-        self.db.network_update(context, network['id'], net)
+        network.injected = CONF.flat_injected
+        network.save()
 
     def _teardown_network_on_host(self, context, network):
         """Tear down network on this host."""
@@ -1631,7 +1645,7 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
         standalone service.
         """
         ctxt = context.get_admin_context()
-        networks = self.db.network_get_all_by_host(ctxt, self.host)
+        networks = network_obj.NetworkList.get_by_host(ctxt, self.host)
         self.l3driver.initialize(fixed_range=False, networks=networks)
         super(FlatDHCPManager, self).init_host()
         self.init_host_floating_ips()
@@ -1651,8 +1665,8 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
             if CONF.use_ipv6:
                 self.driver.update_ra(context, dev, network)
                 gateway = utils.get_my_linklocal(dev)
-                self.db.network_update(context, network['id'],
-                                       {'gateway_v6': gateway})
+                network.gateway_v6 = gateway
+                network.save()
 
     def _teardown_network_on_host(self, context, network):
         if not CONF.fake_network:
@@ -1713,7 +1727,7 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
         """
 
         ctxt = context.get_admin_context()
-        networks = self.db.network_get_all_by_host(ctxt, self.host)
+        networks = network_obj.NetworkList.get_by_host(ctxt, self.host)
         self.l3driver.initialize(fixed_range=False, networks=networks)
         NetworkManager.init_host(self)
         self.init_host_floating_ips()
@@ -1723,27 +1737,25 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
 
         if kwargs.get('vpn', None):
             address = network['vpn_private_address']
-            self.db.fixed_ip_associate(context,
-                                       address,
-                                       instance_id,
-                                       network['id'],
-                                       reserved=True)
+            fip = fixed_ip_obj.FixedIP.associate(context, address, instance_id,
+                                                 network['id'], reserved=True)
         else:
             address = kwargs.get('address', None)
             if address:
-                address = self.db.fixed_ip_associate(context, address,
+                fip = fixed_ip_obj.FixedIP.associate(context, address,
                                                      instance_id,
                                                      network['id'])
             else:
-                address = self.db.fixed_ip_associate_pool(context,
+                fip = fixed_ip_obj.FixedIP.associate_pool(context,
                                                           network['id'],
                                                           instance_id)
+        address = fip.address
 
-        vif = self.db.virtual_interface_get_by_instance_and_network(
+        vif = vif_obj.VirtualInterface.get_by_instance_and_network(
             context, instance_id, network['id'])
-        values = {'allocated': True,
-                  'virtual_interface_id': vif['id']}
-        self.db.fixed_ip_update(context, address, values)
+        fip.allocated = True
+        fip.virtual_interface_id = vif.id
+        fip.save()
 
         if not kwargs.get('vpn', None):
             self._do_trigger_security_group_members_refresh_for_instance(
@@ -1768,46 +1780,48 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
     def add_network_to_project(self, context, project_id, network_uuid=None):
         """Force adds another network to a project."""
         if network_uuid is not None:
-            network_id = self.get_network(context, network_uuid)['id']
+            network_id = self.get_network(context, network_uuid).id
         else:
             network_id = None
-        self.db.network_associate(context, project_id, network_id, force=True)
+        network_obj.Network.associate(context, project_id, network_id,
+                                      force=True)
 
     def associate(self, context, network_uuid, associations):
         """Associate or disassociate host or project to network."""
         # NOTE(vish): This is no longer used but can't be removed until
         #             we major version the network_rpcapi to 2.0.
-        network_id = self.get_network(context, network_uuid)['id']
+        network = self.get_network(context, network_uuid)
+        network_id = network.id
         if 'host' in associations:
             host = associations['host']
             if host is None:
-                self.db.network_disassociate(context, network_id,
-                                             disassociate_host=True,
-                                             disassociate_project=False)
+                network.disassociate(context, network_id,
+                                     host=True, project=False)
             else:
-                self.db.network_set_host(context, network_id, host)
+                network.host = self.host
+                network.save()
         if 'project' in associations:
             project = associations['project']
             if project is None:
-                self.db.network_disassociate(context, network_id,
-                                             disassociate_host=False,
-                                             disassociate_project=True)
+                network.disassociate(context, network_id,
+                                     host=False, project=True)
             else:
-                self.db.network_associate(context, project, network_id, True)
+                network.associate(context, project, network_id, force=True)
 
     def _get_network_by_id(self, context, network_id):
         # NOTE(vish): Don't allow access to networks with project_id=None as
         #             these are networks that haven't been allocated to a
         #             project yet.
-        return self.db.network_get(context, network_id, project_only=True)
+        return network_obj.Network.get_by_id(context, network_id,
+                                             project_only=True)
 
     def _get_networks_by_uuids(self, context, network_uuids):
         # NOTE(vish): Don't allow access to networks with project_id=None as
         #             these are networks that haven't been allocated to a
         #             project yet.
-        networks = self.db.network_get_all_by_uuids(context, network_uuids,
-                                                    project_only=True)
-        networks.sort(key=lambda x: network_uuids.index(x['uuid']))
+        networks = network_obj.NetworkList.get_by_uuids(
+            context, network_uuids, project_only=True)
+        networks.sort(key=lambda x: network_uuids.index(x.uuid))
         return networks
 
     def _get_networks_for_instance(self, context, instance_id, project_id,
@@ -1851,14 +1865,13 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
     @utils.synchronized('setup_network', external=True)
     def _setup_network_on_host(self, context, network):
         """Sets up network on this host."""
-        if not network['vpn_public_address']:
-            net = {}
+        if not network.vpn_public_address:
             address = CONF.vpn_ip
-            net['vpn_public_address'] = address
-            network = self.db.network_update(context, network['id'], net)
+            network.vpn_public_address = address
+            network.save()
         else:
-            address = network['vpn_public_address']
-        network['dhcp_server'] = self._get_dhcp_ip(context, network)
+            address = network.vpn_public_address
+        network.dhcp_server = self._get_dhcp_ip(context, network)
 
         self.l3driver.initialize_network(network.get('cidr'))
         self.l3driver.initialize_gateway(network)
@@ -1868,8 +1881,8 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
         if address == CONF.vpn_ip and hasattr(self.driver,
                                                "ensure_vpn_forward"):
             self.l3driver.add_vpn(CONF.vpn_ip,
-                    network['vpn_public_port'],
-                    network['vpn_private_address'])
+                    network.vpn_public_port,
+                    network.vpn_private_address)
         if not CONF.fake_network:
             dev = self.driver.get_dev(network)
             # NOTE(dprince): dhcp DB queries require elevated context
@@ -1878,8 +1891,8 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             if CONF.use_ipv6:
                 self.driver.update_ra(context, dev, network)
                 gateway = utils.get_my_linklocal(dev)
-                self.db.network_update(context, network['id'],
-                                       {'gateway_v6': gateway})
+                network.gateway_v6 = gateway
+                network.save()
 
     @utils.synchronized('setup_network', external=True)
     def _teardown_network_on_host(self, context, network):
@@ -1898,14 +1911,15 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
                 network['multi_host'] and vpn_address != CONF.vpn_ip and
                 not self.db.network_in_use_on_host(context, network['id'],
                                                    self.host)):
-                LOG.debug("Remove unused gateway %s", network['bridge'])
+                LOG.debug(_("Remove unused gateway %s"), network['bridge'])
                 self.driver.kill_dhcp(dev)
                 self.l3driver.remove_gateway(network)
                 if not CONF.share_dhcp_address:
-                    values = {'allocated': False,
-                              'host': None}
-                    self.db.fixed_ip_update(context, network['dhcp_server'],
-                                            values)
+                    fip = fixed_ip_obj.FixedIP.get_by_address(
+                        context, network.dhcp_server)
+                    fip.allocated = False
+                    fip.host = None
+                    fip.save()
             else:
                 self.driver.update_dhcp(elevated, dev, network)
 

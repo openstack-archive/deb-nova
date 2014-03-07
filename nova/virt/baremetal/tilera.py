@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011-2013 University of Southern California / ISI
 # All Rights Reserved.
 #
@@ -83,8 +81,7 @@ def get_partition_sizes(instance):
 
 
 def get_tftp_image_info(instance):
-    """
-    Generate the paths for tftp files for this instance.
+    """Generate the paths for tftp files for this instance.
 
     Raises NovaException if
     - instance does not contain kernel_id
@@ -168,7 +165,8 @@ class Tilera(base.NodeDriver):
                              target=image_path,
                              image_id=image_meta['id'],
                              user_id=instance['user_id'],
-                             project_id=instance['project_id']
+                             project_id=instance['project_id'],
+                             clean=True,
                         )
 
         return [image_meta['id'], image_path]
@@ -205,7 +203,7 @@ class Tilera(base.NodeDriver):
                     image=get_image_file_path(instance),
                     key=ssh_key,
                     net=net_config,
-                    metadata=instance['metadata'],
+                    metadata=utils.instance_meta(instance),
                     admin_password=admin_password,
                     files=injected_files,
                     partition=partition,
@@ -298,8 +296,7 @@ class Tilera(base.NodeDriver):
                 os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
 
     def _iptables_set(self, node_ip, user_data):
-        """
-        Sets security setting (iptables:port) if needed.
+        """Sets security setting (iptables:port) if needed.
 
         iptables -A INPUT -p tcp ! -s $IP --dport $PORT -j DROP
         /tftpboot/iptables_rule script sets iptables rule on the given node.

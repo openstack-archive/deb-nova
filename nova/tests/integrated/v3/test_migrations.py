@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -67,7 +66,3 @@ class MigrationsSamplesJsonTest(api_sample_base.ApiSampleTestBaseV3):
 
         self.assertEqual(response.status, 200)
         self._verify_response('migrations-get', subs, response, 200)
-
-
-class MigrationsSamplesXmlTest(MigrationsSamplesJsonTest):
-    ctype = 'xml'

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -26,8 +24,6 @@ class UserData(extensions.V3APIExtensionBase):
 
     name = "UserData"
     alias = "os-user-data"
-    namespace = ("http://docs.openstack.org/compute/ext/"
-                 "userdata/api/v3")
     version = 1
 
     def get_controller_extensions(self):
@@ -38,8 +34,3 @@ class UserData(extensions.V3APIExtensionBase):
 
     def server_create(self, server_dict, create_kwargs):
         create_kwargs['user_data'] = server_dict.get(ATTRIBUTE_NAME)
-
-    def server_xml_extract_server_deserialize(self, server_node, server_dict):
-        user_data = server_node.getAttribute(ATTRIBUTE_NAME)
-        if user_data:
-            server_dict[ATTRIBUTE_NAME] = user_data

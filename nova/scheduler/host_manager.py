@@ -114,6 +114,7 @@ class HostState(object):
 
         # Mutable available resources.
         # These will change as resources are virtually "consumed".
+        self.total_usable_ram_mb = 0
         self.total_usable_disk_gb = 0
         self.disk_mb_used = 0
         self.free_ram_mb = 0
@@ -183,9 +184,16 @@ class HostState(object):
         all_ram_mb = compute['memory_mb']
 
         # Assume virtual size is all consumed by instances if use qcow2 disk.
-        least = compute.get('disk_available_least')
-        free_disk_mb = least if least is not None else compute['free_disk_gb']
-        free_disk_mb *= 1024
+        free_gb = compute['free_disk_gb']
+        least_gb = compute.get('disk_available_least')
+        if least_gb is not None:
+            if least_gb > free_gb:
+                # can occur when an instance in database is not on host
+                LOG.warn(_("Host has more disk space than database expected"
+                           " (%(physical)sgb > %(database)sgb)") %
+                         {'physical': least_gb, 'database': free_gb})
+            free_gb = min(least_gb, free_gb)
+        free_disk_mb = free_gb * 1024
 
         self.disk_mb_used = compute['local_gb_used'] * 1024
 
@@ -215,7 +223,9 @@ class HostState(object):
         # Don't store stats directly in host_state to make sure these don't
         # overwrite any values, or get overwritten themselves. Store in self so
         # filters can schedule with them.
-        self.stats = self._statmap(compute.get('stats', []))
+        stats = compute.get('stats', None) or '{}'
+        self.stats = jsonutils.loads(stats)
+
         self.hypervisor_version = compute['hypervisor_version']
 
         # Track number of instances on host
@@ -302,9 +312,6 @@ class HostState(object):
                 task_states.RESIZE_PREP, task_states.IMAGE_SNAPSHOT,
                 task_states.IMAGE_BACKUP]:
             self.num_io_ops += 1
-
-    def _statmap(self, stats):
-        return dict((st['key'], st['value']) for st in stats)
 
     def __repr__(self):
         return ("(%s, %s) ram:%s disk:%s io_ops:%s instances:%s" %
@@ -430,24 +437,6 @@ class HostManager(object):
         """Weigh the hosts."""
         return self.weight_handler.get_weighed_objects(self.weight_classes,
                 hosts, weight_properties)
-
-    def update_service_capabilities(self, service_name, host, capabilities):
-        """Update the per-service capabilities based on this notification."""
-
-        if service_name != 'compute':
-            LOG.debug(_('Ignoring %(service_name)s service update '
-                        'from %(host)s'), {'service_name': service_name,
-                                           'host': host})
-            return
-
-        state_key = (host, capabilities.get('hypervisor_hostname'))
-        LOG.debug(_("Received %(service_name)s service update from "
-                    "%(state_key)s."), {'service_name': service_name,
-                                        'state_key': state_key})
-        # Copy the capabilities, so we don't modify the original dict
-        capab_copy = dict(capabilities)
-        capab_copy["timestamp"] = timeutils.utcnow()  # Reported time
-        self.service_states[state_key] = capab_copy
 
     def get_all_host_states(self, context):
         """Returns a list of HostStates that represents all the hosts

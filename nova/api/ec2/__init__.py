@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -20,11 +18,10 @@ Starting point for routing EC2 requests.
 
 """
 
-import urlparse
-
 from eventlet.green import httplib
 from oslo.config import cfg
 import six
+import six.moves.urllib.parse as urlparse
 import webob
 import webob.dec
 import webob.exc
@@ -159,7 +156,7 @@ class Lockout(wsgi.Middleware):
         failures = int(self.mc.get(failures_key) or 0)
         if failures >= CONF.lockout_attempts:
             detail = _("Too many failed authentications.")
-            raise webob.exc.HTTPForbidden(detail=detail)
+            raise webob.exc.HTTPForbidden(explanation=detail)
         res = req.get_response(self.application)
         if res.status_int == 403:
             failures = self.mc.incr(failures_key)
@@ -305,7 +302,7 @@ class Requestify(wsgi.Middleware):
             if expired:
                 msg = _("Timestamp failed validation.")
                 LOG.exception(msg)
-                raise webob.exc.HTTPForbidden(detail=msg)
+                raise webob.exc.HTTPForbidden(explanation=msg)
 
             # Raise KeyError if omitted
             action = req.params['Action']
@@ -471,8 +468,7 @@ def exception_to_ec2code(ex):
 
 
 def ec2_error_ex(ex, req, code=None, message=None, unexpected=False):
-    """
-    Return an EC2 error response based on passed exception and log
+    """Return an EC2 error response based on passed exception and log
     the exception on an appropriate log level:
 
         * DEBUG: expected errors
@@ -482,7 +478,7 @@ def ec2_error_ex(ex, req, code=None, message=None, unexpected=False):
     status codes are always returned for them.
 
     Unexpected 5xx errors may contain sensitive information,
-    supress their messages for security.
+    suppress their messages for security.
     """
     if not code:
         code = exception_to_ec2code(ex)

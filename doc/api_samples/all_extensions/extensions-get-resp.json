@@ -281,6 +281,14 @@
             "updated": "2013-06-09T00:00:00+00:00"
         },
         {
+            "alias": "os-extended-hypervisors",
+            "description": "Extended hypervisors support.",
+            "links": [],
+            "name": "ExtendedHypervisors",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_hypervisors/api/v1.1",
+            "updated": "2013-10-21T00:00:00-00:00"
+        },
+        {
             "alias": "os-extended-services",
             "description": "Extended services support.",
             "links": [],
@@ -465,14 +473,14 @@
             "updated": "2012-11-19T00:00:00+00:00"
         },
         {
-            "alias": "os-quota-class-sets",
-            "description": "Quota classes management support.",
+            "alias": "os-preserve-ephemeral-rebuild",
+            "description": "Allow preservation of the ephemeral partition on rebuild.",
             "links": [],
-            "name": "QuotaClasses",
-            "namespace": "http://docs.openstack.org/compute/ext/quota-classes-sets/api/v1.1",
-            "updated": "2012-03-12T00:00:00+00:00"
+            "name": "PreserveEphemeralOnRebuild",
+            "namespace": "http://docs.openstack.org/compute/ext/preserve_ephemeral_rebuild/api/v2",
+            "updated": "2013-12-17T00:00:00+00:00"
         },
-        {
+       {
             "alias": "os-quota-sets",
             "description": "Quotas management support.",
             "links": [],
@@ -615,6 +623,22 @@
             "name": "Volumes",
             "namespace": "http://docs.openstack.org/compute/ext/volumes/api/v1.1",
             "updated": "2011-03-25T00:00:00+00:00"
+        },
+        {
+            "alias": "os-extended-services-delete",
+            "description": "Services deletion support.",
+            "links": [],
+            "name": "ExtendedServicesDelete",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_services_delete/api/v2",
+            "updated": "2013-12-10T00:00:00+00:00"
+        },
+        {
+            "alias": "os-console-auth-tokens",
+            "description": "Console token authentication support.",
+            "links": [],
+            "name": "ConsoleAuthTokens",
+            "namespace": "http://docs.openstack.org/compute/ext/consoles-auth-tokens/api/v2",
+            "updated": "2013-08-13T00:00:00+00:00"
         }
     ]
 }

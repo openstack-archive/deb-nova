@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -21,7 +19,6 @@
 """Built-in instance properties."""
 
 import re
-import sys
 import uuid
 
 from oslo.config import cfg
@@ -40,7 +37,7 @@ from nova import utils
 flavor_opts = [
     cfg.StrOpt('default_flavor',
                default='m1.small',
-               help='default flavor to use for the EC2 API only. The Nova API '
+               help='Default flavor to use for the EC2 API only. The Nova API '
                'does not support a default flavor.'),
 ]
 
@@ -54,6 +51,17 @@ LOG = logging.getLogger(__name__)
 # to ascii characters.
 VALID_ID_REGEX = re.compile("^[\w\.\- ]*$")
 VALID_NAME_REGEX = re.compile("^[\w\.\- ]*$", re.UNICODE)
+# NOTE(dosaboy): This is supposed to represent the maximum value that we can
+# place into a SQL single precision float so that we can check whether values
+# are oversize. Postgres and MySQL both define this as their max whereas Sqlite
+# uses dynamic typing so this would not apply. Different dbs react in different
+# ways to oversize values e.g. postgres will raise an exception while mysql
+# will round off the value. Nevertheless we may still want to know prior to
+# insert whether the value is oversize.
+SQL_SP_FLOAT_MAX = 3.40282e+38
+
+# Validate extra specs key names.
+VALID_EXTRASPEC_NAME_REGEX = re.compile(r"[\w\.\- :]+$", re.UNICODE)
 
 
 def _int_or_none(val):
@@ -125,20 +133,22 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb=0, flavorid=None,
     # Some attributes are positive ( > 0) integers
     for option in ['memory_mb', 'vcpus']:
         kwargs[option] = utils.validate_integer(kwargs[option], option, 1,
-                                                sys.maxint)
+                                                db.MAX_INT)
 
     # Some attributes are non-negative ( >= 0) integers
     for option in ['root_gb', 'ephemeral_gb', 'swap']:
         kwargs[option] = utils.validate_integer(kwargs[option], option, 0,
-                                                sys.maxint)
+                                                db.MAX_INT)
 
     # rxtx_factor should be a positive float
     try:
         kwargs['rxtx_factor'] = float(kwargs['rxtx_factor'])
-        if kwargs['rxtx_factor'] <= 0:
+        if (kwargs['rxtx_factor'] <= 0 or
+                kwargs['rxtx_factor'] > SQL_SP_FLOAT_MAX):
             raise ValueError()
     except ValueError:
-        msg = _("'rxtx_factor' argument must be a positive float")
+        msg = (_("'rxtx_factor' argument must be a float between 0 and %g") %
+               SQL_SP_FLOAT_MAX)
         raise exception.InvalidInput(reason=msg)
 
     kwargs['name'] = name
@@ -309,3 +319,11 @@ def delete_flavor_info(metadata, *prefixes):
             del metadata[to_key]
     pci_request.delete_flavor_pci_info(metadata, *prefixes)
     return metadata
+
+
+def validate_extra_spec_keys(key_names_list):
+    for key_name in key_names_list:
+        if not VALID_EXTRASPEC_NAME_REGEX.match(key_name):
+            expl = _('Key Names can only contain alphanumeric characters, '
+                     'periods, dashes, underscores, colons and spaces.')
+            raise exception.InvalidInput(message=expl)

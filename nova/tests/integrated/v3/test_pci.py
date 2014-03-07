@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2013 Intel.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -19,6 +18,43 @@ from nova.tests.integrated.v3 import api_sample_base
 from nova.tests.integrated.v3 import test_servers
 
 
+fake_db_dev_1 = {
+    'created_at': None,
+    'updated_at': None,
+    'deleted_at': None,
+    'deleted': None,
+    'id': 1,
+    'compute_node_id': 1,
+    'address': '0000:04:10.0',
+    'vendor_id': '8086',
+    'product_id': '1520',
+    'dev_type': 'type-VF',
+    'status': 'available',
+    'dev_id': 'pci_0000_04_10_0',
+    'label': 'label_8086_1520',
+    'instance_uuid': '69ba1044-0766-4ec0-b60d-09595de034a1',
+    'extra_info': '{"key1": "value1", "key2": "value2"}'
+    }
+
+fake_db_dev_2 = {
+    'created_at': None,
+    'updated_at': None,
+    'deleted_at': None,
+    'deleted': None,
+    'id': 2,
+    'compute_node_id': 1,
+    'address': '0000:04:10.1',
+    'vendor_id': '8086',
+    'product_id': '1520',
+    'dev_type': 'type-VF',
+    'status': 'available',
+    'dev_id': 'pci_0000_04_10_1',
+    'label': 'label_8086_1520',
+    'instance_uuid': 'd5b446a6-a1b4-4d01-b4f0-eac37b3a62fc',
+    'extra_info': '{"key3": "value3", "key4": "value4"}'
+    }
+
+
 class ExtendedServerPciSampleJsonTest(test_servers.ServersSampleBase):
     extension_name = "os-pci"
 
@@ -37,10 +73,6 @@ class ExtendedServerPciSampleJsonTest(test_servers.ServersSampleBase):
         self._verify_response('servers-detail-resp', subs, response, 200)
 
 
-class ExtendedServerPciSampleXmlTest(ExtendedServerPciSampleJsonTest):
-    ctype = 'xml'
-
-
 class ExtendedHyervisorPciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
     extra_extensions_to_load = ['os-hypervisors']
     extension_name = 'os-pci'
@@ -50,6 +82,7 @@ class ExtendedHyervisorPciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
         self.fake_compute_node = {"cpu_info": "?",
                                   "current_workload": 0,
                                   "disk_available_least": 0,
+                                  "host_ip": "1.1.1.1",
                                   "free_disk_gb": 1028,
                                   "free_ram_mb": 7680,
                                   "hypervisor_hostname": "fake-mini",
@@ -111,5 +144,32 @@ class ExtendedHyervisorPciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
                               subs, response, 200)
 
 
-class ExtendedHyervisorPciSampleXmlTest(ExtendedHyervisorPciSampleJsonTest):
-    ctype = 'xml'
+class PciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
+    extension_name = "os-pci"
+
+    def _fake_pci_device_get_by_id(self, context, id):
+        return fake_db_dev_1
+
+    def _fake_pci_device_get_all_by_node(self, context, id):
+        return [fake_db_dev_1, fake_db_dev_2]
+
+    def test_pci_show(self):
+        self.stubs.Set(db, 'pci_device_get_by_id',
+                       self._fake_pci_device_get_by_id)
+        response = self._do_get('os-pci/1')
+        subs = self._get_regexes()
+        self._verify_response('pci-show-resp', subs, response, 200)
+
+    def test_pci_index(self):
+        self.stubs.Set(db, 'pci_device_get_all_by_node',
+                       self._fake_pci_device_get_all_by_node)
+        response = self._do_get('os-pci')
+        subs = self._get_regexes()
+        self._verify_response('pci-index-resp', subs, response, 200)
+
+    def test_pci_detail(self):
+        self.stubs.Set(db, 'pci_device_get_all_by_node',
+                       self._fake_pci_device_get_all_by_node)
+        response = self._do_get('os-pci/detail')
+        subs = self._get_regexes()
+        self._verify_response('pci-detail-resp', subs, response, 200)

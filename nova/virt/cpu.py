@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -25,8 +23,8 @@ LOG = logging.getLogger(__name__)
 
 virt_cpu_opts = [
     cfg.StrOpt('vcpu_pin_set',
-                help='Which pcpus can be used by vcpus of instance '
-                     'e.g: "4-12,^8,15"',
+                help='Defines which pcpus that instance vcpus can use. '
+               'For example, "4-12,^8,15"',
                 deprecated_group='libvirt'),
 ]
 
@@ -35,8 +33,7 @@ CONF.register_opts(virt_cpu_opts)
 
 
 def get_cpuset_ids():
-    """
-    Parsing vcpu_pin_set config.
+    """Parsing vcpu_pin_set config.
 
     Returns a list of pcpu ids can be used by instances.
     """

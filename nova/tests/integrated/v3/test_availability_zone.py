@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2013 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -47,7 +46,3 @@ class AvailabilityZoneJsonTest(test_servers.ServersSampleBase):
 
     def test_availability_zone_post(self):
         self._post_server()
-
-
-class AvailabilityZoneXmlTest(AvailabilityZoneJsonTest):
-    ctype = "xml"

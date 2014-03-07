@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -29,7 +27,6 @@ from nova import db
 import nova.db.api
 from nova.network import manager
 from nova.openstack.common import jsonutils
-from nova.openstack.common import rpc
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import fake_instance
@@ -78,9 +75,10 @@ class SchedulerHintsTestCase(test.TestCase):
         self.assertEqual(202, res.status_int)
 
     def test_create_server_with_hints(self):
+        hints = {'same_host': '48e6a9f6-30af-47e0-bc04-acaed113bb4e'}
 
         def fake_create(*args, **kwargs):
-            self.assertEqual(kwargs['scheduler_hints'], {'a': 'b'})
+            self.assertEqual(hints, kwargs['scheduler_hints'])
             return ([self.fake_instance], '')
 
         self.stubs.Set(nova.compute.api.API, 'create', fake_create)
@@ -93,8 +91,8 @@ class SchedulerHintsTestCase(test.TestCase):
                   'name': 'server_test',
                   'image_ref': 'cedef40a-ed67-4d10-800e-17455edce175',
                   'flavor_ref': '1',
+                  'os-scheduler-hints:scheduler_hints': hints,
             },
-            'os-scheduler-hints:scheduler_hints': {'a': 'b'},
         }
 
         req.body = jsonutils.dumps(body)
@@ -110,8 +108,8 @@ class SchedulerHintsTestCase(test.TestCase):
                   'name': 'server_test',
                   'image_ref': 'cedef40a-ed67-4d10-800e-17455edce175',
                   'flavor_ref': '1',
+                  'os-scheduler-hints:scheduler_hints': 'non-dict',
             },
-            'os-scheduler-hints:scheduler_hints': 'here',
         }
 
         req.body = jsonutils.dumps(body)
@@ -207,10 +205,8 @@ class ServersControllerCreateTest(test.TestCase):
                 fake_method)
         self.stubs.Set(db, 'instance_get', instance_get)
         self.stubs.Set(db, 'instance_update', instance_update)
-        self.stubs.Set(rpc, 'cast', fake_method)
         self.stubs.Set(db, 'instance_update_and_get_original',
                 server_update)
-        self.stubs.Set(rpc, 'queue_get_for', queue_get_for)
         self.stubs.Set(manager.VlanManager, 'allocate_fixed_ip',
                        fake_method)
 
@@ -227,13 +223,13 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         if override_controller:
-            server = override_controller.create(req, body).obj['server']
+            server = override_controller.create(req, body=body).obj['server']
         else:
-            server = self.controller.create(req, body).obj['server']
+            server = self.controller.create(req, body=body).obj['server']
 
     def test_create_instance_with_scheduler_hints_disabled(self):
-        hints = {'a': 'b'}
-        params = {'scheduler_hints': hints}
+        hints = {'same_host': '48e6a9f6-30af-47e0-bc04-acaed113bb4e'}
+        params = {'os-scheduler-hints:scheduler_hints': hints}
         old_create = compute_api.API.create
 
         def create(*args, **kwargs):
@@ -246,8 +242,8 @@ class ServersControllerCreateTest(test.TestCase):
                 override_controller=self.no_scheduler_hints_controller)
 
     def test_create_instance_with_scheduler_hints_enabled(self):
-        hints = {'a': 'b'}
-        params = {'scheduler_hints': hints}
+        hints = {'same_host': '48e6a9f6-30af-47e0-bc04-acaed113bb4e'}
+        params = {'os-scheduler-hints:scheduler_hints': hints}
         old_create = compute_api.API.create
 
         def create(*args, **kwargs):
@@ -256,72 +252,3 @@ class ServersControllerCreateTest(test.TestCase):
 
         self.stubs.Set(compute_api.API, 'create', create)
         self._test_create_extra(params)
-
-
-class TestServerCreateRequestXMLDeserializer(test.TestCase):
-
-    def setUp(self):
-        super(TestServerCreateRequestXMLDeserializer, self).setUp()
-        ext_info = plugins.LoadedExtensionInfo()
-        controller = servers.ServersController(extension_info=ext_info)
-        self.deserializer = servers.CreateDeserializer(controller)
-
-    def test_request_with_scheduler_hints_and_alternate_namespace_prefix(self):
-        serial_request = """
-<ns2:server xmlns:ns2="http://docs.openstack.org/compute/api/v3"
-     name="new-server-test"
-     image_ref="1"
-     flavor_ref="2">
-     <ns2:metadata><ns2:meta key="hello">world</ns2:meta></ns2:metadata>
-     <os:scheduler_hints
-     xmlns:os="http://docs.openstack.org/compute/ext/scheduler-hints/api/v3">
-             <hypervisor>xen</hypervisor>
-             <near>eb999657-dd6b-464e-8713-95c532ac3b18</near>
-     </os:scheduler_hints>
-     </ns2:server>
-        """
-        request = self.deserializer.deserialize(serial_request)
-        expected = {
-            "server": {
-                'os-scheduler-hints:scheduler_hints': {
-                    'hypervisor': ['xen'],
-                    'near': ['eb999657-dd6b-464e-8713-95c532ac3b18']
-                },
-                "name": "new-server-test",
-                "image_ref": "1",
-                "flavor_ref": "2",
-                "metadata": {
-                    "hello": "world"
-                }
-            }
-        }
-        self.assertEqual(request['body'], expected)
-
-    def test_request_with_scheduler_hints(self):
-        serial_request = """
-    <server xmlns="http://docs.openstack.org/compute/api/v3"
-     xmlns:os-scheduler-hints=
-     "http://docs.openstack.org/compute/ext/scheduler-hints/api/v3"
-     name="new-server-test" image_ref="1" flavor_ref="1">
-       <os-scheduler-hints:scheduler_hints>
-         <different_host>
-           7329b667-50c7-46a6-b913-cb2a09dfeee0
-         </different_host>
-         <different_host>
-           f31efb24-34d2-43e1-8b44-316052956a39
-         </different_host>
-       </os-scheduler-hints:scheduler_hints>
-    </server>"""
-        request = self.deserializer.deserialize(serial_request)
-        expected = {"server": {
-                "name": "new-server-test",
-                "image_ref": "1",
-                "flavor_ref": "1",
-                "os-scheduler-hints:scheduler_hints": {
-                    "different_host": [
-                        "7329b667-50c7-46a6-b913-cb2a09dfeee0",
-                        "f31efb24-34d2-43e1-8b44-316052956a39",
-                    ]
-                }
-                }}
-        self.assertEqual(request['body'], expected)

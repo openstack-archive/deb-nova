@@ -27,6 +27,7 @@ from nova.objects import pci_device
 from nova.objects import security_group
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova import utils
 
 from oslo.config import cfg
@@ -73,7 +74,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
     # Version 1.9: Make uuid a non-None real string
     # Version 1.10: Added use_slave to refresh and get_by_uuid
     # Version 1.11: Update instance from database during destroy
-    VERSION = '1.11'
+    # Version 1.12: Added ephemeral_key_uuid
+    # Version 1.13: Added delete_metadata_key()
+    VERSION = '1.13'
 
     fields = {
         'id': fields.IntegerField(),
@@ -98,6 +101,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         'vcpus': fields.IntegerField(nullable=True),
         'root_gb': fields.IntegerField(nullable=True),
         'ephemeral_gb': fields.IntegerField(nullable=True),
+        'ephemeral_key_uuid': fields.UUIDField(nullable=True),
 
         'host': fields.StringField(nullable=True),
         'node': fields.StringField(nullable=True),
@@ -166,15 +170,17 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         super(Instance, self).__init__(*args, **kwargs)
         self._reset_metadata_tracking()
 
-    def _reset_metadata_tracking(self):
-        self._orig_system_metadata = (dict(self.system_metadata) if
-                                      'system_metadata' in self else {})
-        self._orig_metadata = (dict(self.metadata) if
-                               'metadata' in self else {})
+    def _reset_metadata_tracking(self, fields=None):
+        if fields is None or 'system_metadata' in fields:
+            self._orig_system_metadata = (dict(self.system_metadata) if
+                                          'system_metadata' in self else {})
+        if fields is None or 'metadata' in fields:
+            self._orig_metadata = (dict(self.metadata) if
+                                   'metadata' in self else {})
 
     def obj_reset_changes(self, fields=None):
         super(Instance, self).obj_reset_changes(fields)
-        self._reset_metadata_tracking()
+        self._reset_metadata_tracking(fields=fields)
 
     def obj_what_changed(self):
         changes = super(Instance, self).obj_what_changed()
@@ -184,6 +190,13 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                                           self._orig_system_metadata):
             changes.add('system_metadata')
         return changes
+
+    @classmethod
+    def _obj_from_primitive(cls, context, objver, primitive):
+        self = super(Instance, cls)._obj_from_primitive(context, objver,
+                                                        primitive)
+        self._reset_metadata_tracking()
+        return self
 
     def obj_make_compatible(self, primitive, target_version):
         target_version = (int(target_version.split('.')[0]),
@@ -266,9 +279,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                     context, instance.uuid))
 
         if 'pci_devices' in expected_attrs:
-            pci_devices = pci_device._make_pci_list(
+            pci_devices = base.obj_make_list(
                     context, pci_device.PciDeviceList(),
-                    db_inst['pci_devices'])
+                    pci_device.PciDevice, db_inst['pci_devices'])
             instance['pci_devices'] = pci_devices
         if 'info_cache' in expected_attrs:
             if db_inst['info_cache'] is None:
@@ -281,9 +294,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                 instance_info_cache.InstanceInfoCache._from_db_object(
                     context, instance.info_cache, db_inst['info_cache'])
         if 'security_groups' in expected_attrs:
-            sec_groups = security_group._make_secgroup_list(
+            sec_groups = base.obj_make_list(
                     context, security_group.SecurityGroupList(),
-                    db_inst['security_groups'])
+                    security_group.SecurityGroup, db_inst['security_groups'])
             instance['security_groups'] = sec_groups
 
         instance._context = context
@@ -538,6 +551,24 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             self.system_metadata, "%s_" % namespace)
         self.save()
 
+    @base.remotable
+    def delete_metadata_key(self, context, key):
+        """Optimized metadata delete method.
+
+        This provides a more efficient way to delete a single metadata
+        key, instead of just calling instance.save(). This should be called
+        with the key still present in self.metadata, which it will update
+        after completion.
+        """
+        db.instance_metadata_delete(context, self.uuid, key)
+        md_was_changed = 'metadata' in self.obj_what_changed()
+        del self.metadata[key]
+        self._orig_metadata.pop(key, None)
+        instance_dict = base.obj_to_primitive(self)
+        notifications.send_update(context, instance_dict, instance_dict)
+        if not md_was_changed:
+            self.obj_reset_changes(['metadata'])
+
 
 def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):
     get_fault = expected_attrs and 'fault' in expected_attrs
@@ -569,7 +600,10 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     #              Instance <= version 1.9
     # Version 1.2: Instance <= version 1.11
     # Version 1.3: Added use_slave to get_by_filters
-    VERSION = '1.3'
+    # Version 1.4: Instance <= version 1.12
+    # Version 1.5: Added method get_active_by_window_joined.
+    # Version 1.6: Instance <= version 1.13
+    VERSION = '1.6'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
@@ -579,6 +613,9 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         # NOTE(danms): Instance was at 1.9 before we added this
         '1.2': '1.11',
         '1.3': '1.11',
+        '1.4': '1.12',
+        '1.5': '1.12',
+        '1.6': '1.13',
         }
 
     @base.remotable_classmethod
@@ -622,6 +659,45 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
                                                              reboot_window)
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
+
+    @base.remotable_classmethod
+    def _get_active_by_window_joined(cls, context, begin, end=None,
+                                    project_id=None, host=None,
+                                    expected_attrs=None):
+        # NOTE(mriedem): We need to convert the begin/end timestamp strings
+        # to timezone-aware datetime objects for the DB API call.
+        begin = timeutils.parse_isotime(begin)
+        end = timeutils.parse_isotime(end) if end else None
+        db_inst_list = db.instance_get_active_by_window_joined(context,
+                                                               begin,
+                                                               end,
+                                                               project_id,
+                                                               host)
+        return _make_instance_list(context, cls(), db_inst_list,
+                                   expected_attrs)
+
+    @classmethod
+    def get_active_by_window_joined(cls, context, begin, end=None,
+                                    project_id=None, host=None,
+                                    expected_attrs=None):
+        """Get instances and joins active during a certain time window.
+
+        :param context: nova request context
+        :param begin: datetime for the start of the time window
+        :param end: datetime for the end of the time window
+        :param project_id: used to filter instances by project
+        :param host: used to filter instances on a given compute host
+        :param expected_attrs: list of related fields that can be joined
+        in the database layer when querying for instances
+        :returns: InstanceList
+        """
+        # NOTE(mriedem): We have to convert the datetime objects to string
+        # primitives for the remote call.
+        begin = timeutils.isotime(begin)
+        end = timeutils.isotime(end) if end else None
+        return cls._get_active_by_window_joined(context, begin, end,
+                                                project_id, host,
+                                                expected_attrs)
 
     @base.remotable_classmethod
     def get_by_security_group_id(cls, context, security_group_id):

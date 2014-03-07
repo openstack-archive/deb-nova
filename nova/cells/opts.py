@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 Rackspace Hosting
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -27,13 +25,13 @@ cells_opts = [
                 help='Enable cell functionality'),
     cfg.StrOpt('topic',
                 default='cells',
-                help='the topic cells nodes listen on'),
+                help='The topic cells nodes listen on'),
     cfg.StrOpt('manager',
                default='nova.cells.manager.CellsManager',
                help='Manager for cells'),
     cfg.StrOpt('name',
                 default='nova',
-                help='name of this cell'),
+                help='Name of this cell'),
     cfg.ListOpt('capabilities',
                 default=['hypervisor=xenserver;kvm', 'os=linux;windows'],
                 help='Key/Multi-value list with the capabilities of the cell'),

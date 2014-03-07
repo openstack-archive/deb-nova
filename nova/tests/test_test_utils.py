@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 #    Copyright 2010 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,6 +14,7 @@
 
 import errno
 import socket
+import tempfile
 
 import fixtures
 
@@ -57,7 +56,7 @@ class TestUtilsTestCase(test.TestCase):
             raise e
 
         def fake_socket_ok(x, y):
-            return
+            return tempfile.TemporaryFile()
 
         with fixtures.MonkeyPatch('socket.socket', fake_socket_fail):
             self.assertFalse(test_utils.is_ipv6_supported())

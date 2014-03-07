@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # Copyright 2012 Justin Santa Barbara
 #
@@ -16,7 +14,6 @@
 #    under the License.
 
 import datetime
-from lxml import etree
 from oslo.config import cfg
 import uuid
 import webob
@@ -24,7 +21,6 @@ import webob
 from nova.api.openstack.compute import plugins
 from nova.api.openstack.compute.plugins.v3 import security_groups
 from nova.api.openstack.compute.plugins.v3 import servers
-from nova.api.openstack import xmlutil
 from nova import compute
 from nova.compute import api as compute_api
 from nova.compute import flavors
@@ -33,7 +29,6 @@ from nova import exception
 from nova.network import manager
 from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
-from nova.openstack.common import rpc
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import fake_instance
@@ -184,48 +179,6 @@ class SecurityGroupsOutputTest(test.TestCase):
         self.assertEqual(res.status_int, 404)
 
 
-class SecurityGroupsOutputXmlTest(SecurityGroupsOutputTest):
-    content_type = 'application/xml'
-
-    class MinimalCreateServerTemplate(xmlutil.TemplateBuilder):
-        def construct(self):
-            root = xmlutil.TemplateElement('server', selector='server')
-            root.set('name')
-            root.set('id')
-            root.set('image_ref')
-            root.set('flavor_ref')
-            secgrps = xmlutil.SubTemplateElement(root,
-                '{%s}security_groups' %
-                security_groups.SecurityGroups.namespace)
-            secgrp = xmlutil.SubTemplateElement(
-                secgrps, 'security_group',
-                selector="os-security-groups:security_groups")
-            secgrp.set('name')
-            alias = security_groups.SecurityGroups.alias
-            namespace = security_groups.SecurityGroups.namespace
-            return xmlutil.MasterTemplate(root, 1,
-                                          nsmap={None: xmlutil.XMLNS_V11,
-                                                 alias: namespace})
-
-    def _encode_body(self, body):
-        serializer = self.MinimalCreateServerTemplate()
-        return serializer.serialize(body)
-
-    def _get_server(self, body):
-        return etree.XML(body)
-
-    def _get_servers(self, body):
-        return etree.XML(body).getchildren()
-
-    def _get_groups(self, server):
-        # NOTE(vish): we are adding security groups without an extension
-        #             namespace so we don't break people using the existing
-        #             functionality, but that means we need to use find with
-        #             the existing server namespace.
-        namespace = server.nsmap[None]
-        return server.find('{%s}security_groups' % namespace).getchildren()
-
-
 class ServersControllerCreateTest(test.TestCase):
 
     def setUp(self):
@@ -314,10 +267,8 @@ class ServersControllerCreateTest(test.TestCase):
                        fake_method)
         self.stubs.Set(db, 'instance_get', instance_get)
         self.stubs.Set(db, 'instance_update', instance_update)
-        self.stubs.Set(rpc, 'cast', fake_method)
         self.stubs.Set(db, 'instance_update_and_get_original',
                        server_update)
-        self.stubs.Set(rpc, 'queue_get_for', queue_get_for)
         self.stubs.Set(manager.VlanManager, 'allocate_fixed_ip',
                        fake_method)
 
@@ -334,9 +285,9 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         if override_controller:
-            server = override_controller.create(req, body).obj['server']
+            server = override_controller.create(req, body=body).obj['server']
         else:
-            server = self.controller.create(req, body).obj['server']
+            server = self.controller.create(req, body=body).obj['server']
 
     def test_create_instance_with_security_group_enabled(self):
         group = 'foo'
@@ -379,36 +330,3 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', create)
         self._test_create_extra(params,
             override_controller=self.no_security_groups_controller)
-
-
-class TestServerCreateRequestXMLDeserializer(test.TestCase):
-
-    def setUp(self):
-        super(TestServerCreateRequestXMLDeserializer, self).setUp()
-        ext_info = plugins.LoadedExtensionInfo()
-        controller = servers.ServersController(extension_info=ext_info)
-        self.deserializer = servers.CreateDeserializer(controller)
-
-    def test_request_with_security_groups(self):
-        serial_request = """
-    <server xmlns="http://docs.openstack.org/compute/api/v3"
-        name="security_groups_test"
-        image_ref="1"
-        flavor_ref="1">
-    <os:security_groups xmlns:os="%(namespace)s">
-       <security_group name="sg1"/>
-       <security_group name="sg2"/>
-    </os:security_groups>
-    </server>""" % {
-            'namespace': security_groups.SecurityGroups.namespace}
-        request = self.deserializer.deserialize(serial_request)
-        expected = {
-            "server": {
-            "name": "security_groups_test",
-            "image_ref": "1",
-            "flavor_ref": "1",
-            security_groups.ATTRIBUTE_NAME: [{"name": "sg1"},
-                                {"name": "sg2"}]
-            },
-        }
-        self.assertEqual(request['body'], expected)

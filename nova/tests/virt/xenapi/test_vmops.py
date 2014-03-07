@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -21,6 +19,7 @@ import mock
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
+from nova.pci import pci_manager
 from nova import test
 from nova.tests.virt.xenapi import stubs
 from nova.virt import fake
@@ -43,7 +42,7 @@ class VMOpsTestBase(stubs.XenAPITestBaseNoDB):
                                                      'test_pass')
         self.vmops = vmops.VMOps(self._session, fake.FakeVirtAPI())
 
-    def create_vm(self, name, state="running"):
+    def create_vm(self, name, state="Running"):
         vm_ref = xenapi_fake.create_vm(name, state)
         self.vms.append(vm_ref)
         vm = xenapi_fake.get_record("VM", vm_ref)
@@ -218,6 +217,8 @@ class SpawnTestCase(VMOpsTestBase):
         self.mox.StubOutWithMock(self.vmops, '_create_vm_record')
         self.mox.StubOutWithMock(self.vmops, '_destroy')
         self.mox.StubOutWithMock(self.vmops, '_attach_disks')
+        self.mox.StubOutWithMock(pci_manager, 'get_instance_pci_devs')
+        self.mox.StubOutWithMock(vm_utils, 'set_other_config_pci')
         self.mox.StubOutWithMock(self.vmops, '_attach_orig_disk_for_rescue')
         self.mox.StubOutWithMock(self.vmops, 'inject_network_info')
         self.mox.StubOutWithMock(self.vmops, '_inject_hostname')
@@ -238,8 +239,8 @@ class SpawnTestCase(VMOpsTestBase):
                                  'apply_instance_filter')
 
     def _test_spawn(self, name_label_param=None, block_device_info_param=None,
-                    rescue=False, include_root_vdi=True,
-                    throw_exception=None):
+                    rescue=False, include_root_vdi=True, throw_exception=None,
+                    attach_pci_dev=False):
         self._stub_out_common()
 
         instance = {"name": "dummy", "uuid": "fake_uuid"}
@@ -295,6 +296,30 @@ class SpawnTestCase(VMOpsTestBase):
 
         self.vmops._attach_disks(instance, vm_ref, name_label, vdis, di_type,
                           network_info, admin_password, injected_files)
+        if attach_pci_dev:
+            fake_dev = {
+                'created_at': None,
+                'updated_at': None,
+                'deleted_at': None,
+                'deleted': None,
+                'id': 1,
+                'compute_node_id': 1,
+                'address': '00:00.0',
+                'vendor_id': '1234',
+                'product_id': 'abcd',
+                'dev_type': 'type-PCI',
+                'status': 'available',
+                'dev_id': 'devid',
+                'label': 'label',
+                'instance_uuid': None,
+                'extra_info': '{}',
+            }
+            pci_manager.get_instance_pci_devs(instance).AndReturn([fake_dev])
+            vm_utils.set_other_config_pci(self.vmops._session,
+                                          vm_ref,
+                                          "0/0000:00:00.0")
+        else:
+            pci_manager.get_instance_pci_devs(instance).AndReturn([])
         step += 1
         self.vmops._update_instance_progress(context, instance, step, steps)
 
@@ -356,6 +381,9 @@ class SpawnTestCase(VMOpsTestBase):
                          name_label_param="bob",
                          block_device_info_param={"root_device_name": ""})
 
+    def test_spawn_with_pci_available_on_the_host(self):
+        self._test_spawn(attach_pci_dev=True)
+
     def test_spawn_performs_rollback_and_throws_exception(self):
         self.assertRaises(test.TestingException, self._test_spawn,
                           throw_exception=test.TestingException())
@@ -403,6 +431,7 @@ class SpawnTestCase(VMOpsTestBase):
         self.vmops._attach_disks(instance, vm_ref, name_label, vdis, di_type,
                                  network_info, None, None)
         self.vmops._attach_mapped_block_devices(instance, block_device_info)
+        pci_manager.get_instance_pci_devs(instance).AndReturn([])
 
         self.vmops._inject_instance_metadata(instance, vm_ref)
         self.vmops._inject_auto_disk_config(instance, vm_ref)
@@ -523,12 +552,13 @@ class SpawnTestCase(VMOpsTestBase):
         instance = {"uuid": "uuid"}
         vm_ref = "vm_ref"
 
-        self.mox.StubOutWithMock(self.vmops, 'get_info')
+        self.mox.StubOutWithMock(vm_utils, 'get_power_state')
         self.mox.StubOutWithMock(greenthread, 'sleep')
-        self.vmops.get_info(instance, vm_ref).AndReturn({"state": "asdf"})
+        vm_utils.get_power_state(self._session, vm_ref).AndReturn(
+                                             power_state.SHUTDOWN)
         greenthread.sleep(0.5)
-        self.vmops.get_info(instance, vm_ref).AndReturn({
-                                            "state": power_state.RUNNING})
+        vm_utils.get_power_state(self._session, vm_ref).AndReturn(
+                                            power_state.RUNNING)
 
         self.mox.ReplayAll()
         self.vmops._wait_for_instance_to_start(instance, vm_ref)
@@ -621,7 +651,7 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
 class MigrateDiskResizingUpTestCase(VMOpsTestBase):
     def _fake_snapshot_attached_here(self, session, instance, vm_ref, label,
                                      userdevice, post_snapshot_callback):
-        self.assertTrue(isinstance(instance, dict))
+        self.assertIsInstance(instance, dict)
         if userdevice == '0':
             self.assertEqual("vm_ref", vm_ref)
             self.assertEqual("fake-snapshot", label)
@@ -660,10 +690,13 @@ class MigrateDiskResizingUpTestCase(VMOpsTestBase):
                                     dest, sr_path, 0)]
         self.assertEqual(m_vhd_expected, mock_migrate_vhd.call_args_list)
 
-        prog_expected = [mock.call(context, instance, 1, 5),
-                         mock.call(context, instance, 2, 5),
-                         mock.call(context, instance, 3, 5),
-                         mock.call(context, instance, 4, 5)]
+        prog_expected = [
+            mock.call(context, instance, 1, 5),
+            mock.call(context, instance, 2, 5),
+            mock.call(context, instance, 3, 5),
+            mock.call(context, instance, 4, 5)
+            # 5/5: step to be executed by finish migration.
+            ]
         self.assertEqual(prog_expected, mock_update_progress.call_args_list)
 
     def test_migrate_disk_resizing_up_works_with_two_ephemeral(self,
@@ -703,10 +736,13 @@ class MigrateDiskResizingUpTestCase(VMOpsTestBase):
                                     "5-leaf", dest, sr_path, 0, 2)]
         self.assertEqual(m_vhd_expected, mock_migrate_vhd.call_args_list)
 
-        prog_expected = [mock.call(context, instance, 1, 5),
-                         mock.call(context, instance, 2, 5),
-                         mock.call(context, instance, 3, 5),
-                         mock.call(context, instance, 4, 5)]
+        prog_expected = [
+            mock.call(context, instance, 1, 5),
+            mock.call(context, instance, 2, 5),
+            mock.call(context, instance, 3, 5),
+            mock.call(context, instance, 4, 5)
+            # 5/5: step to be executed by finish migration.
+            ]
         self.assertEqual(prog_expected, mock_update_progress.call_args_list)
 
     @mock.patch.object(vmops.VMOps, '_restore_orig_vm_and_cleanup_orphan')
@@ -845,3 +881,70 @@ class ResizeVdisTestCase(VMOpsTestBase):
                                             4, 2000)
         mock_generate.assert_called_once_with(self.vmops._session, instance,
                                               None, 5, 1000)
+
+
+@mock.patch.object(vmops.VMOps, '_resize_ensure_vm_is_shutdown')
+@mock.patch.object(vmops.VMOps, '_apply_orig_vm_name_label')
+@mock.patch.object(vmops.VMOps, '_update_instance_progress')
+@mock.patch.object(vm_utils, 'get_vdi_for_vm_safely')
+@mock.patch.object(vm_utils, 'resize_disk')
+@mock.patch.object(vm_utils, 'migrate_vhd')
+@mock.patch.object(vm_utils, 'destroy_vdi')
+class MigrateDiskResizingDownTestCase(VMOpsTestBase):
+    def test_migrate_disk_resizing_down_works_no_ephemeral(
+        self,
+        mock_destroy_vdi,
+        mock_migrate_vhd,
+        mock_resize_disk,
+        mock_get_vdi_for_vm_safely,
+        mock_update_instance_progress,
+        mock_apply_orig_vm_name_label,
+        mock_resize_ensure_vm_is_shutdown):
+
+        context = "ctx"
+        instance = {"name": "fake", "uuid": "uuid"}
+        dest = "dest"
+        vm_ref = "vm_ref"
+        sr_path = "sr_path"
+        instance_type = dict(root_gb=1)
+        old_vdi_ref = "old_ref"
+        new_vdi_ref = "new_ref"
+        new_vdi_uuid = "new_uuid"
+
+        mock_get_vdi_for_vm_safely.return_value = (old_vdi_ref, None)
+        mock_resize_disk.return_value = (new_vdi_ref, new_vdi_uuid)
+
+        self.vmops._migrate_disk_resizing_down(context, instance, dest,
+                                               instance_type, vm_ref, sr_path)
+
+        mock_get_vdi_for_vm_safely.assert_called_once_with(
+            self.vmops._session,
+            vm_ref)
+        mock_resize_ensure_vm_is_shutdown.assert_called_once_with(
+            instance, vm_ref)
+        mock_apply_orig_vm_name_label.assert_called_once_with(
+            instance, vm_ref)
+        mock_resize_disk.assert_called_once_with(
+            self.vmops._session,
+            instance,
+            old_vdi_ref,
+            instance_type)
+        mock_migrate_vhd.assert_called_once_with(
+            self.vmops._session,
+            instance,
+            new_vdi_uuid,
+            dest,
+            sr_path, 0)
+        mock_destroy_vdi.assert_called_once_with(
+            self.vmops._session,
+            new_vdi_ref)
+
+        prog_expected = [
+            mock.call(context, instance, 1, 5),
+            mock.call(context, instance, 2, 5),
+            mock.call(context, instance, 3, 5),
+            mock.call(context, instance, 4, 5)
+            # 5/5: step to be executed by finish migration.
+            ]
+        self.assertEqual(prog_expected,
+                         mock_update_instance_progress.call_args_list)

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
 #
@@ -25,7 +23,8 @@ Collection of classes to handle image upload/download to/from Image service
 import httplib
 import urllib
 import urllib2
-import urlparse
+
+import six.moves.urllib.parse as urlparse
 
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
@@ -87,10 +86,6 @@ class VMwareHTTPFile(object):
             self.file_handle.close()
         except Exception as exc:
             LOG.exception(exc)
-
-    def __del__(self):
-        """Close the file handle on garbage collection."""
-        self.close()
 
     def _build_vim_cookie_headers(self, vim_cookies):
         """Build ESX host session cookie headers."""

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 #    Copyright (C) 2012 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -203,4 +201,15 @@ class VirtDiskVFSGuestFSTest(test.NoDBTestCase):
         self.assertEqual(vfs.handle.files["/some/file"]["uid"], 110)
         self.assertEqual(vfs.handle.files["/some/file"]["gid"], 600)
 
+        vfs.teardown()
+
+    def test_close_on_error(self):
+        vfs = vfsimpl.VFSGuestFS(imgfile="/dummy.qcow2", imgfmt="qcow2")
+        vfs.setup()
+        self.assertFalse(vfs.handle.kwargs['close_on_exit'])
+        vfs.teardown()
+        self.stubs.Set(fakeguestfs.GuestFS, 'SUPPORT_CLOSE_ON_EXIT', False)
+        vfs = vfsimpl.VFSGuestFS(imgfile="/dummy.qcow2", imgfmt="qcow2")
+        vfs.setup()
+        self.assertNotIn('close_on_exit', vfs.handle.kwargs)
         vfs.teardown()

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -133,8 +131,7 @@ class FloatingIPBulkController(object):
         return {"floating_ips_bulk_delete": ip_range}
 
     def _address_to_hosts(self, addresses):
-        """
-        Iterate over hosts within an address range.
+        """Iterate over hosts within an address range.
 
         If an explicit range specifier is missing, the parameter is
         interpreted as a specific individual address.
@@ -161,9 +158,6 @@ class Floating_ips_bulk(extensions.ExtensionDescriptor):
     namespace = ("http://docs.openstack.org/compute/ext/"
                  "floating_ips_bulk/api/v2")
     updated = "2012-10-29T13:25:27-06:00"
-
-    def __init__(self, ext_mgr):
-        ext_mgr.register(self)
 
     def get_resources(self):
         resources = []

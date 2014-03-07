@@ -73,8 +73,7 @@ class AggregateController(wsgi.Controller):
     @extensions.expected_errors((400, 409))
     @wsgi.response(201)
     def create(self, req, body):
-        """
-        Creates an aggregate, given its name and
+        """Creates an aggregate, given its name and
         optional availability zone.
         """
         context = _get_context(req)
@@ -139,6 +138,8 @@ class AggregateController(wsgi.Controller):
             aggregate = self.api.update_aggregate(context, id, updates)
         except exception.AggregateNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InvalidAggregateAction as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         return self._marshall_aggregate(aggregate)
 
@@ -209,6 +210,8 @@ class AggregateController(wsgi.Controller):
                                                            id, metadata)
         except exception.AggregateNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InvalidAggregateAction as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         return self._marshall_aggregate(aggregate)
 
@@ -227,7 +230,6 @@ class Aggregates(extensions.V3APIExtensionBase):
 
     name = "Aggregates"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/aggregates/api/v3"
     version = 1
 
     def get_resources(self):

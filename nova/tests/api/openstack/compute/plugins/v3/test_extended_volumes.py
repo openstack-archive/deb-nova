@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -15,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from lxml import etree
 import webob
 
 from nova.api.openstack.compute.plugins.v3 import extended_volumes
@@ -56,28 +53,32 @@ def fake_compute_get_instance_bdms(*args, **kwargs):
     return [{'volume_id': UUID1}, {'volume_id': UUID2}]
 
 
-def fake_attach_volume(self, context, instance, volume_id, device):
+def fake_attach_volume(self, context, instance, volume_id,
+                       device, disk_bus, device_type):
     pass
 
 
 def fake_attach_volume_not_found_vol(self, context, instance, volume_id,
-                                     device):
+                                     device, disk_bus, device_type):
     raise exception.VolumeNotFound(volume_id=volume_id)
 
 
 def fake_attach_volume_invalid_device_path(self, context, instance,
-                                           volume_id, device):
+                                           volume_id, device, disk_bus,
+                                           device_type):
     raise exception.InvalidDevicePath(path=device)
 
 
 def fake_attach_volume_instance_invalid_state(self, context, instance,
-                                              volume_id, device):
+                                              volume_id, device, disk_bus,
+                                              device_type):
     raise exception.InstanceInvalidState(instance_uuid=UUID1, state='',
                                          method='', attr='')
 
 
 def fake_attach_volume_invalid_volume(self, context, instance,
-                                      volume_id, device):
+                                      volume_id, device, disk_bus,
+                                      device_type):
     raise exception.InvalidVolume(reason='')
 
 
@@ -102,6 +103,12 @@ def fake_swap_volume_unattached_volume(self, context, instance,
 
 def fake_detach_volume_invalid_volume(self, context, instance, volume):
     raise exception.InvalidVolume(reason='')
+
+
+def fake_swap_volume_instance_invalid_state(self, context, instance,
+                                              volume_id, device):
+    raise exception.InstanceInvalidState(instance_uuid=UUID1, state='',
+                                         method='', attr='')
 
 
 def fake_volume_get(*args, **kwargs):
@@ -157,9 +164,6 @@ class ExtendedVolumesTest(test.TestCase):
         exp_volumes = [{'id': UUID1}, {'id': UUID2}]
         if self.content_type == 'application/json':
             actual = server.get('%svolumes_attached' % self.prefix)
-        elif self.content_type == 'application/xml':
-            actual = [dict(elem.items()) for elem in
-                      server.findall('%svolume_attached' % self.prefix)]
         self.assertEqual(exp_volumes, actual)
 
     def test_detail(self):
@@ -171,9 +175,6 @@ class ExtendedVolumesTest(test.TestCase):
         for i, server in enumerate(self._get_servers(res.body)):
             if self.content_type == 'application/json':
                 actual = server.get('%svolumes_attached' % self.prefix)
-            elif self.content_type == 'application/xml':
-                actual = [dict(elem.items()) for elem in
-                          server.findall('%svolume_attached' % self.prefix)]
             self.assertEqual(exp_volumes, actual)
 
     def test_detach(self):
@@ -233,6 +234,13 @@ class ExtendedVolumesTest(test.TestCase):
                        fakes.fake_actions_to_locked_server)
         res = self._make_request(url, {"attach": {"volume_id": UUID1}})
         self.assertEqual(res.status_int, 409)
+
+    def test_attach_volume_disk_bus_and_disk_dev(self):
+        url = "/v3/servers/%s/action" % UUID1
+        res = self._make_request(url, {"attach": {"volume_id": UUID1,
+                                                  "device": "/dev/vdb",
+                                                  "disk_bus": "ide",
+                                                  "device_type": "cdrom"}})
 
     def test_attach_volume_with_bad_id(self):
         url = "/v3/servers/%s/action" % UUID1
@@ -348,7 +356,7 @@ class ExtendedVolumesTest(test.TestCase):
 
     def test_swap_volume_with_bad_state_instance(self):
         self.stubs.Set(compute.api.API, 'swap_volume',
-                       fake_attach_volume_instance_invalid_state)
+                       fake_swap_volume_instance_invalid_state)
         self.assertRaises(webob.exc.HTTPConflict, self._test_swap)
 
     def test_swap_volume_no_attachment(self):
@@ -359,14 +367,3 @@ class ExtendedVolumesTest(test.TestCase):
         self.stubs.Set(compute.api.API, 'swap_volume', fake_swap_volume)
         self.stubs.Set(volume.cinder.API, 'get', fake_volume_get_not_found)
         self.assertRaises(webob.exc.HTTPNotFound, self._test_swap)
-
-
-class ExtendedVolumesXmlTest(ExtendedVolumesTest):
-    content_type = 'application/xml'
-    prefix = '{%s}' % extended_volumes.ExtendedVolumes.namespace
-
-    def _get_server(self, body):
-        return etree.XML(body)
-
-    def _get_servers(self, body):
-        return etree.XML(body).getchildren()

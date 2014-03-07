@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # Copyright 2011 Grid Dynamics
 # Copyright 2011 Eldar Nugaev, Kirill Shileev, Ilya Alekseyev
@@ -16,16 +14,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import re
 import webob
 
+from nova.api.openstack import common
+from nova.api.openstack.compute.schemas.v3 import console_output
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import compute
 from nova import exception
 from nova.openstack.common.gettextutils import _
 
-ALIAS = "console-output"
+ALIAS = "os-console-output"
 authorize = extensions.extension_authorizer('compute', "v3:" + ALIAS)
 
 
@@ -36,32 +36,14 @@ class ConsoleOutputController(wsgi.Controller):
 
     @extensions.expected_errors((400, 404, 409, 501))
     @wsgi.action('get_console_output')
+    @validation.schema(console_output.get_console_output)
     def get_console_output(self, req, id, body):
         """Get text console output."""
         context = req.environ['nova.context']
         authorize(context)
 
-        try:
-            instance = self.compute_api.get(context, id)
-        except exception.InstanceNotFound as e:
-            raise webob.exc.HTTPNotFound(explanation=e.format_message())
-
-        try:
-            length = body['get_console_output'].get('length')
-        except (TypeError, KeyError):
-            raise webob.exc.HTTPBadRequest(_('get_console_output malformed '
-                                             'or missing from request body'))
-
-        if length is not None:
-            try:
-                # NOTE(maurosr): cast length into a string before cast into an
-                # integer to avoid thing like: int(2.5) which is 2 instead of
-                # raise ValueError like it would when we try int("2.5"). This
-                # can be removed once we have api validation landed.
-                int(str(length))
-            except ValueError:
-                raise webob.exc.HTTPBadRequest(_('Length in request body must '
-                                                 'be an integer value'))
+        instance = common.get_instance(self.compute_api, context, id)
+        length = body['get_console_output'].get('length')
 
         try:
             output = self.compute_api.get_console_output(context,
@@ -73,10 +55,6 @@ class ConsoleOutputController(wsgi.Controller):
             msg = _("Unable to get console log, functionality not implemented")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
 
-        # XML output is not correctly escaped, so remove invalid characters
-        remove_re = re.compile('[\x00-\x08\x0B-\x1F]')
-        output = remove_re.sub('', output)
-
         return {'output': output}
 
 
@@ -85,8 +63,6 @@ class ConsoleOutput(extensions.V3APIExtensionBase):
 
     name = "ConsoleOutput"
     alias = ALIAS
-    namespace = ("http://docs.openstack.org/compute/core/"
-                 "console-output/api/v3")
     version = 1
 
     def get_controller_extensions(self):

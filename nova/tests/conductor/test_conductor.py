@@ -18,6 +18,7 @@
 import contextlib
 import mock
 import mox
+from oslo import messaging
 
 from nova.api.ec2 import ec2utils
 from nova.compute import flavors
@@ -39,11 +40,12 @@ from nova.objects import fields
 from nova.objects import instance as instance_obj
 from nova.objects import migration as migration_obj
 from nova.openstack.common import jsonutils
-from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
 from nova import quota
+from nova import rpc
 from nova.scheduler import utils as scheduler_utils
 from nova import test
+from nova.tests import cast_as_call
 from nova.tests.compute import test_compute
 from nova.tests import fake_instance
 from nova.tests import fake_instance_actions
@@ -73,6 +75,14 @@ class _BaseTestCase(object):
 
         fake_notifier.stub_notifier(self.stubs)
         self.addCleanup(fake_notifier.reset)
+
+        def fake_deserialize_context(serializer, ctxt_dict):
+            self.assertEqual(self.context.user_id, ctxt_dict['user_id'])
+            self.assertEqual(self.context.project_id, ctxt_dict['project_id'])
+            return self.context
+
+        self.stubs.Set(rpc.RequestContextSerializer, 'deserialize_context',
+                       fake_deserialize_context)
 
     def _create_fake_instance(self, params=None, type_name='m1.tiny'):
         if not params:
@@ -277,13 +287,6 @@ class _BaseTestCase(object):
         self.conductor.instance_info_cache_delete(self.context,
                                                   {'uuid': 'fake-uuid'})
 
-    def test_flavor_get(self):
-        self.mox.StubOutWithMock(db, 'flavor_get')
-        db.flavor_get(self.context, 'fake-id').AndReturn('fake-type')
-        self.mox.ReplayAll()
-        result = self.conductor.instance_type_get(self.context, 'fake-id')
-        self.assertEqual(result, 'fake-type')
-
     def test_vol_get_usage_by_time(self):
         self.mox.StubOutWithMock(db, 'vol_get_usage_by_time')
         db.vol_get_usage_by_time(self.context, 'fake-time').AndReturn(
@@ -337,12 +340,23 @@ class _BaseTestCase(object):
     def test_compute_node_update(self):
         node = {'id': 'fake-id'}
         self.mox.StubOutWithMock(db, 'compute_node_update')
-        db.compute_node_update(self.context, node['id'], 'fake-values',
-                               False).AndReturn('fake-result')
+        db.compute_node_update(self.context, node['id'], {'fake': 'values'}).\
+                               AndReturn('fake-result')
         self.mox.ReplayAll()
         result = self.conductor.compute_node_update(self.context, node,
-                                                    'fake-values', False)
+                                                    {'fake': 'values'}, False)
         self.assertEqual(result, 'fake-result')
+
+    def test_compute_node_update_with_non_json_stats(self):
+        node = {'id': 'fake-id'}
+        fake_input = {'stats': {'a': 'b'}}
+        fake_vals = {'stats': jsonutils.dumps(fake_input['stats'])}
+        self.mox.StubOutWithMock(db, 'compute_node_update')
+        db.compute_node_update(self.context, node['id'], fake_vals
+                               ).AndReturn('fake-result')
+        self.mox.ReplayAll()
+        self.conductor.compute_node_update(self.context, node,
+                                           fake_input, False)
 
     def test_compute_node_delete(self):
         node = {'id': 'fake-id'}
@@ -672,10 +686,21 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         self.mox.StubOutWithMock(db, 'instance_get_all_by_filters')
         db.instance_get_all_by_filters(self.context, filters,
                                        'fake-key', 'fake-sort',
-                                       columns_to_join=None)
+                                       columns_to_join=None, use_slave=False)
         self.mox.ReplayAll()
         self.conductor.instance_get_all_by_filters(self.context, filters,
                                                    'fake-key', 'fake-sort')
+
+    def test_instance_get_all_by_filters_use_slave(self):
+        filters = {'foo': 'bar'}
+        self.mox.StubOutWithMock(db, 'instance_get_all_by_filters')
+        db.instance_get_all_by_filters(self.context, filters,
+                                       'fake-key', 'fake-sort',
+                                       columns_to_join=None, use_slave=True)
+        self.mox.ReplayAll()
+        self.conductor.instance_get_all_by_filters(self.context, filters,
+                                                   'fake-key', 'fake-sort',
+                                                   use_slave=True)
 
     def test_instance_get_all_by_host(self):
         self.mox.StubOutWithMock(db, 'instance_get_all_by_host')
@@ -702,7 +727,7 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
             getattr(db, name)(self.context, *dbargs).AndReturn('fake-result')
         self.mox.ReplayAll()
         if db_exception:
-            self.assertRaises(rpc_common.ClientException,
+            self.assertRaises(messaging.ExpectedException,
                               self.conductor.service_get_all_by,
                               self.context, **condargs)
 
@@ -818,14 +843,14 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         self._test_object_action(False, False)
 
     def test_object_action_on_raise(self):
-        self.assertRaises(rpc_common.ClientException,
+        self.assertRaises(messaging.ExpectedException,
                           self._test_object_action, False, True)
 
     def test_object_class_action(self):
         self._test_object_action(True, False)
 
     def test_object_class_action_on_raise(self):
-        self.assertRaises(rpc_common.ClientException,
+        self.assertRaises(messaging.ExpectedException,
                           self._test_object_action, True, True)
 
     def test_object_action_copies_object(self):
@@ -951,10 +976,21 @@ class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
         self.mox.StubOutWithMock(db, 'instance_get_all_by_filters')
         db.instance_get_all_by_filters(self.context, filters,
                                        'fake-key', 'fake-sort',
-                                       columns_to_join=None)
+                                       columns_to_join=None, use_slave=False)
         self.mox.ReplayAll()
         self.conductor.instance_get_all_by_filters(self.context, filters,
                                                    'fake-key', 'fake-sort')
+
+    def test_instance_get_all_by_filters_use_slave(self):
+        filters = {'foo': 'bar'}
+        self.mox.StubOutWithMock(db, 'instance_get_all_by_filters')
+        db.instance_get_all_by_filters(self.context, filters,
+                                       'fake-key', 'fake-sort',
+                                       columns_to_join=None, use_slave=True)
+        self.mox.ReplayAll()
+        self.conductor.instance_get_all_by_filters(self.context, filters,
+                                                   'fake-key', 'fake-sort',
+                                                   use_slave=True)
 
     def _test_stubbed(self, name, dbargs, condargs,
                       db_result_listified=False, db_exception=None):
@@ -1189,7 +1225,7 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
             timeouts.append(timeout)
             calls['count'] += 1
             if calls['count'] < 15:
-                raise rpc_common.Timeout("fake")
+                raise messaging.MessagingTimeout("fake")
 
         self.stubs.Set(self.conductor.base_rpcapi, 'ping', fake_ping)
 
@@ -1288,6 +1324,14 @@ class _BaseTaskTestCase(object):
         self.project_id = 'fake'
         self.context = FakeContext(self.user_id, self.project_id)
         fake_instance_actions.stub_out_action_events(self.stubs)
+
+        def fake_deserialize_context(serializer, ctxt_dict):
+            self.assertEqual(self.context.user_id, ctxt_dict['user_id'])
+            self.assertEqual(self.context.project_id, ctxt_dict['project_id'])
+            return self.context
+
+        self.stubs.Set(rpc.RequestContextSerializer, 'deserialize_context',
+                       fake_deserialize_context)
 
     def test_live_migrate(self):
         inst = fake_instance.fake_db_instance()
@@ -1395,6 +1439,10 @@ class _BaseTaskTestCase(object):
                 requested_networks='requested_networks', is_first_time=True,
                 filter_properties={}, legacy_bdm_in_spec=False)
         self.mox.ReplayAll()
+
+        # build_instances() is a cast, we need to wait for it to complete
+        self.useFixture(cast_as_call.CastAsCall(self.stubs))
+
         self.conductor.build_instances(self.context,
                 instances=[{'uuid': 'fakeuuid',
                             'system_metadata': system_metadata},
@@ -1452,9 +1500,12 @@ class _BaseTaskTestCase(object):
                 'fake_image_id').AndReturn('fake_image')
         self.conductor_manager._schedule_instances(self.context,
                 'fake_image', filter_properties, instance).AndReturn(
-                        [{'host': 'fake_host'}])
+                        [{'host': 'fake_host',
+                          'nodename': 'fake_node',
+                          'limits': {}}])
         self.conductor_manager.compute_rpcapi.unshelve_instance(self.context,
-                instance, 'fake_host', 'fake_image')
+                instance, 'fake_host', image='fake_image',
+                filter_properties={'limits': {}}, node='fake_node')
         self.mox.ReplayAll()
 
         system_metadata['shelved_at'] = timeutils.utcnow()
@@ -1506,9 +1557,12 @@ class _BaseTaskTestCase(object):
                 'fake_image_id').AndReturn(None)
         self.conductor_manager._schedule_instances(self.context,
                 None, filter_properties, instance).AndReturn(
-                        [{'host': 'fake_host'}])
+                        [{'host': 'fake_host',
+                          'nodename': 'fake_node',
+                          'limits': {}}])
         self.conductor_manager.compute_rpcapi.unshelve_instance(self.context,
-                instance, 'fake_host', None)
+                instance, 'fake_host', image=None,
+                filter_properties={'limits': {}}, node='fake_node')
         self.mox.ReplayAll()
 
         system_metadata['shelved_at'] = timeutils.utcnow()

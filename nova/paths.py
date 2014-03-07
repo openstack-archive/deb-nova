@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -31,7 +29,7 @@ path_opts = [
                default=os.path.join(sys.prefix, 'local', 'bin'),
                help='Directory where nova binaries are installed'),
     cfg.StrOpt('state_path',
-               default='$pybasedir',
+               default='/var/lib/nova',
                help="Top-level directory for maintaining nova's state"),
 ]
 

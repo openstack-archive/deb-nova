@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Citrix Systems, Inc.
 # Copyright (c) 2013 OpenStack Foundation
 #
@@ -31,18 +29,14 @@ LOG = logging.getLogger(__name__)
 
 
 class VolumeOps(object):
-    """
-    Management class for Volume-related tasks
-    """
+    """Management class for Volume-related tasks."""
 
     def __init__(self, session):
         self._session = session
 
     def attach_volume(self, connection_info, instance_name, mountpoint,
                       hotplug=True):
-        """
-        Attach volume storage to VM instance.
-        """
+        """Attach volume storage to VM instance."""
 
         # NOTE: No Resource Pool concept so far
         LOG.debug(_('Attach_volume: %(connection_info)s, %(instance_name)s,'
@@ -65,8 +59,7 @@ class VolumeOps(object):
         return (sr_uuid, vdi_uuid)
 
     def connect_volume(self, connection_info):
-        """
-        Attach volume storage to the hypervisor without attaching to a VM
+        """Attach volume storage to the hypervisor without attaching to a VM
 
         Used to attach the just the SR - e.g. for during live migration
         """
@@ -118,7 +111,7 @@ class VolumeOps(object):
 
                 running = not vm_utils.is_vm_shutdown(self._session, vm_ref)
                 if hotplug and running:
-                    volume_utils.vbd_plug(self._session, vbd_ref, vm_ref)
+                    self._session.VBD.plug(vbd_ref, vm_ref)
 
             vdi_uuid = self._session.call_xenapi("VDI.get_uuid", vdi_ref)
             return (sr_uuid, vdi_uuid)

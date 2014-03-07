@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -18,6 +17,7 @@ from nova.compute import api as compute_api
 from nova.compute import manager as compute_manager
 from nova import context
 from nova import db
+from nova.objects import block_device as block_device_obj
 from nova.tests.api.openstack import fakes
 from nova.tests.integrated.v3 import test_servers
 from nova.volume import cinder
@@ -44,8 +44,7 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
 
     def _stub_compute_api_get(self):
 
-        def fake_compute_api_get(self, context, instance_id,
-                                 want_objects=False):
+        def fake_compute_api_get(self, context, instance_id, **kwargs):
             return {'uuid': instance_id}
 
         self.stubs.Set(compute_api.API, 'get', fake_compute_api_get)
@@ -71,6 +70,8 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
 
     def test_attach_volume(self):
         device_name = '/dev/vdd'
+        disk_bus = 'ide'
+        device_type = 'cdrom'
         self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
         self.stubs.Set(cinder.API, 'check_attach', lambda *a, **k: None)
         self.stubs.Set(cinder.API, 'reserve_volume', lambda *a, **k: None)
@@ -80,12 +81,16 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
         self.stubs.Set(compute_manager.ComputeManager,
                        'attach_volume',
                        lambda *a, **k: None)
+        self.stubs.Set(block_device_obj.BlockDeviceMapping, 'get_by_volume_id',
+                       classmethod(lambda *a, **k: None))
 
         volume = fakes.stub_volume_get(None, context.get_admin_context(),
                                        'a26887c6-c47b-4654-abb5-dfadf7d3f803')
         subs = {
             'volume_id': volume['id'],
-            'device': device_name
+            'device': device_name,
+            'disk_bus': 'ide',
+            'device_type': 'cdrom'
         }
         server_id = self._post_server()
         response = self._do_post('servers/%s/action'
@@ -137,7 +142,3 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
                                  'swap-volume-req', subs)
         self.assertEqual(response.status, 202)
         self.assertEqual(response.read(), '')
-
-
-class ExtendedVolumesSampleXmlTests(ExtendedVolumesSampleJsonTests):
-    ctype = 'xml'

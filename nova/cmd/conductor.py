@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -23,8 +21,10 @@ from oslo.config import cfg
 from nova import config
 from nova import objects
 from nova.openstack.common import log as logging
+from nova.openstack.common.report import guru_meditation_report as gmr
 from nova import service
 from nova import utils
+from nova import version
 
 CONF = cfg.CONF
 CONF.import_opt('topic', 'nova.conductor.api', group='conductor')
@@ -35,8 +35,12 @@ def main():
     config.parse_args(sys.argv)
     logging.setup("nova")
     utils.monkey_patch()
+
+    gmr.TextGuruMeditation.setup_autorun(version)
+
     server = service.Service.create(binary='nova-conductor',
                                     topic=CONF.conductor.topic,
                                     manager=CONF.conductor.manager)
-    service.serve(server, workers=CONF.conductor.workers)
+    workers = CONF.conductor.workers or utils.cpu_count()
+    service.serve(server, workers=workers)
     service.wait()

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -61,11 +59,17 @@ CONF.register_opts(api_opts, api_opts_group)
 # List of v3 API extensions which are considered to form
 # the core API and so must be present
 # TODO(cyeoh): Expand this list as the core APIs are ported to V3
-API_V3_CORE_EXTENSIONS = set(['consoles', 'extensions', 'flavors', 'ips',
-                              'servers', 'server-metadata',
-                              'keypairs', 'console-output', 'versions',
-                              'flavor-manage', 'flavor-access',
-                              'flavor-extra-specs'])
+API_V3_CORE_EXTENSIONS = set(['consoles',
+                              'extensions',
+                              'flavor-access',
+                              'flavor-extra-specs',
+                              'flavor-manage',
+                              'flavors',
+                              'ips',
+                              'keypairs',
+                              'server-metadata',
+                              'servers',
+                              'versions'])
 
 
 class FaultWrapper(base_wsgi.Middleware):
@@ -105,7 +109,7 @@ class FaultWrapper(base_wsgi.Middleware):
         if safe:
             if isinstance(inner.msg_fmt, gettextutils.Message):
                 user_locale = req.best_match_language()
-                inner_msg = gettextutils.get_localized_message(
+                inner_msg = gettextutils.translate(
                         inner.msg_fmt, user_locale)
             else:
                 inner_msg = unicode(inner)
@@ -168,8 +172,7 @@ class PlainMapper(APIMapper):
 
 
 class APIRouter(base_wsgi.Router):
-    """
-    Routes requests on the OpenStack API to the appropriate controller
+    """Routes requests on the OpenStack API to the appropriate controller
     and method.
     """
     ExtensionManager = None  # override in subclasses
@@ -195,7 +198,7 @@ class APIRouter(base_wsgi.Router):
 
     def _setup_ext_routes(self, mapper, ext_mgr, init_only):
         for resource in ext_mgr.get_resources():
-            LOG.debug(_('Extended resource: %s'),
+            LOG.debug(_('Extending resource: %s'),
                       resource.collection)
 
             if init_only is not None and resource.collection not in init_only:
@@ -235,7 +238,7 @@ class APIRouter(base_wsgi.Router):
                             msg_format_dict)
                 continue
 
-            LOG.debug(_('Extension %(ext_name)s extending resource: '
+            LOG.debug(_('Extension %(ext_name)s extended resource: '
                         '%(collection)s'),
                       msg_format_dict)
 
@@ -248,8 +251,7 @@ class APIRouter(base_wsgi.Router):
 
 
 class APIRouterV3(base_wsgi.Router):
-    """
-    Routes requests on the OpenStack v3 API to the appropriate controller
+    """Routes requests on the OpenStack v3 API to the appropriate controller
     and method.
     """
 

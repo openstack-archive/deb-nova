@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 Grid Dynamics
 # All Rights Reserved.
 #
@@ -29,7 +27,7 @@ from nova.openstack.common import fileutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova import unit
+from nova.openstack.common import units
 from nova import utils
 from nova.virt.disk import api as disk
 from nova.virt import images
@@ -49,7 +47,7 @@ __imagebackend_opts = [
     cfg.StrOpt('images_type',
                default='default',
                help='VM Images format. Acceptable values are: raw, qcow2, lvm,'
-                    'rbd, default. If default is specified,'
+                    ' rbd, default. If default is specified,'
                     ' then use_cow_images flag is used instead of this one.',
                deprecated_group='DEFAULT',
                deprecated_name='libvirt_images_type'),
@@ -64,19 +62,21 @@ __imagebackend_opts = [
                      ' if this flag is set to True.',
                 deprecated_group='DEFAULT',
                 deprecated_name='libvirt_sparse_logical_volumes'),
-    cfg.IntOpt('lvm_snapshot_size',
-               default=1000,
-               help='The amount of storage (in megabytes) to allocate for LVM'
-                    ' snapshot copy-on-write blocks.',
-               deprecated_group='DEFAULT'),
+    cfg.StrOpt('volume_clear',
+               default='zero',
+               help='Method used to wipe old volumes (valid options are: '
+                    'none, zero, shred)'),
+    cfg.IntOpt('volume_clear_size',
+               default=0,
+               help='Size in MiB to wipe at start of old volumes. 0 => all'),
     cfg.StrOpt('images_rbd_pool',
                default='rbd',
-               help='the RADOS pool in which rbd volumes are stored',
+               help='The RADOS pool in which rbd volumes are stored',
                deprecated_group='DEFAULT',
                deprecated_name='libvirt_images_rbd_pool'),
     cfg.StrOpt('images_rbd_ceph_conf',
                default='',  # default determined by librados
-               help='path to the ceph configuration file to use',
+               help='Path to the ceph configuration file to use',
                deprecated_group='DEFAULT',
                deprecated_name='libvirt_images_rbd_ceph_conf'),
         ]
@@ -121,6 +121,10 @@ class Image(object):
         :size: Size of created image in bytes
         """
         pass
+
+    def backend_location(self):
+        """Return where the data is stored by this image backend."""
+        return self.path
 
     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
             extra_specs, hypervisor_version):
@@ -257,7 +261,9 @@ class Raw(Image):
             self.driver_format = data.file_format or 'raw'
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        @utils.synchronized(base, external=True, lock_path=self.lock_path)
+        filename = os.path.split(base)[-1]
+
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
             libvirt_utils.copy_image(base, target)
             if size:
@@ -293,7 +299,9 @@ class Qcow2(Image):
         self.preallocate = CONF.preallocate_images != 'none'
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        @utils.synchronized(base, external=True, lock_path=self.lock_path)
+        filename = os.path.split(base)[-1]
+
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_qcow2_image(base, target, size):
             # TODO(pbrady): Consider copying the cow image here
             # with preallocation=metadata set for performance reasons.
@@ -323,7 +331,7 @@ class Qcow2(Image):
                         backing_parts[-1].isdigit():
                     legacy_backing_size = int(backing_parts[-1])
                     legacy_base += '_%d' % legacy_backing_size
-                    legacy_backing_size *= unit.Gi
+                    legacy_backing_size *= units.Gi
 
         # Create the legacy backing file if necessary.
         if legacy_backing_size:
@@ -361,7 +369,7 @@ class Lvm(Image):
                                      ' images_volume_group'
                                      ' flag to use LVM images.'))
             self.vg = CONF.libvirt.images_volume_group
-            self.lv = '%s_%s' % (self.escape(instance['name']),
+            self.lv = '%s_%s' % (instance['uuid'],
                                  self.escape(disk_name))
             self.path = os.path.join('/dev', self.vg, self.lv)
 
@@ -374,7 +382,9 @@ class Lvm(Image):
         return False
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        @utils.synchronized(base, external=True, lock_path=self.lock_path)
+        filename = os.path.split(base)[-1]
+
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def create_lvm_image(base, size):
             base_size = disk.get_disk_size(base)
             self.verify_base_size(base, size, base_size=base_size)
@@ -531,6 +541,9 @@ class Rbd(Image):
             ports.append(port)
         return hosts, ports
 
+    def backend_location(self):
+        return self.pool, self.rbd_name
+
     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
             extra_specs, hypervisor_version):
         """Get `LibvirtConfigGuestDisk` filled for this image.
@@ -577,7 +590,7 @@ class Rbd(Image):
         return False
 
     def _resize(self, volume_name, size):
-        size = int(size) * 1024
+        size = int(size) * units.Ki
 
         with RBDVolumeProxy(self, volume_name) as vol:
             vol.resize(size)

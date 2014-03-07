@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -14,7 +12,6 @@
 
 import webob
 
-from nova.api.openstack.compute.plugins.v3 import flavors as flavors_api
 from nova.api.openstack.compute.views import flavors as flavors_view
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
@@ -27,9 +24,7 @@ authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
 
 
 class FlavorManageController(wsgi.Controller):
-    """
-    The Flavor Lifecycle API controller for the OpenStack API.
-    """
+    """The Flavor Lifecycle API controller for the OpenStack API."""
     _view_builder_class = flavors_view.V3ViewBuilder
 
     def __init__(self):
@@ -54,7 +49,6 @@ class FlavorManageController(wsgi.Controller):
     @wsgi.response(201)
     @wsgi.action("create")
     @extensions.expected_errors((400, 409))
-    @wsgi.serializers(xml=flavors_api.FlavorTemplate)
     def _create(self, req, body):
         context = req.environ['nova.context']
         authorize(context)
@@ -71,7 +65,7 @@ class FlavorManageController(wsgi.Controller):
         root_gb = vals.get('disk')
         ephemeral_gb = vals.get('ephemeral', 0)
         swap = vals.get('swap', 0)
-        rxtx_factor = vals.get('rxtx_factor', 1.0)
+        rxtx_factor = vals.get('os-flavor-rxtx:rxtx_factor', 1.0)
         is_public = vals.get('flavor-access:is_public', True)
 
         try:
@@ -94,13 +88,10 @@ class FlavorManageController(wsgi.Controller):
 
 
 class FlavorManage(extensions.V3APIExtensionBase):
-    """
-    Flavor create/delete API support
-    """
+    """Flavor create/delete API support."""
 
     name = "FlavorManage"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/core/%s/api/v3" % ALIAS
     version = 1
 
     def get_controller_extensions(self):

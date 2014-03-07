@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (C) 2012-2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -83,7 +81,7 @@ from nova.openstack.common.gettextutils import _
 from nova.virt import block_device as driver_block_device
 from nova.virt import configdrive
 from nova.virt import driver
-
+from nova.virt.libvirt import utils as libvirt_utils
 
 CONF = cfg.CONF
 
@@ -219,6 +217,7 @@ def get_disk_bus_for_device_type(virt_type,
        type, return the optimal disk_bus to use for a given
        device type. For example, for a disk on KVM it will
        return 'virtio', while for a CDROM it will return 'ide'
+       on x86_64 and 'scsi' on ppc64.
 
        Returns the disk_bus, or returns None if the device
        type is not supported for this virtualization
@@ -247,7 +246,11 @@ def get_disk_bus_for_device_type(virt_type,
             return "xen"
     elif virt_type in ("qemu", "kvm"):
         if device_type == "cdrom":
-            return "ide"
+            arch = libvirt_utils.get_arch(image_meta)
+            if arch in ("ppc", "ppc64"):
+                return "scsi"
+            else:
+                return "ide"
         elif device_type == "disk":
             return "virtio"
         elif device_type == "floppy":
@@ -419,11 +422,11 @@ def get_root_info(virt_type, image_meta, root_bdm, disk_bus, cdrom_bus,
         if not get_device_name(root_bdm) and root_device_name:
             root_bdm = root_bdm.copy()
             root_bdm['device_name'] = root_device_name
-        return get_info_from_bdm(virt_type, root_bdm, {})
+        return get_info_from_bdm(virt_type, root_bdm, {}, disk_bus)
 
 
-def default_device_names(virt_type, instance, root_device_name,
-                         update_func, ephemerals, swap, block_device_mapping):
+def default_device_names(virt_type, context, instance, root_device_name,
+                         ephemerals, swap, block_device_mapping):
 
     block_device_info = {
         'root_device_name': root_device_name,
@@ -437,25 +440,13 @@ def default_device_names(virt_type, instance, root_device_name,
                 block_device_mapping))
     }
 
-    devices = dict((bdm.get('id'), bdm) for bdm in
-        itertools.chain(ephemerals, swap, block_device_mapping))
-
     get_disk_info(virt_type, instance, block_device_info)
 
     for driver_bdm in itertools.chain(block_device_info['ephemerals'],
                                [block_device_info['swap']] if
                                block_device_info['swap'] else [],
                                block_device_info['block_device_mapping']):
-        if driver_bdm.id in devices:
-            bdm = devices[driver_bdm.id]
-            # NOTE (ndipanov): We may have chosen different values
-            # for bus and type so update those along with device name
-            bdm['device_name'] = get_device_name(driver_bdm)
-            bdm['disk_bus'] = driver_bdm['disk_bus']
-            # Swap does not have device type in driver format
-            bdm['device_type'] = driver_bdm.get('device_type', 'disk')
-            if update_func:
-                update_func(bdm)
+        driver_bdm.save(context)
 
 
 def has_default_ephemeral(instance, disk_bus, block_device_info, mapping):

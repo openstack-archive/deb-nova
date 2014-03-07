@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -84,9 +82,6 @@ class Fixed_ips(extensions.ExtensionDescriptor):
     alias = "os-fixed-ips"
     namespace = "http://docs.openstack.org/compute/ext/fixed_ips/api/v2"
     updated = "2012-10-18T13:25:27-06:00"
-
-    def __init__(self, ext_mgr):
-        ext_mgr.register(self)
 
     def get_resources(self):
         member_actions = {'action': 'POST'}

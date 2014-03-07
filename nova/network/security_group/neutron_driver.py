@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Nicira, Inc.
 # All Rights Reserved
 #
@@ -14,8 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
-# @author: Aaron Rosen, Nicira Networks, Inc.
 
 import sys
 
@@ -196,7 +192,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
 
         Note: the Nova security group API doesn't support adding muliple
         security group rules at once but the EC2 one does. Therefore,
-        this function is writen to support both. Multiple rules are
+        this function is written to support both. Multiple rules are
         installed to a security group in neutron using bulk support.
         """
 
@@ -310,7 +306,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
         return ports
 
     def _get_secgroups_from_port_list(self, ports, neutron):
-        """Returns a dict of security groups keyed by thier ids."""
+        """Returns a dict of security groups keyed by their ids."""
 
         def _chunk_by_ids(sg_ids, limit):
             sg_id_list = []
@@ -406,8 +402,10 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
         except n_exc.NeutronClientException as e:
             exc_info = sys.exc_info()
             if e.status_code == 404:
-                msg = ("Security group %s is not found for project %s" %
-                       (security_group_name, context.project_id))
+                msg = (_("Security group %(name)s is not found for "
+                         "project %(project)s") %
+                       {'name': security_group_name,
+                        'project': context.project_id})
                 self.raise_not_found(msg)
             else:
                 LOG.exception(_("Neutron Error:"))
@@ -420,8 +418,8 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 LOG.exception(_("Neutron Error:"))
 
         if not ports:
-            msg = ("instance_id %s could not be found as device id on"
-                   " any ports" % instance['uuid'])
+            msg = (_("instance_id %s could not be found as device id on"
+                   " any ports") % instance['uuid'])
             self.raise_not_found(msg)
 
         for port in ports:
@@ -455,8 +453,10 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
         except n_exc.NeutronClientException as e:
             exc_info = sys.exc_info()
             if e.status_code == 404:
-                msg = ("Security group %s is not found for project %s" %
-                       (security_group_name, context.project_id))
+                msg = (_("Security group %(name)s is not found for "
+                         "project %(project)s") %
+                       {'name': security_group_name,
+                        'project': context.project_id})
                 self.raise_not_found(msg)
             else:
                 LOG.exception(_("Neutron Error:"))
@@ -469,8 +469,8 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 LOG.exception(_("Neutron Error:"))
 
         if not ports:
-            msg = ("instance_id %s could not be found as device id on"
-                   " any ports" % instance['uuid'])
+            msg = (_("instance_id %s could not be found as device id on"
+                   " any ports") % instance['uuid'])
             self.raise_not_found(msg)
 
         found_security_group = False
@@ -497,8 +497,8 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 with excutils.save_and_reraise_exception():
                     LOG.exception(_("Neutron Error:"))
         if not found_security_group:
-            msg = (_("Security group %(security_group_name)s not assocaited "
-                     "with the instance %(instance)s"),
+            msg = (_("Security group %(security_group_name)s not associated "
+                     "with the instance %(instance)s") %
                    {'security_group_name': security_group_name,
                     'instance': instance['uuid']})
             self.raise_not_found(msg)

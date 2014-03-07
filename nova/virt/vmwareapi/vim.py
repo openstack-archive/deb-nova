@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
@@ -101,8 +99,7 @@ class Vim:
     def __init__(self,
                  protocol="https",
                  host="localhost"):
-        """
-        Creates the necessary Communication interfaces and gets the
+        """Creates the necessary Communication interfaces and gets the
         ServiceContent for initiating SOAP transactions.
 
         protocol: http or https
@@ -124,8 +121,7 @@ class Vim:
 
     @staticmethod
     def get_wsdl_url(protocol, host_name):
-        """
-        allows override of the wsdl location, making this static
+        """Allows override of the wsdl location, making this static
         means we can test the logic outside of the constructor
         without forcing the test environment to have multiple valid
         wsdl locations to test against.
@@ -143,8 +139,7 @@ class Vim:
 
     @staticmethod
     def get_soap_url(protocol, host_name):
-        """
-        Calculates the location of the SOAP services
+        """Calculates the location of the SOAP services
         for a particular server. Created as a static
         method for testing.
 
@@ -163,8 +158,7 @@ class Vim:
     def __getattr__(self, attr_name):
         """Makes the API calls and gets the result."""
         def vim_request_handler(managed_object, **kwargs):
-            """
-            Builds the SOAP message and parses the response for fault
+            """Builds the SOAP message and parses the response for fault
             checking and other errors.
 
             managed_object    : Managed Object Reference or Managed
@@ -196,8 +190,9 @@ class Vim:
                 doc = excep.document
                 detail = doc.childAtPath("/Envelope/Body/Fault/detail")
                 fault_list = []
-                for child in detail.getChildren():
-                    fault_list.append(child.get("type"))
+                if detail:
+                    for child in detail.getChildren():
+                        fault_list.append(child.get("type"))
                 raise error_util.VimFaultException(fault_list, excep)
             except AttributeError as excep:
                 raise error_util.VimAttributeError(_("No such SOAP method "

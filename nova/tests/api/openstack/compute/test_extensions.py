@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
@@ -160,10 +158,25 @@ class ExtensionTestCase(test.TestCase):
                             target).AndRaise(
             exception.PolicyNotAuthorized(
                 action="compute_extension:used_limits_for_admin"))
-        ('compute', 'used_limits_for_admin')
         self.mox.ReplayAll()
         authorize = base_extensions.extension_authorizer('compute',
                                                         'used_limits_for_admin'
+        )
+        self.assertRaises(exception.PolicyNotAuthorized, authorize,
+                          self.fake_context, target=target)
+
+    def test_core_authorizer_throws_exception_if_policy_fails(self):
+        target = {'project_id': '1234',
+                  'user_id': '5678'}
+        self.mox.StubOutWithMock(nova.policy, 'enforce')
+        nova.policy.enforce(self.fake_context,
+                            "compute:used_limits_for_admin",
+                            target).AndRaise(
+            exception.PolicyNotAuthorized(
+                action="compute:used_limits_for_admin"))
+        self.mox.ReplayAll()
+        authorize = base_extensions.core_authorizer('compute',
+                                                    'used_limits_for_admin'
         )
         self.assertRaises(exception.PolicyNotAuthorized, authorize,
                           self.fake_context, target=target)
@@ -215,7 +228,6 @@ class ExtensionControllerTest(ExtensionTestCase):
             "Keypairs",
             "Multinic",
             "MultipleCreate",
-            "QuotaClasses",
             "Quotas",
             "ExtendedQuotas",
             "Rescue",

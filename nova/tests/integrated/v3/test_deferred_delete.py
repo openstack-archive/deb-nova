@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -41,7 +40,3 @@ class DeferredDeleteSampleJsonTests(test_servers.ServersSampleBase):
                                  'force-delete-post-req', {})
         self.assertEqual(response.status, 202)
         self.assertEqual(response.read(), '')
-
-
-class DeferredDeleteSampleXmlTests(DeferredDeleteSampleJsonTests):
-        ctype = 'xml'

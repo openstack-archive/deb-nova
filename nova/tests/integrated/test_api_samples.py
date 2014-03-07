@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -20,10 +19,12 @@ import datetime
 import inspect
 import json
 import os
+import re
 import urllib
 import uuid as uuid_lib
 
 from lxml import etree
+import mock
 from oslo.config import cfg
 
 from nova.api.metadata import password
@@ -42,6 +43,7 @@ from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception
 from nova.network import api as network_api
+from nova.objects import block_device as block_device_obj
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -1654,8 +1656,8 @@ class ServicesJsonTest(ApiSampleTestBaseV2):
         super(ServicesJsonTest, self).tearDown()
         timeutils.clear_time_override()
 
-    def fake_load(self, *args):
-        return True
+    def fake_load(self, service_name):
+        return service_name == 'os-extended-services'
 
     def test_services_list(self):
         """Return a list of all agent builds."""
@@ -1689,8 +1691,7 @@ class ServicesJsonTest(ApiSampleTestBaseV2):
         self._verify_response('service-disable-put-resp', subs, response, 200)
 
     def test_service_detail(self):
-        """
-        Return a list of all running services with the disable reason
+        """Return a list of all running services with the disable reason
         information if that exists.
         """
         self.stubs.Set(extensions.ExtensionManager, "is_loaded",
@@ -1724,8 +1725,7 @@ class ServicesXmlTest(ServicesJsonTest):
 
 
 class ExtendedServicesJsonTest(ApiSampleTestBaseV2):
-    """
-    This extension is extending the functionalities of the
+    """This extension is extending the functionalities of the
     Services extension so the funcionalities introduced by this extension
     are tested in the ServicesJsonTest and ServicesXmlTest classes.
     """
@@ -1736,6 +1736,50 @@ class ExtendedServicesJsonTest(ApiSampleTestBaseV2):
 
 class ExtendedServicesXmlTest(ExtendedServicesJsonTest):
     """This extension is tested in the ServicesXmlTest class."""
+    ctype = 'xml'
+
+
+@mock.patch.object(db, 'service_get_all',
+                   side_effect=test_services.fake_db_api_service_get_all)
+@mock.patch.object(db, 'service_get_by_args',
+                   side_effect=test_services.fake_service_get_by_host_binary)
+class ExtendedServicesDeleteJsonTest(ApiSampleTestBaseV2):
+    extends_name = ("nova.api.openstack.compute.contrib.services.Services")
+    extension_name = ("nova.api.openstack.compute.contrib."
+                      "extended_services_delete.Extended_services_delete")
+
+    def setUp(self):
+        super(ExtendedServicesDeleteJsonTest, self).setUp()
+        timeutils.set_time_override(test_services.fake_utcnow())
+
+    def tearDown(self):
+        super(ExtendedServicesDeleteJsonTest, self).tearDown()
+        timeutils.clear_time_override()
+
+    def test_service_detail(self, *mocks):
+        """Return a list of all running services with the disable reason
+        information if that exists.
+        """
+        response = self._do_get('os-services')
+        self.assertEqual(response.status, 200)
+        subs = {'id': 1,
+                'binary': 'nova-compute',
+                'host': 'host1',
+                'zone': 'nova',
+                'status': 'disabled',
+                'state': 'up'}
+        subs.update(self._get_regexes())
+        return self._verify_response('services-get-resp',
+                                     subs, response, 200)
+
+    def test_service_delete(self, *mocks):
+        response = self._do_delete('os-services/1')
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.read(), "")
+
+
+class ExtendedServicesDeleteXmlTest(ExtendedServicesDeleteJsonTest):
+    """This extension is tested in the ExtendedServicesDeleteJsonTest class."""
     ctype = 'xml'
 
 
@@ -1953,6 +1997,7 @@ class ConsolesSampleJsonTests(ServersSampleBase):
         super(ConsolesSampleJsonTests, self).setUp()
         self.flags(vnc_enabled=True)
         self.flags(enabled=True, group='spice')
+        self.flags(enabled=True, group='rdp')
 
     def test_get_vnc_console(self):
         uuid = self._post_server()
@@ -1975,9 +2020,60 @@ class ConsolesSampleJsonTests(ServersSampleBase):
         self._verify_response('get-spice-console-post-resp', subs,
                               response, 200)
 
+    def test_get_rdp_console(self):
+        uuid = self._post_server()
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'get-rdp-console-post-req',
+                                {'action': 'os-getRDPConsole'})
+        subs = self._get_regexes()
+        subs["url"] = \
+            "((https?):((//)|(\\\\))+([\w\d:#@%/;$()~_?\+-=\\\.&](#!)?)*)"
+        self._verify_response('get-rdp-console-post-resp', subs,
+                              response, 200)
+
 
 class ConsolesSampleXmlTests(ConsolesSampleJsonTests):
         ctype = 'xml'
+
+
+class ConsoleAuthTokensSampleJsonTests(ServersSampleBase):
+    extends_name = ("nova.api.openstack.compute.contrib.consoles.Consoles")
+    extension_name = ("nova.api.openstack.compute.contrib.console_auth_tokens."
+                      "Console_auth_tokens")
+
+    def _get_console_url(self, data):
+        return json.loads(data)["console"]["url"]
+
+    def _get_console_token(self, uuid):
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'get-rdp-console-post-req',
+                                {'action': 'os-getRDPConsole'})
+
+        url = self._get_console_url(response.read())
+        return re.match('.+?token=([^&]+)', url).groups()[0]
+
+    def test_get_console_connect_info(self):
+        self.flags(enabled=True, group='rdp')
+
+        uuid = self._post_server()
+        token = self._get_console_token(uuid)
+
+        response = self._do_get('os-console-auth-tokens/%s' % token)
+
+        subs = self._get_regexes()
+        subs["uuid"] = uuid
+        subs["host"] = r"[\w\.\-]+"
+        subs["port"] = "[0-9]+"
+        subs["internal_access_path"] = ".*"
+        self._verify_response('get-console-connect-info-get-resp', subs,
+                              response, 200)
+
+
+class ConsoleAuthTokensSampleXmlTests(ConsoleAuthTokensSampleJsonTests):
+    ctype = 'xml'
+
+    def _get_console_url(self, data):
+        return etree.fromstring(data).find('url').text
 
 
 class DeferredDeleteSampleJsonTests(ServersSampleBase):
@@ -2561,31 +2657,6 @@ class FlavorDisabledSampleJsonTests(ApiSampleTestBaseV2):
 
 
 class FlavorDisabledSampleXmlTests(FlavorDisabledSampleJsonTests):
-    ctype = "xml"
-
-
-class QuotaClassesSampleJsonTests(ApiSampleTestBaseV2):
-    extension_name = ("nova.api.openstack.compute.contrib.quota_classes."
-                      "Quota_classes")
-    set_id = 'test_class'
-
-    def test_show_quota_classes(self):
-        # Get api sample to show quota classes.
-        response = self._do_get('os-quota-class-sets/%s' % self.set_id)
-        subs = {'set_id': self.set_id}
-        self._verify_response('quota-classes-show-get-resp', subs,
-                              response, 200)
-
-    def test_update_quota_classes(self):
-        # Get api sample to update quota classes.
-        response = self._do_put('os-quota-class-sets/%s' % self.set_id,
-                                'quota-classes-update-post-req',
-                                {})
-        self._verify_response('quota-classes-update-post-resp',
-                              {}, response, 200)
-
-
-class QuotaClassesSampleXmlTests(QuotaClassesSampleJsonTests):
     ctype = "xml"
 
 
@@ -3411,6 +3482,27 @@ class HypervisorsSampleXmlTests(HypervisorsSampleJsonTests):
     ctype = "xml"
 
 
+class ExtendedHypervisorsJsonTest(ApiSampleTestBaseV2):
+    extends_name = ("nova.api.openstack.compute.contrib."
+                    "hypervisors.Hypervisors")
+    extension_name = ("nova.api.openstack.compute.contrib."
+                      "extended_hypervisors.Extended_hypervisors")
+
+    def test_hypervisors_show_with_ip(self):
+        hypervisor_id = 1
+        subs = {
+            'hypervisor_id': hypervisor_id
+        }
+        response = self._do_get('os-hypervisors/%s' % hypervisor_id)
+        subs.update(self._get_regexes())
+        self._verify_response('hypervisors-show-with-ip-resp',
+                              subs, response, 200)
+
+
+class ExtendedHypervisorsXmlTest(ExtendedHypervisorsJsonTest):
+    ctype = 'xml'
+
+
 class HypervisorsCellsSampleJsonTests(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.hypervisors."
                       "Hypervisors")
@@ -3674,7 +3766,10 @@ class AssistedVolumeSnapshotsJsonTest(ApiSampleTestBaseV2):
         subs = {
             'snapshot_name': 'snap-001',
             'description': 'Daily backup',
-            'volume_id': '521752a6-acf6-4b2d-bc7a-119f9148cd8c'
+            'volume_id': '521752a6-acf6-4b2d-bc7a-119f9148cd8c',
+            'snapshot_id': '421752a6-acf6-4b2d-bc7a-119f9148cd8c',
+            'type': 'qcow',
+            'new_file': 'new_file_name'
         }
         subs.update(self._get_regexes())
         response = self._create_assisted_snapshot(subs)
@@ -3737,6 +3832,8 @@ class VolumeAttachmentsSampleJsonTest(VolumeAttachmentsSampleBase):
         self.stubs.Set(compute_manager.ComputeManager,
                        'attach_volume',
                        lambda *a, **k: None)
+        self.stubs.Set(block_device_obj.BlockDeviceMapping, 'get_by_volume_id',
+                       classmethod(lambda *a, **k: None))
 
         volume = fakes.stub_volume_get(None, context.get_admin_context(),
                                        'a26887c6-c47b-4654-abb5-dfadf7d3f803')
@@ -3981,4 +4078,62 @@ class MigrationsSamplesJsonTest(ApiSampleTestBaseV2):
 
 
 class MigrationsSamplesXmlTest(MigrationsSamplesJsonTest):
+    ctype = 'xml'
+
+
+class PreserveEphemeralOnRebuildJsonTest(ServersSampleBase):
+    extension_name = ('nova.api.openstack.compute.contrib.'
+                      'preserve_ephemeral_rebuild.'
+                      'Preserve_ephemeral_rebuild')
+
+    def _test_server_action(self, uuid, action,
+                            subs={}, resp_tpl=None, code=202):
+        subs.update({'action': action})
+        response = self._do_post('servers/%s/action' % uuid,
+                                 'server-action-%s' % action.lower(),
+                                 subs)
+        if resp_tpl:
+            subs.update(self._get_regexes())
+            self._verify_response(resp_tpl, subs, response, code)
+        else:
+            self.assertEqual(response.status, code)
+            self.assertEqual(response.read(), "")
+
+    def test_rebuild_server_preserve_ephemeral_false(self):
+        uuid = self._post_server()
+        image = self.api.get_images()[0]['id']
+        subs = {'host': self._get_host(),
+                'uuid': image,
+                'name': 'foobar',
+                'pass': 'seekr3t',
+                'ip': '1.2.3.4',
+                'ip6': 'fe80::100',
+                'hostid': '[a-f0-9]+',
+                'preserve_ephemeral': 'false'}
+        self._test_server_action(uuid, 'rebuild', subs,
+                                 'server-action-rebuild-resp')
+
+    def test_rebuild_server_preserve_ephemeral_true(self):
+        image = self.api.get_images()[0]['id']
+        subs = {'host': self._get_host(),
+                'uuid': image,
+                'name': 'new-server-test',
+                'pass': 'seekr3t',
+                'ip': '1.2.3.4',
+                'ip6': 'fe80::100',
+                'hostid': '[a-f0-9]+',
+                'preserve_ephemeral': 'true'}
+
+        def fake_rebuild(self_, context, instance, image_href, admin_password,
+                         **kwargs):
+            self.assertTrue(kwargs['preserve_ephemeral'])
+        self.stubs.Set(compute_api.API, 'rebuild', fake_rebuild)
+
+        instance_uuid = self._post_server()
+        response = self._do_post('servers/%s/action' % instance_uuid,
+                                 'server-action-rebuild', subs)
+        self.assertEqual(response.status, 202)
+
+
+class PreserveEphemeralOnRebuildXmlTest(PreserveEphemeralOnRebuildJsonTest):
     ctype = 'xml'

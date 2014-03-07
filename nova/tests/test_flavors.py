@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 Ken Pepple
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -15,7 +13,6 @@
 """
 Unit Tests for flavors code
 """
-import sys
 import time
 
 from nova.compute import flavors
@@ -218,8 +215,7 @@ class InstanceTypeTestCase(test.TestCase):
         self.assertEqual(inst_type_name, deleted_inst_type["name"])
 
     def test_read_deleted_false_converting_flavorid(self):
-        """
-        Ensure deleted flavors are not returned when not needed (for
+        """Ensure deleted flavors are not returned when not needed (for
         example when creating a server and attempting to translate from
         flavorid to instance_type_id.
         """
@@ -434,39 +430,40 @@ class CreateInstanceTypeTest(test.TestCase):
         # Flavor ID which is more than 255 characters will cause error.
         self.assertInvalidInput('a', 64, 1, 120, flavorid='a' * (MAX_LEN + 1))
 
-    def test_memory_must_be_positive_integer(self):
+    def test_memory_must_be_positive_db_integer(self):
         self.assertInvalidInput('flavor1', 'foo', 1, 120)
         self.assertInvalidInput('flavor1', -1, 1, 120)
         self.assertInvalidInput('flavor1', 0, 1, 120)
-        self.assertInvalidInput('flavor1', sys.maxint + 1, 1, 120)
+        self.assertInvalidInput('flavor1', db.MAX_INT + 1, 1, 120)
         flavors.create('flavor1', 1, 1, 120)
 
-    def test_vcpus_must_be_positive_integer(self):
+    def test_vcpus_must_be_positive_db_integer(self):
         self.assertInvalidInput('flavor`', 64, 'foo', 120)
         self.assertInvalidInput('flavor1', 64, -1, 120)
         self.assertInvalidInput('flavor1', 64, 0, 120)
-        self.assertInvalidInput('flavor1', 64, sys.maxint + 1, 120)
+        self.assertInvalidInput('flavor1', 64, db.MAX_INT + 1, 120)
         flavors.create('flavor1', 64, 1, 120)
 
-    def test_root_gb_must_be_nonnegative_integer(self):
+    def test_root_gb_must_be_nonnegative_db_integer(self):
         self.assertInvalidInput('flavor1', 64, 1, 'foo')
         self.assertInvalidInput('flavor1', 64, 1, -1)
-        self.assertInvalidInput('flavor1', 64, 1, sys.maxint + 1)
+        self.assertInvalidInput('flavor1', 64, 1, db.MAX_INT + 1)
         flavors.create('flavor1', 64, 1, 0)
         flavors.create('flavor2', 64, 1, 120)
 
-    def test_ephemeral_gb_must_be_nonnegative_integer(self):
+    def test_ephemeral_gb_must_be_nonnegative_db_integer(self):
         self.assertInvalidInput('flavor1', 64, 1, 120, ephemeral_gb='foo')
         self.assertInvalidInput('flavor1', 64, 1, 120, ephemeral_gb=-1)
         self.assertInvalidInput('flavor1', 64, 1, 120,
-                                ephemeral_gb=sys.maxint + 1)
+                                ephemeral_gb=db.MAX_INT + 1)
         flavors.create('flavor1', 64, 1, 120, ephemeral_gb=0)
         flavors.create('flavor2', 64, 1, 120, ephemeral_gb=120)
 
-    def test_swap_must_be_nonnegative_integer(self):
+    def test_swap_must_be_nonnegative_db_integer(self):
         self.assertInvalidInput('flavor1', 64, 1, 120, swap='foo')
         self.assertInvalidInput('flavor1', 64, 1, 120, swap=-1)
-        self.assertInvalidInput('flavor1', 64, 1, 120, swap=sys.maxint + 1)
+        self.assertInvalidInput('flavor1', 64, 1, 120,
+                                swap=db.MAX_INT + 1)
         flavors.create('flavor1', 64, 1, 120, swap=0)
         flavors.create('flavor2', 64, 1, 120, swap=1)
 
@@ -480,6 +477,20 @@ class CreateInstanceTypeTest(test.TestCase):
 
         flavor = flavors.create('flavor2', 64, 1, 120, rxtx_factor=1.1)
         self.assertEqual(1.1, flavor['rxtx_factor'])
+
+    def test_rxtx_factor_must_be_within_sql_float_range(self):
+        _context = context.get_admin_context()
+        inst_types = db.flavor_get_all(_context)
+        # We do * 10 since this is an approximation and we need to make sure
+        # the difference is noticeble.
+        over_rxtx_factor = flavors.SQL_SP_FLOAT_MAX * 10
+
+        self.assertInvalidInput('flavor1', 64, 1, 120,
+                                rxtx_factor=over_rxtx_factor)
+
+        flavor = flavors.create('flavor2', 64, 1, 120,
+                                rxtx_factor=flavors.SQL_SP_FLOAT_MAX)
+        self.assertEqual(flavors.SQL_SP_FLOAT_MAX, flavor['rxtx_factor'])
 
     def test_is_public_must_be_valid_bool_string(self):
         self.assertInvalidInput('flavor1', 64, 1, 120, is_public='foo')

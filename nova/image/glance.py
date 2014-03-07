@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -25,12 +23,12 @@ import json
 import random
 import sys
 import time
-import urlparse
 
 import glanceclient
 import glanceclient.exc
 from oslo.config import cfg
 import six
+import six.moves.urllib.parse as urlparse
 
 from nova import exception
 import nova.image.download as image_xfers
@@ -44,10 +42,10 @@ from nova import utils
 glance_opts = [
     cfg.StrOpt('glance_host',
                default='$my_ip',
-               help='default glance hostname or ip'),
+               help='Default glance hostname or IP address'),
     cfg.IntOpt('glance_port',
                default=9292,
-               help='default glance port'),
+               help='Default glance port'),
     cfg.StrOpt('glance_protocol',
                 default='http',
                 help='Default protocol to use when connecting to glance. '
@@ -63,7 +61,7 @@ glance_opts = [
                      'glance'),
     cfg.IntOpt('glance_num_retries',
                default=0,
-               help='Number retries when downloading an image from glance'),
+               help='Number of retries when downloading an image from glance'),
     cfg.ListOpt('allowed_direct_url_schemes',
                 default=[],
                 help='A list of url scheme that can be downloaded directly '
@@ -144,8 +142,7 @@ def _create_glance_client(context, host, port, use_ssl, version=1):
 
 
 def get_api_servers():
-    """
-    Shuffle a list of CONF.glance_api_servers and return an iterator
+    """Shuffle a list of CONF.glance_api_servers and return an iterator
     that will cycle through the list, looping around to the beginning
     if necessary.
     """
@@ -197,8 +194,7 @@ class GlanceClientWrapper(object):
                                      self.use_ssl, version)
 
     def call(self, context, version, method, *args, **kwargs):
-        """
-        Call a glance client method.  If we get a connection error,
+        """Call a glance client method.  If we get a connection error,
         retry the request according to CONF.glance_num_retries.
         """
         retry_excs = (glanceclient.exc.ServiceUnavailable,
@@ -296,7 +292,7 @@ class GlanceImageService(object):
         base_image_meta = self._translate_from_glance(image)
         return base_image_meta
 
-    def _get_locations(self, context, image_id):
+    def get_locations(self, context, image_id):
         """Returns the direct url representing the backend storage location,
         or None if this attribute is not shown by Glance.
         """
@@ -328,7 +324,7 @@ class GlanceImageService(object):
     def download(self, context, image_id, data=None, dst_path=None):
         """Calls out to Glance for data and writes data."""
         if CONF.allowed_direct_url_schemes and dst_path is not None:
-            locations = self._get_locations(context, image_id)
+            locations = self.get_locations(context, image_id)
             for entry in locations:
                 loc_url = entry['url']
                 loc_meta = entry['metadata']

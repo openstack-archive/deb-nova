@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -33,7 +32,3 @@ class ExtendedAvailabilityZoneJsonTests(test_servers.ServersSampleBase):
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         self._verify_response('servers-detail-resp', subs, response, 200)
-
-
-class ExtendedAvailabilityZoneXmlTests(ExtendedAvailabilityZoneJsonTests):
-    ctype = 'xml'

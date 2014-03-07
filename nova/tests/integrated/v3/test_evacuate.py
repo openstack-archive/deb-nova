@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -60,7 +59,3 @@ class EvacuateJsonTest(test_servers.ServersSampleBase):
                                  'server-evacuate-req', req_subs)
         subs = self._get_regexes()
         self._verify_response('server-evacuate-resp', subs, response, 200)
-
-
-class EvacuateXmlTest(EvacuateJsonTest):
-    ctype = 'xml'

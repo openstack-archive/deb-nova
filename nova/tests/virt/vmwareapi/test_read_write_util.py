@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 IBM Corp.
 # Copyright 2011 OpenStack Foundation
 #
@@ -25,7 +23,7 @@ from nova.virt.vmwareapi import read_write_util
 CONF = cfg.CONF
 
 
-class ReadWriteUtilTestCase(test.TestCase):
+class ReadWriteUtilTestCase(test.NoDBTestCase):
     def setUp(self):
         super(ReadWriteUtilTestCase, self).setUp()
 

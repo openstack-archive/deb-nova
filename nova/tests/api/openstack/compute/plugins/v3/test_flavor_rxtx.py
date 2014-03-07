@@ -12,9 +12,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from lxml import etree
 import webob
 
+from nova.api.openstack.compute.plugins.v3 import flavor_rxtx
 from nova.compute import flavors
 from nova.openstack.common import jsonutils
 from nova import test
@@ -61,7 +61,7 @@ def fake_get_all_flavors_sorted_list(context=None, inactive=False,
 
 class FlavorRxtxTest(test.NoDBTestCase):
     content_type = 'application/json'
-    prefix = ''
+    prefix = '%s:' % flavor_rxtx.ALIAS
 
     def setUp(self):
         super(FlavorRxtxTest, self).setUp()
@@ -87,7 +87,8 @@ class FlavorRxtxTest(test.NoDBTestCase):
         return jsonutils.loads(body).get('flavors')
 
     def assertFlavorRxtx(self, flavor, rxtx):
-        self.assertEqual(str(flavor.get('rxtx_factor')), rxtx)
+        self.assertEqual(
+            flavor.get('%srxtx_factor' % self.prefix), rxtx)
 
     def test_show(self):
         url = '/v3/flavors/1'
@@ -104,13 +105,3 @@ class FlavorRxtxTest(test.NoDBTestCase):
         flavors = self._get_flavors(res.body)
         self.assertFlavorRxtx(flavors[0], '1.0')
         self.assertFlavorRxtx(flavors[1], '')
-
-
-class FlavorRxtxXmlTest(FlavorRxtxTest):
-    content_type = 'application/xml'
-
-    def _get_flavor(self, body):
-        return etree.XML(body)
-
-    def _get_flavors(self, body):
-        return etree.XML(body).getchildren()

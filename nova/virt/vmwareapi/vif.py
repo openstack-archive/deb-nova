@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
 #
@@ -125,7 +123,7 @@ def get_neutron_network(session, network_name, cluster, vif):
         opaque = session._call_method(vim_util, "get_dynamic_property", host,
                                       "HostSystem",
                                       "config.network.opaqueNetwork")
-    except error_util.VimFaultException:
+    except error_util.InvalidPropertyException:
         opaque = None
     if opaque:
         bridge = vif['network']['id']

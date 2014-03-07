@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -21,6 +19,7 @@ Tests For Scheduler
 
 import mox
 from oslo.config import cfg
+from oslo import messaging
 
 from nova.compute import api as compute_api
 from nova.compute import task_states
@@ -32,9 +31,8 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.image import glance
-from nova import notifier as notify
 from nova.objects import instance as instance_obj
-from nova.openstack.common.rpc import common as rpc_common
+from nova import rpc
 from nova.scheduler import driver
 from nova.scheduler import manager
 from nova import servicegroup
@@ -71,53 +69,6 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         # Correct scheduler driver
         manager = self.manager
         self.assertIsInstance(manager.driver, self.driver_cls)
-
-    def test_update_service_capabilities(self):
-        service_name = 'fake_service'
-        host = 'fake_host'
-
-        self.mox.StubOutWithMock(self.manager.driver,
-                'update_service_capabilities')
-
-        # Test no capabilities passes empty dictionary
-        self.manager.driver.update_service_capabilities(service_name,
-                host, {})
-        self.mox.ReplayAll()
-        self.manager.update_service_capabilities(self.context,
-                service_name=service_name, host=host, capabilities={})
-        self.mox.VerifyAll()
-
-        self.mox.ResetAll()
-        # Test capabilities passes correctly
-        capabilities = {'fake_capability': 'fake_value'}
-        self.manager.driver.update_service_capabilities(
-                service_name, host, capabilities)
-        self.mox.ReplayAll()
-        self.manager.update_service_capabilities(self.context,
-                service_name=service_name, host=host,
-                capabilities=capabilities)
-
-    def test_update_service_multiple_capabilities(self):
-        service_name = 'fake_service'
-        host = 'fake_host'
-
-        self.mox.StubOutWithMock(self.manager.driver,
-                                 'update_service_capabilities')
-
-        capab1 = {'fake_capability': 'fake_value1'},
-        capab2 = {'fake_capability': 'fake_value2'},
-        capab3 = None
-        self.manager.driver.update_service_capabilities(
-                service_name, host, capab1)
-        self.manager.driver.update_service_capabilities(
-                service_name, host, capab2)
-        # None is converted to {}
-        self.manager.driver.update_service_capabilities(
-                service_name, host, {})
-        self.mox.ReplayAll()
-        self.manager.update_service_capabilities(self.context,
-                service_name=service_name, host=host,
-                capabilities=[capab1, capab2, capab3])
 
     def test_show_host_resources(self):
         host = 'fake_host'
@@ -436,10 +387,10 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
 
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(db, 'instance_fault_create')
-        self.mox.StubOutWithMock(notify, 'get_notifier')
+        self.mox.StubOutWithMock(rpc, 'get_notifier')
         notifier = self.mox.CreateMockAnything()
-        notify.get_notifier('conductor', CONF.host).AndReturn(notifier)
-        notify.get_notifier('scheduler').AndReturn(notifier)
+        rpc.get_notifier('conductor', CONF.host).AndReturn(notifier)
+        rpc.get_notifier('scheduler').AndReturn(notifier)
         db.instance_update_and_get_original(self.context, 'fake-uuid',
                                             updates).AndReturn((None,
                                                                 fake_inst))
@@ -457,7 +408,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                 exception.NoValidHost(reason=""))
 
         self.mox.ReplayAll()
-        self.assertRaises(rpc_common.ClientException,
+        self.assertRaises(messaging.ExpectedException,
                           self.manager.select_hosts,
                           self.context, {}, {})
 
@@ -527,20 +478,6 @@ class SchedulerTestCase(test.NoDBTestCase):
         self.topic = 'fake_topic'
         self.servicegroup_api = servicegroup.API()
 
-    def test_update_service_capabilities(self):
-        service_name = 'fake_service'
-        host = 'fake_host'
-
-        self.mox.StubOutWithMock(self.driver.host_manager,
-                'update_service_capabilities')
-
-        capabilities = {'fake_capability': 'fake_value'}
-        self.driver.host_manager.update_service_capabilities(
-                service_name, host, capabilities)
-        self.mox.ReplayAll()
-        self.driver.update_service_capabilities(service_name,
-                host, capabilities)
-
     def test_hosts_up(self):
         service1 = {'host': 'host1'}
         service2 = {'host': 'host2'}
@@ -566,10 +503,10 @@ class SchedulerTestCase(test.NoDBTestCase):
                                             mox.IgnoreArg()).AndReturn(
                                                 (None, instance))
         db.instance_fault_create(self.context, mox.IgnoreArg())
-        self.mox.StubOutWithMock(notify, 'get_notifier')
+        self.mox.StubOutWithMock(rpc, 'get_notifier')
         notifier = self.mox.CreateMockAnything()
-        notify.get_notifier('conductor', CONF.host).AndReturn(notifier)
-        notify.get_notifier('scheduler').AndReturn(notifier)
+        rpc.get_notifier('conductor', CONF.host).AndReturn(notifier)
+        rpc.get_notifier('scheduler').AndReturn(notifier)
         notifier.error(self.context, 'scheduler.run_instance', mox.IgnoreArg())
         self.mox.ReplayAll()
 

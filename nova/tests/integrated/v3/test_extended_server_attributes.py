@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -41,7 +40,3 @@ class ExtendedServerAttributesJsonTest(test_servers.ServersSampleBase):
         subs['instance_name'] = 'instance-\d{8}'
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
         self._verify_response('servers-detail-resp', subs, response, 200)
-
-
-class ExtendedServerAttributesXmlTest(ExtendedServerAttributesJsonTest):
-    ctype = 'xml'

@@ -1,6 +1,4 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
-# Copyright 2012, Red Hat, Inc.
+# Copyright 2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -18,13 +16,15 @@
 Unit Tests for nova.network.rpcapi
 """
 
+import collections
+
+import mox
 from oslo.config import cfg
 
 from nova import context
 from nova.network import rpcapi as network_rpcapi
-from nova.openstack.common import rpc
 from nova import test
-from nova.tests import matchers
+from nova.tests import fake_instance
 
 CONF = cfg.CONF
 
@@ -34,18 +34,37 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
         super(NetworkRpcAPITestCase, self).setUp()
         self.flags(multi_host=True)
 
+    # Used to specify the default value expected if no real value is passed
+    DefaultArg = collections.namedtuple('DefaultArg', ['value'])
+
     def _test_network_api(self, method, rpc_method, **kwargs):
         ctxt = context.RequestContext('fake_user', 'fake_project')
+
         rpcapi = network_rpcapi.NetworkAPI()
-        expected_retval = 'foo' if method == 'call' else None
-        expected_version = kwargs.pop('version', rpcapi.BASE_RPC_API_VERSION)
-        expected_topic = CONF.network_topic
-        expected_msg = rpcapi.make_msg(method, **kwargs)
-        if 'source_compute' in expected_msg['args']:
+        self.assertIsNotNone(rpcapi.client)
+        self.assertEqual(rpcapi.client.target.topic, CONF.network_topic)
+
+        expected_retval = 'foo' if rpc_method == 'call' else None
+        expected_version = kwargs.pop('version', None)
+        expected_fanout = kwargs.pop('fanout', None)
+        expected_kwargs = kwargs.copy()
+
+        for k, v in expected_kwargs.items():
+            if isinstance(v, self.DefaultArg):
+                expected_kwargs[k] = v.value
+                kwargs.pop(k)
+
+        prepare_kwargs = {}
+        if expected_version:
+            prepare_kwargs['version'] = expected_version
+        if expected_fanout:
+            prepare_kwargs['fanout'] = True
+
+        if 'source_compute' in expected_kwargs:
             # Fix up for migrate_instance_* calls.
-            args = expected_msg['args']
-            args['source'] = args.pop('source_compute')
-            args['dest'] = args.pop('dest_compute')
+            expected_kwargs['source'] = expected_kwargs.pop('source_compute')
+            expected_kwargs['dest'] = expected_kwargs.pop('dest_compute')
+
         targeted_methods = [
             'lease_fixed_ip', 'release_fixed_ip', 'rpc_setup_network_on_host',
             '_rpc_allocate_fixed_ip', 'deallocate_fixed_ip', 'update_dns',
@@ -54,56 +73,37 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
             'migrate_instance_finish',
             'allocate_for_instance', 'deallocate_for_instance',
         ]
-        if method in targeted_methods and 'host' in kwargs:
-            if method not in ['allocate_for_instance',
-                              'deallocate_for_instance',
-                              'deallocate_fixed_ip']:
-                del expected_msg['args']['host']
-            host = kwargs['host']
+        targeted_by_instance = ['deallocate_for_instance']
+        if method in targeted_methods and ('host' in expected_kwargs or
+                'instance' in expected_kwargs):
+            if method in targeted_by_instance:
+                host = expected_kwargs['instance']['host']
+            else:
+                host = expected_kwargs['host']
+                if method not in ['allocate_for_instance',
+                                  'deallocate_fixed_ip']:
+                    expected_kwargs.pop('host')
             if CONF.multi_host:
-                expected_topic = rpc.queue_get_for(ctxt, CONF.network_topic,
-                                                   host)
-        expected_msg['version'] = expected_version
+                prepare_kwargs['server'] = host
 
-        self.fake_args = None
-        self.fake_kwargs = None
+        self.mox.StubOutWithMock(rpcapi, 'client')
 
-        def _fake_rpc_method(*args, **kwargs):
-            self.fake_args = args
-            self.fake_kwargs = kwargs
-            if expected_retval:
-                return expected_retval
+        version_check = [
+            'deallocate_for_instance', 'deallocate_fixed_ip'
+        ]
+        if method in version_check:
+            rpcapi.client.can_send_version(mox.IgnoreArg()).AndReturn(True)
 
-        self.stubs.Set(rpc, rpc_method, _fake_rpc_method)
+        if prepare_kwargs:
+            rpcapi.client.prepare(**prepare_kwargs).AndReturn(rpcapi.client)
+
+        rpc_method = getattr(rpcapi.client, rpc_method)
+        rpc_method(ctxt, method, **expected_kwargs).AndReturn('foo')
+
+        self.mox.ReplayAll()
 
         retval = getattr(rpcapi, method)(ctxt, **kwargs)
-
         self.assertEqual(retval, expected_retval)
-        self.assertIsNotNone(self.fake_args)
-        self.assertIsNotNone(self.fake_kwargs)
-        expected_args = [ctxt, expected_topic, expected_msg]
-        for arg, expected_arg in zip(self.fake_args, expected_args):
-            try:
-                self.assertEqual(arg, expected_arg)
-            except AssertionError:
-                # actual_args may contain optional args, like the one that
-                # have default values; therefore if arg and excepted_arg
-                # do not match verify at least that the required ones do
-                if isinstance(arg, dict) and isinstance(expected_arg, dict):
-                    actual_args = arg.get('args')
-                    required_args = expected_arg.get('args')
-                    if actual_args and required_args:
-                        self.assertThat(required_args,
-                                        matchers.IsSubDictOf(actual_args))
-                else:
-                    raise
-
-    def test_get_all_networks(self):
-        self._test_network_api('get_all_networks', rpc_method='call')
-
-    def test_get_network(self):
-        self._test_network_api('get_network', rpc_method='call',
-                network_uuid='fake_uuid')
 
     def test_create_networks(self):
         self._test_network_api('create_networks', rpc_method='call',
@@ -154,14 +154,6 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
         self._test_network_api('get_instance_id_by_floating_address',
                 rpc_method='call', address='w.x.y.z')
 
-    def test_get_vifs_by_instance(self):
-        self._test_network_api('get_vifs_by_instance',
-                rpc_method='call', instance_id='fake_id')
-
-    def test_get_vif_by_mac_address(self):
-        self._test_network_api('get_vif_by_mac_address',
-                rpc_method='call', mac_address='fake_mac_addr')
-
     def test_allocate_floating_ip(self):
         self._test_network_api('allocate_floating_ip', rpc_method='call',
                 project_id='fake_id', pool='fake_pool', auto_assigned=False)
@@ -196,13 +188,15 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
                 macs=[], version='1.9')
 
     def test_deallocate_for_instance(self):
+        instance = fake_instance.fake_instance_obj(context.get_admin_context())
         self._test_network_api('deallocate_for_instance', rpc_method='call',
-                instance_id='fake_id', project_id='fake_id', host='fake_host')
+                requested_networks=self.DefaultArg(None), instance=instance,
+                version='1.11')
 
     def test_deallocate_for_instance_with_expected_networks(self):
+        instance = fake_instance.fake_instance_obj(context.get_admin_context())
         self._test_network_api('deallocate_for_instance', rpc_method='call',
-                instance_id='fake_id', project_id='fake_id',
-                host='fake_host', requested_networks={})
+                instance=instance, requested_networks={}, version='1.11')
 
     def test_add_fixed_ip_to_instance(self):
         self._test_network_api('add_fixed_ip_to_instance', rpc_method='call',
@@ -293,11 +287,13 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
                 vpn=True, host='fake_host')
 
     def test_deallocate_fixed_ip(self):
+        instance = fake_instance.fake_db_instance()
         self._test_network_api('deallocate_fixed_ip', rpc_method='call',
-                address='fake_addr', host='fake_host')
+                address='fake_addr', host='fake_host', instance=instance,
+                version='1.12')
 
     def test_update_dns(self):
-        self._test_network_api('update_dns', rpc_method='fanout_cast',
+        self._test_network_api('update_dns', rpc_method='cast', fanout=True,
                 network_ids='fake_id', version='1.3')
 
     def test__associate_floating_ip(self):
@@ -319,6 +315,7 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
                 source_compute='fake_src_compute',
                 dest_compute='fake_dest_compute',
                 floating_addresses='fake_floating_addresses',
+                host=self.DefaultArg(None),
                 version='1.2')
 
     def test_migrate_instance_start_multi_host(self):
@@ -340,6 +337,7 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
                 source_compute='fake_src_compute',
                 dest_compute='fake_dest_compute',
                 floating_addresses='fake_floating_addresses',
+                host=self.DefaultArg(None),
                 version='1.2')
 
     def test_migrate_instance_finish_multi_host(self):

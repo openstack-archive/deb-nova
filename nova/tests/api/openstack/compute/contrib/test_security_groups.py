@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # Copyright 2012 Justin Santa Barbara
 #
@@ -274,7 +272,7 @@ class TestSecurityGroups(test.TestCase):
 
     def test_create_security_group_quota_limit(self):
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-groups')
-        for num in range(1, CONF.quota_security_groups + 1):
+        for num in range(1, CONF.quota_security_groups):
             name = 'test%s' % num
             sg = security_group_template(name=name)
             res_dict = self.controller.create(req, {'security_group': sg})

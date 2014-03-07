@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Citrix Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -35,8 +33,7 @@ def find_network_with_name_label(session, name_label):
 
 
 def find_network_with_bridge(session, bridge):
-    """
-    Return the network on which the bridge is attached, if found.
+    """Return the network on which the bridge is attached, if found.
     The bridge is defined in the nova db and can be found either in the
     'bridge' or 'name_label' fields of the XenAPI network record.
     """

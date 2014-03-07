@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -63,7 +62,3 @@ class KeyPairsSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
         subs = self._get_regexes()
         subs['keypair_name'] = '(%s)' % key_name
         self._verify_response('keypairs-get-resp', subs, response, 200)
-
-
-class KeyPairsSampleXmlTest(KeyPairsSampleJsonTest):
-    ctype = 'xml'

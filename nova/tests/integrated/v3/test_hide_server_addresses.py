@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -33,12 +32,8 @@ class ServersSampleHideAddressesJsonTest(test_servers.ServersSampleJsonTest):
 
     def setUp(self):
         # We override osapi_hide_server_address_states in order
-        # to have an example of in the json/xml samples of the
+        # to have an example of in the json samples of the
         # addresses being hidden
         CONF.set_override("osapi_hide_server_address_states",
                           [vm_states.ACTIVE])
         super(ServersSampleHideAddressesJsonTest, self).setUp()
-
-
-class ServersSampleHideAddressesXMLTest(ServersSampleHideAddressesJsonTest):
-    ctype = 'xml'

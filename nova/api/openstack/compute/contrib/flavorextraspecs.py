@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 University of Southern California
 # All Rights Reserved.
 #
@@ -22,10 +20,10 @@ from webob import exc
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
+from nova.compute import flavors
 from nova import db
 from nova import exception
 from nova.openstack.common.gettextutils import _
-
 
 authorize = extensions.extension_authorizer('compute', 'flavorextraspecs')
 
@@ -57,6 +55,12 @@ class FlavorExtraSpecsController(object):
             expl = _('No Request Body')
             raise exc.HTTPBadRequest(explanation=expl)
 
+    def _check_key_names(self, keys):
+        try:
+            flavors.validate_extra_spec_keys(keys)
+        except exception.InvalidInput as error:
+            raise exc.HTTPBadRequest(explanation=error.format_message())
+
     @wsgi.serializers(xml=ExtraSpecsTemplate)
     def index(self, req, flavor_id):
         """Returns the list of extra specs for a given flavor."""
@@ -70,6 +74,7 @@ class FlavorExtraSpecsController(object):
         authorize(context, action='create')
         self._check_body(body)
         specs = body.get('extra_specs')
+        self._check_key_names(specs.keys())
         try:
             db.flavor_extra_specs_update_or_create(context,
                                                               flavor_id,

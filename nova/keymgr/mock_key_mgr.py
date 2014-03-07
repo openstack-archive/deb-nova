@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright (c) 2013 The Johns Hopkins University/Applied Physics Laboratory
 # All Rights Reserved.
 #
@@ -42,8 +41,7 @@ LOG = logging.getLogger(__name__)
 
 
 class MockKeyManager(key_mgr.KeyManager):
-    """
-    This mock key manager implementation supports all the methods specified
+    """This mock key manager implementation supports all the methods specified
     by the key manager interface. This implementation stores keys within a
     dictionary, and as a result, it is not acceptable for use across different
     services. Side effects (e.g., raising exceptions) for each method are
@@ -81,13 +79,6 @@ class MockKeyManager(key_mgr.KeyManager):
 
         key = self._generate_key(**kwargs)
         return self.store_key(ctxt, key)
-
-    def _generate_key_id(self):
-        key_id = uuidutils.generate_uuid()
-        while key_id in self.keys:
-            key_id = uuidutils.generate_uuid()
-
-        return key_id
 
     def _generate_key_id(self):
         key_id = uuidutils.generate_uuid()

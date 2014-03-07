@@ -26,13 +26,13 @@ from nova.cells import weights
 from nova import compute
 from nova.compute import flavors
 from nova.compute import instance_actions
-from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import conductor
 from nova.db import base
 from nova import exception
 from nova.objects import base as obj_base
 from nova.objects import instance as instance_obj
+from nova.objects import instance_action as instance_action_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.scheduler import rpcapi as scheduler_rpcapi
@@ -43,12 +43,12 @@ cell_scheduler_opts = [
         cfg.ListOpt('scheduler_filter_classes',
                 default=['nova.cells.filters.all_filters'],
                 help='Filter classes the cells scheduler should use.  '
-                        'An entry of "nova.cells.filters.all_filters"'
+                        'An entry of "nova.cells.filters.all_filters" '
                         'maps to all cells filters included with nova.'),
         cfg.ListOpt('scheduler_weight_classes',
                 default=['nova.cells.weights.all_weighers'],
                 help='Weigher classes the cells scheduler should use.  '
-                        'An entry of "nova.cells.weights.all_weighers"'
+                        'An entry of "nova.cells.weights.all_weighers" '
                         'maps to all cell weighers included with nova.'),
         cfg.IntOpt('scheduler_retries',
                 default=10,
@@ -119,9 +119,11 @@ class CellsScheduler(base.Base):
 
     def _create_action_here(self, ctxt, instance_uuids):
         for instance_uuid in instance_uuids:
-            action = compute_utils.pack_action_start(ctxt, instance_uuid,
-                    instance_actions.CREATE)
-            self.db.action_start(ctxt, action)
+            instance_action_obj.InstanceAction.action_start(
+                    ctxt,
+                    instance_uuid,
+                    instance_actions.CREATE,
+                    want_result=False)
 
     def _get_possible_cells(self):
         cells = self.state_manager.get_child_cells()

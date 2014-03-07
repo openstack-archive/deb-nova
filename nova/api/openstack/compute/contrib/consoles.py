@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -74,6 +72,34 @@ class ConsolesController(wsgi.Controller):
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         except exception.InstanceNotReady as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
+        except NotImplementedError:
+            msg = _("Unable to get spice console, "
+                    "functionality not implemented")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
+
+        return {'console': {'type': console_type, 'url': output['url']}}
+
+    @wsgi.action('os-getRDPConsole')
+    def get_rdp_console(self, req, id, body):
+        """Get text console output."""
+        context = req.environ['nova.context']
+        authorize(context)
+
+        # If type is not supplied or unknown, get_rdp_console below will cope
+        console_type = body['os-getRDPConsole'].get('type')
+
+        try:
+            instance = self.compute_api.get(context, id, want_objects=True)
+            output = self.compute_api.get_rdp_console(context,
+                                                      instance,
+                                                      console_type)
+        except exception.InstanceNotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceNotReady as e:
+            raise webob.exc.HTTPConflict(explanation=e.format_message())
+        except NotImplementedError:
+            msg = _("Unable to get rdp console, functionality not implemented")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
 
         return {'console': {'type': console_type, 'url': output['url']}}
 
@@ -82,7 +108,9 @@ class ConsolesController(wsgi.Controller):
         actions = [extensions.ActionExtension("servers", "os-getVNCConsole",
                                               self.get_vnc_console),
                    extensions.ActionExtension("servers", "os-getSPICEConsole",
-                                              self.get_spice_console)]
+                                              self.get_spice_console),
+                   extensions.ActionExtension("servers", "os-getRDPConsole",
+                                              self.get_rdp_console)]
         return actions
 
 

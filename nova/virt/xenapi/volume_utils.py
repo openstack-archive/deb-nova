@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 Citrix Systems, Inc.
 # Copyright (c) 2013 OpenStack Foundation
 #
@@ -23,13 +21,22 @@ and storage repositories
 import re
 import string
 
+from eventlet import greenthread
 from oslo.config import cfg
 
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova import utils
+
+xenapi_volume_utils_opts = [
+    cfg.IntOpt('introduce_vdi_retry_wait',
+               default=20,
+               help='Number of seconds to wait for an SR to settle '
+                    'if the VDI does not exist when first introduced '),
+    ]
 
 CONF = cfg.CONF
+CONF.register_opts(xenapi_volume_utils_opts, 'xenserver')
+
 LOG = logging.getLogger(__name__)
 
 
@@ -78,22 +85,20 @@ def introduce_sr(session, sr_uuid, label, params):
 
 
 def forget_sr(session, sr_ref):
-    """
-    Forgets the storage repository without destroying the VDIs within
-    """
+    """Forgets the storage repository without destroying the VDIs within."""
     LOG.debug(_('Forgetting SR...'))
     unplug_pbds(session, sr_ref)
     session.call_xenapi("SR.forget", sr_ref)
 
 
 def find_sr_by_uuid(session, sr_uuid):
-    """
-    Return the storage repository given a uuid.
-    """
-    for sr_ref, sr_rec in session.get_all_refs_and_recs('SR'):
-        if sr_rec['uuid'] == sr_uuid:
-            return sr_ref
-    return None
+    """Return the storage repository given a uuid."""
+    try:
+        return session.call_xenapi("SR.get_by_uuid", sr_uuid)
+    except session.XenAPI.Failure as exc:
+        if exc.details[0] == 'UUID_INVALID':
+            return None
+        raise
 
 
 def find_sr_from_vbd(session, vbd_ref):
@@ -132,27 +137,41 @@ def unplug_pbds(session, sr_ref):
                        ' PBD %(pbd)s'), {'exc': exc, 'pbd': pbd})
 
 
+def _get_vdi_ref(session, sr_ref, vdi_uuid, target_lun):
+    if vdi_uuid:
+        LOG.debug("vdi_uuid: %s" % vdi_uuid)
+        return session.call_xenapi("VDI.get_by_uuid", vdi_uuid)
+    elif target_lun:
+        vdi_refs = session.call_xenapi("SR.get_VDIs", sr_ref)
+        for curr_ref in vdi_refs:
+            curr_rec = session.call_xenapi("VDI.get_record", curr_ref)
+            if ('sm_config' in curr_rec and
+                'LUNid' in curr_rec['sm_config'] and
+                curr_rec['sm_config']['LUNid'] == str(target_lun)):
+                return curr_ref
+    else:
+        return (session.call_xenapi("SR.get_VDIs", sr_ref))[0]
+
+    return None
+
+
 def introduce_vdi(session, sr_ref, vdi_uuid=None, target_lun=None):
     """Introduce VDI in the host."""
     try:
-        session.call_xenapi("SR.scan", sr_ref)
-        if vdi_uuid:
-            LOG.debug("vdi_uuid: %s" % vdi_uuid)
-            vdi_ref = session.call_xenapi("VDI.get_by_uuid", vdi_uuid)
-        elif target_lun:
-            vdi_refs = session.call_xenapi("SR.get_VDIs", sr_ref)
-            for curr_ref in vdi_refs:
-                curr_rec = session.call_xenapi("VDI.get_record", curr_ref)
-                if ('sm_config' in curr_rec and
-                        'LUNid' in curr_rec['sm_config'] and
-                        curr_rec['sm_config']['LUNid'] == str(target_lun)):
-                    vdi_ref = curr_ref
-                    break
-        else:
-            vdi_ref = (session.call_xenapi("SR.get_VDIs", sr_ref))[0]
+        vdi_ref = _get_vdi_ref(session, sr_ref, vdi_uuid, target_lun)
+        if vdi_ref is None:
+            greenthread.sleep(CONF.xenserver.introduce_vdi_retry_wait)
+            session.call_xenapi("SR.scan", sr_ref)
+            vdi_ref = _get_vdi_ref(session, sr_ref, vdi_uuid, target_lun)
     except session.XenAPI.Failure as exc:
         LOG.exception(exc)
         raise StorageError(_('Unable to introduce VDI on SR %s') % sr_ref)
+
+    if not vdi_ref:
+        raise StorageError(_('VDI not found on SR %(sr)s (vdi_uuid '
+                             '%(vdi_uuid)s, target_lun %(target_lun)s)') %
+                           {'sr': sr_ref, 'vdi_uuid': vdi_uuid,
+                            'target_lun': target_lun})
 
     try:
         vdi_rec = session.call_xenapi("VDI.get_record", vdi_ref)
@@ -225,8 +244,7 @@ def parse_sr_info(connection_data, description=''):
 
 
 def parse_volume_info(connection_data):
-    """
-    Parse device_path and mountpoint as they can be used by XenAPI.
+    """Parse device_path and mountpoint as they can be used by XenAPI.
     In particular, the mountpoint (e.g. /dev/sdc) must be translated
     into a numeric literal.
     """
@@ -278,25 +296,6 @@ def mountpoint_to_number(mountpoint):
         return -1
 
 
-def _get_volume_id(path_or_id):
-    """Retrieve the volume id from device_path."""
-    # If we have the ID and not a path, just return it.
-    if isinstance(path_or_id, int):
-        return path_or_id
-    # n must contain at least the volume_id
-    # :volume- is for remote volumes
-    # -volume- is for local volumes
-    # see compute/manager->setup_compute_volume
-    volume_id = path_or_id[path_or_id.find(':volume-') + 1:]
-    if volume_id == path_or_id:
-        volume_id = path_or_id[path_or_id.find('-volume--') + 1:]
-        volume_id = volume_id.replace('volume--', '')
-    else:
-        volume_id = volume_id.replace('volume-', '')
-        volume_id = volume_id[0:volume_id.find('-')]
-    return int(volume_id)
-
-
 def _get_target_host(iscsi_string):
     """Retrieve target host."""
     if iscsi_string:
@@ -312,23 +311,3 @@ def _get_target_port(iscsi_string):
         return iscsi_string.split(':')[1]
 
     return CONF.xenserver.target_port
-
-
-def vbd_plug(session, vbd_ref, vm_ref):
-    @utils.synchronized('xenapi-events-' + vm_ref)
-    def synchronized_plug():
-        session.call_xenapi("VBD.plug", vbd_ref)
-
-    # NOTE(johngarbutt) we need to ensure there is only ever one VBD.plug
-    # happening at once per VM due to a bug in XenServer 6.1 and 6.2
-    synchronized_plug()
-
-
-def vbd_unplug(session, vbd_ref, vm_ref):
-    @utils.synchronized('xenapi-events-' + vm_ref)
-    def synchronized_unplug():
-        session.call_xenapi("VBD.unplug", vbd_ref)
-
-    # NOTE(johngarbutt) we need to ensure there is only ever one VBD.unplug
-    # happening at once per VM due to a bug in XenServer 6.1 and 6.2
-    synchronized_unplug()

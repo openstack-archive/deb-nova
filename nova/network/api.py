@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -27,6 +25,7 @@ from nova import exception
 from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
+from nova.objects import instance as instance_obj
 from nova.objects import instance_info_cache as info_cache_obj
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
@@ -38,8 +37,7 @@ LOG = logging.getLogger(__name__)
 
 
 def refresh_cache(f):
-    """
-    Decorator to update the instance_info_cache
+    """Decorator to update the instance_info_cache
 
     Requires context and instance as function args
     """
@@ -313,12 +311,11 @@ class API(base.Base):
         #             this is called from compute.manager which shouldn't
         #             have db access so we do it on the other side of the
         #             rpc.
-        args = {}
-        args['instance_id'] = instance['uuid']
-        args['project_id'] = instance['project_id']
-        args['host'] = instance['host']
-        args['requested_networks'] = requested_networks
-        self.network_rpcapi.deallocate_for_instance(context, **args)
+        if not isinstance(instance, instance_obj.Instance):
+            instance = instance_obj.Instance._from_db_object(context,
+                    instance_obj.Instance(), instance)
+        self.network_rpcapi.deallocate_for_instance(context, instance=instance,
+                requested_networks=requested_networks)
 
     # NOTE(danms): Here for neutron compatibility
     def allocate_port_for_instance(self, context, instance, port_id,

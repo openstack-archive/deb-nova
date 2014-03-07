@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -17,7 +15,10 @@
 import collections
 import functools
 
-from nova import notifier
+import anyjson
+from oslo import messaging
+
+from nova import rpc
 
 NOTIFICATIONS = []
 
@@ -33,8 +34,11 @@ FakeMessage = collections.namedtuple('Message',
 
 class FakeNotifier(object):
 
-    def __init__(self, publisher_id):
+    def __init__(self, transport, publisher_id, serializer=None):
+        self.transport = transport
         self.publisher_id = publisher_id
+        self._serializer = serializer or messaging.serializer.NoOpSerializer()
+
         for priority in ['debug', 'info', 'warn', 'error', 'critical']:
             setattr(self, priority,
                     functools.partial(self._notify, priority.upper()))
@@ -42,12 +46,24 @@ class FakeNotifier(object):
     def prepare(self, publisher_id=None):
         if publisher_id is None:
             publisher_id = self.publisher_id
-        return self.__class__(publisher_id)
+        return self.__class__(self.transport, publisher_id,
+                              serializer=self._serializer)
 
     def _notify(self, priority, ctxt, event_type, payload):
+        payload = self._serializer.serialize_entity(ctxt, payload)
+        # NOTE(sileht): simulate the kombu serializer
+        # this permit to raise an exception if something have not
+        # been serialized correctly
+        anyjson.serialize(payload)
         msg = FakeMessage(self.publisher_id, priority, event_type, payload)
         NOTIFICATIONS.append(msg)
 
 
 def stub_notifier(stubs):
-    stubs.Set(notifier, 'Notifier', FakeNotifier)
+    stubs.Set(messaging, 'Notifier', FakeNotifier)
+    if rpc.NOTIFIER:
+        stubs.Set(rpc, 'NOTIFIER',
+                  FakeNotifier(rpc.NOTIFIER.transport,
+                               rpc.NOTIFIER.publisher_id,
+                               serializer=getattr(rpc.NOTIFIER, '_serializer',
+                                                  None)))

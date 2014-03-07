@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
@@ -28,8 +26,8 @@ from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import units
 from nova.openstack.common import uuidutils
-from nova import unit
 from nova.virt.vmwareapi import error_util
 
 _CLASSES = ['Datacenter', 'Datastore', 'ResourcePool', 'VirtualMachine',
@@ -103,6 +101,13 @@ def _convert_to_array_of_mor(mors):
     array_of_mors = DataObject()
     array_of_mors.ManagedObjectReference = mors
     return array_of_mors
+
+
+def _convert_to_array_of_opt_val(optvals):
+    """Wraps the given array into a DataObject."""
+    array_of_optv = DataObject()
+    array_of_optv.OptionValue = optvals
+    return array_of_optv
 
 
 class FakeRetrieveResult(object):
@@ -203,16 +208,14 @@ class ManagedObject(object):
                                                   self.mo_id))
 
     def set(self, attr, val):
-        """
-        Sets an attribute value. Not using the __setattr__ directly for we
+        """Sets an attribute value. Not using the __setattr__ directly for we
         want to set attributes of the type 'a.b.c' and using this function
         class we set the same.
         """
         self.__setattr__(attr, val)
 
     def get(self, attr):
-        """
-        Gets an attribute. Used as an intermediary to get nested
+        """Gets an attribute. Used as an intermediary to get nested
         property like 'a.b.c' value.
         """
         return self.__getattr__(attr)
@@ -260,9 +263,7 @@ class DataObject(object):
 
 
 class HostInternetScsiHba(DataObject):
-    """
-    iSCSI Host Bus Adapter
-    """
+    """iSCSI Host Bus Adapter"""
 
     def __init__(self):
         super(HostInternetScsiHba, self).__init__()
@@ -270,15 +271,54 @@ class HostInternetScsiHba(DataObject):
         self.key = 'key-vmhba33'
 
 
-class VirtualDisk(DataObject):
-    """
-    Virtual Disk class.
-    """
+class FileAlreadyExists(DataObject):
+    """File already exists class."""
 
     def __init__(self):
+        super(FileAlreadyExists, self).__init__()
+        self.__name__ = error_util.FILE_ALREADY_EXISTS
+
+
+class FileNotFound(DataObject):
+    """File not found class."""
+
+    def __init__(self):
+        super(FileNotFound, self).__init__()
+        self.__name__ = error_util.FILE_NOT_FOUND
+
+
+class FileFault(DataObject):
+    """File fault."""
+
+    def __init__(self):
+        super(FileFault, self).__init__()
+        self.__name__ = error_util.FILE_FAULT
+
+
+class CannotDeleteFile(DataObject):
+    """Cannot delete file."""
+
+    def __init__(self):
+        super(CannotDeleteFile, self).__init__()
+        self.__name__ = error_util.CANNOT_DELETE_FILE
+
+
+class FileLocked(DataObject):
+    """File locked."""
+
+    def __init__(self):
+        super(FileLocked, self).__init__()
+        self.__name__ = error_util.FILE_LOCKED
+
+
+class VirtualDisk(DataObject):
+    """Virtual Disk class."""
+
+    def __init__(self, controllerKey=0, unitNumber=0):
         super(VirtualDisk, self).__init__()
         self.key = 0
-        self.unitNumber = 0
+        self.controllerKey = controllerKey
+        self.unitNumber = unitNumber
 
 
 class VirtualDiskFlatVer2BackingInfo(DataObject):
@@ -298,9 +338,17 @@ class VirtualDiskRawDiskMappingVer1BackingInfo(DataObject):
         self.lunUuid = ""
 
 
+class VirtualIDEController(DataObject):
+
+    def __init__(self, key=0):
+        self.key = key
+
+
 class VirtualLsiLogicController(DataObject):
     """VirtualLsiLogicController class."""
-    pass
+    def __init__(self, key=0, scsiCtlrUnitNumber=0):
+        self.key = key
+        self.scsiCtlrUnitNumber = scsiCtlrUnitNumber
 
 
 class VirtualLsiLogicSASController(DataObject):
@@ -335,8 +383,14 @@ class VirtualMachine(ManagedObject):
         self.set("config.files.vmPathName", kwargs.get("vmPathName"))
         self.set("summary.config.numCpu", kwargs.get("numCpu", 1))
         self.set("summary.config.memorySizeMB", kwargs.get("mem", 1))
+        self.set("summary.config.instanceUuid", kwargs.get("instanceUuid"))
         self.set("config.hardware.device", kwargs.get("virtual_device", None))
-        self.set("config.extraConfig", kwargs.get("extra_config", None))
+        exconfig_do = kwargs.get("extra_config", None)
+        self.set("config.extraConfig",
+                 _convert_to_array_of_opt_val(exconfig_do))
+        if exconfig_do:
+            for optval in exconfig_do:
+                self.set('config.extraConfig["%s"]' % optval.key, optval)
         self.set('runtime.host', kwargs.get("runtime_host", None))
         self.device = kwargs.get("virtual_device")
         # Sample of diagnostics data is below.
@@ -373,8 +427,7 @@ class VirtualMachine(ManagedObject):
         self.set("summary.runtime", runtime)
 
     def reconfig(self, factory, val):
-        """
-        Called to reconfigure the VM. Actually customizes the property
+        """Called to reconfigure the VM. Actually customizes the property
         setting of the Virtual Machine object.
         """
         try:
@@ -385,8 +438,8 @@ class VirtualMachine(ManagedObject):
                 return
 
             # Case of Reconfig of VM to attach disk
-            controller_key = val.deviceChange[1].device.controllerKey
-            filename = val.deviceChange[1].device.backing.fileName
+            controller_key = val.deviceChange[0].device.controllerKey
+            filename = val.deviceChange[0].device.backing.fileName
 
             disk = VirtualDisk()
             disk.controllerKey = controller_key
@@ -429,8 +482,8 @@ class ResourcePool(ManagedObject):
         memoryAllocation = DataObject()
         cpuAllocation = DataObject()
 
-        memory.maxUsage = 1000 * unit.Mi
-        memory.overallUsage = 500 * unit.Mi
+        memory.maxUsage = 1000 * units.Mi
+        memory.overallUsage = 500 * units.Mi
         cpu.maxUsage = 10000
         cpu.overallUsage = 1000
         runtime.cpu = cpu
@@ -527,7 +580,7 @@ class ClusterComputeResource(ManagedObject):
             summary.numCpuCores += host_summary.hardware.numCpuCores
             summary.numCpuThreads += host_summary.hardware.numCpuThreads
             summary.totalMemory += host_summary.hardware.memorySize
-            free_memory = (host_summary.hardware.memorySize / unit.Mi
+            free_memory = (host_summary.hardware.memorySize / units.Mi
                            - host_summary.quickStats.overallMemoryUsage)
             summary.effectiveMemory += free_memory if connected else 0
             summary.numEffectiveHosts += 1 if connected else 0
@@ -541,8 +594,8 @@ class Datastore(ManagedObject):
         super(Datastore, self).__init__("ds")
         self.set("summary.type", "VMFS")
         self.set("summary.name", name)
-        self.set("summary.capacity", capacity * unit.Gi)
-        self.set("summary.freeSpace", free * unit.Gi)
+        self.set("summary.capacity", capacity * units.Gi)
+        self.set("summary.freeSpace", free * units.Gi)
         self.set("summary.accessible", True)
         self.set("browser", "")
 
@@ -594,8 +647,15 @@ class HostSystem(ManagedObject):
         hardware.vendor = "Intel"
         hardware.cpuModel = "Intel(R) Xeon(R)"
         hardware.uuid = "host-uuid"
-        hardware.memorySize = unit.Gi
+        hardware.memorySize = units.Gi
         summary.hardware = hardware
+
+        runtime = DataObject()
+        if connected:
+            runtime.connectionState = "connected"
+        else:
+            runtime.connectionState = "disconnected"
+        summary.runtime = runtime
 
         quickstats = DataObject()
         quickstats.overallMemoryUsage = 500
@@ -616,8 +676,8 @@ class HostSystem(ManagedObject):
         self.set("summary", summary)
         self.set("capability.maxHostSupportedVcpus", 600)
         self.set("summary.runtime.inMaintenanceMode", False)
-        self.set("runtime.connectionState", "connected")
         self.set("summary.hardware", hardware)
+        self.set("summary.runtime", runtime)
         self.set("config.network.pnic", net_info_pnic)
         self.set("connected", connected)
 
@@ -738,11 +798,20 @@ class Datacenter(ManagedObject):
 class Task(ManagedObject):
     """Task class."""
 
-    def __init__(self, task_name, state="running", result=None):
+    def __init__(self, task_name, state="running", result=None,
+                 error_fault=None):
         super(Task, self).__init__("Task")
         info = DataObject()
         info.name = task_name
         info.state = state
+        if state == 'error':
+            error = DataObject()
+            error.localizedMessage = "Error message"
+            if not error_fault:
+                error.fault = DataObject()
+            else:
+                error.fault = error_fault
+            info.error = error
         info.result = result
         self.set("info", info)
 
@@ -792,8 +861,8 @@ def create_cluster(name, ds_ref):
     _create_object('ClusterComputeResource', cluster)
 
 
-def create_task(task_name, state="running", result=None):
-    task = Task(task_name, state, result)
+def create_task(task_name, state="running", result=None, error_fault=None):
+    task = Task(task_name, state, result, error_fault)
     _create_object("Task", task)
     return task
 
@@ -880,8 +949,7 @@ class FakeVim(object):
     """Fake VIM Class."""
 
     def __init__(self, protocol="https", host="localhost", trace=None):
-        """
-        Initializes the suds client object, sets the service content
+        """Initializes the suds client object, sets the service content
         contents and the cookies for the session.
         """
         self._session = None
@@ -901,6 +969,7 @@ class FakeVim(object):
         service_content.fileManager = "FileManager"
         service_content.rootFolder = "RootFolder"
         service_content.sessionManager = "SessionManager"
+        service_content.searchIndex = "SearchIndex"
 
         about_info = DataObject()
         about_info.name = "VMware vCenter Server"
@@ -950,7 +1019,7 @@ class FakeVim(object):
                  _db_content['session']):
             LOG.debug(_("Session is faulty"))
             raise error_util.VimFaultException(
-                               [error_util.FAULT_NOT_AUTHENTICATED],
+                               [error_util.NOT_AUTHENTICATED],
                                _("Session Invalid"))
 
     def _session_is_active(self, *args, **kwargs):
@@ -973,7 +1042,8 @@ class FakeVim(object):
                   "numCpu": config_spec.numCPUs,
                   "mem": config_spec.memoryMB,
                   "extra_config": config_spec.extraConfig,
-                  "virtual_device": config_spec.deviceChange}
+                  "virtual_device": config_spec.deviceChange,
+                  "instanceUuid": config_spec.instanceUuid}
         virtual_machine = VirtualMachine(**vm_dict)
         _create_object("VirtualMachine", virtual_machine)
         task_mdo = create_task(method, "success")
@@ -1005,6 +1075,16 @@ class FakeVim(object):
         """Snapshots a VM. Here we do nothing for faking sake."""
         task_mdo = create_task(method, "success")
         return task_mdo.obj
+
+    def _find_all_by_uuid(self, *args, **kwargs):
+        uuid = kwargs.get('uuid')
+        vm_refs = []
+        for vm_ref in _db_content.get("VirtualMachine"):
+            vm = _get_object(vm_ref)
+            vm_uuid = vm.get("summary.config.instanceUuid")
+            if vm_uuid == uuid:
+                vm_refs.append(vm_ref)
+        return vm_refs
 
     def _delete_disk(self, method, *args, **kwargs):
         """Deletes .vmdk and -flat.vmdk files corresponding to the VM."""
@@ -1193,6 +1273,9 @@ class FakeVim(object):
                                                 *args, **kwargs)
         elif attr_name == "CloneVM_Task":
             return lambda *args, **kwargs: self._clone_vm(attr_name,
+                                                *args, **kwargs)
+        elif attr_name == "FindAllByUuid":
+            return lambda *args, **kwargs: self._find_all_by_uuid(attr_name,
                                                 *args, **kwargs)
         elif attr_name == "Rename_Task":
             return lambda *args, **kwargs: self._just_return_task(attr_name)

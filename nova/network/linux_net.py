@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -30,6 +28,7 @@ import six
 
 from nova import db
 from nova import exception
+from nova.objects import virtual_interface as vif_obj
 from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
 from nova.openstack.common.gettextutils import _
@@ -47,7 +46,7 @@ LOG = logging.getLogger(__name__)
 linux_net_opts = [
     cfg.MultiStrOpt('dhcpbridge_flagfile',
                     default=['/etc/nova/nova-dhcpbridge.conf'],
-                    help='location of flagfiles for dhcpbridge'),
+                    help='Location of flagfiles for dhcpbridge'),
     cfg.StrOpt('networks_path',
                default=paths.state_path_def('networks'),
                help='Location to keep network config files'),
@@ -58,7 +57,7 @@ linux_net_opts = [
                help='MTU setting for network interface'),
     cfg.StrOpt('dhcpbridge',
                default=paths.bindir_def('nova-dhcpbridge'),
-               help='location of nova-dhcpbridge'),
+               help='Location of nova-dhcpbridge'),
     cfg.StrOpt('routing_source_ip',
                default='$my_ip',
                help='Public IP of network host'),
@@ -67,12 +66,12 @@ linux_net_opts = [
                help='Lifetime of a DHCP lease in seconds'),
     cfg.MultiStrOpt('dns_server',
                     default=[],
-                    help='if set, uses specific dns server for dnsmasq. Can'
-                         'be specified multiple times.'),
+                    help='If set, uses specific DNS server for dnsmasq. Can'
+                         ' be specified multiple times.'),
     cfg.BoolOpt('use_network_dns_servers',
                 default=False,
-                help='if set, uses the dns1 and dns2 from the network ref.'
-                     'as dns servers.'),
+                help='If set, uses the dns1 and dns2 from the network ref.'
+                     ' as dns servers.'),
     cfg.ListOpt('dmz_cidr',
                default=[],
                help='A list of dmz range that should be accepted'),
@@ -92,10 +91,10 @@ linux_net_opts = [
                help='Name of Open vSwitch bridge used with linuxnet'),
     cfg.BoolOpt('send_arp_for_ha',
                 default=False,
-                help='send gratuitous ARPs for HA setup'),
+                help='Send gratuitous ARPs for HA setup'),
     cfg.IntOpt('send_arp_for_ha_count',
                default=3,
-               help='send this many gratuitous ARPs for HA setup'),
+               help='Send this many gratuitous ARPs for HA setup'),
     cfg.BoolOpt('use_single_default_gateway',
                 default=False,
                 help='Use single default gateway. Only first nic of vm will '
@@ -107,10 +106,10 @@ linux_net_opts = [
                          'Can be specified multiple times.'),
     cfg.StrOpt('metadata_host',
                default='$my_ip',
-               help='the ip for the metadata api server'),
+               help='The IP address for the metadata API server'),
     cfg.IntOpt('metadata_port',
                default=8775,
-               help='the port for the metadata api port'),
+               help='The port for the metadata API port'),
     cfg.StrOpt('iptables_top_regex',
                default='',
                help='Regular expression to match iptables rule that should '
@@ -127,6 +126,9 @@ linux_net_opts = [
                default=120,
                help='Amount of time, in seconds, that ovs_vsctl should wait '
                     'for a response from the database. 0 is to wait forever.'),
+    cfg.BoolOpt('fake_network',
+                default=False,
+                help='If passed, use fake network devices and addresses'),
     ]
 
 CONF = cfg.CONF
@@ -825,8 +827,12 @@ def initialize_gateway_device(dev, network_ref):
 
     # NOTE(vish): The ip for dnsmasq has to be the first address on the
     #             bridge for it to respond to reqests properly
-    full_ip = '%s/%s' % (network_ref['dhcp_server'],
-                         network_ref['cidr'].rpartition('/')[2])
+    try:
+        prefix = network_ref.cidr.prefixlen
+    except AttributeError:
+        prefix = network_ref['cidr'].rpartition('/')[2]
+
+    full_ip = '%s/%s' % (network_ref['dhcp_server'], prefix)
     new_ip_params = [[full_ip, 'brd', network_ref['broadcast']]]
     old_ip_params = []
     out, err = _execute('ip', 'addr', 'show', 'dev', dev,
@@ -968,11 +974,11 @@ def get_dhcp_opts(context, network_ref):
         instance_set = set([datum['instance_uuid'] for datum in data])
         default_gw_vif = {}
         for instance_uuid in instance_set:
-            vifs = db.virtual_interface_get_by_instance(context,
-                                                        instance_uuid)
+            vifs = vif_obj.VirtualInterfaceList.get_by_instance_uuid(context,
+                    instance_uuid)
             if vifs:
                 #offer a default gateway to the first virtual interface
-                default_gw_vif[instance_uuid] = vifs[0]['id']
+                default_gw_vif[instance_uuid] = vifs[0].id
 
         for datum in data:
             instance_uuid = datum['instance_uuid']
@@ -1262,6 +1268,15 @@ def _ip_bridge_cmd(action, params, device):
     return cmd
 
 
+def _set_device_mtu(dev):
+    """Set the device MTU."""
+
+    if CONF.network_device_mtu:
+        utils.execute('ip', 'link', 'set', dev, 'mtu',
+                      CONF.network_device_mtu, run_as_root=True,
+                      check_exit_code=[0, 2, 254])
+
+
 def _create_veth_pair(dev1_name, dev2_name):
     """Create a pair of veth devices with the specified names,
     deleting any previous devices with those names.
@@ -1275,10 +1290,7 @@ def _create_veth_pair(dev1_name, dev2_name):
         utils.execute('ip', 'link', 'set', dev, 'up', run_as_root=True)
         utils.execute('ip', 'link', 'set', dev, 'promisc', 'on',
                       run_as_root=True)
-        if CONF.network_device_mtu:
-            utils.execute('ip', 'link', 'set', dev, 'mtu',
-                          CONF.network_device_mtu, run_as_root=True,
-                          check_exit_code=[0, 2, 254])
+        _set_device_mtu(dev)
 
 
 def _ovs_vsctl(args):
@@ -1292,17 +1304,14 @@ def _ovs_vsctl(args):
 
 
 def create_ovs_vif_port(bridge, dev, iface_id, mac, instance_id):
-    _ovs_vsctl(['--', '--may-exist', 'add-port',
-                bridge, dev,
+    _ovs_vsctl(['--', '--if-exists', 'del-port', dev, '--',
+                'add-port', bridge, dev,
                 '--', 'set', 'Interface', dev,
                 'external-ids:iface-id=%s' % iface_id,
                 'external-ids:iface-status=active',
                 'external-ids:attached-mac=%s' % mac,
                 'external-ids:vm-uuid=%s' % instance_id])
-    if CONF.network_device_mtu:
-        utils.execute('ip', 'link', 'set', dev, 'mtu',
-                      CONF.network_device_mtu, run_as_root=True,
-                      check_exit_code=[0, 2, 254])
+    _set_device_mtu(dev)
 
 
 def delete_ovs_vif_port(bridge, dev):
@@ -1379,8 +1388,7 @@ def get_dev(network):
 
 
 class LinuxNetInterfaceDriver(object):
-    """
-    Abstract class that defines generic network host API
+    """Abstract class that defines generic network host API
     for for all Linux interface drivers.
     """
 
@@ -1478,10 +1486,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                          check_exit_code=[0, 2, 254])
             _execute('ip', 'link', 'set', interface, 'up', run_as_root=True,
                      check_exit_code=[0, 2, 254])
-            if CONF.network_device_mtu:
-                _execute('ip', 'link', 'set', interface, 'mtu',
-                         CONF.network_device_mtu, run_as_root=True,
-                         check_exit_code=[0, 2, 254])
+            _set_device_mtu(interface)
         return interface
 
     @staticmethod
@@ -1547,7 +1552,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             for line in out.split('\n'):
                 fields = line.split()
                 if fields and fields[0] == 'inet':
-                    if fields[-2] == 'secondary':
+                    if fields[-2] in ('secondary', 'dynamic', ):
                         params = fields[1:-2]
                     else:
                         params = fields[1:-1]
@@ -1731,10 +1736,7 @@ class LinuxOVSInterfaceDriver(LinuxNetInterfaceDriver):
                         'external-ids:attached-mac=%s' % mac_address])
             _execute('ip', 'link', 'set', dev, 'address', mac_address,
                      run_as_root=True)
-            if CONF.network_device_mtu:
-                _execute('ip', 'link', 'set', dev, 'mtu',
-                         CONF.network_device_mtu, run_as_root=True,
-                         check_exit_code=[0, 2, 254])
+            _set_device_mtu(dev)
             _execute('ip', 'link', 'set', dev, 'up', run_as_root=True)
             if not gateway:
                 # If we weren't instructed to act as a gateway then add the

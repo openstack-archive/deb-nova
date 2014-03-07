@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -92,7 +91,3 @@ class AccessIPsSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
         subs['hostid'] = '[a-f0-9]+'
         subs['id'] = uuid
         self._verify_response('server-put-resp', subs, response, 200)
-
-
-class AccessIPsSampleXmlTest(AccessIPsSampleJsonTest):
-    ctype = 'xml'

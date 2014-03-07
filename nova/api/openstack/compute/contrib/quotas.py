@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -15,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import urlparse
+import six.moves.urllib.parse as urlparse
 import webob
 
 from nova.api.openstack import extensions
@@ -75,10 +73,10 @@ class QuotaSetsController(wsgi.Controller):
             raise webob.exc.HTTPBadRequest(explanation=msg)
         if ((limit < minimum) and
            (maximum != -1 or (maximum == -1 and limit != -1))):
-            msg = _("Quota limit must greater than %s.") % minimum
+            msg = _("Quota limit must be greater than %s.") % minimum
             raise webob.exc.HTTPBadRequest(explanation=msg)
         if maximum != -1 and limit > maximum:
-            msg = _("Quota limit must less than %s.") % maximum
+            msg = _("Quota limit must be less than %s.") % maximum
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
     def _get_quotas(self, context, id, user_id=None, usages=False):

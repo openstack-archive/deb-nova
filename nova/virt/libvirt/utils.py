@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2010 United States Government as represented by the
 #    Administrator of the National Aeronautics and Space Administration.
 #    All Rights Reserved.
@@ -22,6 +20,7 @@
 
 import errno
 import os
+import platform
 
 from lxml import etree
 from oslo.config import cfg
@@ -30,9 +29,10 @@ from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
-from nova import unit
+from nova.openstack.common import units
 from nova import utils
 from nova.virt import images
+from nova.virt import volumeutils
 
 libvirt_opts = [
     cfg.BoolOpt('snapshot_compression',
@@ -40,7 +40,7 @@ libvirt_opts = [
                 help='Compress snapshot images when possible. This '
                      'currently applies exclusively to qcow2 images',
                 deprecated_group='DEFAULT',
-                deprecated_name='libvirt_snashot_compression'),
+                deprecated_name='libvirt_snapshot_compression'),
     ]
 
 CONF = cfg.CONF
@@ -54,17 +54,7 @@ def execute(*args, **kwargs):
 
 
 def get_iscsi_initiator():
-    """Get iscsi initiator name for this machine."""
-    # NOTE(vish) openiscsi stores initiator name in a file that
-    #            needs root permission to read.
-    try:
-        contents = utils.read_file_as_root('/etc/iscsi/initiatorname.iscsi')
-    except exception.FileNotFound:
-        return None
-
-    for l in contents.split('\n'):
-        if l.startswith('InitiatorName='):
-            return l[l.index('=') + 1:].strip()
+    return volumeutils.get_iscsi_initiator()
 
 
 def get_fc_hbas():
@@ -240,7 +230,7 @@ def create_lvm_image(vg, lv, size, sparse=False):
                                 'lv': lv})
 
     if sparse:
-        preallocated_space = 64 * unit.Mi
+        preallocated_space = 64 * units.Mi
         check_size(vg, lv, preallocated_space)
         if free_space < size:
             LOG.warning(_('Volume group %(vg)s will not be able'
@@ -362,26 +352,23 @@ def logical_volume_size(path):
     return int(out)
 
 
-def clear_logical_volume(path):
-    """Obfuscate the logical volume.
+def _zero_logical_volume(path, volume_size):
+    """Write zeros over the specified path
 
     :param path: logical volume path
+    :param size: number of zeros to write
     """
-    # TODO(p-draigbrady): We currently overwrite with zeros
-    # but we may want to make this configurable in future
-    # for more or less security conscious setups.
-
-    vol_size = logical_volume_size(path)
-    bs = unit.Mi
+    bs = units.Mi
     direct_flags = ('oflag=direct',)
     sync_flags = ()
-    remaining_bytes = vol_size
+    remaining_bytes = volume_size
 
-    # The loop caters for versions of dd that
-    # don't support the iflag=count_bytes option.
+    # The loop efficiently writes zeros using dd,
+    # and caters for versions of dd that don't have
+    # the easier to use iflag=count_bytes option.
     while remaining_bytes:
         zero_blocks = remaining_bytes / bs
-        seek_blocks = (vol_size - remaining_bytes) / bs
+        seek_blocks = (volume_size - remaining_bytes) / bs
         zero_cmd = ('dd', 'bs=%s' % bs,
                     'if=/dev/zero', 'of=%s' % path,
                     'seek=%s' % seek_blocks, 'count=%s' % zero_blocks)
@@ -390,10 +377,43 @@ def clear_logical_volume(path):
         if zero_blocks:
             utils.execute(*zero_cmd, run_as_root=True)
         remaining_bytes %= bs
-        bs /= 1024  # Limit to 3 iterations
+        bs /= units.Ki  # Limit to 3 iterations
         # Use O_DIRECT with initial block size and fdatasync otherwise
         direct_flags = ()
         sync_flags = ('conv=fdatasync',)
+
+
+def clear_logical_volume(path):
+    """Obfuscate the logical volume.
+
+    :param path: logical volume path
+    """
+    volume_clear = CONF.libvirt.volume_clear
+
+    if volume_clear not in ('none', 'shred', 'zero'):
+        LOG.error(_("ignoring unrecognized volume_clear='%s' value"),
+                  volume_clear)
+        volume_clear = 'zero'
+
+    if volume_clear == 'none':
+        return
+
+    volume_clear_size = int(CONF.libvirt.volume_clear_size) * units.Mi
+    volume_size = logical_volume_size(path)
+
+    if volume_clear_size != 0 and volume_clear_size < volume_size:
+        volume_size = volume_clear_size
+
+    if volume_clear == 'zero':
+        # NOTE(p-draigbrady): we could use shred to do the zeroing
+        # with -n0 -z, however only versions >= 8.22 perform as well as dd
+        _zero_logical_volume(path, volume_size)
+    elif volume_clear == 'shred':
+        utils.execute('shred', '-n3', '-s%d' % volume_size, path,
+                      run_as_root=True)
+    else:
+        raise exception.Invalid(_("volume_clear='%s' is not handled")
+                                % volume_clear)
 
 
 def remove_logical_volumes(*paths):
@@ -627,10 +647,11 @@ def get_fs_info(path):
             'used': used}
 
 
-def fetch_image(context, target, image_id, user_id, project_id, max_size=0):
+def fetch_image(context, target, image_id, user_id, project_id,
+                max_size=0, imagehandler_args=None):
     """Grab image."""
     images.fetch_to_raw(context, image_id, target, user_id, project_id,
-                        max_size=max_size)
+                        max_size=max_size, imagehandler_args=imagehandler_args)
 
 
 def get_instance_path(instance, forceold=False, relative=False):
@@ -655,3 +676,23 @@ def get_instance_path(instance, forceold=False, relative=False):
     if relative:
         return instance['uuid']
     return os.path.join(CONF.instances_path, instance['uuid'])
+
+
+def get_arch(image_meta):
+    """Determine the architecture of the guest (or host).
+
+    This method determines the CPU architecture that must be supported by
+    the hypervisor. It gets the (guest) arch info from image_meta properties,
+    and it will fallback to the nova-compute (host) arch if no architecture
+    info is provided in image_meta.
+
+    :param image_meta: the metadata associated with the instance image
+
+    :returns: guest (or host) architecture
+    """
+    if image_meta:
+        arch = image_meta.get('properties', {}).get('architecture')
+        if arch is not None:
+            return arch
+
+    return platform.processor()

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2010 OpenStack Foundation
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
@@ -31,11 +29,11 @@ from nova.conductor import api as conductor_api
 from nova import db
 from nova import exception
 from nova import notifications
-from nova import notifier
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
+from nova import rpc
 from nova import servicegroup
 
 LOG = logging.getLogger(__name__)
@@ -81,8 +79,8 @@ def handle_schedule_error(context, ex, instance_uuid, request_spec):
                    method='run_instance',
                    reason=ex)
 
-    notifier.get_notifier('scheduler').error(context,
-                                             'scheduler.run_instance', payload)
+    rpc.get_notifier('scheduler').error(context,
+                                        'scheduler.run_instance', payload)
 
 
 def instance_update_db(context, instance_uuid, extra_values=None):
@@ -106,10 +104,9 @@ class Scheduler(object):
                 CONF.scheduler_host_manager)
         self.servicegroup_api = servicegroup.API()
 
-    def update_service_capabilities(self, service_name, host, capabilities):
-        """Process a capability update from a service node."""
-        self.host_manager.update_service_capabilities(service_name,
-                host, capabilities)
+    def run_periodic_tasks(self, context):
+        """Manager calls this so drivers can perform periodic tasks."""
+        pass
 
     def hosts_up(self, context, topic):
         """Return the list of hosts that have a running service for topic."""

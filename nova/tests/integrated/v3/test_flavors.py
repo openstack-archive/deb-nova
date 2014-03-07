@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -34,7 +33,3 @@ class FlavorsSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
         response = self._do_get('flavors/detail')
         subs = self._get_regexes()
         self._verify_response('flavors-detail-resp', subs, response, 200)
-
-
-class FlavorsSampleXmlTest(FlavorsSampleJsonTest):
-    ctype = 'xml'

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Cloudbase Solutions Srl
 # All Rights Reserved.
 #
@@ -23,7 +21,7 @@ import os
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova import unit
+from nova.openstack.common import units
 from nova.virt.hyperv import imagecache
 from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vmops
@@ -44,6 +42,8 @@ class MigrationOps(object):
         self._imagecache = imagecache.ImageCache()
 
     def _migrate_disk_files(self, instance_name, disk_files, dest):
+        # TODO(mikal): it would be nice if this method took a full instance,
+        # because it could then be passed to the log messages below.
         same_host = False
         if dest in self._hostutils.get_local_ips():
             same_host = True
@@ -253,12 +253,12 @@ class MigrationOps(object):
                                       src_base_disk_path)
 
             if resize_instance:
-                new_size = instance['root_gb'] * unit.Gi
+                new_size = instance['root_gb'] * units.Gi
                 self._check_resize_vhd(root_vhd_path, root_vhd_info, new_size)
 
         eph_vhd_path = self._pathutils.lookup_ephemeral_vhd_path(instance_name)
         if resize_instance:
-            new_size = instance.get('ephemeral_gb', 0) * unit.Gi
+            new_size = instance.get('ephemeral_gb', 0) * units.Gi
             if not eph_vhd_path:
                 if new_size:
                     eph_vhd_path = self._vmops.create_ephemeral_vhd(instance)

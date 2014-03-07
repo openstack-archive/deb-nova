@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack Foundation
@@ -31,8 +29,7 @@ LOG = logging.getLogger(__name__)
 
 
 def get_network_with_the_name(session, network_name="vmnet0", cluster=None):
-    """
-    Gets reference to the network whose name is passed as the
+    """Gets reference to the network whose name is passed as the
     argument.
     """
     host = vm_util.get_host_ref(session, cluster)
@@ -82,8 +79,7 @@ def get_network_with_the_name(session, network_name="vmnet0", cluster=None):
 
 
 def get_vswitch_for_vlan_interface(session, vlan_interface, cluster=None):
-    """
-    Gets the vswitch associated with the physical network adapter
+    """Gets the vswitch associated with the physical network adapter
     with the name supplied.
     """
     # Get the list of vSwicthes on the Host System
@@ -143,8 +139,7 @@ def get_vlanid_and_vswitch_for_portgroup(session, pg_name, cluster=None):
 
 
 def create_port_group(session, pg_name, vswitch_name, vlan_id=0, cluster=None):
-    """
-    Creates a port group on the host system with the vlan tags
+    """Creates a port group on the host system with the vlan tags
     supplied. VLAN id 0 means no vlan id association.
     """
     client_factory = session._get_vim().client.factory
@@ -163,13 +158,12 @@ def create_port_group(session, pg_name, vswitch_name, vlan_id=0, cluster=None):
         session._call_method(session._get_vim(),
                 "AddPortGroup", network_system_mor,
                 portgrp=add_prt_grp_spec)
-    except error_util.VimFaultException as exc:
+    except error_util.AlreadyExistsException:
         # There can be a race condition when two instances try
         # adding port groups at the same time. One succeeds, then
         # the other one will get an exception. Since we are
         # concerned with the port group being created, which is done
         # by the other call, we can ignore the exception.
-        if error_util.FAULT_ALREADY_EXISTS not in exc.fault_list:
-            raise exception.NovaException(exc)
+        LOG.debug(_("Port Group %s already exists."), pg_name)
     LOG.debug(_("Created Port Group with name %s on "
                 "the ESX host") % pg_name)

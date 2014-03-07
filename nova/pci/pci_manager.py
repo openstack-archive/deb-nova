@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Intel, Inc.
 # Copyright (c) 2013 OpenStack Foundation
 # All Rights Reserved.
@@ -153,8 +151,11 @@ class PciDevTracker(object):
                 try:
                     existed.remove()
                 except exception.PciDeviceInvalidStatus as e:
-                    LOG.warn(_("Trying to remove device with %(status)s"
-                        "ownership %(instance_uuid)s"), existed)
+                    LOG.warn(_("Trying to remove device with %(status)s "
+                               "ownership %(instance_uuid)s because of "
+                               "%(pci_exception)s"), {'status': existed.status,
+                                  'instance_uuid': existed.instance_uuid,
+                                  'pci_exception': e.format_message()})
                     # Note(yjiang5): remove the device by force so that
                     # db entry is cleaned in next sync.
                     existed.status = 'removed'

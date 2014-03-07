@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from lxml import etree
 from webob import exc
 
 from nova.api.openstack.compute.plugins.v3 import hypervisors
@@ -48,7 +47,8 @@ TEST_HYPERS = [
          current_workload=2,
          running_vms=2,
          cpu_info='cpu_info',
-         disk_available_least=100),
+         disk_available_least=100,
+         host_ip='1.1.1.1'),
     dict(id=2,
          service_id=2,
          service=dict(id=2,
@@ -72,7 +72,8 @@ TEST_HYPERS = [
          current_workload=2,
          running_vms=2,
          cpu_info='cpu_info',
-         disk_available_least=100)]
+         disk_available_least=100,
+         host_ip='2.2.2.2')]
 TEST_SERVERS = [dict(name="inst1", uuid="uuid1", host="compute1"),
                 dict(name="inst2", uuid="uuid2", host="compute2"),
                 dict(name="inst3", uuid="uuid3", host="compute1"),
@@ -169,6 +170,7 @@ class HypervisorsTest(test.NoDBTestCase):
                 running_vms=2,
                 cpu_info='cpu_info',
                 disk_available_least=100,
+                host_ip='1.1.1.1',
                 service=dict(id=1, host='compute1')))
 
     def test_view_hypervisor_servers(self):
@@ -220,7 +222,8 @@ class HypervisorsTest(test.NoDBTestCase):
                          current_workload=2,
                          running_vms=2,
                          cpu_info='cpu_info',
-                         disk_available_least=100),
+                         disk_available_least=100,
+                         host_ip='1.1.1.1'),
                     dict(id=2,
                          service=dict(id=2, host="compute2"),
                          vcpus=4,
@@ -237,7 +240,8 @@ class HypervisorsTest(test.NoDBTestCase):
                          current_workload=2,
                          running_vms=2,
                          cpu_info='cpu_info',
-                         disk_available_least=100)]))
+                         disk_available_least=100,
+                         host_ip='2.2.2.2')]))
 
     def test_detail_non_admin(self):
         req = fakes.HTTPRequestV3.blank('/os-hypervisors/detail')
@@ -276,7 +280,8 @@ class HypervisorsTest(test.NoDBTestCase):
                     current_workload=2,
                     running_vms=2,
                     cpu_info='cpu_info',
-                    disk_available_least=100)))
+                    disk_available_least=100,
+                    host_ip='1.1.1.1')))
 
     def test_show_non_admin(self):
         req = fakes.HTTPRequestV3.blank('/os-hypervisors/1')
@@ -413,172 +418,3 @@ class HypervisorsTest(test.NoDBTestCase):
         req = fakes.HTTPRequestV3.blank('/os-hypervisors/statistics')
         self.assertRaises(exception.PolicyNotAuthorized,
                           self.controller.statistics, req)
-
-
-class HypervisorsSerializersTest(test.NoDBTestCase):
-    def compare_to_exemplar(self, exemplar, hyper):
-        # Check attributes
-        for key, value in exemplar.items():
-            if key in ('service', 'servers'):
-                # These turn into child elements and get tested
-                # separately below...
-                continue
-
-            self.assertEqual(str(value), hyper.get(key))
-
-        # Check child elements
-        required_children = set([child for child in ('service', 'servers')
-                                 if child in exemplar])
-        for child in hyper:
-            self.assertIn(child.tag, required_children)
-            required_children.remove(child.tag)
-
-            # Check the node...
-            if child.tag == 'service':
-                for key, value in exemplar['service'].items():
-                    self.assertEqual(str(value), child.get(key))
-            elif child.tag == 'servers':
-                self.assertEqual(len(child), len(exemplar['servers']))
-                for idx, grandchild in enumerate(child):
-                    self.assertEqual('server', grandchild.tag)
-                    for key, value in exemplar['servers'][idx].items():
-                        self.assertEqual(str(value), grandchild.get(key))
-
-        # Are they all accounted for?
-        self.assertEqual(len(required_children), 0)
-
-    def test_index_serializer(self):
-        serializer = hypervisors.HypervisorIndexTemplate()
-        exemplar = dict(hypervisors=[
-                dict(hypervisor_hostname="hyper1",
-                     id=1),
-                dict(hypervisor_hostname="hyper2",
-                     id=2)])
-        text = serializer.serialize(exemplar)
-        tree = etree.fromstring(text)
-
-        self.assertEqual('hypervisors', tree.tag)
-        self.assertEqual(len(exemplar['hypervisors']), len(tree))
-        for idx, hyper in enumerate(tree):
-            self.assertEqual('hypervisor', hyper.tag)
-            self.compare_to_exemplar(exemplar['hypervisors'][idx], hyper)
-
-    def test_detail_serializer(self):
-        serializer = hypervisors.HypervisorDetailTemplate()
-        exemplar = dict(hypervisors=[
-                dict(hypervisor_hostname="hyper1",
-                     id=1,
-                     vcpus=4,
-                     memory_mb=10 * 1024,
-                     local_gb=500,
-                     vcpus_used=2,
-                     memory_mb_used=5 * 1024,
-                     local_gb_used=250,
-                     hypervisor_type='xen',
-                     hypervisor_version=3,
-                     free_ram_mb=5 * 1024,
-                     free_disk_gb=250,
-                     current_workload=2,
-                     running_vms=2,
-                     cpu_info="json data",
-                     disk_available_least=100,
-                     service=dict(id=1, host="compute1")),
-                dict(hypervisor_hostname="hyper2",
-                     id=2,
-                     vcpus=4,
-                     memory_mb=10 * 1024,
-                     local_gb=500,
-                     vcpus_used=2,
-                     memory_mb_used=5 * 1024,
-                     local_gb_used=250,
-                     hypervisor_type='xen',
-                     hypervisor_version=3,
-                     free_ram_mb=5 * 1024,
-                     free_disk_gb=250,
-                     current_workload=2,
-                     running_vms=2,
-                     cpu_info="json data",
-                     disk_available_least=100,
-                     service=dict(id=2, host="compute2"))])
-        text = serializer.serialize(exemplar)
-        tree = etree.fromstring(text)
-
-        self.assertEqual('hypervisors', tree.tag)
-        self.assertEqual(len(exemplar['hypervisors']), len(tree))
-        for idx, hyper in enumerate(tree):
-            self.assertEqual('hypervisor', hyper.tag)
-            self.compare_to_exemplar(exemplar['hypervisors'][idx], hyper)
-
-    def test_show_serializer(self):
-        serializer = hypervisors.HypervisorTemplate()
-        exemplar = dict(hypervisor=dict(
-                hypervisor_hostname="hyper1",
-                id=1,
-                vcpus=4,
-                memory_mb=10 * 1024,
-                local_gb=500,
-                vcpus_used=2,
-                memory_mb_used=5 * 1024,
-                local_gb_used=250,
-                hypervisor_type='xen',
-                hypervisor_version=3,
-                free_ram_mb=5 * 1024,
-                free_disk_gb=250,
-                current_workload=2,
-                running_vms=2,
-                cpu_info="json data",
-                disk_available_least=100,
-                service=dict(id=1, host="compute1")))
-        text = serializer.serialize(exemplar)
-        tree = etree.fromstring(text)
-
-        self.assertEqual('hypervisor', tree.tag)
-        self.compare_to_exemplar(exemplar['hypervisor'], tree)
-
-    def test_uptime_serializer(self):
-        serializer = hypervisors.HypervisorUptimeTemplate()
-        exemplar = dict(hypervisor=dict(
-                hypervisor_hostname="hyper1",
-                id=1,
-                uptime='fake uptime'))
-        text = serializer.serialize(exemplar)
-        tree = etree.fromstring(text)
-
-        self.assertEqual('hypervisor', tree.tag)
-        self.compare_to_exemplar(exemplar['hypervisor'], tree)
-
-    def test_servers_serializer(self):
-        serializer = hypervisors.HypervisorServersTemplate()
-        exemplar = dict(hypervisor=
-                dict(hypervisor_hostname="hyper1",
-                     id=1,
-                     servers=[
-                        dict(name="inst1",
-                             id="uuid1"),
-                        dict(name="inst2",
-                             id="uuid2")]))
-        text = serializer.serialize(exemplar)
-        tree = etree.fromstring(text)
-        self.assertEqual('hypervisor', tree.tag)
-        self.compare_to_exemplar(exemplar['hypervisor'], tree)
-
-    def test_statistics_serializer(self):
-        serializer = hypervisors.HypervisorStatisticsTemplate()
-        exemplar = dict(hypervisor_statistics=dict(
-                count=2,
-                vcpus=8,
-                memory_mb=20 * 1024,
-                local_gb=500,
-                vcpus_used=4,
-                memory_mb_used=10 * 1024,
-                local_gb_used=250,
-                free_ram_mb=10 * 1024,
-                free_disk_gb=250,
-                current_workload=4,
-                running_vms=4,
-                disk_available_least=200))
-        text = serializer.serialize(exemplar)
-        tree = etree.fromstring(text)
-
-        self.assertEqual('hypervisor_statistics', tree.tag)
-        self.compare_to_exemplar(exemplar['hypervisor_statistics'], tree)

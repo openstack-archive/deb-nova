@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -86,9 +84,9 @@ class NovaExceptionTestCase(test.NoDBTestCase):
 
     def test_error_msg_exception_with_kwargs(self):
         class FakeNovaException(exception.NovaException):
-            msg_fmt = "default message: %(mispelled_code)s"
+            msg_fmt = "default message: %(misspelled_code)s"
 
-        exc = FakeNovaException(code=500, mispelled_code='blah')
+        exc = FakeNovaException(code=500, misspelled_code='blah')
         self.assertEqual(unicode(exc), 'default message: blah')
         self.assertEqual(exc.message, 'default message: blah')
 
@@ -144,7 +142,8 @@ class NovaExceptionTestCase(test.NoDBTestCase):
 
     def test_format_message_gettext_msg_returned(self):
         class FakeNovaException(exception.NovaException):
-            msg_fmt = gettextutils.Message("Some message %(param)s", 'nova')
+            msg_fmt = gettextutils.Message("Some message %(param)s",
+                                           domain='nova')
 
         exc = FakeNovaException(param='blah')
         msg = exc.format_message()

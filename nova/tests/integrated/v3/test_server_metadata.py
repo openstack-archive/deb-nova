@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -79,7 +78,3 @@ class ServersMetadataJsonTest(test_servers.ServersSampleBase):
         response = self._do_delete('servers/%s/metadata/foo' % uuid)
         self.assertEqual(response.status, 204)
         self.assertEqual(response.read(), '')
-
-
-class ServersMetadataXmlTest(ServersMetadataJsonTest):
-    ctype = 'xml'

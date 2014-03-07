@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -27,7 +25,7 @@ from nova import exception
 from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common.gettextutils import _
 
-INIT_VERSION = 179
+INIT_VERSION = 215
 _REPOSITORY = None
 
 get_engine = db_session.get_engine

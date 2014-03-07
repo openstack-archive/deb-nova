@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -80,6 +79,8 @@ class ServicesJsonTest(api_sample_base.ApiSampleTestBaseV3):
         return self._verify_response('service-disable-log-put-resp',
                                      subs, response, 200)
 
-
-class ServicesXmlTest(ServicesJsonTest):
-    ctype = 'xml'
+    def test_service_delete(self):
+        """Delete an existing service."""
+        response = self._do_delete('os-services/1')
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.read(), "")

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 IBM Corp.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -19,7 +17,6 @@ import webob.exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
 from nova.openstack.common.gettextutils import _
@@ -32,33 +29,7 @@ CONF = cfg.CONF
 CONF.import_opt('service_down_time', 'nova.service')
 
 
-class ServicesIndexTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('services')
-        elem = xmlutil.SubTemplateElement(root, 'service', selector='services')
-        elem.set('binary')
-        elem.set('host')
-        elem.set('zone')
-        elem.set('status')
-        elem.set('state')
-        elem.set('updated_at')
-        elem.set('disabled_reason')
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class ServiceUpdateTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('service', selector='service')
-        root.set('host')
-        root.set('binary')
-        root.set('status')
-        root.set('disabled_reason')
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class ServiceController(object):
+class ServiceController(wsgi.Controller):
 
     def __init__(self):
         self.host_api = compute.HostAPI()
@@ -90,6 +61,7 @@ class ServiceController(object):
         if svc['disabled']:
             active = 'disabled'
         service_detail = {'binary': svc['binary'], 'host': svc['host'],
+                     'id': svc['id'],
                      'zone': svc['availability_zone'],
                      'status': active, 'state': state,
                      'updated_at': svc['updated_at'],
@@ -114,18 +86,29 @@ class ServiceController(object):
 
         return True
 
+    @wsgi.response(204)
+    @extensions.expected_errors((400, 404))
+    def delete(self, req, id):
+        """Deletes the specified service."""
+        context = req.environ['nova.context']
+        authorize(context)
+
+        try:
+            self.host_api.service_delete(context, id)
+        except exception.ServiceNotFound:
+            explanation = _("Service %s not found.") % id
+            raise webob.exc.HTTPNotFound(explanation=explanation)
+
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=ServicesIndexTemplate)
     def index(self, req):
-        """
-        Return a list of all running services. Filter by host & service name.
+        """Return a list of all running services. Filter by host & service
+        name
         """
         services = self._get_services_list(req)
 
         return {'services': services}
 
     @extensions.expected_errors((400, 404))
-    @wsgi.serializers(xml=ServiceUpdateTemplate)
     def update(self, req, id, body):
         """Enable/Disable scheduling for a service."""
         context = req.environ['nova.context']
@@ -158,7 +141,7 @@ class ServiceController(object):
                 if not self._is_valid_as_reason(reason):
                     msg = _('Disabled reason contains invalid characters '
                             'or is too long')
-                    raise webob.exc.HTTPBadRequest(detail=msg)
+                    raise webob.exc.HTTPBadRequest(explanation=msg)
 
                 status_detail['disabled_reason'] = reason
                 ret_value['service']['disabled_reason'] = reason
@@ -166,11 +149,11 @@ class ServiceController(object):
             msg = _('Invalid attribute in the request')
             if 'host' in body and 'binary' in body:
                 msg = _('Missing disabled reason field')
-            raise webob.exc.HTTPBadRequest(detail=msg)
+            raise webob.exc.HTTPBadRequest(explanation=msg)
 
         try:
             self.host_api.service_update(context, host, binary, status_detail)
-        except exception.ServiceNotFound as e:
+        except exception.HostBinaryNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
         return ret_value
@@ -181,7 +164,6 @@ class Services(extensions.V3APIExtensionBase):
 
     name = "Services"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/services/api/v3"
     version = 1
 
     def get_resources(self):

@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
 # Copyright 2012 Pedro Navarro Perez
 # Copyright 2013 Cloudbase Solutions Srl
@@ -127,6 +126,10 @@ class BaseVolumeUtils(object):
             return None
 
         devices = initiator_sessions[0].Devices
+
+        if not devices:
+            return None
+
         for device in devices:
             if device.ScsiLun == target_lun:
                 return device.DeviceNumber

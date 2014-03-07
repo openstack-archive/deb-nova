@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 Justin Santa Barbara
 # Copyright 2012 OpenStack Foundation
 # All Rights Reserved.
@@ -231,6 +229,12 @@ class _FakeImageService(object):
         if image_id in self.images:
             return 'fake_location'
         return None
+
+    def get_locations(self, context, image_id):
+        if image_id in self.images:
+            return ['fake_location', 'fake_location2']
+        return []
+
 
 _fakeImageService = _FakeImageService()
 

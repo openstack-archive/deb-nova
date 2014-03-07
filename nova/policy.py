@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -131,3 +129,7 @@ class IsAdminCheck(policy.Check):
         """Determine whether is_admin matches the requested value."""
 
         return creds['is_admin'] == self.expected
+
+
+def get_rules():
+    return policy._rules

@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -68,7 +67,3 @@ class HypervisorsSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
             'hypervisor_id': hypervisor_id,
         }
         self._verify_response('hypervisors-uptime-resp', subs, response, 200)
-
-
-class HypervisorsSampleXmlTests(HypervisorsSampleJsonTests):
-    ctype = "xml"

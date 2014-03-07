@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -16,6 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import os
+
 from oslo.config import cfg
 
 
@@ -29,7 +29,7 @@ CONF = cfg.CONF
 CONF.import_opt('use_ipv6', 'nova.netconf')
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('scheduler_driver', 'nova.scheduler.manager')
-CONF.import_opt('fake_network', 'nova.network.manager')
+CONF.import_opt('fake_network', 'nova.network.linux_net')
 CONF.import_opt('network_size', 'nova.network.manager')
 CONF.import_opt('num_networks', 'nova.network.manager')
 CONF.import_opt('floating_ip_dns_manager', 'nova.network.floating_ips')
@@ -43,6 +43,8 @@ class ConfFixture(config_fixture.Config):
     """Fixture to manage global conf settings."""
     def setUp(self):
         super(ConfFixture, self).setUp()
+        self.conf.set_default('state_path', os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', '..')))
         self.conf.set_default('api_paste_config',
                               paths.state_path_def('etc/nova/api-paste.ini'))
         self.conf.set_default('host', 'fake-mini')
@@ -55,10 +57,6 @@ class ConfFixture(config_fixture.Config):
                               'nova.tests.utils.dns_manager')
         self.conf.set_default('network_size', 8)
         self.conf.set_default('num_networks', 2)
-        self.conf.set_default('rpc_backend',
-                              'nova.openstack.common.rpc.impl_fake')
-        self.conf.set_default('rpc_cast_timeout', 5)
-        self.conf.set_default('rpc_response_timeout', 5)
         self.conf.set_default('connection', "sqlite://", group='database')
         self.conf.set_default('sqlite_synchronous', False)
         self.conf.set_default('use_ipv6', True)

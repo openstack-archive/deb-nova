@@ -14,7 +14,6 @@
 #    under the License.
 
 import string
-import webob
 
 from nova.compute import api as compute_api
 from nova import exception
@@ -44,7 +43,8 @@ def fake_get_console_output_all_characters(self, _ctx, _instance, _tail_len):
     return string.printable
 
 
-def fake_get(self, context, instance_uuid):
+def fake_get(self, context, instance_uuid, expected_attrs=None,
+             want_objects=False):
     return {'uuid': instance_uuid}
 
 
@@ -60,7 +60,8 @@ class ConsoleOutputExtensionTest(test.NoDBTestCase):
         self.stubs.Set(compute_api.API, 'get_console_output',
                        fake_get_console_output)
         self.stubs.Set(compute_api.API, 'get', fake_get)
-        self.app = fakes.wsgi_app_v3(init_only=('servers', 'console-output'))
+        self.app = fakes.wsgi_app_v3(init_only=('servers',
+                                                'os-console-output'))
 
     def _create_request(self, length_dict={}):
         body = {'get_console_output': length_dict}
@@ -91,20 +92,6 @@ class ConsoleOutputExtensionTest(test.NoDBTestCase):
         self.assertEqual(res.status_int, 200)
         self.assertEqual(output, {'output': '2\n3\n4'})
 
-    def test_get_console_output_filtered_characters(self):
-        self.stubs.Set(compute_api.API, 'get_console_output',
-                       fake_get_console_output_all_characters)
-        body = {'get_console_output': {}}
-        req = webob.Request.blank('/v3/servers/1/action')
-        req.method = "POST"
-        req.body = jsonutils.dumps(body)
-        req.headers["content-type"] = "application/json"
-        res = req.get_response(self.app)
-        output = jsonutils.loads(res.body)
-        self.assertEqual(res.status_int, 200)
-        expect = string.digits + string.letters + string.punctuation + ' \t\n'
-        self.assertEqual(output, {'output': expect})
-
     def test_get_console_output_with_non_integer_length(self):
         req = self._create_request(length_dict={'length': 'NaN'})
         res = req.get_response(self.app)
@@ -133,7 +120,7 @@ class ConsoleOutputExtensionTest(test.NoDBTestCase):
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 409)
 
-    def test_get_console_output_with_lenght_as_float(self):
+    def test_get_console_output_with_length_as_float(self):
         req = self._create_request(length_dict={'length': 2.5})
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 400)
@@ -144,3 +131,13 @@ class ConsoleOutputExtensionTest(test.NoDBTestCase):
         req = self._create_request()
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 501)
+
+    def test_get_console_output_with_negative_length(self):
+        req = self._create_request(length_dict={'length': -1})
+        res = req.get_response(self.app)
+        self.assertEqual(res.status_int, 400)
+
+    def test_get_console_output_with_boolean_length(self):
+        req = self._create_request(length_dict={'length': True})
+        res = req.get_response(self.app)
+        self.assertEqual(res.status_int, 400)

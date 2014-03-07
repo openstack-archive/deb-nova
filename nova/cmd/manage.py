@@ -1,9 +1,8 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
+# Copyright 2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -60,11 +59,11 @@ import sys
 
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
 import six
 
 from nova.api.ec2 import ec2utils
 from nova import availability_zones
-from nova.cells import rpc_driver
 from nova.compute import flavors
 from nova import config
 from nova import context
@@ -76,8 +75,8 @@ from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import rpc
 from nova import quota
+from nova import rpc
 from nova import servicegroup
 from nova import version
 
@@ -224,8 +223,7 @@ class ProjectCommands(object):
     @args('--key', metavar='<key>', help='Key')
     @args('--value', metavar='<value>', help='Value')
     def quota(self, project_id, user_id=None, key=None, value=None):
-        """
-        Create, update or display quotas for project/user
+        """Create, update or display quotas for project/user
 
         If no quota key is provided, the quota will be displayed.
         If a valid quota key is provided and it does not exist,
@@ -254,10 +252,10 @@ class ProjectCommands(object):
                     return(2)
                 if ((int(value) < minimum) and
                    (maximum != -1 or (maximum == -1 and int(value) != -1))):
-                    print(_('Quota limit must greater than %s.') % minimum)
+                    print(_('Quota limit must be greater than %s.') % minimum)
                     return(2)
                 if maximum != -1 and int(value) > maximum:
-                    print(_('Quota limit must less than %s.') % maximum)
+                    print(_('Quota limit must be less than %s.') % maximum)
                     return(2)
                 try:
                     db.quota_create(ctxt, project_id, key, value,
@@ -402,8 +400,7 @@ class FloatingIpCommands(object):
 
     @staticmethod
     def address_to_hosts(addresses):
-        """
-        Iterate over hosts within an address range.
+        """Iterate over hosts within an address range.
 
         If an explicit range specifier is missing, the parameter is
         interpreted as a specific individual address.
@@ -680,8 +677,8 @@ class ServiceCommands(object):
     @args('--host', metavar='<host>', help='Host')
     @args('--service', metavar='<service>', help='Nova service')
     def list(self, host=None, service=None):
-        """
-        Show a list of all running services. Filter by host & service name.
+        """Show a list of all running services. Filter by host & service
+        name
         """
         servicegroup_api = servicegroup.API()
         ctxt = context.get_admin_context()
@@ -802,7 +799,7 @@ class ServiceCommands(object):
             result = self._show_host_resources(context.get_admin_context(),
                                                host=host)
         except exception.NovaException as ex:
-            print (_("error: %s") % ex)
+            print(_("error: %s") % ex)
             return 2
 
         if not isinstance(result, dict):
@@ -1200,19 +1197,19 @@ class CellCommands(object):
             return(2)
 
         # Set up the transport URL
-        transport = {
-            'username': username,
-            'password': password,
-            'hostname': hostname,
-            'port': int(port),
-            'virtual_host': virtual_host,
-        }
-        transport_url = rpc_driver.unparse_transport_url(transport)
+        transport_host = messaging.TransportHost(hostname=hostname,
+                                                 port=int(port),
+                                                 username=username,
+                                                 password=password)
+
+        transport_url = rpc.get_transport_url()
+        transport_url.hosts.append(transport_host)
+        transport_url.virtual_host = virtual_host
 
         is_parent = cell_type == 'parent'
         values = {'name': name,
                   'is_parent': is_parent,
-                  'transport_url': transport_url,
+                  'transport_url': str(transport_url),
                   'weight_offset': float(woffset),
                   'weight_scale': float(wscale)}
         ctxt = context.get_admin_context()
@@ -1233,11 +1230,12 @@ class CellCommands(object):
         print(fmt % ('-' * 3, '-' * 10, '-' * 6, '-' * 10, '-' * 15,
                 '-' * 5, '-' * 10))
         for cell in cells:
-            transport = rpc_driver.parse_transport_url(cell.transport_url)
+            url = rpc.get_transport_url(cell.transport_url)
+            host = url.hosts[0] if url.hosts else messaging.TransportHost()
             print(fmt % (cell.id, cell.name,
                     'parent' if cell.is_parent else 'child',
-                    transport['username'], transport['hostname'],
-                    transport['port'], transport['virtual_host']))
+                    host.username, host.hostname,
+                    host.port, url.virtual_host))
         print(fmt % ('-' * 3, '-' * 10, '-' * 6, '-' * 10, '-' * 15,
                 '-' * 5, '-' * 10))
 

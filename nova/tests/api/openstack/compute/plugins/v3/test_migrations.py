@@ -1,5 +1,3 @@
-# vim: tabstop=5 shiftwidth=4 softtabstop=4
-
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,8 +13,6 @@
 #    under the License.
 
 import datetime
-
-from lxml import etree
 
 from nova.api.openstack.compute.plugins.v3 import migrations
 from nova import context
@@ -99,24 +95,3 @@ class MigrationsTestCase(test.NoDBTestCase):
 
         self.assertRaises(exception.PolicyNotAuthorized, self.controller.index,
                           self.req)
-
-
-class MigrationsTemplateTest(test.NoDBTestCase):
-    def setUp(self):
-        super(MigrationsTemplateTest, self).setUp()
-        self.serializer = migrations.MigrationsTemplate()
-
-    def test_index_serialization(self):
-        res_xml = self.serializer.serialize({'migrations': fake_migrations})
-
-        tree = etree.XML(res_xml)
-        children = tree.findall('migration')
-        self.assertEqual(tree.tag, 'migrations')
-        self.assertEqual(2, len(children))
-
-        for idx, child in enumerate(children):
-            self.assertEqual(child.tag, 'migration')
-            migration = fake_migrations[idx]
-            for attr in migration.keys():
-                self.assertEqual(str(migration[attr]),
-                                 child.get(attr))

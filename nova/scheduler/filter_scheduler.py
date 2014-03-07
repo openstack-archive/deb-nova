@@ -25,10 +25,10 @@ from oslo.config import cfg
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
-from nova import notifier
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.pci import pci_request
+from nova import rpc
 from nova.scheduler import driver
 from nova.scheduler import scheduler_options
 from nova.scheduler import utils as scheduler_utils
@@ -59,7 +59,7 @@ class FilterScheduler(driver.Scheduler):
         super(FilterScheduler, self).__init__(*args, **kwargs)
         self.options = scheduler_options.SchedulerOptions()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
-        self.notifier = notifier.get_notifier('scheduler')
+        self.notifier = rpc.get_notifier('scheduler')
 
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
@@ -312,7 +312,7 @@ class FilterScheduler(driver.Scheduler):
         # Note: remember, we are using an iterator here. So only
         # traverse this list once. This can bite you if the hosts
         # are being scanned in a filter or weighing function.
-        hosts = self.host_manager.get_all_host_states(elevated)
+        hosts = self._get_all_host_states(elevated)
 
         selected_hosts = []
         if instance_uuids:
@@ -350,3 +350,7 @@ class FilterScheduler(driver.Scheduler):
             if update_group_hosts is True:
                 filter_properties['group_hosts'].append(chosen_host.obj.host)
         return selected_hosts
+
+    def _get_all_host_states(self, context):
+        """Template method, so a subclass can implement caching."""
+        return self.host_manager.get_all_host_states(context)

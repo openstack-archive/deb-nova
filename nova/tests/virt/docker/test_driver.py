@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
 # Copyright (c) 2013 dotCloud, Inc.
 # All Rights Reserved.
 #
@@ -23,12 +21,13 @@ import mock
 from nova import context
 from nova import exception
 from nova.openstack.common import jsonutils
+from nova.openstack.common import units
 from nova import test
 from nova.tests import utils
 import nova.tests.virt.docker.mock_client
 from nova.tests.virt.test_virt_drivers import _VirtDriverTestCase
-from nova import unit
 from nova.virt.docker import hostinfo
+from nova.virt.docker import network
 
 
 class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
@@ -38,9 +37,9 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
     def setUp(self):
         super(DockerDriverTestCase, self).setUp()
 
-        self.stubs.Set(nova.virt.docker.driver.DockerDriver,
-                       'docker',
-                       nova.tests.virt.docker.mock_client.MockClient())
+        self.mock_client = nova.tests.virt.docker.mock_client.MockClient()
+        self.stubs.Set(nova.virt.docker.driver.DockerDriver, 'docker',
+                       self.mock_client)
 
         def fake_setup_network(self, instance, network_info):
             return
@@ -56,6 +55,12 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
                        '_get_registry_port',
                        fake_get_registry_port)
 
+        # Note: using mock.object.path on class throws
+        # errors in test_virt_drivers
+        def fake_teardown_network(container_id):
+            return
+
+        self.stubs.Set(network, 'teardown_network', fake_teardown_network)
         self.context = context.RequestContext('fake_user', 'fake_project')
 
     def test_driver_capabilities(self):
@@ -88,14 +93,14 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
 
     def test_get_available_resource(self):
         memory = {
-            'total': 4 * unit.Mi,
-            'free': 3 * unit.Mi,
-            'used': 1 * unit.Mi
+            'total': 4 * units.Mi,
+            'free': 3 * units.Mi,
+            'used': 1 * units.Mi
         }
         disk = {
-            'total': 50 * unit.Gi,
-            'available': 25 * unit.Gi,
-            'used': 25 * unit.Gi
+            'total': 50 * units.Gi,
+            'available': 25 * units.Gi,
+            'used': 25 * units.Gi
         }
         # create the mocks
         with contextlib.nested(
@@ -152,6 +157,8 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
         self.connection.spawn(self.context, instance_href, image_info,
                               'fake_files', 'fake_password')
         self._assert_cpu_shares(instance_href)
+        self.assertEqual(self.mock_client.name, "nova-{0}".format(
+            instance_href['uuid']))
 
     def test_create_container_vcpus_2(self, image_info=None):
         flavor = utils.get_test_flavor(options={
@@ -167,12 +174,21 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
         self.connection.spawn(self.context, instance_href, image_info,
                               'fake_files', 'fake_password')
         self._assert_cpu_shares(instance_href, vcpus=2)
+        self.assertEqual(self.mock_client.name, "nova-{0}".format(
+            instance_href['uuid']))
 
     def _assert_cpu_shares(self, instance_href, vcpus=4):
-        container_id = self.connection.find_container_by_name(
+        container_id = self.connection._find_container_by_name(
             instance_href['name']).get('id')
         container_info = self.connection.docker.inspect_container(container_id)
         self.assertEqual(vcpus * 1024, container_info['Config']['CpuShares'])
+
+    @mock.patch('nova.virt.docker.driver.DockerDriver._setup_network',
+                side_effect=Exception)
+    def test_create_container_net_setup_fails(self, mock_setup_network):
+        self.assertRaises(exception.InstanceDeployFailure,
+                          self.test_create_container)
+        self.assertEqual(0, len(self.mock_client.list_containers()))
 
     def test_create_container_wrong_image(self):
         instance_href = utils.get_test_instance()
@@ -183,22 +199,21 @@ class DockerDriverTestCase(_VirtDriverTestCase, test.TestCase):
                           self.test_create_container,
                           image_info)
 
-    def test_destroy_container(self):
-        def fake_find_container_by_name(container_name):
-            return {'id': 'fake_id'}
-
-        self.stubs.Set(self.connection, 'find_container_by_name',
-            fake_find_container_by_name)
-        instance_href = utils.get_test_instance()
-        self.connection.destroy(self.context, instance_href,
-                'fake_networkinfo')
+    @mock.patch.object(network, 'teardown_network')
+    @mock.patch.object(nova.virt.docker.driver.DockerDriver,
+                '_find_container_by_name', return_value={'id': 'fake_id'})
+    def test_destroy_container(self, byname_mock, teardown_mock):
+        instance = utils.get_test_instance()
+        self.connection.destroy(self.context, instance, 'fake_networkinfo')
+        byname_mock.assert_called_once_with(instance['name'])
+        teardown_mock.assert_called_with('fake_id')
 
     def test_get_memory_limit_from_sys_meta_in_object(self):
         instance = utils.get_test_instance(obj=True)
         limit = self.connection._get_memory_limit_bytes(instance)
-        self.assertEqual(2048 * unit.Mi, limit)
+        self.assertEqual(2048 * units.Mi, limit)
 
     def test_get_memory_limit_from_sys_meta_in_db_instance(self):
         instance = utils.get_test_instance(obj=False)
         limit = self.connection._get_memory_limit_bytes(instance)
-        self.assertEqual(2048 * unit.Mi, limit)
+        self.assertEqual(2048 * units.Mi, limit)

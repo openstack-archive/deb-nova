@@ -34,6 +34,7 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_block_device
 from nova.tests import fake_instance
 from nova.tests.image import fake
 from nova.tests import matchers
@@ -100,7 +101,11 @@ class ServerActionsControllerTest(test.TestCase):
         self.url = '/v2/fake/servers/%s/action' % self.uuid
         self._image_href = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
 
-        self.controller = servers.Controller()
+        class FakeExtManager(object):
+            def is_loaded(self, ext):
+                return False
+
+        self.controller = servers.Controller(ext_mgr=FakeExtManager())
         self.compute_api = self.controller.compute_api
         self.context = context.RequestContext('fake', 'fake')
         self.app = fakes.wsgi_app(init_only=('servers',),
@@ -319,6 +324,71 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPConflict,
                           self.controller._action_reboot,
                           req, FAKE_UUID, body)
+
+    def test_rebuild_preserve_ephemeral_is_ignored_when_ext_not_loaded(self):
+        return_server = fakes.fake_instance_get(image_ref='2',
+                                                vm_state=vm_states.ACTIVE,
+                                                host='fake_host')
+        self.stubs.Set(db, 'instance_get_by_uuid', return_server)
+
+        body = {
+            "rebuild": {
+                "imageRef": self._image_href,
+                "preserve_ephemeral": False,
+            },
+        }
+        req = fakes.HTTPRequest.blank(self.url)
+        context = req.environ['nova.context']
+
+        self.mox.StubOutWithMock(compute_api.API, 'rebuild')
+        compute_api.API.rebuild(context, mox.IgnoreArg(), self._image_href,
+                                mox.IgnoreArg(), files_to_inject=None)
+        self.mox.ReplayAll()
+
+        self.controller._action_rebuild(req, FAKE_UUID, body)
+
+    def _test_rebuild_preserve_ephemeral(self, value=None):
+        def fake_is_loaded(ext):
+            return ext == 'os-preserve-ephemeral-rebuild'
+        self.stubs.Set(self.controller.ext_mgr, 'is_loaded', fake_is_loaded)
+
+        return_server = fakes.fake_instance_get(image_ref='2',
+                                                vm_state=vm_states.ACTIVE,
+                                                host='fake_host')
+        self.stubs.Set(db, 'instance_get_by_uuid', return_server)
+
+        body = {
+            "rebuild": {
+                "imageRef": self._image_href,
+            },
+        }
+        if value is not None:
+            body['rebuild']['preserve_ephemeral'] = value
+
+        req = fakes.HTTPRequest.blank(self.url)
+        context = req.environ['nova.context']
+
+        self.mox.StubOutWithMock(compute_api.API, 'rebuild')
+
+        if value is not None:
+            compute_api.API.rebuild(context, mox.IgnoreArg(), self._image_href,
+                                    mox.IgnoreArg(), preserve_ephemeral=value,
+                                    files_to_inject=None)
+        else:
+            compute_api.API.rebuild(context, mox.IgnoreArg(), self._image_href,
+                                    mox.IgnoreArg(), files_to_inject=None)
+        self.mox.ReplayAll()
+
+        self.controller._action_rebuild(req, FAKE_UUID, body)
+
+    def test_rebuild_preserve_ephemeral_true(self):
+        self._test_rebuild_preserve_ephemeral(True)
+
+    def test_rebuild_preserve_ephemeral_false(self):
+        self._test_rebuild_preserve_ephemeral(False)
+
+    def test_rebuild_preserve_ephemeral_default(self):
+        self._test_rebuild_preserve_ephemeral()
 
     def test_rebuild_accepted_minimum(self):
         return_server = fakes.fake_instance_get(image_ref='2',
@@ -952,15 +1022,16 @@ class ServerActionsControllerTest(test.TestCase):
         image_service.create(None, original_image)
 
         def fake_block_device_mapping_get_all_by_instance(context, inst_id):
-            return [dict(volume_id=_fake_id('a'),
-                         source_type='snapshot',
-                         destination_type='volume',
-                         volume_size=1,
-                         device_name='vda',
-                         snapshot_id=1,
-                         boot_index=0,
-                         delete_on_termination=False,
-                         no_device=None)]
+            return [fake_block_device.FakeDbBlockDeviceDict(
+                        {'volume_id': _fake_id('a'),
+                         'source_type': 'snapshot',
+                         'destination_type': 'volume',
+                         'volume_size': 1,
+                         'device_name': 'vda',
+                         'snapshot_id': 1,
+                         'boot_index': 0,
+                         'delete_on_termination': False,
+                         'no_device': None})]
 
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        fake_block_device_mapping_get_all_by_instance)
@@ -995,10 +1066,16 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertEqual(properties['kernel_id'], _fake_id('b'))
         self.assertEqual(properties['ramdisk_id'], _fake_id('c'))
         self.assertEqual(properties['root_device_name'], '/dev/vda')
+        self.assertEqual(properties['bdm_v2'], True)
         bdms = properties['block_device_mapping']
         self.assertEqual(len(bdms), 1)
-        self.assertEqual(bdms[0]['device_name'], 'vda')
+        self.assertEqual(bdms[0]['boot_index'], 0)
+        self.assertEqual(bdms[0]['source_type'], 'snapshot')
+        self.assertEqual(bdms[0]['destination_type'], 'volume')
         self.assertEqual(bdms[0]['snapshot_id'], snapshot['id'])
+        for fld in ('connection_info', 'id',
+                    'instance_uuid', 'device_name'):
+            self.assertTrue(fld not in bdms[0])
         for k in extra_properties.keys():
             self.assertEqual(properties[k], extra_properties[k])
 
@@ -1019,15 +1096,16 @@ class ServerActionsControllerTest(test.TestCase):
         image_service = glance.get_default_image_service()
 
         def fake_block_device_mapping_get_all_by_instance(context, inst_id):
-            return [dict(volume_id=_fake_id('a'),
-                         source_type='snapshot',
-                         destination_type='volume',
-                         volume_size=1,
-                         device_name='vda',
-                         snapshot_id=1,
-                         boot_index=0,
-                         delete_on_termination=False,
-                         no_device=None)]
+            return [fake_block_device.FakeDbBlockDeviceDict(
+                        {'volume_id': _fake_id('a'),
+                         'source_type': 'snapshot',
+                         'destination_type': 'volume',
+                         'volume_size': 1,
+                         'device_name': 'vda',
+                         'snapshot_id': 1,
+                         'boot_index': 0,
+                         'delete_on_termination': False,
+                         'no_device': None})]
 
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
                        fake_block_device_mapping_get_all_by_instance)
@@ -1037,23 +1115,22 @@ class ServerActionsControllerTest(test.TestCase):
                                            root_device_name='/dev/vda')
         self.stubs.Set(db, 'instance_get_by_uuid', instance)
 
+        fake_metadata = {'test_key1': 'test_value1',
+                         'test_key2': 'test_value2'}
         volume = dict(id=_fake_id('a'),
                       size=1,
                       host='fake',
-                      display_description='fake')
+                      display_description='fake',
+                      volume_image_metadata=fake_metadata)
         snapshot = dict(id=_fake_id('d'))
         self.mox.StubOutWithMock(self.controller.compute_api, 'volume_api')
         volume_api = self.controller.compute_api.volume_api
         volume_api.get(mox.IgnoreArg(), volume['id']).AndReturn(volume)
+        volume_api.get(mox.IgnoreArg(), volume['id']).AndReturn(volume)
         volume_api.create_snapshot_force(mox.IgnoreArg(), volume['id'],
                mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(snapshot)
 
-        def fake_bdm_image_metadata(fd, context, bdms, legacy_bdm):
-            return {'test_key1': 'test_value1',
-                    'test_key2': 'test_value2'}
         req = fakes.HTTPRequest.blank(self.url)
-        self.stubs.Set(compute_api.API, '_get_bdm_image_metadata',
-                       fake_bdm_image_metadata)
 
         self.mox.ReplayAll()
         response = self.controller._action_create_image(req, FAKE_UUID, body)
@@ -1360,6 +1437,21 @@ class TestServerActionXMLDeserializer(test.TestCase):
                           self.deserializer.deserialize,
                           serial_request,
                           'action')
+
+    def test_rebuild_preserve_ephemeral_passed(self):
+        serial_request = """<?xml version="1.0" encoding="UTF-8"?>
+                <rebuild
+                    xmlns="http://docs.openstack.org/compute/api/v1.1"
+                    imageRef="http://localhost/images/1"
+                    preserve_ephemeral="true"/>"""
+        request = self.deserializer.deserialize(serial_request, 'action')
+        expected = {
+            "rebuild": {
+                "imageRef": "http://localhost/images/1",
+                "preserve_ephemeral": True,
+            },
+        }
+        self.assertThat(request['body'], matchers.DictMatches(expected))
 
     def test_corrupt_xml(self):
         """Should throw a 400 error on corrupt xml."""

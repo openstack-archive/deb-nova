@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -48,7 +47,3 @@ class MultinicSampleJsonTest(test_servers.ServersSampleBase):
         response = self._do_post('servers/%s/action' % (self.uuid),
                                  'multinic-remove-fixed-ip-req', subs)
         self.assertEqual(response.status, 202)
-
-
-class MultinicSampleXmlTest(MultinicSampleJsonTest):
-    ctype = "xml"

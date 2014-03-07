@@ -1,5 +1,6 @@
 # Copyright (c) 2012 Rackspace Hosting
 # All Rights Reserved.
+# Copyright 2013 Red Hat, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -23,14 +24,14 @@ messging module.
 """
 
 from oslo.config import cfg
+from oslo import messaging
 
 from nova import exception
 from nova.objects import base as objects_base
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova import rpcclient
-
+from nova import rpc
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
@@ -42,7 +43,7 @@ rpcapi_cap_opt = cfg.StrOpt('cells',
 CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
 
-class CellsAPI(rpcclient.RpcProxy):
+class CellsAPI(object):
     '''Cells client-side RPC API
 
     API version history:
@@ -87,8 +88,8 @@ class CellsAPI(rpcclient.RpcProxy):
         handle the version_cap being set to 1.24.
 
         1.25 - Adds rebuild_instance()
+        1.26 - Adds service_delete()
     '''
-    BASE_RPC_API_VERSION = '1.0'
 
     VERSION_ALIASES = {
         'grizzly': '1.6',
@@ -96,13 +97,14 @@ class CellsAPI(rpcclient.RpcProxy):
     }
 
     def __init__(self):
+        super(CellsAPI, self).__init__()
+        target = messaging.Target(topic=CONF.cells.topic, version='1.0')
         version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.cells,
                                                CONF.upgrade_levels.cells)
-        super(CellsAPI, self).__init__(topic=CONF.cells.topic,
-                default_version=self.BASE_RPC_API_VERSION,
-                serializer=objects_base.NovaObjectSerializer(),
-                version_cap=version_cap)
-        self.client = self.get_client()
+        serializer = objects_base.NovaObjectSerializer()
+        self.client = rpc.get_client(target,
+                                     version_cap=version_cap,
+                                     serializer=serializer)
 
     def cast_compute_api_method(self, ctxt, cell_name, method,
             *args, **kwargs):
@@ -242,8 +244,7 @@ class CellsAPI(rpcclient.RpcProxy):
         return cctxt.call(context, 'get_host_uptime', host_name=host_name)
 
     def service_update(self, ctxt, host_name, binary, params_to_update):
-        """
-        Used to enable/disable a service. For compute services, setting to
+        """Used to enable/disable a service. For compute services, setting to
         disabled stops new builds arriving on that host.
 
         :param host_name: the name of the host machine that the service is
@@ -256,6 +257,12 @@ class CellsAPI(rpcclient.RpcProxy):
                           host_name=host_name,
                           binary=binary,
                           params_to_update=params_to_update)
+
+    def service_delete(self, ctxt, cell_service_id):
+        """Deletes the specified service."""
+        cctxt = self.client.prepare(version='1.26')
+        cctxt.call(ctxt, 'service_delete',
+                   cell_service_id=cell_service_id)
 
     def proxy_rpc_to_manager(self, ctxt, rpc_message, topic, call=False,
                              timeout=None):
@@ -577,7 +584,7 @@ class CellsAPI(rpcclient.RpcProxy):
     def rebuild_instance(self, ctxt, instance, new_pass, injected_files,
                          image_ref, orig_image_ref, orig_sys_metadata, bdms,
                          recreate=False, on_shared_storage=False, host=None,
-                         kwargs=None):
+                         preserve_ephemeral=False, kwargs=None):
         if not CONF.cells.enable:
             return
 
@@ -585,4 +592,4 @@ class CellsAPI(rpcclient.RpcProxy):
         cctxt.cast(ctxt, 'rebuild_instance',
                    instance=instance, image_href=image_ref,
                    admin_password=new_pass, files_to_inject=injected_files,
-                   kwargs=kwargs)
+                   preserve_ephemeral=preserve_ephemeral, kwargs=kwargs)

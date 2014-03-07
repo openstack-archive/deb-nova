@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Intel Corporation
 # All Rights Reserved.
 #
@@ -14,7 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-# @author: Yongli He, Intel Corporation.
 
 """Tests for PCI request."""
 
@@ -65,7 +62,7 @@ class AliasTestCase(test.NoDBTestCase):
     def test_good_alias(self):
         self.flags(pci_alias=[_fake_alias1])
         als = pci_request._get_alias_from_config()
-        self.assertEqual(type(als['QuicAssist']), list)
+        self.assertIsInstance(als['QuicAssist'], list)
         expect_dict = {
             "capability_type": "pci",
             "product_id": "4443",
@@ -77,7 +74,7 @@ class AliasTestCase(test.NoDBTestCase):
     def test_multispec_alias(self):
         self.flags(pci_alias=[_fake_alias1, _fake_alias11])
         als = pci_request._get_alias_from_config()
-        self.assertEqual(type(als['QuicAssist']), list)
+        self.assertIsInstance(als['QuicAssist'], list)
         expect_dict1 = {
             "capability_type": "pci",
             "product_id": "4443",

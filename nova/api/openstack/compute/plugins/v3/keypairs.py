@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2011 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -20,10 +18,9 @@
 import webob
 import webob.exc
 
-from nova.api.openstack.compute.schemas.v3 import keypairs_schema
+from nova.api.openstack.compute.schemas.v3 import keypairs
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 from nova.api import validation
 from nova.compute import api as compute_api
 from nova import exception
@@ -33,21 +30,6 @@ from nova.openstack.common.gettextutils import _
 ALIAS = 'keypairs'
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
 soft_authorize = extensions.soft_extension_authorizer('compute', 'v3:' + ALIAS)
-
-
-class KeypairTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        return xmlutil.MasterTemplate(xmlutil.make_flat_dict('keypair'), 1)
-
-
-class KeypairsTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('keypairs')
-        elem = xmlutil.make_flat_dict('keypair', selector='keypairs',
-                                      subselector='keypair')
-        root.append(elem)
-
-        return xmlutil.MasterTemplate(root, 1)
 
 
 class KeypairController(object):
@@ -66,13 +48,11 @@ class KeypairController(object):
             clean[attr] = keypair[attr]
         return clean
 
-    @wsgi.serializers(xml=KeypairTemplate)
     @extensions.expected_errors((400, 409, 413))
     @wsgi.response(201)
-    @validation.schema(request_body_schema=keypairs_schema.create)
+    @validation.schema(keypairs.create)
     def create(self, req, body):
-        """
-        Create or import keypair.
+        """Create or import keypair.
 
         Sending name will generate a key and return private_key
         and fingerprint.
@@ -117,9 +97,7 @@ class KeypairController(object):
     @wsgi.response(204)
     @extensions.expected_errors(404)
     def delete(self, req, id):
-        """
-        Delete a keypair with a given name
-        """
+        """Delete a keypair with a given name."""
         context = req.environ['nova.context']
         authorize(context, action='delete')
         try:
@@ -127,7 +105,6 @@ class KeypairController(object):
         except exception.KeypairNotFound:
             raise webob.exc.HTTPNotFound()
 
-    @wsgi.serializers(xml=KeypairTemplate)
     @extensions.expected_errors(404)
     def show(self, req, id):
         """Return data for the given key name."""
@@ -141,11 +118,8 @@ class KeypairController(object):
         return {'keypair': self._filter_keypair(keypair)}
 
     @extensions.expected_errors(())
-    @wsgi.serializers(xml=KeypairsTemplate)
     def index(self, req):
-        """
-        List of keypairs for a user
-        """
+        """List of keypairs for a user."""
         context = req.environ['nova.context']
         authorize(context, action='index')
         key_pairs = self.api.get_key_pairs(context, context.user_id)
@@ -154,21 +128,6 @@ class KeypairController(object):
             rval.append({'keypair': self._filter_keypair(key_pair)})
 
         return {'keypairs': rval}
-
-
-class ServerKeyNameTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('server')
-        root.set('key_name', 'key_name')
-        return xmlutil.SlaveTemplate(root, 1)
-
-
-class ServersKeyNameTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('servers')
-        elem = xmlutil.SubTemplateElement(root, 'server', selector='servers')
-        elem.set('key_name', 'key_name')
-        return xmlutil.SlaveTemplate(root, 1)
 
 
 class Controller(wsgi.Controller):
@@ -182,7 +141,6 @@ class Controller(wsgi.Controller):
 
     def _show(self, req, resp_obj):
         if 'server' in resp_obj.obj:
-            resp_obj.attach(xml=ServerKeyNameTemplate())
             server = resp_obj.obj['server']
             self._add_key_name(req, [server])
 
@@ -196,7 +154,6 @@ class Controller(wsgi.Controller):
     def detail(self, req, resp_obj):
         context = req.environ['nova.context']
         if 'servers' in resp_obj.obj and soft_authorize(context):
-            resp_obj.attach(xml=ServersKeyNameTemplate())
             servers = resp_obj.obj['servers']
             self._add_key_name(req, servers)
 
@@ -206,7 +163,6 @@ class Keypairs(extensions.V3APIExtensionBase):
 
     name = "Keypairs"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/core/keypairs/api/v3"
     version = 1
 
     def get_resources(self):

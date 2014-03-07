@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2013 Intel, Inc.
 # Copyright (c) 2012 OpenStack Foundation
 # All Rights Reserved.
@@ -48,8 +46,7 @@ def pci_device_prop_match(pci_dev, specs):
 
 
 def parse_address(address):
-    """
-    Returns (domain, bus, slot, function) from PCI address that is stored in
+    """Returns (domain, bus, slot, function) from PCI address that is stored in
     PciDevice DB table.
     """
     m = _PCI_ADDRESS_REGEX.match(address)

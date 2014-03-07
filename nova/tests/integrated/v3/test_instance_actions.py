@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright 2012 Nebula, Inc.
 # Copyright 2013 IBM Corp.
 #
@@ -45,7 +44,7 @@ class InstanceActionsSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
         def fake_instance_get_by_uuid(context, instance_id):
             return self.instance
 
-        def fake_get(self, context, instance_uuid):
+        def fake_get(self, context, instance_uuid, **kwargs):
             return {'uuid': instance_uuid}
 
         self.stubs.Set(db, 'action_get_by_request_id',
@@ -83,7 +82,3 @@ class InstanceActionsSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
                               '-[0-9a-f]{4}-[0-9a-f]{12}')
         self._verify_response('instance-actions-list-resp', subs,
                               response, 200)
-
-
-class InstanceActionsSampleXmlTest(InstanceActionsSampleJsonTest):
-        ctype = 'xml'
