@@ -444,9 +444,8 @@ class InstanceEvents(object):
                 self._events.setdefault(instance.uuid, {})
                 return self._events[instance.uuid].setdefault(
                     event_name, eventlet.event.Event())
-        LOG.debug(_('Preparing to wait for external event %(event)s '
-                    'for instance %(uuid)s'), {'event': event_name,
-                                               'uuid': instance.uuid})
+        LOG.debug(_('Preparing to wait for external event %(event)s'),
+                  {'event': event_name}, instance=instance)
         return _create_or_get_event()
 
     def pop_instance_event(self, instance, event):
@@ -648,8 +647,7 @@ class ComputeManager(manager.Manager):
             instance.save()
         except exception.InstanceNotFound:
             LOG.debug(_('Instance has been destroyed from under us while '
-                        'trying to set it to ERROR'),
-                      instance_uuid=instance.uuid)
+                        'trying to set it to ERROR'), instance=instance)
 
     def _get_instances_on_driver(self, context, filters=None):
         """Return a list of instance records for the instances found
@@ -1778,7 +1776,8 @@ class ComputeManager(manager.Manager):
 
             if node is None:
                 node = self.driver.get_available_nodes()[0]
-                LOG.debug(_('No node specified, defaulting to %s'), node)
+                LOG.debug(_('No node specified, defaulting to %s'), node,
+                          instance=instance)
 
             try:
                 self._build_and_run_instance(context, instance, image,
@@ -2110,8 +2109,8 @@ class ComputeManager(manager.Manager):
             events = self.instance_events.clear_events_for_instance(instance)
             if events:
                 LOG.debug(_('Events pending at deletion: %(events)s'),
-                          {'events': ','.join(events.keys()),
-                           'instance': instance})
+                          {'events': ','.join(events.keys())},
+                          instance=instance)
             db_inst = obj_base.obj_to_primitive(instance)
             instance.info_cache.delete()
             self._notify_about_instance_usage(context, instance,
@@ -3240,7 +3239,8 @@ class ComputeManager(manager.Manager):
         """
         if node is None:
             node = self.driver.get_available_nodes(refresh=True)[0]
-            LOG.debug(_("No node specified, defaulting to %s"), node)
+            LOG.debug(_("No node specified, defaulting to %s"), node,
+                      instance=instance)
 
         with self._error_out_instance_on_exception(context, instance['uuid'],
                                                    reservations):
@@ -3780,7 +3780,8 @@ class ComputeManager(manager.Manager):
 
         if node is None:
             node = self.driver.get_available_nodes()[0]
-            LOG.debug(_('No node specified, defaulting to %s'), node)
+            LOG.debug(_('No node specified, defaulting to %s'), node,
+                      instance=instance)
 
         rt = self._get_resource_tracker(node)
         limits = filter_properties.get('limits', {})
@@ -4110,7 +4111,8 @@ class ComputeManager(manager.Manager):
                 pass
 
             if vol_stats:
-                LOG.debug(_("Updating volume usage cache with totals"))
+                LOG.debug(_("Updating volume usage cache with totals"),
+                          instance=instance)
                 rd_req, rd_bytes, wr_req, wr_bytes, flush_ops = vol_stats
                 self.conductor_api.vol_usage_update(context, volume_id,
                                                     rd_req, rd_bytes,
@@ -5474,7 +5476,7 @@ class ComputeManager(manager.Manager):
         _event = self.instance_events.pop_instance_event(instance, event)
         if _event:
             LOG.debug(_('Processing event %(event)s'),
-                      {'event': event.key, 'instance': instance})
+                      {'event': event.key}, instance=instance)
             _event.send(event)
 
     @wrap_exception()
