@@ -3,9 +3,9 @@ Author: Thomas Goirand <zigo@debian.org>
 Forwarded: not-needed
 Index: nova/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
 ===================================================================
---- nova.orig/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost	2013-09-12 21:33:58.000000000 +0800
-+++ nova/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost	2013-09-12 21:33:59.000000000 +0800
-@@ -41,7 +41,7 @@
+--- nova.orig/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost	2014-03-07 14:45:23.000000000 +0800
++++ nova/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost	2014-03-07 14:54:05.000000000 +0800
+@@ -43,7 +43,7 @@
  
  
  host_data_pattern = re.compile(r"\s*(\S+) \([^\)]+\) *: ?(.*)")
