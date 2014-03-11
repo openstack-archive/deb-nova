@@ -989,6 +989,8 @@ class Controller(wsgi.Controller):
                 exception.PortNotFound,
                 exception.SecurityGroupNotFound,
                 exception.InvalidBDM,
+                exception.PortRequiresFixedIP,
+                exception.NetworkRequiresSubnet,
                 exception.InstanceUserDataMalformed) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
