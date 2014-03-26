@@ -1,3 +1,11 @@
+nova (2013.2.2-4) unstable; urgency=medium
+
+  * CVE-2014-0134: Nova host data leak to vm instance in rescue mode. Applied
+    upstream patch: CVE-2014-0134_Persist_image_format_to_a_file.patch
+    (Closes: #742712).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 26 Mar 2014 15:55:16 +0000
+
 nova (2013.2.2-3) unstable; urgency=medium
 
   * Rebuilt for SQLA 0.9.x.
@@ -5,7 +13,7 @@ nova (2013.2.2-3) unstable; urgency=medium
     - French, Julien Patriarca (Closes: #740224).
     - Danish, Joe Dalton (Closes: #739754).
 
- -- Thomas Goirand <zigo@debian.org>  Sun, 02 Mar 2014 16:56:25 +0800
+ -- Thomas Goirand <zigo@debian.org>  Wed, 26 Mar 2014 23:33:22 +0800
 
 nova (2013.2.2-2) unstable; urgency=medium
 
