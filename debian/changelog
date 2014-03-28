@@ -3,6 +3,9 @@ nova (2013.2.2-3) UNRELEASED; urgency=low
   * Updated Debconf translation, with thanks to:
     - French, Julien Patriarca (Closes: #740224).
     - Danish, Joe Dalton (Closes: #739754).
+  * CVE-2014-0134: Nova host data leak to vm instance in rescue mode. Applied
+    upstream patch: CVE-2014-0134_Persist_image_format_to_a_file.patch
+    (Closes: #742712).
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 02 Mar 2014 16:56:25 +0800
 
