@@ -1,4 +1,4 @@
-nova (2013.2.2-3) UNRELEASED; urgency=low
+nova (2013.2.2-3) unstable; urgency=low
 
   * Updated Debconf translation, with thanks to:
     - French, Julien Patriarca (Closes: #740224).
