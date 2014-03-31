@@ -1,8 +1,12 @@
-nova (2014.1~b3-2) experimental; urgency=medium
+nova (2014.1~rc1-1) experimental; urgency=low
 
+  [ Thomas Goirand ]
+  * New upstream release.
+
+  [ Gustavo Panizzo ]
   * Change the default VIF driver for kvm compute nodes.
 
- -- gustavo panizzo <gfa@zumbi.com.ar>  Sun, 30 Mar 2014 19:42:02 -0300
+ -- Thomas Goirand <zigo@debian.org>  Tue, 01 Apr 2014 07:55:24 +0800
 
 nova (2014.1~b3-1) experimental; urgency=low
 
