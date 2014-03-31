@@ -529,6 +529,7 @@ Depends: bridge-utils,
          netcat,
          nova-common (= ${binary:Version}),
          vlan,
+         conntrack,
          ${misc:Depends},
          ${ostack-lsb-base},
          ${python:Depends}
