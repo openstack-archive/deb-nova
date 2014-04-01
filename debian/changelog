@@ -2,6 +2,7 @@ nova (2014.1~rc1-1) experimental; urgency=low
 
   [ Thomas Goirand ]
   * New upstream release.
+  * Reviewed (build-)dependencies.
 
   [ Gustavo Panizzo ]
   * Change the default VIF driver for kvm compute nodes.
