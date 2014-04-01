@@ -2,4 +2,3 @@ path-to-the-xenhost.conf-fixup.patch
 install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
-fixes-sqlalchemy-version-in-requirements.txt.patch
