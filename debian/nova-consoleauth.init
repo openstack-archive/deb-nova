@@ -18,7 +18,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Console"
 NAME=nova-consoleauth
 DAEMON=/usr/bin/nova-consoleauth
-DAEMON_ARGS="--config-file=/etc/nova/nova.conf --log-file=/var/log/nova/nova-consoleauth.log"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
@@ -26,6 +26,12 @@ LOCK_DIR=/var/lock/nova/
 
 # Exit if the package is not installed
 [ -x $DAEMON ] || exit 0
+
+[ -r /etc/default/openstack ] && . /etc/default/openstack
+[ -r /etc/default/$NAME ] && . /etc/default/$NAME
+
+[ "x$USE_SYSLOG" = "xyes" ] && DAEMON_ARGS="$DAEMON_ARGS --use-syslog"
+[ "x$USE_LOGFILE" != "xno" ] && DAEMON_ARGS="$DAEMON_ARGS --log-file /var/log/nova/$NAME.log"
 
 mkdir -p ${LOCK_DIR}
 chown ${NOVA_USER} ${LOCK_DIR}
