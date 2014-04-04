@@ -14,4 +14,12 @@ pre-start script
    chown nova:root /var/lock/nova/
 end script
 
-exec start-stop-daemon --start --chuid nova --exec /usr/bin/nova-spicehtml5proxy -- --config-file=/etc/nova/nova.conf
+script
+	[ -r /etc/default/openstack ] && . /etc/default/openstack
+	[ -r /etc/default/$UPSTART_JOB ] && . /etc/default/$UPSTART_JOB
+
+	[ "x$USE_SYSLOG" = "xyes" ] && DAEMON_ARGS="$DAEMON_ARGS --use-syslog"
+	[ "x$USE_LOGFILE" != "xno" ] && DAEMON_ARGS="$DAEMON_ARGS --log-file /var/log/nova/$UPSTART_JOB.log"
+
+	exec start-stop-daemon --start --chuid nova --exec /usr/bin/nova-spicehtml5proxy -- --config-file=/etc/nova/nova.conf $DAEMON_ARGS
+end script

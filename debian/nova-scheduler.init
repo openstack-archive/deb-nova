@@ -18,11 +18,17 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Scheduler"
 NAME=nova-scheduler
 DAEMON=/usr/bin/nova-scheduler
-DAEMON_ARGS="--config-file=/etc/nova/nova.conf --log-file=/var/log/nova/nova-scheduler.log"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
 LOCK_DIR=/var/lock/nova/
+
+[ -r /etc/default/openstack ] && . /etc/default/openstack
+[ -r /etc/default/$NAME ] && . /etc/default/$NAME
+
+[ "x$USE_SYSLOG" = "xyes" ] && DAEMON_ARGS="$DAEMON_ARGS --use-syslog"
+[ "x$USE_LOGFILE" != "xno" ] && DAEMON_ARGS="$DAEMON_ARGS --log-file /var/log/nova/$NAME.log"
 
 # Exit if the package is not installed
 [ -x $DAEMON ] || exit 0

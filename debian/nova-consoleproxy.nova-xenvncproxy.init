@@ -16,7 +16,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack XVP VNC proxy"
 NAME=nova-xvpvncproxy
 DAEMON=/usr/bin/nova-xvpvncproxy
-DAEMON_ARGS="--config-file /etc/nova/nova.conf --log-file /var/log/nova/nova-consoleproxy.log"
+DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
@@ -29,9 +29,15 @@ if ! [ -r /etc/default/nova-consoleproxy ] ; then
 	exit 0
 fi
 . /etc/default/nova-consoleproxy
+
+[ -r /etc/default/openstack ] && . /etc/default/openstack
+
 if ! [ "${NOVA_CONSOLE_PROXY_TYPE}" = "xenvnc" ] ; then
 	exit 0
 fi
+
+[ "x$USE_SYSLOG" = "xyes" ] && DAEMON_ARGS="$DAEMON_ARGS --use-syslog"
+[ "x$USE_LOGFILE" != "xno" ] && DAEMON_ARGS="$DAEMON_ARGS --log-file /var/log/nova/nova-consoleproxy.log"
 
 mkdir -p ${LOCK_DIR}
 chown ${NOVA_USER} ${LOCK_DIR}
