@@ -1,3 +1,11 @@
+nova (2014.1~rc1-2) experimental; urgency=low
+
+  * Fixed new configuration that goes now in the [libvirt] section.
+  * Allow selecting log destination for Openstack daemons.
+  * Adds re-adds-missing-keystone-authtoken-info-in-api-paste.ini.patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 08 Apr 2014 23:16:35 +0800
+
 nova (2014.1~rc1-1) experimental; urgency=low
 
   [ Thomas Goirand ]
