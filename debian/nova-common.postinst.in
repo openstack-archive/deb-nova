@@ -3,7 +3,6 @@
 set -e
 
 NOVA_CONF=/etc/nova/nova.conf
-NOVA_API_CONF=/etc/nova/api-paste.ini
 
 #PKGOS-INCLUDE#
 
@@ -26,14 +25,14 @@ manage_nova_my_ip_field () {
 
 manage_keystone_auth_fields () {
 	db_get nova/auth-host
-	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken auth_host ${RET}
+	pkgos_inifile set ${NOVA_CONF} keystone_authtoken auth_host ${RET}
 	db_get nova/admin-tenant-name
-	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_tenant_name ${RET}
+	pkgos_inifile set ${NOVA_CONF} keystone_authtoken admin_tenant_name ${RET}
 	db_get nova/admin-user
-	pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_user ${RET}
+	pkgos_inifile set ${NOVA_CONF} keystone_authtoken admin_user ${RET}
 	db_get nova/admin-password
 	if [ -n "${RET}" ] ; then
-		pkgos_inifile set ${NOVA_API_CONF} filter:authtoken admin_password ${RET}
+		pkgos_inifile set ${NOVA_CONF} keystone_authtoken admin_password ${RET}
 	fi
 }
 

@@ -2,4 +2,3 @@ path-to-the-xenhost.conf-fixup.patch
 install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
-re-adds-missing-keystone-authtoken-info-in-api-paste.ini.patch

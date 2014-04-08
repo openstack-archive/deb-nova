@@ -4,7 +4,6 @@ set -e
 . /usr/share/debconf/confmodule
 
 NOVA_CONF=/etc/nova/nova.conf
-NOVA_API_CONF=/etc/nova/api-paste.ini
 
 #PKGOS-INCLUDE#
 
@@ -56,7 +55,7 @@ read_neutron_config () {
 pkgos_var_user_group nova
 pkgos_dbc_read_conf -pkg nova-common ${NOVA_CONF} DEFAULT sql_connection nova $@
 pkgos_rabbit_read_conf ${NOVA_CONF} DEFAULT nova
-pkgos_read_admin_creds ${NOVA_API_CONF} filter:authtoken nova
+pkgos_read_admin_creds ${NOVA_CONF} keystone_authtoken nova
 read_neutron_config
 
 set_enabled_apis_multiselect
