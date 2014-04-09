@@ -18,7 +18,6 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Spice HTML5 Proxy"
 NAME=nova-spicehtml5proxy
 DAEMON=/usr/bin/nova-spicehtml5proxy
-DAEMON_ARGS="--config-file /etc/nova/nova.conf --log-file /var/log/nova/nova-consoleproxy.log"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
@@ -27,6 +26,13 @@ LOCK_DIR=/var/lock/nova/
 # Exit if the package is not installed, or the default file not present,
 # or not set to this daemon
 [ -x $DAEMON ] || exit 0
+
+[ -r /etc/default/openstack ] && . /etc/default/openstack
+[ -r /etc/default/$NAME ] && . /etc/default/$NAME
+
+[ "x$USE_SYSLOG" = "xyes" ] && DAEMON_ARGS="$DAEMON_ARGS --use-syslog"
+[ "x$USE_LOGFILE" != "xno" ] && DAEMON_ARGS="$DAEMON_ARGS --log-file /var/log/nova/nova-consoleproxy.log"
+
 if [ -r /etc/default/nova-consoleproxy ] ; then
     . /etc/default/nova-consoleproxy
 fi

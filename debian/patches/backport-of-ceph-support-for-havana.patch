@@ -19,11 +19,11 @@ Description: Backport the fixes needed for Ceph support on Havana
 Author: Thomas Goirand <zigo@debian.org>
 Origin: upstream, https://github.com/jdurgin/nova/commits/havana-ephemeral-rbd
 Reviewed-By: leseb
-Last-Update: 2014-02-14
+Last-Update: 2014-04-09
 
---- nova-2013.2.2.orig/nova/tests/compute/test_compute.py
-+++ nova-2013.2.2/nova/tests/compute/test_compute.py
-@@ -4424,7 +4424,7 @@ class ComputeTestCase(BaseTestCase):
+--- nova-2013.2.3.orig/nova/tests/compute/test_compute.py
++++ nova-2013.2.3/nova/tests/compute/test_compute.py
+@@ -4438,7 +4438,7 @@ class ComputeTestCase(BaseTestCase):
          fake_notifier.NOTIFICATIONS = []
          # start test
          self.mox.ReplayAll()
@@ -32,7 +32,7 @@ Last-Update: 2014-02-14
          ret = self.compute.pre_live_migration(c, instance=instance,
                                                block_migration=False,
                                                migrate_data=migrate_data)
-@@ -4486,7 +4486,7 @@ class ComputeTestCase(BaseTestCase):
+@@ -4500,7 +4500,7 @@ class ComputeTestCase(BaseTestCase):
          self.compute.compute_rpcapi.remove_volume_connection(
                  c, updated_instance, 'vol2-id', dest_host)
          self.compute.compute_rpcapi.rollback_live_migration_at_destination(
@@ -41,7 +41,7 @@ Last-Update: 2014-02-14
  
          # start test
          self.mox.ReplayAll()
-@@ -4506,7 +4506,7 @@ class ComputeTestCase(BaseTestCase):
+@@ -4520,7 +4520,7 @@ class ComputeTestCase(BaseTestCase):
  
          instance = jsonutils.to_primitive(instance_ref)
  
@@ -50,7 +50,7 @@ Last-Update: 2014-02-14
  
          self.mox.StubOutWithMock(self.compute.compute_rpcapi,
                                   'pre_live_migration')
-@@ -4586,7 +4586,7 @@ class ComputeTestCase(BaseTestCase):
+@@ -4600,7 +4600,7 @@ class ComputeTestCase(BaseTestCase):
  
          # start test
          self.mox.ReplayAll()
@@ -59,8 +59,8 @@ Last-Update: 2014-02-14
          self.compute._post_live_migration(c, inst_ref, dest,
                                            migrate_data=migrate_data)
          self.assertTrue('destroyed' in result)
---- nova-2013.2.2.orig/nova/tests/compute/test_rpcapi.py
-+++ nova-2013.2.2/nova/tests/compute/test_rpcapi.py
+--- nova-2013.2.3.orig/nova/tests/compute/test_rpcapi.py
++++ nova-2013.2.3/nova/tests/compute/test_rpcapi.py
 @@ -340,7 +340,8 @@ class ComputeRpcAPITestCase(test.TestCas
  
      def test_rollback_live_migration_at_destination(self):
@@ -71,197 +71,8 @@ Last-Update: 2014-02-14
  
      def test_run_instance(self):
          self._test_compute_api('run_instance', 'cast',
---- nova-2013.2.2.orig/nova/tests/virt/libvirt/test_imagebackend.py
-+++ nova-2013.2.2/nova/tests/virt/libvirt/test_imagebackend.py
-@@ -20,6 +20,8 @@ import os
- import fixtures
- from oslo.config import cfg
- 
-+from inspect import getargspec
-+
- from nova import exception
- from nova.openstack.common import uuidutils
- from nova import test
-@@ -293,12 +295,12 @@ class Qcow2TestCase(_ImageTestCase, test
-     def test_create_image_too_small(self):
-         fn = self.prepare_mocks()
-         self.mox.StubOutWithMock(os.path, 'exists')
--        self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
-+        self.mox.StubOutWithMock(imagebackend.Qcow2, 'get_disk_size')
-         if self.OLD_STYLE_INSTANCE_PATH:
-             os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
-         os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
--        imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
--                                       ).AndReturn(self.SIZE)
-+        imagebackend.Qcow2.get_disk_size(self.TEMPLATE_PATH
-+                                         ).AndReturn(self.SIZE)
-         self.mox.ReplayAll()
- 
-         image = self.image_class(self.INSTANCE, self.NAME)
-@@ -521,10 +523,12 @@ class RbdTestCase(_ImageTestCase, test.N
-         self.libvirt_utils = imagebackend.libvirt_utils
-         self.utils = imagebackend.utils
-         self.rbd = self.mox.CreateMockAnything()
-+        self.rados = self.mox.CreateMockAnything()
- 
-     def prepare_mocks(self):
-         fn = self.mox.CreateMockAnything()
-         self.mox.StubOutWithMock(imagebackend, 'rbd')
-+        self.mox.StubOutWithMock(imagebackend, 'rados')
-         return fn
- 
-     def test_cache(self):
-@@ -618,11 +622,15 @@ class RbdTestCase(_ImageTestCase, test.N
-         fake_processutils.fake_execute_clear_log()
-         fake_processutils.stub_out_processutils_execute(self.stubs)
-         self.mox.StubOutWithMock(imagebackend, 'rbd')
-+        self.mox.StubOutWithMock(imagebackend, 'rados')
-         image = self.image_class(self.INSTANCE, self.NAME)
- 
-         def fake_fetch(target, *args, **kwargs):
-             return
- 
-+        def fake_resize(rbd_name, size):
-+            return
-+
-         self.stubs.Set(os.path, 'exists', lambda _: True)
-         self.stubs.Set(image, 'check_image_exists', lambda: True)
- 
-@@ -630,6 +638,132 @@ class RbdTestCase(_ImageTestCase, test.N
- 
-         self.assertEqual(fake_processutils.fake_execute_get_log(), [])
- 
-+    def test_direct_fetch(self):
-+        self.prepare_mocks()
-+        self.rbd.RBD_FEATURE_LAYERING = 1
-+
-+        image = self.image_class(self.INSTANCE, self.NAME)
-+        self.mox.StubOutWithMock(image, '_clone')
-+        image._clone('b', 'c', 'd')
-+        self.mox.ReplayAll()
-+
-+        def fake_parse_location(url):
-+            return 'a', 'b', 'c', 'd'
-+
-+        self.stubs.Set(image, 'check_image_exists', lambda: False)
-+        self.stubs.Set(image, '_is_cloneable', lambda x: True)
-+        self.stubs.Set(image, '_parse_location', fake_parse_location)
-+
-+        image.direct_fetch('image_id',
-+                           {'disk_format': 'raw'},
-+                           [{'url': 'rbd://a/b/c/d'}])
-+
-+        self.mox.VerifyAll()
-+
-+    def test_direct_fetch_fail(self):
-+        image = self.image_class(self.INSTANCE, self.NAME)
-+        self.stubs.Set(image, '_is_cloneable', lambda: True)
-+        self.assertRaises(exception.ImageUnacceptable,
-+                          image.direct_fetch, 'image_id',
-+                          {'disk_format': 'raw'},
-+                          [{'url': 'rbd://a/b/c/d'}])
-+        self.rbd.RBD_FEATURE_LAYERING = 1
-+        self.assertRaises(exception.ImageUnacceptable,
-+                          image.direct_fetch, 'image_id',
-+                          {},
-+                          [{'url': 'rbd://a/b/c/d'}])
-+        self.assertRaises(exception.ImageUnacceptable,
-+                          image.direct_fetch, 'image_id',
-+                          {'disk_format': 'raw'},
-+                          [])
-+        self.stubs.Set(image, '_is_cloneable', lambda: False)
-+        self.assertRaises(exception.ImageUnacceptable,
-+                          image.direct_fetch, 'image_id',
-+                          {'disk_format': 'raw'},
-+                          [{'url': 'rbd://a/b/c/d'}])
-+
-+    def test_good_locations(self):
-+        image = self.image_class(self.INSTANCE, self.NAME)
-+        locations = ['rbd://fsid/pool/image/snap',
-+                     'rbd://%2F/%2F/%2F/%2F', ]
-+        map(image._parse_location, locations)
-+
-+    def test_bad_locations(self):
-+        image = self.image_class(self.INSTANCE, self.NAME)
-+        locations = ['rbd://image',
-+                     'http://path/to/somewhere/else',
-+                     'rbd://image/extra',
-+                     'rbd://image/',
-+                     'rbd://fsid/pool/image/',
-+                     'rbd://fsid/pool/image/snap/',
-+                     'rbd://///', ]
-+        for loc in locations:
-+            self.assertRaises(exception.ImageUnacceptable,
-+                              image._parse_location,
-+                              loc)
-+            self.assertFalse(image._is_cloneable(loc))
-+
-+    def test_cloneable(self):
-+        image = self.image_class(self.INSTANCE, self.NAME)
-+        self.stubs.Set(image, '_get_fsid', lambda: 'abc')
-+        location = u'rbd://abc/pool/image/snap'
-+        mock_proxy = self.mox.CreateMockAnything()
-+        self.mox.StubOutWithMock(imagebackend, 'RBDVolumeProxy')
-+
-+        imagebackend.RBDVolumeProxy(image, 'image',
-+                                    pool='pool',
-+                                    snapshot='snap',
-+                                    read_only=True).AndReturn(mock_proxy)
-+        mock_proxy.__enter__().AndReturn(mock_proxy)
-+        mock_proxy.__exit__(None, None, None).AndReturn(None)
-+
-+        self.mox.ReplayAll()
-+
-+        self.assertTrue(image._is_cloneable(location))
-+
-+    def test_uncloneable_different_fsid(self):
-+        image = self.image_class(self.INSTANCE, self.NAME)
-+        self.stubs.Set(image, '_get_fsid', lambda: 'abc')
-+        location = 'rbd://def/pool/image/snap'
-+        self.assertFalse(image._is_cloneable(location))
-+
-+    def test_uncloneable_unreadable(self):
-+        self.prepare_mocks()
-+        image = self.image_class(self.INSTANCE, self.NAME, rbd=self.rbd)
-+        self.stubs.Set(image, '_get_fsid', lambda: 'abc')
-+        location = 'rbd://abc/pool/image/snap'
-+        self.stubs.Set(self.rbd, 'Error', test.TestingException)
-+        self.mox.StubOutWithMock(imagebackend, 'RBDVolumeProxy')
-+
-+        imagebackend.RBDVolumeProxy(image, 'image',
-+                                    pool='pool',
-+                                    snapshot='snap',
-+                                    read_only=True).AndRaise(
-+            test.TestingException)
-+
-+        self.mox.ReplayAll()
-+
-+        self.assertFalse(image._is_cloneable(location))
-+
-+    def test_parent_compatible(self):
-+        self.assertEqual(getargspec(imagebackend.Image.libvirt_info),
-+             getargspec(self.image_class.libvirt_info))
-+
-+    def test_image_path(self):
-+
-+        conf = "FakeConf"
-+        pool = "FakePool"
-+        user = "FakeUser"
-+
-+        self.flags(libvirt_images_rbd_pool=pool)
-+        self.flags(libvirt_images_rbd_ceph_conf=conf)
-+        self.flags(rbd_user=user)
-+        image = self.image_class(self.INSTANCE, self.NAME)
-+        rbd_path = "rbd:%s/%s:id=%s:conf=%s" % (pool, image.rbd_name,
-+                                                user, conf)
-+
-+        self.assertEqual(image.path, rbd_path)
-+
- 
- class BackendTestCase(test.NoDBTestCase):
-     INSTANCE = {'name': 'fake-instance',
---- nova-2013.2.2.orig/nova/tests/virt/libvirt/fake_libvirt_utils.py
-+++ nova-2013.2.2/nova/tests/virt/libvirt/fake_libvirt_utils.py
+--- nova-2013.2.3.orig/nova/tests/virt/libvirt/fake_libvirt_utils.py
++++ nova-2013.2.3/nova/tests/virt/libvirt/fake_libvirt_utils.py
 @@ -211,10 +211,16 @@ def pick_disk_driver_name(hypervisor_ver
  
  
@@ -281,9 +92,9 @@ Last-Update: 2014-02-14
 +
 +def ascii_str(s):
 +    return libvirt_utils.ascii_str(s)
---- nova-2013.2.2.orig/nova/tests/virt/libvirt/test_libvirt.py
-+++ nova-2013.2.2/nova/tests/virt/libvirt/test_libvirt.py
-@@ -2893,7 +2893,7 @@ class LibvirtConnTestCase(test.TestCase)
+--- nova-2013.2.3.orig/nova/tests/virt/libvirt/test_libvirt.py
++++ nova-2013.2.3/nova/tests/virt/libvirt/test_libvirt.py
+@@ -2906,7 +2906,7 @@ class LibvirtConnTestCase(test.TestCase)
          ret = conn.check_can_live_migrate_source(self.context, instance_ref,
                                                   dest_check_data)
          self.assertTrue(type(ret) == dict)
@@ -292,7 +103,7 @@ Last-Update: 2014-02-14
  
      def test_check_can_live_migrate_source_vol_backed_w_disk_raises(self):
          instance_ref = db.instance_create(self.context, self.test_instance)
-@@ -3185,7 +3185,7 @@ class LibvirtConnTestCase(test.TestCase)
+@@ -3198,7 +3198,7 @@ class LibvirtConnTestCase(test.TestCase)
              self.mox.StubOutWithMock(conn, 'plug_vifs')
              conn.plug_vifs(mox.IsA(inst_ref), nw_info)
              self.mox.ReplayAll()
@@ -301,7 +112,7 @@ Last-Update: 2014-02-14
                              'is_volume_backed': True,
                              'block_migration': False,
                              'instance_relative_path': inst_ref['name']
-@@ -4356,8 +4356,10 @@ class LibvirtConnTestCase(test.TestCase)
+@@ -4369,8 +4369,10 @@ class LibvirtConnTestCase(test.TestCase)
          def fake_get_info(instance_name):
              return {'state': power_state.SHUTDOWN, 'id': -1}
  
@@ -314,8 +125,8 @@ Last-Update: 2014-02-14
          fake_pool = 'fake_pool'
          fake_instance = {'name': 'fakeinstancename', 'id': 'instanceid',
                           'uuid': '875a8070-d0b9-4949-8b31-104d125c9a64'}
---- nova-2013.2.2.orig/nova/image/glance.py
-+++ nova-2013.2.2/nova/image/glance.py
+--- nova-2013.2.3.orig/nova/image/glance.py
++++ nova-2013.2.3/nova/image/glance.py
 @@ -295,7 +295,7 @@ class GlanceImageService(object):
          base_image_meta = self._translate_from_glance(image)
          return base_image_meta
@@ -334,9 +145,9 @@ Last-Update: 2014-02-14
              for entry in locations:
                  loc_url = entry['url']
                  loc_meta = entry['metadata']
---- nova-2013.2.2.orig/nova/compute/rpcapi.py
-+++ nova-2013.2.2/nova/compute/rpcapi.py
-@@ -678,12 +678,13 @@ class ComputeAPI(rpcclient.RpcProxy):
+--- nova-2013.2.3.orig/nova/compute/rpcapi.py
++++ nova-2013.2.3/nova/compute/rpcapi.py
+@@ -682,12 +682,13 @@ class ComputeAPI(rpcclient.RpcProxy):
                     instance=instance, migration=migration,
                     reservations=reservations)
  
@@ -352,9 +163,9 @@ Last-Update: 2014-02-14
  
      def run_instance(self, ctxt, instance, host, request_spec,
                       filter_properties, requested_networks,
---- nova-2013.2.2.orig/nova/compute/manager.py
-+++ nova-2013.2.2/nova/compute/manager.py
-@@ -4143,11 +4143,18 @@ class ComputeManager(manager.SchedulerDe
+--- nova-2013.2.3.orig/nova/compute/manager.py
++++ nova-2013.2.3/nova/compute/manager.py
+@@ -4145,11 +4145,18 @@ class ComputeManager(manager.SchedulerDe
          # No instance booting at source host, but instance dir
          # must be deleted for preparing next block migration
          # must be deleted for preparing next live migration w/o shared storage
@@ -377,7 +188,7 @@ Last-Update: 2014-02-14
          else:
              # self.driver.destroy() usually performs  vif unplugging
              # but we must do it explicitly here when block_migration
-@@ -4270,20 +4277,24 @@ class ComputeManager(manager.SchedulerDe
+@@ -4272,20 +4279,24 @@ class ComputeManager(manager.SchedulerDe
          # Also Volume backed live migration w/o shared storage needs to delete
          # newly created instance-xxx dir on the destination as a part of its
          # rollback process
@@ -409,7 +220,7 @@ Last-Update: 2014-02-14
          """Cleaning up image directory that is created pre_live_migration.
  
          :param context: security context
-@@ -4302,7 +4313,8 @@ class ComputeManager(manager.SchedulerDe
+@@ -4304,7 +4315,8 @@ class ComputeManager(manager.SchedulerDe
          #             from remote volumes if necessary
          block_device_info = self._get_instance_volume_block_device_info(
                              context, instance)
@@ -419,8 +230,8 @@ Last-Update: 2014-02-14
          self._notify_about_instance_usage(
                          context, instance, "live_migration.rollback.dest.end",
                          network_info=network_info)
---- nova-2013.2.2.orig/nova/virt/driver.py
-+++ nova-2013.2.2/nova/virt/driver.py
+--- nova-2013.2.3.orig/nova/virt/driver.py
++++ nova-2013.2.3/nova/virt/driver.py
 @@ -242,7 +242,7 @@ class ComputeDriver(object):
          raise NotImplementedError()
  
@@ -430,8 +241,8 @@ Last-Update: 2014-02-14
          """Destroy (shutdown and delete) the specified instance.
  
          If the instance is not found (for example if networking failed), this
---- nova-2013.2.2.orig/nova/virt/images.py
-+++ nova-2013.2.2/nova/virt/images.py
+--- nova-2013.2.3.orig/nova/virt/images.py
++++ nova-2013.2.3/nova/virt/images.py
 @@ -179,6 +179,26 @@ def convert_image(source, dest, out_form
      utils.execute(*cmd, run_as_root=run_as_root)
  
@@ -459,8 +270,8 @@ Last-Update: 2014-02-14
  def fetch(context, image_href, path, _user_id, _project_id, max_size=0):
      # TODO(vish): Improve context handling and add owner and auth data
      #             when it is added to glance.  Right now there is no
---- nova-2013.2.2.orig/nova/virt/fake.py
-+++ nova-2013.2.2/nova/virt/fake.py
+--- nova-2013.2.3.orig/nova/virt/fake.py
++++ nova-2013.2.3/nova/virt/fake.py
 @@ -207,7 +207,7 @@ class FakeDriver(driver.ComputeDriver):
          pass
  
@@ -470,8 +281,8 @@ Last-Update: 2014-02-14
          key = instance['name']
          if key in self.instances:
              del self.instances[key]
---- nova-2013.2.2.orig/nova/virt/libvirt/driver.py
-+++ nova-2013.2.2/nova/virt/libvirt/driver.py
+--- nova-2013.2.3.orig/nova/virt/libvirt/driver.py
++++ nova-2013.2.3/nova/virt/libvirt/driver.py
 @@ -829,10 +829,11 @@ class LibvirtDriver(driver.ComputeDriver
              self._destroy(instance)
  
@@ -541,7 +352,7 @@ Last-Update: 2014-02-14
  
          # Lookup the filesystem type if required
          os_type_with_default = disk.get_fs_type_for_os_type(
-@@ -3853,16 +3859,15 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -3855,16 +3861,15 @@ class LibvirtDriver(driver.ComputeDriver
          # Checking shared storage connectivity
          # if block migration, instances_paths should not be on shared storage.
          source = CONF.host
@@ -566,7 +377,7 @@ Last-Update: 2014-02-14
                  reason = _("Block migration can not be used "
                             "with shared storage.")
                  raise exception.InvalidLocalStorage(reason=reason, path=source)
-@@ -3870,11 +3875,11 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -3872,11 +3877,11 @@ class LibvirtDriver(driver.ComputeDriver
                                      dest_check_data['disk_available_mb'],
                                      dest_check_data['disk_over_commit'])
  
@@ -580,7 +391,7 @@ Last-Update: 2014-02-14
  
          # NOTE(mikal): include the instance directory name here because it
          # doesn't yet exist on the destination but we want to force that
-@@ -3885,6 +3890,21 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -3887,6 +3892,21 @@ class LibvirtDriver(driver.ComputeDriver
  
          return dest_check_data
  
@@ -602,7 +413,7 @@ Last-Update: 2014-02-14
      def _assert_dest_node_has_enough_disk(self, context, instance,
                                               available_mb, disk_over_commit):
          """Checks if destination has enough disk for block migration."""
-@@ -4133,17 +4153,21 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4135,17 +4155,21 @@ class LibvirtDriver(driver.ComputeDriver
                             network_info, disk_info, migrate_data=None):
          """Preparation live migration."""
          # Steps for volume backed instance live migration w/o shared storage.
@@ -627,7 +438,7 @@ Last-Update: 2014-02-14
              # NOTE(mikal): this doesn't use libvirt_utils.get_instance_path
              # because we are ensuring that the same instance directory name
              # is used as was at the source
-@@ -4157,11 +4181,12 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4159,11 +4183,12 @@ class LibvirtDriver(driver.ComputeDriver
                  raise exception.DestinationDiskExists(path=instance_dir)
              os.mkdir(instance_dir)
  
@@ -641,8 +452,8 @@ Last-Update: 2014-02-14
              # Touch the console.log file, required by libvirt.
              console_file = self._get_console_log_path(instance)
              libvirt_utils.file_open(console_file, 'a').close()
---- nova-2013.2.2.orig/nova/virt/libvirt/imagebackend.py
-+++ nova-2013.2.2/nova/virt/libvirt/imagebackend.py
+--- nova-2013.2.3.orig/nova/virt/libvirt/imagebackend.py
++++ nova-2013.2.3/nova/virt/libvirt/imagebackend.py
 @@ -18,6 +18,7 @@
  import abc
  import contextlib
@@ -671,7 +482,7 @@ Last-Update: 2014-02-14
  
  LOG = logging.getLogger(__name__)
  
-@@ -193,8 +198,7 @@ class Image(object):
+@@ -198,8 +203,7 @@ class Image(object):
                            (CONF.preallocate_images, self.path))
          return can_fallocate
  
@@ -681,7 +492,7 @@ Last-Update: 2014-02-14
          """Check that the base image is not larger than size.
             Since images can't be generally shrunk, enforce this
             constraint taking account of virtual image size.
-@@ -213,7 +217,7 @@ class Image(object):
+@@ -218,7 +222,7 @@ class Image(object):
              return
  
          if size and not base_size:
@@ -690,7 +501,7 @@ Last-Update: 2014-02-14
  
          if size < base_size:
              msg = _('%(base)s virtual size %(base_size)s '
-@@ -223,6 +227,9 @@ class Image(object):
+@@ -228,6 +232,9 @@ class Image(object):
                                'size': size})
              raise exception.InstanceTypeDiskTooSmall()
  
@@ -700,9 +511,9 @@ Last-Update: 2014-02-14
      def snapshot_create(self):
          raise NotImplementedError()
  
-@@ -232,6 +239,14 @@ class Image(object):
-     def snapshot_delete(self):
-         raise NotImplementedError()
+@@ -296,6 +303,14 @@ class Image(object):
+             raise exception.DiskInfoReadWriteFail(reason=unicode(e))
+         return driver_format
  
 +    def direct_fetch(self, image_id, image_meta, image_locations, max_size=0):
 +        """Create an image from a direct image location.
@@ -715,7 +526,7 @@ Last-Update: 2014-02-14
  
  class Raw(Image):
      def __init__(self, instance=None, disk_name=None, path=None,
-@@ -435,32 +450,110 @@ class Lvm(Image):
+@@ -507,32 +522,110 @@ class Lvm(Image):
          libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
  
  
@@ -831,16 +642,7 @@ Last-Update: 2014-02-14
          args.extend(['--conf', self.ceph_conf])
          return args
  
-@@ -482,7 +575,7 @@ class Rbd(Image):
-         return hosts, ports
- 
-     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
--            extra_specs):
-+                     extra_specs, hypervisor_version):
-         """Get `LibvirtConfigGuestDisk` filled for this image.
- 
-         :disk_dev: Disk bus device name
-@@ -526,6 +619,17 @@ class Rbd(Image):
+@@ -598,6 +691,17 @@ class Rbd(Image):
  
          return False
  
@@ -858,7 +660,7 @@ Last-Update: 2014-02-14
      def create_image(self, prepare_template, base, size, *args, **kwargs):
          if self.rbd is None:
              raise RuntimeError(_('rbd python libraries not found'))
-@@ -536,29 +640,104 @@ class Rbd(Image):
+@@ -608,29 +712,104 @@ class Rbd(Image):
              old_format = False
              features = self.rbd.RBD_FEATURE_LAYERING
  
@@ -973,8 +775,8 @@ Last-Update: 2014-02-14
  
  class Backend(object):
      def __init__(self, use_cow):
---- nova-2013.2.2.orig/nova/virt/libvirt/utils.py
-+++ nova-2013.2.2/nova/virt/libvirt/utils.py
+--- nova-2013.2.3.orig/nova/virt/libvirt/utils.py
++++ nova-2013.2.3/nova/virt/libvirt/utils.py
 @@ -45,6 +45,13 @@ CONF.register_opts(libvirt_opts)
  CONF.import_opt('instances_path', 'nova.compute.manager')
  LOG = logging.getLogger(__name__)
