@@ -3,6 +3,9 @@ nova (2013.2.3-1) unstable; urgency=medium
   * New upstream release.
   * Removed patch applied upstream for CVE-2014-0134.
   * Rebase of the Ceph support patch.
+  * CVE-2014-0167: RBAC policy not properly enforced in Nova EC2 API. Applied
+    upstream patch: Add_RBAC_policy_for_ec2_API_security_groups_calls.patch
+    (Closes: #744051).
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 09 Apr 2014 17:45:21 +0800
 
