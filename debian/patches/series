@@ -5,4 +5,3 @@ fix-docs-build-without-network.patch
 fixes-requirements.txt-for-sid.patch
 fix-webob-requirements.txt.patch
 backport-of-ceph-support-for-havana.patch
-CVE-2014-0134_Persist_image_format_to_a_file.patch
