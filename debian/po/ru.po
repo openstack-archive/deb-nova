@@ -1,13 +1,13 @@
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the nova package.
 #
-# Yuri Kozlov <yuray@komyakino.ru>, 2012, 2013.
+# Yuri Kozlov <yuray@komyakino.ru>, 2012, 2013, 2014.
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 2013.2-1\n"
+"Project-Id-Version: nova 2013.2.2-4\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-01-18 23:08+0800\n"
-"PO-Revision-Date: 2013-11-16 08:19+0400\n"
+"POT-Creation-Date: 2014-02-08 17:20+0800\n"
+"PO-Revision-Date: 2014-04-02 19:16+0400\n"
 "Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
 "Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
 "Language: ru\n"
@@ -135,75 +135,98 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
-msgid "Value for my_ip:"
-msgstr "Значение my_ip:"
+msgid "IP address on Nova management network:"
+msgstr "IP-адрес в сети управления Nova:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
 msgid ""
-"Enter the IP address that will be set in the my_ip directive of nova.conf."
-msgstr "Введите IP-адрес, который будет присвоен директиве my_ip в nova.conf."
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:9001
-#, fuzzy
-#| msgid "Value for my_ip:"
-msgid "Value for neutron_url:"
-msgstr "Значение my_ip:"
-
-#. Type: string
-#. Description
-#: ../nova-common.templates:9001
-msgid "Enter the URL of your Neutron server."
+"Please enter the IP address for this physical node on the private network "
+"being used for OpenStack Compute management."
 msgstr ""
+"Введите IP-адрес этого физического узла в закрытой сети, который "
+"используется для управления из OpenStack Compute."
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:8001
+#| msgid ""
+#| "Enter the IP address that will be set in the my_ip directive of nova.conf."
+msgid "This value will be stored in the my_ip directive of nova.conf."
+msgstr "Это значение будет сохранено в директиве my_ip в nova.conf."
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+msgid "Neutron server URL:"
+msgstr "URL сервера Neutron:"
+
+#. Type: string
+#. Description
+#: ../nova-common.templates:9001
+#| msgid "Please specify the IP address of that server."
+msgid "Please enter the URL of the Neutron server."
+msgstr "Укажите URL сервера Neutron."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-#, fuzzy
 #| msgid "Auth server tenant name:"
 msgid "Neutron admin tenant name:"
-msgstr "Членское имя сервера аутентификации:"
+msgstr "Членское имя для admin Neutron:"
 
 #. Type: string
 #. Description
-#: ../nova-common.templates:10001
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../nova-common.templates:10001 ../nova-common.templates:11001
+#: ../nova-common.templates:12001
 msgid ""
 "Nova needs to be able to communicate with Neutron through Keystone. "
 "Therefore Nova needs to know the Neutron admin tenant, username and password."
 msgstr ""
+"Nova требуется связь с Neutron через Keystone. "
+"Поэтому Nova требуется указать членское имя (tenant) admin Neutron, имя "
+"пользователя и пароль."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid "Enter the name of the admin tenant for Neutron."
-msgstr ""
+msgid "Please enter the name of the admin tenant for Neutron."
+msgstr "Введите членское имя admin для Neutron."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Neutron admin username:"
-msgstr ""
+#| msgid "Auth server tenant name:"
+msgid "Neutron administrator username:"
+msgstr "Имя пользователя администратора Neutron:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Enter the username for Neutron."
-msgstr ""
+#| msgid ""
+#| "Please enter the username used to connect to your XenAPI (XCP server)."
+msgid "Please enter the username of the Neutron administrator."
+msgstr "Введите имя пользователя администратора Neutron."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Neutron admin password:"
-msgstr ""
+#| msgid "Auth server tenant name:"
+msgid "Neutron administrator password:"
+msgstr "Пароль администратора Neutron:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Enter the password for the admin username of Neutron."
-msgstr ""
+#| msgid ""
+#| "Please enter the password used to connect to your XenAPI (XCP server)."
+msgid "Please enter the password of the Neutron administrator."
+msgstr "Введите пароль администратора Neutron."
 
 #. Type: string
 #. Description
@@ -457,6 +480,14 @@ msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr ""
 "Позже можно изменить настройку, отредактировав файл /etc/default/nova-"
 "consoleproxy."
+
+#~ msgid "Value for my_ip:"
+#~ msgstr "Значение my_ip:"
+
+#, fuzzy
+#~| msgid "Value for my_ip:"
+#~ msgid "Value for neutron_url:"
+#~ msgstr "Значение my_ip:"
 
 #~ msgid "Start nova services at boot?"
 #~ msgstr "Запускать службы nova при включении машины?"
