@@ -3995,13 +3995,13 @@ msgstr ""
 msgid "Could not find host to be set in request body"
 msgstr ""
 
-#: nova/api/openstack/compute/plugins/v3/aggregates.py:208
-msgid "Invalid request format for metadata"
+#: nova/api/openstack/compute/plugins/v3/aggregates.py:54
+msgid "The value of host must be a string"
 msgstr ""
 
 #: nova/api/openstack/compute/plugins/v3/aggregates.py:87
 #, python-format
-msgid "Attach interface to %s"
+msgid "Could not find %s parameter in the request"
 msgstr ""
 
 #: nova/api/openstack/compute/plugins/v3/aggregates.py:124
@@ -4010,19 +4010,16 @@ msgstr ""
 
 #: nova/api/openstack/compute/plugins/v3/aggregates.py:127
 #, python-format
-msgid "create_backup entity requires %s attribute"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/create_backup.py:66
-msgid "Malformed create_backup entity"
+msgid "Invalid key %s in request body."
 msgstr ""
 
 #: nova/api/openstack/compute/plugins/v3/aggregates.py:208
 msgid "Invalid request format for metadata"
 msgstr ""
 
-#: nova/api/openstack/compute/plugins/v3/create_backup.py:75
-msgid "create_backup attribute 'rotation' must be greater than or equal to zero"
+#: nova/api/openstack/compute/plugins/v3/attach_interfaces.py:103
+#, python-format
+msgid "Attach interface to %s"
 msgstr ""
 
 #: nova/api/openstack/compute/plugins/v3/cells.py:187
@@ -10751,17 +10748,17 @@ msgstr ""
 
 #: nova/virt/libvirt/driver.py:3534
 #, python-format
-msgid "An error occurred while enabling hairpin mode on domain with xml: %s"
+msgid "An error occurred while trying to define a domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3543
 #, python-format
-msgid "Neutron Reported failure on event %(event)s for instance %(uuid)s"
+msgid "An error occurred while trying to launch a defined domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3552
 #, python-format
-msgid "Timeout waiting for vif plugging callback for instance %(uuid)s"
+msgid "An error occurred while enabling hairpin mode on domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3570

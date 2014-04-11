@@ -3953,6 +3953,23 @@ msgstr ""
 msgid "access_ip_v6 is not proper IPv6 format"
 msgstr ""
 
+#: nova/api/openstack/compute/plugins/v3/aggregates.py:50
+msgid "Could not find host to be set in request body"
+msgstr ""
+
+#: nova/api/openstack/compute/plugins/v3/aggregates.py:54
+msgid "The value of host must be a string"
+msgstr ""
+
+#: nova/api/openstack/compute/plugins/v3/aggregates.py:87
+#, python-format
+msgid "Could not find %s parameter in the request"
+msgstr ""
+
+#: nova/api/openstack/compute/plugins/v3/aggregates.py:124
+msgid "Request body is empty"
+msgstr ""
+
 #: nova/api/openstack/compute/plugins/v3/aggregates.py:127
 #, python-format
 msgid "Invalid key %s in request body."
@@ -3962,26 +3979,9 @@ msgstr ""
 msgid "Invalid request format for metadata"
 msgstr ""
 
-#: nova/api/openstack/compute/plugins/v3/aggregates.py:87
+#: nova/api/openstack/compute/plugins/v3/attach_interfaces.py:103
 #, python-format
 msgid "Attach interface to %s"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/aggregates.py:124
-msgid "Request body is empty"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/aggregates.py:127
-#, python-format
-msgid "create_backup entity requires %s attribute"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/aggregates.py:208
-msgid "Invalid request format for metadata"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/create_backup.py:72
-msgid "create_backup attribute 'rotation' must be an integer"
 msgstr ""
 
 #: nova/api/openstack/compute/plugins/v3/cells.py:187
@@ -10650,7 +10650,7 @@ msgstr ""
 
 #: nova/virt/libvirt/driver.py:3552
 #, python-format
-msgid "Timeout waiting for vif plugging callback for instance %(uuid)s"
+msgid "An error occurred while enabling hairpin mode on domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3570

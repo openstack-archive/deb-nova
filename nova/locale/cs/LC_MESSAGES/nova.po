@@ -10895,12 +10895,12 @@ msgstr ""
 
 #: nova/virt/libvirt/driver.py:3543
 #, python-format
-msgid "Neutron Reported failure on event %(event)s for instance %(uuid)s"
+msgid "An error occurred while trying to launch a defined domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3552
 #, python-format
-msgid "Timeout waiting for vif plugging callback for instance %(uuid)s"
+msgid "An error occurred while enabling hairpin mode on domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3570

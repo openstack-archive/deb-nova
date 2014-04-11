@@ -4038,32 +4038,6 @@ msgstr ""
 msgid "create_backup attribute 'rotation' must be greater than or equal to zero"
 msgstr ""
 
-#: nova/api/openstack/compute/plugins/v3/cells.py:187
-#, python-format
-msgid "Cell %s doesn't exist."
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/console_auth_tokens.py:40
-msgid "token not provided"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/create_backup.py:62
-#, python-format
-msgid "create_backup entity requires %s attribute"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/create_backup.py:66
-msgid "Malformed create_backup entity"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/create_backup.py:72
-msgid "create_backup attribute 'rotation' must be an integer"
-msgstr ""
-
-#: nova/api/openstack/compute/plugins/v3/create_backup.py:75
-msgid "create_backup attribute 'rotation' must be greater than or equal to zero"
-msgstr ""
-
 #: nova/api/openstack/compute/plugins/v3/extended_volumes.py:98
 msgid "The volume was either invalid or not attached to the instance."
 msgstr ""
@@ -10767,12 +10741,12 @@ msgstr ""
 
 #: nova/virt/libvirt/driver.py:3543
 #, python-format
-msgid "Neutron Reported failure on event %(event)s for instance %(uuid)s"
+msgid "An error occurred while trying to launch a defined domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3552
 #, python-format
-msgid "Timeout waiting for vif plugging callback for instance %(uuid)s"
+msgid "An error occurred while enabling hairpin mode on domain with xml: %s"
 msgstr ""
 
 #: nova/virt/libvirt/driver.py:3570

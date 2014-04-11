@@ -5168,21 +5168,21 @@ class ComputeTestCase(BaseTestCase):
 
         # creating mocks
         self.mox.StubOutWithMock(self.compute.driver, 'unfilter_instance')
-        self.compute.driver.unfilter_instance(instance, [])
+        self.compute.driver.unfilter_instance(inst_ref, [])
         self.mox.StubOutWithMock(self.compute.conductor_api,
                                  'network_migrate_instance_start')
         migration = {'source_compute': srchost, 'dest_compute': dest, }
-        self.compute.conductor_api.network_migrate_instance_start(c, instance,
+        self.compute.conductor_api.network_migrate_instance_start(c, inst_ref,
                                                                   migration)
 
         self.mox.StubOutWithMock(self.compute.compute_rpcapi,
                                  'post_live_migration_at_destination')
         self.compute.compute_rpcapi.post_live_migration_at_destination(
-            c, instance, False, dest)
+            c, inst_ref, False, dest)
 
         self.mox.StubOutWithMock(self.compute.network_api,
                                  'setup_networks_on_host')
-        self.compute.network_api.setup_networks_on_host(c, instance,
+        self.compute.network_api.setup_networks_on_host(c, inst_ref,
                                                         self.compute.host,
                                                         teardown=True)
         self.mox.StubOutWithMock(self.compute.instance_events,
@@ -5193,7 +5193,7 @@ class ComputeTestCase(BaseTestCase):
         # start test
         self.mox.ReplayAll()
         migrate_data = {'is_shared_storage': False}
-        self.compute._post_live_migration(c, instance, dest,
+        self.compute._post_live_migration(c, inst_ref, dest,
                                           migrate_data=migrate_data)
         self.assertIn('cleanup', result)
         self.assertEqual(result['cleanup'], True)
