@@ -5157,13 +5157,14 @@ class ComputeTestCase(BaseTestCase):
 
         # creating testdata
         c = context.get_admin_context()
-        instance = self._objectify(self._create_fake_instance(
-                                             {'host': srchost,
-                                              'state_description': 'migrating',
-                                              'state': power_state.PAUSED}))
-        instance.update({'task_state': task_states.MIGRATING,
-                         'power_state': power_state.PAUSED})
-        instance.save(c)
+        inst_ref = jsonutils.to_primitive(self._create_fake_instance({
+                                'host': srchost,
+                                'state_description': 'migrating',
+                                'state': power_state.PAUSED}))
+        inst_uuid = inst_ref['uuid']
+        db.instance_update(c, inst_uuid,
+                           {'task_state': task_states.MIGRATING,
+                            'power_state': power_state.PAUSED})
 
         # creating mocks
         self.mox.StubOutWithMock(self.compute.driver, 'unfilter_instance')

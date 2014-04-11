@@ -183,7 +183,9 @@ libvirt_opts = [
                deprecated_group='DEFAULT'),
     cfg.StrOpt('vif_driver',
                default='nova.virt.libvirt.vif.LibvirtGenericVIFDriver',
-               help='The libvirt VIF driver to configure the VIFs.',
+               help='DEPRECATED. The libvirt VIF driver to configure the VIFs.'
+                    'This option is deprecated and will be removed in the '
+                    'Juno release.',
                deprecated_name='libvirt_vif_driver',
                deprecated_group='DEFAULT'),
     cfg.ListOpt('volume_drivers',
@@ -3582,6 +3584,10 @@ class LibvirtDriver(driver.ComputeDriver):
         return [('network-vif-plugged', vif['id'])
                 for vif in network_info if vif.get('active', True) is False]
 
+    @staticmethod
+    def _conn_supports_start_paused():
+        return CONF.libvirt.virt_type in ('kvm', 'qemu')
+
     def _create_domain_and_network(self, context, xml, instance, network_info,
                                    block_device_info=None, power_on=True,
                                    reboot=False, vifs_already_plugged=False):
@@ -3615,11 +3621,14 @@ class LibvirtDriver(driver.ComputeDriver):
                     encryptor.attach_volume(context, **encryption)
 
         timeout = CONF.vif_plugging_timeout
-        if utils.is_neutron() and not vifs_already_plugged and timeout:
+        if (self._conn_supports_start_paused() and
+            utils.is_neutron() and not
+            vifs_already_plugged and timeout):
             events = self._get_neutron_events(network_info)
         else:
             events = []
 
+        launch_flags = events and libvirt.VIR_DOMAIN_START_PAUSED or 0
         try:
             with self.virtapi.wait_for_instance_event(
                     instance, events, deadline=timeout,
@@ -3631,7 +3640,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                                              network_info)
                 domain = self._create_domain(
                     xml, instance=instance,
-                    launch_flags=libvirt.VIR_DOMAIN_START_PAUSED,
+                    launch_flags=launch_flags,
                     power_on=power_on)
 
                 self.firewall_driver.apply_instance_filter(instance,
@@ -3652,7 +3661,10 @@ class LibvirtDriver(driver.ComputeDriver):
                 self.cleanup(context, instance, network_info=network_info,
                              block_device_info=block_device_info)
                 raise exception.VirtualInterfaceCreateException()
-        domain.resume()
+
+        # Resume only if domain has been paused
+        if launch_flags & libvirt.VIR_DOMAIN_START_PAUSED:
+            domain.resume()
         return domain
 
     def get_all_block_devices(self):
