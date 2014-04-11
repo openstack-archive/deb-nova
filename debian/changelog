@@ -1,5 +1,6 @@
-nova (2014.1~rc1-2) experimental; urgency=low
+nova (2014.1~rc2-1) experimental; urgency=low
 
+  * New upstream pre-release.
   * Fixed new configuration that goes now in the [libvirt] section.
   * Allow selecting log destination for Openstack daemons.
   * Fixed nova.conf for Icehouse.
