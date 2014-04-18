@@ -1,3 +1,10 @@
+nova (2014.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Uploading to unstable.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 18 Apr 2014 09:36:19 +0800
+
 nova (2014.1~rc2-1) experimental; urgency=low
 
   * New upstream pre-release.
