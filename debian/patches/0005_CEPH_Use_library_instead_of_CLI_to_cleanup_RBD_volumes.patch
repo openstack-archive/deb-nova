@@ -1,0 +1,352 @@
+From ef3f83c6482bfc20170c4f9d482931cbb4e99d46 Mon Sep 17 00:00:00 2001
+From: Dmitry Borodaenko <dborodaenko@mirantis.com>
+Date: Thu, 13 Mar 2014 14:33:11 -0700
+Subject: [PATCH] Use library instead of CLI to cleanup RBD volumes
+
+'rbd list' CLI returns error code when there are no rbd volumes, which
+causes problems during live migration of VMs with RBD backed ephemeral
+volumes. It's safer to use the library that only raises an exception in
+case of a real problem.
+
+The only case where rbd CLI is still justified is import, which is
+needed to correctly import sparse image files.
+
+All code related to cleanup of RBD volumes is moved to rbd_utils.py,
+this fixes a yo-yo problem with single-use methods scattered across 3
+different files, and minimizes impact of this fix on imports in
+imagebackend and utils.
+
+Flake8 F401 in test_libvirt.py has to be ignored since flake8 doesn't
+recognize use of an imported module in a @mock.patch decorator.
+
+Change-Id: I92cd6b16fbd93b377fe47b15d22efbbf68d02513
+Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
+---
+ nova/tests/virt/libvirt/test_imagebackend.py  | 16 +++++++---
+ nova/tests/virt/libvirt/test_libvirt.py       | 37 +++++------------------
+ nova/tests/virt/libvirt/test_libvirt_utils.py | 42 ---------------------------
+ nova/tests/virt/libvirt/test_rbd_utils.py     | 14 +++++++++
+ nova/virt/libvirt/driver.py                   | 17 ++++-------
+ nova/virt/libvirt/imagebackend.py             |  2 +-
+ nova/virt/libvirt/rbd_utils.py                | 15 ++++++++++
+ nova/virt/libvirt/utils.py                    | 40 -------------------------
+ 8 files changed, 56 insertions(+), 127 deletions(-)
+
+diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
+index 59234e1..2733cbe 100644
+--- a/nova/tests/virt/libvirt/test_imagebackend.py
++++ b/nova/tests/virt/libvirt/test_imagebackend.py
+@@ -805,20 +805,24 @@ def test_create_image(self):
+ 
+         rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
+ 
++        fake_processutils.fake_execute_clear_log()
++        fake_processutils.stub_out_processutils_execute(self.stubs)
++
+         image = self.image_class(self.INSTANCE, self.NAME)
+         self.mox.StubOutWithMock(image, 'check_image_exists')
+         image.check_image_exists().AndReturn(False)
+         image.check_image_exists().AndReturn(False)
+         rbd_name = "%s_%s" % (self.INSTANCE['uuid'], self.NAME)
+-        cmd = ('--pool', self.POOL, self.TEMPLATE_PATH,
++        cmd = ('rbd', 'import', '--pool', self.POOL, self.TEMPLATE_PATH,
+                rbd_name, '--new-format', '--id', self.USER,
+                '--conf', self.CONF)
+-        self.libvirt_utils.import_rbd_image(self.TEMPLATE_PATH, *cmd)
+ 
+         self.mox.ReplayAll()
+ 
+         image.create_image(fn, self.TEMPLATE_PATH, None)
+ 
++        self.assertEqual(fake_processutils.fake_execute_get_log(),
++            [' '.join(cmd)])
+         self.mox.VerifyAll()
+ 
+     def test_create_image_resize(self):
+@@ -828,15 +832,17 @@ def test_create_image_resize(self):
+ 
+         rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
+ 
++        fake_processutils.fake_execute_clear_log()
++        fake_processutils.stub_out_processutils_execute(self.stubs)
++
+         image = self.image_class(self.INSTANCE, self.NAME)
+         self.mox.StubOutWithMock(image, 'check_image_exists')
+         image.check_image_exists().AndReturn(False)
+         image.check_image_exists().AndReturn(False)
+         rbd_name = "%s_%s" % (self.INSTANCE['uuid'], self.NAME)
+-        cmd = ('--pool', self.POOL, self.TEMPLATE_PATH,
++        cmd = ('rbd', 'import', '--pool', self.POOL, self.TEMPLATE_PATH,
+                rbd_name, '--new-format', '--id', self.USER,
+                '--conf', self.CONF)
+-        self.libvirt_utils.import_rbd_image(self.TEMPLATE_PATH, *cmd)
+         self.mox.StubOutWithMock(image, 'get_disk_size')
+         image.get_disk_size(rbd_name).AndReturn(self.SIZE)
+         self.mox.StubOutWithMock(image.driver, 'resize')
+@@ -846,6 +852,8 @@ def test_create_image_resize(self):
+ 
+         image.create_image(fn, self.TEMPLATE_PATH, full_size)
+ 
++        self.assertEqual(fake_processutils.fake_execute_get_log(),
++            [' '.join(cmd)])
+         self.mox.VerifyAll()
+ 
+     def test_create_image_already_exists(self):
+diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
+index 9dffa0b..39ada54 100644
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -76,6 +76,7 @@
+ from nova.virt.libvirt import driver as libvirt_driver
+ from nova.virt.libvirt import firewall
+ from nova.virt.libvirt import imagebackend
++from nova.virt.libvirt import rbd_utils  # noqa
+ from nova.virt.libvirt import utils as libvirt_utils
+ from nova.virt import netutils
+ 
+@@ -5473,38 +5474,16 @@ def fake_delete_instance_files(instance):
+                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
+         conn.destroy(self.context, instance, [])
+ 
+-    def test_cleanup_rbd(self):
+-        mock = self.mox.CreateMock(libvirt.virDomain)
+-
+-        def fake_lookup_by_name(instance_name):
+-            return mock
+-
+-        def fake_get_info(instance_name):
+-            return {'state': power_state.SHUTDOWN, 'id': -1}
+-
+-        fake_volumes = ['875a8070-d0b9-4949-8b31-104d125c9a64.local',
+-                        '875a8070-d0b9-4949-8b31-104d125c9a64.swap',
+-                        '875a8070-d0b9-4949-8b31-104d125c9a64',
+-                        'wrong875a8070-d0b9-4949-8b31-104d125c9a64']
+-        fake_pool = 'fake_pool'
+-        fake_instance = {'name': 'fakeinstancename', 'id': 'instanceid',
+-                         'uuid': '875a8070-d0b9-4949-8b31-104d125c9a64'}
+-
+-        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+-        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+-        self.stubs.Set(conn, 'get_info', fake_get_info)
+-
+-        self.flags(images_rbd_pool=fake_pool, group='libvirt')
+-        self.mox.StubOutWithMock(libvirt_driver.libvirt_utils,
+-                                 'remove_rbd_volumes')
+-        libvirt_driver.libvirt_utils.remove_rbd_volumes(fake_pool,
+-                                                        *fake_volumes[:3])
+-
+-        self.mox.ReplayAll()
++    @mock.patch('nova.virt.libvirt.rbd_utils.RBDDriver')
++    def test_cleanup_rbd(self, mock_driver):
++        driver = mock_driver.return_value
++        driver.cleanup_volumes = mock.Mock()
++        fake_instance = {'uuid': '875a8070-d0b9-4949-8b31-104d125c9a64'}
+ 
++        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+         conn._cleanup_rbd(fake_instance)
+ 
+-        self.mox.VerifyAll()
++        driver.cleanup_volumes.assert_called_with(fake_instance)
+ 
+     def test_destroy_undefines_no_undefine_flags(self):
+         mock = self.mox.CreateMock(libvirt.virDomain)
+diff --git a/nova/tests/virt/libvirt/test_libvirt_utils.py b/nova/tests/virt/libvirt/test_libvirt_utils.py
+index c10fc21..fc4b3d3 100644
+--- a/nova/tests/virt/libvirt/test_libvirt_utils.py
++++ b/nova/tests/virt/libvirt/test_libvirt_utils.py
+@@ -170,48 +170,6 @@ def fake_execute(*cmd, **kwargs):
+         libvirt_utils.clear_logical_volume('/dev/vd')
+         self.assertEqual(expected_commands, executes)
+ 
+-    def test_list_rbd_volumes(self):
+-        conf = '/etc/ceph/fake_ceph.conf'
+-        pool = 'fake_pool'
+-        user = 'user'
+-        self.flags(images_rbd_ceph_conf=conf, group='libvirt')
+-        self.flags(rbd_user=user, group='libvirt')
+-        fn = self.mox.CreateMockAnything()
+-        self.mox.StubOutWithMock(libvirt_utils.utils,
+-                                 'execute')
+-        libvirt_utils.utils.execute('rbd', '-p', pool, 'ls', '--id',
+-                                    user,
+-                                    '--conf', conf).AndReturn(("Out", "Error"))
+-        self.mox.ReplayAll()
+-
+-        libvirt_utils.list_rbd_volumes(pool)
+-
+-        self.mox.VerifyAll()
+-
+-    def test_remove_rbd_volumes(self):
+-        conf = '/etc/ceph/fake_ceph.conf'
+-        pool = 'fake_pool'
+-        user = 'user'
+-        names = ['volume1', 'volume2', 'volume3']
+-        self.flags(images_rbd_ceph_conf=conf, group='libvirt')
+-        self.flags(rbd_user=user, group='libvirt')
+-        fn = self.mox.CreateMockAnything()
+-        self.mox.StubOutWithMock(libvirt_utils.utils, 'execute')
+-        libvirt_utils.utils.execute('rbd', '-p', pool, 'rm', 'volume1',
+-                                    '--id', user, '--conf', conf, attempts=3,
+-                                    run_as_root=True)
+-        libvirt_utils.utils.execute('rbd', '-p', pool, 'rm', 'volume2',
+-                                    '--id', user, '--conf', conf, attempts=3,
+-                                    run_as_root=True)
+-        libvirt_utils.utils.execute('rbd', '-p', pool, 'rm', 'volume3',
+-                                    '--id', user, '--conf', conf, attempts=3,
+-                                    run_as_root=True)
+-        self.mox.ReplayAll()
+-
+-        libvirt_utils.remove_rbd_volumes(pool, *names)
+-
+-        self.mox.VerifyAll()
+-
+     @mock.patch('nova.utils.execute')
+     def test_copy_image_local_cp(self, mock_execute):
+         libvirt_utils.copy_image('src', 'dest')
+diff --git a/nova/tests/virt/libvirt/test_rbd_utils.py b/nova/tests/virt/libvirt/test_rbd_utils.py
+index 35fb43c..53c8273 100644
+--- a/nova/tests/virt/libvirt/test_rbd_utils.py
++++ b/nova/tests/virt/libvirt/test_rbd_utils.py
+@@ -268,3 +268,17 @@ def test_rename(self):
+             mock_rename.rename.assert_called_once_with(client.ioctx,
+                                                        self.volume_name,
+                                                        new_name)
++
++    def test_cleanup_volumes(self):
++        instance = {'uuid': '12345'}
++
++        with mock.patch.object(rbd_utils, 'RADOSClient') as client_init:
++            client = client_init.return_value
++            self.mock_rbd.RBD.list = mock.Mock()
++            self.mock_rbd.RBD.list.return_value = ['12345_test', '111_test']
++            self.mock_rbd.RBD.remove = mock.Mock()
++            self.driver.cleanup_volumes(instance)
++            self.mock_rbd.RBD.remove.assert_called_once_with(
++                    client.ioctx, '12345_test')
++            client.__enter__.assert_called_once()
++            client.__exit__.assert_called_once()
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index ac6e9d4..7f290d1 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -100,6 +100,7 @@
+ from nova.virt.libvirt import firewall as libvirt_firewall
+ from nova.virt.libvirt import imagebackend
+ from nova.virt.libvirt import imagecache
++from nova.virt.libvirt import rbd_utils
+ from nova.virt.libvirt import utils as libvirt_utils
+ from nova.virt import netutils
+ from nova.virt import watchdog_actions
+@@ -1068,17 +1069,11 @@ def cleanup(self, context, instance, network_info, block_device_info=None,
+                 self._cleanup_rbd(instance)
+ 
+     def _cleanup_rbd(self, instance):
+-        pool = CONF.libvirt.images_rbd_pool
+-        volumes = libvirt_utils.list_rbd_volumes(pool)
+-        pattern = instance['uuid']
+-
+-        def belongs_to_instance(disk):
+-            return disk.startswith(pattern)
+-
+-        volumes = filter(belongs_to_instance, volumes)
+-
+-        if volumes:
+-            libvirt_utils.remove_rbd_volumes(pool, *volumes)
++        driver = rbd_utils.RBDDriver(
++                pool=CONF.libvirt.images_rbd_pool,
++                ceph_conf=CONF.libvirt.images_rbd_ceph_conf,
++                rbd_user=CONF.libvirt.rbd_user)
++        driver.cleanup_volumes(instance)
+ 
+     def _cleanup_lvm(self, instance):
+         """Delete all LVM disks for given instance object."""
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index 6941b1e..2f9b708 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -590,7 +590,7 @@ def create_image(self, prepare_template, base, size, *args, **kwargs):
+             if self.driver.supports_layering():
+                 args += ['--new-format']
+                 args += self.driver.ceph_args()
+-                libvirt_utils.import_rbd_image(*args)
++                utils.execute('rbd', 'import', *args)
+ 
+         if size and size > self.get_disk_size(self.rbd_name):
+             self.driver.resize(self.rbd_name, size)
+diff --git a/nova/virt/libvirt/rbd_utils.py b/nova/virt/libvirt/rbd_utils.py
+index 5e255fc..ee6936d 100644
+--- a/nova/virt/libvirt/rbd_utils.py
++++ b/nova/virt/libvirt/rbd_utils.py
+@@ -232,3 +232,18 @@ def rename(self, name, new_name):
+             self.rbd.RBD().rename(client.ioctx,
+                                   name.encode('utf-8'),
+                                   new_name.encode('utf-8'))
++
++    def cleanup_volumes(self, instance):
++        with RADOSClient(self, self.pool) as client:
++
++            def belongs_to_instance(disk):
++                return disk.startswith(instance['uuid'])
++
++            volumes = self.rbd.RBD().list(client.ioctx)
++            for volume in filter(belongs_to_instance, volumes):
++                try:
++                    self.rbd.RBD().remove(client.ioctx, volume)
++                except (rbd.ImageNotFound, rbd.ImageHasSnapshots):
++                    LOG.warn(_('rbd remove %(volume)s in pool %(pool)s '
++                               'failed'),
++                             {'volume': volume, 'pool': self.pool})
+diff --git a/nova/virt/libvirt/utils.py b/nova/virt/libvirt/utils.py
+index 04f0234..19c1fc7 100644
+--- a/nova/virt/libvirt/utils.py
++++ b/nova/virt/libvirt/utils.py
+@@ -251,46 +251,6 @@ def check_size(vg, lv, size):
+     execute(*cmd, run_as_root=True, attempts=3)
+ 
+ 
+-def import_rbd_image(*args):
+-    execute('rbd', 'import', *args)
+-
+-
+-def _run_rbd(*args, **kwargs):
+-    total = list(args)
+-
+-    if CONF.libvirt.rbd_user:
+-        total.extend(['--id', str(CONF.libvirt.rbd_user)])
+-    if CONF.libvirt.images_rbd_ceph_conf:
+-        total.extend(['--conf', str(CONF.libvirt.images_rbd_ceph_conf)])
+-
+-    return utils.execute(*total, **kwargs)
+-
+-
+-def list_rbd_volumes(pool):
+-    """List volumes names for given ceph pool.
+-
+-    :param pool: ceph pool name
+-    """
+-    try:
+-        out, err = _run_rbd('rbd', '-p', pool, 'ls')
+-    except processutils.ProcessExecutionError:
+-        # No problem when no volume in rbd pool
+-        return []
+-
+-    return [line.strip() for line in out.splitlines()]
+-
+-
+-def remove_rbd_volumes(pool, *names):
+-    """Remove one or more rbd volume."""
+-    for name in names:
+-        rbd_remove = ['rbd', '-p', pool, 'rm', name]
+-        try:
+-            _run_rbd(*rbd_remove, attempts=3, run_as_root=True)
+-        except processutils.ProcessExecutionError:
+-            LOG.warn(_("rbd remove %(name)s in pool %(pool)s failed"),
+-                     {'name': name, 'pool': pool})
+-
+-
+ def get_volume_group_info(vg):
+     """Return free/used/total space info for a volume group in bytes
+ 
+-- 
+1.9.1
+

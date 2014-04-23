@@ -1,0 +1,1356 @@
+From d8736fe0238040fcf3585a3227e5a46b18873ace Mon Sep 17 00:00:00 2001
+From: Zhi Yan Liu <zhiyanl@cn.ibm.com>
+Date: Sat, 15 Jun 2013 21:25:34 +0800
+Subject: [PATCH] Adding image multiple location support
+
+Images now support multiple locations within its metadata and it may be
+stored on more than one backend storage. Nova should add a layer to
+transparently handle image preparing and removing for an instance by the
+best approach/location, and it should allow administrators to configure
+the image handler pipeline with the order who preferred to the layer.
+
+Also, based on this structure we could implement particular sub-class in
+relevant hypervisor layer with more advanced functions, such as CoW
+making, snapshot capturing and etc. in future.
+
+Implement bp: image-multiple-location
+DocImpact
+
+Change-Id: Idce8d21ae37bfdbb28a2567120a83d1061061904
+Signed-off-by: Zhi Yan Liu <zhiyanl@cn.ibm.com>
+---
+ nova/exception.py                          |   5 +
+ nova/hacking/checks.py                     |   2 +-
+ nova/image/glance.py                       |   4 +-
+ nova/tests/image/fake.py                   |   6 +
+ nova/tests/virt/libvirt/test_imagecache.py |  31 +++-
+ nova/tests/virt/libvirt/test_libvirt.py    |  56 +++++-
+ nova/tests/virt/test_imagehandler.py       | 277 +++++++++++++++++++++++++++++
+ nova/virt/driver.py                        |   2 +
+ nova/virt/imagehandler/base.py             | 248 ++++++++++++++++++++++++++
+ nova/virt/imagehandler/download.py         |  66 +++++++
+ nova/virt/images.py                        | 105 +++++++++--
+ nova/virt/libvirt/driver.py                |  53 +++---
+ nova/virt/libvirt/imagebackend.py          |   7 +
+ nova/virt/libvirt/imagecache.py            |  33 ++--
+ nova/virt/libvirt/utils.py                 |   5 +-
+ setup.cfg                                  |   2 +
+ 16 files changed, 831 insertions(+), 71 deletions(-)
+ create mode 100644 nova/tests/virt/test_imagehandler.py
+ create mode 100644 nova/virt/imagehandler/base.py
+ create mode 100644 nova/virt/imagehandler/download.py
+
+diff --git a/nova/exception.py b/nova/exception.py
+index e874927..fc9483f 100644
+--- a/nova/exception.py
++++ b/nova/exception.py
+@@ -1547,3 +1547,8 @@ class InvalidWatchdogAction(Invalid):
+ class NoBlockMigrationForConfigDriveInLibVirt(NovaException):
+     msg_fmt = _("Block migration of instances with config drives is not "
+                 "supported in libvirt.")
++
++
++class NoImageHandlerAvailable(NovaException):
++    msg_fmt = _("No image handlers specified in the configuration "
++                "are available for image %(image_id)s.")
+diff --git a/nova/hacking/checks.py b/nova/hacking/checks.py
+index 9cfb167..c2ca193 100644
+--- a/nova/hacking/checks.py
++++ b/nova/hacking/checks.py
+@@ -85,7 +85,7 @@ def _get_virt_name(regex, data):
+         return None
+     driver = m.group(1)
+     # Ignore things we mis-detect as virt drivers in the regex
+-    if driver in ["test_virt_drivers", "driver", "firewall",
++    if driver in ["test_virt_drivers", "driver", "firewall", "imagehandler",
+                   "disk", "api", "imagecache", "cpu"]:
+         return None
+     # TODO(berrange): remove once bugs 1261826 and 126182 are
+diff --git a/nova/image/glance.py b/nova/image/glance.py
+index f9022fc..3a8bd69 100644
+--- a/nova/image/glance.py
++++ b/nova/image/glance.py
+@@ -277,7 +277,7 @@ def show(self, context, image_id):
+         base_image_meta = _translate_from_glance(image)
+         return base_image_meta
+ 
+-    def _get_locations(self, context, image_id):
++    def get_locations(self, context, image_id):
+         """Returns the direct url representing the backend storage location,
+         or None if this attribute is not shown by Glance.
+         """
+@@ -309,7 +309,7 @@ def _get_transfer_module(self, scheme):
+     def download(self, context, image_id, data=None, dst_path=None):
+         """Calls out to Glance for data and writes data."""
+         if CONF.allowed_direct_url_schemes and dst_path is not None:
+-            locations = self._get_locations(context, image_id)
++            locations = self.get_locations(context, image_id)
+             for entry in locations:
+                 loc_url = entry['url']
+                 loc_meta = entry['metadata']
+diff --git a/nova/tests/image/fake.py b/nova/tests/image/fake.py
+index 0e8d3ac..874c2de 100644
+--- a/nova/tests/image/fake.py
++++ b/nova/tests/image/fake.py
+@@ -230,6 +230,12 @@ def get_location(self, context, image_id):
+             return 'fake_location'
+         return None
+ 
++    def get_locations(self, context, image_id):
++        if image_id in self.images:
++            return ['fake_location', 'fake_location2']
++        return []
++
++
+ _fakeImageService = _FakeImageService()
+ 
+ 
+diff --git a/nova/tests/virt/libvirt/test_imagecache.py b/nova/tests/virt/libvirt/test_imagecache.py
+index c6bae72..ecc4db6 100644
+--- a/nova/tests/virt/libvirt/test_imagecache.py
++++ b/nova/tests/virt/libvirt/test_imagecache.py
+@@ -31,6 +31,9 @@
+ from nova import test
+ from nova.tests import fake_instance
+ from nova import utils
++from nova.virt import fake
++from nova.virt import imagehandler
++from nova.virt.libvirt import driver as libvirt_driver
+ from nova.virt.libvirt import imagecache
+ from nova.virt.libvirt import utils as virtutils
+ 
+@@ -60,6 +63,8 @@ def setUp(self):
+                                          'instance-00000002',
+                                          'instance-00000003',
+                                          'banana-42-hamster'])
++        imagehandler.load_image_handlers(libvirt_driver.LibvirtDriver(
++                                                  fake.FakeVirtAPI(), False))
+ 
+     def test_read_stored_checksum_missing(self):
+         self.stubs.Set(os.path, 'exists', lambda x: False)
+@@ -335,7 +340,7 @@ def _make_base_file(self, checksum=True):
+     def test_remove_base_file(self):
+         with self._make_base_file() as fname:
+             image_cache_manager = imagecache.ImageCacheManager()
+-            image_cache_manager._remove_base_file(fname)
++            image_cache_manager._remove_base_file(None, None, fname)
+             info_fname = imagecache.get_info_filename(fname)
+ 
+             # Files are initially too new to delete
+@@ -344,7 +349,7 @@ def test_remove_base_file(self):
+ 
+             # Old files get cleaned up though
+             os.utime(fname, (-1, time.time() - 3601))
+-            image_cache_manager._remove_base_file(fname)
++            image_cache_manager._remove_base_file(None, None, fname)
+ 
+             self.assertFalse(os.path.exists(fname))
+             self.assertFalse(os.path.exists(info_fname))
+@@ -353,7 +358,7 @@ def test_remove_base_file_original(self):
+         with self._make_base_file() as fname:
+             image_cache_manager = imagecache.ImageCacheManager()
+             image_cache_manager.originals = [fname]
+-            image_cache_manager._remove_base_file(fname)
++            image_cache_manager._remove_base_file(None, None, fname)
+             info_fname = imagecache.get_info_filename(fname)
+ 
+             # Files are initially too new to delete
+@@ -362,14 +367,14 @@ def test_remove_base_file_original(self):
+ 
+             # This file should stay longer than a resized image
+             os.utime(fname, (-1, time.time() - 3601))
+-            image_cache_manager._remove_base_file(fname)
++            image_cache_manager._remove_base_file(None, None, fname)
+ 
+             self.assertTrue(os.path.exists(fname))
+             self.assertTrue(os.path.exists(info_fname))
+ 
+             # Originals don't stay forever though
+             os.utime(fname, (-1, time.time() - 3600 * 25))
+-            image_cache_manager._remove_base_file(fname)
++            image_cache_manager._remove_base_file(None, None, fname)
+ 
+             self.assertFalse(os.path.exists(fname))
+             self.assertFalse(os.path.exists(info_fname))
+@@ -385,7 +390,7 @@ def test_remove_base_file_dne(self):
+ 
+             fname = os.path.join(tmpdir, 'aaa')
+             image_cache_manager = imagecache.ImageCacheManager()
+-            image_cache_manager._remove_base_file(fname)
++            image_cache_manager._remove_base_file(None, None, fname)
+ 
+     def test_remove_base_file_oserror(self):
+         with intercept_log_messages() as stream:
+@@ -402,7 +407,7 @@ def test_remove_base_file_oserror(self):
+ 
+                 # This will raise an OSError because of file permissions
+                 image_cache_manager = imagecache.ImageCacheManager()
+-                image_cache_manager._remove_base_file(fname)
++                image_cache_manager._remove_base_file(None, None, fname)
+ 
+                 self.assertTrue(os.path.exists(fname))
+                 self.assertNotEqual(stream.getvalue().find('Failed to remove'),
+@@ -420,7 +425,7 @@ def test_handle_base_image_unused(self):
+ 
+             self.assertEqual(image_cache_manager.unexplained_images, [])
+             self.assertEqual(image_cache_manager.removable_base_files,
+-                             [fname])
++                             [{'image_id': img, 'file': fname}])
+             self.assertEqual(image_cache_manager.corrupt_base_files, [])
+ 
+     def test_handle_base_image_used(self):
+@@ -664,6 +669,12 @@ def remove(path):
+ 
+         self.stubs.Set(os, 'remove', lambda x: remove(x))
+ 
++        def fake_remove_image(*args, **kwargs):
++            return True
++
++        self.stubs.Set(imagehandler.download.DownloadImageHandler,
++                       '_remove_image', fake_remove_image)
++
+         # And finally we can make the call we're actually testing...
+         # The argument here should be a context, but it is mocked out
+         image_cache_manager.update(None, all_instances)
+@@ -676,11 +687,13 @@ def remove(path):
+         self.assertEqual(len(image_cache_manager.active_base_files),
+                          len(active))
+ 
++        removable_base_files = [entry['file'] for entry in
++                                image_cache_manager.removable_base_files]
+         for rem in [fq_path('e97222e91fc4241f49a7f520d1dcf446751129b3_sm'),
+                     fq_path('e09c675c2d1cfac32dae3c2d83689c8c94bc693b_sm'),
+                     fq_path(hashed_42),
+                     fq_path('%s_10737418240' % hashed_1)]:
+-            self.assertIn(rem, image_cache_manager.removable_base_files)
++            self.assertIn(rem, removable_base_files)
+ 
+         # Ensure there are no "corrupt" images as well
+         self.assertEqual(len(image_cache_manager.corrupt_base_files), 0)
+diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
+index f1ab786..9dffa0b 100644
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -49,6 +49,7 @@
+ from nova.openstack.common import fileutils
+ from nova.openstack.common import importutils
+ from nova.openstack.common import jsonutils
++from nova.openstack.common import lockutils
+ from nova.openstack.common import loopingcall
+ from nova.openstack.common import processutils
+ from nova.openstack.common import units
+@@ -68,6 +69,7 @@
+ from nova.virt import event as virtevent
+ from nova.virt import fake
+ from nova.virt import firewall as base_firewall
++from nova.virt import imagehandler
+ from nova.virt import images
+ from nova.virt.libvirt import blockinfo
+ from nova.virt.libvirt import config as vconfig
+@@ -7859,7 +7861,7 @@ def test_fetch_image(self):
+         user_id = 'fake'
+         project_id = 'fake'
+         images.fetch_to_raw(context, image_id, target, user_id, project_id,
+-                            max_size=0)
++                            max_size=0, imagehandler_args=None)
+ 
+         self.mox.ReplayAll()
+         libvirt_utils.fetch_image(context, target, image_id,
+@@ -7880,6 +7882,16 @@ def fake_unlink(path):
+         def fake_rm_on_error(path, remove=None):
+             self.executes.append(('rm', '-f', path))
+ 
++        temp_image_files = ['t.qcow2.converted', 't.raw.part']
++        existing_image_files = ['t.qcow2', 't.raw'] + temp_image_files
++
++        def fake_exists(path):
++            self.executes.append(('test', '-f', path))
++            ret = path in existing_image_files
++            if path in temp_image_files and path in existing_image_files:
++                existing_image_files.pop(existing_image_files.index(path))
++            return ret
++
+         def fake_qemu_img_info(path):
+             class FakeImgInfo(object):
+                 pass
+@@ -7906,12 +7918,23 @@ class FakeImgInfo(object):
+ 
+             return FakeImgInfo()
+ 
++        def fake_image_show(self, image_meta):
++            return {'locations': []}
++
++        @contextlib.contextmanager
++        def fake_lockutils_lock(*args, **kwargs):
++            yield
++
++        nova.tests.image.fake.stub_out_image_service(self.stubs)
++
+         self.stubs.Set(utils, 'execute', fake_execute)
+         self.stubs.Set(os, 'rename', fake_rename)
+         self.stubs.Set(os, 'unlink', fake_unlink)
+-        self.stubs.Set(images, 'fetch', lambda *_, **__: None)
++        self.stubs.Set(os.path, 'exists', fake_exists)
++        self.stubs.Set(images, 'fetch', lambda *_, **__: True)
+         self.stubs.Set(images, 'qemu_img_info', fake_qemu_img_info)
+         self.stubs.Set(fileutils, 'delete_if_exists', fake_rm_on_error)
++        self.stubs.Set(lockutils, 'lock', fake_lockutils_lock)
+ 
+         # Since the remove param of fileutils.remove_path_on_error()
+         # is initialized at load time, we must provide a wrapper
+@@ -7920,6 +7943,12 @@ class FakeImgInfo(object):
+         f = functools.partial(old_rm_path_on_error, remove=fake_rm_on_error)
+         self.stubs.Set(fileutils, 'remove_path_on_error', f)
+ 
++        self.stubs.Set(nova.tests.image.fake.FakeImageService(),
++                       'show', fake_image_show)
++
++        imagehandler.load_image_handlers(libvirt_driver.LibvirtDriver(
++                                             fake.FakeVirtAPI(), False))
++
+         context = 'opaque context'
+         image_id = '4'
+         user_id = 'fake'
+@@ -7929,21 +7958,32 @@ class FakeImgInfo(object):
+         self.executes = []
+         expected_commands = [('qemu-img', 'convert', '-O', 'raw',
+                               't.qcow2.part', 't.qcow2.converted'),
+-                             ('rm', 't.qcow2.part'),
+-                             ('mv', 't.qcow2.converted', 't.qcow2')]
++                             ('test', '-f', 't.qcow2.converted'),
++                             ('mv', 't.qcow2.converted', 't.qcow2'),
++                             ('test', '-f', 't.qcow2'),
++                             ('test', '-f', 't.qcow2.converted'),
++                             ('rm', '-f', 't.qcow2.part'),
++                             ('test', '-f', 't.qcow2.part')]
++
+         images.fetch_to_raw(context, image_id, target, user_id, project_id,
+                             max_size=1)
+         self.assertEqual(self.executes, expected_commands)
+ 
+         target = 't.raw'
+         self.executes = []
+-        expected_commands = [('mv', 't.raw.part', 't.raw')]
++        expected_commands = [('test', '-f', 't.raw.part'),
++                             ('mv', 't.raw.part', 't.raw'),
++                             ('test', '-f', 't.raw'),
++                             ('test', '-f', 't.raw.part')]
++        existing_image_files.append('t.qcow2.converted')
+         images.fetch_to_raw(context, image_id, target, user_id, project_id)
+         self.assertEqual(self.executes, expected_commands)
+ 
+         target = 'backing.qcow2'
+         self.executes = []
+-        expected_commands = [('rm', '-f', 'backing.qcow2.part')]
++        expected_commands = [('rm', '-f', 'backing.qcow2.part'),
++                             ('test', '-f', 'backing.qcow2.part'),
++                             ('rm', '-f', 'backing.qcow2.part')]
+         self.assertRaises(exception.ImageUnacceptable,
+                           images.fetch_to_raw,
+                           context, image_id, target, user_id, project_id)
+@@ -7951,7 +7991,9 @@ class FakeImgInfo(object):
+ 
+         target = 'big.qcow2'
+         self.executes = []
+-        expected_commands = [('rm', '-f', 'big.qcow2.part')]
++        expected_commands = [('rm', '-f', 'big.qcow2.part'),
++                             ('test', '-f', 'big.qcow2.part'),
++                             ('rm', '-f', 'big.qcow2.part')]
+         self.assertRaises(exception.FlavorDiskTooSmall,
+                           images.fetch_to_raw,
+                           context, image_id, target, user_id, project_id,
+diff --git a/nova/tests/virt/test_imagehandler.py b/nova/tests/virt/test_imagehandler.py
+new file mode 100644
+index 0000000..96bb964
+--- /dev/null
++++ b/nova/tests/virt/test_imagehandler.py
+@@ -0,0 +1,277 @@
++#    Copyright 2014 IBM Corp.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++import mock
++import stevedore
++
++from nova import context
++from nova import exception
++from nova import test
++from nova.tests.image import fake as fake_image
++from nova.virt import imagehandler
++from nova.virt.imagehandler import download as download_imagehandler
++
++
++class ImageHandlerTestCase(test.TestCase):
++    def setUp(self):
++        super(ImageHandlerTestCase, self).setUp()
++        self.fake_driver = mock.MagicMock()
++        self.context = context.get_admin_context()
++        self.image_service = fake_image.stub_out_image_service(self.stubs)
++        imagehandler._IMAGE_HANDLERS = []
++        imagehandler._IMAGE_HANDLERS_ASSO = {}
++
++    def tearDown(self):
++        fake_image.FakeImageService_reset()
++        super(ImageHandlerTestCase, self).tearDown()
++
++    def test_match_locations_empty(self):
++        matched = imagehandler._match_locations([], ())
++        self.assertEqual([], matched)
++        matched = imagehandler._match_locations(None, ())
++        self.assertEqual([], matched)
++        matched = imagehandler._match_locations([], None)
++        self.assertEqual([], matched)
++
++    def test_match_locations_location_dependent(self):
++        fake_locations = [{'url': 'fake1://url', 'metadata': {}},
++                          {'url': 'fake2://url', 'metadata': {}}]
++        matched = imagehandler._match_locations(fake_locations, ('fake1'))
++        self.assertEqual([{'url': 'fake1://url', 'metadata': {}}], matched)
++        matched = imagehandler._match_locations(fake_locations,
++                                                ('no_existing'))
++        self.assertEqual([], matched)
++
++    def test_match_locations_location_independent(self):
++        fake_locations = [{'url': 'fake1://url', 'metadata': {}},
++                          {'url': 'fake2://url', 'metadata': {}}]
++        matched = imagehandler._match_locations(fake_locations, ())
++        self.assertEqual(fake_locations, matched)
++
++    def test_image_handler_association_hooks(self):
++        handler = 'fake_handler'
++        path = 'fake/image/path'
++        location = 'fake://image_location_url'
++        image_meta = 'fake_image_meta'
++        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
++        imagehandler._image_handler_asso(handler, path, location, image_meta)
++        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS_ASSO))
++        self.assertIn(path, imagehandler._IMAGE_HANDLERS_ASSO)
++        self.assertEqual((handler, location, image_meta),
++                         imagehandler._IMAGE_HANDLERS_ASSO[path])
++        imagehandler._image_handler_disasso('another_handler',
++                                            'another/fake/image/path')
++        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS_ASSO))
++        imagehandler._image_handler_disasso(handler, path)
++        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
++
++    def test_load_image_handlers(self):
++        self.flags(image_handlers=['download'])
++        imagehandler.load_image_handlers(self.fake_driver)
++        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS))
++        self.assertIsInstance(imagehandler._IMAGE_HANDLERS[0],
++                              download_imagehandler.DownloadImageHandler)
++        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
++
++    def test_load_image_handlers_with_invalid_handler_name(self):
++        self.flags(image_handlers=['invaild1', 'download', 'invaild2'])
++        imagehandler.load_image_handlers(self.fake_driver)
++        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS))
++        self.assertIsInstance(imagehandler._IMAGE_HANDLERS[0],
++                              download_imagehandler.DownloadImageHandler)
++        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
++
++    @mock.patch.object(stevedore.extension, 'ExtensionManager')
++    @mock.patch.object(stevedore.driver, 'DriverManager')
++    def test_load_image_handlers_with_deduplicating(self,
++                                                    mock_DriverManager,
++                                                    mock_ExtensionManager):
++        handlers = ['handler1', 'handler2', 'handler3']
++
++        def _fake_stevedore_driver_manager(*args, **kwargs):
++            return mock.MagicMock(**{'driver': kwargs['name']})
++
++        mock_ExtensionManager.return_value = mock.MagicMock(
++                                        **{'names.return_value': handlers})
++        mock_DriverManager.side_effect = _fake_stevedore_driver_manager
++
++        self.flags(image_handlers=['invaild1', 'handler1  ', '  handler3',
++                                   'invaild2', '  handler2  '])
++        imagehandler.load_image_handlers(self.fake_driver)
++        self.assertEqual(3, len(imagehandler._IMAGE_HANDLERS))
++        for handler in imagehandler._IMAGE_HANDLERS:
++            self.assertTrue(handler in handlers)
++        self.assertEqual(['handler1', 'handler3', 'handler2'],
++                         imagehandler._IMAGE_HANDLERS)
++        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
++
++    @mock.patch.object(stevedore.extension, 'ExtensionManager')
++    @mock.patch.object(stevedore.driver, 'DriverManager')
++    def test_load_image_handlers_with_load_handler_failure(self,
++                                                    mock_DriverManager,
++                                                    mock_ExtensionManager):
++        handlers = ['raise_exception', 'download']
++
++        def _fake_stevedore_driver_manager(*args, **kwargs):
++            if kwargs['name'] == 'raise_exception':
++                raise Exception('handler failed to initialize.')
++            else:
++                return mock.MagicMock(**{'driver': kwargs['name']})
++
++        mock_ExtensionManager.return_value = mock.MagicMock(
++                                        **{'names.return_value': handlers})
++        mock_DriverManager.side_effect = _fake_stevedore_driver_manager
++
++        self.flags(image_handlers=['raise_exception', 'download',
++                                   'raise_exception', 'download'])
++        imagehandler.load_image_handlers(self.fake_driver)
++        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS))
++        self.assertEqual(['download'], imagehandler._IMAGE_HANDLERS)
++        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
++
++    @mock.patch.object(download_imagehandler.DownloadImageHandler,
++                       '_fetch_image')
++    def _handle_image_without_associated_handle(self, image_id,
++                                                expected_locations,
++                                                expected_handled_location,
++                                                expected_handled_path,
++                                                mock__fetch_image):
++        def _fake_handler_fetch(context, image_meta, path,
++                                user_id=None, project_id=None, location=None):
++            return location == expected_handled_location
++
++        mock__fetch_image.side_effect = _fake_handler_fetch
++
++        self.flags(image_handlers=['download'])
++        imagehandler.load_image_handlers(self.fake_driver)
++        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS))
++        self.assertEqual(0, len(imagehandler._IMAGE_HANDLERS_ASSO))
++
++        check_left_loc_count = expected_handled_location in expected_locations
++        if check_left_loc_count:
++            unused_location_count = (len(expected_locations) -
++                 expected_locations.index(expected_handled_location) - 1)
++
++        self._fetch_image(image_id, expected_locations,
++                          expected_handled_location, expected_handled_path)
++
++        if check_left_loc_count:
++            self.assertEqual(unused_location_count, len(expected_locations))
++        self.assertEqual(1, len(imagehandler._IMAGE_HANDLERS_ASSO))
++        self.assertEqual(
++             (imagehandler._IMAGE_HANDLERS[0], expected_handled_location),
++             imagehandler._IMAGE_HANDLERS_ASSO[expected_handled_path][:2])
++
++    @mock.patch.object(download_imagehandler.DownloadImageHandler,
++                       '_fetch_image')
++    def _fetch_image(self, image_id, expected_locations,
++                     expected_handled_location, expected_handled_path,
++                     mock__fetch_image):
++        def _fake_handler_fetch(context, image_id, image_meta, path,
++                                user_id=None, project_id=None, location=None):
++            return location == expected_handled_location
++
++        mock__fetch_image.side_effect = _fake_handler_fetch
++
++        for handler_context in imagehandler.handle_image(self.context,
++                                image_id, target_path=expected_handled_path):
++            (handler, loc, image_meta) = handler_context
++            self.assertEqual(handler, imagehandler._IMAGE_HANDLERS[0])
++            if (len(expected_locations) > 0):
++                self.assertEqual(expected_locations.pop(0), loc)
++            handler.fetch_image(context, image_id, image_meta,
++                                expected_handled_path, location=loc)
++
++    def test_handle_image_without_associated_handle(self):
++        image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
++        expected_locations = ['fake_location', 'fake_location2']
++        # Image will be handled successful on second location.
++        expected_handled_location = 'fake_location2'
++        expected_handled_path = 'fake/image/path2'
++        self._handle_image_without_associated_handle(image_id,
++                                                     expected_locations,
++                                                     expected_handled_location,
++                                                     expected_handled_path)
++
++    def test_handle_image_with_associated_handler(self):
++        self.get_locations_called = False
++
++        def _fake_get_locations(*args, **kwargs):
++            self.get_locations_called = True
++
++        image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
++        expected_locations = ['fake_location', 'fake_location2']
++        expected_handled_location = 'fake_location'
++        expected_handled_path = 'fake/image/path'
++
++        # 1) Handle image without cached association information
++        self._handle_image_without_associated_handle(image_id,
++                                                     list(expected_locations),
++                                                     expected_handled_location,
++                                                     expected_handled_path)
++
++        self.image_service.get_locations = mock.MagicMock(
++                                    **{'side_effect': _fake_get_locations})
++
++        # 2) Handle image with cached association information
++        self._fetch_image(image_id, expected_locations,
++                          expected_handled_location, expected_handled_path)
++
++        self.assertFalse(self.get_locations_called)
++        del self.get_locations_called
++
++    def test_handle_image_with_association_discarded(self):
++        self.get_locations_called = False
++        original_get_locations = self.image_service.get_locations
++
++        def _fake_get_locations(*args, **kwargs):
++            self.get_locations_called = True
++            return original_get_locations(*args, **kwargs)
++
++        image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
++        expected_locations = ['fake_location', 'fake_location2']
++        expected_handled_location = 'fake_location'
++        expected_handled_path = 'fake/image/path'
++
++        # 1) Handle image without cached association information
++        self._handle_image_without_associated_handle(image_id,
++                                                     list(expected_locations),
++                                                     expected_handled_location,
++                                                     expected_handled_path)
++
++        # 2) Clear cached association information
++        imagehandler._IMAGE_HANDLERS_ASSO = {}
++
++        # 3) Handle image with discarded association information
++        self.image_service.get_locations = mock.MagicMock(
++                                    **{'side_effect': _fake_get_locations})
++
++        self._fetch_image(image_id, expected_locations,
++                          expected_handled_location, expected_handled_path)
++
++        self.assertTrue(self.get_locations_called)
++        del self.get_locations_called
++
++    def test_handle_image_no_handler_available(self):
++        image_id = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
++        expected_locations = ['fake_location', 'fake_location2']
++        expected_handled_location = 'fake_location3'
++        expected_handled_path = 'fake/image/path'
++
++        self.assertRaises(exception.NoImageHandlerAvailable,
++                          self._handle_image_without_associated_handle,
++                          image_id,
++                          expected_locations,
++                          expected_handled_location,
++                          expected_handled_path)
+diff --git a/nova/virt/driver.py b/nova/virt/driver.py
+index a36c10b..2fe9fb6 100644
+--- a/nova/virt/driver.py
++++ b/nova/virt/driver.py
+@@ -29,6 +29,7 @@
+ from nova.openstack.common import log as logging
+ from nova import utils
+ from nova.virt import event as virtevent
++from nova.virt import imagehandler
+ 
+ driver_opts = [
+     cfg.StrOpt('compute_driver',
+@@ -141,6 +142,7 @@ class ComputeDriver(object):
+     def __init__(self, virtapi):
+         self.virtapi = virtapi
+         self._compute_event_callback = None
++        imagehandler.load_image_handlers(self)
+ 
+     def init_host(self, host):
+         """Initialize anything that is necessary for the driver to function,
+diff --git a/nova/virt/imagehandler/base.py b/nova/virt/imagehandler/base.py
+new file mode 100644
+index 0000000..8650dae
+--- /dev/null
++++ b/nova/virt/imagehandler/base.py
+@@ -0,0 +1,248 @@
++# Copyright 2014 IBM Corp.
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++"""
++Base image handler implementation.
++"""
++
++import abc
++import sys
++
++import six
++
++from nova.openstack.common.gettextutils import _
++from nova.openstack.common import lockutils
++from nova.openstack.common import log as logging
++
++LOG = logging.getLogger(__name__)
++
++
++@six.add_metaclass(abc.ABCMeta)
++class ImageHandler(object):
++    """Image handler base class.
++
++    Currently the behavior of this image handler class just
++    only like a image fetcher. On next step, we could implement
++    particular sub-class in relevant hypervisor layer with more
++    advanced functions base on this structure, such as
++    CoW creating and snapshot capturing, etc..
++    """
++
++    def __init__(self, driver, *args, **kwargs):
++        """Construct a image handler instance.
++
++        :param driver: a valid compute driver instance,
++                such as nova.virt.libvirt.driver.LibvirtDriver object
++        :param associate_fn: An optional hook function, will be called when
++                an image be handled by this handler.
++        :param disassociate_fn: An optional hook function, will be called when
++                the associated relationship be removed.
++        """
++        self._last_ops_handled = False
++        self.driver = driver
++        noop = lambda *args, **kwargs: None
++        self.associate_fn = kwargs.get('associate_fn', noop)
++        self.disassociate_fn = kwargs.get('disassociate_fn', noop)
++
++    def fetch_image(self, context, image_id, image_meta, path,
++                    user_id=None, project_id=None, location=None,
++                    **kwargs):
++        """Fetch an image from a location to local.
++
++        :param context: Request context
++        :param image_id: The opaque image identifier
++        :param image_meta: The opaque image metadata
++        :param path: The image data to write, as a file-like object
++        :param user_id: Request user id
++        :param project_id: Request project id
++        :param location: Image location to handling
++        :param kwargs: Other handler-specified arguments
++
++        :retval a boolean value to inform handling success or not
++        """
++        with lockutils.lock("nova-imagehandler-%s" % image_id,
++                            lock_file_prefix='nova-', external=True):
++            ret = self._fetch_image(context, image_id, image_meta, path,
++                                    user_id, project_id, location,
++                                    **kwargs)
++            if ret:
++                self._associate(path, location, image_meta)
++            self._set_handled(ret)
++            return ret
++
++    def remove_image(self, context, image_id, image_meta, path,
++                     user_id=None, project_id=None, location=None,
++                     **kwargs):
++        """Remove an image from local.
++
++        :param context: Request context
++        :param image_id: The opaque image identifier
++        :param image_meta: The opaque image metadata
++        :param path: The image object local storage path
++        :param user_id: Request user id
++        :param project_id: Request project id
++        :param location: Image location to handling
++        :param kwargs: Other handler-specified arguments
++
++        :retval a boolean value to inform handling success or not
++        """
++        with lockutils.lock("nova-imagehandler-%s" % image_id,
++                            lock_file_prefix='nova-', external=True):
++            ret = self._remove_image(context, image_id, image_meta, path,
++                                     user_id, project_id, location,
++                                     **kwargs)
++            if ret:
++                self._disassociate(path)
++            self._set_handled(ret)
++            return ret
++
++    def move_image(self, context, image_id, image_meta, src_path, dst_path,
++                   user_id=None, project_id=None, location=None,
++                   **kwargs):
++        """Move an image on local.
++
++        :param context: Request context
++        :param image_id: The opaque image identifier
++        :param image_meta: The opaque image metadata
++        :param src_path: The image object source path
++        :param dst_path: The image object destination path
++        :param user_id: Request user id
++        :param project_id: Request project id
++        :param location: Image location to handling
++        :param kwargs: Other handler-specified arguments
++
++        :retval a boolean value to inform handling success or not
++        """
++        with lockutils.lock("nova-imagehandler-%s" % image_id,
++                            lock_file_prefix='nova-', external=True):
++            ret = self._move_image(context, image_id, image_meta,
++                                   src_path, dst_path,
++                                   user_id, project_id, location,
++                                   **kwargs)
++            if ret:
++                self._disassociate(src_path)
++                self._associate(dst_path, location, image_meta)
++            self._set_handled(ret)
++            return ret
++
++    def last_ops_handled(self, flush=True):
++        ret = self._last_ops_handled
++        if flush:
++            self._last_ops_handled = False
++        return ret
++
++    def _set_handled(self, handled):
++        self._last_ops_handled = handled
++
++    def _associate(self, path, location, image_meta):
++        if sys.version_info >= (3, 0, 0):
++            _basestring = str
++        else:
++            _basestring = basestring
++
++        if path is None:
++            return
++        elif not isinstance(path, _basestring):
++            return
++        elif len(path.strip()) == 0:
++            return
++
++        try:
++            self.associate_fn(self, path.strip(), location, image_meta)
++        except Exception:
++            LOG.warn(_("Failed to call image handler association hook."))
++
++    def _disassociate(self, path):
++        try:
++            self.disassociate_fn(self, path)
++        except Exception:
++            LOG.warn(_("Failed to call image handler disassociation hook."))
++
++    @abc.abstractmethod
++    def get_schemes(self):
++        """Returns a tuple of schemes which this handler can handle."""
++        pass
++
++    @abc.abstractmethod
++    def is_local(self):
++        """Returns whether the images fetched by this handler are local.
++        This lets callers distinguish between images being downloaded to
++        local disk or fetched to remotely accessible storage.
++        """
++        pass
++
++    @abc.abstractmethod
++    def _fetch_image(self, context, image_id, image_meta, path,
++                     user_id=None, project_id=None, location=None,
++                     **kwargs):
++        """Fetch an image from a location to local.
++        Specific handler can using full-copy or zero-copy approach to
++        implement this method.
++
++        :param context: Request context
++        :param image_id: The opaque image identifier
++        :param image_meta: The opaque image metadata
++        :param path: The image data to write, as a file-like object
++        :param user_id: Request user id
++        :param project_id: Request project id
++        :param location: Image location to handling
++        :param kwargs: Other handler-specified arguments
++
++        :retval a boolean value to inform handling success or not
++        """
++        pass
++
++    @abc.abstractmethod
++    def _remove_image(self, context, image_id, image_meta, path,
++                      user_id=None, project_id=None, location=None,
++                      **kwargs):
++        """Remove an image from local.
++        Specific handler can using particular approach to
++        implement this method which base on '_fetch_image()' implementation.
++
++        :param context: Request context
++        :param image_id: The opaque image identifier
++        :param image_meta: The opaque image metadata
++        :param path: The image object local storage path
++        :param user_id: Request user id
++        :param project_id: Request project id
++        :param location: Image location to handling
++        :param kwargs: Other handler-specified arguments
++
++        :retval a boolean value to inform handling success or not
++        """
++        pass
++
++    @abc.abstractmethod
++    def _move_image(self, context, image_id, image_meta, src_path, dst_path,
++                    user_id=None, project_id=None, location=None,
++                    **kwargs):
++        """Move an image on local.
++        Specific handler can using particular approach to
++        implement this method which base on '_fetch_image()' implementation.
++
++        :param context: Request context
++        :param image_id: The opaque image identifier
++        :param image_meta: The opaque image metadata
++        :param src_path: The image object source path
++        :param dst_path: The image object destination path
++        :param user_id: Request user id
++        :param project_id: Request project id
++        :param location: Image location to handling
++        :param kwargs: Other handler-specified arguments
++
++        :retval a boolean value to inform handling success or not
++        """
++        pass
+diff --git a/nova/virt/imagehandler/download.py b/nova/virt/imagehandler/download.py
+new file mode 100644
+index 0000000..50b8c90
+--- /dev/null
++++ b/nova/virt/imagehandler/download.py
+@@ -0,0 +1,66 @@
++# Copyright 2014 IBM Corp.
++# All Rights Reserved.
++#
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++"""
++Download image handler implementation.
++"""
++
++import os
++
++from nova.image import glance
++from nova.openstack.common import fileutils
++from nova.virt.imagehandler import base
++
++
++class DownloadImageHandler(base.ImageHandler):
++    """Download image handler class.
++
++    Using downloading method to fetch image and save to regular file,
++    and use os.unlink to remove image, those like Nova default behavior.
++    """
++    def get_schemes(self):
++        # Note(zhiyan): empty set meaning handler have not scheme limitation.
++        return ()
++
++    def is_local(self):
++        return True
++
++    def _fetch_image(self, context, image_id, image_meta, path,
++                     user_id=None, project_id=None, location=None,
++                     **kwargs):
++        # TODO(vish): Improve context handling and add owner and auth data
++        #             when it is added to glance.  Right now there is no
++        #             auth checking in glance, so we assume that access was
++        #             checked before we got here.
++        (image_service, _image_id) = glance.get_remote_image_service(context,
++                                                                     image_id)
++        with fileutils.remove_path_on_error(path):
++            image_service.download(context, image_id, dst_path=path)
++        return os.path.exists(path)
++
++    def _remove_image(self, context, image_id, image_meta, path,
++                      user_id=None, project_id=None, location=None,
++                      **kwargs):
++        fileutils.delete_if_exists(path)
++        return not os.path.exists(path)
++
++    def _move_image(self, context, image_id, image_meta, src_path, dst_path,
++                    user_id=None, project_id=None, location=None,
++                    **kwargs):
++        if os.path.exists(src_path):
++            os.rename(src_path, dst_path)
++            return os.path.exists(dst_path) and not os.path.exists(src_path)
++        else:
++            return False
+diff --git a/nova/virt/images.py b/nova/virt/images.py
+index 6b23944..a4de6e4 100644
+--- a/nova/virt/images.py
++++ b/nova/virt/images.py
+@@ -19,17 +19,18 @@
+ Handling of VM disk images.
+ """
+ 
++import functools
+ import os
+ 
+ from oslo.config import cfg
+ 
+ from nova import exception
+-from nova.image import glance
+ from nova.openstack.common import fileutils
+ from nova.openstack.common.gettextutils import _
+ from nova.openstack.common import imageutils
+ from nova.openstack.common import log as logging
+ from nova import utils
++from nova.virt import imagehandler
+ 
+ LOG = logging.getLogger(__name__)
+ 
+@@ -61,23 +62,61 @@ def convert_image(source, dest, out_format, run_as_root=False):
+     utils.execute(*cmd, run_as_root=run_as_root)
+ 
+ 
+-def fetch(context, image_href, path, _user_id, _project_id, max_size=0):
+-    # TODO(vish): Improve context handling and add owner and auth data
+-    #             when it is added to glance.  Right now there is no
+-    #             auth checking in glance, so we assume that access was
+-    #             checked before we got here.
+-    (image_service, image_id) = glance.get_remote_image_service(context,
+-                                                                image_href)
+-    with fileutils.remove_path_on_error(path):
+-        image_service.download(context, image_id, dst_path=path)
++def _remove_image_on_exec(context, image_href, user_id, project_id,
++                          imagehandler_args, image_path):
++    for handler, loc, image_meta in imagehandler.handle_image(context,
++                                                              image_href,
++                                                              user_id,
++                                                              project_id,
++                                                              image_path):
++        # The loop will stop when the handle function returns success.
++        handler.remove_image(context, image_href, image_meta, image_path,
++                             user_id, project_id, loc, **imagehandler_args)
++    fileutils.delete_if_exists(image_path)
++
++
++def fetch(context, image_href, path, _user_id, _project_id,
++          max_size=0, imagehandler_args=None):
++    """Fetch image and returns whether the image was stored locally."""
++    imagehandler_args = imagehandler_args or {}
++    _remove_image_fun = functools.partial(_remove_image_on_exec,
++                                          context, image_href,
++                                          _user_id, _project_id,
++                                          imagehandler_args)
++
++    fetched_to_local = True
++    with fileutils.remove_path_on_error(path, remove=_remove_image_fun):
++        for handler, loc, image_meta in imagehandler.handle_image(context,
++                                                                  image_href,
++                                                                  _user_id,
++                                                                  _project_id,
++                                                                  path):
++            # The loop will stop when the handle function returns success.
++            handler.fetch_image(context, image_href, image_meta, path,
++                                _user_id, _project_id, loc,
++                                **imagehandler_args)
++            fetched_to_local = handler.is_local()
++    return fetched_to_local
++
++
++def fetch_to_raw(context, image_href, path, user_id, project_id,
++                 max_size=0, imagehandler_args=None):
++    path_tmp = "%s.part" % path
++    fetched_to_local = fetch(context, image_href, path_tmp,
++                             user_id, project_id,
++                             max_size=max_size,
++                             imagehandler_args=imagehandler_args)
+ 
++    if not fetched_to_local:
++        return
+ 
+-def fetch_to_raw(context, image_href, path, user_id, project_id, max_size=0):
+-    path_tmp = "%s.part" % path
+-    fetch(context, image_href, path_tmp, user_id, project_id,
+-          max_size=max_size)
++    imagehandler_args = imagehandler_args or {}
++    _remove_image_fun = functools.partial(_remove_image_on_exec,
++                                          context, image_href,
++                                          user_id, project_id,
++                                          imagehandler_args)
+ 
+-    with fileutils.remove_path_on_error(path_tmp):
++    with fileutils.remove_path_on_error(path_tmp, remove=_remove_image_fun):
+         data = qemu_img_info(path_tmp)
+ 
+         fmt = data.file_format
+@@ -112,9 +151,9 @@ def fetch_to_raw(context, image_href, path, user_id, project_id, max_size=0):
+         if fmt != "raw" and CONF.force_raw_images:
+             staged = "%s.converted" % path
+             LOG.debug("%s was %s, converting to raw" % (image_href, fmt))
++
+             with fileutils.remove_path_on_error(staged):
+                 convert_image(path_tmp, staged, 'raw')
+-                os.unlink(path_tmp)
+ 
+                 data = qemu_img_info(staged)
+                 if data.file_format != "raw":
+@@ -122,6 +161,36 @@ def fetch_to_raw(context, image_href, path, user_id, project_id, max_size=0):
+                         reason=_("Converted to raw, but format is now %s") %
+                         data.file_format)
+ 
+-                os.rename(staged, path)
++                for handler_context in imagehandler.handle_image(context,
++                                                                 image_href,
++                                                                 user_id,
++                                                                 project_id,
++                                                                 staged):
++                    (handler, loc, image_meta) = handler_context
++                    # The loop will stop when the handle function
++                    # return success.
++                    handler.move_image(context, image_href, image_meta,
++                                       staged, path,
++                                       user_id, project_id, loc,
++                                       **imagehandler_args)
++
++                for handler_context in imagehandler.handle_image(context,
++                                                                 image_href,
++                                                                 user_id,
++                                                                 project_id,
++                                                                 path_tmp):
++                    (handler, loc, image_meta) = handler_context
++                    handler.remove_image(context, image_href, image_meta,
++                                         path_tmp, user_id, project_id, loc,
++                                         **imagehandler_args)
+         else:
+-            os.rename(path_tmp, path)
++            for handler_context in imagehandler.handle_image(context,
++                                                             image_href,
++                                                             user_id,
++                                                             project_id,
++                                                             path_tmp):
++                (handler, loc, image_meta) = handler_context
++                handler.move_image(context, image_href, image_meta,
++                                   path_tmp, path,
++                                   user_id, project_id, loc,
++                                   **imagehandler_args)
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 1a18931..ac6e9d4 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -2606,13 +2606,18 @@ def raw(fname):
+             if size == 0 or suffix == '.rescue':
+                 size = None
+ 
+-            image('disk').cache(fetch_func=libvirt_utils.fetch_image,
+-                                context=context,
+-                                filename=root_fname,
+-                                size=size,
+-                                image_id=disk_images['image_id'],
+-                                user_id=instance['user_id'],
+-                                project_id=instance['project_id'])
++            disk_image = image('disk')
++            imagehandler_args = dict(
++                 backend_location=disk_image.backend_location(),
++                 backend_type=CONF.libvirt.images_type)
++            disk_image.cache(fetch_func=libvirt_utils.fetch_image,
++                             filename=root_fname,
++                             size=size,
++                             context=context,
++                             image_id=disk_images['image_id'],
++                             user_id=instance['user_id'],
++                             project_id=instance['project_id'],
++                             imagehandler_args=imagehandler_args)
+ 
+         # Lookup the filesystem type if required
+         os_type_with_default = disk.get_fs_type_for_os_type(
+@@ -4480,21 +4485,29 @@ def wait_for_live_migration():
+         timer.start(interval=0.5).wait()
+ 
+     def _fetch_instance_kernel_ramdisk(self, context, instance):
+-        """Download kernel and ramdisk for instance in instance directory."""
+-        instance_dir = libvirt_utils.get_instance_path(instance)
++        """Fetch kernel and ramdisk for instance."""
+         if instance['kernel_id']:
+-            libvirt_utils.fetch_image(context,
+-                                      os.path.join(instance_dir, 'kernel'),
+-                                      instance['kernel_id'],
+-                                      instance['user_id'],
+-                                      instance['project_id'])
++            disk_images = {'kernel_id': instance['kernel_id'],
++                           'ramdisk_id': instance['ramdisk_id']}
++
++            image = self.image_backend.image(instance, 'kernel', 'raw')
++            fname = imagecache.get_cache_fname(disk_images, 'kernel_id')
++            image.cache(fetch_func=libvirt_utils.fetch_image,
++                                context=context,
++                                filename=fname,
++                                image_id=disk_images['kernel_id'],
++                                user_id=instance['user_id'],
++                                project_id=instance['project_id'])
++
+             if instance['ramdisk_id']:
+-                libvirt_utils.fetch_image(context,
+-                                          os.path.join(instance_dir,
+-                                                       'ramdisk'),
+-                                          instance['ramdisk_id'],
+-                                          instance['user_id'],
+-                                          instance['project_id'])
++                image = self.image_backend.image(instance, 'ramdisk', 'raw')
++                fname = imagecache.get_cache_fname(disk_images, 'ramdisk_id')
++                image.cache(fetch_func=libvirt_utils.fetch_image,
++                                     context=context,
++                                     filename=fname,
++                                     image_id=disk_images['ramdisk_id'],
++                                     user_id=instance['user_id'],
++                                     project_id=instance['project_id'])
+ 
+     def rollback_live_migration_at_destination(self, context, instance,
+                                                network_info,
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index 6511496..4ff6c5e 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -127,6 +127,10 @@ def create_image(self, prepare_template, base, size, *args, **kwargs):
+         """
+         pass
+ 
++    def backend_location(self):
++        """Return where the data is stored by this image backend."""
++        return self.path
++
+     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
+             extra_specs, hypervisor_version):
+         """Get `LibvirtConfigGuestDisk` filled for this image.
+@@ -609,6 +613,9 @@ def _get_mon_addrs(self):
+             ports.append(port)
+         return hosts, ports
+ 
++    def backend_location(self):
++        return self.pool, self.rbd_name
++
+     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
+             extra_specs, hypervisor_version):
+         """Get `LibvirtConfigGuestDisk` filled for this image.
+diff --git a/nova/virt/libvirt/imagecache.py b/nova/virt/libvirt/imagecache.py
+index 5320bad..8834322 100644
+--- a/nova/virt/libvirt/imagecache.py
++++ b/nova/virt/libvirt/imagecache.py
+@@ -35,6 +35,7 @@
+ from nova.openstack.common import processutils
+ from nova import utils
+ from nova.virt import imagecache
++from nova.virt import imagehandler
+ from nova.virt.libvirt import utils as virtutils
+ 
+ LOG = logging.getLogger(__name__)
+@@ -419,7 +420,7 @@ def inner_verify_checksum():
+ 
+         return inner_verify_checksum()
+ 
+-    def _remove_base_file(self, base_file):
++    def _remove_base_file(self, context, image_id, base_file):
+         """Remove a single base file if it is old enough.
+ 
+         Returns nothing.
+@@ -437,12 +438,17 @@ def _remove_base_file(self, base_file):
+             maxage = CONF.remove_unused_original_minimum_age_seconds
+ 
+         if age < maxage:
+-            LOG.info(_('Base file too young to remove: %s'),
+-                     base_file)
++            LOG.info(_('Base file too young to remove: %s'), base_file)
+         else:
+             LOG.info(_('Removing base file: %s'), base_file)
+             try:
+-                os.remove(base_file)
++                for handler_context in imagehandler.handle_image(
++                                                    target_path=base_file):
++                    (handler, loc, image_meta) = handler_context
++                    # The loop will stop when the handle function
++                    # returns success.
++                    handler.remove_image(context, image_id, image_meta,
++                                         base_file, location=loc)
+                 signature = get_info_filename(base_file)
+                 if os.path.exists(signature):
+                     os.remove(signature)
+@@ -510,7 +516,8 @@ def _handle_base_image(self, img_id, base_file):
+                             'use'),
+                           {'id': img_id,
+                            'base_file': base_file})
+-                self.removable_base_files.append(base_file)
++                self.removable_base_files.append({'image_id': img_id,
++                                                  'file': base_file})
+ 
+             else:
+                 LOG.debug(_('image %(id)s at (%(base_file)s): image is in '
+@@ -543,9 +550,10 @@ def _age_and_verify_cached_images(self, context, all_instances, base_dir):
+                 self.active_base_files.append(backing_path)
+ 
+         # Anything left is an unknown base image
+-        for img in self.unexplained_images:
+-            LOG.warning(_('Unknown base file: %s'), img)
+-            self.removable_base_files.append(img)
++        for img_file in self.unexplained_images:
++            LOG.warning(_('Unknown base file: %s'), img_file)
++            self.removable_base_files.append({'image_id': None,
++                                              'file': img_file})
+ 
+         # Dump these lists
+         if self.active_base_files:
+@@ -556,12 +564,13 @@ def _age_and_verify_cached_images(self, context, all_instances, base_dir):
+                      ' '.join(self.corrupt_base_files))
+ 
+         if self.removable_base_files:
+-            LOG.info(_('Removable base files: %s'),
+-                     ' '.join(self.removable_base_files))
++            base_files = [entry['file'] for entry in self.removable_base_files]
++            LOG.info(_('Removable base files: %s'), ' '.join(base_files))
+ 
+             if self.remove_unused_base_images:
+-                for base_file in self.removable_base_files:
+-                    self._remove_base_file(base_file)
++                for entry in self.removable_base_files:
++                    self._remove_base_file(context,
++                                           entry['image_id'], entry['file'])
+ 
+         # That's it
+         LOG.debug(_('Verification complete'))
+diff --git a/nova/virt/libvirt/utils.py b/nova/virt/libvirt/utils.py
+index ddfad72..04f0234 100644
+--- a/nova/virt/libvirt/utils.py
++++ b/nova/virt/libvirt/utils.py
+@@ -647,10 +647,11 @@ def get_fs_info(path):
+             'used': used}
+ 
+ 
+-def fetch_image(context, target, image_id, user_id, project_id, max_size=0):
++def fetch_image(context, target, image_id, user_id, project_id,
++                max_size=0, imagehandler_args=None):
+     """Grab image."""
+     images.fetch_to_raw(context, image_id, target, user_id, project_id,
+-                        max_size=max_size)
++                        max_size=max_size, imagehandler_args=imagehandler_args)
+ 
+ 
+ def get_instance_path(instance, forceold=False, relative=False):
+diff --git a/setup.cfg b/setup.cfg
+index 96a63dc..1384595 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -29,6 +29,8 @@ packages =
+ [entry_points]
+ nova.image.download.modules =
+     file = nova.image.download.file
++nova.virt.image.handlers =
++    download = nova.virt.imagehandler.download:DownloadImageHandler
+ console_scripts =
+     nova-all = nova.cmd.all:main
+     nova-api = nova.cmd.api:main
+-- 
+1.9.1
+

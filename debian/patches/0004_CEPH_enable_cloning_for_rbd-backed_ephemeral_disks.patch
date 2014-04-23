@@ -1,0 +1,843 @@
+From e4e73a58e9d01d8e4c3a23c93c4dc24ebd6b3076 Mon Sep 17 00:00:00 2001
+From: Josh Durgin <josh.durgin@inktank.com>
+Date: Wed, 22 Jan 2014 15:07:17 -0800
+Subject: [PATCH] enable cloning for rbd-backed ephemeral disks
+
+Currently when using rbd as an image backend, nova downloads the
+glance image to local disk and then copies it again into rbd. This
+can be very slow for large images, and wastes bandwidth as well as
+disk space.
+
+When the glance image is stored in the same ceph cluster, the data is
+being pulled out and pushed back in unnecessarily. Instead, create a
+copy-on-write clone of the image. This is fast, and does not depend
+on the size of the image. Instead of taking minutes, booting takes
+seconds, and is not limited by the disk copy.
+
+Add some rbd utility functions from cinder to support cloning and
+let the rbd imagebackend rely on librbd instead of the rbd
+command line tool for checking image existence.
+
+Add an ImageHandler for rbd that does the cloning if an applicable
+image location is available. If no such location is available, or rbd
+is not configured for ephemeral disks, this handler does nothing, so
+enable it by default.
+
+blueprint rbd-clone-image-handler
+Closes-bug: 1226351
+Change-Id: I9b77a50206d0eda709df8356faaeeba35d232f22
+Signed-off-by: Josh Durgin <josh.durgin@inktank.com>
+Signed-off-by: Zhi Yan Liu <zhiyanl@cn.ibm.com>
+---
+ nova/tests/virt/libvirt/test_imagebackend.py |  64 +++++++++++--
+ nova/tests/virt/libvirt/test_imagehandler.py | 136 +++++++++++++++++++++++++++
+ nova/tests/virt/libvirt/test_rbd_utils.py    | 116 ++++++++++++++++++++++-
+ nova/virt/libvirt/imagebackend.py            |  47 +++++----
+ nova/virt/libvirt/imagehandler.py            | 107 +++++++++++++++++++++
+ nova/virt/libvirt/rbd_utils.py               | 133 ++++++++++++++++++++++----
+ setup.cfg                                    |   1 +
+ 7 files changed, 554 insertions(+), 50 deletions(-)
+ create mode 100644 nova/tests/virt/libvirt/test_imagehandler.py
+ create mode 100644 nova/virt/libvirt/imagehandler.py
+
+diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
+index f3ee4cf..59234e1 100644
+--- a/nova/tests/virt/libvirt/test_imagebackend.py
++++ b/nova/tests/virt/libvirt/test_imagebackend.py
+@@ -397,14 +397,14 @@ def test_create_image_with_size(self):
+     def test_create_image_too_small(self):
+         fn = self.prepare_mocks()
+         self.mox.StubOutWithMock(os.path, 'exists')
+-        self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
++        self.mox.StubOutWithMock(imagebackend.Qcow2, 'get_disk_size')
+         if self.OLD_STYLE_INSTANCE_PATH:
+             os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
+         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
+         os.path.exists(self.INSTANCES_PATH).AndReturn(True)
+         os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
+-        imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
+-                                       ).AndReturn(self.SIZE)
++        imagebackend.Qcow2.get_disk_size(self.TEMPLATE_PATH
++                                         ).AndReturn(self.SIZE)
+         self.mox.ReplayAll()
+ 
+         image = self.image_class(self.INSTANCE, self.NAME)
+@@ -752,6 +752,7 @@ def test_cache(self):
+         self.mox.VerifyAll()
+ 
+     def test_cache_base_dir_exists(self):
++        fn = self.mox.CreateMockAnything()
+         image = self.image_class(self.INSTANCE, self.NAME)
+ 
+         self.mox.StubOutWithMock(os.path, 'exists')
+@@ -804,21 +805,68 @@ def test_create_image(self):
+ 
+         rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
+ 
+-        self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
+-        imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
+-                                       ).AndReturn(self.SIZE)
+-        rbd_name = "%s/%s" % (self.INSTANCE['name'], self.NAME)
++        image = self.image_class(self.INSTANCE, self.NAME)
++        self.mox.StubOutWithMock(image, 'check_image_exists')
++        image.check_image_exists().AndReturn(False)
++        image.check_image_exists().AndReturn(False)
++        rbd_name = "%s_%s" % (self.INSTANCE['uuid'], self.NAME)
+         cmd = ('--pool', self.POOL, self.TEMPLATE_PATH,
+                rbd_name, '--new-format', '--id', self.USER,
+                '--conf', self.CONF)
+         self.libvirt_utils.import_rbd_image(self.TEMPLATE_PATH, *cmd)
++
+         self.mox.ReplayAll()
+ 
+-        image = self.image_class(self.INSTANCE, self.NAME)
+         image.create_image(fn, self.TEMPLATE_PATH, None)
+ 
+         self.mox.VerifyAll()
+ 
++    def test_create_image_resize(self):
++        fn = self.mox.CreateMockAnything()
++        full_size = self.SIZE * 2
++        fn(max_size=full_size, target=self.TEMPLATE_PATH)
++
++        rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
++
++        image = self.image_class(self.INSTANCE, self.NAME)
++        self.mox.StubOutWithMock(image, 'check_image_exists')
++        image.check_image_exists().AndReturn(False)
++        image.check_image_exists().AndReturn(False)
++        rbd_name = "%s_%s" % (self.INSTANCE['uuid'], self.NAME)
++        cmd = ('--pool', self.POOL, self.TEMPLATE_PATH,
++               rbd_name, '--new-format', '--id', self.USER,
++               '--conf', self.CONF)
++        self.libvirt_utils.import_rbd_image(self.TEMPLATE_PATH, *cmd)
++        self.mox.StubOutWithMock(image, 'get_disk_size')
++        image.get_disk_size(rbd_name).AndReturn(self.SIZE)
++        self.mox.StubOutWithMock(image.driver, 'resize')
++        image.driver.resize(rbd_name, full_size)
++
++        self.mox.ReplayAll()
++
++        image.create_image(fn, self.TEMPLATE_PATH, full_size)
++
++        self.mox.VerifyAll()
++
++    def test_create_image_already_exists(self):
++        rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
++
++        image = self.image_class(self.INSTANCE, self.NAME)
++        self.mox.StubOutWithMock(image, 'check_image_exists')
++        image.check_image_exists().AndReturn(True)
++        self.mox.StubOutWithMock(image, 'get_disk_size')
++        image.get_disk_size(self.TEMPLATE_PATH).AndReturn(self.SIZE)
++        image.check_image_exists().AndReturn(True)
++        rbd_name = "%s_%s" % (self.INSTANCE['uuid'], self.NAME)
++        image.get_disk_size(rbd_name).AndReturn(self.SIZE)
++
++        self.mox.ReplayAll()
++
++        fn = self.mox.CreateMockAnything()
++        image.create_image(fn, self.TEMPLATE_PATH, self.SIZE)
++
++        self.mox.VerifyAll()
++
+     def test_prealloc_image(self):
+         CONF.set_override('preallocate_images', 'space')
+ 
+diff --git a/nova/tests/virt/libvirt/test_imagehandler.py b/nova/tests/virt/libvirt/test_imagehandler.py
+new file mode 100644
+index 0000000..c085ba0
+--- /dev/null
++++ b/nova/tests/virt/libvirt/test_imagehandler.py
+@@ -0,0 +1,136 @@
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++import mock
++
++from nova import test
++from nova.virt.libvirt import imagehandler
++
++
++IMAGE_ID = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
++IMAGE_PATH = '/var/run/instances/_base/img'
++
++
++class RBDTestCase(test.NoDBTestCase):
++
++    def setUp(self):
++        super(RBDTestCase, self).setUp()
++        self.imagehandler = imagehandler.RBDCloneImageHandler(
++            rbd=mock.Mock(),
++            rados=mock.Mock())
++        self.imagehandler.driver.is_cloneable = mock.Mock()
++        self.imagehandler.driver.clone = mock.Mock()
++
++    def tearDown(self):
++        super(RBDTestCase, self).tearDown()
++
++    def test_fetch_image_no_snapshot(self):
++        url = 'rbd://old_image'
++        self.imagehandler.driver.is_cloneable.return_value = False
++        handled = self.imagehandler._fetch_image(None, IMAGE_ID,
++                                                 dict(disk_format='raw'),
++                                                 IMAGE_PATH,
++                                                 backend_type='rbd',
++                                                 backend_location=('a', 'b'),
++                                                 location=dict(url=url))
++        self.assertFalse(handled)
++        self.imagehandler.driver.is_cloneable.assert_called_once_with(url,
++                                                                      mock.ANY)
++        self.assertFalse(self.imagehandler.driver.clone.called)
++
++    def test_fetch_image_non_rbd_backend(self):
++        url = 'rbd://fsid/pool/image/snap'
++        self.imagehandler.driver.is_cloneable.return_value = True
++        handled = self.imagehandler._fetch_image(None, IMAGE_ID,
++                                                 dict(disk_format='raw'),
++                                                 IMAGE_PATH,
++                                                 backend_type='lvm',
++                                                 backend_location='/path',
++                                                 location=dict(url=url))
++        self.assertFalse(handled)
++        self.assertFalse(self.imagehandler.driver.clone.called)
++
++    def test_fetch_image_rbd_not_cloneable(self):
++        url = 'rbd://fsid/pool/image/snap'
++        dest_pool = 'foo'
++        dest_image = 'bar'
++        self.imagehandler.driver.is_cloneable.return_value = False
++        handled = self.imagehandler._fetch_image(None, IMAGE_ID,
++                                                 dict(disk_format='raw'),
++                                                 IMAGE_PATH,
++                                                 backend_type='rbd',
++                                                 backend_location=(dest_pool,
++                                                                   dest_image),
++                                                 location=dict(url=url))
++        self.imagehandler.driver.is_cloneable.assert_called_once_with(url,
++                                                                      mock.ANY)
++        self.assertFalse(handled)
++
++    def test_fetch_image_cloneable(self):
++        url = 'rbd://fsid/pool/image/snap'
++        dest_pool = 'foo'
++        dest_image = 'bar'
++        self.imagehandler.driver.is_cloneable.return_value = True
++        handled = self.imagehandler._fetch_image(None, IMAGE_ID,
++                                                 dict(disk_format='raw'),
++                                                 IMAGE_PATH,
++                                                 backend_type='rbd',
++                                                 backend_location=(dest_pool,
++                                                                   dest_image),
++                                                 location=dict(url=url))
++        self.imagehandler.driver.is_cloneable.assert_called_once_with(url,
++                                                                      mock.ANY)
++        self.imagehandler.driver.clone.assert_called_once_with(dest_pool,
++                                                               dest_image,
++                                                               'pool',
++                                                               'image',
++                                                               'snap')
++        self.assertTrue(handled)
++
++    def test_remove_image(self):
++        url = 'rbd://fsid/pool/image/snap'
++        pool = 'foo'
++        image = 'bar'
++        self.imagehandler.driver.remove = mock.Mock()
++        self.imagehandler.driver.is_cloneable.return_value = True
++        handled = self.imagehandler._remove_image(None, IMAGE_ID,
++                                                  dict(disk_format='raw'),
++                                                  IMAGE_PATH,
++                                                  backend_type='rbd',
++                                                  backend_location=(pool,
++                                                                    image),
++                                                  backend_dest='baz',
++                                                  location=dict(url=url))
++        self.imagehandler.driver.is_cloneable.assert_called_once_with(url,
++                                                                      mock.ANY)
++        self.imagehandler.driver.remove.assert_called_once_with(image)
++        self.assertTrue(handled)
++
++    def test_move_image(self):
++        url = 'rbd://fsid/pool/image/snap'
++        pool = 'foo'
++        image = 'bar'
++        dest_image = 'baz'
++        self.imagehandler.driver.rename = mock.Mock()
++        self.imagehandler.driver.is_cloneable.return_value = True
++        handled = self.imagehandler._move_image(None, IMAGE_ID,
++                                                dict(disk_format='raw'),
++                                                IMAGE_PATH, IMAGE_PATH,
++                                                backend_type='rbd',
++                                                backend_location=(pool, image),
++                                                backend_dest='baz',
++                                                location=dict(url=url))
++        self.imagehandler.driver.is_cloneable.assert_called_once_with(url,
++                                                                      mock.ANY)
++        self.imagehandler.driver.rename.assert_called_once_with(image,
++                                                                dest_image)
++        self.assertTrue(handled)
+diff --git a/nova/tests/virt/libvirt/test_rbd_utils.py b/nova/tests/virt/libvirt/test_rbd_utils.py
+index 0460337..35fb43c 100644
+--- a/nova/tests/virt/libvirt/test_rbd_utils.py
++++ b/nova/tests/virt/libvirt/test_rbd_utils.py
+@@ -13,8 +13,8 @@
+ 
+ import mock
+ 
++from nova import exception
+ from nova.openstack.common import log as logging
+-from nova.openstack.common import units
+ from nova import test
+ from nova import utils
+ from nova.virt.libvirt import rbd_utils
+@@ -77,6 +77,65 @@ def setUp(self):
+     def tearDown(self):
+         super(RBDTestCase, self).tearDown()
+ 
++    def test_good_locations(self):
++        locations = ['rbd://fsid/pool/image/snap',
++                     'rbd://%2F/%2F/%2F/%2F', ]
++        map(self.driver.parse_location, locations)
++
++    def test_bad_locations(self):
++        locations = ['rbd://image',
++                     'http://path/to/somewhere/else',
++                     'rbd://image/extra',
++                     'rbd://image/',
++                     'rbd://fsid/pool/image/',
++                     'rbd://fsid/pool/image/snap/',
++                     'rbd://///', ]
++        for loc in locations:
++            self.assertRaises(exception.ImageUnacceptable,
++                              self.driver.parse_location,
++                              loc)
++            self.assertFalse(
++                self.driver.is_cloneable(loc, {'disk_format': 'raw'}))
++
++    def test_cloneable(self):
++        with mock.patch.object(self.driver, '_get_fsid') as mock_get_fsid:
++            mock_get_fsid.return_value = 'abc'
++            location = 'rbd://abc/pool/image/snap'
++            info = {'disk_format': 'raw'}
++            self.assertTrue(self.driver.is_cloneable(location, info))
++            self.assertTrue(mock_get_fsid.called)
++
++    def test_uncloneable_different_fsid(self):
++        with mock.patch.object(self.driver, '_get_fsid') as mock_get_fsid:
++            mock_get_fsid.return_value = 'abc'
++            location = 'rbd://def/pool/image/snap'
++            self.assertFalse(
++                self.driver.is_cloneable(location, {'disk_format': 'raw'}))
++            self.assertTrue(mock_get_fsid.called)
++
++    @mock.patch.object(rbd_utils, 'RBDVolumeProxy')
++    def test_uncloneable_unreadable(self, mock_proxy):
++        with mock.patch.object(self.driver, '_get_fsid') as mock_get_fsid:
++            mock_get_fsid.return_value = 'abc'
++            location = 'rbd://abc/pool/image/snap'
++
++            mock_proxy.side_effect = self.mock_rbd.Error
++
++            args = [location, {'disk_format': 'raw'}]
++            self.assertFalse(self.driver.is_cloneable(*args))
++            mock_proxy.assert_called_once()
++            self.assertTrue(mock_get_fsid.called)
++
++    def test_uncloneable_bad_format(self):
++        with mock.patch.object(self.driver, '_get_fsid') as mock_get_fsid:
++            mock_get_fsid.return_value = 'abc'
++            location = 'rbd://abc/pool/image/snap'
++            formats = ['qcow2', 'vmdk', 'vdi']
++            for f in formats:
++                self.assertFalse(
++                    self.driver.is_cloneable(location, {'disk_format': f}))
++            self.assertTrue(mock_get_fsid.called)
++
+     def test_get_mon_addrs(self):
+         with mock.patch.object(utils, 'execute') as mock_execute:
+             mock_execute.return_value = (CEPH_MON_DUMP, '')
+@@ -84,6 +143,35 @@ def test_get_mon_addrs(self):
+             ports = ['6789', '6790', '6791', '6792', '6791']
+             self.assertEqual((hosts, ports), self.driver.get_mon_addrs())
+ 
++    @mock.patch.object(rbd_utils, 'RADOSClient')
++    def test_clone(self, mock_client):
++        src_pool = u'images'
++        src_image = u'image-name'
++        src_snap = u'snapshot-name'
++
++        client_stack = []
++
++        def mock__enter__(inst):
++            def _inner():
++                client_stack.append(inst)
++                return inst
++            return _inner
++
++        client = mock_client.return_value
++        # capture both rados client used to perform the clone
++        client.__enter__.side_effect = mock__enter__(client)
++
++        self.mock_rbd.RBD.clone = mock.Mock()
++
++        self.driver.clone(self.rbd_pool, self.volume_name,
++                          src_pool, src_image, src_snap)
++
++        args = [client_stack[0].ioctx, str(src_image), str(src_snap),
++                client_stack[1].ioctx, str(self.volume_name)]
++        kwargs = {'features': self.mock_rbd.RBD_FEATURE_LAYERING}
++        self.mock_rbd.RBD.clone.assert_called_once_with(*args, **kwargs)
++        self.assertEqual(client.__enter__.call_count, 2)
++
+     def test_resize(self):
+         size = 1024
+ 
+@@ -91,7 +179,7 @@ def test_resize(self):
+             proxy = proxy_init.return_value
+             proxy.__enter__.return_value = proxy
+             self.driver.resize(self.volume_name, size)
+-            proxy.resize.assert_called_once_with(size * units.Ki)
++            proxy.resize.assert_called_once_with(size)
+ 
+     def test_rbd_volume_proxy_init(self):
+         with mock.patch.object(self.driver, '_connect_to_rados') as \
+@@ -156,3 +244,27 @@ def test_ceph_args(self):
+         self.driver.ceph_conf = '/path/bar.conf'
+         self.assertEqual(['--id', 'foo', '--conf', '/path/bar.conf'],
+                          self.driver.ceph_args())
++
++    def test_exists(self):
++        snapshot = 'snap'
++
++        with mock.patch.object(rbd_utils, 'RBDVolumeProxy') as proxy_init:
++            proxy = proxy_init.return_value
++            self.assertTrue(self.driver.exists(self.volume_name,
++                                               self.rbd_pool,
++                                               snapshot))
++            proxy.__enter__.assert_called_once()
++            proxy.__exit__.assert_called_once()
++
++    def test_rename(self):
++        new_name = 'bar'
++
++        with mock.patch.object(rbd_utils, 'RADOSClient') as client_init:
++            client = client_init.return_value
++            client.__enter__.return_value = client
++            self.mock_rbd.RBD = mock.Mock(return_value=mock.Mock())
++            self.driver.rename(self.volume_name, new_name)
++            mock_rename = self.mock_rbd.RBD.return_value
++            mock_rename.rename.assert_called_once_with(client.ioctx,
++                                                       self.volume_name,
++                                                       new_name)
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index e886e0d..6941b1e 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -210,8 +210,7 @@ def _can_fallocate(self):
+                                            'path': self.path})
+         return can_fallocate
+ 
+-    @staticmethod
+-    def verify_base_size(base, size, base_size=0):
++    def verify_base_size(self, base, size, base_size=0):
+         """Check that the base image is not larger than size.
+            Since images can't be generally shrunk, enforce this
+            constraint taking account of virtual image size.
+@@ -230,7 +229,7 @@ def verify_base_size(base, size, base_size=0):
+             return
+ 
+         if size and not base_size:
+-            base_size = disk.get_disk_size(base)
++            base_size = self.get_disk_size(base)
+ 
+         if size < base_size:
+             msg = _('%(base)s virtual size %(base_size)s '
+@@ -240,6 +239,9 @@ def verify_base_size(base, size, base_size=0):
+                               'size': size})
+             raise exception.FlavorDiskTooSmall()
+ 
++    def get_disk_size(self, name):
++        disk.get_disk_size(name)
++
+     def snapshot_extract(self, target, out_format):
+         raise NotImplementedError()
+ 
+@@ -562,30 +564,35 @@ def _can_fallocate(self):
+         return False
+ 
+     def check_image_exists(self):
+-        rbd_volumes = libvirt_utils.list_rbd_volumes(self.pool)
+-        for vol in rbd_volumes:
+-            if vol.startswith(self.rbd_name):
+-                return True
++        return self.driver.exists(self.rbd_name)
+ 
+-        return False
++    def get_disk_size(self, name):
++        """Returns the size of the virtual disk in bytes.
++
++        The name argument is ignored since this backend already knows
++        its name, and callers may pass a non-existent local file path.
++        """
++        return self.driver.size(self.rbd_name)
+ 
+     def create_image(self, prepare_template, base, size, *args, **kwargs):
+-        if not os.path.exists(base):
++
++        if not self.check_image_exists():
+             prepare_template(target=base, max_size=size, *args, **kwargs)
+         else:
+             self.verify_base_size(base, size)
+ 
+-        # keep using the command line import instead of librbd since it
+-        # detects zeroes to preserve sparseness in the image
+-        args = ['--pool', self.pool, base, self.rbd_name]
+-        if self.driver.supports_layering():
+-            args += ['--new-format']
+-        args += self.driver.ceph_args()
+-        libvirt_utils.import_rbd_image(*args)
+-
+-        base_size = disk.get_disk_size(base)
+-
+-        if size and size > base_size:
++        # prepare_template() may have cloned the image into a new rbd
++        # image already instead of downloading it locally
++        if not self.check_image_exists():
++            # keep using the command line import instead of librbd since it
++            # detects zeroes to preserve sparseness in the image
++            args = ['--pool', self.pool, base, self.rbd_name]
++            if self.driver.supports_layering():
++                args += ['--new-format']
++                args += self.driver.ceph_args()
++                libvirt_utils.import_rbd_image(*args)
++
++        if size and size > self.get_disk_size(self.rbd_name):
+             self.driver.resize(self.rbd_name, size)
+ 
+     def snapshot_extract(self, target, out_format):
+diff --git a/nova/virt/libvirt/imagehandler.py b/nova/virt/libvirt/imagehandler.py
+new file mode 100644
+index 0000000..d9529bb
+--- /dev/null
++++ b/nova/virt/libvirt/imagehandler.py
+@@ -0,0 +1,107 @@
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++"""
++RBD clone image handler for libvirt hypervisors.
++"""
++
++from oslo.config import cfg
++
++from nova.openstack.common.gettextutils import _
++from nova.openstack.common import log as logging
++from nova.virt.imagehandler import base
++from nova.virt.libvirt import rbd_utils
++
++CONF = cfg.CONF
++CONF.import_opt('images_rbd_pool', 'nova.virt.libvirt.imagebackend',
++                group='libvirt')
++CONF.import_opt('images_rbd_ceph_conf', 'nova.virt.libvirt.imagebackend',
++                group='libvirt')
++CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume', group='libvirt')
++
++LOG = logging.getLogger(__name__)
++
++
++class RBDCloneImageHandler(base.ImageHandler):
++    """Handler for rbd-backed images.
++
++    If libvirt is using rbd for ephemeral/root disks, this handler
++    will clone images already stored in rbd instead of downloading
++    them locally and importing them into rbd.
++
++    If rbd is not the image backend type, this handler does nothing.
++    """
++    def __init__(self, driver=None, *args, **kwargs):
++        super(RBDCloneImageHandler, self).__init__(driver, *args, **kwargs)
++        if not CONF.libvirt.images_rbd_pool:
++            raise RuntimeError(_('You should specify images_rbd_pool flag in '
++                                 'the libvirt section to use rbd images.'))
++        self.driver = rbd_utils.RBDDriver(
++            pool=CONF.libvirt.images_rbd_pool,
++            ceph_conf=CONF.libvirt.images_rbd_ceph_conf,
++            rbd_user=CONF.libvirt.rbd_user,
++            rbd_lib=kwargs.get('rbd'),
++            rados_lib=kwargs.get('rados'))
++
++    def get_schemes(self):
++        return ('rbd')
++
++    def is_local(self):
++        return False
++
++    def _can_handle_image(self, context, image_meta, location, **kwargs):
++        """Returns whether it makes sense to clone the image.
++
++        - The glance image and libvirt image backend must be rbd.
++        - The image must be readable by the rados user available to nova.
++        - The image must be in raw format.
++        """
++        backend_type = kwargs.get('backend_type')
++        backend_location = kwargs.get('backend_location')
++        if backend_type != 'rbd' or not backend_location:
++            LOG.debug('backend type is not rbd or backend_location is not set')
++            return False
++
++        return self.driver.is_cloneable(location['url'], image_meta)
++
++    def _fetch_image(self, context, image_id, image_meta, path,
++                     user_id=None, project_id=None, location=None,
++                     **kwargs):
++        if not self._can_handle_image(context, image_meta, location, **kwargs):
++            return False
++
++        dest_pool, dest_image = kwargs['backend_location']
++        url = location['url']
++        _fsid, pool, image, snapshot = self.driver.parse_location(url)
++        self.driver.clone(dest_pool, dest_image, pool, image, snapshot)
++        return True
++
++    def _remove_image(self, context, image_id, image_meta, path,
++                      user_id=None, project_id=None, location=None,
++                      **kwargs):
++        if not self._can_handle_image(context, image_meta, location, **kwargs):
++            return False
++
++        pool, image = kwargs['backend_location']
++        self.driver.remove(image)
++        return True
++
++    def _move_image(self, context, image_id, image_meta, src_path, dst_path,
++                    user_id=None, project_id=None, location=None,
++                    **kwargs):
++        if not self._can_handle_image(context, image_meta, location, **kwargs):
++            return False
++
++        src_pool, src_image = kwargs['backend_location']
++        dest_image = kwargs.get('backend_dest')
++        self.driver.rename(src_image, dest_image)
++        return True
+diff --git a/nova/virt/libvirt/rbd_utils.py b/nova/virt/libvirt/rbd_utils.py
+index 84883ec..5e255fc 100644
+--- a/nova/virt/libvirt/rbd_utils.py
++++ b/nova/virt/libvirt/rbd_utils.py
+@@ -11,6 +11,8 @@
+ #    License for the specific language governing permissions and limitations
+ #    under the License.
+ 
++import urllib
++
+ try:
+     import rados
+     import rbd
+@@ -18,10 +20,11 @@
+     rados = None
+     rbd = None
+ 
++from nova import exception
++from nova.openstack.common import excutils
+ from nova.openstack.common.gettextutils import _
+ from nova.openstack.common import jsonutils
+ from nova.openstack.common import log as logging
+-from nova.openstack.common import units
+ from nova import utils
+ 
+ LOG = logging.getLogger(__name__)
+@@ -36,14 +39,23 @@ class RBDVolumeProxy(object):
+     The underlying librados client and ioctx can be accessed as the attributes
+     'client' and 'ioctx'.
+     """
+-    def __init__(self, driver, name, pool=None):
++    def __init__(self, driver, name, pool=None, snapshot=None,
++                 read_only=False):
+         client, ioctx = driver._connect_to_rados(pool)
+         try:
+-            self.volume = driver.rbd.Image(ioctx, str(name), snapshot=None)
++            snap_name = snapshot.encode('utf8') if snapshot else None
++            self.volume = driver.rbd.Image(ioctx, name.encode('utf8'),
++                                           snapshot=snap_name,
++                                           read_only=read_only)
++        except driver.rbd.ImageNotFound:
++            with excutils.save_and_reraise_exception():
++                LOG.debug("rbd image %s does not exist", name)
++                driver._disconnect_from_rados(client, ioctx)
+         except driver.rbd.Error:
+-            LOG.exception(_("error opening rbd image %s"), name)
+-            driver._disconnect_from_rados(client, ioctx)
+-            raise
++            with excutils.save_and_reraise_exception():
++                LOG.exception(_("error opening rbd image %s"), name)
++                driver._disconnect_from_rados(client, ioctx)
++
+         self.driver = driver
+         self.client = client
+         self.ioctx = ioctx
+@@ -61,15 +73,17 @@ def __getattr__(self, attrib):
+         return getattr(self.volume, attrib)
+ 
+ 
+-def ascii_str(s):
+-    """Convert a string to ascii, or return None if the input is None.
++class RADOSClient(object):
++    """Context manager to simplify error handling for connecting to ceph."""
++    def __init__(self, driver, pool=None):
++        self.driver = driver
++        self.cluster, self.ioctx = driver._connect_to_rados(pool)
+ 
+-    This is useful when a parameter is None by default, or a string. LibRBD
+-    only accepts ascii, hence the need for conversion.
+-    """
+-    if s is None:
+-        return s
+-    return str(s)
++    def __enter__(self):
++        return self
++
++    def __exit__(self, type_, value, traceback):
++        self.driver._disconnect_from_rados(self.cluster, self.ioctx)
+ 
+ 
+ class RBDDriver(object):
+@@ -89,8 +103,8 @@ def _connect_to_rados(self, pool=None):
+                                   conffile=self.ceph_conf)
+         try:
+             client.connect()
+-            pool_to_open = str(pool or self.pool)
+-            ioctx = client.open_ioctx(pool_to_open)
++            pool_to_open = pool or self.pool
++            ioctx = client.open_ioctx(pool_to_open.encode('utf-8'))
+             return client, ioctx
+         except self.rados.Error:
+             # shutdown cannot raise an exception
+@@ -130,12 +144,91 @@ def get_mon_addrs(self):
+             ports.append(port)
+         return hosts, ports
+ 
++    def parse_location(self, location):
++        prefix = 'rbd://'
++        if not location.startswith(prefix):
++            reason = _('Not stored in rbd')
++            raise exception.ImageUnacceptable(image_id=location, reason=reason)
++        pieces = map(urllib.unquote, location[len(prefix):].split('/'))
++        if '' in pieces:
++            reason = _('Blank components')
++            raise exception.ImageUnacceptable(image_id=location, reason=reason)
++        if len(pieces) != 4:
++            reason = _('Not an rbd snapshot')
++            raise exception.ImageUnacceptable(image_id=location, reason=reason)
++        return pieces
++
++    def _get_fsid(self):
++        with RADOSClient(self) as client:
++            return client.cluster.get_fsid()
++
++    def is_cloneable(self, image_location, image_meta):
++        try:
++            fsid, pool, image, snapshot = self.parse_location(image_location)
++        except exception.ImageUnacceptable as e:
++            LOG.debug(_('not cloneable: %s'), e)
++            return False
++
++        if self._get_fsid() != fsid:
++            reason = _('%s is in a different ceph cluster') % image_location
++            LOG.debug(reason)
++            return False
++
++        if image_meta['disk_format'] != 'raw':
++            reason = _("rbd image clone requires image format to be "
++                       "'raw' but image {0} is '{1}'").format(
++                           image_location, image_meta['disk_format'])
++            LOG.debug(reason)
++            return False
++
++        # check that we can read the image
++        try:
++            return self.exists(image, pool=pool, snapshot=snapshot)
++        except self.rbd.Error as e:
++            LOG.debug(_('Unable to open image %(loc)s: %(err)s') %
++                      dict(loc=image_location, err=e))
++            return False
++
++    def clone(self, dest_pool, dest_image, src_pool, src_image, src_snap):
++        LOG.debug(_('cloning %(pool)s/%(img)s@%(snap)s to %(dstpl)s/%(dst)s') %
++                  dict(pool=src_pool, img=src_image, snap=src_snap,
++                       dst=dest_image, dstpl=dest_pool))
++        with RADOSClient(self, src_pool) as src_client:
++            with RADOSClient(self, dest_pool) as dest_client:
++                self.rbd.RBD().clone(src_client.ioctx,
++                                     src_image.encode('utf-8'),
++                                     src_snap.encode('utf-8'),
++                                     dest_client.ioctx,
++                                     dest_image.encode('utf-8'),
++                                     features=self.rbd.RBD_FEATURE_LAYERING)
++
+     def size(self, name):
+         with RBDVolumeProxy(self, name) as vol:
+             return vol.size()
+ 
+-    def resize(self, volume_name, size):
+-        size = int(size) * units.Ki
++    def resize(self, name, size_bytes):
++        LOG.debug('resizing rbd image %s to %d', name, size_bytes)
++        with RBDVolumeProxy(self, name) as vol:
++            vol.resize(size_bytes)
+ 
+-        with RBDVolumeProxy(self, volume_name) as vol:
+-            vol.resize(size)
++    def exists(self, name, pool=None, snapshot=None):
++        try:
++            with RBDVolumeProxy(self, name,
++                                pool=pool,
++                                snapshot=snapshot,
++                                read_only=True):
++                return True
++        except self.rbd.ImageNotFound:
++            return False
++
++    def remove(self, name):
++        LOG.debug('removing rbd image %s', name)
++        with RBDVolumeProxy(self, name) as vol:
++            vol.remove()
++
++    def rename(self, name, new_name):
++        LOG.debug('renaming rbd image %s to %s', name, new_name)
++        with RADOSClient(self) as client:
++            self.rbd.RBD().rename(client.ioctx,
++                                  name.encode('utf-8'),
++                                  new_name.encode('utf-8'))
+diff --git a/setup.cfg b/setup.cfg
+index 1384595..f8d1790 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -31,6 +31,7 @@ nova.image.download.modules =
+     file = nova.image.download.file
+ nova.virt.image.handlers =
+     download = nova.virt.imagehandler.download:DownloadImageHandler
++    libvirt_rbd_clone = nova.virt.libvirt.imagehandler:RBDCloneImageHandler
+ console_scripts =
+     nova-all = nova.cmd.all:main
+     nova-api = nova.cmd.api:main
+-- 
+1.9.1
+

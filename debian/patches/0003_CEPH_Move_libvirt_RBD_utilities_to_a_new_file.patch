@@ -1,0 +1,606 @@
+From 8dffdba7fc44d7d4ab27ca0f785be35092f709cf Mon Sep 17 00:00:00 2001
+From: Josh Durgin <josh.durgin@inktank.com>
+Date: Wed, 22 Jan 2014 14:44:11 -0800
+Subject: [PATCH] Move libvirt RBD utilities to a new file
+
+This will make it easier to share rbd-related code with
+cinder and glance. Port the applicable unit tests over
+from cinder.
+
+Change-Id: I5bf08da87daf1d98f326f21cf33aba68aa830785
+Signed-off-by: Josh Durgin <josh.durgin@inktank.com>
+---
+ nova/tests/virt/libvirt/test_imagebackend.py |  23 ++--
+ nova/tests/virt/libvirt/test_rbd_utils.py    | 158 +++++++++++++++++++++++++++
+ nova/virt/libvirt/imagebackend.py            | 133 +++-------------------
+ nova/virt/libvirt/rbd_utils.py               | 141 ++++++++++++++++++++++++
+ 4 files changed, 324 insertions(+), 131 deletions(-)
+ create mode 100644 nova/tests/virt/libvirt/test_rbd_utils.py
+ create mode 100644 nova/virt/libvirt/rbd_utils.py
+
+diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
+index d4add89..f3ee4cf 100644
+--- a/nova/tests/virt/libvirt/test_imagebackend.py
++++ b/nova/tests/virt/libvirt/test_imagebackend.py
+@@ -30,6 +30,7 @@
+ from nova.tests.virt.libvirt import fake_libvirt_utils
+ from nova import utils
+ from nova.virt.libvirt import imagebackend
++from nova.virt.libvirt import rbd_utils
+ 
+ CONF = cfg.CONF
+ 
+@@ -729,14 +730,8 @@ def setUp(self):
+                    group='libvirt')
+         self.libvirt_utils = imagebackend.libvirt_utils
+         self.utils = imagebackend.utils
+-        self.rbd = self.mox.CreateMockAnything()
+-        self.rados = self.mox.CreateMockAnything()
+-
+-    def prepare_mocks(self):
+-        fn = self.mox.CreateMockAnything()
+-        self.mox.StubOutWithMock(imagebackend, 'rbd')
+-        self.mox.StubOutWithMock(imagebackend, 'rados')
+-        return fn
++        self.mox.StubOutWithMock(rbd_utils, 'rbd')
++        self.mox.StubOutWithMock(rbd_utils, 'rados')
+ 
+     def test_cache(self):
+         image = self.image_class(self.INSTANCE, self.NAME)
+@@ -804,10 +799,10 @@ def test_cache_template_exists(self):
+         self.mox.VerifyAll()
+ 
+     def test_create_image(self):
+-        fn = self.prepare_mocks()
+-        fn(max_size=None, rbd=self.rbd, target=self.TEMPLATE_PATH)
++        fn = self.mox.CreateMockAnything()
++        fn(max_size=None, target=self.TEMPLATE_PATH)
+ 
+-        self.rbd.RBD_FEATURE_LAYERING = 1
++        rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
+ 
+         self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
+         imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
+@@ -820,7 +815,7 @@ def test_create_image(self):
+         self.mox.ReplayAll()
+ 
+         image = self.image_class(self.INSTANCE, self.NAME)
+-        image.create_image(fn, self.TEMPLATE_PATH, None, rbd=self.rbd)
++        image.create_image(fn, self.TEMPLATE_PATH, None)
+ 
+         self.mox.VerifyAll()
+ 
+@@ -829,8 +824,6 @@ def test_prealloc_image(self):
+ 
+         fake_processutils.fake_execute_clear_log()
+         fake_processutils.stub_out_processutils_execute(self.stubs)
+-        self.mox.StubOutWithMock(imagebackend, 'rbd')
+-        self.mox.StubOutWithMock(imagebackend, 'rados')
+         image = self.image_class(self.INSTANCE, self.NAME)
+ 
+         def fake_fetch(target, *args, **kwargs):
+@@ -911,6 +904,8 @@ def test_image_rbd(self):
+         pool = "FakePool"
+         self.flags(images_rbd_pool=pool, group='libvirt')
+         self.flags(images_rbd_ceph_conf=conf, group='libvirt')
++        self.mox.StubOutWithMock(rbd_utils, 'rbd')
++        self.mox.StubOutWithMock(rbd_utils, 'rados')
+         self._test_image('rbd', imagebackend.Rbd, imagebackend.Rbd)
+ 
+     def test_image_default(self):
+diff --git a/nova/tests/virt/libvirt/test_rbd_utils.py b/nova/tests/virt/libvirt/test_rbd_utils.py
+new file mode 100644
+index 0000000..0460337
+--- /dev/null
++++ b/nova/tests/virt/libvirt/test_rbd_utils.py
+@@ -0,0 +1,158 @@
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++
++import mock
++
++from nova.openstack.common import log as logging
++from nova.openstack.common import units
++from nova import test
++from nova import utils
++from nova.virt.libvirt import rbd_utils
++
++
++LOG = logging.getLogger(__name__)
++
++
++CEPH_MON_DUMP = """dumped monmap epoch 1
++{ "epoch": 1,
++  "fsid": "33630410-6d93-4d66-8e42-3b953cf194aa",
++  "modified": "2013-05-22 17:44:56.343618",
++  "created": "2013-05-22 17:44:56.343618",
++  "mons": [
++        { "rank": 0,
++          "name": "a",
++          "addr": "[::1]:6789\/0"},
++        { "rank": 1,
++          "name": "b",
++          "addr": "[::1]:6790\/0"},
++        { "rank": 2,
++          "name": "c",
++          "addr": "[::1]:6791\/0"},
++        { "rank": 3,
++          "name": "d",
++          "addr": "127.0.0.1:6792\/0"},
++        { "rank": 4,
++          "name": "e",
++          "addr": "example.com:6791\/0"}],
++  "quorum": [
++        0,
++        1,
++        2]}
++"""
++
++
++class RBDTestCase(test.NoDBTestCase):
++
++    def setUp(self):
++        super(RBDTestCase, self).setUp()
++
++        self.mock_rbd = mock.Mock()
++        self.mock_rados = mock.Mock()
++        self.mock_rados.Rados = mock.Mock
++        self.mock_rados.Rados.ioctx = mock.Mock()
++
++        self.mock_rbd.RBD = mock.Mock
++        self.mock_rbd.Image = mock.Mock
++        self.mock_rbd.Image.close = mock.Mock()
++        self.mock_rbd.RBD.Error = Exception
++        self.mock_rados.Error = Exception
++
++        self.rbd_pool = 'rbd'
++        self.driver = rbd_utils.RBDDriver(self.rbd_pool, None, None,
++                                          rbd_lib=self.mock_rbd,
++                                          rados_lib=self.mock_rados)
++
++        self.volume_name = u'volume-00000001'
++
++    def tearDown(self):
++        super(RBDTestCase, self).tearDown()
++
++    def test_get_mon_addrs(self):
++        with mock.patch.object(utils, 'execute') as mock_execute:
++            mock_execute.return_value = (CEPH_MON_DUMP, '')
++            hosts = ['::1', '::1', '::1', '127.0.0.1', 'example.com']
++            ports = ['6789', '6790', '6791', '6792', '6791']
++            self.assertEqual((hosts, ports), self.driver.get_mon_addrs())
++
++    def test_resize(self):
++        size = 1024
++
++        with mock.patch.object(rbd_utils, 'RBDVolumeProxy') as proxy_init:
++            proxy = proxy_init.return_value
++            proxy.__enter__.return_value = proxy
++            self.driver.resize(self.volume_name, size)
++            proxy.resize.assert_called_once_with(size * units.Ki)
++
++    def test_rbd_volume_proxy_init(self):
++        with mock.patch.object(self.driver, '_connect_to_rados') as \
++                mock_connect_from_rados:
++            with mock.patch.object(self.driver, '_disconnect_from_rados') as \
++                    mock_disconnect_from_rados:
++                mock_connect_from_rados.return_value = (None, None)
++                mock_disconnect_from_rados.return_value = (None, None)
++
++                with rbd_utils.RBDVolumeProxy(self.driver, self.volume_name):
++                    mock_connect_from_rados.assert_called_once()
++                    self.assertFalse(mock_disconnect_from_rados.called)
++
++                mock_disconnect_from_rados.assert_called_once()
++
++    def test_connect_to_rados(self):
++        self.mock_rados.Rados.connect = mock.Mock()
++        self.mock_rados.Rados.shutdown = mock.Mock()
++        self.mock_rados.Rados.open_ioctx = mock.Mock()
++        self.mock_rados.Rados.open_ioctx.return_value = \
++            self.mock_rados.Rados.ioctx
++
++        # default configured pool
++        ret = self.driver._connect_to_rados()
++        self.assertTrue(self.mock_rados.Rados.connect.called)
++        self.assertTrue(self.mock_rados.Rados.open_ioctx.called)
++        self.assertIsInstance(ret[0], self.mock_rados.Rados)
++        self.assertEqual(ret[1], self.mock_rados.Rados.ioctx)
++        self.mock_rados.Rados.open_ioctx.assert_called_with(self.rbd_pool)
++
++        # different pool
++        ret = self.driver._connect_to_rados('alt_pool')
++        self.assertTrue(self.mock_rados.Rados.connect.called)
++        self.assertTrue(self.mock_rados.Rados.open_ioctx.called)
++        self.assertIsInstance(ret[0], self.mock_rados.Rados)
++        self.assertEqual(ret[1], self.mock_rados.Rados.ioctx)
++        self.mock_rados.Rados.open_ioctx.assert_called_with('alt_pool')
++
++        # error
++        self.mock_rados.Rados.open_ioctx.reset_mock()
++        self.mock_rados.Rados.shutdown.reset_mock()
++        self.mock_rados.Rados.open_ioctx.side_effect = self.mock_rados.Error
++        self.assertRaises(self.mock_rados.Error, self.driver._connect_to_rados)
++        self.mock_rados.Rados.open_ioctx.assert_called_once()
++        self.mock_rados.Rados.shutdown.assert_called_once()
++
++    def test_ceph_args(self):
++        self.driver.rbd_user = None
++        self.driver.ceph_conf = None
++        self.assertEqual([], self.driver.ceph_args())
++
++        self.driver.rbd_user = 'foo'
++        self.driver.ceph_conf = None
++        self.assertEqual(['--id', 'foo'], self.driver.ceph_args())
++
++        self.driver.rbd_user = None
++        self.driver.ceph_conf = '/path/bar.conf'
++        self.assertEqual(['--conf', '/path/bar.conf'],
++                         self.driver.ceph_args())
++
++        self.driver.rbd_user = 'foo'
++        self.driver.ceph_conf = '/path/bar.conf'
++        self.assertEqual(['--id', 'foo', '--conf', '/path/bar.conf'],
++                         self.driver.ceph_args())
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index 4ff6c5e..e886e0d 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -32,17 +32,9 @@
+ from nova.virt.disk import api as disk
+ from nova.virt import images
+ from nova.virt.libvirt import config as vconfig
++from nova.virt.libvirt import rbd_utils
+ from nova.virt.libvirt import utils as libvirt_utils
+ 
+-
+-try:
+-    import rados
+-    import rbd
+-except ImportError:
+-    rados = None
+-    rbd = None
+-
+-
+ __imagebackend_opts = [
+     cfg.StrOpt('images_type',
+                default='default',
+@@ -85,6 +77,8 @@
+ CONF.register_opts(__imagebackend_opts, 'libvirt')
+ CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
+ CONF.import_opt('preallocate_images', 'nova.virt.driver')
++CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume', group='libvirt')
++CONF.import_opt('rbd_secret_uuid', 'nova.virt.libvirt.volume', group='libvirt')
+ 
+ LOG = logging.getLogger(__name__)
+ 
+@@ -495,51 +489,6 @@ def snapshot_extract(self, target, out_format):
+                              run_as_root=True)
+ 
+ 
+-class RBDVolumeProxy(object):
+-    """Context manager for dealing with an existing rbd volume.
+-
+-    This handles connecting to rados and opening an ioctx automatically, and
+-    otherwise acts like a librbd Image object.
+-
+-    The underlying librados client and ioctx can be accessed as the attributes
+-    'client' and 'ioctx'.
+-    """
+-    def __init__(self, driver, name, pool=None):
+-        client, ioctx = driver._connect_to_rados(pool)
+-        try:
+-            self.volume = driver.rbd.Image(ioctx, str(name), snapshot=None)
+-        except driver.rbd.Error:
+-            LOG.exception(_("error opening rbd image %s"), name)
+-            driver._disconnect_from_rados(client, ioctx)
+-            raise
+-        self.driver = driver
+-        self.client = client
+-        self.ioctx = ioctx
+-
+-    def __enter__(self):
+-        return self
+-
+-    def __exit__(self, type_, value, traceback):
+-        try:
+-            self.volume.close()
+-        finally:
+-            self.driver._disconnect_from_rados(self.client, self.ioctx)
+-
+-    def __getattr__(self, attrib):
+-        return getattr(self.volume, attrib)
+-
+-
+-def ascii_str(s):
+-    """Convert a string to ascii, or return None if the input is None.
+-
+-    This is useful when a parameter is None by default, or a string. LibRBD
+-    only accepts ascii, hence the need for conversion.
+-    """
+-    if s is None:
+-        return s
+-    return str(s)
+-
+-
+ class Rbd(Image):
+     def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
+         super(Rbd, self).__init__("block", "rbd", is_block_dev=True)
+@@ -556,10 +505,15 @@ def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
+                                  ' images_rbd_pool'
+                                  ' flag to use rbd images.'))
+         self.pool = CONF.libvirt.images_rbd_pool
+-        self.ceph_conf = ascii_str(CONF.libvirt.images_rbd_ceph_conf)
+-        self.rbd_user = ascii_str(CONF.libvirt.rbd_user)
+-        self.rbd = kwargs.get('rbd', rbd)
+-        self.rados = kwargs.get('rados', rados)
++        self.rbd_user = CONF.libvirt.rbd_user
++        self.ceph_conf = CONF.libvirt.images_rbd_ceph_conf
++
++        self.driver = rbd_utils.RBDDriver(
++            pool=self.pool,
++            ceph_conf=self.ceph_conf,
++            rbd_user=self.rbd_user,
++            rbd_lib=kwargs.get('rbd'),
++            rados_lib=kwargs.get('rados'))
+ 
+         self.path = 'rbd:%s/%s' % (self.pool, self.rbd_name)
+         if self.rbd_user:
+@@ -567,52 +521,6 @@ def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
+         if self.ceph_conf:
+             self.path += ':conf=' + self.ceph_conf
+ 
+-    def _connect_to_rados(self, pool=None):
+-        client = self.rados.Rados(rados_id=self.rbd_user,
+-                                  conffile=self.ceph_conf)
+-        try:
+-            client.connect()
+-            pool_to_open = str(pool or self.pool)
+-            ioctx = client.open_ioctx(pool_to_open)
+-            return client, ioctx
+-        except self.rados.Error:
+-            # shutdown cannot raise an exception
+-            client.shutdown()
+-            raise
+-
+-    def _disconnect_from_rados(self, client, ioctx):
+-        # closing an ioctx cannot raise an exception
+-        ioctx.close()
+-        client.shutdown()
+-
+-    def _supports_layering(self):
+-        return hasattr(self.rbd, 'RBD_FEATURE_LAYERING')
+-
+-    def _ceph_args(self):
+-        args = []
+-        if self.rbd_user:
+-            args.extend(['--id', self.rbd_user])
+-        if self.ceph_conf:
+-            args.extend(['--conf', self.ceph_conf])
+-        return args
+-
+-    def _get_mon_addrs(self):
+-        args = ['ceph', 'mon', 'dump', '--format=json'] + self._ceph_args()
+-        out, _ = utils.execute(*args)
+-        lines = out.split('\n')
+-        if lines[0].startswith('dumped monmap epoch'):
+-            lines = lines[1:]
+-        monmap = jsonutils.loads('\n'.join(lines))
+-        addrs = [mon['addr'] for mon in monmap['mons']]
+-        hosts = []
+-        ports = []
+-        for addr in addrs:
+-            host_port = addr[:addr.rindex('/')]
+-            host, port = host_port.rsplit(':', 1)
+-            hosts.append(host.strip('[]'))
+-            ports.append(port)
+-        return hosts, ports
+-
+     def backend_location(self):
+         return self.pool, self.rbd_name
+ 
+@@ -628,7 +536,7 @@ def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
+         """
+         info = vconfig.LibvirtConfigGuestDisk()
+ 
+-        hosts, ports = self._get_mon_addrs()
++        hosts, ports = self.driver.get_mon_addrs()
+         info.device_type = device_type
+         info.driver_format = 'raw'
+         info.driver_cache = cache_mode
+@@ -661,16 +569,7 @@ def check_image_exists(self):
+ 
+         return False
+ 
+-    def _resize(self, volume_name, size):
+-        size = int(size) * units.Ki
+-
+-        with RBDVolumeProxy(self, volume_name) as vol:
+-            vol.resize(size)
+-
+     def create_image(self, prepare_template, base, size, *args, **kwargs):
+-        if self.rbd is None:
+-            raise RuntimeError(_('rbd python libraries not found'))
+-
+         if not os.path.exists(base):
+             prepare_template(target=base, max_size=size, *args, **kwargs)
+         else:
+@@ -679,15 +578,15 @@ def create_image(self, prepare_template, base, size, *args, **kwargs):
+         # keep using the command line import instead of librbd since it
+         # detects zeroes to preserve sparseness in the image
+         args = ['--pool', self.pool, base, self.rbd_name]
+-        if self._supports_layering():
++        if self.driver.supports_layering():
+             args += ['--new-format']
+-        args += self._ceph_args()
++        args += self.driver.ceph_args()
+         libvirt_utils.import_rbd_image(*args)
+ 
+         base_size = disk.get_disk_size(base)
+ 
+         if size and size > base_size:
+-            self._resize(self.rbd_name, size)
++            self.driver.resize(self.rbd_name, size)
+ 
+     def snapshot_extract(self, target, out_format):
+         images.convert_image(self.path, target, out_format)
+diff --git a/nova/virt/libvirt/rbd_utils.py b/nova/virt/libvirt/rbd_utils.py
+new file mode 100644
+index 0000000..84883ec
+--- /dev/null
++++ b/nova/virt/libvirt/rbd_utils.py
+@@ -0,0 +1,141 @@
++# Copyright 2012 Grid Dynamics
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++try:
++    import rados
++    import rbd
++except ImportError:
++    rados = None
++    rbd = None
++
++from nova.openstack.common.gettextutils import _
++from nova.openstack.common import jsonutils
++from nova.openstack.common import log as logging
++from nova.openstack.common import units
++from nova import utils
++
++LOG = logging.getLogger(__name__)
++
++
++class RBDVolumeProxy(object):
++    """Context manager for dealing with an existing rbd volume.
++
++    This handles connecting to rados and opening an ioctx automatically, and
++    otherwise acts like a librbd Image object.
++
++    The underlying librados client and ioctx can be accessed as the attributes
++    'client' and 'ioctx'.
++    """
++    def __init__(self, driver, name, pool=None):
++        client, ioctx = driver._connect_to_rados(pool)
++        try:
++            self.volume = driver.rbd.Image(ioctx, str(name), snapshot=None)
++        except driver.rbd.Error:
++            LOG.exception(_("error opening rbd image %s"), name)
++            driver._disconnect_from_rados(client, ioctx)
++            raise
++        self.driver = driver
++        self.client = client
++        self.ioctx = ioctx
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, type_, value, traceback):
++        try:
++            self.volume.close()
++        finally:
++            self.driver._disconnect_from_rados(self.client, self.ioctx)
++
++    def __getattr__(self, attrib):
++        return getattr(self.volume, attrib)
++
++
++def ascii_str(s):
++    """Convert a string to ascii, or return None if the input is None.
++
++    This is useful when a parameter is None by default, or a string. LibRBD
++    only accepts ascii, hence the need for conversion.
++    """
++    if s is None:
++        return s
++    return str(s)
++
++
++class RBDDriver(object):
++
++    def __init__(self, pool, ceph_conf, rbd_user,
++                 rbd_lib=None, rados_lib=None):
++        self.pool = pool.encode('utf8')
++        self.ceph_conf = ceph_conf.encode('utf8') if ceph_conf else None
++        self.rbd_user = rbd_user.encode('utf8') if rbd_user else None
++        self.rbd = rbd_lib or rbd
++        self.rados = rados_lib or rados
++        if self.rbd is None:
++            raise RuntimeError(_('rbd python libraries not found'))
++
++    def _connect_to_rados(self, pool=None):
++        client = self.rados.Rados(rados_id=self.rbd_user,
++                                  conffile=self.ceph_conf)
++        try:
++            client.connect()
++            pool_to_open = str(pool or self.pool)
++            ioctx = client.open_ioctx(pool_to_open)
++            return client, ioctx
++        except self.rados.Error:
++            # shutdown cannot raise an exception
++            client.shutdown()
++            raise
++
++    def _disconnect_from_rados(self, client, ioctx):
++        # closing an ioctx cannot raise an exception
++        ioctx.close()
++        client.shutdown()
++
++    def supports_layering(self):
++        return hasattr(self.rbd, 'RBD_FEATURE_LAYERING')
++
++    def ceph_args(self):
++        args = []
++        if self.rbd_user:
++            args.extend(['--id', self.rbd_user])
++        if self.ceph_conf:
++            args.extend(['--conf', self.ceph_conf])
++        return args
++
++    def get_mon_addrs(self):
++        args = ['ceph', 'mon', 'dump', '--format=json'] + self.ceph_args()
++        out, _ = utils.execute(*args)
++        lines = out.split('\n')
++        if lines[0].startswith('dumped monmap epoch'):
++            lines = lines[1:]
++        monmap = jsonutils.loads('\n'.join(lines))
++        addrs = [mon['addr'] for mon in monmap['mons']]
++        hosts = []
++        ports = []
++        for addr in addrs:
++            host_port = addr[:addr.rindex('/')]
++            host, port = host_port.rsplit(':', 1)
++            hosts.append(host.strip('[]'))
++            ports.append(port)
++        return hosts, ports
++
++    def size(self, name):
++        with RBDVolumeProxy(self, name) as vol:
++            return vol.size()
++
++    def resize(self, volume_name, size):
++        size = int(size) * units.Ki
++
++        with RBDVolumeProxy(self, volume_name) as vol:
++            vol.resize(size)
+-- 
+1.9.1
+

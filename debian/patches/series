@@ -2,3 +2,8 @@ path-to-the-xenhost.conf-fixup.patch
 install-missing-files.patch
 #fix-ubuntu-tests.patch
 fix-docs-build-without-network.patch
+0001_CEPH_remove-redundant-copy-of-test_cache_base_dir_exists.patch
+0002_CEPH_Adding_image_multiple_location_support.patch
+0003_CEPH_Move_libvirt_RBD_utilities_to_a_new_file.patch
+0004_CEPH_enable_cloning_for_rbd-backed_ephemeral_disks.patch
+0005_CEPH_Use_library_instead_of_CLI_to_cleanup_RBD_volumes.patch
