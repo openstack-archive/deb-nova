@@ -1,3 +1,4 @@
+debian/nova.conf.example	usr/share/nova-common
 debian/nova.conf	usr/share/nova-common
 etc/nova/api-paste.ini	usr/share/nova-common
 etc/nova/policy.json	etc/nova
