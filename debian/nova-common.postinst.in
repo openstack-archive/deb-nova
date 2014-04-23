@@ -76,7 +76,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	pkgos_write_new_conf nova logging.conf
 
 	# Tweak config files depending on debconf answers
-	pkgos_dbc_postinst /etc/nova/nova.conf DEFAULT sql_connection nova $@
+	pkgos_dbc_postinst /etc/nova/nova.conf database connection nova $@
 	pkgos_rabbit_write_conf /etc/nova/nova.conf DEFAULT nova
 	manage_nova_api_field
 	manage_nova_my_ip_field

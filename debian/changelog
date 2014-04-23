@@ -1,6 +1,8 @@
 nova (2014.1-2) UNRELEASED; urgency=low
 
   * Added 5 Ceph support patches.
+  * Switched to [DEFAULT]/sql_connection to [database]/connection in the config
+    and postinst scripts of nova-common (Close: #745551).
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 23 Apr 2014 22:55:20 +0800
 
