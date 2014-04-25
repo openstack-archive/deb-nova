@@ -345,13 +345,13 @@ Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dpkg-dev,
+         guestmount,
          qemu-kvm | kvm,
          libvirt-bin,
          nova-common,
          nova-compute,
          python-libvirt,
          ${misc:Depends}
-Recommends: guestmount
 Provides: nova-compute-hypervisor
 Conflicts: nova-baremetal,
            nova-compute-lxc,
