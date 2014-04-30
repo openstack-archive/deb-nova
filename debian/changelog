@@ -1,4 +1,4 @@
-nova (2014.1-2) UNRELEASED; urgency=low
+nova (2014.1-2) unstable; urgency=low
 
   * Added 5 Ceph support patches.
   * Switched to [DEFAULT]/sql_connection to [database]/connection in the config
