@@ -31,7 +31,7 @@ manage_nova_my_ip () {
 	if [ -n "${RET}" ] && [ ! "${RET}" = "NOT_FOUND" ] ; then
 		db_set nova/my-ip "${RET}"
 	else
-		if [ -r /proc/net/route ] ; then
+		if [ -r /proc/net/route ] && [ -x /sbin/route ] ; then
 			DEFROUTE_IF=`LC_ALL=C /sbin/route | grep default |awk -- '{ print $8 }' | cut -d" " -f1`
 			if [ -n "${DEFROUTE_IF}" ] ; then
 				DEFROUTE_IP=`LC_ALL=C ip addr show "${DEFROUTE_IF}" | grep inet | head -n 1 | awk '{print $2}' | cut -d/ -f1 | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'`
