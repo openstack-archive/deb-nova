@@ -1,3 +1,9 @@
+nova (2014.1-5) unstable; urgency=medium
+
+  * New patchset for CEPH support.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 13 May 2014 05:13:45 +0800
+
 nova (2014.1-4) unstable; urgency=medium
 
   * Test if /sbin/route is present before using it (Closes: #737052).
