@@ -1,3 +1,9 @@
+nova (2014.1-6) medium; urgency=medium
+
+  * Fixed the sql_connection -> connection in the default nova.conf.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 16 May 2014 21:18:55 +0800
+
 nova (2014.1-5) unstable; urgency=medium
 
   * New patchset for CEPH support.
