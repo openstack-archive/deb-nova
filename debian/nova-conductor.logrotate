@@ -5,10 +5,6 @@
     delaycompress
     notifempty
     postrotate
-        if dpkg-vendor --derives-from ubuntu ; then
-            service nova-conductor restart >/dev/null 2>&1 || true
-        else
-            invoke-rc.d nova-conductor restart >/dev/null 2>&1 || true
-        fi
+        service nova-conductor restart >/dev/null 2>&1 || true
     endscript
 }
