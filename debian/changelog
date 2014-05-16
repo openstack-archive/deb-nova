@@ -1,4 +1,4 @@
-nova (2014.1-6) medium; urgency=medium
+nova (2014.1-6) unstable; urgency=medium
 
   * Fixed the sql_connection -> connection in the default nova.conf.
   * Fixed logrotate scripts to use "service X restart" always, and not using
