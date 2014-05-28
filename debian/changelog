@@ -1,3 +1,9 @@
+nova (2014.1-7) unstable; urgency=medium
+
+  * Removed useless python-support Build-Depends.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 28 May 2014 16:10:53 +0800
+
 nova (2014.1-6) unstable; urgency=medium
 
   * Fixed the sql_connection -> connection in the default nova.conf.
