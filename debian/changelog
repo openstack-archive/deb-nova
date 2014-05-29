@@ -1,3 +1,9 @@
+nova (2014.1-8) unstable; urgency=medium
+
+  * Switched to copytruncate instead of restart daemons for logrotate.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 29 May 2014 13:47:54 +0800
+
 nova (2014.1-7) unstable; urgency=medium
 
   * Removed useless python-support Build-Depends.

@@ -3,24 +3,5 @@
     missingok
     compress
     delaycompress
-    create 640 nova nova
-    postrotate
-        if [ -r /etc/default/nova-consoleproxy ] ; then
-            . /etc/default/nova-consoleproxy
-            if [ -n "${NOVA_CONSOLE_PROXY_TYPE}" ] ; then
-                case ${NOVA_CONSOLE_PROXY_TYPE} in
-                spicehtml5)
-                    service nova-spicehtml5proxy restart >/dev/null 2>&1 || true
-                ;;
-                xenvnc)
-                    service nova-xenvncproxy restart >/dev/null 2>&1 || true
-                ;;
-                novnc)
-                    service nova-novncproxy restart >/dev/null 2>&1 || true
-                ;;
-                esac
-            fi
-            
-            NOVA_CONSOLE_PROXY_TYPE=spicehtml5
-    endscript
+    copytruncate
 }

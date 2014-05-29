@@ -4,6 +4,7 @@
     compress
     delaycompress
     notifempty
+    copytruncate
 }
 
 /var/log/nova/nova-dhcpbridge.log {
@@ -12,4 +13,5 @@
     compress
     delaycompress
     notifempty
+    copytruncate
 }

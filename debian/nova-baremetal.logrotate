@@ -4,7 +4,5 @@
     compress
     delaycompress
     notifempty
-    postrotate
-        service nova-baremetal restart >/dev/null 2>&1 || true
-    endscript
+    copytruncate
 }

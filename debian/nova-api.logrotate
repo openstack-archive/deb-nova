@@ -3,7 +3,5 @@
     missingok
     compress
     delaycompress
-    postrotate
-        service nova-api restart >/dev/null 2>&1 || true
-    endscript
+    copytruncate
 }
