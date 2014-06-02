@@ -7,3 +7,5 @@ fix-docs-build-without-network.patch
 0003_CEPH_Move-libvirt-RBD-utilities-to-a-new-file.patch
 0004_CEPH_Use-library-instead-of-CLI-to-cleanup-RBD-volumes.patch
 0005_CEPH_enable-cloning-for-rbd-backed-ephemeral-disks.patch
+CVE-2014-2573_1_VMWare_add_power_off_vm_before_detach_disk_during_unrescue.patch
+CVE-2014-2573_2_VMware_ensure_rescue_instance_is_deleted_when_instance_is_deleted.patch

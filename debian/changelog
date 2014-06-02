@@ -1,3 +1,10 @@
+nova (2014.1-9) unstable; urgency=high
+
+  * CVE-2014-2573: Nova VMWare driver leaks rescued images. Applied 2 patches
+    from upstream (Closes: #750144).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 02 Jun 2014 11:28:38 +0800
+
 nova (2014.1-8) unstable; urgency=medium
 
   * Switched to copytruncate instead of restart daemons for logrotate.
