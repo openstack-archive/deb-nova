@@ -1,3 +1,9 @@
+nova (2014.1-10) unstable; urgency=medium
+
+  * Now build-depends on opesntack-pkg-tools >= 0.12~.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 05 Jun 2014 07:19:54 +0000
+
 nova (2014.1-9) unstable; urgency=high
 
   * CVE-2014-2573: Nova VMWare driver leaks rescued images. Applied 2 patches
