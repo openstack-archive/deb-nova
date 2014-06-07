@@ -1,3 +1,9 @@
+nova (2014.1-11) unstable; urgency=medium
+
+  * Added cpu_mode=host-passthrough in nova-compute-kvm.conf.
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 07 Jun 2014 16:56:42 +0800
+
 nova (2014.1-10) unstable; urgency=medium
 
   * Now build-depends on opesntack-pkg-tools >= 0.12~.
