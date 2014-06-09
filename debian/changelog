@@ -2,6 +2,7 @@ nova (2014.1.1-1) unstable; urgency=medium
 
   * New upstream release.
   * Removed both CVE-2014-2573 patches applied upstream.
+  * Refreshed Ceph patches.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 09 Jun 2014 22:53:07 +0800
 

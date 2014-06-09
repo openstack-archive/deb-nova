@@ -32,11 +32,11 @@ Signed-off-by: Josh Durgin <josh.durgin@inktank.com>
 Signed-off-by: Zhi Yan Liu <zhiyanl@cn.ibm.com>
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 
-diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
-index 11a36df..7edfaa0 100644
---- a/nova/tests/virt/libvirt/test_imagebackend.py
-+++ b/nova/tests/virt/libvirt/test_imagebackend.py
-@@ -397,14 +397,14 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
+Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_imagebackend.py	2014-06-09 22:54:58.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_imagebackend.py	2014-06-09 22:55:03.000000000 +0800
+@@ -397,14 +397,14 @@
      def test_create_image_too_small(self):
          fn = self.prepare_mocks()
          self.mox.StubOutWithMock(os.path, 'exists')
@@ -54,7 +54,7 @@ index 11a36df..7edfaa0 100644
          self.mox.ReplayAll()
  
          image = self.image_class(self.INSTANCE, self.NAME)
-@@ -752,6 +752,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
+@@ -752,6 +752,7 @@
          self.mox.VerifyAll()
  
      def test_cache_base_dir_exists(self):
@@ -62,7 +62,7 @@ index 11a36df..7edfaa0 100644
          image = self.image_class(self.INSTANCE, self.NAME)
  
          self.mox.StubOutWithMock(os.path, 'exists')
-@@ -821,22 +822,73 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
+@@ -821,22 +822,73 @@
          fake_processutils.fake_execute_clear_log()
          fake_processutils.stub_out_processutils_execute(self.stubs)
  
@@ -141,7 +141,7 @@ index 11a36df..7edfaa0 100644
      def test_prealloc_image(self):
          CONF.set_override('preallocate_images', 'space')
  
-@@ -876,6 +928,67 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
+@@ -876,6 +928,67 @@
  
          self.assertEqual(image.path, rbd_path)
  
@@ -209,11 +209,11 @@ index 11a36df..7edfaa0 100644
  
  class BackendTestCase(test.NoDBTestCase):
      INSTANCE = {'name': 'fake-instance',
-diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
-index f1d121f..1f02097 100644
---- a/nova/tests/virt/libvirt/test_libvirt.py
-+++ b/nova/tests/virt/libvirt/test_libvirt.py
-@@ -7852,7 +7852,7 @@ disk size: 4.4M''', ''))
+Index: nova/nova/tests/virt/libvirt/test_libvirt.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:54:58.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:55:03.000000000 +0800
+@@ -7947,7 +7947,7 @@
          user_id = 'fake'
          project_id = 'fake'
          images.fetch_to_raw(context, image_id, target, user_id, project_id,
@@ -222,10 +222,10 @@ index f1d121f..1f02097 100644
  
          self.mox.ReplayAll()
          libvirt_utils.fetch_image(context, target, image_id,
-diff --git a/nova/tests/virt/libvirt/test_rbd_utils.py b/nova/tests/virt/libvirt/test_rbd_utils.py
-index 4f3f139..31d2f68 100644
---- a/nova/tests/virt/libvirt/test_rbd_utils.py
-+++ b/nova/tests/virt/libvirt/test_rbd_utils.py
+Index: nova/nova/tests/virt/libvirt/test_rbd_utils.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_rbd_utils.py	2014-06-09 22:54:58.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_rbd_utils.py	2014-06-09 22:55:03.000000000 +0800
 @@ -13,8 +13,8 @@
  
  import mock
@@ -236,7 +236,7 @@ index 4f3f139..31d2f68 100644
  from nova import test
  from nova import utils
  from nova.virt.libvirt import rbd_utils
-@@ -77,6 +77,64 @@ class RBDTestCase(test.NoDBTestCase):
+@@ -77,6 +77,64 @@
      def tearDown(self):
          super(RBDTestCase, self).tearDown()
  
@@ -301,7 +301,7 @@ index 4f3f139..31d2f68 100644
      def test_get_mon_addrs(self):
          with mock.patch.object(utils, 'execute') as mock_execute:
              mock_execute.return_value = (CEPH_MON_DUMP, '')
-@@ -84,6 +142,35 @@ class RBDTestCase(test.NoDBTestCase):
+@@ -84,6 +142,35 @@
              ports = ['6789', '6790', '6791', '6792', '6791']
              self.assertEqual((hosts, ports), self.driver.get_mon_addrs())
  
@@ -337,7 +337,7 @@ index 4f3f139..31d2f68 100644
      def test_resize(self):
          size = 1024
  
-@@ -91,7 +178,7 @@ class RBDTestCase(test.NoDBTestCase):
+@@ -91,7 +178,7 @@
              proxy = proxy_init.return_value
              proxy.__enter__.return_value = proxy
              self.driver.resize(self.volume_name, size)
@@ -346,7 +346,7 @@ index 4f3f139..31d2f68 100644
  
      def test_rbd_volume_proxy_init(self):
          with mock.patch.object(self.driver, '_connect_to_rados') as \
-@@ -157,6 +244,17 @@ class RBDTestCase(test.NoDBTestCase):
+@@ -157,6 +244,17 @@
          self.assertEqual(['--id', 'foo', '--conf', '/path/bar.conf'],
                           self.driver.ceph_args())
  
@@ -364,10 +364,10 @@ index 4f3f139..31d2f68 100644
      def test_cleanup_volumes(self):
          instance = {'uuid': '12345'}
  
-diff --git a/nova/tests/virt/test_images.py b/nova/tests/virt/test_images.py
-index b07cb6b..df6e088 100644
---- a/nova/tests/virt/test_images.py
-+++ b/nova/tests/virt/test_images.py
+Index: nova/nova/tests/virt/test_images.py
+===================================================================
+--- nova.orig/nova/tests/virt/test_images.py	2014-06-09 22:54:45.000000000 +0800
++++ nova/nova/tests/virt/test_images.py	2014-06-09 22:55:03.000000000 +0800
 @@ -12,6 +12,7 @@
  #    License for the specific language governing permissions and limitations
  #    under the License.
@@ -376,7 +376,7 @@ index b07cb6b..df6e088 100644
  
  from nova import test
  from nova.virt import images
-@@ -22,3 +23,36 @@ class QemuTestCase(test.NoDBTestCase):
+@@ -22,3 +23,36 @@
          image_info = images.qemu_img_info("/path/that/does/not/exist")
          self.assertTrue(image_info)
          self.assertTrue(str(image_info))
@@ -413,11 +413,11 @@ index b07cb6b..df6e088 100644
 +        images.fetch_to_raw('context', 'image', None, None, None,
 +                            backend='backend')
 +        mock_direct_fetch.assert_called_with('context', 'image', 'backend')
-diff --git a/nova/virt/images.py b/nova/virt/images.py
-index 6b23944..c82ccb2 100644
---- a/nova/virt/images.py
-+++ b/nova/virt/images.py
-@@ -72,7 +72,33 @@ def fetch(context, image_href, path, _user_id, _project_id, max_size=0):
+Index: nova/nova/virt/images.py
+===================================================================
+--- nova.orig/nova/virt/images.py	2014-06-09 22:54:45.000000000 +0800
++++ nova/nova/virt/images.py	2014-06-09 22:55:03.000000000 +0800
+@@ -72,7 +72,33 @@
          image_service.download(context, image_id, dst_path=path)
  
  
@@ -452,11 +452,11 @@ index 6b23944..c82ccb2 100644
      path_tmp = "%s.part" % path
      fetch(context, image_href, path_tmp, user_id, project_id,
            max_size=max_size)
-diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index 8352984..a67d6f4 100644
---- a/nova/virt/libvirt/driver.py
-+++ b/nova/virt/libvirt/driver.py
-@@ -2604,13 +2604,15 @@ class LibvirtDriver(driver.ComputeDriver):
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py	2014-06-09 22:54:58.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-06-09 22:55:03.000000000 +0800
+@@ -2616,13 +2616,15 @@
              if size == 0 or suffix == '.rescue':
                  size = None
  
@@ -479,11 +479,11 @@ index 8352984..a67d6f4 100644
  
          # Lookup the filesystem type if required
          os_type_with_default = disk.get_fs_type_for_os_type(
-diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index e715e2a..3ef4a2e 100644
---- a/nova/virt/libvirt/imagebackend.py
-+++ b/nova/virt/libvirt/imagebackend.py
-@@ -206,8 +206,7 @@ class Image(object):
+Index: nova/nova/virt/libvirt/imagebackend.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/imagebackend.py	2014-06-09 22:54:58.000000000 +0800
++++ nova/nova/virt/libvirt/imagebackend.py	2014-06-09 22:55:03.000000000 +0800
+@@ -206,8 +206,7 @@
                                             'path': self.path})
          return can_fallocate
  
@@ -493,7 +493,7 @@ index e715e2a..3ef4a2e 100644
          """Check that the base image is not larger than size.
             Since images can't be generally shrunk, enforce this
             constraint taking account of virtual image size.
-@@ -226,7 +225,7 @@ class Image(object):
+@@ -226,7 +225,7 @@
              return
  
          if size and not base_size:
@@ -502,7 +502,7 @@ index e715e2a..3ef4a2e 100644
  
          if size < base_size:
              msg = _('%(base)s virtual size %(base_size)s '
-@@ -236,6 +235,9 @@ class Image(object):
+@@ -236,6 +235,9 @@
                                'size': size})
              raise exception.FlavorDiskTooSmall()
  
@@ -512,7 +512,7 @@ index e715e2a..3ef4a2e 100644
      def snapshot_extract(self, target, out_format):
          raise NotImplementedError()
  
-@@ -304,6 +306,14 @@ class Image(object):
+@@ -304,6 +306,14 @@
          '''
          return False
  
@@ -527,7 +527,7 @@ index e715e2a..3ef4a2e 100644
  
  class Raw(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -561,30 +571,35 @@ class Rbd(Image):
+@@ -561,30 +571,35 @@
          return False
  
      def check_image_exists(self):
@@ -563,8 +563,6 @@ index e715e2a..3ef4a2e 100644
 -        utils.execute('rbd', 'import', *args)
 -
 -        base_size = disk.get_disk_size(base)
--
--        if size and size > base_size:
 +        # prepare_template() may have cloned the image into a new rbd
 +        # image already instead of downloading it locally
 +        if not self.check_image_exists():
@@ -575,12 +573,13 @@ index e715e2a..3ef4a2e 100644
 +                args += ['--new-format']
 +                args += self.driver.ceph_args()
 +                utils.execute('rbd', 'import', *args)
-+
+ 
+-        if size and size > base_size:
 +        if size and size > self.get_disk_size(self.rbd_name):
              self.driver.resize(self.rbd_name, size)
  
      def snapshot_extract(self, target, out_format):
-@@ -594,6 +609,23 @@ class Rbd(Image):
+@@ -594,6 +609,23 @@
      def is_shared_block_storage():
          return True
  
@@ -604,10 +603,10 @@ index e715e2a..3ef4a2e 100644
  
  class Backend(object):
      def __init__(self, use_cow):
-diff --git a/nova/virt/libvirt/rbd_utils.py b/nova/virt/libvirt/rbd_utils.py
-index 19acc98..fffc230 100644
---- a/nova/virt/libvirt/rbd_utils.py
-+++ b/nova/virt/libvirt/rbd_utils.py
+Index: nova/nova/virt/libvirt/rbd_utils.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/rbd_utils.py	2014-06-09 22:54:58.000000000 +0800
++++ nova/nova/virt/libvirt/rbd_utils.py	2014-06-09 22:55:03.000000000 +0800
 @@ -11,6 +11,8 @@
  #    License for the specific language governing permissions and limitations
  #    under the License.
@@ -617,7 +616,7 @@ index 19acc98..fffc230 100644
  try:
      import rados
      import rbd
-@@ -18,10 +20,11 @@ except ImportError:
+@@ -18,10 +20,11 @@
      rados = None
      rbd = None
  
@@ -630,7 +629,7 @@ index 19acc98..fffc230 100644
  from nova import utils
  
  LOG = logging.getLogger(__name__)
-@@ -36,14 +39,23 @@ class RBDVolumeProxy(object):
+@@ -36,14 +39,23 @@
      The underlying librados client and ioctx can be accessed as the attributes
      'client' and 'ioctx'.
      """
@@ -659,7 +658,7 @@ index 19acc98..fffc230 100644
          self.driver = driver
          self.client = client
          self.ioctx = ioctx
-@@ -61,15 +73,17 @@ class RBDVolumeProxy(object):
+@@ -61,15 +73,17 @@
          return getattr(self.volume, attrib)
  
  
@@ -670,6 +669,9 @@ index 19acc98..fffc230 100644
 +    def __init__(self, driver, pool=None):
 +        self.driver = driver
 +        self.cluster, self.ioctx = driver._connect_to_rados(pool)
++
++    def __enter__(self):
++        return self
  
 -    This is useful when a parameter is None by default, or a string. LibRBD
 -    only accepts ascii, hence the need for conversion.
@@ -677,15 +679,12 @@ index 19acc98..fffc230 100644
 -    if s is None:
 -        return s
 -    return str(s)
-+    def __enter__(self):
-+        return self
-+
 +    def __exit__(self, type_, value, traceback):
 +        self.driver._disconnect_from_rados(self.cluster, self.ioctx)
  
  
  class RBDDriver(object):
-@@ -91,8 +105,8 @@ class RBDDriver(object):
+@@ -91,8 +105,8 @@
                                    conffile=self.ceph_conf)
          try:
              client.connect()
@@ -696,7 +695,7 @@ index 19acc98..fffc230 100644
              return client, ioctx
          except self.rados.Error:
              # shutdown cannot raise an exception
-@@ -132,15 +146,84 @@ class RBDDriver(object):
+@@ -132,15 +146,84 @@
              ports.append(port)
          return hosts, ports
  
@@ -785,11 +784,11 @@ index 19acc98..fffc230 100644
  
      def cleanup_volumes(self, instance):
          with RADOSClient(self, self.pool) as client:
-diff --git a/nova/virt/libvirt/utils.py b/nova/virt/libvirt/utils.py
-index 21b02f6..53dd411 100644
---- a/nova/virt/libvirt/utils.py
-+++ b/nova/virt/libvirt/utils.py
-@@ -607,10 +607,11 @@ def get_fs_info(path):
+Index: nova/nova/virt/libvirt/utils.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/utils.py	2014-06-09 22:54:58.000000000 +0800
++++ nova/nova/virt/libvirt/utils.py	2014-06-09 22:55:03.000000000 +0800
+@@ -607,10 +607,11 @@
              'used': used}
  
  
@@ -803,6 +802,3 @@ index 21b02f6..53dd411 100644
  
  
  def get_instance_path(instance, forceold=False, relative=False):
--- 
-2.0.0.rc0
-

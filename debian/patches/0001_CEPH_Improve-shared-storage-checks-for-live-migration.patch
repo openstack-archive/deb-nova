@@ -13,11 +13,11 @@ Co-authored-by: Yaguang Tang <yaguang.tang@canonical.com>
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 Change-Id: I2755c59b4db736151000dae351fd776d3c15ca39
 
-diff --git a/nova/compute/manager.py b/nova/compute/manager.py
-index d6dd2a5..5f9e83b 100644
---- a/nova/compute/manager.py
-+++ b/nova/compute/manager.py
-@@ -4536,6 +4536,39 @@ class ComputeManager(manager.Manager):
+Index: nova/nova/compute/manager.py
+===================================================================
+--- nova.orig/nova/compute/manager.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/compute/manager.py	2014-06-09 22:54:50.000000000 +0800
+@@ -4524,6 +4524,39 @@
                                     self._rollback_live_migration,
                                     block_migration, migrate_data)
  
@@ -57,7 +57,7 @@ index d6dd2a5..5f9e83b 100644
      @wrap_exception()
      @wrap_instance_fault
      def _post_live_migration(self, ctxt, instance,
-@@ -4601,16 +4634,15 @@ class ComputeManager(manager.Manager):
+@@ -4589,16 +4622,15 @@
          self.compute_rpcapi.post_live_migration_at_destination(ctxt,
                  instance, block_migration, dest)
  
@@ -82,7 +82,7 @@ index d6dd2a5..5f9e83b 100644
              # but we must do it explicitly here when block_migration
              # is false, as the network devices at the source must be
              # torn down
-@@ -4733,27 +4765,22 @@ class ComputeManager(manager.Manager):
+@@ -4721,27 +4753,22 @@
          self._notify_about_instance_usage(context, instance,
                                            "live_migration._rollback.start")
  
@@ -120,7 +120,7 @@ index d6dd2a5..5f9e83b 100644
          """Cleaning up image directory that is created pre_live_migration.
  
          :param context: security context
-@@ -4772,8 +4799,9 @@ class ComputeManager(manager.Manager):
+@@ -4760,8 +4787,9 @@
          #             from remote volumes if necessary
          block_device_info = self._get_instance_volume_block_device_info(
                              context, instance)
@@ -132,11 +132,11 @@ index d6dd2a5..5f9e83b 100644
          self._notify_about_instance_usage(
                          context, instance, "live_migration.rollback.dest.end",
                          network_info=network_info)
-diff --git a/nova/compute/rpcapi.py b/nova/compute/rpcapi.py
-index a1adfbf..27d257e 100644
---- a/nova/compute/rpcapi.py
-+++ b/nova/compute/rpcapi.py
-@@ -734,13 +734,22 @@ class ComputeAPI(object):
+Index: nova/nova/compute/rpcapi.py
+===================================================================
+--- nova.orig/nova/compute/rpcapi.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/compute/rpcapi.py	2014-06-09 22:54:50.000000000 +0800
+@@ -734,13 +734,22 @@
                     instance=instance, migration=migration,
                     reservations=reservations)
  
@@ -164,11 +164,11 @@ index a1adfbf..27d257e 100644
  
      def run_instance(self, ctxt, instance, host, request_spec,
                       filter_properties, requested_networks,
-diff --git a/nova/tests/compute/test_compute.py b/nova/tests/compute/test_compute.py
-index 946c0c7..6c68eea 100644
---- a/nova/tests/compute/test_compute.py
-+++ b/nova/tests/compute/test_compute.py
-@@ -5010,7 +5010,7 @@ class ComputeTestCase(BaseTestCase):
+Index: nova/nova/tests/compute/test_compute.py
+===================================================================
+--- nova.orig/nova/tests/compute/test_compute.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/tests/compute/test_compute.py	2014-06-09 22:54:50.000000000 +0800
+@@ -4977,7 +4977,7 @@
          fake_notifier.NOTIFICATIONS = []
          # start test
          self.mox.ReplayAll()
@@ -177,7 +177,7 @@ index 946c0c7..6c68eea 100644
          ret = self.compute.pre_live_migration(c, instance=instance,
                                                block_migration=False, disk=None,
                                                migrate_data=migrate_data)
-@@ -5082,7 +5082,8 @@ class ComputeTestCase(BaseTestCase):
+@@ -5049,7 +5049,8 @@
          self.compute.compute_rpcapi.remove_volume_connection(
                  c, updated_instance, 'vol2-id', dest_host)
          self.compute.compute_rpcapi.rollback_live_migration_at_destination(
@@ -187,7 +187,7 @@ index 946c0c7..6c68eea 100644
  
          # start test
          self.mox.ReplayAll()
-@@ -5099,7 +5100,7 @@ class ComputeTestCase(BaseTestCase):
+@@ -5066,7 +5067,7 @@
          instance.host = self.compute.host
          dest = 'desthost'
  
@@ -196,7 +196,7 @@ index 946c0c7..6c68eea 100644
  
          self.mox.StubOutWithMock(self.compute.compute_rpcapi,
                                   'pre_live_migration')
-@@ -5192,7 +5193,7 @@ class ComputeTestCase(BaseTestCase):
+@@ -5159,7 +5160,7 @@
  
          # start test
          self.mox.ReplayAll()
@@ -205,7 +205,7 @@ index 946c0c7..6c68eea 100644
          self.compute._post_live_migration(c, inst_ref, dest,
                                            migrate_data=migrate_data)
          self.assertIn('cleanup', result)
-@@ -5392,7 +5393,8 @@ class ComputeTestCase(BaseTestCase):
+@@ -5359,7 +5360,8 @@
          self.mox.StubOutWithMock(self.compute.driver,
                                   'rollback_live_migration_at_destination')
          self.compute.driver.rollback_live_migration_at_destination(c,
@@ -215,11 +215,11 @@ index 946c0c7..6c68eea 100644
  
          # start test
          self.mox.ReplayAll()
-diff --git a/nova/tests/compute/test_rpcapi.py b/nova/tests/compute/test_rpcapi.py
-index d4026ea..4b7271b 100644
---- a/nova/tests/compute/test_rpcapi.py
-+++ b/nova/tests/compute/test_rpcapi.py
-@@ -621,7 +621,8 @@ class ComputeRpcAPITestCase(test.TestCase):
+Index: nova/nova/tests/compute/test_rpcapi.py
+===================================================================
+--- nova.orig/nova/tests/compute/test_rpcapi.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/tests/compute/test_rpcapi.py	2014-06-09 22:54:50.000000000 +0800
+@@ -621,7 +621,8 @@
  
      def test_rollback_live_migration_at_destination(self):
          self._test_compute_api('rollback_live_migration_at_destination',
@@ -229,11 +229,11 @@ index d4026ea..4b7271b 100644
  
          # NOTE(russellb) Havana compat
          self.flags(compute='havana', group='upgrade_levels')
-diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
-index f1ab786..05f13e0 100644
---- a/nova/tests/virt/libvirt/test_libvirt.py
-+++ b/nova/tests/virt/libvirt/test_libvirt.py
-@@ -3730,6 +3730,7 @@ class LibvirtConnTestCase(test.TestCase):
+Index: nova/nova/tests/virt/libvirt/test_libvirt.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:54:50.000000000 +0800
+@@ -3764,6 +3764,7 @@
          return_value = conn.check_can_live_migrate_destination(self.context,
                  instance_ref, compute_info, compute_info, True)
          self.assertThat({"filename": "file",
@@ -241,7 +241,7 @@ index f1ab786..05f13e0 100644
                           'disk_available_mb': 409600,
                           "disk_over_commit": False,
                           "block_migration": True},
-@@ -3754,6 +3755,7 @@ class LibvirtConnTestCase(test.TestCase):
+@@ -3788,6 +3789,7 @@
          return_value = conn.check_can_live_migrate_destination(self.context,
                  instance_ref, compute_info, compute_info, False)
          self.assertThat({"filename": "file",
@@ -249,7 +249,7 @@ index f1ab786..05f13e0 100644
                           "block_migration": False,
                           "disk_over_commit": False,
                           "disk_available_mb": None},
-@@ -3791,139 +3793,150 @@ class LibvirtConnTestCase(test.TestCase):
+@@ -3825,139 +3827,150 @@
          conn.check_can_live_migrate_destination_cleanup(self.context,
                                                          dest_check_data)
  
@@ -259,6 +259,12 @@ index f1ab786..05f13e0 100644
 -                           "block_migration": True,
 -                           "disk_over_commit": False,
 -                           "disk_available_mb": 1024}
+-        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+-
+-        self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
+-        conn._check_shared_storage_test_file("file").AndReturn(False)
+-        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+-        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
 +    def _mock_can_live_migrate_source(self, block_migration=False,
 +                                      is_shared_block_storage=False,
 +                                      is_shared_instance_path=False,
@@ -269,12 +275,8 @@ index f1ab786..05f13e0 100644
 +                           'block_migration': block_migration,
 +                           'disk_over_commit': False,
 +                           'disk_available_mb': disk_available_mb}
-         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
- 
--        self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
--        conn._check_shared_storage_test_file("file").AndReturn(False)
--        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
--        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
++        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
++
 +        self.mox.StubOutWithMock(conn, '_is_shared_block_storage')
 +        conn._is_shared_block_storage(instance, dest_check_data).AndReturn(
 +                is_shared_block_storage)
@@ -497,7 +499,7 @@ index f1ab786..05f13e0 100644
  
      def test_live_migration_raises_exception(self):
          # Confirms recover method is called when exceptions are raised.
-@@ -3972,9 +3985,9 @@ class LibvirtConnTestCase(test.TestCase):
+@@ -4006,9 +4019,9 @@
          conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
          with mock.patch.object(conn, "destroy") as mock_destroy:
              conn.rollback_live_migration_at_destination("context",
@@ -509,7 +511,7 @@ index f1ab786..05f13e0 100644
  
      def _do_test_create_images_and_backing(self, disk_type):
          conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-@@ -4112,7 +4125,8 @@ class LibvirtConnTestCase(test.TestCase):
+@@ -4146,7 +4159,8 @@
  
          self.assertRaises(exception.NoBlockMigrationForConfigDriveInLibVirt,
                            conn.pre_live_migration, c, inst_ref, vol, None,
@@ -519,7 +521,7 @@ index f1ab786..05f13e0 100644
  
      def test_pre_live_migration_vol_backed_works_correctly_mocked(self):
          # Creating testdata, using temp dir.
-@@ -4148,7 +4162,7 @@ class LibvirtConnTestCase(test.TestCase):
+@@ -4182,7 +4196,7 @@
              self.mox.StubOutWithMock(conn, 'plug_vifs')
              conn.plug_vifs(mox.IsA(inst_ref), nw_info)
              self.mox.ReplayAll()
@@ -528,11 +530,11 @@ index f1ab786..05f13e0 100644
                              'is_volume_backed': True,
                              'block_migration': False,
                              'instance_relative_path': inst_ref['name']
-diff --git a/nova/virt/driver.py b/nova/virt/driver.py
-index a36c10b..1ccd200 100644
---- a/nova/virt/driver.py
-+++ b/nova/virt/driver.py
-@@ -297,7 +297,7 @@ class ComputeDriver(object):
+Index: nova/nova/virt/driver.py
+===================================================================
+--- nova.orig/nova/virt/driver.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/virt/driver.py	2014-06-09 22:54:50.000000000 +0800
+@@ -297,7 +297,7 @@
          raise NotImplementedError()
  
      def destroy(self, context, instance, network_info, block_device_info=None,
@@ -541,7 +543,7 @@ index a36c10b..1ccd200 100644
          """Destroy the specified instance from the Hypervisor.
  
          If the instance is not found (for example if networking failed), this
-@@ -311,11 +311,12 @@ class ComputeDriver(object):
+@@ -311,11 +311,12 @@
          :param block_device_info: Information about block devices that should
                                    be detached from the instance.
          :param destroy_disks: Indicates if disks should be destroyed
@@ -555,7 +557,7 @@ index a36c10b..1ccd200 100644
          """Cleanup the instance resources .
  
          Instance should have been destroyed from the Hypervisor before calling
-@@ -328,7 +329,7 @@ class ComputeDriver(object):
+@@ -328,7 +329,7 @@
          :param block_device_info: Information about block devices that should
                                    be detached from the instance.
          :param destroy_disks: Indicates if disks should be destroyed
@@ -564,7 +566,7 @@ index a36c10b..1ccd200 100644
          """
          raise NotImplementedError()
  
-@@ -657,13 +658,18 @@ class ComputeDriver(object):
+@@ -657,13 +658,18 @@
  
      def rollback_live_migration_at_destination(self, ctxt, instance_ref,
                                                 network_info,
@@ -584,11 +586,11 @@ index a36c10b..1ccd200 100644
  
          """
          raise NotImplementedError()
-diff --git a/nova/virt/fake.py b/nova/virt/fake.py
-index ea175cb..0f869ee 100644
---- a/nova/virt/fake.py
-+++ b/nova/virt/fake.py
-@@ -204,7 +204,7 @@ class FakeDriver(driver.ComputeDriver):
+Index: nova/nova/virt/fake.py
+===================================================================
+--- nova.orig/nova/virt/fake.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/virt/fake.py	2014-06-09 22:54:50.000000000 +0800
+@@ -204,7 +204,7 @@
          pass
  
      def destroy(self, context, instance, network_info, block_device_info=None,
@@ -597,7 +599,7 @@ index ea175cb..0f869ee 100644
          key = instance['name']
          if key in self.instances:
              del self.instances[key]
-@@ -214,7 +214,7 @@ class FakeDriver(driver.ComputeDriver):
+@@ -214,7 +214,7 @@
                           'inst': self.instances}, instance=instance)
  
      def cleanup(self, context, instance, network_info, block_device_info=None,
@@ -606,11 +608,11 @@ index ea175cb..0f869ee 100644
          pass
  
      def attach_volume(self, context, connection_info, instance, mountpoint,
-diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index 1a18931..d87957c 100644
---- a/nova/virt/libvirt/driver.py
-+++ b/nova/virt/libvirt/driver.py
-@@ -947,10 +947,10 @@ class LibvirtDriver(driver.ComputeDriver):
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-06-09 22:54:50.000000000 +0800
+@@ -954,10 +954,10 @@
              self._destroy(instance)
  
      def destroy(self, context, instance, network_info, block_device_info=None,
@@ -623,16 +625,16 @@ index 1a18931..d87957c 100644
  
      def _undefine_domain(self, instance):
          try:
-@@ -984,7 +984,7 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -991,7 +991,7 @@
                                {'errcode': errcode, 'e': e}, instance=instance)
  
      def cleanup(self, context, instance, network_info, block_device_info=None,
 -                destroy_disks=True):
 +                destroy_disks=True, migrate_data=None):
          self._undefine_domain(instance)
-         self.unplug_vifs(instance, network_info)
+         self.unplug_vifs(instance, network_info, ignore_errors=True)
          retry = True
-@@ -1059,9 +1059,12 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -1066,9 +1066,12 @@
                                   {'vol_id': vol.get('volume_id'), 'exc': exc},
                                   instance=instance)
  
@@ -646,7 +648,7 @@ index 1a18931..d87957c 100644
              self._cleanup_lvm(instance)
              #NOTE(haomai): destroy volumes if needed
              if CONF.libvirt.images_type == 'rbd':
-@@ -4192,6 +4195,7 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -4204,6 +4207,7 @@
          filename = self._create_shared_storage_test_file()
  
          return {"filename": filename,
@@ -654,7 +656,7 @@ index 1a18931..d87957c 100644
                  "block_migration": block_migration,
                  "disk_over_commit": disk_over_commit,
                  "disk_available_mb": disk_available_mb}
-@@ -4220,16 +4224,15 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -4232,16 +4236,15 @@
          # Checking shared storage connectivity
          # if block migration, instances_paths should not be on shared storage.
          source = CONF.host
@@ -663,22 +665,23 @@ index 1a18931..d87957c 100644
 -        is_volume_backed = dest_check_data.get('is_volume_backed', False)
 -        has_local_disks = bool(
 -                jsonutils.loads(self.get_instance_disk_info(instance['name'])))
- 
+-
 -        shared = self._check_shared_storage_test_file(filename)
+ 
+-        if block_migration:
+-            if shared:
 +        dest_check_data.update({'is_shared_block_storage':
 +                self._is_shared_block_storage(instance, dest_check_data)})
 +        dest_check_data.update({'is_shared_instance_path':
 +                self._is_shared_instance_path(dest_check_data)})
- 
--        if block_migration:
--            if shared:
++
 +        if dest_check_data['block_migration']:
 +            if (dest_check_data['is_shared_block_storage'] or
 +                    dest_check_data['is_shared_instance_path']):
                  reason = _("Block migration can not be used "
                             "with shared storage.")
                  raise exception.InvalidLocalStorage(reason=reason, path=source)
-@@ -4237,11 +4240,11 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -4249,11 +4252,11 @@
                                      dest_check_data['disk_available_mb'],
                                      dest_check_data['disk_over_commit'])
  
@@ -692,7 +695,7 @@ index 1a18931..d87957c 100644
  
          # NOTE(mikal): include the instance directory name here because it
          # doesn't yet exist on the destination but we want to force that
-@@ -4252,6 +4255,32 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -4264,6 +4267,32 @@
  
          return dest_check_data
  
@@ -725,7 +728,7 @@ index 1a18931..d87957c 100644
      def _assert_dest_node_has_enough_disk(self, context, instance,
                                               available_mb, disk_over_commit):
          """Checks if destination has enough disk for block migration."""
-@@ -4498,31 +4527,37 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -4510,31 +4539,37 @@
  
      def rollback_live_migration_at_destination(self, context, instance,
                                                 network_info,
@@ -770,7 +773,7 @@ index 1a18931..d87957c 100644
              # NOTE(mikal): this doesn't use libvirt_utils.get_instance_path
              # because we are ensuring that the same instance directory name
              # is used as was at the source
-@@ -4536,11 +4571,16 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -4548,11 +4583,16 @@
                  raise exception.DestinationDiskExists(path=instance_dir)
              os.mkdir(instance_dir)
  
@@ -788,11 +791,11 @@ index 1a18931..d87957c 100644
              # Touch the console.log file, required by libvirt.
              console_file = self._get_console_log_path(instance)
              libvirt_utils.file_open(console_file, 'a').close()
-diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index 6511496..7595a89 100644
---- a/nova/virt/libvirt/imagebackend.py
-+++ b/nova/virt/libvirt/imagebackend.py
-@@ -304,6 +304,12 @@ class Image(object):
+Index: nova/nova/virt/libvirt/imagebackend.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/imagebackend.py	2014-06-09 22:54:46.000000000 +0800
++++ nova/nova/virt/libvirt/imagebackend.py	2014-06-09 22:54:50.000000000 +0800
+@@ -304,6 +304,12 @@
              raise exception.DiskInfoReadWriteFail(reason=unicode(e))
          return driver_format
  
@@ -805,7 +808,7 @@ index 6511496..7595a89 100644
  
  class Raw(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -685,6 +691,10 @@ class Rbd(Image):
+@@ -685,6 +691,10 @@
      def snapshot_extract(self, target, out_format):
          images.convert_image(self.path, target, out_format)
  
@@ -816,6 +819,3 @@ index 6511496..7595a89 100644
  
  class Backend(object):
      def __init__(self, use_cow):
--- 
-2.0.0.rc0
-
