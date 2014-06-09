@@ -1,3 +1,9 @@
+nova (2014.1.1-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 09 Jun 2014 22:53:07 +0800
+
 nova (2014.1-11) unstable; urgency=medium
 
   * Added cpu_mode=host-passthrough in nova-compute-kvm.conf.
