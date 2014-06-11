@@ -1,3 +1,9 @@
+nova (2014.2~b1-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 12 Jun 2014 01:02:03 +0800
+
 nova (2014.1.1-2) unstable; urgency=medium
 
   * Comment out cpu_mode=host-passthrough in /etc/nova/nova-compute.conf in the
