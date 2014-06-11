@@ -25,7 +25,6 @@ from oslo.config import cfg
 
 from nova.api.metadata import password
 from nova.compute import utils as compute_utils
-from nova import conductor
 from nova import context
 from nova import crypto
 from nova import exception
@@ -186,11 +185,10 @@ class XenAPIBasedAgent(object):
                     instance=self.instance, exc_info=True)
         try:
             ctxt = context.get_admin_context()
-            capi = conductor.API()
             compute_utils.add_instance_fault_from_exc(
-                    ctxt, capi, self.instance, error, exc_info=exc_info)
+                    ctxt, self.instance, error, exc_info=exc_info)
         except Exception:
-            pass
+            LOG.debug(_("Error setting instance fault."), exc_info=True)
 
     def _call_agent(self, method, addl_args=None, timeout=None,
                     success_codes=None, ignore_errors=True):
@@ -272,11 +270,9 @@ class XenAPIBasedAgent(object):
         if sshkey and sshkey.startswith("ssh-rsa"):
             ctxt = context.get_admin_context()
             enc = crypto.ssh_encrypt_text(sshkey, new_pass)
-            sys_meta = utils.instance_sys_meta(self.instance)
-            sys_meta.update(password.convert_password(ctxt,
-                                                      base64.b64encode(enc)))
-            self.virtapi.instance_update(ctxt, self.instance['uuid'],
-                                         {'system_metadata': sys_meta})
+            self.instance.system_metadata.update(
+                password.convert_password(ctxt, base64.b64encode(enc)))
+            self.instance.save()
 
     def set_admin_password(self, new_pass):
         """Set the root/admin password on the VM instance.

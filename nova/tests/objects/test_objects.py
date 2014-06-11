@@ -14,30 +14,32 @@
 
 import contextlib
 import datetime
-import iso8601
+import hashlib
+import inspect
 
 import mock
-import netaddr
 import six
 from testtools import matchers
 
 from nova.conductor import rpcapi as conductor_rpcapi
 from nova import context
 from nova import exception
+from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova.objects import utils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova import rpc
 from nova import test
+from nova.tests import fake_notifier
 
 
 class MyObj(base.NovaPersistentObject, base.NovaObject):
-    VERSION = '1.5'
+    VERSION = '1.6'
     fields = {'foo': fields.Field(fields.Integer()),
               'bar': fields.Field(fields.String()),
               'missing': fields.Field(fields.String()),
+              'readonly': fields.Field(fields.Integer(), read_only=True),
               }
 
     @staticmethod
@@ -46,6 +48,7 @@ class MyObj(base.NovaPersistentObject, base.NovaObject):
         self.foo = db_obj['foo']
         self.bar = db_obj['bar']
         self.missing = db_obj['missing']
+        self.readonly = 1
         return self
 
     def obj_load_attr(self, attrname):
@@ -91,6 +94,14 @@ class MyObj(base.NovaPersistentObject, base.NovaObject):
             primitive['bar'] = 'old%s' % primitive['bar']
 
 
+class MyObjDiffVers(MyObj):
+    VERSION = '1.5'
+
+    @classmethod
+    def obj_name(cls):
+        return 'MyObj'
+
+
 class MyObj2(object):
     @classmethod
     def obj_name(cls):
@@ -115,129 +126,67 @@ class TestMetaclass(test.TestCase):
 
         @six.add_metaclass(base.NovaObjectMetaclass)
         class NewBaseClass(object):
+            VERSION = '1.0'
             fields = {}
 
             @classmethod
             def obj_name(cls):
                 return cls.__name__
 
-        class Test1(NewBaseClass):
-            @staticmethod
-            def obj_name():
+        class Fake1TestObj1(NewBaseClass):
+            @classmethod
+            def obj_name(cls):
                 return 'fake1'
 
-        class Test2(NewBaseClass):
+        class Fake1TestObj2(Fake1TestObj1):
             pass
 
-        class Test2v2(NewBaseClass):
-            @staticmethod
-            def obj_name():
-                return 'Test2'
+        class Fake1TestObj3(Fake1TestObj1):
+            VERSION = '1.1'
 
-        expected = {'fake1': [Test1], 'Test2': [Test2, Test2v2]}
+        class Fake2TestObj1(NewBaseClass):
+            @classmethod
+            def obj_name(cls):
+                return 'fake2'
 
+        class Fake1TestObj4(Fake1TestObj3):
+            VERSION = '1.2'
+
+        class Fake2TestObj2(Fake2TestObj1):
+            VERSION = '1.1'
+
+        class Fake1TestObj5(Fake1TestObj1):
+            VERSION = '1.1'
+
+        # Newest versions first in the list. Duplicate versions take the
+        # newest object.
+        expected = {'fake1': [Fake1TestObj4, Fake1TestObj5, Fake1TestObj2],
+                    'fake2': [Fake2TestObj2, Fake2TestObj1]}
         self.assertEqual(expected, NewBaseClass._obj_classes)
         # The following should work, also.
-        self.assertEqual(expected, Test1._obj_classes)
-        self.assertEqual(expected, Test2._obj_classes)
+        self.assertEqual(expected, Fake1TestObj1._obj_classes)
+        self.assertEqual(expected, Fake1TestObj2._obj_classes)
+        self.assertEqual(expected, Fake1TestObj3._obj_classes)
+        self.assertEqual(expected, Fake1TestObj4._obj_classes)
+        self.assertEqual(expected, Fake1TestObj5._obj_classes)
+        self.assertEqual(expected, Fake2TestObj1._obj_classes)
+        self.assertEqual(expected, Fake2TestObj2._obj_classes)
+
+    def test_field_checking(self):
+        def create_class(field):
+            class TestField(base.NovaObject):
+                VERSION = '1.5'
+                fields = {'foo': field()}
+            return TestField
+
+        create_class(fields.IPV4AndV6AddressField)
+        self.assertRaises(exception.ObjectFieldInvalid,
+                          create_class, fields.IPV4AndV6Address)
+        self.assertRaises(exception.ObjectFieldInvalid,
+                          create_class, int)
 
 
-class TestUtils(test.TestCase):
-    def test_datetime_or_none(self):
-        naive_dt = timeutils.utcnow()
-        dt = timeutils.parse_isotime(timeutils.isotime(naive_dt))
-        self.assertEqual(utils.datetime_or_none(dt), dt)
-        self.assertEqual(utils.datetime_or_none(dt),
-                         naive_dt.replace(tzinfo=iso8601.iso8601.Utc(),
-                                          microsecond=0))
-        self.assertIsNone(utils.datetime_or_none(None))
-        self.assertRaises(ValueError, utils.datetime_or_none, 'foo')
-
-    def test_datetime_or_str_or_none(self):
-        dts = timeutils.isotime()
-        dt = timeutils.parse_isotime(dts)
-        self.assertEqual(utils.datetime_or_str_or_none(dt), dt)
-        self.assertIsNone(utils.datetime_or_str_or_none(None))
-        self.assertEqual(utils.datetime_or_str_or_none(dts), dt)
-        self.assertRaises(ValueError, utils.datetime_or_str_or_none, 'foo')
-
-    def test_int_or_none(self):
-        self.assertEqual(utils.int_or_none(1), 1)
-        self.assertEqual(utils.int_or_none('1'), 1)
-        self.assertIsNone(utils.int_or_none(None))
-        self.assertRaises(ValueError, utils.int_or_none, 'foo')
-
-    def test_str_or_none(self):
-        class Obj(object):
-            pass
-        self.assertEqual(utils.str_or_none('foo'), 'foo')
-        self.assertEqual(utils.str_or_none(1), '1')
-        self.assertIsNone(utils.str_or_none(None))
-        self.assertIsInstance(utils.str_or_none('foo'), unicode)
-
-    def test_str_value(self):
-        self.assertEqual('foo', utils.str_value('foo'))
-        self.assertEqual('1', utils.str_value(1))
-        self.assertRaises(ValueError, utils.str_value, None)
-        self.assertIsInstance(utils.str_value('foo'), unicode)
-
-    def test_cstring(self):
-        self.assertEqual('foo', utils.cstring('foo'))
-        self.assertEqual('1', utils.cstring(1))
-        self.assertRaises(ValueError, utils.cstring, None)
-
-    def test_ip_or_none(self):
-        ip4 = netaddr.IPAddress('1.2.3.4', 4)
-        ip6 = netaddr.IPAddress('1::2', 6)
-        self.assertEqual(utils.ip_or_none(4)('1.2.3.4'), ip4)
-        self.assertEqual(utils.ip_or_none(6)('1::2'), ip6)
-        self.assertIsNone(utils.ip_or_none(4)(None))
-        self.assertIsNone(utils.ip_or_none(6)(None))
-        self.assertRaises(netaddr.AddrFormatError, utils.ip_or_none(4), 'foo')
-        self.assertRaises(netaddr.AddrFormatError, utils.ip_or_none(6), 'foo')
-
-    def test_list_of_strings_or_none(self):
-        self.assertIsNone(utils.list_of_strings_or_none(None))
-        self.assertEqual(utils.list_of_strings_or_none(['1', '2']),
-                         ['1', '2'])
-        self.assertRaises(ValueError,
-                          utils.list_of_strings_or_none, 'foo')
-        self.assertRaises(ValueError,
-                          utils.list_of_strings_or_none, [1, 2])
-        self.assertRaises(ValueError,
-                          utils.list_of_strings_or_none, ['1', 2])
-
-    def test_dict_of_strings_or_none(self):
-        self.assertIsNone(utils.dict_of_strings_or_none(None))
-        self.assertEqual(utils.dict_of_strings_or_none({'1': '2'}),
-                         {'1': '2'})
-        self.assertRaises(ValueError,
-                          utils.dict_of_strings_or_none, {'1': '2', '3': 4})
-        self.assertRaises(ValueError,
-                          utils.dict_of_strings_or_none, {'1': '2', 3: '4'})
-        self.assertRaises(ValueError,
-                          utils.dict_of_strings_or_none, {'1': '2', 3: '4'})
-        self.assertRaises(ValueError,
-                          utils.dict_of_strings_or_none, 'foo')
-
-    def test_dt_serializer(self):
-        class Obj(object):
-            foo = utils.dt_serializer('bar')
-
-        obj = Obj()
-        obj.bar = timeutils.parse_isotime('1955-11-05T00:00:00Z')
-        self.assertEqual(obj.foo(), '1955-11-05T00:00:00Z')
-        obj.bar = None
-        self.assertIsNone(obj.foo())
-        obj.bar = 'foo'
-        self.assertRaises(AttributeError, obj.foo)
-
-    def test_dt_deserializer(self):
-        dt = timeutils.parse_isotime('1955-11-05T00:00:00Z')
-        self.assertEqual(utils.dt_deserializer(None, timeutils.isotime(dt)),
-                         dt)
-        self.assertIsNone(utils.dt_deserializer(None, None))
-        self.assertRaises(ValueError, utils.dt_deserializer, None, 'foo')
+class TestObjToPrimitive(test.TestCase):
 
     def test_obj_to_primitive_list(self):
         class MyObjElement(base.NovaObject):
@@ -278,6 +227,9 @@ class TestUtils(test.TestCase):
         obj = TestObject(addr='1.2.3.4', cidr='1.1.1.1/16')
         self.assertEqual({'addr': '1.2.3.4', 'cidr': '1.1.1.1/16'},
                          base.obj_to_primitive(obj))
+
+
+class TestObjMakeList(test.TestCase):
 
     def test_obj_make_list(self):
         class MyList(base.ObjectListBase, base.NovaObject):
@@ -338,6 +290,8 @@ class _BaseTestCase(test.TestCase):
         super(_BaseTestCase, self).setUp()
         self.remote_object_calls = list()
         self.context = context.RequestContext('fake-user', 'fake-project')
+        fake_notifier.stub_notifier(self.stubs)
+        self.addCleanup(fake_notifier.reset)
 
     def compare_obj(self, obj, db_obj, subs=None, allow_missing=None,
                     comparators=None):
@@ -431,6 +385,14 @@ class _RemoteTest(_BaseTestCase):
 
 
 class _TestObject(object):
+    def test_object_attrs_in_init(self):
+        # Spot check a few
+        objects.Instance
+        objects.InstanceInfoCache
+        objects.SecurityGroup
+        # Now check the test one in this file. Should be newest version
+        self.assertEqual('1.6', objects.MyObj.VERSION)
+
     def test_hydration_type_error(self):
         primitive = {'nova_object.name': 'MyObj',
                      'nova_object.namespace': 'nova',
@@ -474,7 +436,7 @@ class _TestObject(object):
     def test_dehydration(self):
         expected = {'nova_object.name': 'MyObj',
                     'nova_object.namespace': 'nova',
-                    'nova_object.version': '1.5',
+                    'nova_object.version': '1.6',
                     'nova_object.data': {'foo': 1}}
         obj = MyObj(foo=1)
         obj.obj_reset_changes()
@@ -522,7 +484,7 @@ class _TestObject(object):
         self.assertEqual(obj.bar, 'loaded!')
         expected = {'nova_object.name': 'MyObj',
                     'nova_object.namespace': 'nova',
-                    'nova_object.version': '1.5',
+                    'nova_object.version': '1.6',
                     'nova_object.changes': ['bar'],
                     'nova_object.data': {'foo': 1,
                                          'bar': 'loaded!'}}
@@ -538,6 +500,14 @@ class _TestObject(object):
         obj2.obj_reset_changes()
         self.assertEqual(obj2.obj_what_changed(), set())
 
+    def test_obj_class_from_name(self):
+        obj = base.NovaObject.obj_class_from_name('MyObj', '1.5')
+        self.assertEqual('1.5', obj.VERSION)
+
+    def test_obj_class_from_name_latest_compatible(self):
+        obj = base.NovaObject.obj_class_from_name('MyObj', '1.1')
+        self.assertEqual('1.6', obj.VERSION)
+
     def test_unknown_objtype(self):
         self.assertRaises(exception.UnsupportedObjectError,
                           base.NovaObject.obj_class_from_name, 'foo', '1.0')
@@ -550,7 +520,7 @@ class _TestObject(object):
             pass
 
         self.assertIsNotNone(error)
-        self.assertEqual('1.5', error.kwargs['supported'])
+        self.assertEqual('1.6', error.kwargs['supported'])
 
     def test_with_alternate_context(self):
         ctxt1 = context.RequestContext('foo', 'foo')
@@ -642,7 +612,7 @@ class _TestObject(object):
                     deleted=False)
         expected = {'nova_object.name': 'MyObj',
                     'nova_object.namespace': 'nova',
-                    'nova_object.version': '1.5',
+                    'nova_object.version': '1.6',
                     'nova_object.changes':
                         ['deleted', 'created_at', 'deleted_at', 'updated_at'],
                     'nova_object.data':
@@ -686,7 +656,7 @@ class _TestObject(object):
 
     def test_object_inheritance(self):
         base_fields = base.NovaPersistentObject.fields.keys()
-        myobj_fields = ['foo', 'bar', 'missing'] + base_fields
+        myobj_fields = ['foo', 'bar', 'missing', 'readonly'] + base_fields
         myobj3_fields = ['new_field']
         self.assertTrue(issubclass(TestSubclassedObject, MyObj))
         self.assertEqual(len(myobj_fields), len(MyObj.fields))
@@ -724,6 +694,12 @@ class _TestObject(object):
         self.assertEqual('abc', obj.bar)
         self.assertEqual(set(['foo', 'bar']), obj.obj_what_changed())
 
+    def test_obj_read_only(self):
+        obj = MyObj(context=self.context, foo=123, bar='abc')
+        obj.readonly = 1
+        self.assertRaises(exception.ReadOnlyFieldError, setattr,
+                          obj, 'readonly', 2)
+
 
 class TestObject(_LocalTest, _TestObject):
     pass
@@ -736,7 +712,7 @@ class TestRemoteObject(_RemoteTest, _TestObject):
                           MyObj2.query, self.context)
 
     def test_minor_version_greater(self):
-        MyObj2.VERSION = '1.6'
+        MyObj2.VERSION = '1.7'
         self.assertRaises(exception.IncompatibleObjectVersion,
                           MyObj2.query, self.context)
 
@@ -857,7 +833,7 @@ class TestObjectSerializer(_BaseTestCase):
         self.assertEqual('backported', result)
         ser._conductor.object_backport.assert_called_with(self.context,
                                                           primitive,
-                                                          '1.5')
+                                                          '1.6')
 
     def test_object_serialization(self):
         ser = base.NovaObjectSerializer()
@@ -881,3 +857,93 @@ class TestObjectSerializer(_BaseTestCase):
             self.assertEqual(1, len(thing2))
             for item in thing2:
                 self.assertIsInstance(item, MyObj)
+
+
+# NOTE(danms): The hashes in this list should only be changed if
+# they come with a corresponding version bump in the affected
+# objects
+object_data = {
+    'Aggregate': '1.1-1d96b82d2f0ad66ad1d49313f08eca71',
+    'AggregateList': '1.1-dbb5bafde58c263c1fd132c33d68ba77',
+    'BlockDeviceMapping': '1.1-d44030deca25ebf8efcb4f3d12429677',
+    'BlockDeviceMappingList': '1.2-d0f559a2510ea2beab5478e5118a69f9',
+    'ComputeNode': '1.3-da09be1ff8b43f9889f2bb4e43b5686e',
+    'ComputeNodeList': '1.2-be44294fa7d0deef6146863836adb1e5',
+    'DNSDomain': '1.0-f0467d23e2c8b567469cdcd6a9708615',
+    'DNSDomainList': '1.0-47ffa72c29119d19fc8d3854ae49f094',
+    'FixedIP': '1.1-121f5e17f0e1a2115a6d93b80a158292',
+    'FixedIPList': '1.1-c944566e2e21af32432d7b7c35018831',
+    'Flavor': '1.0-4f0c857e5bf5627a40d04ba249f9e31b',
+    'FlavorList': '1.0-47ffa72c29119d19fc8d3854ae49f094',
+    'FloatingIP': '1.1-ee1245f7df59fcd081e3bffe3411e822',
+    'FloatingIPList': '1.1-a5c220af1c55f2aa3d2d14771bbca668',
+    'Instance': '1.13-552999d3072d5aa7b31493d3c2ee551e',
+    'InstanceAction': '1.1-abef7ec3247d587bdef78bf47744c6ee',
+    'InstanceActionEvent': '1.1-7c8b9daaf15615c90d6dcc2d26c2c3af',
+    'InstanceActionEventList': '1.0-6f8bfe29181b175400069c8a47f6e618',
+    'InstanceActionList': '1.0-d0f559a2510ea2beab5478e5118a69f9',
+    'InstanceExternalEvent': '1.0-c1b2be346d0ee670ebc0146c65859b1e',
+    'InstanceFault': '1.2-c85a5ecc4f4a82a26c9da95d947a719d',
+    'InstanceFaultList': '1.1-6e250b18ac45ea63a3478a4b365b009f',
+    'InstanceGroup': '1.6-c17ebff3c3453108370362a8f22b8d48',
+    'InstanceGroupList': '1.2-176452f4f090408eb1b9d631957f996b',
+    'InstanceInfoCache': '1.5-04937dde0e8409eb87bc04f3514736ba',
+    'InstanceList': '1.6-086b5de1c23af9e023fa10dd2e8c6a69',
+    'KeyPair': '1.1-30e67207cd4d0a3a044b5805f252a60c',
+    'KeyPairList': '1.0-ab564b050224c1945febb24ce84c9524',
+    'Migration': '1.1-c90e531ec87739decb31026c05100964',
+    'MigrationList': '1.1-add1d472f38ee759f9d717b9824e07a4',
+    'MyObj': '1.6-f441a9b820e323c45b92d66d2f9ebbf2',
+    'Network': '1.1-faba26d0290395456f9a040584c4364b',
+    'NetworkList': '1.1-eaafb55cf6b571581df685127cd687c1',
+    'OtherTestableObject': '1.0-b43ae164bcf53764db6a54270af71b86',
+    'PciDevice': '1.1-637f3dddb48197d2a69e41bd1144a3c5',
+    'PciDeviceList': '1.0-80491949ec8ac90cbbd1ea153adcb4ef',
+    'Quotas': '1.0-759987de0abbb6e4428bba7c6bdf8e9e',
+    'QuotasNoOp': '1.0-c25493f36b5df1d1f0a1077a610495cd',
+    'SecurityGroup': '1.1-0a71e19e0b5bd790e6bf882afcb71d4c',
+    'SecurityGroupList': '1.0-ae82c19e66b17d506e25f8d49576db1f',
+    'SecurityGroupRule': '1.0-96cdebd0294fd834e3e4249238c76eb9',
+    'SecurityGroupRuleList': '1.0-790df2265ff6d41794f60decdf9dd080',
+    'Service': '1.2-16a7d0f0d41e423deefb804ca2aeb51d',
+    'ServiceList': '1.0-35c5e3a116de08c1655d5fc3ecbe6549',
+    'TestableObject': '1.0-b43ae164bcf53764db6a54270af71b86',
+    'TestSubclassedObject': '1.6-cd6574f48c2bc3ccebe7306a06dfaa1c',
+    'VirtualInterface': '1.0-022c3e84a172f8302a0f8c4407bc92a2',
+    'VirtualInterfaceList': '1.0-59568968ee1ac0e796c7ebbf8354d65d',
+    'VolumeMapping': '1.0-b97464d4e338688d04a46d5c1740423d',
+    }
+
+
+class TestObjectVersions(test.TestCase):
+    def _get_fingerprint(self, obj_class):
+        fields = obj_class.fields.items()
+        methods = {}
+        for name in dir(obj_class):
+            thing = getattr(obj_class, name)
+            if inspect.ismethod(thing) and hasattr(thing, 'remotable'):
+                methods[name] = inspect.getargspec(thing)
+        # NOTE(danms): Things that need a version bump are any fields
+        # and their types, or the signatures of any remotable methods.
+        # Of course, these are just the mechanical changes we can detect,
+        # but many other things may require a version bump (method behavior
+        # and return value changes, for example).
+        relevant_data = {'fields': fields,
+                         'methods': methods,
+                         }
+        return '%s-%s' % (obj_class.VERSION,
+                          hashlib.md5(str(relevant_data)).hexdigest())
+
+    def _test_versions_cls(self, obj_name):
+        obj_class = base.NovaObject._obj_classes[obj_name][0]
+        expected_fingerprint = object_data.get(obj_name, 'unknown')
+        actual_fingerprint = self._get_fingerprint(obj_class)
+
+        self.assertEqual(
+            expected_fingerprint, actual_fingerprint,
+            ('%s object has changed; please make sure the version '
+             'has been bumped, and then update this hash') % obj_name)
+
+    def test_versions(self):
+        for obj_name in base.NovaObject._obj_classes:
+            self._test_versions_cls(obj_name)

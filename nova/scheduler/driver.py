@@ -25,7 +25,6 @@ from oslo.config import cfg
 
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
-from nova.conductor import api as conductor_api
 from nova import db
 from nova import exception
 from nova import notifications
@@ -68,7 +67,6 @@ def handle_schedule_error(context, ex, instance_uuid, request_spec):
     notifications.send_update(context, old_ref, new_ref,
             service="scheduler")
     compute_utils.add_instance_fault_from_exc(context,
-            conductor_api.LocalAPI(),
             new_ref, ex, sys.exc_info())
 
     properties = request_spec.get('instance_properties', {})
@@ -116,6 +114,8 @@ class Scheduler(object):
                 for service in services
                 if self.servicegroup_api.service_is_up(service)]
 
+    # NOTE(alaski): Remove this method when the scheduler rpc interface is
+    # bumped to 4.x as it is no longer used.
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,

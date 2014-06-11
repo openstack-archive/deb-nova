@@ -35,9 +35,10 @@ class DbDriver(api.ServiceGroupDriver):
     def __init__(self, *args, **kwargs):
         self.db_allowed = kwargs.get('db_allowed', True)
         self.conductor_api = conductor.API(use_local=self.db_allowed)
+        self.service_down_time = CONF.service_down_time
 
     def join(self, member_id, group_id, service=None):
-        """Join the given service with it's group."""
+        """Join the given service with its group."""
 
         msg = _('DB_Driver: join new ServiceGroup member %(member_id)s to '
                     'the %(group_id)s group, service = %(service)s')
@@ -67,14 +68,17 @@ class DbDriver(api.ServiceGroupDriver):
             last_heartbeat = last_heartbeat.replace(tzinfo=None)
         # Timestamps in DB are UTC.
         elapsed = timeutils.delta_seconds(last_heartbeat, timeutils.utcnow())
-        LOG.debug('DB_Driver.is_up last_heartbeat = %(lhb)s elapsed = %(el)s',
-                  {'lhb': str(last_heartbeat), 'el': str(elapsed)})
-        return abs(elapsed) <= CONF.service_down_time
+        is_up = abs(elapsed) <= self.service_down_time
+        if not is_up:
+            msg = _('Seems service is down. Last heartbeat was %(lhb)s. '
+                    'Elapsed time is %(el)s')
+            LOG.debug(msg, {'lhb': str(last_heartbeat), 'el': str(elapsed)})
+        return is_up
 
     def get_all(self, group_id):
         """Returns ALL members of the given group
         """
-        LOG.debug(_('DB_Driver: get_all members of the %s group') % group_id)
+        LOG.debug('DB_Driver: get_all members of the %s group', group_id)
         rs = []
         ctxt = context.get_admin_context()
         services = self.conductor_api.service_get_all_by_topic(ctxt, group_id)

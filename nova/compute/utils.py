@@ -28,10 +28,11 @@ from nova.compute import task_states
 from nova import exception
 from nova.network import model as network_model
 from nova import notifications
-from nova.objects import instance as instance_obj
+from nova.objects import base as obj_base
+from nova.objects import instance_action as instance_action_obj
+from nova.objects import instance_fault as instance_fault_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log
-from nova.openstack.common import timeutils
 from nova import rpc
 from nova import utils
 from nova.virt import driver
@@ -82,63 +83,16 @@ def _get_fault_details(exc_info, error_code):
     return unicode(details)
 
 
-def add_instance_fault_from_exc(context, conductor,
-                                instance, fault, exc_info=None):
+def add_instance_fault_from_exc(context, instance, fault, exc_info=None):
     """Adds the specified fault to the database."""
 
-    fault_dict = exception_to_dict(fault)
-    code = fault_dict["code"]
-    details = _get_fault_details(exc_info, code)
-
-    values = {
-        'instance_uuid': instance['uuid'],
-        'code': code,
-        'message': fault_dict["message"],
-        'details': details,
-        'host': CONF.host
-    }
-    conductor.instance_fault_create(context, values)
-
-
-def pack_action_start(context, instance_uuid, action_name):
-    values = {'action': action_name,
-              'instance_uuid': instance_uuid,
-              'request_id': context.request_id,
-              'user_id': context.user_id,
-              'project_id': context.project_id,
-              'start_time': context.timestamp}
-    return values
-
-
-def pack_action_finish(context, instance_uuid):
-    values = {'instance_uuid': instance_uuid,
-              'request_id': context.request_id,
-              'finish_time': timeutils.utcnow()}
-    return values
-
-
-def pack_action_event_start(context, instance_uuid, event_name):
-    values = {'event': event_name,
-              'instance_uuid': instance_uuid,
-              'request_id': context.request_id,
-              'start_time': timeutils.utcnow()}
-    return values
-
-
-def pack_action_event_finish(context, instance_uuid, event_name, exc_val=None,
-                             exc_tb=None):
-    values = {'event': event_name,
-              'instance_uuid': instance_uuid,
-              'request_id': context.request_id,
-              'finish_time': timeutils.utcnow()}
-    if exc_tb is None:
-        values['result'] = 'Success'
-    else:
-        values['result'] = 'Error'
-        values['message'] = str(exc_val)
-        values['traceback'] = ''.join(traceback.format_tb(exc_tb))
-
-    return values
+    fault_obj = instance_fault_obj.InstanceFault(context=context)
+    fault_obj.host = CONF.host
+    fault_obj.instance_uuid = instance['uuid']
+    fault_obj.update(exception_to_dict(fault))
+    code = fault_obj.code
+    fault_obj.details = _get_fault_details(exc_info, code)
+    fault_obj.create()
 
 
 def get_device_name_for_instance(context, instance, bdms, device):
@@ -205,7 +159,7 @@ def get_next_device_name(instance, device_name_list,
         prefix = '/dev/xvd'
 
     if req_prefix != prefix:
-        LOG.debug(_("Using %(prefix)s instead of %(req_prefix)s"),
+        LOG.debug("Using %(prefix)s instead of %(req_prefix)s",
                   {'prefix': prefix, 'req_prefix': req_prefix})
 
     used_letters = set()
@@ -245,13 +199,14 @@ def _get_unused_letter(used_letters):
     return letters[0]
 
 
-def get_image_metadata(context, image_service, image_id, instance):
+def get_image_metadata(context, image_api, image_id_or_uri, instance):
     # If the base image is still available, get its metadata
     try:
-        image = image_service.show(context, image_id)
+        image = image_api.get(context, image_id_or_uri)
     except Exception as e:
         LOG.warning(_("Can't access image %(image_id)s: %(error)s"),
-                    {"image_id": image_id, "error": e}, instance=instance)
+                    {"image_id": image_id_or_uri, "error": e},
+                    instance=instance)
         image_system_meta = {}
     else:
         flavor = flavors.extract_flavor(instance)
@@ -332,8 +287,7 @@ def notify_about_instance_usage(notifier, context, instance, event_suffix,
     if fault:
         # NOTE(johngarbutt) mirrors the format in wrap_exception
         fault_payload = exception_to_dict(fault)
-        LOG.debug(fault_payload["message"], instance=instance,
-                  exc_info=True)
+        LOG.debug(fault_payload["message"], instance=instance)
         usage_info.update(fault_payload)
 
     if event_suffix.endswith("error"):
@@ -354,8 +308,8 @@ def notify_about_aggregate_update(context, event_suffix, aggregate_payload):
     if not aggregate_identifier:
         aggregate_identifier = aggregate_payload.get('name', None)
         if not aggregate_identifier:
-            LOG.debug(_("No aggregate id or name specified for this "
-                        "notification and it will be ignored"))
+            LOG.debug("No aggregate id or name specified for this "
+                      "notification and it will be ignored")
             return
 
     notifier = rpc.get_notifier(service='aggregate',
@@ -384,7 +338,7 @@ def notify_about_host_update(context, event_suffix, host_payload):
 
 
 def get_nw_info_for_instance(instance):
-    if isinstance(instance, instance_obj.Instance):
+    if isinstance(instance, obj_base.NovaObject):
         if instance.info_cache is None:
             return network_model.NetworkInfo.hydrate([])
         return instance.info_cache.network_info
@@ -463,23 +417,49 @@ def get_reboot_type(task_state, current_power_state):
 class EventReporter(object):
     """Context manager to report instance action events."""
 
-    def __init__(self, context, conductor, event_name, *instance_uuids):
+    def __init__(self, context, event_name, *instance_uuids):
         self.context = context
-        self.conductor = conductor
         self.event_name = event_name
         self.instance_uuids = instance_uuids
 
     def __enter__(self):
         for uuid in self.instance_uuids:
-            event = pack_action_event_start(self.context, uuid,
-                                            self.event_name)
-            self.conductor.action_event_start(self.context, event)
+            instance_action_obj.InstanceActionEvent.event_start(
+                self.context, uuid, self.event_name, want_result=False)
 
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         for uuid in self.instance_uuids:
-            event = pack_action_event_finish(self.context, uuid,
-                                             self.event_name, exc_val, exc_tb)
-            self.conductor.action_event_finish(self.context, event)
+            instance_action_obj.InstanceActionEvent.event_finish_with_failure(
+                self.context, uuid, self.event_name, exc_val=exc_val,
+                exc_tb=exc_tb, want_result=False)
         return False
+
+
+def periodic_task_spacing_warn(config_option_name):
+    """Decorator to warn about an upcoming breaking change in methods which
+    use the @periodic_task decorator.
+
+    Some methods using the @periodic_task decorator specify spacing=0 or
+    None to mean "do not call this method", but the decorator itself uses
+    0/None to mean "call at the default rate".
+
+    Starting with the K release the Nova methods will be changed to conform
+    to the Oslo decorator.  This decorator should be present wherever a
+    spacing value from user-supplied config is passed to @periodic_task, and
+    there is also a check to skip the method if the value is zero.  It will
+    log a warning if the spacing value from config is 0/None.
+    """
+    # TODO(gilliard) remove this decorator, its usages and the early returns
+    # near them after the K release.
+    def wrapper(f):
+        if (hasattr(f, "_periodic_spacing") and
+                (f._periodic_spacing == 0 or f._periodic_spacing is None)):
+            LOG.warning(_("Value of 0 or None specified for %s."
+                " This behaviour will change in meaning in the K release, to"
+                " mean 'call at the default rate' rather than 'do not call'."
+                " To keep the 'do not call' behaviour, use a negative value."),
+                config_option_name)
+        return f
+    return wrapper

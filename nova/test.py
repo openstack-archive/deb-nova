@@ -42,6 +42,7 @@ from nova import db
 from nova.db import migration
 from nova.db.sqlalchemy import api as session
 from nova.network import manager as network_manager
+from nova import objects
 from nova.objects import base as objects_base
 from nova.openstack.common.fixture import logging as log_fixture
 from nova.openstack.common.fixture import moxstubout
@@ -52,6 +53,7 @@ from nova import rpc
 from nova import service
 from nova.tests import conf_fixture
 from nova.tests import policy_fixture
+from nova import utils
 
 
 test_opts = [
@@ -71,6 +73,11 @@ CONF.import_opt('enabled', 'nova.api.openstack', group='osapi_v3')
 CONF.set_override('use_stderr', False)
 
 nova_logging.setup('nova')
+
+# NOTE(comstud): Make sure we have all of the objects loaded. We do this
+# at module import time, because we may be using mock decorators in our
+# tests that run at import time.
+objects.register_all()
 
 _DB_CACHE = None
 _TRUE_VALUES = ('True', 'true', '1', 'yes')
@@ -269,7 +276,7 @@ class TestCase(testtools.TestCase):
 
         # Collect logs
         fs = '%(levelname)s [%(name)s] %(message)s'
-        fake = self.useFixture(fixtures.FakeLogger(format=fs, level=None))
+        self.useFixture(fixtures.FakeLogger(format=fs, level=None))
         root.handlers[0].setLevel(level)
 
         if level > logging.DEBUG:
@@ -304,6 +311,11 @@ class TestCase(testtools.TestCase):
         self._base_test_obj_backup = copy.copy(
             objects_base.NovaObject._obj_classes)
         self.addCleanup(self._restore_obj_registry)
+
+        # NOTE(mnaser): All calls to utils.is_neutron() are cached in
+        # nova.utils._IS_NEUTRON.  We set it to None to avoid any
+        # caching of that value.
+        utils._IS_NEUTRON = None
 
         mox_fixture = self.useFixture(moxstubout.MoxStubout())
         self.mox = mox_fixture.mox

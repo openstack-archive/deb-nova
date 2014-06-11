@@ -97,7 +97,7 @@ class FloatingIP(object):
                                                   interface,
                                                   fixed_ip.network)
                 except processutils.ProcessExecutionError:
-                    LOG.debug(_('Interface %s not found'), interface)
+                    LOG.debug('Interface %s not found', interface)
                     raise exception.NoFloatingIpInterface(interface=interface)
 
     def allocate_for_instance(self, context, **kwargs):
@@ -111,7 +111,6 @@ class FloatingIP(object):
         if not uuidutils.is_uuid_like(instance_uuid):
             instance_uuid = kwargs.get('instance_uuid')
         project_id = kwargs.get('project_id')
-        requested_networks = kwargs.get('requested_networks')
         # call the next inherited class's allocate_for_instance()
         # which is currently the NetworkManager version
         # do this first so fixed ip is already allocated
@@ -121,9 +120,9 @@ class FloatingIP(object):
             # allocate a floating ip
             floating_address = self.allocate_floating_ip(context, project_id,
                 True)
-            LOG.debug(_("floating IP allocation for instance "
-                        "|%s|"), floating_address,
-                        instance_uuid=instance_uuid, context=context)
+            LOG.debug("floating IP allocation for instance "
+                      "|%s|", floating_address,
+                      instance_uuid=instance_uuid, context=context)
 
             # get the first fixed address belonging to the instance
             fixed_ips = nw_info.fixed_ips()
@@ -199,13 +198,13 @@ class FloatingIP(object):
             if floating_ip.project_id is None:
                 LOG.warn(_('Address |%(address)s| is not allocated'),
                            {'address': floating_ip.address})
-                raise exception.NotAuthorized()
+                raise exception.Forbidden()
             else:
                 LOG.warn(_('Address |%(address)s| is not allocated to your '
                            'project |%(project)s|'),
                            {'address': floating_ip.address,
                            'project': context.project_id})
-                raise exception.NotAuthorized()
+                raise exception.Forbidden()
 
     def allocate_floating_ip(self, context, project_id, auto_assigned=False,
                              pool=None):
@@ -284,11 +283,17 @@ class FloatingIP(object):
             LOG.exception(_("Failed to update usages deallocating "
                             "floating IP"))
 
-        floating_ip_obj.FloatingIP.deallocate(context, address)
-
-        # Commit the reservations
-        if reservations:
-            QUOTAS.commit(context, reservations, project_id=project_id)
+        floating_ip_ref = floating_ip_obj.FloatingIP.deallocate(context,
+                                                                address)
+        # floating_ip_ref will be None if concurrently another
+        # API call has also deallocated the same floating ip
+        if floating_ip_ref is None:
+            if reservations:
+                QUOTAS.rollback(context, reservations, project_id=project_id)
+        else:
+            # Commit the reservations
+            if reservations:
+                QUOTAS.commit(context, reservations, project_id=project_id)
 
     @messaging.expected_exceptions(exception.FloatingIpNotFoundForAddress)
     def associate_floating_ip(self, context, floating_address, fixed_address,
@@ -372,7 +377,7 @@ class FloatingIP(object):
                 self.l3driver.add_floating_ip(floating_address, fixed_address,
                         interface, fixed['network'])
             except processutils.ProcessExecutionError as e:
-                with excutils.save_and_reraise_exception() as exc_ctxt:
+                with excutils.save_and_reraise_exception():
                     try:
                         floating_ip_obj.FloatingIP.disassociate(
                             context, floating_address)
@@ -532,7 +537,7 @@ class FloatingIP(object):
     def _is_stale_floating_ip_address(self, context, floating_ip):
         try:
             self._floating_ip_owned_by_project(context, floating_ip)
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             return True
         return False if floating_ip.get('fixed_ip_id') else True
 

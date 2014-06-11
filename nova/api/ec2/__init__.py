@@ -123,7 +123,7 @@ class RequestLogging(wsgi.Middleware):
             request.user_agent,
             request.content_type,
             response.content_type,
-            context=ctxt)
+            context=ctxt)    # noqa
 
 
 class Lockout(wsgi.Middleware):
@@ -320,9 +320,9 @@ class Requestify(wsgi.Middleware):
         except exception.InvalidRequest as err:
             raise webob.exc.HTTPBadRequest(explanation=unicode(err))
 
-        LOG.debug(_('action: %s'), action)
+        LOG.debug('action: %s', action)
         for key, value in args.items():
-            LOG.debug(_('arg: %(key)s\t\tval: %(value)s'),
+            LOG.debug('arg: %(key)s\t\tval: %(value)s',
                       {'key': key, 'value': value})
 
         # Success!
@@ -488,22 +488,17 @@ def ec2_error_ex(ex, req, code=None, message=None, unexpected=False):
 
     if unexpected:
         log_fun = LOG.error
-        if ex.args and status < 500:
-            log_msg = _("Unexpected %(ex_name)s raised: %(ex_str)s")
-        else:
-            log_msg = _("Unexpected %(ex_name)s raised")
+        log_msg = _("Unexpected %(ex_name)s raised: %(ex_str)s")
     else:
         log_fun = LOG.debug
-        if ex.args:
-            log_msg = _("%(ex_name)s raised: %(ex_str)s")
-        else:
-            log_msg = _("%(ex_name)s raised")
+        log_msg = _("%(ex_name)s raised: %(ex_str)s")
         # NOTE(jruzicka): For compatibility with EC2 API, treat expected
         # exceptions as client (4xx) errors. The exception error code is 500
         # by default and most exceptions inherit this from NovaException even
         # though they are actually client errors in most cases.
         if status >= 500:
             status = 400
+
     context = req.environ['nova.context']
     request_id = context.request_id
     log_msg_args = {
@@ -567,7 +562,7 @@ class Executor(wsgi.Application):
                 exception.MissingParameter,
                 exception.NoFloatingIpInterface,
                 exception.NoMoreFixedIps,
-                exception.NotAuthorized,
+                exception.Forbidden,
                 exception.QuotaError,
                 exception.SecurityGroupExists,
                 exception.SecurityGroupLimitExceeded,

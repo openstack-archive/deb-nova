@@ -15,12 +15,12 @@
 
 import webob.exc
 
+from nova.api.openstack import common
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
-from nova.openstack.common.gettextutils import _
 
 
 authorize = extensions.extension_authorizer('compute', 'server_diagnostics')
@@ -44,11 +44,14 @@ class ServerDiagnosticsController(object):
         compute_api = compute.API()
         try:
             instance = compute_api.get(context, server_id, want_objects=True)
-        except exception.NotFound():
-            msg = _("Instance not found")
-            raise webob.exc.HTTPNotFound(explanation=msg)
+        except exception.InstanceNotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
-        return compute_api.get_diagnostics(context, instance)
+        try:
+            return compute_api.get_diagnostics(context, instance)
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'get_diagnostics')
 
 
 class Server_diagnostics(extensions.ExtensionDescriptor):
@@ -58,7 +61,7 @@ class Server_diagnostics(extensions.ExtensionDescriptor):
     alias = "os-server-diagnostics"
     namespace = ("http://docs.openstack.org/compute/ext/"
                  "server-diagnostics/api/v1.1")
-    updated = "2011-12-21T00:00:00+00:00"
+    updated = "2011-12-21T00:00:00Z"
 
     def get_resources(self):
         parent_def = {'member_name': 'server', 'collection_name': 'servers'}

@@ -14,7 +14,6 @@
 #    under the License.
 
 from nova import db
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -39,12 +38,12 @@ class AggregateMultiTenancyIsolation(filters.BaseHostFilter):
         props = spec.get('instance_properties', {})
         tenant_id = props.get('project_id')
 
-        context = filter_properties['context'].elevated()
+        context = filter_properties['context']
         metadata = db.aggregate_metadata_get_by_host(context, host_state.host,
                                                      key="filter_tenant_id")
 
         if metadata != {}:
             if tenant_id not in metadata["filter_tenant_id"]:
-                LOG.debug(_("%s fails tenant id on aggregate"), host_state)
+                LOG.debug("%s fails tenant id on aggregate", host_state)
                 return False
         return True

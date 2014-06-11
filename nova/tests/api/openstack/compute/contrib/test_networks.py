@@ -15,6 +15,7 @@
 #    under the License.
 
 import copy
+import datetime
 import math
 import uuid
 
@@ -36,7 +37,7 @@ FAKE_NETWORKS = [
     {
         'bridge': 'br100', 'vpn_public_port': 1000,
         'dhcp_start': '10.0.0.3', 'bridge_interface': 'eth0',
-        'updated_at': '2011-08-16 09:26:13.048257',
+        'updated_at': datetime.datetime(2011, 8, 16, 9, 26, 13, 48257),
         'id': 1, 'uuid': '20c8acc0-f747-4d71-a389-46d078ebf047',
         'cidr_v6': None, 'deleted_at': None,
         'gateway': '10.0.0.1', 'label': 'mynet_0',
@@ -48,7 +49,7 @@ FAKE_NETWORKS = [
         'vpn_public_address': '127.0.0.1', 'multi_host': False,
         'dns1': None, 'dns2': None, 'host': 'nsokolov-desktop',
         'gateway_v6': None, 'netmask_v6': None, 'priority': None,
-        'created_at': '2011-08-15 06:19:19.387525',
+        'created_at': datetime.datetime(2011, 8, 15, 6, 19, 19, 387525),
     },
     {
         'bridge': 'br101', 'vpn_public_port': 1001,
@@ -63,7 +64,7 @@ FAKE_NETWORKS = [
         'cidr': '10.0.0.10/29', 'vpn_public_address': None,
         'multi_host': False, 'dns1': None, 'dns2': None, 'host': None,
         'gateway_v6': None, 'netmask_v6': None, 'priority': None,
-        'created_at': '2011-08-15 06:19:19.885495',
+        'created_at': datetime.datetime(2011, 8, 15, 6, 19, 19, 885495),
     },
 ]
 
@@ -105,6 +106,8 @@ class FakeNetworkAPI(object):
         self._vlan_is_disabled = True
 
     def delete(self, context, network_id):
+        if network_id == -1:
+            raise exception.NetworkInUse(network_id=network_id)
         for i, network in enumerate(self.networks):
             if network['id'] == network_id:
                 del self.networks[0]
@@ -203,7 +206,6 @@ class NetworksTest(test.NoDBTestCase):
         self.associate_controller = networks_associate\
             .NetworkAssociateActionController(self.fake_network_api)
         fakes.stub_out_networking(self.stubs)
-        nova.utils.reset_is_neutron()
         fakes.stub_out_rate_limiting(self.stubs)
 
     @staticmethod
@@ -303,6 +305,11 @@ class NetworksTest(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/1234/os-networks/100')
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.controller.delete, req, 100)
+
+    def test_network_delete_in_use(self):
+        req = fakes.HTTPRequest.blank('/v2/1234/os-networks/-1')
+        self.assertRaises(webob.exc.HTTPConflict,
+                          self.controller.delete, req, -1)
 
     def test_network_add_vlan_disabled(self):
         self.fake_network_api.disable_vlan()

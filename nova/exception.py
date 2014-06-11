@@ -123,7 +123,7 @@ class NovaException(Exception):
                 # log the issue and the kwargs
                 LOG.exception(_('Exception in string format operation'))
                 for name, value in kwargs.iteritems():
-                    LOG.error("%s: %s" % (name, value))
+                    LOG.error("%s: %s" % (name, value))    # noqa
 
                 if CONF.fatal_exception_format_errors:
                     raise exc_info[0], exc_info[1], exc_info[2]
@@ -161,17 +161,21 @@ class GlanceConnectionFailed(NovaException):
         "%(reason)s")
 
 
-class NotAuthorized(NovaException):
+class CinderConnectionFailed(NovaException):
+    msg_fmt = _("Connection to cinder host failed: %(reason)s")
+
+
+class Forbidden(NovaException):
     ec2_code = 'AuthFailure'
     msg_fmt = _("Not authorized.")
     code = 403
 
 
-class AdminRequired(NotAuthorized):
+class AdminRequired(Forbidden):
     msg_fmt = _("User does not have admin privileges")
 
 
-class PolicyNotAuthorized(NotAuthorized):
+class PolicyNotAuthorized(Forbidden):
     msg_fmt = _("Policy doesn't allow %(action)s to be performed.")
 
 
@@ -625,7 +629,7 @@ class NetworkRequiresSubnet(Invalid):
                 " instances on.")
 
 
-class ExternalNetworkAttachForbidden(NotAuthorized):
+class ExternalNetworkAttachForbidden(Forbidden):
     msg_fmt = _("It is not allowed to create an interface on "
                 "external network %(network_uuid)s")
 
@@ -1062,6 +1066,10 @@ class InvalidLocalStorage(NovaException):
     msg_fmt = _("%(path)s is not on local storage: %(reason)s")
 
 
+class StorageError(NovaException):
+    msg_fmt = _("Storage error: %(reason)s")
+
+
 class MigrationError(NovaException):
     msg_fmt = _("Migration error: %(reason)s")
 
@@ -1377,8 +1385,16 @@ class IncompatibleObjectVersion(NovaException):
     msg_fmt = _('Version %(objver)s of %(objname)s is not supported')
 
 
+class ReadOnlyFieldError(NovaException):
+    msg_fmt = _('Cannot modify readonly field %(field)s')
+
+
 class ObjectActionError(NovaException):
     msg_fmt = _('Object action %(action)s failed because: %(reason)s')
+
+
+class ObjectFieldInvalid(NovaException):
+    msg_fmt = _('Field %(field)s of %(objname)s is not an instance of Field')
 
 
 class CoreAPIMissing(NovaException):
@@ -1526,6 +1542,10 @@ class KeyManagerError(NovaException):
     msg_fmt = _("Key manager error: %(reason)s")
 
 
+class VolumesNotRemoved(Invalid):
+    msg_fmt = _("Failed to remove volume(s): (%(reason)s)")
+
+
 class InvalidVideoMode(Invalid):
     msg_fmt = _("Provided video model (%(model)s) is not supported.")
 
@@ -1547,3 +1567,7 @@ class InvalidWatchdogAction(Invalid):
 class NoBlockMigrationForConfigDriveInLibVirt(NovaException):
     msg_fmt = _("Block migration of instances with config drives is not "
                 "supported in libvirt.")
+
+
+class UnshelveException(NovaException):
+    msg_fmt = _("Error during unshelve instance %(instance_id)s: %(reason)s")

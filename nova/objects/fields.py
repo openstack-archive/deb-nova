@@ -117,10 +117,21 @@ class UnspecifiedDefault(object):
 
 
 class Field(object):
-    def __init__(self, field_type, nullable=False, default=UnspecifiedDefault):
+    def __init__(self, field_type, nullable=False,
+                 default=UnspecifiedDefault, read_only=False):
         self._type = field_type
         self._nullable = nullable
         self._default = default
+        self._read_only = read_only
+
+    def __repr__(self):
+        args = {
+            'nullable': self._nullable,
+            'default': self._default,
+            }
+        return '%s(%s)' % (self._type.__class__.__name__,
+                           ','.join(['%s=%s' % (k, v)
+                                     for k, v in args.items()]))
 
     @property
     def nullable(self):
@@ -129,6 +140,10 @@ class Field(object):
     @property
     def default(self):
         return self._default
+
+    @property
+    def read_only(self):
+        return self._read_only
 
     def _null(self, obj, attr):
         if self.nullable:
@@ -246,11 +261,16 @@ class DateTime(FieldType):
     @staticmethod
     def coerce(obj, attr, value):
         if isinstance(value, six.string_types):
+            # NOTE(danms): Being tolerant of isotime strings here will help us
+            # during our objects transition
             value = timeutils.parse_isotime(value)
         elif not isinstance(value, datetime.datetime):
             raise ValueError(_('A datetime.datetime is required here'))
 
         if value.utcoffset() is None:
+            # NOTE(danms): Legacy objects from sqlalchemy are stored in UTC,
+            # but are returned without a timezone attached.
+            # As a transitional aid, assume a tz-naive object is in UTC.
             value = value.replace(tzinfo=iso8601.iso8601.Utc())
         return value
 
@@ -474,6 +494,10 @@ class IPV4AddressField(AutoTypedField):
 
 class IPV6AddressField(AutoTypedField):
     AUTO_TYPE = IPV6Address()
+
+
+class IPV4AndV6AddressField(AutoTypedField):
+    AUTO_TYPE = IPV4AndV6Address()
 
 
 class IPNetworkField(AutoTypedField):

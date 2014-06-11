@@ -24,14 +24,15 @@ from nova.compute import api as compute_api
 from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception
-from nova.openstack.common import policy
+from nova.openstack.common import policy as common_policy
+from nova import policy
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import fake_instance
-from nova.tests import fake_instance_actions
+from nova.tests import fake_server_actions
 
-FAKE_UUID = fake_instance_actions.FAKE_UUID
-FAKE_REQUEST_ID = fake_instance_actions.FAKE_REQUEST_ID1
+FAKE_UUID = fake_server_actions.FAKE_UUID
+FAKE_REQUEST_ID = fake_server_actions.FAKE_REQUEST_ID1
 
 
 def format_action(action):
@@ -71,9 +72,9 @@ class InstanceActionsPolicyTest(test.NoDBTestCase):
         self.controller = instance_actions.InstanceActionsController()
 
     def test_list_actions_restricted_by_project(self):
-        rules = policy.Rules({'compute:get': policy.parse_rule(''),
-                              'compute_extension:instance_actions':
-                               policy.parse_rule('project_id:%(project_id)s')})
+        rules = {'compute:get': common_policy.parse_rule(''),
+                 'compute_extension:instance_actions':
+                     common_policy.parse_rule('project_id:%(project_id)s')}
         policy.set_rules(rules)
 
         def fake_instance_get_by_uuid(context, instance_id,
@@ -85,13 +86,13 @@ class InstanceActionsPolicyTest(test.NoDBTestCase):
 
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get_by_uuid)
         req = fakes.HTTPRequest.blank('/v2/123/servers/12/os-instance-actions')
-        self.assertRaises(exception.NotAuthorized, self.controller.index, req,
+        self.assertRaises(exception.Forbidden, self.controller.index, req,
                           str(uuid.uuid4()))
 
     def test_get_action_restricted_by_project(self):
-        rules = policy.Rules({'compute:get': policy.parse_rule(''),
-                              'compute_extension:instance_actions':
-                               policy.parse_rule('project_id:%(project_id)s')})
+        rules = {'compute:get': common_policy.parse_rule(''),
+                 'compute_extension:instance_actions':
+                     common_policy.parse_rule('project_id:%(project_id)s')}
         policy.set_rules(rules)
 
         def fake_instance_get_by_uuid(context, instance_id,
@@ -104,7 +105,7 @@ class InstanceActionsPolicyTest(test.NoDBTestCase):
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get_by_uuid)
         req = fakes.HTTPRequest.blank(
                                     '/v2/123/servers/12/os-instance-actions/1')
-        self.assertRaises(exception.NotAuthorized, self.controller.show, req,
+        self.assertRaises(exception.Forbidden, self.controller.show, req,
                           str(uuid.uuid4()), '1')
 
 
@@ -112,10 +113,11 @@ class InstanceActionsTest(test.NoDBTestCase):
     def setUp(self):
         super(InstanceActionsTest, self).setUp()
         self.controller = instance_actions.InstanceActionsController()
-        self.fake_actions = copy.deepcopy(fake_instance_actions.FAKE_ACTIONS)
-        self.fake_events = copy.deepcopy(fake_instance_actions.FAKE_EVENTS)
+        self.fake_actions = copy.deepcopy(fake_server_actions.FAKE_ACTIONS)
+        self.fake_events = copy.deepcopy(fake_server_actions.FAKE_EVENTS)
 
-        def fake_get(self, context, instance_uuid):
+        def fake_get(self, context, instance_uuid, expected_attrs=None,
+                     want_objects=False):
             return {'uuid': instance_uuid}
 
         def fake_instance_get_by_uuid(context, instance_id, use_slave=False):
@@ -175,11 +177,11 @@ class InstanceActionsTest(test.NoDBTestCase):
 
         self.stubs.Set(db, 'action_get_by_request_id', fake_get_action)
         self.stubs.Set(db, 'action_events_get', fake_get_events)
-        rules = policy.Rules({'compute:get': policy.parse_rule(''),
-                              'compute_extension:instance_actions':
-                                policy.parse_rule(''),
-                              'compute_extension:instance_actions:events':
-                                policy.parse_rule('is_admin:True')})
+        rules = {'compute:get': common_policy.parse_rule(''),
+                 'compute_extension:instance_actions':
+                     common_policy.parse_rule(''),
+                 'compute_extension:instance_actions:events':
+                     common_policy.parse_rule('is_admin:True')}
         policy.set_rules(rules)
         req = fakes.HTTPRequest.blank(
                                 '/v2/123/servers/12/os-instance-actions/1')
@@ -198,20 +200,31 @@ class InstanceActionsTest(test.NoDBTestCase):
         self.assertRaises(exc.HTTPNotFound, self.controller.show, req,
                           FAKE_UUID, FAKE_REQUEST_ID)
 
-    def test_instance_not_found(self):
-        def fake_get(self, context, instance_uuid):
+    def test_index_instance_not_found(self):
+        def fake_get(self, context, instance_uuid, expected_attrs=None,
+                     want_objects=False):
             raise exception.InstanceNotFound(instance_id=instance_uuid)
         self.stubs.Set(compute_api.API, 'get', fake_get)
         req = fakes.HTTPRequest.blank('/v2/123/servers/12/os-instance-actions')
         self.assertRaises(exc.HTTPNotFound, self.controller.index, req,
                           FAKE_UUID)
 
+    def test_show_instance_not_found(self):
+        def fake_get(self, context, instance_uuid, expected_attrs=None,
+                     want_objects=False):
+            raise exception.InstanceNotFound(instance_id=instance_uuid)
+        self.stubs.Set(compute_api.API, 'get', fake_get)
+        req = fakes.HTTPRequest.blank(
+            '/v2/123/servers/12/os-instance-actions/fake')
+        self.assertRaises(exc.HTTPNotFound, self.controller.show, req,
+                          FAKE_UUID, 'fake')
+
 
 class InstanceActionsSerializerTest(test.NoDBTestCase):
     def setUp(self):
         super(InstanceActionsSerializerTest, self).setUp()
-        self.fake_actions = copy.deepcopy(fake_instance_actions.FAKE_ACTIONS)
-        self.fake_events = copy.deepcopy(fake_instance_actions.FAKE_EVENTS)
+        self.fake_actions = copy.deepcopy(fake_server_actions.FAKE_ACTIONS)
+        self.fake_events = copy.deepcopy(fake_server_actions.FAKE_EVENTS)
 
     def _verify_instance_action_attachment(self, attach, tree):
         for key in attach.keys():

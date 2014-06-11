@@ -177,18 +177,17 @@ class XenAPIDriver(driver.ComputeDriver):
         except Exception:
             LOG.exception(_('Failure while cleaning up attached VDIs'))
 
-    def instance_exists(self, instance_name):
+    def instance_exists(self, instance):
         """Checks existence of an instance on the host.
 
-        :param instance_name: The name of the instance to lookup
+        :param instance: The instance to lookup
 
-        Returns True if an instance with the supplied name exists on
-        the host, False otherwise.
+        Returns True if supplied instance exists on the host, False otherwise.
 
         NOTE(belliott): This is an override of the base method for
         efficiency.
         """
-        return self._vmops.instance_exists(instance_name)
+        return self._vmops.instance_exists(instance.name)
 
     def estimate_instance_overhead(self, instance_info):
         """Get virtualization overhead required to build an instance of the
@@ -462,6 +461,7 @@ class XenAPIDriver(driver.ComputeDriver):
         free_ram_mb = host_stats['host_memory_free_computed'] / units.Mi
         total_disk_gb = host_stats['disk_total'] / units.Gi
         used_disk_gb = host_stats['disk_used'] / units.Gi
+        allocated_disk_gb = host_stats['disk_allocated'] / units.Gi
         hyper_ver = utils.convert_version_to_int(self._session.product_version)
         dic = {'vcpus': host_stats['host_cpu_info']['cpu_count'],
                'memory_mb': total_ram_mb,
@@ -475,6 +475,7 @@ class XenAPIDriver(driver.ComputeDriver):
                # Todo(bobba) cpu_info may be in a format not supported by
                # arch_filter.py - see libvirt/driver.py get_cpu_info
                'cpu_info': jsonutils.dumps(host_stats['host_cpu_info']),
+               'disk_available_least': total_disk_gb - allocated_disk_gb,
                'supported_instances': jsonutils.dumps(
                    host_stats['supported_instances']),
                'pci_passthrough_devices': jsonutils.dumps(
@@ -576,7 +577,7 @@ class XenAPIDriver(driver.ComputeDriver):
         # TODO(JohnGarbutt) look again when boot-from-volume hits trunk
         pre_live_migration_result = {}
         pre_live_migration_result['sr_uuid_map'] = \
-                 self._vmops.attach_block_device_volumes(block_device_info)
+                 self._vmops.connect_block_device_volumes(block_device_info)
         return pre_live_migration_result
 
     def post_live_migration(self, ctxt, instance_ref, block_device_info,

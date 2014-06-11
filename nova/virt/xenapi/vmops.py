@@ -35,7 +35,7 @@ from nova.compute import vm_mode
 from nova.compute import vm_states
 from nova import context as nova_context
 from nova import exception
-from nova.objects import aggregate as aggregate_obj
+from nova import objects
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
@@ -554,10 +554,10 @@ class VMOps(object):
         that are in progress.)
         """
         mode = vm_utils.determine_vm_mode(instance, disk_image_type)
-        if instance['vm_mode'] != mode:
+        if instance.vm_mode != mode:
             # Update database with normalized (or determined) value
-            self._virtapi.instance_update(context,
-                                          instance['uuid'], {'vm_mode': mode})
+            instance.vm_mode = mode
+            instance.save()
 
         image_properties = image_meta.get("properties")
         device_id = vm_utils.get_vm_device_id(self._session, image_properties)
@@ -774,8 +774,8 @@ class VMOps(object):
         progress = round(float(step) / total_steps * 100)
         LOG.debug(_("Updating progress to %d"), progress,
                   instance=instance)
-        self._virtapi.instance_update(context, instance['uuid'],
-                                      {'progress': progress})
+        instance.progress = progress
+        instance.save()
 
     def _resize_ensure_vm_is_shutdown(self, instance, vm_ref):
         if vm_utils.is_vm_shutdown(self._session, vm_ref):
@@ -1076,9 +1076,13 @@ class VMOps(object):
         new_root_gb = instance['root_gb']
         root_vdi = vdis.get('root')
         if new_root_gb and root_vdi:
-            vdi_ref = root_vdi['ref']
-            vm_utils.update_vdi_virtual_size(self._session, instance,
-                                             vdi_ref, new_root_gb)
+            if root_vdi.get('osvol', False):  # Don't resize root volumes.
+                LOG.debug(_("Not resizing the root volume."),
+                    instance=instance)
+            else:
+                vdi_ref = root_vdi['ref']
+                vm_utils.update_vdi_virtual_size(self._session, instance,
+                                                 vdi_ref, new_root_gb)
 
         ephemeral_vdis = vdis.get('ephemerals')
         if not ephemeral_vdis:
@@ -1266,7 +1270,7 @@ class VMOps(object):
         for vdi_ref in vdi_refs:
             try:
                 vm_utils.destroy_vdi(self._session, vdi_ref)
-            except volume_utils.StorageError as exc:
+            except exception.StorageError as exc:
                 LOG.error(exc)
 
     def _destroy_kernel_ramdisk(self, instance, vm_ref):
@@ -1827,7 +1831,7 @@ class VMOps(object):
                                                network_info=network_info)
 
     def _get_host_uuid_from_aggregate(self, context, hostname):
-        current_aggregate = aggregate_obj.AggregateList.get_by_host(
+        current_aggregate = objects.AggregateList.get_by_host(
             context, CONF.host, key=pool_states.POOL_FLAG)[0]
         if not current_aggregate:
             raise exception.AggregateHostNotFound(host=CONF.host)
@@ -2077,18 +2081,14 @@ class VMOps(object):
 
         return usage
 
-    def attach_block_device_volumes(self, block_device_info):
+    def connect_block_device_volumes(self, block_device_info):
         sr_uuid_map = {}
         try:
             if block_device_info is not None:
                 for block_device_map in block_device_info[
                                                 'block_device_mapping']:
-                    sr_uuid, _ = self._volumeops.attach_volume(
-                        block_device_map['connection_info'],
-                        None,
-                        block_device_map['mount_device'],
-                        hotplug=False)
-
+                    sr_uuid, _ = self._volumeops.connect_volume(
+                            block_device_map['connection_info'])
                     sr_ref = self._session.call_xenapi('SR.get_by_uuid',
                                                        sr_uuid)
                     sr_uuid_map[sr_uuid] = sr_ref

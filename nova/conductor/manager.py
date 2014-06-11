@@ -14,6 +14,9 @@
 
 """Handles database requests from other nova services."""
 
+import copy
+import itertools
+
 from oslo import messaging
 import six
 
@@ -33,6 +36,7 @@ from nova import manager
 from nova import network
 from nova.network.security_group import openstack_driver
 from nova import notifications
+from nova import objects
 from nova.objects import base as nova_object
 from nova.objects import instance as instance_obj
 from nova.objects import migration as migration_obj
@@ -43,6 +47,7 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import quota
+from nova.scheduler import driver as scheduler_driver
 from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova.scheduler import utils as scheduler_utils
 
@@ -661,10 +666,13 @@ class ComputeTaskManager(base.Base):
     @messaging.expected_exceptions(exception.NoValidHost,
                                    exception.ComputeServiceUnavailable,
                                    exception.InvalidHypervisorType,
+                                   exception.InvalidCPUInfo,
                                    exception.UnableToMigrateToSelf,
                                    exception.DestinationHypervisorTooOld,
                                    exception.InvalidLocalStorage,
                                    exception.InvalidSharedStorage,
+                                   exception.HypervisorUnavailable,
+                                   exception.InstanceNotRunning,
                                    exception.MigrationPreCheckError)
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
             flavor, block_migration, disk_over_commit, reservations=None):
@@ -681,8 +689,8 @@ class ComputeTaskManager(base.Base):
                                block_migration, disk_over_commit)
         elif not live and not rebuild and flavor:
             instance_uuid = instance['uuid']
-            with compute_utils.EventReporter(context, self.db,
-                                         'cold_migrate', instance_uuid):
+            with compute_utils.EventReporter(context, 'cold_migrate',
+                                             instance_uuid):
                 self._cold_migrate(context, instance, flavor,
                                    scheduler_hint['filter_properties'],
                                    reservations)
@@ -764,6 +772,7 @@ class ComputeTaskManager(base.Base):
                 exception.InvalidLocalStorage,
                 exception.InvalidSharedStorage,
                 exception.HypervisorUnavailable,
+                exception.InstanceNotRunning,
                 exception.MigrationPreCheckError) as ex:
             with excutils.save_and_reraise_exception():
                 #TODO(johngarbutt) - eventually need instance actions here
@@ -788,19 +797,40 @@ class ComputeTaskManager(base.Base):
             security_groups, block_device_mapping, legacy_bdm=True):
         request_spec = scheduler_utils.build_request_spec(context, image,
                                                           instances)
-        # NOTE(alaski): For compatibility until a new scheduler method is used.
-        request_spec.update({'block_device_mapping': block_device_mapping,
-                             'security_group': security_groups})
-        self.scheduler_rpcapi.run_instance(context, request_spec=request_spec,
-                admin_password=admin_password, injected_files=injected_files,
-                requested_networks=requested_networks, is_first_time=True,
-                filter_properties=filter_properties,
-                legacy_bdm_in_spec=legacy_bdm)
+        try:
+            hosts = self.scheduler_rpcapi.select_destinations(context,
+                    request_spec, filter_properties)
+        except Exception as exc:
+            for instance in instances:
+                scheduler_driver.handle_schedule_error(context, exc,
+                        instance.uuid, request_spec)
+            return
 
-    def _get_image(self, context, image_id):
-        if not image_id:
-            return None
-        return self.image_service.show(context, image_id)
+        for (instance, host) in itertools.izip(instances, hosts):
+            try:
+                instance.refresh()
+            except (exception.InstanceNotFound,
+                    exception.InstanceInfoCacheNotFound):
+                LOG.debug('Instance deleted during build', instance=instance)
+                continue
+            local_filter_props = copy.deepcopy(filter_properties)
+            scheduler_utils.populate_filter_properties(local_filter_props,
+                host)
+            # The block_device_mapping passed from the api doesn't contain
+            # instance specific information
+            bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                    context, instance.uuid)
+
+            self.compute_rpcapi.build_and_run_instance(context,
+                    instance=instance, host=host['host'], image=image,
+                    request_spec=request_spec,
+                    filter_properties=local_filter_props,
+                    admin_password=admin_password,
+                    injected_files=injected_files,
+                    requested_networks=requested_networks,
+                    security_groups=security_groups,
+                    block_device_mapping=bdms, node=host['nodename'],
+                    limits=host['limits'])
 
     def _delete_image(self, context, image_id):
         (image_service, image_id) = glance.get_remote_image_service(context,
@@ -819,6 +849,10 @@ class ComputeTaskManager(base.Base):
     def unshelve_instance(self, context, instance):
         sys_meta = instance.system_metadata
 
+        def safe_image_show(ctx, image_id):
+            if image_id:
+                return self.image_service.show(ctx, image_id)
+
         if instance.vm_state == vm_states.SHELVED:
             instance.task_state = task_states.POWERING_ON
             instance.save(expected_task_state=task_states.UNSHELVING)
@@ -827,21 +861,22 @@ class ComputeTaskManager(base.Base):
             if snapshot_id:
                 self._delete_image(context, snapshot_id)
         elif instance.vm_state == vm_states.SHELVED_OFFLOADED:
-            try:
-                with compute_utils.EventReporter(context, self.db,
-                        'get_image_info', instance.uuid):
-                    image = self._get_image(context,
-                            sys_meta['shelved_image_id'])
-            except exception.ImageNotFound:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_('Unshelve attempted but vm_state not SHELVED '
-                                'or SHELVED_OFFLOADED'), instance=instance)
+            image_id = sys_meta.get('shelved_image_id')
+            with compute_utils.EventReporter(
+                context, 'get_image_info', instance.uuid):
+                try:
+                    image = safe_image_show(context, image_id)
+                except exception.ImageNotFound:
                     instance.vm_state = vm_states.ERROR
                     instance.save()
+                    reason = _('Unshelve attempted but the image %s '
+                               'cannot be found.') % image_id
+                    LOG.error(reason, instance=instance)
+                    raise exception.UnshelveException(
+                        instance_id=instance.uuid, reason=reason)
 
             try:
-                with compute_utils.EventReporter(context, self.db,
-                                                 'schedule_instances',
+                with compute_utils.EventReporter(context, 'schedule_instances',
                                                  instance.uuid):
                     filter_properties = {}
                     hosts = self._schedule_instances(context, image,
@@ -854,7 +889,7 @@ class ComputeTaskManager(base.Base):
                     self.compute_rpcapi.unshelve_instance(
                             context, instance, host, image=image,
                             filter_properties=filter_properties, node=node)
-            except exception.NoValidHost as ex:
+            except exception.NoValidHost:
                 instance.task_state = None
                 instance.save()
                 LOG.warning(_("No valid host found for unshelve instance"),
@@ -896,9 +931,11 @@ class _ConductorManagerV2Proxy(object):
         return self.manager.migration_get_in_progress_by_host_and_node(context,
                 host, node)
 
+    # TODO(danms): This can be removed in v3.0 of the RPC API
     def aggregate_host_add(self, context, aggregate, host):
         return self.manager.aggregate_host_add(context, aggregate, host)
 
+    # TODO(danms): This can be removed in v3.0 of the RPC API
     def aggregate_host_delete(self, context, aggregate, host):
         return self.manager.aggregate_host_delete(context, aggregate, host)
 
@@ -928,16 +965,19 @@ class _ConductorManagerV2Proxy(object):
         return self.manager.block_device_mapping_get_all_by_instance(context,
                 instance, legacy)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def instance_get_all_by_filters(self, context, filters, sort_key,
                                     sort_dir, columns_to_join, use_slave):
         return self.manager.instance_get_all_by_filters(context, filters,
                 sort_key, sort_dir, columns_to_join, use_slave)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def instance_get_active_by_window_joined(self, context, begin, end,
                                              project_id, host):
         return self.manager.instance_get_active_by_window_joined(context,
                 begin, end, project_id, host)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def instance_destroy(self, context, instance):
         return self.manager.instance_destroy(context, instance)
 
@@ -959,12 +999,15 @@ class _ConductorManagerV2Proxy(object):
         return self.manager.instance_get_all_by_host(context, host, node,
                 columns_to_join)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def instance_fault_create(self, context, values):
         return self.manager.instance_fault_create(context, values)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def action_event_start(self, context, values):
         return self.manager.action_event_start(context, values)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def action_event_finish(self, context, values):
         return self.manager.action_event_finish(context, values)
 
@@ -1015,18 +1058,22 @@ class _ConductorManagerV2Proxy(object):
         return self.manager.security_groups_trigger_members_refresh(context,
                 group_ids)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def network_migrate_instance_start(self, context, instance, migration):
         return self.manager.network_migrate_instance_start(context, instance,
                 migration)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPC API
     def network_migrate_instance_finish(self, context, instance, migration):
         return self.manager.network_migrate_instance_finish(context, instance,
                 migration)
 
+    # TODO(comstud): This can be removed in version 3.0 of RPCAPI
     def quota_commit(self, context, reservations, project_id, user_id):
         return self.manager.quota_commit(context, reservations, project_id,
                 user_id)
 
+    # TODO(comstud): This can be removed in version 3.0 of RPCAPI
     def quota_rollback(self, context, reservations, project_id, user_id):
         return self.manager.quota_rollback(context, reservations, project_id,
                 user_id)
@@ -1034,6 +1081,7 @@ class _ConductorManagerV2Proxy(object):
     def get_ec2_ids(self, context, instance):
         return self.manager.get_ec2_ids(context, instance)
 
+    # TODO(danms): This can be removed in version 3.0 of the RPCAPI
     def compute_unrescue(self, context, instance):
         return self.manager.compute_unrescue(context, instance)
 

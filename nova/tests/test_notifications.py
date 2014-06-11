@@ -13,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Tests for common notifcations."""
+"""Tests for common notifications."""
 
 import copy
 
@@ -110,7 +110,7 @@ class NotificationsTestCase(test.TestCase):
 
     def test_notif_disabled(self):
 
-        # test config disable of the notifcations
+        # test config disable of the notifications
         self.flags(notify_on_state_change=None)
 
         old = copy.copy(self.instance)
@@ -148,7 +148,7 @@ class NotificationsTestCase(test.TestCase):
 
         self.assertEqual(0, len(fake_notifier.NOTIFICATIONS))
 
-        # ok now enable task state notifcations and re-try
+        # ok now enable task state notifications and re-try
         self.flags(notify_on_state_change="vm_and_task_state")
 
         notifications.send_update(self.context, old, self.instance)
@@ -277,6 +277,13 @@ class NotificationsTestCase(test.TestCase):
                                                   self.net_info, None)
         self.assertIn("fixed_ips", info)
         self.assertEqual(info["fixed_ips"][0]["label"], "test1")
+
+    def test_payload_has_vif_mac_address(self):
+        info = notifications.info_from_instance(self.context, self.instance,
+                                                  self.net_info, None)
+        self.assertIn("fixed_ips", info)
+        self.assertEqual(self.net_info[0]['address'],
+                         info["fixed_ips"][0]["vif_mac"])
 
     def test_send_access_ip_update(self):
         notifications.send_update(self.context, self.instance, self.instance)

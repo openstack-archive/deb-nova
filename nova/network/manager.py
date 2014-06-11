@@ -363,14 +363,14 @@ class NetworkManager(manager.Manager):
                                                                    self.host,
                                                                    time)
             if num:
-                LOG.debug(_('Disassociated %s stale fixed ip(s)'), num)
+                LOG.debug('Disassociated %s stale fixed ip(s)', num)
 
     def set_network_host(self, context, network_ref):
         """Safely sets the host of the network."""
         if not isinstance(network_ref, network_obj.Network):
             network_ref = network_obj.Network._from_db_object(
                 context, network_obj.Network(), network_ref)
-        LOG.debug(_('setting network host'), context=context)
+        LOG.debug('setting network host', context=context)
         network_ref.host = self.host
         network_ref.save()
         return self.host
@@ -386,7 +386,7 @@ class NetworkManager(manager.Manager):
         try:
             # NOTE(vish): We need to make sure the instance info cache has been
             #             updated with new ip info before we trigger the
-            #             security group refresh. This is somewhat ineffecient
+            #             security group refresh. This is somewhat inefficient
             #             but avoids doing some dangerous refactoring for a
             #             bug fix.
             nw_info = self.get_instance_nw_info(admin_context, instance_id,
@@ -490,20 +490,20 @@ class NetworkManager(manager.Manager):
         vpn = kwargs['vpn']
         macs = kwargs['macs']
         admin_context = context.elevated()
-        LOG.debug(_("network allocations"), instance_uuid=instance_uuid,
+        LOG.debug("network allocations", instance_uuid=instance_uuid,
                   context=context)
         networks = self._get_networks_for_instance(admin_context,
                                         instance_uuid, project_id,
                                         requested_networks=requested_networks)
         networks_list = [self._get_network_dict(network)
                                  for network in networks]
-        LOG.debug(_('networks retrieved for instance: |%s|'),
+        LOG.debug('networks retrieved for instance: |%s|',
                   networks_list, context=context, instance_uuid=instance_uuid)
 
         try:
             self._allocate_mac_addresses(context, instance_uuid, networks,
                                          macs)
-        except Exception as e:
+        except Exception:
             with excutils.save_and_reraise_exception():
                 # If we fail to allocate any one mac address, clean up all
                 # allocated VIFs
@@ -555,7 +555,7 @@ class NetworkManager(manager.Manager):
                     read_deleted_context, instance_uuid)
         except exception.FixedIpNotFoundForInstance:
             fixed_ips = []
-        LOG.debug(_("network deallocation for instance"),
+        LOG.debug("network deallocation for instance",
                   context=context, instance_uuid=instance_uuid)
         # deallocate fixed ips
         for fixed_ip in fixed_ips:
@@ -867,7 +867,8 @@ class NetworkManager(manager.Manager):
             if network['cidr']:
                 address = kwargs.get('address', None)
                 if address:
-                    fip = fixed_ip_obj.FixedIP.associate(context, address,
+                    fip = fixed_ip_obj.FixedIP.associate(context,
+                                                         str(address),
                                                          instance_id,
                                                          network['id'])
                 else:
@@ -935,7 +936,6 @@ class NetworkManager(manager.Manager):
                                                       self.instance_dns_domain)
 
         fixed_ip_ref.allocated = False
-        fixed_ip_ref.virtual_interface_id = None
         fixed_ip_ref.save()
 
         if teardown:
@@ -984,7 +984,7 @@ class NetworkManager(manager.Manager):
 
     def lease_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is leased."""
-        LOG.debug(_('Leased IP |%s|'), address, context=context)
+        LOG.debug('Leased IP |%s|', address, context=context)
         fixed_ip = fixed_ip_obj.FixedIP.get_by_address(context, address)
 
         if fixed_ip.instance_uuid is None:
@@ -999,7 +999,7 @@ class NetworkManager(manager.Manager):
 
     def release_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is released."""
-        LOG.debug(_('Released IP |%s|'), address, context=context)
+        LOG.debug('Released IP |%s|', address, context=context)
         fixed_ip = fixed_ip_obj.FixedIP.get_by_address(context, address)
 
         if fixed_ip.instance_uuid is None:
@@ -1484,7 +1484,7 @@ class FlatManager(NetworkManager):
 
     The idea is to create a single network for the host with a command like:
     nova-manage network create 192.168.0.0/24 1 256. Creating multiple
-    networks for for one manager is currently not supported, but could be
+    networks for one manager is currently not supported, but could be
     added by modifying allocate_fixed_ip and get_network to get the network
     with new logic. Arbitrary lists of addresses in a single network can
     be accomplished with manual db editing.
@@ -1648,9 +1648,14 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
         """
         ctxt = context.get_admin_context()
         networks = network_obj.NetworkList.get_by_host(ctxt, self.host)
+
+        self.driver.iptables_manager.defer_apply_on()
+
         self.l3driver.initialize(fixed_range=False, networks=networks)
         super(FlatDHCPManager, self).init_host()
         self.init_host_floating_ips()
+
+        self.driver.iptables_manager.defer_apply_off()
 
     def _setup_network_on_host(self, context, network):
         """Sets up network on this host."""
@@ -1729,21 +1734,27 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
 
         ctxt = context.get_admin_context()
         networks = network_obj.NetworkList.get_by_host(ctxt, self.host)
+
+        self.driver.iptables_manager.defer_apply_on()
+
         self.l3driver.initialize(fixed_range=False, networks=networks)
         NetworkManager.init_host(self)
         self.init_host_floating_ips()
+
+        self.driver.iptables_manager.defer_apply_off()
 
     def allocate_fixed_ip(self, context, instance_id, network, **kwargs):
         """Gets a fixed ip from the pool."""
 
         if kwargs.get('vpn', None):
             address = network['vpn_private_address']
-            fip = fixed_ip_obj.FixedIP.associate(context, address, instance_id,
-                                                 network['id'], reserved=True)
+            fip = fixed_ip_obj.FixedIP.associate(context, str(address),
+                                                 instance_id, network['id'],
+                                                 reserved=True)
         else:
             address = kwargs.get('address', None)
             if address:
-                fip = fixed_ip_obj.FixedIP.associate(context, address,
+                fip = fixed_ip_obj.FixedIP.associate(context, str(address),
                                                      instance_id,
                                                      network['id'])
             else:
@@ -1913,7 +1924,7 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
                 network['multi_host'] and vpn_address != CONF.vpn_ip and
                 not network_obj.Network.in_use_on_host(context, network['id'],
                                                        self.host)):
-                LOG.debug(_("Remove unused gateway %s"), network['bridge'])
+                LOG.debug("Remove unused gateway %s", network['bridge'])
                 self.driver.kill_dhcp(dev)
                 self.l3driver.remove_gateway(network)
                 if not CONF.share_dhcp_address:

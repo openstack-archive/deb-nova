@@ -654,7 +654,8 @@ class HostStorageSystem(ManagedObject):
 class HostSystem(ManagedObject):
     """Host System class."""
 
-    def __init__(self, name="ha-host", connected=True, ds_ref=None):
+    def __init__(self, name="ha-host", connected=True, ds_ref=None,
+                 maintenance_mode=False):
         super(HostSystem, self).__init__("host")
         self.set("name", name)
         if _db_content.get("HostNetworkSystem", None) is None:
@@ -689,6 +690,9 @@ class HostSystem(ManagedObject):
             runtime.connectionState = "connected"
         else:
             runtime.connectionState = "disconnected"
+
+        runtime.inMaintenanceMode = maintenance_mode
+
         summary.runtime = runtime
 
         quickstats = DataObject()
@@ -709,7 +713,6 @@ class HostSystem(ManagedObject):
 
         self.set("summary", summary)
         self.set("capability.maxHostSupportedVcpus", 600)
-        self.set("summary.runtime.inMaintenanceMode", False)
         self.set("summary.hardware", hardware)
         self.set("summary.runtime", runtime)
         self.set("config.network.pnic", net_info_pnic)
@@ -824,8 +827,11 @@ class Datacenter(ManagedObject):
         network_do = DataObject()
         network_do.ManagedObjectReference = [net_ref]
         self.set("network", network_do)
-        datastore = DataObject()
-        datastore.ManagedObjectReference = [ds_ref]
+        if ds_ref:
+            datastore = DataObject()
+            datastore.ManagedObjectReference = [ds_ref]
+        else:
+            datastore = None
         self.set("datastore", datastore)
 
 
@@ -941,14 +947,6 @@ def get_file(file_path):
     if _db_content.get("files") is None:
         raise exception.NoFilesFound()
     return file_path in _db_content.get("files")
-
-
-def fake_fetch_image(context, image, instance, **kwargs):
-    """Fakes fetch image call. Just adds a reference to the db for the file."""
-    ds_name = kwargs.get("datastore_name")
-    file_path = kwargs.get("file_path")
-    ds_file_path = "[" + ds_name + "] " + file_path
-    _add_file(ds_file_path)
 
 
 def fake_upload_image(context, image, instance, **kwargs):
@@ -1098,7 +1096,7 @@ class FakeVim(object):
         _create_object("VirtualMachine", virtual_machine)
         res_pool = _get_object(pool)
         res_pool.vm.ManagedObjectReference.append(virtual_machine.obj)
-        task_mdo = create_task(method, "success")
+        task_mdo = create_task(method, "success", result=virtual_machine.obj)
         return task_mdo.obj
 
     def _reconfig_vm(self, method, *args, **kwargs):
@@ -1173,8 +1171,6 @@ class FakeVim(object):
         source_vmref = args[0]
         source_vm_mdo = _get_vm_mdo(source_vmref)
         clone_spec = kwargs.get("spec")
-        ds = _db_content["Datastore"].keys()[0]
-        host = _db_content["HostSystem"].keys()[0]
         vm_dict = {
          "name": kwargs.get("name"),
          "ds": source_vm_mdo.get("datastore"),
@@ -1269,6 +1265,13 @@ class FakeVim(object):
         task_mdo = create_task(method, "success")
         return task_mdo.obj
 
+    def fake_transfer_file(self, ds_name, file_path):
+        """Fakes fetch image call.
+        Just adds a reference to the db for the file.
+        """
+        ds_file_path = "[" + ds_name + "] " + file_path
+        _add_file(ds_file_path)
+
     def _make_dir(self, method, *args, **kwargs):
         """Creates a directory in the datastore."""
         ds_path = kwargs.get("name")
@@ -1302,7 +1305,7 @@ class FakeVim(object):
     def _retrieve_properties(self, method, *args, **kwargs):
         """Retrieves properties based on the type."""
         spec_set = kwargs.get("specSet")[0]
-        type = spec_set.propSet[0].type
+        spec_type = spec_set.propSet[0].type
         properties = spec_set.propSet[0].pathSet
         if not isinstance(properties, list):
             properties = properties.split()
@@ -1315,8 +1318,8 @@ class FakeVim(object):
                     # This means that we are retrieving props for all managed
                     # data objects of the specified 'type' in the entire
                     # inventory. This gets invoked by vim_util.get_objects.
-                    mdo_refs = _db_content[type]
-                elif obj_ref.type != type:
+                    mdo_refs = _db_content[spec_type]
+                elif obj_ref.type != spec_type:
                     # This means that we are retrieving props for the managed
                     # data objects in the parent object's 'path' property.
                     # This gets invoked by vim_util.get_inner_objects
@@ -1335,7 +1338,7 @@ class FakeVim(object):
                     mdo_refs = [obj_ref]
 
                 for mdo_ref in mdo_refs:
-                    mdo = _db_content[type][mdo_ref]
+                    mdo = _db_content[spec_type][mdo_ref]
                     prop_list = []
                     for prop_name in properties:
                         prop = Prop(prop_name, mdo.get(prop_name))

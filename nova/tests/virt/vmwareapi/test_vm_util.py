@@ -17,13 +17,16 @@
 import collections
 import re
 
+import contextlib
 import mock
 
 from nova import exception
+from nova.network import model as network_model
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import units
 from nova.openstack.common import uuidutils
 from nova import test
+from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake
 from nova.virt.vmwareapi import vm_util
 
@@ -32,18 +35,18 @@ class fake_session(object):
     def __init__(self, *ret):
         self.ret = ret
         self.ind = 0
+        self.vim = fake.FakeVim()
 
     def _call_method(self, *args):
         # return fake objects in circular manner
         self.ind = (self.ind + 1) % len(self.ret)
         return self.ret[self.ind - 1]
 
+    def _wait_for_task(self):
+        pass
+
     def _get_vim(self):
-        fake_vim = fake.DataObject()
-        client = fake.DataObject()
-        client.factory = 'fake_factory'
-        fake_vim.client = client
-        return fake_vim
+        return self.vim
 
 
 class partialObject(object):
@@ -83,7 +86,8 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
             fake_session(fake_objects), None, None, datastore_valid_regex)
         self.assertEqual("openstack-ds0", result[1])
 
-    def test_get_stats_from_cluster(self):
+    def _test_get_stats_from_cluster(self, connection_state="connected",
+                                     maintenance_mode=False):
         ManagedObjectRefs = [fake.ManagedObjectReference("host1",
                                                          "HostSystem"),
                              fake.ManagedObjectReference("host2",
@@ -100,8 +104,11 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
 
         runtime_host_1 = fake.DataObject()
         runtime_host_1.connectionState = "connected"
+        runtime_host_1.inMaintenanceMode = False
+
         runtime_host_2 = fake.DataObject()
-        runtime_host_2.connectionState = "disconnected"
+        runtime_host_2.connectionState = connection_state
+        runtime_host_2.inMaintenanceMode = maintenance_mode
 
         prop_list_host_1 = [fake.Prop(name="hardware_summary", val=hardware),
                             fake.Prop(name="runtime_summary",
@@ -109,6 +116,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         prop_list_host_2 = [fake.Prop(name="hardware_summary", val=hardware),
                             fake.Prop(name="runtime_summary",
                                       val=runtime_host_2)]
+
         fake_objects = fake.FakeRetrieveResult()
         fake_objects.add_object(fake.ObjectContent("prop_list_host1",
                                                    prop_list_host_1))
@@ -132,14 +140,30 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
             result = vm_util.get_stats_from_cluster(session, "cluster1")
             cpu_info = {}
             mem_info = {}
-            cpu_info['vcpus'] = 16
-            cpu_info['cores'] = 8
-            cpu_info['vendor'] = ["Intel"]
-            cpu_info['model'] = ["Intel(R) Xeon(R)"]
+            if connection_state == "connected" and not maintenance_mode:
+                cpu_info['vcpus'] = 32
+                cpu_info['cores'] = 16
+                cpu_info['vendor'] = ["Intel", "Intel"]
+                cpu_info['model'] = ["Intel(R) Xeon(R)",
+                                     "Intel(R) Xeon(R)"]
+            else:
+                cpu_info['vcpus'] = 16
+                cpu_info['cores'] = 8
+                cpu_info['vendor'] = ["Intel"]
+                cpu_info['model'] = ["Intel(R) Xeon(R)"]
             mem_info['total'] = 5120
             mem_info['free'] = 3072
             expected_stats = {'cpu': cpu_info, 'mem': mem_info}
             self.assertEqual(expected_stats, result)
+
+    def test_get_stats_from_cluster_hosts_connected_and_active(self):
+        self._test_get_stats_from_cluster()
+
+    def test_get_stats_from_cluster_hosts_disconnected_and_active(self):
+        self._test_get_stats_from_cluster(connection_state="disconnected")
+
+    def test_get_stats_from_cluster_hosts_connected_and_maintenance(self):
+        self._test_get_stats_from_cluster(maintenance_mode=True)
 
     def test_get_datastore_ref_and_name_with_token(self):
         regex = re.compile("^ds.*\d$")
@@ -630,3 +654,191 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         expected = re.sub(r'\s+', '', expected)
         result = re.sub(r'\s+', '', repr(result))
         self.assertEqual(expected, result)
+
+    def test_create_vm(self):
+
+        method_list = ['CreateVM_Task', 'get_dynamic_property']
+
+        def fake_call_method(module, method, *args, **kwargs):
+            expected_method = method_list.pop(0)
+            self.assertEqual(expected_method, method)
+            if (expected_method == 'CreateVM_Task'):
+                return 'fake_create_vm_task'
+            elif (expected_method == 'get_dynamic_property'):
+                task_info = mock.Mock(state="success", result="fake_vm_ref")
+                return task_info
+            else:
+                self.fail('Should not get here....')
+
+        def fake_wait_for_task(self, *args):
+            task_info = mock.Mock(state="success", result="fake_vm_ref")
+            return task_info
+
+        session = fake_session()
+        fake_instance = mock.MagicMock()
+        fake_call_mock = mock.Mock(side_effect=fake_call_method)
+        fake_wait_mock = mock.Mock(side_effect=fake_wait_for_task)
+        with contextlib.nested(
+                mock.patch.object(session, '_wait_for_task',
+                                  fake_wait_mock),
+                mock.patch.object(session, '_call_method',
+                                  fake_call_mock)
+        ) as (wait_for_task, call_method):
+            vm_ref = vm_util.create_vm(
+                session,
+                fake_instance,
+                'fake_vm_folder',
+                'fake_config_spec',
+                'fake_res_pool_ref')
+            self.assertEqual('fake_vm_ref', vm_ref)
+
+            call_method.assert_called_once_with(mock.ANY, 'CreateVM_Task',
+                'fake_vm_folder', config='fake_config_spec',
+                pool='fake_res_pool_ref')
+            wait_for_task.assert_called_once_with('fake_create_vm_task')
+
+    def test_convert_vif_model(self):
+        expected = "VirtualE1000"
+        result = vm_util._convert_vif_model(network_model.VIF_MODEL_E1000)
+        self.assertEqual(expected, result)
+        expected = "VirtualE1000e"
+        result = vm_util._convert_vif_model(network_model.VIF_MODEL_E1000E)
+        self.assertEqual(expected, result)
+        types = ["VirtualE1000", "VirtualE1000e", "VirtualPCNet32",
+                 "VirtualVmxnet"]
+        for type in types:
+            self.assertEqual(type,
+                             vm_util._convert_vif_model(type))
+        self.assertRaises(exception.Invalid,
+                          vm_util._convert_vif_model,
+                          "InvalidVifModel")
+
+    def test_power_on_instance_with_vm_ref(self):
+        session = fake_session()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(session, "_call_method",
+                              return_value='fake-task'),
+            mock.patch.object(session, "_wait_for_task"),
+        ) as (fake_call_method, fake_wait_for_task):
+            vm_util.power_on_instance(session, fake_instance,
+                                      vm_ref='fake-vm-ref')
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOnVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+
+    def test_power_on_instance_without_vm_ref(self):
+        session = fake_session()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(vm_util, "get_vm_ref",
+                              return_value='fake-vm-ref'),
+            mock.patch.object(session, "_call_method",
+                              return_value='fake-task'),
+            mock.patch.object(session, "_wait_for_task"),
+        ) as (fake_get_vm_ref, fake_call_method, fake_wait_for_task):
+            vm_util.power_on_instance(session, fake_instance)
+            fake_get_vm_ref.assert_called_once_with(session, fake_instance)
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOnVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+
+    def test_power_on_instance_with_exception(self):
+        session = fake_session()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(session, "_call_method",
+                              return_value='fake-task'),
+            mock.patch.object(session, "_wait_for_task",
+                              side_effect=exception.NovaException('fake')),
+        ) as (fake_call_method, fake_wait_for_task):
+            self.assertRaises(exception.NovaException,
+                              vm_util.power_on_instance,
+                              session, fake_instance,
+                              vm_ref='fake-vm-ref')
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOnVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+
+    def test_power_on_instance_with_power_state_exception(self):
+        session = fake_session()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(session, "_call_method",
+                              return_value='fake-task'),
+            mock.patch.object(
+                    session, "_wait_for_task",
+                    side_effect=error_util.InvalidPowerStateException),
+        ) as (fake_call_method, fake_wait_for_task):
+            vm_util.power_on_instance(session, fake_instance,
+                                      vm_ref='fake-vm-ref')
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOnVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+
+    def test_create_virtual_disk(self):
+        session = fake_session()
+        dm = session._get_vim().get_service_content().virtualDiskManager
+        with contextlib.nested(
+            mock.patch.object(vm_util, "get_vmdk_create_spec",
+                              return_value='fake-spec'),
+            mock.patch.object(session, "_call_method",
+                              return_value='fake-task'),
+            mock.patch.object(session, "_wait_for_task"),
+        ) as (fake_get_spec, fake_call_method, fake_wait_for_task):
+            vm_util.create_virtual_disk(session, 'fake-dc-ref',
+                                        'fake-adapter-type', 'fake-disk-type',
+                                        'fake-path', 7)
+            fake_get_spec.assert_called_once_with(
+                    session._get_vim().client.factory, 7,
+                    'fake-adapter-type',
+                    'fake-disk-type')
+            fake_call_method.assert_called_once_with(
+                    session._get_vim(),
+                    "CreateVirtualDisk_Task",
+                    dm,
+                    name='fake-path',
+                    datacenter='fake-dc-ref',
+                    spec='fake-spec')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+
+    def test_copy_virtual_disk(self):
+        session = fake_session()
+        dm = session._get_vim().get_service_content().virtualDiskManager
+        with contextlib.nested(
+            mock.patch.object(session, "_call_method",
+                              return_value='fake-task'),
+            mock.patch.object(session, "_wait_for_task"),
+        ) as (fake_call_method, fake_wait_for_task):
+            vm_util.copy_virtual_disk(session, 'fake-dc-ref',
+                                      'fake-source', 'fake-dest', 'fake-spec')
+            fake_call_method.assert_called_once_with(
+                    session._get_vim(),
+                    "CopyVirtualDisk_Task",
+                    dm,
+                    sourceName='fake-source',
+                    sourceDatacenter='fake-dc-ref',
+                    destName='fake-dest',
+                    destSpec='fake-spec')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+
+    def _create_fake_vm_objects(self):
+        fake_objects = fake.FakeRetrieveResult()
+        fake_objects.add_object(fake.VirtualMachine())
+        return fake_objects
+
+    def test_get_values(self):
+        objects = self._create_fake_vm_objects()
+        lst_properties = ['runtime.powerState',
+                          'summary.guest.toolsStatus',
+                          'summary.guest.toolsRunningStatus']
+        query = vm_util.get_values_from_object_properties(
+                fake_session(objects), objects, lst_properties)
+        self.assertEqual('poweredOn', query['runtime.powerState'])
+        self.assertEqual('guestToolsRunning',
+                         query['summary.guest.toolsRunningStatus'])
+        self.assertEqual('toolsOk', query['summary.guest.toolsStatus'])

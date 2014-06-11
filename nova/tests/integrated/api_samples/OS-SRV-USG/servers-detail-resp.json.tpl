@@ -2,8 +2,8 @@
     "servers": [
     {
             "status": "ACTIVE",
-            "updated": "%(timestamp)s",
-            "OS-SRV-USG:launched_at": "%(timestamp)s",
+            "updated": "%(isotime)s",
+            "OS-SRV-USG:launched_at": "%(strtime)s",
             "user_id": "fake",
             "addresses": {
                 "private": [
@@ -23,7 +23,7 @@
                     "rel": "bookmark"
                 }
             ],
-            "created": "%(timestamp)s",
+            "created": "%(isotime)s",
             "name": "new-server-test",
             "image": {
                 "id": "%(uuid)s",

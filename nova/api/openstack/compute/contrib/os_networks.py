@@ -70,7 +70,7 @@ class NetworkController(wsgi.Controller):
     def _disassociate_host_and_project(self, req, id, body):
         context = req.environ['nova.context']
         authorize(context)
-        LOG.debug(_("Disassociating network with id %s"), id)
+        LOG.debug("Disassociating network with id %s", id)
 
         try:
             self.network_api.associate(context, id, host=None, project=None)
@@ -86,7 +86,7 @@ class NetworkController(wsgi.Controller):
     def show(self, req, id):
         context = req.environ['nova.context']
         authorize_view(context)
-        LOG.debug(_("Showing network with id %s") % id)
+        LOG.debug("Showing network with id %s", id)
         try:
             network = self.network_api.get(context, id)
         except exception.NetworkNotFound:
@@ -100,6 +100,8 @@ class NetworkController(wsgi.Controller):
         LOG.info(_("Deleting network with id %s") % id)
         try:
             self.network_api.delete(context, id)
+        except exception.NetworkInUse as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.NetworkNotFound:
             msg = _("Network not found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -123,7 +125,7 @@ class NetworkController(wsgi.Controller):
         if not cidr:
             raise bad(_("Network cidr or cidr_v6 is required"))
 
-        LOG.debug(_("Creating network with label %s") % params["label"])
+        LOG.debug("Creating network with label %s", params["label"])
 
         params["num_networks"] = 1
         params["network_size"] = netaddr.IPNetwork(cidr).size
@@ -139,8 +141,8 @@ class NetworkController(wsgi.Controller):
 
         network_id = body.get('id', None)
         project_id = context.project_id
-        LOG.debug(_("Associating network %(network)s"
-                    " with project %(project)s") %
+        LOG.debug("Associating network %(network)s"
+                  " with project %(project)s",
                   {"network": network_id or "",
                    "project": project_id})
         try:
@@ -167,7 +169,7 @@ class Os_networks(extensions.ExtensionDescriptor):
     alias = "os-networks"
     namespace = ("http://docs.openstack.org/compute/"
                  "ext/os-networks/api/v1.1")
-    updated = "2011-12-23T00:00:00+00:00"
+    updated = "2011-12-23T00:00:00Z"
 
     def get_resources(self):
         member_actions = {'action': 'POST'}

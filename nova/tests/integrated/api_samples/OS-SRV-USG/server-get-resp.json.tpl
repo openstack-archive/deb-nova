@@ -1,6 +1,6 @@
 {
     "server": {
-        "OS-SRV-USG:launched_at": "%(timestamp)s",
+        "OS-SRV-USG:launched_at": "%(strtime)s",
         "OS-SRV-USG:terminated_at": null,
         "accessIPv4": "",
         "accessIPv6": "",
@@ -12,7 +12,7 @@
                 }
             ]
         },
-        "created": "%(timestamp)s",
+        "created": "%(isotime)s",
         "flavor": {
             "id": "1",
             "links": [
@@ -50,7 +50,7 @@
         "progress": 0,
         "status": "ACTIVE",
         "tenant_id": "openstack",
-        "updated": "%(timestamp)s",
+        "updated": "%(isotime)s",
         "user_id": "fake"
     }
 }

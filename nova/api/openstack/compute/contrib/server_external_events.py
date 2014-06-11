@@ -108,9 +108,9 @@ class ServerExternalEventsController(wsgi.Controller):
                         context, event.instance_uuid)
                     instances[event.instance_uuid] = instance
                 except exception.InstanceNotFound:
-                    LOG.debug(_('Dropping event %(name)s:%(tag)s for unknown '
-                                'instance %(instance_uuid)s'),
-                                dict(event.iteritems()))
+                    LOG.debug('Dropping event %(name)s:%(tag)s for unknown '
+                              'instance %(instance_uuid)s',
+                              dict(event.iteritems()))
                     _event['status'] = 'failed'
                     _event['code'] = 404
                     result = 207
@@ -144,7 +144,7 @@ class Server_external_events(extensions.ExtensionDescriptor):
     alias = "os-server-external-events"
     namespace = ("http://docs.openstack.org/compute/ext/"
                  "server-external-events/api/v2")
-    updated = "2014-02-18T00:00:00-00:00"
+    updated = "2014-02-18T00:00:00Z"
 
     def get_resources(self):
         resource = extensions.ResourceExtension('os-server-external-events',

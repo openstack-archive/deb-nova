@@ -22,7 +22,10 @@ imagecache_opts = [
     cfg.IntOpt('image_cache_manager_interval',
                default=2400,
                help='Number of seconds to wait between runs of the image '
-                    'cache manager'),
+                    'cache manager. Set to -1 to disable. '
+                    'Setting this to 0 will disable, but this will change in '
+                    'the K release to mean "run at the default rate".'),
+    # TODO(gilliard): Clean the above message after the K release
     cfg.StrOpt('image_cache_subdirectory_name',
                default='_base',
                help='Where cached images are stored under $instances_path. '
@@ -118,7 +121,7 @@ class ImageCacheManager(object):
                 'originals': []}
 
     def _age_and_verify_cached_images(self, context, all_instances, base_dir):
-        """Ages and verfies cached images."""
+        """Ages and verifies cached images."""
 
         raise NotImplementedError()
 

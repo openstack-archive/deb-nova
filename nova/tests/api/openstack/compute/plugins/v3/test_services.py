@@ -266,7 +266,7 @@ class ServicesTest(test.TestCase):
     def test_services_enable(self):
         def _service_update(context, service_id, values):
             self.assertIsNone(values['disabled_reason'])
-            return test_service.fake_service
+            return dict(test_service.fake_service, id=service_id)
 
         self.stubs.Set(db, "service_update", _service_update)
 
@@ -372,7 +372,7 @@ class ServicesTest(test.TestCase):
 
         with mock.patch.object(self.controller.host_api,
                                'service_delete') as service_delete:
-            response = self.controller.delete(request, '1')
+            self.controller.delete(request, '1')
             service_delete.assert_called_once_with(
                 request.environ['nova.context'], '1')
             self.assertEqual(self.controller.delete.wsgi_code, 204)

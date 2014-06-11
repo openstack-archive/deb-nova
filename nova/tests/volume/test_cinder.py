@@ -13,7 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import mock
+
 from cinderclient import exceptions as cinder_exception
+import mock
 
 from nova import context
 from nova import exception
@@ -63,11 +66,15 @@ class CinderApiTestCase(test.NoDBTestCase):
         volume_id = 'volume_id'
         cinder.cinderclient(self.ctx).AndRaise(cinder_exception.NotFound(''))
         cinder.cinderclient(self.ctx).AndRaise(cinder_exception.BadRequest(''))
+        cinder.cinderclient(self.ctx).AndRaise(
+                                        cinder_exception.ConnectionError(''))
         self.mox.ReplayAll()
 
         self.assertRaises(exception.VolumeNotFound,
                           self.api.get, self.ctx, volume_id)
         self.assertRaises(exception.InvalidInput,
+                          self.api.get, self.ctx, volume_id)
+        self.assertRaises(exception.CinderConnectionFailed,
                           self.api.get, self.ctx, volume_id)
 
     def test_create(self):
@@ -83,6 +90,17 @@ class CinderApiTestCase(test.NoDBTestCase):
 
         self.assertRaises(exception.InvalidInput,
                           self.api.create, self.ctx, 1, '', '')
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_create_over_quota_failed(self, mock_cinderclient):
+        mock_cinderclient.return_value.volumes.create.side_effect = (
+            cinder_exception.OverLimit(413))
+        self.assertRaises(exception.OverQuota, self.api.create, self.ctx,
+                          1, '', '')
+        mock_cinderclient.return_value.volumes.create.assert_called_once_with(
+            1, user_id=None, imageRef=None, availability_zone=None,
+            volume_type=None, display_description='', snapshot_id=None,
+            display_name='', project_id=None, metadata=None)
 
     def test_get_all(self):
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
@@ -108,22 +126,46 @@ class CinderApiTestCase(test.NoDBTestCase):
     def test_check_attach_availability_zone_differs(self):
         volume = {'status': 'available'}
         volume['attach_status'] = "detached"
-        instance = {'availability_zone': 'zone1'}
-        volume['availability_zone'] = 'zone2'
-        cinder.CONF.set_override('cinder_cross_az_attach', False)
-        self.assertRaises(exception.InvalidVolume,
-                          self.api.check_attach, self.ctx, volume, instance)
-        volume['availability_zone'] = 'zone1'
-        self.assertIsNone(self.api.check_attach(self.ctx, volume, instance))
-        cinder.CONF.reset()
+        instance = {'availability_zone': 'zone1', 'host': 'fakehost'}
+
+        with mock.patch.object(cinder.az, 'get_instance_availability_zone',
+                               side_effect=lambda context,
+                               instance: 'zone1') as mock_get_instance_az:
+
+            cinder.CONF.set_override('cinder_cross_az_attach', False)
+            volume['availability_zone'] = 'zone1'
+            self.assertIsNone(self.api.check_attach(self.ctx,
+                                                    volume, instance))
+            mock_get_instance_az.assert_called_once_with(self.ctx, instance)
+            mock_get_instance_az.reset_mock()
+            volume['availability_zone'] = 'zone2'
+            self.assertRaises(exception.InvalidVolume,
+                            self.api.check_attach, self.ctx, volume, instance)
+            mock_get_instance_az.assert_called_once_with(self.ctx, instance)
+            mock_get_instance_az.reset_mock()
+            del instance['host']
+            volume['availability_zone'] = 'zone1'
+            self.assertIsNone(self.api.check_attach(
+                self.ctx, volume, instance))
+            mock_get_instance_az.assert_not_called()
+            volume['availability_zone'] = 'zone2'
+            self.assertRaises(exception.InvalidVolume,
+                            self.api.check_attach, self.ctx, volume, instance)
+            mock_get_instance_az.assert_not_called()
+            cinder.CONF.reset()
 
     def test_check_attach(self):
         volume = {'status': 'available'}
         volume['attach_status'] = "detached"
         volume['availability_zone'] = 'zone1'
-        instance = {'availability_zone': 'zone1'}
+        instance = {'availability_zone': 'zone1', 'host': 'fakehost'}
         cinder.CONF.set_override('cinder_cross_az_attach', False)
-        self.assertIsNone(self.api.check_attach(self.ctx, volume, instance))
+
+        with mock.patch.object(cinder.az, 'get_instance_availability_zone',
+                               side_effect=lambda context, instance: 'zone1'):
+            self.assertIsNone(self.api.check_attach(
+                self.ctx, volume, instance))
+
         cinder.CONF.reset()
 
     def test_check_detach(self):
@@ -169,14 +211,27 @@ class CinderApiTestCase(test.NoDBTestCase):
 
         self.api.roll_detaching(self.ctx, 'id1')
 
-    def test_attach(self):
-        cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
-        self.mox.StubOutWithMock(self.cinderclient.volumes,
-                                 'attach')
-        self.cinderclient.volumes.attach('id1', 'uuid', 'point')
-        self.mox.ReplayAll()
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_attach(self, mock_cinderclient):
+        mock_volumes = mock.MagicMock()
+        mock_cinderclient.return_value = mock.MagicMock(volumes=mock_volumes)
 
         self.api.attach(self.ctx, 'id1', 'uuid', 'point')
+
+        mock_cinderclient.assert_called_once_with(self.ctx)
+        mock_volumes.attach.assert_called_once_with('id1', 'uuid', 'point',
+                                                    mode='rw')
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_attach_with_mode(self, mock_cinderclient):
+        mock_volumes = mock.MagicMock()
+        mock_cinderclient.return_value = mock.MagicMock(volumes=mock_volumes)
+
+        self.api.attach(self.ctx, 'id1', 'uuid', 'point', mode='ro')
+
+        mock_cinderclient.assert_called_once_with(self.ctx)
+        mock_volumes.attach.assert_called_once_with('id1', 'uuid', 'point',
+                                                    mode='ro')
 
     def test_detach(self):
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
@@ -230,9 +285,13 @@ class CinderApiTestCase(test.NoDBTestCase):
     def test_get_snapshot_failed(self):
         snapshot_id = 'snapshot_id'
         cinder.cinderclient(self.ctx).AndRaise(cinder_exception.NotFound(''))
+        cinder.cinderclient(self.ctx).AndRaise(
+                                        cinder_exception.ConnectionError(''))
         self.mox.ReplayAll()
 
         self.assertRaises(exception.SnapshotNotFound,
+                          self.api.get_snapshot, self.ctx, snapshot_id)
+        self.assertRaises(exception.CinderConnectionFailed,
                           self.api.get_snapshot, self.ctx, snapshot_id)
 
     def test_get_all_snapshots(self):

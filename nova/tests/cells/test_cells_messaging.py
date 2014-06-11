@@ -17,6 +17,7 @@
 Tests For Cells Messaging module
 """
 
+import mock
 import mox
 from oslo.config import cfg
 from oslo import messaging as oslo_messaging
@@ -32,13 +33,14 @@ from nova.network import model as network_model
 from nova.objects import base as objects_base
 from nova.objects import fields as objects_fields
 from nova.objects import instance as instance_obj
+from nova.objects import instance_fault as instance_fault_obj
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import rpc
 from nova import test
 from nova.tests.cells import fakes
-from nova.tests import fake_instance_actions
+from nova.tests import fake_server_actions
 
 CONF = cfg.CONF
 CONF.import_opt('name', 'nova.cells.opts', group='cells')
@@ -646,17 +648,6 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         self.tgt_db_inst = methods_cls.db
         self.tgt_c_rpcapi = methods_cls.compute_rpcapi
 
-    def test_schedule_run_instance(self):
-        host_sched_kwargs = {'filter_properties': {},
-                             'key1': 'value1',
-                             'key2': 'value2'}
-        self.mox.StubOutWithMock(self.tgt_scheduler, 'run_instance')
-        self.tgt_scheduler.run_instance(self.ctxt, host_sched_kwargs)
-        self.mox.ReplayAll()
-        self.src_msg_runner.schedule_run_instance(self.ctxt,
-                                                  self.tgt_cell_name,
-                                                  host_sched_kwargs)
-
     def test_build_instances(self):
         build_inst_kwargs = {'filter_properties': {},
                              'key1': 'value1',
@@ -966,7 +957,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
                 fake_topic,
                 fake_rpc_message, False, timeout=None)
 
-    def test_task_log_get_all_targetted(self):
+    def test_task_log_get_all_targeted(self):
         task_name = 'fake_task_name'
         begin = 'fake_begin'
         end = 'fake_end'
@@ -1002,9 +993,9 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         self.assertEqual('fake_result', result)
 
     def test_actions_get(self):
-        fake_uuid = fake_instance_actions.FAKE_UUID
-        fake_req_id = fake_instance_actions.FAKE_REQUEST_ID1
-        fake_act = fake_instance_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
+        fake_uuid = fake_server_actions.FAKE_UUID
+        fake_req_id = fake_server_actions.FAKE_REQUEST_ID1
+        fake_act = fake_server_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
 
         self.mox.StubOutWithMock(self.tgt_db_inst, 'actions_get')
         self.tgt_db_inst.actions_get(self.ctxt,
@@ -1018,9 +1009,9 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         self.assertEqual([jsonutils.to_primitive(fake_act)], result)
 
     def test_action_get_by_request_id(self):
-        fake_uuid = fake_instance_actions.FAKE_UUID
-        fake_req_id = fake_instance_actions.FAKE_REQUEST_ID1
-        fake_act = fake_instance_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
+        fake_uuid = fake_server_actions.FAKE_UUID
+        fake_req_id = fake_server_actions.FAKE_REQUEST_ID1
+        fake_act = fake_server_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
 
         self.mox.StubOutWithMock(self.tgt_db_inst, 'action_get_by_request_id')
         self.tgt_db_inst.action_get_by_request_id(self.ctxt,
@@ -1033,8 +1024,8 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         self.assertEqual(jsonutils.to_primitive(fake_act), result)
 
     def test_action_events_get(self):
-        fake_action_id = fake_instance_actions.FAKE_ACTION_ID1
-        fake_events = fake_instance_actions.FAKE_EVENTS[fake_action_id]
+        fake_action_id = fake_server_actions.FAKE_ACTION_ID1
+        fake_events = fake_server_actions.FAKE_EVENTS[fake_action_id]
 
         self.mox.StubOutWithMock(self.tgt_db_inst, 'action_events_get')
         self.tgt_db_inst.action_events_get(self.ctxt,
@@ -1608,22 +1599,27 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
 
     def test_instance_fault_create_at_top(self):
         fake_instance_fault = {'id': 1,
-                               'other stuff': 2,
-                               'more stuff': 3}
-        expected_instance_fault = {'other stuff': 2,
-                                   'more stuff': 3}
+                               'message': 'fake-message',
+                               'details': 'fake-details'}
 
-        # Shouldn't be called for these 2 cells
-        self.mox.StubOutWithMock(self.src_db_inst, 'instance_fault_create')
-        self.mox.StubOutWithMock(self.mid_db_inst, 'instance_fault_create')
+        if_mock = mock.Mock(spec_set=instance_fault_obj.InstanceFault)
 
-        self.mox.StubOutWithMock(self.tgt_db_inst, 'instance_fault_create')
-        self.tgt_db_inst.instance_fault_create(self.ctxt,
-                                               expected_instance_fault)
-        self.mox.ReplayAll()
+        def _check_create():
+            self.assertEqual('fake-message', if_mock.message)
+            self.assertEqual('fake-details', if_mock.details)
+            # Should not be set
+            self.assertNotEqual(1, if_mock.id)
 
-        self.src_msg_runner.instance_fault_create_at_top(self.ctxt,
-                fake_instance_fault)
+        if_mock.create.side_effect = _check_create
+
+        with mock.patch.object(instance_fault_obj,
+                               'InstanceFault') as if_obj_mock:
+            if_obj_mock.return_value = if_mock
+            self.src_msg_runner.instance_fault_create_at_top(
+                    self.ctxt, fake_instance_fault)
+
+        if_obj_mock.assert_called_once_with(context=self.ctxt)
+        if_mock.create.assert_called_once_with()
 
     def test_bw_usage_update_at_top(self):
         fake_bw_update_info = {'uuid': 'fake_uuid',

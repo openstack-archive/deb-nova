@@ -80,6 +80,10 @@ class SchedulerAPI(object):
         ... - Deprecated select_hosts()
 
         3.0 - Removed backwards compat
+
+        ... Icehouse supports message version 3.0.  So, any changes to
+        existing methods in 3.x after that point should be done such that they
+        can handle the version_cap being set to 3.0.
     '''
 
     VERSION_ALIASES = {
@@ -101,19 +105,6 @@ class SchedulerAPI(object):
         cctxt = self.client.prepare()
         return cctxt.call(ctxt, 'select_destinations',
             request_spec=request_spec, filter_properties=filter_properties)
-
-    def run_instance(self, ctxt, request_spec, admin_password,
-            injected_files, requested_networks, is_first_time,
-            filter_properties, legacy_bdm_in_spec=True):
-        msg_kwargs = {'request_spec': request_spec,
-                      'admin_password': admin_password,
-                      'injected_files': injected_files,
-                      'requested_networks': requested_networks,
-                      'is_first_time': is_first_time,
-                      'filter_properties': filter_properties,
-                      'legacy_bdm_in_spec': legacy_bdm_in_spec}
-        cctxt = self.client.prepare()
-        cctxt.cast(ctxt, 'run_instance', **msg_kwargs)
 
     def prep_resize(self, ctxt, instance, instance_type, image,
             request_spec, filter_properties, reservations):

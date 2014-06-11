@@ -26,7 +26,8 @@ CONF = cfg.CONF
 CONF.import_opt('password_length', 'nova.utils')
 
 
-def rescue(self, context, instance, rescue_password=None):
+def rescue(self, context, instance, rescue_password=None,
+           rescue_image_ref=None):
     pass
 
 
@@ -50,6 +51,23 @@ class RescueTest(test.NoDBTestCase):
                 'nova.api.openstack.compute.contrib.select_extensions'],
             osapi_compute_ext_list=['Rescue'])
         self.app = fakes.wsgi_app(init_only=('servers',))
+
+    def test_rescue_from_locked_server(self):
+        def fake_rescue_from_locked_server(self, context,
+            instance, rescue_password=None, rescue_image_ref=None):
+            raise exception.InstanceIsLocked(instance_uuid=instance['uuid'])
+
+        self.stubs.Set(compute.api.API,
+                       'rescue',
+                       fake_rescue_from_locked_server)
+        body = {"rescue": {"adminPass": "AABBCC112233"}}
+        req = webob.Request.blank('/v2/fake/servers/test_inst/action')
+        req.method = "POST"
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        resp = req.get_response(self.app)
+        self.assertEqual(resp.status_int, 409)
 
     def test_rescue_with_preset_password(self):
         body = {"rescue": {"adminPass": "AABBCC112233"}}
@@ -99,6 +117,24 @@ class RescueTest(test.NoDBTestCase):
 
         resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 202)
+
+    def test_unrescue_from_locked_server(self):
+        def fake_unrescue_from_locked_server(self, context,
+            instance):
+            raise exception.InstanceIsLocked(instance_uuid=instance['uuid'])
+
+        self.stubs.Set(compute.api.API,
+                       'unrescue',
+                       fake_unrescue_from_locked_server)
+
+        body = dict(unrescue=None)
+        req = webob.Request.blank('/v2/fake/servers/test_inst/action')
+        req.method = "POST"
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+
+        resp = req.get_response(self.app)
+        self.assertEqual(resp.status_int, 409)
 
     def test_unrescue_of_active_instance(self):
         body = dict(unrescue=None)

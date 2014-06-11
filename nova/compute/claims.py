@@ -18,7 +18,7 @@ Claim objects for use with resource tracking.
 """
 
 from nova import exception
-from nova.objects import instance as instance_obj
+from nova.objects import base as obj_base
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -76,7 +76,7 @@ class Claim(NopClaim):
                  limits=None):
         super(Claim, self).__init__()
         # Stash a copy of the instance at the current point of time
-        if isinstance(instance, instance_obj.Instance):
+        if isinstance(instance, obj_base.NovaObject):
             self.instance = instance.obj_clone()
         else:
             # This does not use copy.deepcopy() because it could be
@@ -90,7 +90,7 @@ class Claim(NopClaim):
 
         self.overhead = overhead
 
-        # Check claim at constuctor to avoid mess code
+        # Check claim at constructor to avoid mess code
         # Raise exception ComputeResourcesUnavailable if claim failed
         self._claim_test(resources, limits)
 
@@ -110,7 +110,7 @@ class Claim(NopClaim):
         """Compute operation requiring claimed resources has failed or
         been aborted.
         """
-        LOG.debug(_("Aborting claim: %s") % self, instance=self.instance)
+        LOG.debug("Aborting claim: %s" % self, instance=self.instance)
         self.tracker.abort_instance_claim(self.instance)
 
     def _claim_test(self, resources, limits=None):
@@ -252,5 +252,5 @@ class ResizeClaim(Claim):
         """Compute operation requiring claimed resources has failed or
         been aborted.
         """
-        LOG.debug(_("Aborting claim: %s") % self, instance=self.instance)
+        LOG.debug("Aborting claim: %s" % self, instance=self.instance)
         self.tracker.drop_resize_claim(self.instance, self.instance_type)

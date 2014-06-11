@@ -111,7 +111,7 @@ There are some standard filter classes to use (:mod:`nova.scheduler.filters`):
 * |DifferentHostFilter| - allows to put the instance on a different host from a
   set of instances.
 * |SameHostFilter| - puts the instance on the same host as another instance in
-  a set of of instances.
+  a set of instances.
 * |RetryFilter| - filters hosts that have been attempted for scheduling.
   Only passes hosts that have not been previously attempted.
 * |TrustedFilter| - filters hosts based on their trust.  Only passes hosts
@@ -127,7 +127,7 @@ There are some standard filter classes to use (:mod:`nova.scheduler.filters`):
   group.  When the server gets scheduled, anti-affinity will be enforced among
   all servers in that group.
 * |ServerGroupAffinityFilter| - This filter works the same way as
-  ServerGroupAffinityFilter.  The difference is that when you create the server
+  ServerGroupAntiAffinityFilter.  The difference is that when you create the server
   group, you should specify a policy of 'affinity'.
 * |GroupAntiAffinityFilter| - This filter is deprecated in favor of
   ServerGroupAntiAffinityFilter.  Note that this should not be enabled at the
@@ -310,7 +310,7 @@ easily. Therefore the final weight for the object will be::
 
 A weigher should be a subclass of ``weights.BaseHostWeigher`` and they must
 implement the ``weight_multiplier`` and ``weight_object`` methods. If the
-``weight_objects`` method is overriden it just return a list of weights, and not
+``weight_objects`` method is overridden it just return a list of weights, and not
 modify the weight of the object directly, since final weights are normalized and
 computed by ``weight.BaseWeightHandler``.
 

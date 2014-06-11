@@ -27,7 +27,7 @@ from nova import context
 from nova.openstack.common import timeutils
 from nova import test
 from nova.tests.cells import fakes
-from nova.tests import fake_instance_actions
+from nova.tests import fake_server_actions
 
 CONF = cfg.CONF
 CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
@@ -112,16 +112,6 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         self.msg_runner.tell_parents_our_capacities(self.ctxt)
         self.mox.ReplayAll()
         self.cells_manager._update_our_parents(self.ctxt)
-
-    def test_schedule_run_instance(self):
-        host_sched_kwargs = 'fake_host_sched_kwargs_silently_passed'
-        self.mox.StubOutWithMock(self.msg_runner, 'schedule_run_instance')
-        our_cell = self.msg_runner.state_manager.get_my_state()
-        self.msg_runner.schedule_run_instance(self.ctxt, our_cell,
-                                              host_sched_kwargs)
-        self.mox.ReplayAll()
-        self.cells_manager.schedule_run_instance(self.ctxt,
-                host_sched_kwargs=host_sched_kwargs)
 
     def test_build_instances(self):
         build_inst_kwargs = {'instances': [1, 2]}
@@ -490,9 +480,9 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         self.assertEqual(expected_response, response)
 
     def test_actions_get(self):
-        fake_uuid = fake_instance_actions.FAKE_UUID
-        fake_req_id = fake_instance_actions.FAKE_REQUEST_ID1
-        fake_act = fake_instance_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
+        fake_uuid = fake_server_actions.FAKE_UUID
+        fake_req_id = fake_server_actions.FAKE_REQUEST_ID1
+        fake_act = fake_server_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
         fake_response = messaging.Response('fake-cell', [fake_act], False)
         expected_response = [fake_act]
         self.mox.StubOutWithMock(self.msg_runner, 'actions_get')
@@ -504,9 +494,9 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         self.assertEqual(expected_response, response)
 
     def test_action_get_by_request_id(self):
-        fake_uuid = fake_instance_actions.FAKE_UUID
-        fake_req_id = fake_instance_actions.FAKE_REQUEST_ID1
-        fake_act = fake_instance_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
+        fake_uuid = fake_server_actions.FAKE_UUID
+        fake_req_id = fake_server_actions.FAKE_REQUEST_ID1
+        fake_act = fake_server_actions.FAKE_ACTIONS[fake_uuid][fake_req_id]
         fake_response = messaging.Response('fake-cell', fake_act, False)
         expected_response = fake_act
         self.mox.StubOutWithMock(self.msg_runner, 'action_get_by_request_id')
@@ -520,8 +510,8 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         self.assertEqual(expected_response, response)
 
     def test_action_events_get(self):
-        fake_action_id = fake_instance_actions.FAKE_ACTION_ID1
-        fake_events = fake_instance_actions.FAKE_EVENTS[fake_action_id]
+        fake_action_id = fake_server_actions.FAKE_ACTION_ID1
+        fake_events = fake_server_actions.FAKE_EVENTS[fake_action_id]
         fake_response = messaging.Response('fake-cell', fake_events, False)
         expected_response = fake_events
         self.mox.StubOutWithMock(self.msg_runner, 'action_events_get')

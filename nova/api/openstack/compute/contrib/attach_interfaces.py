@@ -105,14 +105,16 @@ class InterfaceAttachmentController(object):
             vif = self.compute_api.attach_interface(context,
                 instance, network_id, port_id, req_ip)
         except (exception.PortNotFound,
+                exception.FixedIpAlreadyInUse,
                 exception.PortInUse,
                 exception.NetworkDuplicated,
                 exception.NetworkAmbiguous,
                 exception.NetworkNotFound) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.NotFound as e:
-            LOG.exception(e)
-            raise exc.HTTPNotFound()
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except NotImplementedError:
             msg = _("Network driver does not support this function.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
@@ -146,6 +148,8 @@ class InterfaceAttachmentController(object):
                 instance, port_id=port_id)
         except exception.PortNotFound:
             raise exc.HTTPNotFound()
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except NotImplementedError:
             msg = _("Network driver does not support this function.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
@@ -185,7 +189,7 @@ class Attach_interfaces(extensions.ExtensionDescriptor):
     name = "AttachInterfaces"
     alias = "os-attach-interfaces"
     namespace = "http://docs.openstack.org/compute/ext/interfaces/api/v1.1"
-    updated = "2012-07-22T00:00:00+00:00"
+    updated = "2012-07-22T00:00:00Z"
 
     def get_resources(self):
         resources = []

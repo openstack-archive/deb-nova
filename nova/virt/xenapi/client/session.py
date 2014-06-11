@@ -14,6 +14,8 @@
 
 import contextlib
 import cPickle as pickle
+import errno
+import socket
 import time
 import xmlrpclib
 
@@ -23,12 +25,12 @@ from oslo.config import cfg
 
 from nova import context
 from nova import exception
-from nova.objects import aggregate as aggregate_obj
+from nova import objects
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import versionutils
 from nova import utils
-from nova.virt.xenapi.client import objects
+from nova.virt.xenapi.client import objects as cli_objects
 from nova.virt.xenapi import pool
 from nova.virt.xenapi import pool_states
 
@@ -54,16 +56,16 @@ CONF.import_opt('host', 'nova.netconf')
 
 
 def apply_session_helpers(session):
-    session.VM = objects.VM(session)
-    session.SR = objects.SR(session)
-    session.VDI = objects.VDI(session)
-    session.VBD = objects.VBD(session)
-    session.PBD = objects.PBD(session)
-    session.PIF = objects.PIF(session)
-    session.VLAN = objects.VLAN(session)
-    session.host = objects.Host(session)
-    session.network = objects.Network(session)
-    session.pool = objects.Pool(session)
+    session.VM = cli_objects.VM(session)
+    session.SR = cli_objects.SR(session)
+    session.VDI = cli_objects.VDI(session)
+    session.VBD = cli_objects.VBD(session)
+    session.PBD = cli_objects.PBD(session)
+    session.PIF = cli_objects.PIF(session)
+    session.VLAN = cli_objects.VLAN(session)
+    session.host = cli_objects.Host(session)
+    session.network = cli_objects.Network(session)
+    session.pool = cli_objects.Pool(session)
 
 
 class XenAPISession(object):
@@ -130,7 +132,7 @@ class XenAPISession(object):
 
     def _get_host_uuid(self):
         if self.is_slave:
-            aggr = aggregate_obj.AggregateList.get_by_host(
+            aggr = objects.AggregateList.get_by_host(
                 context.get_admin_context(),
                 CONF.host, key=pool_states.POOL_FLAG)[0]
             if not aggr:
@@ -210,35 +212,46 @@ class XenAPISession(object):
         attempts = num_retries + 1
         sleep_time = 0.5
         for attempt in xrange(1, attempts + 1):
-            LOG.info(_('%(plugin)s.%(fn)s attempt %(attempt)d/%(attempts)d'),
-                     {'plugin': plugin, 'fn': fn, 'attempt': attempt,
-                      'attempts': attempts})
             try:
                 if attempt > 1:
                     time.sleep(sleep_time)
                     sleep_time = min(2 * sleep_time, 15)
 
+                callback_result = None
                 if callback:
-                    callback(kwargs)
+                    callback_result = callback(kwargs)
 
+                msg = _('%(plugin)s.%(fn)s attempt %(attempt)d/%(attempts)d, '
+                        'callback_result: %(callback_result)s')
+                LOG.debug(msg,
+                          {'plugin': plugin, 'fn': fn, 'attempt': attempt,
+                           'attempts': attempts,
+                           'callback_result': callback_result})
                 return self.call_plugin_serialized(plugin, fn, *args, **kwargs)
             except self.XenAPI.Failure as exc:
-                if self._is_retryable_exception(exc):
+                if self._is_retryable_exception(exc, fn):
                     LOG.warn(_('%(plugin)s.%(fn)s failed. Retrying call.')
                              % {'plugin': plugin, 'fn': fn})
+                else:
+                    raise
+            except socket.error as exc:
+                if exc.errno == errno.ECONNRESET:
+                    LOG.warn(_('Lost connection to XenAPI during call to '
+                               '%(plugin)s.%(fn)s.  Retrying call.') %
+                               {'plugin': plugin, 'fn': fn})
                 else:
                     raise
 
         raise exception.PluginRetriesExceeded(num_retries=num_retries)
 
-    def _is_retryable_exception(self, exc):
+    def _is_retryable_exception(self, exc, fn):
         _type, method, error = exc.details[:3]
         if error == 'RetryableError':
-            LOG.debug(_("RetryableError, so retrying upload_vhd"),
+            LOG.debug(_("RetryableError, so retrying %(fn)s"), {'fn': fn},
                       exc_info=True)
             return True
         elif "signal" in method:
-            LOG.debug(_("Error due to a signal, retrying upload_vhd"),
+            LOG.debug(_("Error due to a signal, retrying %(fn)s"), {'fn': fn},
                       exc_info=True)
             return True
         else:

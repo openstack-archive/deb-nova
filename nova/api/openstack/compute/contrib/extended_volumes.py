@@ -18,7 +18,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
-from nova.objects import block_device as block_device_obj
+from nova import objects
 
 authorize = extensions.soft_extension_authorizer('compute', 'extended_volumes')
 
@@ -29,7 +29,7 @@ class ExtendedVolumesController(wsgi.Controller):
         self.compute_api = compute.API()
 
     def _extend_server(self, context, server, instance):
-        bdms = block_device_obj.BlockDeviceMappingList.get_by_instance_uuid(
+        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance['uuid'])
         volume_ids = [bdm.volume_id for bdm in bdms if bdm.volume_id]
         key = "%s:volumes_attached" % Extended_volumes.alias
@@ -68,7 +68,7 @@ class Extended_volumes(extensions.ExtensionDescriptor):
     alias = "os-extended-volumes"
     namespace = ("http://docs.openstack.org/compute/ext/"
                  "extended_volumes/api/v1.1")
-    updated = "2013-06-07T00:00:00+00:00"
+    updated = "2013-06-07T00:00:00Z"
 
     def get_controller_extensions(self):
         controller = ExtendedVolumesController()

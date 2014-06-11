@@ -15,6 +15,8 @@
 
 import re
 
+import pep8
+
 """
 Guidelines for writing new hacking checks
 
@@ -37,7 +39,8 @@ virt_import_re = re.compile(
     r"^\s*(?:import|from) nova\.(?:tests\.)?virt\.(\w+)")
 virt_config_re = re.compile(
     r"CONF\.import_opt\('.*?', 'nova\.virt\.(\w+)('|.)")
-author_tag_re = re.compile("^\s*#\s*@?(a|A)uthor:")
+author_tag_re = (re.compile("^\s*#\s*@?(a|A)uthor:"),
+                 re.compile("^\.\.\s+moduleauthor::"))
 asse_trueinst_re = re.compile(
                      r"(.)*assertTrue\(isinstance\((\w|\.|\'|\"|\[|\])+, "
                      "(\w|\.|\'|\"|\[|\])+\)\)")
@@ -48,6 +51,9 @@ asse_equal_end_with_none_re = re.compile(
                            r"(.)*assertEqual\((\w|\.|\'|\"|\[|\])+, None\)")
 asse_equal_start_with_none_re = re.compile(
                            r"(.)*assertEqual\(None, (\w|\.|\'|\"|\[|\])+\)")
+conf_attribute_set_re = re.compile(r"CONF\.[a-z0-9_.]+\s*=\s*\w")
+log_translation = re.compile(
+    r"(.)*LOG\.(audit|error|info|warn|warning|critical|exception)\(\s*('|\")")
 
 
 def import_no_db_in_virt(logical_line, filename):
@@ -158,9 +164,13 @@ def no_vi_headers(physical_line, line_number, lines):
 
 
 def no_author_tags(physical_line):
-    if author_tag_re.match(physical_line):
-        pos = physical_line.find('author')
-        return pos, "N315: Don't use author tags"
+    for regex in author_tag_re:
+        if regex.match(physical_line):
+            physical_line = physical_line.lower()
+            pos = physical_line.find('moduleauthor')
+            if pos < 0:
+                pos = physical_line.find('author')
+            return pos, "N315: Don't use author tags"
 
 
 def assert_true_instance(logical_line):
@@ -193,6 +203,80 @@ def assert_equal_none(logical_line):
                "sentences not allowed")
 
 
+def no_translate_debug_logs(logical_line, filename):
+    """Check for 'LOG.debug(_('
+
+    As per our translation policy,
+    https://wiki.openstack.org/wiki/LoggingStandards#Log_Translation
+    we shouldn't translate debug level logs.
+
+    * This check assumes that 'LOG' is a logger.
+    * Use filename so we can start enforcing this in specific folders instead
+      of needing to do so all at once.
+
+    N319
+    """
+    dirs = ["nova/scheduler",
+            "nova/network",
+            "nova/volume",
+            "nova/api",
+            "nova/cells",
+            "nova/conductor",
+            "nova/compute",
+            "nova/objects",
+            "nova/cmd",
+            "nova/db",
+            "nova/cert",
+            "nova/console",
+            "nova/consoleauth",
+            "nova/cloudpipe",
+            "nova/image",
+            "nova/hacking",
+            "nova/ipv6",
+            "nova/keymgr",
+            "nova/objectstore",
+            "nova/pci",
+            "nova/rdp",
+            "nova/servicegroup",
+            "nova/spice",
+            "nova/storage",
+            "nova/tests",
+            "nova/vnc",
+           ]
+    if max([name in filename for name in dirs]):
+        if logical_line.startswith("LOG.debug(_("):
+            yield(0, "N319 Don't translate debug level logs")
+
+
+def no_setting_conf_directly_in_tests(logical_line, filename):
+    """Check for setting CONF.* attributes directly in tests
+
+    The value can leak out of tests affecting how subsequent tests run.
+    Using self.flags(option=value) is the preferred method to temporarily
+    set config options in tests.
+
+    N320
+    """
+    if 'nova/tests/' in filename:
+        res = conf_attribute_set_re.match(logical_line)
+        if res:
+            yield (0, "N320: Setting CONF.* attributes directly in tests is "
+                      "forbidden. Use self.flags(option=value) instead")
+
+
+def validate_log_translations(logical_line, physical_line, filename):
+    # Translations are not required in the test directory
+    # and the Xen utilities
+    if ("nova/tests" in filename or
+            "plugins/xenserver/xenapi/etc/xapi.d" in filename):
+        return
+    if pep8.noqa(physical_line):
+        return
+    msg = "N321: Log messages require translations!"
+    if log_translation.match(logical_line):
+        yield (0, msg)
+
+
 def factory(register):
     register(import_no_db_in_virt)
     register(no_db_session_in_public_api)
@@ -205,3 +289,6 @@ def factory(register):
     register(assert_true_instance)
     register(assert_equal_type)
     register(assert_equal_none)
+    register(no_translate_debug_logs)
+    register(no_setting_conf_directly_in_tests)
+    register(validate_log_translations)

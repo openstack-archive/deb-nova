@@ -1,6 +1,6 @@
 {
     "server": {
-        "os-server-usage:launched_at": "%(timestamp)s",
+        "os-server-usage:launched_at": "%(strtime)s",
         "os-server-usage:terminated_at": null,
         "addresses": {
             "private": [
@@ -12,7 +12,7 @@
                 }
             ]
         },
-        "created": "%(timestamp)s",
+        "created": "%(isotime)s",
         "flavor": {
             "id": "1",
             "links": [
@@ -51,7 +51,7 @@
         "progress": 0,
         "status": "ACTIVE",
         "tenant_id": "openstack",
-        "updated": "%(timestamp)s",
+        "updated": "%(isotime)s",
         "user_id": "fake"
     }
 }

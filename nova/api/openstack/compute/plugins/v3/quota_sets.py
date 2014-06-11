@@ -87,7 +87,7 @@ class QuotaSetsController(wsgi.Controller):
             nova.context.authorize_project_context(context, id)
             return self._format_quota_set(id,
                     self._get_quotas(context, id, user_id=user_id))
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
     @extensions.expected_errors(403)
@@ -100,7 +100,7 @@ class QuotaSetsController(wsgi.Controller):
             return self._format_quota_set(id, self._get_quotas(context, id,
                                                                user_id=user_id,
                                                                usages=True))
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
     @extensions.expected_errors((400, 403))
@@ -142,16 +142,16 @@ class QuotaSetsController(wsgi.Controller):
         try:
             settable_quotas = QUOTAS.get_settable_quotas(context, project_id,
                                                          user_id=user_id)
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
         try:
             quotas = self._get_quotas(context, id, user_id=user_id,
                                       usages=True)
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
-        LOG.debug(_("Force update quotas: %s"), force_update)
+        LOG.debug("Force update quotas: %s", force_update)
 
         for key, value in body['quota_set'].iteritems():
             if key == 'force' or (not value and value != 0):
@@ -165,8 +165,8 @@ class QuotaSetsController(wsgi.Controller):
                 if quota_value and quota_value['limit'] >= 0:
                     quota_used = (quota_value['in_use'] +
                                   quota_value['reserved'])
-                    LOG.debug(_("Quota %(key)s used: %(quota_used)s, "
-                                "value: %(value)s."),
+                    LOG.debug("Quota %(key)s used: %(quota_used)s, "
+                              "value: %(value)s.",
                               {'key': key, 'quota_used': quota_used,
                                'value': value})
                     if quota_used > value:
@@ -214,7 +214,7 @@ class QuotaSetsController(wsgi.Controller):
                                                        id, user_id)
             else:
                 QUOTAS.destroy_all_by_project(context, id)
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
 

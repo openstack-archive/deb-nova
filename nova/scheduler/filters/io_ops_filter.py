@@ -15,7 +15,6 @@
 
 from oslo.config import cfg
 
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.scheduler import filters
 
@@ -23,7 +22,10 @@ LOG = logging.getLogger(__name__)
 
 max_io_ops_per_host_opt = cfg.IntOpt("max_io_ops_per_host",
         default=8,
-        help="Ignore hosts that have too many builds/resizes/snaps/migrations")
+        help="Tells filters to ignore hosts that have "
+             "this many or more instances currently in "
+             "build, resize, snapshot, migrate, rescue or unshelve "
+             "task states")
 
 CONF = cfg.CONF
 CONF.register_opt(max_io_ops_per_host_opt)
@@ -40,8 +42,8 @@ class IoOpsFilter(filters.BaseHostFilter):
         max_io_ops = CONF.max_io_ops_per_host
         passes = num_io_ops < max_io_ops
         if not passes:
-            LOG.debug(_("%(host_state)s fails I/O ops check: Max IOs per host "
-                        "is set to %(max_io_ops)s"),
+            LOG.debug("%(host_state)s fails I/O ops check: Max IOs per host "
+                        "is set to %(max_io_ops)s",
                         {'host_state': host_state,
                          'max_io_ops': max_io_ops})
         return passes

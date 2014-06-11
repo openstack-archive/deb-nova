@@ -285,15 +285,12 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
         flavor = utils.get_test_flavor()
         # Raises an exception when options are neither specified
         # on the instance nor in configuration file
-        CONF.baremetal.deploy_kernel = None
-        CONF.baremetal.deploy_ramdisk = None
         self.assertRaises(exception.NovaException,
                 pxe.get_tftp_image_info,
                 self.instance, flavor)
 
         # Test that other non-true values also raise an exception
-        CONF.baremetal.deploy_kernel = ""
-        CONF.baremetal.deploy_ramdisk = ""
+        self.flags(deploy_kernel='', deploy_ramdisk='', group='baremetal')
         self.assertRaises(exception.NovaException,
                 pxe.get_tftp_image_info,
                 self.instance, flavor)
@@ -313,8 +310,8 @@ class PXEClassMethodsTestCase(BareMetalPXETestCase):
 
         # Here, we confirm both that all four values were set
         # and that the proper paths are getting set for all of them
-        CONF.baremetal.deploy_kernel = 'cccc'
-        CONF.baremetal.deploy_ramdisk = 'dddd'
+        self.flags(deploy_kernel='cccc', deploy_ramdisk='dddd',
+                   group='baremetal')
         base = os.path.join(CONF.baremetal.tftp_root, self.instance['uuid'])
         res = pxe.get_tftp_image_info(self.instance, flavor)
         expected = {
@@ -414,6 +411,9 @@ class PXEPrivateMethodsTestCase(BareMetalPXETestCase):
         net = pxe.build_network_config(net_info)
         admin_password = 'fake password'
 
+        self.mox.StubOutWithMock(os.path, 'exists')
+        os.path.exists(mox.IgnoreArg()).AndReturn(True)
+
         self.mox.StubOutWithMock(disk_api, 'inject_data')
         disk_api.inject_data(
                 admin_password=admin_password,
@@ -500,7 +500,7 @@ class PXEPublicMethodsTestCase(BareMetalPXETestCase):
         iqn = "iqn-%s" % self.instance['uuid']
         pxe_config = 'this is a fake pxe config'
         pxe_path = pxe.get_pxe_config_file_path(self.instance)
-        image_path = pxe.get_image_file_path(self.instance)
+        pxe.get_image_file_path(self.instance)
 
         self.mox.StubOutWithMock(flavor_obj.Flavor, 'get_by_id')
         self.mox.StubOutWithMock(pxe, 'get_tftp_image_info')

@@ -54,6 +54,8 @@
 
 from __future__ import print_function
 
+import argparse
+import decorator
 import os
 import sys
 
@@ -70,6 +72,7 @@ from nova import context
 from nova import db
 from nova.db import migration
 from nova import exception
+from nova import objects
 from nova.openstack.common import cliutils
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common.gettextutils import _
@@ -78,6 +81,7 @@ from nova.openstack.common import log as logging
 from nova import quota
 from nova import rpc
 from nova import servicegroup
+from nova import utils
 from nova import version
 
 CONF = cfg.CONF
@@ -483,9 +487,20 @@ class FloatingIpCommands(object):
                                           floating_ip['interface']))
 
 
+@decorator.decorator
+def validate_network_plugin(f, *args, **kwargs):
+    """Decorator to validate the network plugin."""
+    if utils.is_neutron():
+        print(_("ERROR: Network commands are not supported when using the "
+                "Neutron API.  Use python-neutronclient instead."))
+        return(2)
+    return f(*args, **kwargs)
+
+
 class NetworkCommands(object):
     """Class for managing networks."""
 
+    @validate_network_plugin
     @args('--label', metavar='<label>', help='Label for network (ex: public)')
     @args('--fixed_range_v4', dest='cidr', metavar='<x.x.x.x/yy>',
             help='IPv4 subnet (ex: 10.0.0.0/8)')
@@ -527,6 +542,7 @@ class NetworkCommands(object):
         net_manager = importutils.import_object(CONF.network_manager)
         net_manager.create_networks(context.get_admin_context(), **kwargs)
 
+    @validate_network_plugin
     def list(self):
         """List all created networks."""
         _fmt = "%-5s\t%-18s\t%-15s\t%-15s\t%-15s\t%-15s\t%-15s\t%-15s\t%-15s"
@@ -558,11 +574,11 @@ class NetworkCommands(object):
                               network.project_id,
                               network.uuid))
 
+    @validate_network_plugin
     @args('--fixed_range', metavar='<x.x.x.x/yy>', help='Network to delete')
     @args('--uuid', metavar='<uuid>', help='UUID of network to delete')
     def delete(self, fixed_range=None, uuid=None):
         """Deletes a network."""
-
         if fixed_range is None and uuid is None:
             raise Exception(_("Please specify either fixed_range or uuid"))
 
@@ -578,6 +594,7 @@ class NetworkCommands(object):
         net_manager.delete_network(context.get_admin_context(),
             fixed_range, uuid)
 
+    @validate_network_plugin
     @args('--fixed_range', metavar='<x.x.x.x/yy>', help='Network to modify')
     @args('--project', metavar='<project name>',
             help='Project name to associate')
@@ -906,6 +923,10 @@ class FlavorCommands(object):
 
     Note instance type is a deprecated synonym for flavor.
     """
+
+    description = ('DEPRECATED: Use the nova flavor-* commands from '
+                   'python-novaclient instead. The flavor subcommand will be '
+                   'removed in the 2015.1 release')
 
     def _print_flavors(self, val):
         is_public = ('private', 'public')[val["is_public"] == 1]
@@ -1280,13 +1301,14 @@ def add_command_parsers(subparsers):
     for category in CATEGORIES:
         command_object = CATEGORIES[category]()
 
-        parser = subparsers.add_parser(category)
+        desc = getattr(command_object, 'description', None)
+        parser = subparsers.add_parser(category, description=desc)
         parser.set_defaults(command_object=command_object)
 
         category_subparsers = parser.add_subparsers(dest='action')
 
         for (action, action_fn) in methods_of(command_object):
-            parser = category_subparsers.add_parser(action)
+            parser = category_subparsers.add_parser(action, description=desc)
 
             action_kwargs = []
             for args, kwargs in getattr(action_fn, 'args', []):
@@ -1305,7 +1327,8 @@ def add_command_parsers(subparsers):
             parser.set_defaults(action_fn=action_fn)
             parser.set_defaults(action_kwargs=action_kwargs)
 
-            parser.add_argument('action_args', nargs='*')
+            parser.add_argument('action_args', nargs='*',
+                                help=argparse.SUPPRESS)
 
 
 category_opt = cfg.SubCommandOpt('category',
@@ -1332,6 +1355,8 @@ def main():
 
         print(_('Please re-run nova-manage as root.'))
         return(2)
+
+    objects.register_all()
 
     if CONF.category.name == "version":
         print(version.version_string_with_package())

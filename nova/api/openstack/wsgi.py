@@ -677,7 +677,7 @@ class ResourceExceptionHandler(object):
         if not ex_value:
             return True
 
-        if isinstance(ex_value, exception.NotAuthorized):
+        if isinstance(ex_value, exception.Forbidden):
             raise Fault(webob.exc.HTTPForbidden(
                     explanation=ex_value.format_message()))
         elif isinstance(ex_value, exception.Invalid):
@@ -812,7 +812,7 @@ class Resource(wsgi.Application):
         try:
             content_type = request.get_content_type()
         except exception.InvalidContentType:
-            LOG.debug(_("Unrecognized Content-Type provided in request"))
+            LOG.debug("Unrecognized Content-Type provided in request")
             return None, ''
 
         return content_type, request.body
@@ -938,8 +938,8 @@ class Resource(wsgi.Application):
                     "%(body)s") % {'action': action,
                                    'body': unicode(body, 'utf-8')}
             LOG.debug(logging.mask_password(msg))
-        LOG.debug(_("Calling method '%(meth)s' (Content-type='%(ctype)s', "
-                    "Accept='%(accept)s')"),
+        LOG.debug("Calling method '%(meth)s' (Content-type='%(ctype)s', "
+                  "Accept='%(accept)s')",
                   {'meth': str(meth),
                    'ctype': content_type,
                    'accept': accept})
@@ -1013,9 +1013,6 @@ class Resource(wsgi.Application):
                                               self.default_serializers)
 
         if hasattr(response, 'headers'):
-            if context:
-                response.headers.add('x-compute-request-id',
-                                     context.request_id)
 
             for hdr, val in response.headers.items():
                 # Headers must be utf-8 strings
@@ -1173,10 +1170,7 @@ class Controller(object):
             except AttributeError:
                 return False
 
-        if not is_dict(body[entity_name]):
-            return False
-
-        return True
+        return is_dict(body[entity_name])
 
 
 class Fault(webob.exc.HTTPException):
@@ -1211,7 +1205,7 @@ class Fault(webob.exc.HTTPException):
         code = self.wrapped_exc.status_int
         fault_name = self._fault_names.get(code, "computeFault")
         explanation = self.wrapped_exc.explanation
-        LOG.debug(_("Returning %(code)s to user: %(explanation)s"),
+        LOG.debug("Returning %(code)s to user: %(explanation)s",
                   {'code': code, 'explanation': explanation})
 
         explanation = gettextutils.translate(explanation,
@@ -1238,7 +1232,6 @@ class Fault(webob.exc.HTTPException):
 
         self.wrapped_exc.body = serializer.serialize(fault_data)
         self.wrapped_exc.content_type = content_type
-        _set_request_id_header(req, self.wrapped_exc.headers)
 
         return self.wrapped_exc
 
@@ -1298,9 +1291,3 @@ class RateLimitFault(webob.exc.HTTPException):
         self.wrapped_exc.content_type = content_type
 
         return self.wrapped_exc
-
-
-def _set_request_id_header(req, headers):
-    context = req.environ.get('nova.context')
-    if context:
-        headers['x-compute-request-id'] = context.request_id

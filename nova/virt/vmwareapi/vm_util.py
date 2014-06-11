@@ -25,6 +25,7 @@ import functools
 from oslo.config import cfg
 
 from nova import exception
+from nova.network import model as network_model
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import units
@@ -35,6 +36,9 @@ from nova.virt.vmwareapi import vim_util
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
+ALL_SUPPORTED_NETWORK_DEVICES = ['VirtualE1000', 'VirtualE1000e',
+                                 'VirtualPCNet32', 'VirtualSriovEthernetCard',
+                                 'VirtualVmxnet']
 DSRecord = collections.namedtuple(
     'DSRecord', ['datastore', 'name', 'capacity', 'freespace'])
 
@@ -183,6 +187,18 @@ def create_controller_spec(client_factory, key, adapter_type="lsiLogic"):
     return virtual_device_config
 
 
+def _convert_vif_model(name):
+    """Converts standard VIF_MODEL types to the internal VMware ones."""
+    if name == network_model.VIF_MODEL_E1000:
+        return 'VirtualE1000'
+    if name == network_model.VIF_MODEL_E1000E:
+        return 'VirtualE1000e'
+    if name not in ALL_SUPPORTED_NETWORK_DEVICES:
+        msg = _('%s is not supported.') % name
+        raise exception.Invalid(msg)
+    return name
+
+
 def create_network_spec(client_factory, vif_info):
     """Builds a config spec for the addition of a new network
     adapter to the VM.
@@ -191,8 +207,7 @@ def create_network_spec(client_factory, vif_info):
     network_spec.operation = "add"
 
     # Keep compatible with other Hyper vif model parameter.
-    if vif_info['vif_model'] == "e1000":
-        vif_info['vif_model'] = "VirtualE1000"
+    vif_info['vif_model'] = _convert_vif_model(vif_info['vif_model'])
 
     vif = 'ns0:' + vif_info['vif_model']
     net_device = client_factory.create(vif)
@@ -978,7 +993,8 @@ def get_stats_from_cluster(session, cluster):
             for obj in result.objects:
                 hardware_summary = obj.propSet[0].val
                 runtime_summary = obj.propSet[1].val
-                if runtime_summary.connectionState == "connected":
+                if (runtime_summary.inMaintenanceMode == False and
+                    runtime_summary.connectionState == "connected"):
                     # Total vcpus is the sum of all pCPUs of individual hosts
                     # The overcommitment ratio is factored in by the scheduler
                     cpu_info['vcpus'] += hardware_summary.numCpuThreads
@@ -1157,12 +1173,12 @@ def get_available_datastores(session, cluster=None, datastore_regex=None):
     """Get the datastore list and choose the first local storage."""
     if cluster:
         mobj = cluster
-        type = "ClusterComputeResource"
+        resource_type = "ClusterComputeResource"
     else:
         mobj = get_host_ref(session)
-        type = "HostSystem"
+        resource_type = "HostSystem"
     ds = session._call_method(vim_util, "get_dynamic_property", mobj,
-                              type, "datastore")
+                              resource_type, "datastore")
     if not ds:
         return []
     data_store_mors = ds.ManagedObjectReference
@@ -1364,6 +1380,79 @@ def get_vmdk_adapter_type(adapter_type):
     return vmdk_adapter_type
 
 
+def create_vm(session, instance, vm_folder, config_spec, res_pool_ref):
+    """Create VM on ESX host."""
+    LOG.debug(_("Creating VM on the ESX host"), instance=instance)
+    vm_create_task = session._call_method(
+        session._get_vim(),
+        "CreateVM_Task", vm_folder,
+        config=config_spec, pool=res_pool_ref)
+    task_info = session._wait_for_task(vm_create_task)
+    LOG.debug(_("Created VM on the ESX host"), instance=instance)
+    return task_info.result
+
+
+def create_virtual_disk(session, dc_ref, adapter_type, disk_type,
+                        virtual_disk_path, size_in_kb):
+    # Create a Virtual Disk of the size of the flat vmdk file. This is
+    # done just to generate the meta-data file whose specifics
+    # depend on the size of the disk, thin/thick provisioning and the
+    # storage adapter type.
+    LOG.debug("Creating Virtual Disk of size  "
+              "%(vmdk_file_size_in_kb)s KB and adapter type "
+              "%(adapter_type)s on the data store",
+              {"vmdk_file_size_in_kb": size_in_kb,
+               "adapter_type": adapter_type})
+
+    vmdk_create_spec = get_vmdk_create_spec(
+            session._get_vim().client.factory,
+            size_in_kb,
+            adapter_type,
+            disk_type)
+
+    vmdk_create_task = session._call_method(
+            session._get_vim(),
+            "CreateVirtualDisk_Task",
+            session._get_vim().get_service_content().virtualDiskManager,
+            name=virtual_disk_path,
+            datacenter=dc_ref,
+            spec=vmdk_create_spec)
+
+    session._wait_for_task(vmdk_create_task)
+    LOG.debug("Created Virtual Disk of size %(vmdk_file_size_in_kb)s"
+              " KB and type %(disk_type)s",
+              {"vmdk_file_size_in_kb": size_in_kb,
+               "disk_type": disk_type})
+
+
+def copy_virtual_disk(session, dc_ref, source, dest, copy_spec=None):
+    """Copy a sparse virtual disk to a thin virtual disk. This is also
+       done to generate the meta-data file whose specifics
+       depend on the size of the disk, thin/thick provisioning and the
+       storage adapter type.
+
+    :param session: - session for connection
+    :param dc_ref: - data center reference object
+    :param source: - source datastore path
+    :param dest: - destination datastore path
+    :param copy_spec: - the copy specification
+    """
+    LOG.debug("Copying Virtual Disk %(source)s to %(dest)s",
+              {'source': source, 'dest': dest})
+    vim = session._get_vim()
+    vmdk_copy_task = session._call_method(
+            vim,
+            "CopyVirtualDisk_Task",
+            vim.get_service_content().virtualDiskManager,
+            sourceName=source,
+            sourceDatacenter=dc_ref,
+            destName=dest,
+            destSpec=copy_spec)
+    session._wait_for_task(vmdk_copy_task)
+    LOG.debug("Copied Virtual Disk %(source)s to %(dest)s",
+              {'source': source, 'dest': dest})
+
+
 def clone_vmref_for_instance(session, instance, vm_ref, host_ref, ds_ref,
                                 vmfolder_ref):
     """Clone VM and link the cloned VM to the instance.
@@ -1455,3 +1544,41 @@ def associate_vmref_for_instance(session, instance, vm_ref=None,
                instance=instance)
     # Invalidate the cache, so that it is refetched the next time
     vm_ref_cache_delete(instance['uuid'])
+
+
+def power_on_instance(session, instance, vm_ref=None):
+    """Power on the specified instance."""
+
+    if vm_ref is None:
+        vm_ref = get_vm_ref(session, instance)
+
+    LOG.debug("Powering on the VM", instance=instance)
+    try:
+        poweron_task = session._call_method(
+                                    session._get_vim(),
+                                    "PowerOnVM_Task", vm_ref)
+        session._wait_for_task(poweron_task)
+        LOG.debug("Powered on the VM", instance=instance)
+    except error_util.InvalidPowerStateException:
+        LOG.debug("VM already powered on", instance=instance)
+
+
+def get_values_from_object_properties(session, props, properties):
+    """Get the specific values from a object list.
+
+    The object values will be returned as a dictionary. The keys for the
+    dictionary will be the 'properties'.
+    """
+    dictionary = {}
+    while props:
+        for elem in props.objects:
+            propdict = propset_dict(elem.propSet)
+            dictionary.update(propdict)
+        token = _get_token(props)
+        if not token:
+            break
+
+        props = session._call_method(vim_util,
+                                     "continue_to_get_objects",
+                                     token)
+    return dictionary

@@ -55,7 +55,7 @@ class ExtensionDescriptor(object):
     namespace = None
 
     # The timestamp when the extension was last updated, e.g.,
-    # '2011-01-22T13:25:27-06:00'
+    # '2011-01-22T19:25:27Z'
     updated = None
 
     def __init__(self, ext_mgr):
@@ -174,7 +174,7 @@ class ExtensionsController(wsgi.Resource):
 class ExtensionManager(object):
     """Load extensions from the configured extension path.
 
-    See nova/tests/api/openstack/volume/extensions/foxinsocks.py or an
+    See nova/tests/api/openstack/compute/extensions/foxinsocks.py or an
     example extension implementation.
 
     """
@@ -233,12 +233,12 @@ class ExtensionManager(object):
     def _check_extension(self, extension):
         """Checks for required methods in extension objects."""
         try:
-            LOG.debug(_('Ext name: %s'), extension.name)
-            LOG.debug(_('Ext alias: %s'), extension.alias)
-            LOG.debug(_('Ext description: %s'),
+            LOG.debug('Ext name: %s', extension.name)
+            LOG.debug('Ext alias: %s', extension.alias)
+            LOG.debug('Ext description: %s',
                       ' '.join(extension.__doc__.strip().split()))
-            LOG.debug(_('Ext namespace: %s'), extension.namespace)
-            LOG.debug(_('Ext updated: %s'), extension.updated)
+            LOG.debug('Ext namespace: %s', extension.namespace)
+            LOG.debug('Ext updated: %s', extension.updated)
         except AttributeError as ex:
             LOG.exception(_("Exception loading extension: %s"), unicode(ex))
             return False
@@ -254,7 +254,7 @@ class ExtensionManager(object):
         expected to call the register() method at least once.
         """
 
-        LOG.debug(_("Loading extension %s"), ext_factory)
+        LOG.debug("Loading extension %s", ext_factory)
 
         if isinstance(ext_factory, six.string_types):
             # Load the factory
@@ -263,7 +263,7 @@ class ExtensionManager(object):
             factory = ext_factory
 
         # Call it
-        LOG.debug(_("Calling extension factory %s"), ext_factory)
+        LOG.debug("Calling extension factory %s", ext_factory)
         factory(self)
 
     def _load_extensions(self):
@@ -401,7 +401,7 @@ def soft_extension_authorizer(api_name, extension_name):
         try:
             hard_authorize(context, action=action)
             return True
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             return False
     return authorize
 

@@ -16,10 +16,11 @@
 
 from nova import db
 from nova.scheduler import filters
+from nova.scheduler.filters import utils
 
 
 class TypeAffinityFilter(filters.BaseHostFilter):
-    """TypeAffinityFilter doesn't allow more then one VM type per host.
+    """TypeAffinityFilter doesn't allow more than one VM type per host.
 
     Note: this works best with ram_weight_multiplier
     (spread) set to 1 (default).
@@ -51,8 +52,13 @@ class AggregateTypeAffinityFilter(filters.BaseHostFilter):
 
     def host_passes(self, host_state, filter_properties):
         instance_type = filter_properties.get('instance_type')
-        context = filter_properties['context'].elevated()
-        metadata = db.aggregate_metadata_get_by_host(
-                     context, host_state.host, key='instance_type')
-        return (len(metadata) == 0 or
-                instance_type['name'] in metadata['instance_type'])
+
+        # TODO(uni): DB query in filter is a performance hit, especially for
+        # system with lots of hosts. Will need a general solution here to fix
+        # all filters with aggregate DB call things.
+        aggregate_vals = utils.aggregate_values_from_db(
+            filter_properties['context'], host_state.host, 'instance_type')
+
+        if not aggregate_vals:
+            return True
+        return instance_type['name'] in aggregate_vals

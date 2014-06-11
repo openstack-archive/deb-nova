@@ -29,6 +29,7 @@ FILE_ALREADY_EXISTS = 'FileAlreadyExists'
 FILE_FAULT = 'FileFault'
 FILE_LOCKED = 'FileLocked'
 FILE_NOT_FOUND = 'FileNotFound'
+INVALID_POWER_STATE = 'InvalidPowerState'
 INVALID_PROPERTY = 'InvalidProperty'
 NO_PERMISSION = 'NoPermission'
 NOT_AUTHENTICATED = 'NotAuthenticated'
@@ -42,7 +43,7 @@ class VimException(Exception):
         if isinstance(exception_summary, list):
             # we need this to protect against developers using
             # this method like VimFaultException
-            raise ValueError("exception_summary must not be a list")
+            raise ValueError(_("exception_summary must not be a list"))
 
         self.exception_summary = str(exception_summary)
         self.exception_obj = excep
@@ -72,7 +73,7 @@ class VimFaultException(Exception):
     def __init__(self, fault_list, fault_string, details=None):
         Exception.__init__(self)
         if not isinstance(fault_list, list):
-            raise ValueError("fault_list must be a list")
+            raise ValueError(_("fault_list must be a list"))
         self.fault_list = fault_list
         self.fault_string = fault_string
         self.details = details
@@ -149,6 +150,10 @@ class MissingParameter(VMwareDriverException):
     msg_fmt = _("Missing parameter : %(param)s")
 
 
+class NoRootDiskDefined(VMwareDriverException):
+    msg_fmt = _("No root disk defined.")
+
+
 class AlreadyExistsException(VMwareDriverException):
     msg_fmt = _("Resource already exists.")
     code = 409
@@ -194,6 +199,11 @@ class NotAuthenticatedException(VMwareDriverException):
     code = 403
 
 
+class InvalidPowerStateException(VMwareDriverException):
+    msg_fmt = _("Invalid Power State.")
+    code = 409
+
+
 # Populate the fault registry with the exceptions that have
 # special treatment.
 _fault_classes_registry = {
@@ -203,6 +213,7 @@ _fault_classes_registry = {
     FILE_FAULT: FileFaultException,
     FILE_LOCKED: FileLockedException,
     FILE_NOT_FOUND: FileNotFoundException,
+    INVALID_POWER_STATE: InvalidPowerStateException,
     INVALID_PROPERTY: InvalidPropertyException,
     NO_PERMISSION: NoPermissionException,
     NOT_AUTHENTICATED: NotAuthenticatedException

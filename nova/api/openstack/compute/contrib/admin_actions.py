@@ -336,13 +336,16 @@ class AdminActionsController(wsgi.Controller):
             instance = self.compute_api.get(context, id, want_objects=True)
             self.compute_api.live_migrate(context, instance, block_migration,
                                           disk_over_commit, host)
-        except (exception.ComputeServiceUnavailable,
+        except (exception.NoValidHost,
+                exception.ComputeServiceUnavailable,
                 exception.InvalidHypervisorType,
+                exception.InvalidCPUInfo,
                 exception.UnableToMigrateToSelf,
                 exception.DestinationHypervisorTooOld,
-                exception.NoValidHost,
                 exception.InvalidLocalStorage,
                 exception.InvalidSharedStorage,
+                exception.HypervisorUnavailable,
+                exception.InstanceNotRunning,
                 exception.MigrationPreCheckError) as ex:
             raise exc.HTTPBadRequest(explanation=ex.format_message())
         except exception.InstanceNotFound as e:
@@ -402,7 +405,7 @@ class Admin_actions(extensions.ExtensionDescriptor):
     name = "AdminActions"
     alias = "os-admin-actions"
     namespace = "http://docs.openstack.org/compute/ext/admin-actions/api/v1.1"
-    updated = "2011-09-20T00:00:00+00:00"
+    updated = "2011-09-20T00:00:00Z"
 
     def get_controller_extensions(self):
         controller = AdminActionsController()

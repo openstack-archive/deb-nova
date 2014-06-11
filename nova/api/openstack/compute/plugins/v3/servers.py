@@ -32,7 +32,7 @@ from nova import compute
 from nova.compute import flavors
 from nova import exception
 from nova.image import glance
-from nova.objects import block_device as block_device_obj
+from nova import objects
 from nova.objects import instance as instance_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
@@ -115,14 +115,14 @@ class ServersController(wsgi.Controller):
                     # to implement multiple server (and other) entry
                     # points if hasattr(ext.obj, 'server_create'):
                     if hasattr(ext.obj, required_function):
-                        LOG.debug(_('extension %(ext_alias)s detected by '
-                                    'servers extension for function %(func)s'),
-                                    {'ext_alias': ext.obj.alias,
-                                     'func': required_function})
+                        LOG.debug('extension %(ext_alias)s detected by '
+                                  'servers extension for function %(func)s',
+                                  {'ext_alias': ext.obj.alias,
+                                   'func': required_function})
                         return check_whiteblack_lists(ext)
                     else:
                         LOG.debug(
-                            _('extension %(ext_alias)s is missing %(func)s'),
+                            'extension %(ext_alias)s is missing %(func)s',
                             {'ext_alias': ext.obj.alias,
                             'func': required_function})
                         return False
@@ -143,7 +143,7 @@ class ServersController(wsgi.Controller):
               invoke_kwds={"extension_info": self.extension_info},
               propagate_map_exceptions=True)
         if not list(self.create_extension_manager):
-            LOG.debug(_("Did not find any server create extensions"))
+            LOG.debug("Did not find any server create extensions")
 
         # Look for implementation of extension point of server rebuild
         self.rebuild_extension_manager = \
@@ -154,7 +154,7 @@ class ServersController(wsgi.Controller):
                 invoke_kwds={"extension_info": self.extension_info},
                 propagate_map_exceptions=True)
         if not list(self.rebuild_extension_manager):
-            LOG.debug(_("Did not find any server rebuild extensions"))
+            LOG.debug("Did not find any server rebuild extensions")
 
         # Look for implementation of extension point of server update
         self.update_extension_manager = \
@@ -165,7 +165,7 @@ class ServersController(wsgi.Controller):
                 invoke_kwds={"extension_info": self.extension_info},
                 propagate_map_exceptions=True)
         if not list(self.update_extension_manager):
-            LOG.debug(_("Did not find any server update extensions"))
+            LOG.debug("Did not find any server update extensions")
 
     def index(self, req):
         """Returns a list of server names and ids for a given user."""
@@ -313,13 +313,6 @@ class ServersController(wsgi.Controller):
 
     def _validate_server_name(self, value):
         self._check_string_length(value, 'Server name', max_length=255)
-
-    def _validate_device_name(self, value):
-        self._check_string_length(value, 'Device name', max_length=255)
-
-        if ' ' in value:
-            msg = _("Device name cannot include spaces.")
-            raise exc.HTTPBadRequest(explanation=msg)
 
     def _get_requested_networks(self, requested_networks):
         """Create a list of requested networks from the networks attribute."""
@@ -526,6 +519,7 @@ class ServersController(wsgi.Controller):
                 exception.MultiplePortsNotApplicable,
                 exception.InstanceUserDataMalformed,
                 exception.PortNotFound,
+                exception.FixedIpAlreadyInUse,
                 exception.SecurityGroupNotFound,
                 exception.PortRequiresFixedIP,
                 exception.NetworkRequiresSubnet,
@@ -552,25 +546,25 @@ class ServersController(wsgi.Controller):
 
     def _create_extension_point(self, ext, server_dict, create_kwargs):
         handler = ext.obj
-        LOG.debug(_("Running _create_extension_point for %s"), ext.obj)
+        LOG.debug("Running _create_extension_point for %s", ext.obj)
 
         handler.server_create(server_dict, create_kwargs)
 
     def _rebuild_extension_point(self, ext, rebuild_dict, rebuild_kwargs):
         handler = ext.obj
-        LOG.debug(_("Running _rebuild_extension_point for %s"), ext.obj)
+        LOG.debug("Running _rebuild_extension_point for %s", ext.obj)
 
         handler.server_rebuild(rebuild_dict, rebuild_kwargs)
 
     def _resize_extension_point(self, ext, resize_dict, resize_kwargs):
         handler = ext.obj
-        LOG.debug(_("Running _resize_extension_point for %s"), ext.obj)
+        LOG.debug("Running _resize_extension_point for %s", ext.obj)
 
         handler.server_resize(resize_dict, resize_kwargs)
 
     def _update_extension_point(self, ext, update_dict, update_kwargs):
         handler = ext.obj
-        LOG.debug(_("Running _update_extension_point for %s"), ext.obj)
+        LOG.debug("Running _update_extension_point for %s", ext.obj)
         handler.server_update(update_dict, update_kwargs)
 
     def _delete(self, context, req, instance_uuid):
@@ -901,7 +895,7 @@ class ServersController(wsgi.Controller):
 
         instance = self._get_server(context, req, id)
 
-        bdms = block_device_obj.BlockDeviceMappingList.get_by_instance_uuid(
+        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                     context, instance.uuid)
 
         try:
@@ -910,13 +904,11 @@ class ServersController(wsgi.Controller):
                 img = instance['image_ref']
                 if not img:
                     props = bdms.root_metadata(
-                            context, self.compute_api.image_service,
+                            context, self.compute_api.image_api,
                             self.compute_api.volume_api)
                     image_meta = {'properties': props}
                 else:
-                    src_image = self.compute_api.\
-                        image_service.show(context, img)
-                    image_meta = dict(src_image)
+                    image_meta = self.compute_api.image_api.get(context, img)
 
                 image = self.compute_api.snapshot_volume_backed(
                                                        context,
@@ -979,7 +971,7 @@ class ServersController(wsgi.Controller):
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
         authorizer(context, instance, 'start')
-        LOG.debug(_('start instance'), instance=instance)
+        LOG.debug('start instance', instance=instance)
         try:
             self.compute_api.start(context, instance)
         except (exception.InstanceNotReady, exception.InstanceIsLocked,
@@ -994,7 +986,7 @@ class ServersController(wsgi.Controller):
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
         authorizer(context, instance, 'stop')
-        LOG.debug(_('stop instance'), instance=instance)
+        LOG.debug('stop instance', instance=instance)
         try:
             self.compute_api.stop(context, instance)
         except (exception.InstanceNotReady, exception.InstanceIsLocked,
@@ -1011,7 +1003,7 @@ def remove_invalid_options(context, search_options, allowed_search_options):
     # Otherwise, strip out all unknown options
     unknown_options = [opt for opt in search_options
                         if opt not in allowed_search_options]
-    LOG.debug(_("Removing options '%s' from query"),
+    LOG.debug("Removing options '%s' from query",
               ", ".join(unknown_options))
     for opt in unknown_options:
         search_options.pop(opt, None)

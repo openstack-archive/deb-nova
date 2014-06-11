@@ -75,7 +75,7 @@ class ImagePropertiesFilter(_FilterTestClass):
     def test_missing_hypervisor_version_requires(self):
         self.filter_props['request_spec'] = {'image': {'properties': {}}}
         for cell in self.cells:
-            cell.capabilities = {"prominent_hypervisor_version": [u"6.2"]}
+            cell.capabilities = {"prominent_hypervisor_version": set([u"6.2"])}
         self.assertEqual(self.cells,
                          self._filter_cells(self.cells, self.filter_props))
 
@@ -89,10 +89,18 @@ class ImagePropertiesFilter(_FilterTestClass):
         image = {'properties': {'hypervisor_version_requires': '>6.0, <=6.3'}}
         self.filter_props['request_spec'] = {'image': image}
 
-        self.cell1.capabilities = {"prominent_hypervisor_version": [u"6.2"]}
-        self.cell2.capabilities = {"prominent_hypervisor_version": [u"6.3"]}
-        self.cell3.capabilities = {"prominent_hypervisor_version": [u"6.0"]}
+        self.cell1.capabilities = {"prominent_hypervisor_version":
+                set([u"6.2"])}
+        self.cell2.capabilities = {"prominent_hypervisor_version":
+                set([u"6.3"])}
+        self.cell3.capabilities = {"prominent_hypervisor_version":
+                set([u"6.0"])}
 
+        self.assertEqual([self.cell1, self.cell2],
+                         self._filter_cells(self.cells, self.filter_props))
+
+        # assert again to verify filter doesn't mutate state
+        # LP bug #1325705
         self.assertEqual([self.cell1, self.cell2],
                          self._filter_cells(self.cells, self.filter_props))
 
@@ -140,13 +148,13 @@ class TestTargetCellFilter(_FilterTestClass):
     def test_target_cell_specified_not_me(self):
         info = {}
 
-        def _fake_sched_run_instance(ctxt, cell, sched_kwargs):
+        def _fake_build_instances(ctxt, cell, sched_kwargs):
             info['ctxt'] = ctxt
             info['cell'] = cell
             info['sched_kwargs'] = sched_kwargs
 
-        self.stubs.Set(self.msg_runner, 'schedule_run_instance',
-                       _fake_sched_run_instance)
+        self.stubs.Set(self.msg_runner, 'build_instances',
+                       _fake_build_instances)
         cells = [1, 2, 3]
         target_cell = 'fake!cell!path'
         current_cell = 'not!the!same'
@@ -155,7 +163,7 @@ class TestTargetCellFilter(_FilterTestClass):
                         'scheduler': self.scheduler,
                         'context': self.context,
                         'host_sched_kwargs': 'meow',
-                        'cell_scheduler_method': 'schedule_run_instance'}
+                        'cell_scheduler_method': 'build_instances'}
         # None is returned to bypass further scheduling.
         self.assertIsNone(self._filter_cells(cells, filter_props))
         # The filter should have re-scheduled to the child cell itself.

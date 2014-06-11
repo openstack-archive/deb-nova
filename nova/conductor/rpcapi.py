@@ -133,6 +133,20 @@ class ConductorAPI(object):
     ...  - Remove block_device_mapping_destroy()
 
     2.0  - Drop backwards compatibility
+    ...  - Remove quota_rollback() and quota_commit()
+    ...  - Remove aggregate_host_add() and aggregate_host_delete()
+    ...  - Remove network_migrate_instance_start() and
+           network_migrate_instance_finish()
+
+        ... Icehouse supports message version 2.0.  So, any changes to
+        existing methods in 2.x after that point should be done such that they
+        can handle the version_cap being set to 2.0.
+    ...  - Remove instance_destroy()
+    ...  - Remove compute_unrescue()
+    ...  - Remove instance_get_all_by_filters()
+    ...  - Remove instance_get_active_by_window_joined()
+    ...  - Remove instance_fault_create()
+    ...  - Remove action_event_start() and action_event_finish()
     """
 
     VERSION_ALIASES = {
@@ -173,20 +187,6 @@ class ConductorAPI(object):
         return cctxt.call(context,
                           'migration_get_in_progress_by_host_and_node',
                           host=host, node=node)
-
-    def aggregate_host_add(self, context, aggregate, host):
-        aggregate_p = jsonutils.to_primitive(aggregate)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'aggregate_host_add',
-                          aggregate=aggregate_p,
-                          host=host)
-
-    def aggregate_host_delete(self, context, aggregate, host):
-        aggregate_p = jsonutils.to_primitive(aggregate)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'aggregate_host_delete',
-                          aggregate=aggregate_p,
-                          host=host)
 
     def aggregate_metadata_get_by_host(self, context, host, key):
         cctxt = self.client.prepare()
@@ -230,27 +230,6 @@ class ConductorAPI(object):
         return cctxt.call(context, 'block_device_mapping_get_all_by_instance',
                           instance=instance_p, legacy=legacy)
 
-    def instance_get_all_by_filters(self, context, filters, sort_key,
-                                    sort_dir, columns_to_join=None,
-                                    use_slave=False):
-        msg_kwargs = dict(filters=filters, sort_key=sort_key,
-                          sort_dir=sort_dir, columns_to_join=columns_to_join,
-                          use_slave=use_slave)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'instance_get_all_by_filters', **msg_kwargs)
-
-    def instance_get_active_by_window_joined(self, context, begin, end=None,
-                                             project_id=None, host=None):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'instance_get_active_by_window_joined',
-                          begin=begin, end=end, project_id=project_id,
-                          host=host)
-
-    def instance_destroy(self, context, instance):
-        instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'instance_destroy', instance=instance_p)
-
     def instance_info_cache_delete(self, context, instance):
         instance_p = jsonutils.to_primitive(instance)
         cctxt = self.client.prepare()
@@ -285,20 +264,6 @@ class ConductorAPI(object):
         return cctxt.call(context, 'instance_get_all_by_host',
                           host=host, node=node,
                           columns_to_join=columns_to_join)
-
-    def instance_fault_create(self, context, values):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'instance_fault_create', values=values)
-
-    def action_event_start(self, context, values):
-        values_p = jsonutils.to_primitive(values)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'action_event_start', values=values_p)
-
-    def action_event_finish(self, context, values):
-        values_p = jsonutils.to_primitive(values)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'action_event_finish', values=values_p)
 
     def service_create(self, context, values):
         cctxt = self.client.prepare()
@@ -376,46 +341,11 @@ class ConductorAPI(object):
         return cctxt.call(context, 'security_groups_trigger_members_refresh',
                           group_ids=group_ids)
 
-    def network_migrate_instance_start(self, context, instance, migration):
-        instance_p = jsonutils.to_primitive(instance)
-        migration_p = jsonutils.to_primitive(migration)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'network_migrate_instance_start',
-                          instance=instance_p, migration=migration_p)
-
-    def network_migrate_instance_finish(self, context, instance, migration):
-        instance_p = jsonutils.to_primitive(instance)
-        migration_p = jsonutils.to_primitive(migration)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'network_migrate_instance_finish',
-                          instance=instance_p, migration=migration_p)
-
-    def quota_commit(self, context, reservations, project_id=None,
-                     user_id=None):
-        reservations_p = jsonutils.to_primitive(reservations)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'quota_commit',
-                          reservations=reservations_p,
-                          project_id=project_id, user_id=user_id)
-
-    def quota_rollback(self, context, reservations, project_id=None,
-                       user_id=None):
-        reservations_p = jsonutils.to_primitive(reservations)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'quota_rollback',
-                          reservations=reservations_p,
-                          project_id=project_id, user_id=user_id)
-
     def get_ec2_ids(self, context, instance):
         instance_p = jsonutils.to_primitive(instance)
         cctxt = self.client.prepare()
         return cctxt.call(context, 'get_ec2_ids',
                           instance=instance_p)
-
-    def compute_unrescue(self, context, instance):
-        instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'compute_unrescue', instance=instance_p)
 
     def object_class_action(self, context, objname, objmethod, objver,
                             args, kwargs):

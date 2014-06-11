@@ -149,7 +149,7 @@ class SecurityGroupDefaultRulesController(sg.SecurityGroupControllerBase):
 
         id = self.security_group_api.validate_id(id)
 
-        LOG.debug(_("Showing security_group_default_rule with id %s") % id)
+        LOG.debug("Showing security_group_default_rule with id %s", id)
         try:
             rule = self.security_group_api.get_default_rule(context, id)
         except exception.SecurityGroupDefaultRuleNotFound:
@@ -201,7 +201,7 @@ class Security_group_default_rules(extensions.ExtensionDescriptor):
     alias = "os-security-group-default-rules"
     namespace = ("http://docs.openstack.org/compute/ext/"
                  "securitygroupdefaultrules/api/v1.1")
-    updated = "2013-02-05T00:00:00+00:00"
+    updated = "2013-02-05T00:00:00Z"
 
     def get_resources(self):
         resources = [

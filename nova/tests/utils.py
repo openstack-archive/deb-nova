@@ -105,7 +105,6 @@ def get_test_network_info(count=1):
     ipv6 = CONF.use_ipv6
     fake = 'fake'
     fake_ip = '0.0.0.0'
-    fake_netmask = '255.255.255.255'
     fake_vlan = 100
     fake_bridge_interface = 'eth0'
 
@@ -206,3 +205,8 @@ def is_ipv6_supported():
             has_ipv6_support = False
 
     return has_ipv6_support
+
+
+def get_api_version(request):
+    if request.path[2:3].isdigit():
+        return int(request.path[2:3])

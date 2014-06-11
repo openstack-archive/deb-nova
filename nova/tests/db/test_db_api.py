@@ -24,17 +24,21 @@ import iso8601
 import types
 import uuid as stdlib_uuid
 
+import eventlet
 import mox
 import netaddr
 from oslo.config import cfg
 import six
+from sqlalchemy import Column
 from sqlalchemy.dialects import sqlite
 from sqlalchemy import exc
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy.orm import exc as sqlalchemy_orm_exc
 from sqlalchemy.orm import query
 from sqlalchemy.sql.expression import select
+from sqlalchemy import Table
 
 from nova import block_device
 from nova.compute import vm_states
@@ -42,9 +46,13 @@ from nova import context
 from nova import db
 from nova.db.sqlalchemy import api as sqlalchemy_api
 from nova.db.sqlalchemy import models
+from nova.db.sqlalchemy import types as col_types
 from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
+from nova.openstack.common.db import api as db_api
 from nova.openstack.common.db import exception as db_exc
+from nova.openstack.common.db.sqlalchemy import test_base
+from nova.openstack.common.db.sqlalchemy import utils as sqlalchemyutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
@@ -354,9 +362,9 @@ class AggregateDBApiTestCase(test.TestCase):
         a1 = _create_aggregate_with_hosts(context=ctxt)
         a2 = _create_aggregate_with_hosts(context=ctxt, values=values2)
         # a3 has no hosts and should not be in the results.
-        a3 = _create_aggregate(context=ctxt, values=values3)
+        _create_aggregate(context=ctxt, values=values3)
         # a4 has no matching hosts.
-        a4 = _create_aggregate_with_hosts(context=ctxt, values=values4,
+        _create_aggregate_with_hosts(context=ctxt, values=values4,
                 hosts=['foo4.openstack.org'])
         # a5 has no matching hosts after deleting the only matching host.
         a5 = _create_aggregate_with_hosts(context=ctxt, values=values5,
@@ -415,8 +423,8 @@ class AggregateDBApiTestCase(test.TestCase):
         a2_metadata = {'good': 'value12', 'bad': 'badvalue12'}
         a3_hosts = ['foo2.openstack.org', 'foo3.openstack.org']
         a3_metadata = {'good': 'value23', 'bad': 'badvalue23'}
-        a1 = _create_aggregate_with_hosts(context=ctxt)
-        a2 = _create_aggregate_with_hosts(context=ctxt, values=values2,
+        _create_aggregate_with_hosts(context=ctxt)
+        _create_aggregate_with_hosts(context=ctxt, values=values2,
                 hosts=a2_hosts, metadata=a2_metadata)
         a3 = _create_aggregate_with_hosts(context=ctxt, values=values3,
                 hosts=a3_hosts, metadata=a3_metadata)
@@ -427,7 +435,7 @@ class AggregateDBApiTestCase(test.TestCase):
         self.assertNotIn('bad', r1)
         # Delete metadata
         db.aggregate_metadata_delete(ctxt, a3['id'], 'good')
-        r2 = db.aggregate_metadata_get_by_host(ctxt, 'foo.openstack.org',
+        r2 = db.aggregate_metadata_get_by_host(ctxt, 'foo3.openstack.org',
                                                key='good')
         self.assertNotIn('good', r2)
 
@@ -439,10 +447,10 @@ class AggregateDBApiTestCase(test.TestCase):
         a2_metadata = {'good': 'value12', 'bad': 'badvalue12'}
         a3_hosts = ['foo2.openstack.org', 'foo3.openstack.org']
         a3_metadata = {'good': 'value23', 'bad': 'badvalue23'}
-        a1 = _create_aggregate_with_hosts(context=ctxt)
-        a2 = _create_aggregate_with_hosts(context=ctxt, values=values2,
+        _create_aggregate_with_hosts(context=ctxt)
+        _create_aggregate_with_hosts(context=ctxt, values=values2,
                 hosts=a2_hosts, metadata=a2_metadata)
-        a3 = _create_aggregate_with_hosts(context=ctxt, values=values3,
+        _create_aggregate_with_hosts(context=ctxt, values=values3,
                 hosts=a3_hosts, metadata=a3_metadata)
         r1 = db.aggregate_host_get_by_metadata_key(ctxt, key='good')
         self.assertEqual({
@@ -962,26 +970,30 @@ class ReservationTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def setUp(self):
         super(ReservationTestCase, self).setUp()
         self.ctxt = context.get_admin_context()
+
+        self.reservations = _quota_reserve(self.ctxt, 'project1', 'user1')
+        usage = db.quota_usage_get(self.ctxt, 'project1', 'resource1', 'user1')
+
         self.values = {'uuid': 'sample-uuid',
                 'project_id': 'project1',
                 'user_id': 'user1',
-                'resource': 'resource',
+                'resource': 'resource1',
                 'delta': 42,
                 'expire': timeutils.utcnow() + datetime.timedelta(days=1),
-                'usage': {'id': 1}}
+                'usage': {'id': usage.id}}
 
     def test_reservation_commit(self):
-        reservations = _quota_reserve(self.ctxt, 'project1', 'user1')
         expected = {'project_id': 'project1', 'user_id': 'user1',
                 'resource0': {'reserved': 0, 'in_use': 0},
                 'resource1': {'reserved': 1, 'in_use': 1},
                 'fixed_ips': {'reserved': 2, 'in_use': 2}}
         self.assertEqual(expected, db.quota_usage_get_all_by_project_and_user(
                                             self.ctxt, 'project1', 'user1'))
-        _reservation_get(self.ctxt, reservations[0])
-        db.reservation_commit(self.ctxt, reservations, 'project1', 'user1')
+        _reservation_get(self.ctxt, self.reservations[0])
+        db.reservation_commit(self.ctxt, self.reservations, 'project1',
+                              'user1')
         self.assertRaises(exception.ReservationNotFound,
-            _reservation_get, self.ctxt, reservations[0])
+            _reservation_get, self.ctxt, self.reservations[0])
         expected = {'project_id': 'project1', 'user_id': 'user1',
                 'resource0': {'reserved': 0, 'in_use': 0},
                 'resource1': {'reserved': 0, 'in_use': 2},
@@ -990,17 +1002,17 @@ class ReservationTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                             self.ctxt, 'project1', 'user1'))
 
     def test_reservation_rollback(self):
-        reservations = _quota_reserve(self.ctxt, 'project1', 'user1')
         expected = {'project_id': 'project1', 'user_id': 'user1',
                 'resource0': {'reserved': 0, 'in_use': 0},
                 'resource1': {'reserved': 1, 'in_use': 1},
                 'fixed_ips': {'reserved': 2, 'in_use': 2}}
         self.assertEqual(expected, db.quota_usage_get_all_by_project_and_user(
                                             self.ctxt, 'project1', 'user1'))
-        _reservation_get(self.ctxt, reservations[0])
-        db.reservation_rollback(self.ctxt, reservations, 'project1', 'user1')
+        _reservation_get(self.ctxt, self.reservations[0])
+        db.reservation_rollback(self.ctxt, self.reservations, 'project1',
+                                'user1')
         self.assertRaises(exception.ReservationNotFound,
-            _reservation_get, self.ctxt, reservations[0])
+            _reservation_get, self.ctxt, self.reservations[0])
         expected = {'project_id': 'project1', 'user_id': 'user1',
                 'resource0': {'reserved': 0, 'in_use': 0},
                 'resource1': {'reserved': 0, 'in_use': 1},
@@ -1009,8 +1021,6 @@ class ReservationTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                             self.ctxt, 'project1', 'user1'))
 
     def test_reservation_expire(self):
-        self.values['expire'] = timeutils.utcnow() + datetime.timedelta(days=1)
-        _quota_reserve(self.ctxt, 'project1', 'user1')
         db.reservation_expire(self.ctxt)
 
         expected = {'project_id': 'project1', 'user_id': 'user1',
@@ -1104,8 +1114,8 @@ class SecurityGroupRuleTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(rules[0]['id'], security_group_rule['id'])
 
     def test_security_group_rule_destroy(self):
-        security_group1 = self._create_security_group({'name': 'fake1'})
-        security_group2 = self._create_security_group({'name': 'fake2'})
+        self._create_security_group({'name': 'fake1'})
+        self._create_security_group({'name': 'fake2'})
         security_group_rule1 = self._create_security_group_rule({})
         security_group_rule2 = self._create_security_group_rule({})
         db.security_group_rule_destroy(self.ctxt, security_group_rule1['id'])
@@ -1123,7 +1133,7 @@ class SecurityGroupRuleTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_security_group_rule_get(self):
         security_group_rule1 = (
                 self._create_security_group_rule({}))
-        security_group_rule2 = self._create_security_group_rule({})
+        self._create_security_group_rule({})
         real_security_group_rule = db.security_group_rule_get(self.ctxt,
                                               security_group_rule1['id'])
         self._assertEqualObjects(security_group_rule1,
@@ -1349,7 +1359,6 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
                     'project_id': 'fake_proj1',
         }
 
-        columns_to_join = ['rules.grantee_group']
         updated_group = db.security_group_update(self.ctxt,
                                     security_group['id'],
                                     new_values,
@@ -1359,7 +1368,7 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(updated_group['rules'], [])
 
     def test_security_group_update_to_duplicate(self):
-        security_group1 = self._create_security_group(
+        self._create_security_group(
                 {'name': 'fake1', 'project_id': 'fake_proj1'})
         security_group2 = self._create_security_group(
                 {'name': 'fake1', 'project_id': 'fake_proj2'})
@@ -1542,6 +1551,11 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         filtered_instances = db.instance_get_all_by_filters(self.ctxt, {})
         self._assertEqualListsOfInstances(instances, filtered_instances)
 
+    def test_instance_get_all_by_filters_zero_limit(self):
+        self.create_instance_with_args()
+        instances = db.instance_get_all_by_filters(self.ctxt, {}, limit=0)
+        self.assertEqual([], instances)
+
     def test_instance_metadata_get_multi(self):
         uuids = [self.create_instance_with_args()['uuid'] for i in range(3)]
         meta = sqlalchemy_api._instance_metadata_get_multi(self.ctxt, uuids)
@@ -1707,7 +1721,7 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_instance_get_all_by_filters_deleted_and_soft_deleted(self):
         inst1 = self.create_instance_with_args()
         inst2 = self.create_instance_with_args(vm_state=vm_states.SOFT_DELETED)
-        inst3 = self.create_instance_with_args()
+        self.create_instance_with_args()
         db.instance_destroy(self.ctxt, inst1['uuid'])
         result = db.instance_get_all_by_filters(self.ctxt,
                                                 {'deleted': True})
@@ -1718,8 +1732,8 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_instance_get_all_by_filters_deleted_no_soft_deleted(self):
         inst1 = self.create_instance_with_args()
-        inst2 = self.create_instance_with_args(vm_state=vm_states.SOFT_DELETED)
-        inst3 = self.create_instance_with_args()
+        self.create_instance_with_args(vm_state=vm_states.SOFT_DELETED)
+        self.create_instance_with_args()
         db.instance_destroy(self.ctxt, inst1['uuid'])
         result = db.instance_get_all_by_filters(self.ctxt,
                                                 {'deleted': True,
@@ -1740,7 +1754,7 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_instance_get_all_by_filters_not_deleted(self):
         inst1 = self.create_instance_with_args()
-        inst2 = self.create_instance_with_args(vm_state=vm_states.SOFT_DELETED)
+        self.create_instance_with_args(vm_state=vm_states.SOFT_DELETED)
         inst3 = self.create_instance_with_args()
         inst4 = self.create_instance_with_args(vm_state=vm_states.ACTIVE)
         db.instance_destroy(self.ctxt, inst1['uuid'])
@@ -1949,11 +1963,7 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         set_and_check(meta)
 
     def test_security_group_in_use(self):
-        instance = db.instance_create(self.ctxt, dict(host='foo'))
-        values = [
-            {'instances': [instance]},
-            {'instances': []},
-        ]
+        db.instance_create(self.ctxt, dict(host='foo'))
 
     def test_instance_update_updates_system_metadata(self):
         # Ensure that system_metadata is updated during instance_update
@@ -2135,7 +2145,8 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
                               running_vms=0, current_workload=0,
                               service_id=service['id'])
         compute = db.compute_node_create(self.ctxt, compute_values)
-        real_service = db.service_get(self.ctxt, service['id'])
+        real_service = db.service_get(self.ctxt, service['id'],
+                                      with_compute_node=True)
         real_compute = real_service['compute_node'][0]
         self.assertEqual(compute['id'], real_compute['id'])
 
@@ -2424,15 +2435,17 @@ class InstanceActionTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
         action_values = self._create_action_values(uuid1)
         db.action_start(self.ctxt, action_values)
+        request_id = action_values['request_id']
+
+        # NOTE(rpodolyaka): ensure we use a different req id for the 2nd req
         action_values['action'] = 'resize'
+        action_values['request_id'] = 'req-00000000-7522-4d99-7ff-111111111111'
         db.action_start(self.ctxt, action_values)
 
         action_values = self._create_action_values(uuid2, 'reboot', ctxt2)
         db.action_start(ctxt2, action_values)
         db.action_start(ctxt2, action_values)
 
-        actions = db.actions_get(self.ctxt, uuid1)
-        request_id = actions[0]['request_id']
         action = db.action_get_by_request_id(self.ctxt, uuid1, request_id)
         self.assertEqual('run_instance', action['action'])
         self.assertEqual(self.ctxt.request_id, action['request_id'])
@@ -3494,6 +3507,8 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
         address = '192.168.1.5'
         instance_uuid = self._create_instance()
         network_id = db.network_create_safe(self.ctxt, {})['id']
+        values = {'address': '192.168.1.5', 'instance_uuid': instance_uuid}
+        vif = db.virtual_interface_create(self.ctxt, values)
         param = {
             'reserved': False,
             'deleted': 0,
@@ -3503,16 +3518,18 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
             'allocated': False,
             'instance_uuid': instance_uuid,
             'network_id': network_id,
-            'virtual_interface_id': None
+            'virtual_interface_id': vif['id']
         }
         db.fixed_ip_create(self.ctxt, param)
 
         db.fixed_ip_disassociate(self.ctxt, address)
         fixed_ip_data = db.fixed_ip_get_by_address(self.ctxt, address)
         ignored_keys = ['created_at', 'id', 'deleted_at',
-                        'updated_at', 'instance_uuid']
+                        'updated_at', 'instance_uuid',
+                        'virtual_interface_id']
         self._assertEqualObjects(param, fixed_ip_data, ignored_keys)
         self.assertIsNone(fixed_ip_data['instance_uuid'])
+        self.assertIsNone(fixed_ip_data['virtual_interface_id'])
 
     def test_fixed_ip_get_not_found_exception(self):
         self.assertRaises(exception.FixedIpNotFound,
@@ -3536,7 +3553,7 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
         fixed_ip_id = db.fixed_ip_create(self.ctxt, param)
 
         self.ctxt.is_admin = False
-        self.assertRaises(exception.NotAuthorized, db.fixed_ip_get,
+        self.assertRaises(exception.Forbidden, db.fixed_ip_get,
                           self.ctxt, fixed_ip_id)
 
     def test_fixed_ip_get_success(self):
@@ -3756,7 +3773,7 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_floating_ip_allocate_not_authorized(self):
         ctxt = context.RequestContext(user_id='a', project_id='abc',
                                       is_admin=False)
-        self.assertRaises(exception.NotAuthorized,
+        self.assertRaises(exception.Forbidden,
                           db.floating_ip_allocate_address,
                           ctxt, 'other_project_id', 'any_pool')
 
@@ -3789,7 +3806,7 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
         def create_ips(i, j):
             return [{'address': '1.1.%s.%s' % (i, k)} for k in range(1, j + 1)]
 
-        # NOTE(boris-42): Create more then 256 ip to check that
+        # NOTE(boris-42): Create more than 256 ip to check that
         #                 _ip_range_splitter works properly.
         for i in range(1, 3):
             ips_for_delete.extend(create_ips(i, 255))
@@ -4002,7 +4019,7 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_floating_ip_get_all_by_project_not_authorized(self):
         ctxt = context.RequestContext(user_id='a', project_id='abc',
                                       is_admin=False)
-        self.assertRaises(exception.NotAuthorized,
+        self.assertRaises(exception.Forbidden,
                           db.floating_ip_get_all_by_project,
                           ctxt, 'other_project')
 
@@ -4306,7 +4323,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
                             user_id='fake-user-uuid1')
 
         # Instance rebooted or crashed. block device stats were reset and are
-        # less then the previous values
+        # less than the previous values
         db.vol_usage_update(ctxt, u'1',
                             rd_req=100, rd_bytes=200,
                             wr_req=300, wr_bytes=400,
@@ -4360,7 +4377,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
                             user_id='fake-user-uuid1')
 
         # Instance rebooted or crashed. block device stats were reset and are
-        # less then the previous values
+        # less than the previous values
         db.vol_usage_update(ctxt, u'1',
                             rd_req=100, rd_bytes=200,
                             wr_req=300, wr_bytes=400,
@@ -4623,7 +4640,7 @@ class BlockDeviceMappingTestCase(test.TestCase):
                                                           bdm['instance_uuid'])
         self.assertEqual(len(bdm), 0)
 
-    def test_block_device_mapping_destroy_by_instance_and_volumne(self):
+    def test_block_device_mapping_destroy_by_instance_and_volume(self):
         vol_id1 = '69f5c254-1a5b-4fff-acf7-cb369904f58f'
         vol_id2 = '69f5c254-1a5b-4fff-acf7-cb369904f59f'
 
@@ -4801,14 +4818,17 @@ class VirtualInterfaceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         inst_uuid2 = db.instance_create(self.ctxt, {})['uuid']
         vifs1 = [self._create_virt_interface({'address': 'fake1'}),
                  self._create_virt_interface({'address': 'fake2'})]
+        # multiple nic of same instance
         vifs2 = [self._create_virt_interface({'address': 'fake3',
+                                              'instance_uuid': inst_uuid2}),
+                 self._create_virt_interface({'address': 'fake4',
                                               'instance_uuid': inst_uuid2})]
         vifs1_real = db.virtual_interface_get_by_instance(self.ctxt,
                                                           self.instance_uuid)
         vifs2_real = db.virtual_interface_get_by_instance(self.ctxt,
                                                           inst_uuid2)
         self._assertEqualListsOfObjects(vifs1, vifs1_real)
-        self._assertEqualListsOfObjects(vifs2, vifs2_real)
+        self._assertEqualOrderedListOfObjects(vifs2, vifs2_real)
 
     def test_virtual_interface_get_by_instance_and_network(self):
         inst_uuid2 = db.instance_create(self.ctxt, {})['uuid']
@@ -4905,7 +4925,7 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_network_delete_safe(self):
         values = {'host': 'localhost', 'project_id': 'project1'}
         network = db.network_create_safe(self.ctxt, values)
-        db_network = db.network_get(self.ctxt, network['id'])
+        db.network_get(self.ctxt, network['id'])
         values = {'network_id': network['id'], 'address': '192.168.1.5'}
         address1 = db.fixed_ip_create(self.ctxt, values)['address']
         values = {'network_id': network['id'],
@@ -4987,7 +5007,7 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
         # network with fixed ip with host set
         net2 = db.network_create_safe(self.ctxt, {})
         db.fixed_ip_create(self.ctxt, {'host': host, 'network_id': net2.id})
-        data = db.network_get_all_by_host(self.ctxt, host)
+        db.network_get_all_by_host(self.ctxt, host)
         self._assertEqualListsOfObjects([net1, net2],
             db.network_get_all_by_host(self.ctxt, host))
         # network with instance with host set
@@ -5286,9 +5306,9 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
         network = db.network_create_safe(self.ctxt, {})
         for i in range(2):
             address = '192.168.0.%d' % i
-            ip = db.fixed_ip_create(self.ctxt, {'project_id': 'project1',
-                                                'address': address,
-                                                'network_id': network['id']})
+            db.fixed_ip_create(self.ctxt, {'project_id': 'project1',
+                                           'address': address,
+                                           'network_id': network['id']})
             db.fixed_ip_associate(self.ctxt, address,
                                   instances[0].uuid, network['id'])
 
@@ -6224,8 +6244,6 @@ class Ec2TestCase(test.TestCase):
             except exception.NotFound as exc:
                 self.assertIn(unicode(value), unicode(exc))
 
-        check_exc_format(db.get_ec2_volume_id_by_uuid, 'fake')
-        check_exc_format(db.get_volume_uuid_by_ec2_id, 123456)
         check_exc_format(db.get_ec2_snapshot_id_by_uuid, 'fake')
         check_exc_format(db.get_snapshot_uuid_by_ec2_id, 123456)
         check_exc_format(db.get_ec2_instance_id_by_uuid, 'fake')
@@ -6236,25 +6254,15 @@ class Ec2TestCase(test.TestCase):
         self.assertIsNotNone(vol['id'])
         self.assertEqual(vol['uuid'], 'fake-uuid')
 
-    def test_get_ec2_volume_id_by_uuid(self):
+    def test_ec2_volume_get_by_id(self):
         vol = db.ec2_volume_create(self.ctxt, 'fake-uuid')
-        vol_id = db.get_ec2_volume_id_by_uuid(self.ctxt, 'fake-uuid')
-        self.assertEqual(vol['id'], vol_id)
+        vol2 = db.ec2_volume_get_by_id(self.ctxt, vol['id'])
+        self.assertEqual(vol2['uuid'], vol['uuid'])
 
-    def test_get_volume_uuid_by_ec2_id(self):
+    def test_ec2_volume_get_by_uuid(self):
         vol = db.ec2_volume_create(self.ctxt, 'fake-uuid')
-        vol_uuid = db.get_volume_uuid_by_ec2_id(self.ctxt, vol['id'])
-        self.assertEqual(vol_uuid, 'fake-uuid')
-
-    def test_get_ec2_volume_id_by_uuid_not_found(self):
-        self.assertRaises(exception.VolumeNotFound,
-                          db.get_ec2_volume_id_by_uuid,
-                          self.ctxt, 'uuid-not-present')
-
-    def test_get_volume_uuid_by_ec2_id_not_found(self):
-        self.assertRaises(exception.VolumeNotFound,
-                          db.get_volume_uuid_by_ec2_id,
-                          self.ctxt, 100500)
+        vol2 = db.ec2_volume_get_by_uuid(self.ctxt, vol['uuid'])
+        self.assertEqual(vol2['id'], vol['id'])
 
     def test_ec2_snapshot_create(self):
         snap = db.ec2_snapshot_create(self.ctxt, 'fake-uuid')
@@ -6286,6 +6294,26 @@ class Ec2TestCase(test.TestCase):
         self.assertIsNotNone(inst['id'])
         self.assertEqual(inst['uuid'], 'fake-uuid')
 
+    def test_ec2_instance_get_by_uuid(self):
+        inst = db.ec2_instance_create(self.ctxt, 'fake-uuid')
+        inst2 = db.ec2_instance_get_by_uuid(self.ctxt, 'fake-uuid')
+        self.assertEqual(inst['id'], inst2['id'])
+
+    def test_ec2_instance_get_by_id(self):
+        inst = db.ec2_instance_create(self.ctxt, 'fake-uuid')
+        inst2 = db.ec2_instance_get_by_id(self.ctxt, inst['id'])
+        self.assertEqual(inst['id'], inst2['id'])
+
+    def test_ec2_instance_get_by_uuid_not_found(self):
+        self.assertRaises(exception.InstanceNotFound,
+                          db.ec2_instance_get_by_uuid,
+                          self.ctxt, 'uuid-not-present')
+
+    def test_ec2_instance_get_by_id_not_found(self):
+        self.assertRaises(exception.InstanceNotFound,
+                          db.ec2_instance_get_by_uuid,
+                          self.ctxt, 12345)
+
     def test_get_ec2_instance_id_by_uuid(self):
         inst = db.ec2_instance_create(self.ctxt, 'fake-uuid')
         inst_id = db.get_ec2_instance_id_by_uuid(self.ctxt, 'fake-uuid')
@@ -6314,22 +6342,24 @@ class ArchiveTestCase(test.TestCase):
         self.context = context.get_admin_context()
         self.engine = get_engine()
         self.conn = self.engine.connect()
-        self.instance_id_mappings = db_utils.get_table(self.engine,
-                                                       "instance_id_mappings")
-        self.shadow_instance_id_mappings = db_utils.get_table(self.engine,
-                                                "shadow_instance_id_mappings")
-        self.dns_domains = db_utils.get_table(self.engine, "dns_domains")
-        self.shadow_dns_domains = db_utils.get_table(self.engine,
-                                                     "shadow_dns_domains")
-        self.consoles = db_utils.get_table(self.engine, "consoles")
-        self.console_pools = db_utils.get_table(self.engine, "console_pools")
-        self.shadow_consoles = db_utils.get_table(self.engine,
-                                                  "shadow_consoles")
-        self.shadow_console_pools = db_utils.get_table(self.engine,
-                                                       "shadow_console_pools")
-        self.instances = db_utils.get_table(self.engine, "instances")
-        self.shadow_instances = db_utils.get_table(self.engine,
-                                                   "shadow_instances")
+        self.instance_id_mappings = sqlalchemyutils.get_table(
+            self.engine, "instance_id_mappings")
+        self.shadow_instance_id_mappings = sqlalchemyutils.get_table(
+            self.engine, "shadow_instance_id_mappings")
+        self.dns_domains = sqlalchemyutils.get_table(
+            self.engine, "dns_domains")
+        self.shadow_dns_domains = sqlalchemyutils.get_table(
+            self.engine, "shadow_dns_domains")
+        self.consoles = sqlalchemyutils.get_table(self.engine, "consoles")
+        self.console_pools = sqlalchemyutils.get_table(
+            self.engine, "console_pools")
+        self.shadow_consoles = sqlalchemyutils.get_table(
+            self.engine, "shadow_consoles")
+        self.shadow_console_pools = sqlalchemyutils.get_table(
+            self.engine, "shadow_console_pools")
+        self.instances = sqlalchemyutils.get_table(self.engine, "instances")
+        self.shadow_instances = sqlalchemyutils.get_table(
+            self.engine, "shadow_instances")
         self.uuidstrs = []
         for unused in range(6):
             self.uuidstrs.append(stdlib_uuid.uuid4().hex)
@@ -6343,17 +6373,17 @@ class ArchiveTestCase(test.TestCase):
         super(ArchiveTestCase, self).tearDown()
         for tablename in self.id_tablenames_to_cleanup:
             for name in [tablename, "shadow_" + tablename]:
-                table = db_utils.get_table(self.engine, name)
+                table = sqlalchemyutils.get_table(self.engine, name)
                 del_statement = table.delete(table.c.id.in_(self.ids))
                 self.conn.execute(del_statement)
         for tablename in self.uuid_tablenames_to_cleanup:
             for name in [tablename, "shadow_" + tablename]:
-                table = db_utils.get_table(self.engine, name)
+                table = sqlalchemyutils.get_table(self.engine, name)
                 del_statement = table.delete(table.c.uuid.in_(self.uuidstrs))
                 self.conn.execute(del_statement)
         for tablename in self.domain_tablenames_to_cleanup:
             for name in [tablename, "shadow_" + tablename]:
-                table = db_utils.get_table(self.engine, name)
+                table = sqlalchemyutils.get_table(self.engine, name)
                 del_statement = table.delete(table.c.domain.in_(self.uuidstrs))
                 self.conn.execute(del_statement)
 
@@ -6432,11 +6462,12 @@ class ArchiveTestCase(test.TestCase):
 
     def _test_archive_deleted_rows_for_one_uuid_table(self, tablename):
         """:returns: 0 on success, 1 if no uuid column, 2 if insert failed."""
-        main_table = db_utils.get_table(self.engine, tablename)
+        main_table = sqlalchemyutils.get_table(self.engine, tablename)
         if not hasattr(main_table.c, "uuid"):
             # Not a uuid table, so skip it.
             return 1
-        shadow_table = db_utils.get_table(self.engine, "shadow_" + tablename)
+        shadow_table = sqlalchemyutils.get_table(
+            self.engine, "shadow_" + tablename)
         # Add 6 rows to table
         for uuidstr in self.uuidstrs:
             ins_stmt = main_table.insert().values(uuid=uuidstr)
@@ -6646,7 +6677,7 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_instance_group_create_with_same_key(self):
         values = self._get_default_values()
         values['uuid'] = 'fake_id'
-        result = self._create_instance_group(self.context, values)
+        self._create_instance_group(self.context, values)
         self.assertRaises(exception.InstanceGroupIdExists,
                           self._create_instance_group, self.context, values)
 
@@ -7051,8 +7082,6 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_pci_device_get_by_id(self):
         v1, v2 = self._create_fake_pci_devs()
         result = db.pci_device_get_by_id(self.admin_context, 3353)
-        ignored_keys = ['id', 'deleted', 'deleted_at', 'updated_at',
-                        'created_at']
         self._assertEqualObjects(v1, result, self.ignored_keys)
 
     def test_pci_device_get_by_id_not_found(self):
@@ -7170,3 +7199,63 @@ class RetryOnDeadlockTestCase(test.TestCase):
                 raise db_exc.DBDeadlock("fake exception")
             return True
         self.assertTrue(call_api())
+
+
+class NovaDBAPITestCase(test.TestCase):
+    def test_nova_db_api_common(self):
+        nova_db_api = db.api.NovaDBAPI()
+
+        # get access to some db-api method
+        nova_db_api.instance_group_get
+        # CONF.database.use_tpool is False, so we have no proxy in this case
+        self.assertIsInstance(nova_db_api._db_api, db_api.DBAPI)
+
+    def test_nova_db_api_config_change(self):
+        nova_db_api = db.api.NovaDBAPI()
+
+        CONF.set_override('use_tpool', True, group='database')
+        self.addCleanup(CONF.reset)
+
+        # get access to some db-api method
+        nova_db_api.instance_group_get
+        # CONF.database.use_tpool is True, so we get tpool proxy in this case
+        self.assertIsInstance(nova_db_api._db_api, eventlet.tpool.Proxy)
+
+
+class TestSqlalchemyTypesRepr(test_base.DbTestCase):
+    def setUp(self):
+        super(TestSqlalchemyTypesRepr, self).setUp()
+        meta = MetaData(bind=self.engine)
+        self.table = Table(
+            'cidr_tbl',
+            meta,
+            Column('id', Integer, primary_key=True),
+            Column('addr', col_types.CIDR())
+        )
+        self.table.create()
+        self.addCleanup(meta.drop_all)
+
+    def test_cidr_repr(self):
+        addrs = [('192.168.3.0/24', '192.168.3.0/24'),
+                 ('2001:db8::/64', '2001:db8::/64'),
+                 ('192.168.3.0', '192.168.3.0/32'),
+                 ('2001:db8::', '2001:db8::/128'),
+                 (None, None)]
+        with self.engine.begin() as conn:
+            for i in addrs:
+                conn.execute(self.table.insert(), {'addr': i[0]})
+
+            query = self.table.select().order_by(self.table.c.id)
+            result = conn.execute(query)
+            for idx, row in enumerate(result):
+                self.assertEqual(addrs[idx][1], row.addr)
+
+
+class TestMySQLSqlalchemyTypesRepr(TestSqlalchemyTypesRepr,
+        test_base.MySQLOpportunisticTestCase):
+    pass
+
+
+class TestPostgreSQLSqlalchemyTypesRepr(TestSqlalchemyTypesRepr,
+        test_base.PostgreSQLOpportunisticTestCase):
+    pass

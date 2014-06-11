@@ -282,6 +282,25 @@ class NetworkCommandsTestCase(test.TestCase):
                                dis_host=True)
 
 
+class NeutronV2NetworkCommandsTestCase(test.TestCase):
+    def setUp(self):
+        super(NeutronV2NetworkCommandsTestCase, self).setUp()
+        self.flags(network_api_class='nova.network.neutronv2.api.API')
+        self.commands = manage.NetworkCommands()
+
+    def test_create(self):
+        self.assertEqual(2, self.commands.create())
+
+    def test_list(self):
+        self.assertEqual(2, self.commands.list())
+
+    def test_delete(self):
+        self.assertEqual(2, self.commands.delete())
+
+    def test_modify(self):
+        self.assertEqual(2, self.commands.modify('192.168.0.1'))
+
+
 class FlavorCommandsTestCase(test.TestCase):
     def setUp(self):
         super(FlavorCommandsTestCase, self).setUp()

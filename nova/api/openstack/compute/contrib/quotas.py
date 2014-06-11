@@ -103,7 +103,7 @@ class QuotaSetsController(wsgi.Controller):
             nova.context.authorize_project_context(context, id)
             return self._format_quota_set(id,
                     self._get_quotas(context, id, user_id=user_id))
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
     @wsgi.serializers(xml=QuotaTemplate)
@@ -133,7 +133,7 @@ class QuotaSetsController(wsgi.Controller):
         try:
             settable_quotas = QUOTAS.get_settable_quotas(context, project_id,
                                                          user_id=user_id)
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
         if not self.is_valid_body(body, 'quota_set'):
@@ -153,11 +153,10 @@ class QuotaSetsController(wsgi.Controller):
                 try:
                     value = utils.validate_integer(value, key)
                 except exception.InvalidInput as e:
-                    LOG.warn(e.format_message())
                     raise webob.exc.HTTPBadRequest(
                         explanation=e.format_message())
 
-        LOG.debug(_("force update quotas: %s") % force_update)
+        LOG.debug("force update quotas: %s", force_update)
 
         if len(bad_keys) > 0:
             msg = _("Bad key(s) %s in quota_set") % ",".join(bad_keys)
@@ -166,7 +165,7 @@ class QuotaSetsController(wsgi.Controller):
         try:
             quotas = self._get_quotas(context, id, user_id=user_id,
                                       usages=True)
-        except exception.NotAuthorized:
+        except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
 
         for key, value in quota_set.items():
@@ -181,8 +180,8 @@ class QuotaSetsController(wsgi.Controller):
                 if quota_value and quota_value['limit'] >= 0:
                     quota_used = (quota_value['in_use'] +
                                   quota_value['reserved'])
-                    LOG.debug(_("Quota %(key)s used: %(quota_used)s, "
-                                "value: %(value)s."),
+                    LOG.debug("Quota %(key)s used: %(quota_used)s, "
+                              "value: %(value)s.",
                               {'key': key, 'quota_used': quota_used,
                                'value': value})
                     if quota_used > value:
@@ -228,7 +227,7 @@ class QuotaSetsController(wsgi.Controller):
                 else:
                     QUOTAS.destroy_all_by_project(context, id)
                 return webob.Response(status_int=202)
-            except exception.NotAuthorized:
+            except exception.Forbidden:
                 raise webob.exc.HTTPForbidden()
         raise webob.exc.HTTPNotFound()
 
@@ -239,7 +238,7 @@ class Quotas(extensions.ExtensionDescriptor):
     name = "Quotas"
     alias = "os-quota-sets"
     namespace = "http://docs.openstack.org/compute/ext/quotas-sets/api/v1.1"
-    updated = "2011-08-08T00:00:00+00:00"
+    updated = "2011-08-08T00:00:00Z"
 
     def get_resources(self):
         resources = []

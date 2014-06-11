@@ -82,7 +82,11 @@ def get_fake_db_instance(start, end, instance_id, tenant_id,
             flavor_id=FAKE_INST_TYPE['id'],
             launched_at=start,
             terminated_at=end,
-            vm_state=vm_state)
+            vm_state=vm_state,
+            memory_mb=MEMORY_MB,
+            vcpus=VCPUS,
+            root_gb=ROOT_GB,
+            ephemeral_gb=EPHEMERAL_GB,)
     inst['system_metadata'] = sys_meta
     return inst
 
@@ -228,7 +232,7 @@ class SimpleTenantUsageTest(test.TestCase):
                     ["role:admin"], ["project_id:%(project_id)s"]
                     ])
         }
-        common_policy.set_rules(common_policy.Rules(rules))
+        policy.set_rules(rules)
 
         try:
             res = req.get_response(fakes.wsgi_app(

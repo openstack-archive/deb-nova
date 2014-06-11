@@ -26,6 +26,7 @@ from cinderclient import service_catalog
 from cinderclient.v1 import client as cinder_client
 from oslo.config import cfg
 
+from nova import availability_zones as az
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
@@ -90,7 +91,7 @@ def cinderclient(context):
                          service_name=service_name,
                          endpoint_type=endpoint_type)
 
-    LOG.debug(_('Cinderclient connection created using URL: %s') % url)
+    LOG.debug('Cinderclient connection created using URL: %s', url)
 
     c = cinder_client.Client(context.user_id,
                              context.auth_token,
@@ -178,6 +179,11 @@ def translate_volume_exception(method):
             elif isinstance(exc_value, cinder_exception.BadRequest):
                 exc_value = exception.InvalidInput(reason=exc_value.message)
             raise exc_value, None, exc_trace
+        except cinder_exception.ConnectionError:
+            exc_type, exc_value, exc_trace = sys.exc_info()
+            exc_value = exception.CinderConnectionFailed(
+                                                   reason=exc_value.message)
+            raise exc_value, None, exc_trace
         return res
     return wrapper
 
@@ -193,6 +199,11 @@ def translate_snapshot_exception(method):
             exc_type, exc_value, exc_trace = sys.exc_info()
             if isinstance(exc_value, cinder_exception.NotFound):
                 exc_value = exception.SnapshotNotFound(snapshot_id=snapshot_id)
+            raise exc_value, None, exc_trace
+        except cinder_exception.ConnectionError:
+            exc_type, exc_value, exc_trace = sys.exc_info()
+            exc_value = exception.CinderConnectionFailed(
+                                                  reason=exc_value.message)
             raise exc_value, None, exc_trace
         return res
     return wrapper
@@ -216,7 +227,6 @@ class API(object):
         return rval
 
     def check_attached(self, context, volume):
-        """Raise exception if volume in use."""
         if volume['status'] != "in-use":
             msg = _("status must be 'in-use'")
             raise exception.InvalidVolume(reason=msg)
@@ -230,7 +240,14 @@ class API(object):
             msg = _("already attached")
             raise exception.InvalidVolume(reason=msg)
         if instance and not CONF.cinder_cross_az_attach:
-            if instance['availability_zone'] != volume['availability_zone']:
+            # NOTE(sorrison): If instance is on a host we match against it's AZ
+            #                 else we check the intended AZ
+            if instance.get('host'):
+                instance_az = az.get_instance_availability_zone(
+                    context, instance)
+            else:
+                instance_az = instance['availability_zone']
+            if instance_az != volume['availability_zone']:
                 msg = _("Instance and volume not in same availability_zone")
                 raise exception.InvalidVolume(reason=msg)
 
@@ -257,9 +274,9 @@ class API(object):
         cinderclient(context).volumes.roll_detaching(volume_id)
 
     @translate_volume_exception
-    def attach(self, context, volume_id, instance_uuid, mountpoint):
+    def attach(self, context, volume_id, instance_uuid, mountpoint, mode='rw'):
         cinderclient(context).volumes.attach(volume_id, instance_uuid,
-                                             mountpoint)
+                                             mountpoint, mode=mode)
 
     @translate_volume_exception
     def detach(self, context, volume_id):
@@ -302,6 +319,8 @@ class API(object):
         try:
             item = cinderclient(context).volumes.create(size, **kwargs)
             return _untranslate_volume_summary_view(context, item)
+        except cinder_exception.OverLimit:
+            raise exception.OverQuota(overs='volumes')
         except cinder_exception.BadRequest as e:
             raise exception.InvalidInput(reason=unicode(e))
 

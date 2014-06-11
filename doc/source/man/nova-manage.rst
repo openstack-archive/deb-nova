@@ -118,6 +118,9 @@ Nova Floating IPs
 Nova Flavor
 ~~~~~~~~~~~
 
+**DEPRECATED** Use the nova flavor-* commands from python-novaclient instead.
+The flavor subcommand will be removed in the 2015.1 release.
+
 ``nova-manage flavor list``
 
     Outputs a list of all active flavors to the screen.
@@ -182,11 +185,6 @@ Nova VM
 ``nova-manage live-migration <ec2_id> <destination host name>``
     Live migrate instance from current host to destination host. Requires instance id (which comes from euca-describe-instance) and destination host name (which can be found from nova-manage service list).
 
-
-FILES
-========
-
-The nova-manage.conf file contains configuration information in the form of python-gflags.
 
 SEE ALSO
 ========

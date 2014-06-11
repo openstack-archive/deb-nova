@@ -162,7 +162,7 @@ class API(object):
         return v.vol
 
     def get(self, context, volume_id):
-        if volume_id == 87654321:
+        if str(volume_id) == '87654321':
             return {'id': volume_id,
                     'attach_time': '13:56:24',
                     'attach_status': 'attached',
@@ -200,7 +200,7 @@ class API(object):
             msg = _("already detached")
             raise exception.InvalidVolume(reason=msg)
 
-    def attach(self, context, volume_id, instance_uuid, mountpoint):
+    def attach(self, context, volume_id, instance_uuid, mountpoint, mode='rw'):
         LOG.info('attaching volume %s', volume_id)
         volume = self.get(context, volume_id)
         volume['status'] = 'in-use'

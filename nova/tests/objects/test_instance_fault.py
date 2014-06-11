@@ -12,7 +12,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import mock
+
 from nova import db
+from nova import exception
 from nova.objects import instance_fault
 from nova.tests.objects import test_objects
 
@@ -69,6 +72,48 @@ class _TestInstanceFault(object):
         faults = instance_fault.InstanceFaultList.get_by_instance_uuids(
             self.context, ['fake-uuid'])
         self.assertEqual(0, len(faults))
+
+    @mock.patch('nova.cells.rpcapi.CellsAPI.instance_fault_create_at_top')
+    @mock.patch('nova.db.instance_fault_create')
+    def _test_create(self, update_cells, mock_create, cells_fault_create):
+        mock_create.return_value = fake_faults['fake-uuid'][1]
+        fault = instance_fault.InstanceFault()
+        fault.instance_uuid = 'fake-uuid'
+        fault.code = 456
+        fault.message = 'foo'
+        fault.details = 'you screwed up'
+        fault.host = 'myhost'
+        fault.create(self.context)
+        self.assertEqual(2, fault.id)
+        mock_create.assert_called_once_with(self.context,
+                                            {'instance_uuid': 'fake-uuid',
+                                             'code': 456,
+                                             'message': 'foo',
+                                             'details': 'you screwed up',
+                                             'host': 'myhost'})
+        if update_cells:
+            cells_fault_create.assert_called_once_with(
+                    self.context, fake_faults['fake-uuid'][1])
+        else:
+            self.assertFalse(cells_fault_create.called)
+
+    def test_create_no_cells(self):
+        self.flags(enable=False, group='cells')
+        self._test_create(False)
+
+    def test_create_api_cell(self):
+        self.flags(cell_type='api', enable=True, group='cells')
+        self._test_create(False)
+
+    def test_create_compute_cell(self):
+        self.flags(cell_type='compute', enable=True, group='cells')
+        self._test_create(True)
+
+    def test_create_already_created(self):
+        fault = instance_fault.InstanceFault()
+        fault.id = 1
+        self.assertRaises(exception.ObjectActionError,
+                          fault.create, self.context)
 
 
 class TestInstanceFault(test_objects._LocalTest,

@@ -103,7 +103,7 @@ class NetworkController(object):
     def show(self, req, id):
         context = req.environ['nova.context']
         authorize(context)
-        LOG.debug(_("Showing network with id %s") % id)
+        LOG.debug("Showing network with id %s", id)
         try:
             network = self.network_api.get(context, id)
         except exception.NetworkNotFound:
@@ -131,6 +131,8 @@ class NetworkController(object):
             response = exc.HTTPAccepted()
         except exception.PolicyNotAuthorized as e:
             raise exc.HTTPForbidden(explanation=str(e))
+        except exception.NetworkInUse as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.NetworkNotFound:
             msg = _("Network not found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -199,7 +201,7 @@ class Os_tenant_networks(extensions.ExtensionDescriptor):
     alias = "os-tenant-networks"
     namespace = ("http://docs.openstack.org/compute/"
                  "ext/os-tenant-networks/api/v2")
-    updated = "2012-03-07T09:46:43-05:00"
+    updated = "2012-03-07T14:46:43Z"
 
     def get_resources(self):
         ext = extensions.ResourceExtension('os-tenant-networks',

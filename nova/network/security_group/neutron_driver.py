@@ -33,9 +33,6 @@ from nova.openstack.common import uuidutils
 from nova import utils
 
 
-wrap_check_security_groups_policy = compute_api.policy_decorator(
-    scope='compute:security_groups')
-
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
@@ -134,7 +131,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
         except n_exc.NeutronClientException as e:
             exc_info = sys.exc_info()
             if e.status_code == 404:
-                LOG.debug(_("Neutron security group %s not found"), name)
+                LOG.debug("Neutron security group %s not found", name)
                 self.raise_not_found(unicode(e))
             else:
                 LOG.error(_("Neutron Error: %s"), e)
@@ -190,7 +187,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
     def add_rules(self, context, id, name, vals):
         """Add security group rule(s) to security group.
 
-        Note: the Nova security group API doesn't support adding muliple
+        Note: the Nova security group API doesn't support adding multiple
         security group rules at once but the EC2 one does. Therefore,
         this function is written to support both. Multiple rules are
         installed to a security group in neutron using bulk support.
@@ -264,7 +261,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
             # works.... :/
             for rule_id in range(0, len(rule_ids)):
                 neutron.delete_security_group_rule(rule_ids.pop())
-        except n_exc.NeutronClientException as e:
+        except n_exc.NeutronClientException:
             with excutils.save_and_reraise_exception():
                 LOG.exception(_("Neutron Error unable to delete %s"), rule_ids)
 
@@ -276,7 +273,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
         except n_exc.NeutronClientException as e:
             exc_info = sys.exc_info()
             if e.status_code == 404:
-                LOG.debug(_("Neutron security group rule %s not found"), id)
+                LOG.debug("Neutron security group rule %s not found", id)
                 self.raise_not_found(unicode(e))
             else:
                 LOG.error(_("Neutron Error: %s"), e)
@@ -380,7 +377,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
         servers = [{'id': instance_uuid}]
         sg_bindings = self.get_instances_security_groups_bindings(
                                   context, servers, detailed)
-        return sg_bindings.get(instance_uuid)
+        return sg_bindings.get(instance_uuid, [])
 
     def _has_security_group_requirements(self, port):
         port_security_enabled = port.get('port_security_enabled', True)
@@ -389,7 +386,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
             return port_security_enabled
         return False
 
-    @wrap_check_security_groups_policy
+    @compute_api.wrap_check_security_groups_policy
     def add_to_instance(self, context, instance, security_group_name):
         """Add security group to the instance."""
 
@@ -443,7 +440,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 with excutils.save_and_reraise_exception():
                     LOG.exception(_("Neutron Error:"))
 
-    @wrap_check_security_groups_policy
+    @compute_api.wrap_check_security_groups_policy
     def remove_from_instance(self, context, instance, security_group_name):
         """Remove the security group associated with the instance."""
         neutron = neutronv2.get_client(context)
@@ -504,7 +501,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
             self.raise_not_found(msg)
 
     def populate_security_groups(self, instance, security_groups):
-        # Setting to emply list since we do not want to populate this field
+        # Setting to empty list since we do not want to populate this field
         # in the nova database if using the neutron driver
         instance['security_groups'] = security_group.SecurityGroupList()
         instance['security_groups'].objects = []

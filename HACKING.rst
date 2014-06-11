@@ -30,6 +30,10 @@ Nova Specific Commandments
   assertIsInstance(A, B)
 - [N318] Change assertEqual(A, None) or assertEqual(None, A) by optimal assert like
   assertIsNone(A)
+- [N319] Validate that debug level logs are not translated.
+- [N320] Setting CONF.* attributes directly in tests is forbidden. Use
+  self.flags(option=value) instead.
+- [N321] Validate that LOG messages, except debug ones, have translations
 
 Creating Unit Tests
 -------------------
@@ -53,6 +57,10 @@ the tests that OpenStack CI systems run. Behind the scenes, tox is running
 testr arguments that are needed to tox. For example, you can run:
 ``tox -- --analyze-isolation`` to cause tox to tell testr to add
 --analyze-isolation to its argument list.
+
+Python packages may also have dependencies that are outside of tox's ability
+to install. Please refer to doc/source/devref/development.environment.rst for
+a list of those packages on Ubuntu, Fedora and Mac OS X.
 
 It is also possible to run the tests inside of a virtual environment
 you have created, or it is possible that you have all of the dependencies

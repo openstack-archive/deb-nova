@@ -61,7 +61,7 @@ class API(object):
         '''
 
         if not cls._driver:
-            LOG.debug(_('ServiceGroup driver defined as an instance of %s'),
+            LOG.debug('ServiceGroup driver defined as an instance of %s',
                       str(CONF.servicegroup_driver))
             driver_name = CONF.servicegroup_driver
             try:
@@ -111,9 +111,8 @@ class API(object):
 
     def service_is_up(self, member):
         """Check if the given member is up."""
-        msg = _('Check if the given member [%s] is part of the '
-                'ServiceGroup, is up')
-        LOG.debug(msg, member)
+        # NOTE(johngarbutt) no logging in this method,
+        # so this doesn't slow down the scheduler
         return self._driver.is_up(member)
 
     def leave(self, member_id, group_id):
@@ -127,15 +126,15 @@ class API(object):
 
     def get_all(self, group_id):
         """Returns ALL members of the given group."""
-        LOG.debug(_('Returns ALL members of the [%s] '
-                    'ServiceGroup'), group_id)
+        LOG.debug('Returns ALL members of the [%s] '
+                  'ServiceGroup', group_id)
         return self._driver.get_all(group_id)
 
     def get_one(self, group_id):
         """Returns one member of the given group. The strategy to select
         the member is decided by the driver (e.g. random or round-robin).
         """
-        LOG.debug(_('Returns one member of the [%s] group'), group_id)
+        LOG.debug('Returns one member of the [%s] group', group_id)
         return self._driver.get_one(group_id)
 
 
@@ -143,7 +142,7 @@ class ServiceGroupDriver(object):
     """Base class for ServiceGroup drivers."""
 
     def join(self, member_id, group_id, service=None):
-        """Join the given service with it's group."""
+        """Join the given service with its group."""
         raise NotImplementedError()
 
     def is_up(self, member):

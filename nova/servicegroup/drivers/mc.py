@@ -72,7 +72,7 @@ class MemcachedDriver(api.ServiceGroupDriver):
     def get_all(self, group_id):
         """Returns ALL members of the given group
         """
-        LOG.debug(_('Memcached_Driver: get_all members of the %s group') %
+        LOG.debug('Memcached_Driver: get_all members of the %s group',
                   group_id)
         rs = []
         ctxt = context.get_admin_context()
@@ -84,7 +84,6 @@ class MemcachedDriver(api.ServiceGroupDriver):
 
     def _report_state(self, service):
         """Update the state of this service in the datastore."""
-        ctxt = context.get_admin_context()
         try:
             key = "%(topic)s:%(host)s" % service.service_ref
             # memcached has data expiration time capability.

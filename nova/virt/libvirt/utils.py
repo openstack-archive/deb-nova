@@ -27,6 +27,9 @@ from oslo.config import cfg
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
+from nova.openstack.common.gettextutils import _LE
+from nova.openstack.common.gettextutils import _LI
+from nova.openstack.common.gettextutils import _LW
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova.openstack.common import units
@@ -68,13 +71,13 @@ def get_fc_hbas():
         # and systool is not installed
         # 96 = nova.cmd.rootwrap.RC_NOEXECFOUND:
         if exc.exit_code == 96:
-            LOG.warn(_("systool is not installed"))
+            LOG.warn(_LW("systool is not installed"))
         return []
     except OSError as exc:
         # This handles the case where rootwrap is NOT used
         # and systool is not installed
         if exc.errno == errno.ENOENT:
-            LOG.warn(_("systool is not installed"))
+            LOG.warn(_LW("systool is not installed"))
         return []
 
     if out is None:
@@ -193,8 +196,8 @@ def create_cow_image(backing_file, path, size=None):
     # See: http://www.gossamer-threads.com/lists/openstack/dev/10592
     # if 'preallocation' in base_details:
     #     cow_opts += ['preallocation=%s' % base_details['preallocation']]
-    if base_details and base_details.encryption:
-        cow_opts += ['encryption=%s' % base_details.encryption]
+    if base_details and base_details.encrypted:
+        cow_opts += ['encryption=%s' % base_details.encrypted]
     if size is not None:
         cow_opts += ['size=%s' % size]
     if cow_opts:
@@ -233,11 +236,11 @@ def create_lvm_image(vg, lv, size, sparse=False):
         preallocated_space = 64 * units.Mi
         check_size(vg, lv, preallocated_space)
         if free_space < size:
-            LOG.warning(_('Volume group %(vg)s will not be able'
-                          ' to hold sparse volume %(lv)s.'
-                          ' Virtual volume size is %(size)db,'
-                          ' but free space on volume group is'
-                          ' only %(free_space)db.'),
+            LOG.warn(_LW('Volume group %(vg)s will not be able'
+                         ' to hold sparse volume %(lv)s.'
+                         ' Virtual volume size is %(size)db,'
+                         ' but free space on volume group is'
+                         ' only %(free_space)db.'),
                         {'vg': vg,
                          'free_space': free_space,
                          'size': size,
@@ -287,7 +290,7 @@ def remove_rbd_volumes(pool, *names):
         try:
             _run_rbd(*rbd_remove, attempts=3, run_as_root=True)
         except processutils.ProcessExecutionError:
-            LOG.warn(_("rbd remove %(name)s in pool %(pool)s failed"),
+            LOG.warn(_LW("rbd remove %(name)s in pool %(pool)s failed"),
                      {'name': name, 'pool': pool})
 
 
@@ -391,7 +394,7 @@ def clear_logical_volume(path):
     volume_clear = CONF.libvirt.volume_clear
 
     if volume_clear not in ('none', 'shred', 'zero'):
-        LOG.error(_("ignoring unrecognized volume_clear='%s' value"),
+        LOG.error(_LE("ignoring unrecognized volume_clear='%s' value"),
                   volume_clear)
         volume_clear = 'zero'
 
@@ -416,15 +419,19 @@ def clear_logical_volume(path):
                                 % volume_clear)
 
 
-def remove_logical_volumes(*paths):
+def remove_logical_volumes(paths):
     """Remove one or more logical volume."""
 
+    errors = []
     for path in paths:
         clear_logical_volume(path)
-
-    if paths:
-        lvremove = ('lvremove', '-f') + paths
-        execute(*lvremove, attempts=3, run_as_root=True)
+        lvremove = ('lvremove', '-f', path)
+        try:
+            execute(*lvremove, attempts=3, run_as_root=True)
+        except processutils.ProcessExecutionError as exp:
+            errors.append(str(exp))
+    if errors:
+        raise exception.VolumesNotRemoved(reason=(', ').join(errors))
 
 
 def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
@@ -711,5 +718,5 @@ def is_mounted(mount_path, source=None):
     except OSError as exc:
         #info since it's not required to have this tool.
         if exc.errno == errno.ENOENT:
-            LOG.info(_("findmnt tool is not installed"))
+            LOG.info(_LI("findmnt tool is not installed"))
         return False

@@ -17,6 +17,7 @@
 import uuid
 
 from lxml import etree
+import mock
 import webob
 
 from nova.api.openstack.compute.contrib import floating_ips
@@ -39,6 +40,24 @@ FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 def network_api_get_floating_ip(self, context, id):
     return {'id': 1, 'address': '10.10.10.10', 'pool': 'nova',
             'fixed_ip_id': None}
+
+
+def network_api_get_floating_ips(self, context, all_tenants=False):
+    ret = [{'id': 1,
+            'address': '10.10.10.10',
+            'pool': 'nova',
+            'fixed_ip': {'address': '10.0.0.1',
+                         'instance': {'uuid': FAKE_UUID}}},
+           {'id': 2,
+            'pool': 'nova', 'interface': 'eth0',
+            'address': '10.10.10.11',
+            'fixed_ip': None}]
+    if all_tenants:
+        ret.append({'id': 3,
+                    'pool': 'nova', 'interface': 'eth1',
+                    'address': '10.10.10.12',
+                    'fixed_ip': None})
+    return ret
 
 
 def network_api_get_floating_ip_by_address(self, context, address):
@@ -131,6 +150,8 @@ class FloatingIpTest(test.TestCase):
                        compute_api_get)
         self.stubs.Set(network.api.API, "get_floating_ip",
                        network_api_get_floating_ip)
+        self.stubs.Set(network.api.API, "get_floating_ips",
+                       network_api_get_floating_ips)
         self.stubs.Set(network.api.API, "get_floating_ip_by_address",
                        network_api_get_floating_ip_by_address)
         self.stubs.Set(network.api.API, "get_floating_ips_by_project",
@@ -200,6 +221,35 @@ class FloatingIpTest(test.TestCase):
                                       'fixed_ip': None,
                                       'id': 2}]}
         self.assertEqual(res_dict, response)
+
+    def test_floating_ips_list_all_tenants_admin(self):
+        req = fakes.HTTPRequest.blank(
+            '/v2/fake/os-floating-ips/?all_tenants=1',
+            use_admin_context=True)
+        res_dict = self.controller.index(req)
+
+        response = {'floating_ips': [{'instance_id': FAKE_UUID,
+                                      'ip': '10.10.10.10',
+                                      'pool': 'nova',
+                                      'fixed_ip': '10.0.0.1',
+                                      'id': 1},
+                                     {'instance_id': None,
+                                      'ip': '10.10.10.11',
+                                      'pool': 'nova',
+                                      'fixed_ip': None,
+                                      'id': 2},
+                                     {'instance_id': None,
+                                      'ip': '10.10.10.12',
+                                      'pool': 'nova',
+                                      'fixed_ip': None,
+                                      'id': 3}]}
+        self.assertEqual(response, res_dict)
+
+    def test_floating_ips_list_all_tenants_not_admin(self):
+        req = fakes.HTTPRequest.blank(
+            '/v2/fake/os-floating-ips/?all_tenants=1',
+            use_admin_context=False)
+        self.assertRaises(exception.Forbidden, self.controller.index, req)
 
     def test_floating_ip_release_nonexisting(self):
         def fake_get_floating_ip(*args, **kwargs):
@@ -368,7 +418,6 @@ class FloatingIpTest(test.TestCase):
         self.assertTrue(rsp.status_int == 202)
 
     def test_floating_ip_associate_invalid_instance(self):
-        fixed_address = '192.168.1.100'
 
         def fake_get(self, context, id, expected_attrs=None,
                      want_objects=False):
@@ -406,7 +455,8 @@ class FloatingIpTest(test.TestCase):
         def fake_associate_floating_ip(self, context, instance,
                               floating_address, fixed_address,
                               affect_auto_assigned=False):
-            raise exception.NotAuthorized()
+            raise exception.FloatingIpNotFoundForAddress(
+                address=floating_address)
         self.stubs.Set(network.api.API, "associate_floating_ip",
                        fake_associate_floating_ip)
         floating_ip = '10.10.10.11'
@@ -420,6 +470,15 @@ class FloatingIpTest(test.TestCase):
         self.assertEqual(resp.status_int, 404)
         self.assertEqual(res_dict['itemNotFound']['message'],
                        "floating ip not found")
+
+    @mock.patch.object(network.api.API, 'associate_floating_ip',
+                       side_effect=exception.Forbidden)
+    def test_associate_floating_ip_forbidden(self, associate_mock):
+        body = dict(addFloatingIp=dict(address='10.10.10.11'))
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/test_inst/action')
+        self.assertRaises(webob.exc.HTTPForbidden,
+                          self.manager._add_floating_ip, req, 'test_inst',
+                          body)
 
     def test_floating_ip_disassociate(self):
         def get_instance_by_floating_ip_addr(self, context, address):
@@ -544,7 +603,7 @@ class FloatingIpTest(test.TestCase):
                 return 'test_inst'
 
         def network_api_disassociate(self, context, instance, address):
-            raise exception.NotAuthorized()
+            raise exception.Forbidden()
 
         self.stubs.Set(network.api.API, "get_floating_ip_by_address",
                        fake_get_floating_ip_addr_auto_assigned)
@@ -614,6 +673,8 @@ class ExtendedFloatingIpTest(test.TestCase):
                        compute_api_get)
         self.stubs.Set(network.api.API, "get_floating_ip",
                        network_api_get_floating_ip)
+        self.stubs.Set(network.api.API, "get_floating_ips",
+                       network_api_get_floating_ips)
         self.stubs.Set(network.api.API, "get_floating_ip_by_address",
                        network_api_get_floating_ip_by_address)
         self.stubs.Set(network.api.API, "get_floating_ips_by_project",

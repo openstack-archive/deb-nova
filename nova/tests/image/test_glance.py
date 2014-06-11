@@ -36,7 +36,6 @@ from nova.image import glance
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests.glance import stubs as glance_stubs
-from nova.tests import matchers
 from nova import utils
 
 import nova.virt.libvirt.utils as lv_utils
@@ -158,85 +157,6 @@ class TestGlanceImageService(test.NoDBTestCase):
                                   updated_at=self.NOW_GLANCE_FORMAT,
                                   deleted_at=self.NOW_GLANCE_FORMAT)
 
-    def test_create_with_instance_id(self):
-        # Ensure instance_id is persisted as an image-property.
-        fixture = {'name': 'test image',
-                   'is_public': False,
-                   'properties': {'instance_id': '42', 'user_id': 'fake'}}
-
-        image_id = self.service.create(self.context, fixture)['id']
-        image_meta = self.service.show(self.context, image_id)
-        expected = {
-            'id': image_id,
-            'name': 'test image',
-            'is_public': False,
-            'size': None,
-            'min_disk': None,
-            'min_ram': None,
-            'disk_format': None,
-            'container_format': None,
-            'checksum': None,
-            'created_at': self.NOW_DATETIME,
-            'updated_at': self.NOW_DATETIME,
-            'deleted_at': None,
-            'deleted': None,
-            'status': None,
-            'properties': {'instance_id': '42', 'user_id': 'fake'},
-            'owner': None,
-        }
-        self.assertThat(image_meta, matchers.DictMatches(expected))
-
-        image_metas = self.service.detail(self.context)
-        self.assertThat(image_metas[0], matchers.DictMatches(expected))
-
-    def test_create_without_instance_id(self):
-        """Ensure we can create an image without having to specify an
-        instance_id. Public images are an example of an image not tied to an
-        instance.
-        """
-        fixture = {'name': 'test image', 'is_public': False}
-        image_id = self.service.create(self.context, fixture)['id']
-
-        expected = {
-            'id': image_id,
-            'name': 'test image',
-            'is_public': False,
-            'size': None,
-            'min_disk': None,
-            'min_ram': None,
-            'disk_format': None,
-            'container_format': None,
-            'checksum': None,
-            'created_at': self.NOW_DATETIME,
-            'updated_at': self.NOW_DATETIME,
-            'deleted_at': None,
-            'deleted': None,
-            'status': None,
-            'properties': {},
-            'owner': None,
-        }
-        actual = self.service.show(self.context, image_id)
-        self.assertThat(actual, matchers.DictMatches(expected))
-
-    def test_create(self):
-        fixture = self._make_fixture(name='test image')
-        num_images = len(self.service.detail(self.context))
-        image_id = self.service.create(self.context, fixture)['id']
-
-        self.assertIsNotNone(image_id)
-        self.assertEqual(num_images + 1,
-                         len(self.service.detail(self.context)))
-
-    def test_create_and_show_non_existing_image(self):
-        fixture = self._make_fixture(name='test image')
-        image_id = self.service.create(self.context, fixture)['id']
-
-        self.assertIsNotNone(image_id)
-        self.assertRaises(exception.ImageNotFound,
-                          self.service.show,
-                          self.context,
-                          'bad image id')
-
     def test_show_makes_datetimes(self):
         fixture = self._make_datetime_fixture()
         image_id = self.service.create(self.context, fixture)['id']
@@ -258,45 +178,6 @@ class TestGlanceImageService(test.NoDBTestCase):
             a_mock.assert_called_with(self.context, 1, 'list',
                                       filters={'is_public': 'none'},
                                       page_size=5)
-
-    def test_update(self):
-        fixture = self._make_fixture(name='test image')
-        image = self.service.create(self.context, fixture)
-        image_id = image['id']
-        fixture['name'] = 'new image name'
-        self.service.update(self.context, image_id, fixture)
-
-        new_image_data = self.service.show(self.context, image_id)
-        self.assertEqual('new image name', new_image_data['name'])
-
-    def test_delete(self):
-        fixture1 = self._make_fixture(name='test image 1')
-        fixture2 = self._make_fixture(name='test image 2')
-        fixtures = [fixture1, fixture2]
-
-        num_images = len(self.service.detail(self.context))
-        self.assertEqual(0, num_images)
-
-        ids = []
-        for fixture in fixtures:
-            new_id = self.service.create(self.context, fixture)['id']
-            ids.append(new_id)
-
-        num_images = len(self.service.detail(self.context))
-        self.assertEqual(2, num_images)
-
-        self.service.delete(self.context, ids[0])
-        # When you delete an image from glance, it sets the status to DELETED
-        # and doesn't actually remove the image.
-
-        # Check the image is still there.
-        num_images = len(self.service.detail(self.context))
-        self.assertEqual(2, num_images)
-
-        # Check the image is marked as deleted.
-        num_images = reduce(lambda x, y: x + (0 if y['deleted'] else 1),
-                            self.service.detail(self.context), 0)
-        self.assertEqual(1, num_images)
 
     def test_download_with_retries(self):
         tries = [0]
@@ -478,7 +359,6 @@ class TestGlanceImageService(test.NoDBTestCase):
     def test_download_module_file_bad_module(self):
         _, data_filename = self._get_tempfile()
         file_url = 'applesauce://%s' % data_filename
-        data_called = False
 
         class MyGlanceStubClient(glance_stubs.StubGlanceClient):
             data_called = False
@@ -572,6 +452,48 @@ class TestGlanceImageService(test.NoDBTestCase):
         self.assertEqual(same_id, image_id)
         self.assertEqual(service._client.host, 'something-less-likely')
 
+    def test_extracting_missing_attributes(self):
+        """Verify behavior from glance objects that are missing attributes
+
+        This fakes the image class and is missing attribute as the client can
+        return if they're not set in the database.
+        """
+        class MyFakeGlanceImage(glance_stubs.FakeImage):
+            def __init__(self, metadata):
+                IMAGE_ATTRIBUTES = ['size', 'owner', 'id', 'created_at',
+                                    'updated_at', 'status', 'min_disk',
+                                    'min_ram', 'is_public']
+                raw = dict.fromkeys(IMAGE_ATTRIBUTES)
+                raw.update(metadata)
+                self.__dict__['raw'] = raw
+
+        metadata = {
+            'id': 1,
+            'created_at': self.NOW_DATETIME,
+            'updated_at': self.NOW_DATETIME,
+        }
+        image = MyFakeGlanceImage(metadata)
+        observed = glance._extract_attributes(image)
+        expected = {
+            'id': 1,
+            'name': None,
+            'is_public': None,
+            'size': None,
+            'min_disk': None,
+            'min_ram': None,
+            'disk_format': None,
+            'container_format': None,
+            'checksum': None,
+            'created_at': self.NOW_DATETIME,
+            'updated_at': self.NOW_DATETIME,
+            'deleted_at': None,
+            'deleted': None,
+            'status': None,
+            'properties': {},
+            'owner': None,
+        }
+        self.assertEqual(expected, observed)
+
 
 def _create_failing_glance_client(info):
     class MyGlanceStubClient(glance_stubs.StubGlanceClient):
@@ -583,6 +505,68 @@ def _create_failing_glance_client(info):
             return {}
 
     return MyGlanceStubClient()
+
+
+class TestGetLocations(test.NoDBTestCase):
+    """Tests the internal _get_locations function."""
+
+    class ImageSpecV2(object):
+        visibility = None
+        properties = None
+        locations = None
+        direct_url = None
+
+    @mock.patch('nova.image.glance._is_image_available')
+    def test_success_has_locations(self, avail_mock):
+        avail_mock.return_value = True
+        locations = [
+            mock.sentinel.loc1
+        ]
+        image_meta = mock.MagicMock(locations=locations,
+                                    spec=TestGetLocations.ImageSpecV2)
+
+        client_mock = mock.MagicMock()
+        client_mock.call.return_value = image_meta
+        locs = glance._get_locations(client_mock, mock.sentinel.ctx,
+                                     mock.sentinel.image_id)
+        client_mock.call.assert_called_once_with(mock.sentinel.ctx,
+                                                 2, 'get',
+                                                 mock.sentinel.image_id)
+        self.assertEqual(locations, locs)
+        avail_mock.assert_called_once_with(mock.sentinel.ctx, image_meta)
+
+    @mock.patch('nova.image.glance._is_image_available')
+    def test_success_direct_uri_added_to_locations(self, avail_mock):
+        avail_mock.return_value = True
+        locations = [
+            mock.sentinel.loc1
+        ]
+        image_meta = mock.MagicMock(locations=locations,
+                                    spec=TestGetLocations.ImageSpecV2,
+                                    direct_uri=mock.sentinel.duri)
+
+        client_mock = mock.MagicMock()
+        client_mock.call.return_value = image_meta
+        locs = glance._get_locations(client_mock, mock.sentinel.ctx,
+                                     mock.sentinel.image_id)
+        client_mock.call.assert_called_once_with(mock.sentinel.ctx,
+                                                 2, 'get',
+                                                 mock.sentinel.image_id)
+        expected = locations
+        expected.append({"url": mock.sentinel.duri, "metadata": {}})
+        self.assertEqual(expected, locs)
+
+    @mock.patch('nova.image.glance._reraise_translated_image_exception')
+    @mock.patch('nova.image.glance._is_image_available')
+    def test_get_locations_not_found(self, avail_mock, reraise_mock):
+        raised = exception.ImageNotFound(image_id=123)
+        reraise_mock.side_effect = raised
+
+        client_mock = mock.MagicMock()
+        client_mock.call.side_effect = glanceclient.exc.NotFound
+        self.assertRaises(exception.ImageNotFound, glance._get_locations,
+                          client_mock, mock.sentinel.ctx,
+                          mock.sentinel.image_id)
 
 
 class TestIsImageAvailable(test.NoDBTestCase):
@@ -602,7 +586,7 @@ class TestIsImageAvailable(test.NoDBTestCase):
 
         res = glance._is_image_available(ctx, img)
         self.assertTrue(res)
-        img.assert_not_called()
+        self.assertFalse(img.called)
 
     def test_admin_override(self):
         ctx = mock.MagicMock(auth_token=False, is_admin=True)
@@ -610,7 +594,7 @@ class TestIsImageAvailable(test.NoDBTestCase):
 
         res = glance._is_image_available(ctx, img)
         self.assertTrue(res)
-        img.assert_not_called()
+        self.assertFalse(img.called)
 
     def test_v2_visibility(self):
         ctx = mock.MagicMock(auth_token=False, is_admin=False)
@@ -744,7 +728,7 @@ class TestShow(test.NoDBTestCase):
         client.call.assert_called_once_with(ctx, 1, 'get',
                                             mock.sentinel.image_id)
         is_avail_mock.assert_called_once_with(ctx, mock.sentinel.images_0)
-        trans_from_mock.assert_not_called()
+        self.assertFalse(trans_from_mock.called)
 
     @mock.patch('nova.image.glance._reraise_translated_image_exception')
     @mock.patch('nova.image.glance._translate_from_glance')
@@ -762,14 +746,48 @@ class TestShow(test.NoDBTestCase):
             service.show(ctx, mock.sentinel.image_id)
             client.call.assert_called_once_with(ctx, 1, 'get',
                                                 mock.sentinel.image_id)
-            is_avail_mock.assert_not_called()
-            trans_from_mock.assert_not_called()
+            self.assertFalse(is_avail_mock.called)
+            self.assertFalse(trans_from_mock.called)
             reraise_mock.assert_called_once_with(mock.sentinel.image_id)
+
+    @mock.patch('nova.image.glance._is_image_available')
+    def test_show_queued_image_without_some_attrs(self, is_avail_mock):
+        is_avail_mock.return_value = True
+        client = mock.MagicMock()
+
+        # fake image cls without disk_format, container_format, name attributes
+        class fake_image_cls(object):
+            id = 'b31aa5dd-f07a-4748-8f15-398346887584'
+            deleted = False
+            protected = False
+            min_disk = 0
+            created_at = '2014-05-20T08:16:48'
+            size = 0
+            status = 'queued'
+            is_public = False
+            min_ram = 0
+            owner = '980ec4870033453ead65c0470a78b8a8'
+            updated_at = '2014-05-20T08:16:48'
+        glance_image = fake_image_cls()
+        client.call.return_value = glance_image
+        ctx = mock.sentinel.ctx
+        service = glance.GlanceImageService(client)
+        image_info = service.show(ctx, glance_image.id)
+        client.call.assert_called_once_with(ctx, 1, 'get',
+                                            glance_image.id)
+        NOVA_IMAGE_ATTRIBUTES = set(['size', 'disk_format', 'owner',
+                                     'container_format', 'status', 'id',
+                                     'name', 'created_at', 'updated_at',
+                                     'deleted', 'deleted_at', 'checksum',
+                                     'min_disk', 'min_ram', 'is_public',
+                                     'properties'])
+
+        self.assertEqual(NOVA_IMAGE_ATTRIBUTES, set(image_info.keys()))
 
 
 class TestDetail(test.NoDBTestCase):
 
-    """Tests the show method of the GlanceImageService."""
+    """Tests the detail method of the GlanceImageService."""
 
     @mock.patch('nova.image.glance._extract_query_params')
     @mock.patch('nova.image.glance._translate_from_glance')
@@ -808,7 +826,7 @@ class TestDetail(test.NoDBTestCase):
 
         client.call.assert_called_once_with(ctx, 1, 'list')
         is_avail_mock.assert_called_once_with(ctx, mock.sentinel.images_0)
-        trans_from_mock.assert_not_called()
+        self.assertFalse(trans_from_mock.called)
         self.assertEqual([], images)
 
     @mock.patch('nova.image.glance._extract_query_params')
@@ -822,7 +840,7 @@ class TestDetail(test.NoDBTestCase):
         client.call.return_value = [mock.sentinel.images_0]
         ctx = mock.sentinel.ctx
         service = glance.GlanceImageService(client)
-        images = service.detail(ctx, **params)
+        service.detail(ctx, **params)
 
         client.call.assert_called_once_with(ctx, 1, 'list', limit=10)
 
@@ -834,20 +852,170 @@ class TestDetail(test.NoDBTestCase):
                                    ext_query_mock, reraise_mock):
         params = {}
         ext_query_mock.return_value = params
-        raised = exception.NotAuthorized()
+        raised = exception.Forbidden()
         client = mock.MagicMock()
         client.call.side_effect = glanceclient.exc.Forbidden
         ctx = mock.sentinel.ctx
         reraise_mock.side_effect = raised
         service = glance.GlanceImageService(client)
 
-        with testtools.ExpectedException(exception.NotAuthorized):
+        with testtools.ExpectedException(exception.Forbidden):
             service.detail(ctx, **params)
 
         client.call.assert_called_once_with(ctx, 1, 'list')
-        is_avail_mock.assert_not_called()
-        trans_from_mock.assert_not_called()
+        self.assertFalse(is_avail_mock.called)
+        self.assertFalse(trans_from_mock.called)
         reraise_mock.assert_called_once_with()
+
+
+class TestCreate(test.NoDBTestCase):
+
+    """Tests the create method of the GlanceImageService."""
+
+    @mock.patch('nova.image.glance._translate_from_glance')
+    @mock.patch('nova.image.glance._translate_to_glance')
+    def test_create_success(self, trans_to_mock, trans_from_mock):
+        translated = {
+            'image_id': mock.sentinel.image_id
+        }
+        trans_to_mock.return_value = translated
+        trans_from_mock.return_value = mock.sentinel.trans_from
+        image_mock = mock.MagicMock(spec=dict)
+        client = mock.MagicMock()
+        client.call.return_value = mock.sentinel.image_meta
+        ctx = mock.sentinel.ctx
+        service = glance.GlanceImageService(client)
+        image_meta = service.create(ctx, image_mock)
+
+        trans_to_mock.assert_called_once_with(image_mock)
+        client.call.assert_called_once_with(ctx, 1, 'create',
+                                            image_id=mock.sentinel.image_id)
+        trans_from_mock.assert_called_once_with(mock.sentinel.image_meta)
+
+        self.assertEqual(mock.sentinel.trans_from, image_meta)
+
+        # Now verify that if we supply image data to the call,
+        # that the client is also called with the data kwarg
+        client.reset_mock()
+        image_meta = service.create(ctx, image_mock, data=mock.sentinel.data)
+
+        client.call.assert_called_once_with(ctx, 1, 'create',
+                                            image_id=mock.sentinel.image_id,
+                                            data=mock.sentinel.data)
+
+    @mock.patch('nova.image.glance._reraise_translated_exception')
+    @mock.patch('nova.image.glance._translate_from_glance')
+    @mock.patch('nova.image.glance._translate_to_glance')
+    def test_create_client_failure(self, trans_to_mock, trans_from_mock,
+                                   reraise_mock):
+        translated = {}
+        trans_to_mock.return_value = translated
+        image_mock = mock.MagicMock(spec=dict)
+        raised = exception.Invalid()
+        client = mock.MagicMock()
+        client.call.side_effect = glanceclient.exc.BadRequest
+        ctx = mock.sentinel.ctx
+        reraise_mock.side_effect = raised
+        service = glance.GlanceImageService(client)
+
+        self.assertRaises(exception.Invalid, service.create, ctx, image_mock)
+        trans_to_mock.assert_called_once_with(image_mock)
+        self.assertFalse(trans_from_mock.called)
+
+
+class TestUpdate(test.NoDBTestCase):
+
+    """Tests the update method of the GlanceImageService."""
+
+    @mock.patch('nova.image.glance._translate_from_glance')
+    @mock.patch('nova.image.glance._translate_to_glance')
+    def test_update_success(self, trans_to_mock, trans_from_mock):
+        translated = {
+            'id': mock.sentinel.image_id,
+            'name': mock.sentinel.name
+        }
+        trans_to_mock.return_value = translated
+        trans_from_mock.return_value = mock.sentinel.trans_from
+        image_mock = mock.MagicMock(spec=dict)
+        client = mock.MagicMock()
+        client.call.return_value = mock.sentinel.image_meta
+        ctx = mock.sentinel.ctx
+        service = glance.GlanceImageService(client)
+        image_meta = service.update(ctx, mock.sentinel.image_id, image_mock)
+
+        trans_to_mock.assert_called_once_with(image_mock)
+        # Verify that the 'id' element has been removed as a kwarg to
+        # the call to glanceclient's update (since the image ID is
+        # supplied as a positional arg), and that the
+        # purge_props default is True.
+        client.call.assert_called_once_with(ctx, 1, 'update',
+                                            mock.sentinel.image_id,
+                                            name=mock.sentinel.name,
+                                            purge_props=True)
+        trans_from_mock.assert_called_once_with(mock.sentinel.image_meta)
+        self.assertEqual(mock.sentinel.trans_from, image_meta)
+
+        # Now verify that if we supply image data to the call,
+        # that the client is also called with the data kwarg
+        client.reset_mock()
+        image_meta = service.update(ctx, mock.sentinel.image_id,
+                                    image_mock, data=mock.sentinel.data)
+
+        client.call.assert_called_once_with(ctx, 1, 'update',
+                                            mock.sentinel.image_id,
+                                            name=mock.sentinel.name,
+                                            purge_props=True,
+                                            data=mock.sentinel.data)
+
+    @mock.patch('nova.image.glance._reraise_translated_image_exception')
+    @mock.patch('nova.image.glance._translate_from_glance')
+    @mock.patch('nova.image.glance._translate_to_glance')
+    def test_update_client_failure(self, trans_to_mock, trans_from_mock,
+                                   reraise_mock):
+        translated = {
+            'name': mock.sentinel.name
+        }
+        trans_to_mock.return_value = translated
+        trans_from_mock.return_value = mock.sentinel.trans_from
+        image_mock = mock.MagicMock(spec=dict)
+        raised = exception.ImageNotAuthorized(image_id=123)
+        client = mock.MagicMock()
+        client.call.side_effect = glanceclient.exc.Forbidden
+        ctx = mock.sentinel.ctx
+        reraise_mock.side_effect = raised
+        service = glance.GlanceImageService(client)
+
+        self.assertRaises(exception.ImageNotAuthorized,
+                          service.update, ctx, mock.sentinel.image_id,
+                          image_mock)
+        client.call.assert_called_once_with(ctx, 1, 'update',
+                                            mock.sentinel.image_id,
+                                            purge_props=True,
+                                            name=mock.sentinel.name)
+        self.assertFalse(trans_from_mock.called)
+        reraise_mock.assert_called_once_with(mock.sentinel.image_id)
+
+
+class TestDelete(test.NoDBTestCase):
+
+    """Tests the delete method of the GlanceImageService."""
+
+    def test_delete_success(self):
+        client = mock.MagicMock()
+        client.call.return_value = True
+        ctx = mock.sentinel.ctx
+        service = glance.GlanceImageService(client)
+        service.delete(ctx, mock.sentinel.image_id)
+        client.call.assert_called_once_with(ctx, 1, 'delete',
+                                            mock.sentinel.image_id)
+
+    def test_delete_client_failure(self):
+        client = mock.MagicMock()
+        client.call.side_effect = glanceclient.exc.NotFound
+        ctx = mock.sentinel.ctx
+        service = glance.GlanceImageService(client)
+        self.assertRaises(exception.ImageNotFound, service.delete, ctx,
+                          mock.sentinel.image_id)
 
 
 class TestGlanceClientWrapper(test.NoDBTestCase):

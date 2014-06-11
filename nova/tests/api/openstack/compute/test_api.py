@@ -20,7 +20,6 @@ import webob.exc
 
 from nova.api import openstack as openstack_api
 from nova.api.openstack import wsgi
-import nova.context
 from nova import exception
 from nova.openstack.common import jsonutils
 from nova import test
@@ -61,7 +60,7 @@ class APITest(test.NoDBTestCase):
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, ctype)
 
-        body = jsonutils.loads(res.body)
+        jsonutils.loads(res.body)
 
     def test_vendor_content_type_xml(self):
         ctype = 'application/vnd.openstack.compute+xml'
@@ -73,7 +72,7 @@ class APITest(test.NoDBTestCase):
         self.assertEqual(res.status_int, 200)
         self.assertEqual(res.content_type, ctype)
 
-        body = etree.XML(res.body)
+        etree.XML(res.body)
 
     def test_exceptions_are_converted_to_faults_webob_exc(self):
         @webob.dec.wsgify
@@ -178,8 +177,6 @@ class APITest(test.NoDBTestCase):
         class ExceptionWithNoneCode(Exception):
             code = None
 
-        msg = 'Internal Server Error'
-
         @webob.dec.wsgify
         def fail(req):
             raise ExceptionWithNoneCode()
@@ -187,13 +184,3 @@ class APITest(test.NoDBTestCase):
         api = self._wsgi_app(fail)
         resp = webob.Request.blank('/').get_response(api)
         self.assertEqual(500, resp.status_int)
-
-    def test_request_id_in_response(self):
-        req = webob.Request.blank('/')
-        req.method = 'GET'
-        context = nova.context.RequestContext('bob', 1)
-        context.request_id = 'test-req-id'
-        req.environ['nova.context'] = context
-
-        res = req.get_response(fakes.wsgi_app())
-        self.assertEqual(res.headers['x-compute-request-id'], 'test-req-id')

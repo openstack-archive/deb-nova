@@ -26,7 +26,7 @@ At each aging iteration we check if the image can be aged.
 This is done by comparing the current nova compute time to the time embedded
 in the timestamp. If the time exceeds the configured aging time then
 the parent folder, that is the image ID folder, will be deleted.
-That effectivly ages the cached image.
+That effectively ages the cached image.
 If an image is used then the timestamps will be deleted.
 
 When accessing a timestamp we make use of locking. This ensure that aging
@@ -105,12 +105,12 @@ class ImageCacheManager(imagecache.ImageCacheManager):
         return timeutils.parse_strtime(ts, fmt=TIMESTAMP_FORMAT)
 
     def _get_ds_browser(self, ds_ref):
-        ds_browser = self._ds_browser.get(ds_ref)
+        ds_browser = self._ds_browser.get(ds_ref.value)
         if not ds_browser:
             ds_browser = vim_util.get_dynamic_property(
                     self._session._get_vim(), ds_ref,
                     "Datastore", "browser")
-            self._ds_browser[ds_ref] = ds_browser
+            self._ds_browser[ds_ref.value] = ds_browser
         return ds_browser
 
     def _list_datastore_images(self, ds_path, datastore):

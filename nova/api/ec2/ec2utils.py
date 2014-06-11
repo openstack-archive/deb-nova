@@ -22,6 +22,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.network import model as network_model
+from nova.objects import ec2 as ec2_obj
 from nova.objects import instance as instance_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
@@ -107,7 +108,7 @@ def id_to_glance_id(context, image_id):
 @memoize
 def glance_id_to_id(context, glance_id):
     """Convert a glance id to an internal (db) id."""
-    if glance_id is None:
+    if not glance_id:
         return
     try:
         return db.s3_image_get_by_uuid(context, glance_id)['id']
@@ -122,6 +123,8 @@ def ec2_id_to_glance_id(context, ec2_id):
 
 def glance_id_to_ec2_id(context, glance_id, image_type='ami'):
     image_id = glance_id_to_id(context, glance_id)
+    if image_id is None:
+        return
     return image_ec2_id(image_id, image_type=image_type)
 
 
@@ -234,6 +237,24 @@ def ec2_vol_id_to_uuid(ec2_id):
 _ms_time_regex = re.compile('^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,6}Z$')
 
 
+def status_to_ec2_attach_status(volume):
+    """Get the corresponding EC2 attachment state.
+
+    According to EC2 API, the valid attachment status in response is:
+    attaching | attached | detaching | detached
+    """
+    volume_status = volume.get('status')
+    attach_status = volume.get('attach_status')
+    if volume_status in ('attaching', 'detaching'):
+        ec2_attach_status = volume_status
+    elif attach_status in ('attached', 'detached'):
+        ec2_attach_status = attach_status
+    else:
+        msg = _("Unacceptable attach status:%s for ec2 API.") % attach_status
+        raise exception.Invalid(msg)
+    return ec2_attach_status
+
+
 def is_ec2_timestamp_expired(request, expires=None):
     """Checks the timestamp or expiry time included in an EC2 request
     and returns true if the request is expired
@@ -289,14 +310,19 @@ def get_int_id_from_volume_uuid(context, volume_uuid):
     if volume_uuid is None:
         return
     try:
-        return db.get_ec2_volume_id_by_uuid(context, volume_uuid)
+        vmap = ec2_obj.VolumeMapping.get_by_uuid(context, volume_uuid)
+        return vmap.id
     except exception.NotFound:
-        return db.ec2_volume_create(context, volume_uuid)['id']
+        vmap = ec2_obj.VolumeMapping()
+        vmap.uuid = volume_uuid
+        vmap.create(context)
+        return vmap.id
 
 
 @memoize
 def get_volume_uuid_from_int_id(context, int_id):
-    return db.get_volume_uuid_by_ec2_id(context, int_id)
+    vmap = ec2_obj.VolumeMapping.get_by_id(context, int_id)
+    return vmap.uuid
 
 
 def ec2_snap_id_to_uuid(ec2_id):

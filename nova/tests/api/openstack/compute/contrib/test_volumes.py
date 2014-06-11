@@ -31,6 +31,7 @@ from nova.compute import flavors
 from nova import context
 from nova import db
 from nova import exception
+from nova import objects
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova import test
@@ -298,6 +299,7 @@ class VolumeApiTest(test.TestCase):
         req = webob.Request.blank('/v2/fake/os-volumes/456')
         resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 404)
+        self.assertIn('Volume 456 could not be found.', resp.body)
 
     def test_volume_delete(self):
         req = webob.Request.blank('/v2/fake/os-volumes/123')
@@ -312,6 +314,7 @@ class VolumeApiTest(test.TestCase):
         req.method = 'DELETE'
         resp = req.get_response(self.app)
         self.assertEqual(resp.status_int, 404)
+        self.assertIn('Volume 456 could not be found.', resp.body)
 
 
 class VolumeAttachTests(test.TestCase):
@@ -342,6 +345,51 @@ class VolumeAttachTests(test.TestCase):
         result = self.attachments.show(req, FAKE_UUID, FAKE_UUID_A)
         self.assertEqual(self.expected_show, result)
 
+    @mock.patch.object(compute_api.API, 'get',
+        side_effect=exception.InstanceNotFound(instance_id=FAKE_UUID))
+    def test_show_no_instance(self, mock_mr):
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        self.assertRaises(exc.HTTPNotFound,
+                          self.attachments.show,
+                          req,
+                          FAKE_UUID,
+                          FAKE_UUID_A)
+
+    @mock.patch.object(objects.BlockDeviceMappingList,
+                       'get_by_instance_uuid', return_value=None)
+    def test_show_no_bdms(self, mock_mr):
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        self.assertRaises(exc.HTTPNotFound,
+                          self.attachments.show,
+                          req,
+                          FAKE_UUID,
+                          FAKE_UUID_A)
+
+    def test_show_bdms_no_mountpoint(self):
+        FAKE_UUID_NOTEXIST = '00000000-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+
+        req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')
+        req.method = 'POST'
+        req.body = jsonutils.dumps({})
+        req.headers['content-type'] = 'application/json'
+        req.environ['nova.context'] = self.context
+
+        self.assertRaises(exc.HTTPNotFound,
+                          self.attachments.show,
+                          req,
+                          FAKE_UUID,
+                          FAKE_UUID_NOTEXIST)
+
     def test_detach(self):
         self.stubs.Set(compute_api.API,
                        'detach_volume',
@@ -369,7 +417,7 @@ class VolumeAttachTests(test.TestCase):
                           FAKE_UUID,
                           FAKE_UUID_C)
 
-    @mock.patch('nova.objects.block_device.BlockDeviceMapping.is_root',
+    @mock.patch('nova.objects.BlockDeviceMapping.is_root',
                  new_callable=mock.PropertyMock)
     def test_detach_vol_root(self, mock_isroot):
         req = webob.Request.blank('/v2/servers/id/os-volume_attachments/uuid')

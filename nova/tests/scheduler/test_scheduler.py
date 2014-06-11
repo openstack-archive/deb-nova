@@ -27,7 +27,6 @@ from nova.compute import api as compute_api
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
-from nova.conductor import api as conductor_api
 from nova.conductor.tasks import live_migrate
 from nova import context
 from nova import db
@@ -40,9 +39,10 @@ from nova.scheduler import manager
 from nova import servicegroup
 from nova import test
 from nova.tests import fake_instance
-from nova.tests import fake_instance_actions
+from nova.tests import fake_server_actions
 from nova.tests.image import fake as fake_image
 from nova.tests import matchers
+from nova.tests.objects import test_instance_fault
 from nova.tests.scheduler import fakes
 from nova import utils
 
@@ -65,7 +65,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         self.topic = 'fake_topic'
         self.fake_args = (1, 2, 3)
         self.fake_kwargs = {'cat': 'meow', 'dog': 'woof'}
-        fake_instance_actions.stub_out_action_events(self.stubs)
+        fake_server_actions.stub_out_action_events(self.stubs)
 
     def test_1_correct_init(self):
         # Correct scheduler driver
@@ -152,8 +152,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                 {"vm_state": vm_states.ERROR,
                  "task_state": None}).AndReturn((inst, inst))
         compute_utils.add_instance_fault_from_exc(self.context,
-                mox.IsA(conductor_api.LocalAPI), new_ref,
-                mox.IsA(exception.NoValidHost), mox.IgnoreArg())
+                new_ref, mox.IsA(exception.NoValidHost), mox.IgnoreArg())
 
         self.mox.ReplayAll()
         self.manager.run_instance(self.context, request_spec,
@@ -180,8 +179,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                                  "task_state": None,
                                  "expected_task_state": task_states.MIGRATING,
                                 }).AndReturn((inst, inst))
-        compute_utils.add_instance_fault_from_exc(self.context,
-                                mox.IsA(conductor_api.LocalAPI), inst,
+        compute_utils.add_instance_fault_from_exc(self.context, inst,
                                 mox.IsA(exception.NoValidHost),
                                 mox.IgnoreArg())
 
@@ -213,8 +211,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                                  "task_state": None,
                                  "expected_task_state": task_states.MIGRATING,
                                 }).AndReturn((inst, inst))
-        compute_utils.add_instance_fault_from_exc(self.context,
-                                mox.IsA(conductor_api.LocalAPI), inst,
+        compute_utils.add_instance_fault_from_exc(self.context, inst,
                                 mox.IsA(exception.ComputeServiceUnavailable),
                                 mox.IgnoreArg())
 
@@ -254,8 +251,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         db.instance_update_and_get_original(self.context, inst["uuid"],
                                 {"vm_state": vm_states.ERROR,
                                 }).AndReturn((inst, inst))
-        compute_utils.add_instance_fault_from_exc(self.context,
-                                mox.IsA(conductor_api.LocalAPI), inst,
+        compute_utils.add_instance_fault_from_exc(self.context, inst,
                                 mox.IsA(ValueError),
                                 mox.IgnoreArg())
 
@@ -295,8 +291,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                 fake_instance_uuid,
                 {"vm_state": vm_states.ACTIVE, "task_state": None}).AndReturn(
                         (inst, inst))
-        compute_utils.add_instance_fault_from_exc(self.context,
-                mox.IsA(conductor_api.LocalAPI), new_ref,
+        compute_utils.add_instance_fault_from_exc(self.context, new_ref,
                 mox.IsA(exception.NoValidHost), mox.IgnoreArg())
 
         self.mox.ReplayAll()
@@ -331,8 +326,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                 fake_instance_uuid,
                 {"vm_state": vm_states.STOPPED, "task_state": None}).AndReturn(
                         (inst, inst))
-        compute_utils.add_instance_fault_from_exc(self.context,
-                mox.IsA(conductor_api.LocalAPI), new_ref,
+        compute_utils.add_instance_fault_from_exc(self.context, new_ref,
                 mox.IsA(exception.NoValidHost), mox.IgnoreArg())
 
         self.mox.ReplayAll()
@@ -373,8 +367,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
                 fake_instance_uuid,
                 {"vm_state": vm_states.ERROR,
                  "task_state": None}).AndReturn((inst, inst))
-        compute_utils.add_instance_fault_from_exc(self.context,
-                mox.IsA(conductor_api.LocalAPI), new_ref,
+        compute_utils.add_instance_fault_from_exc(self.context, new_ref,
                 mox.IsA(test.TestingException), mox.IgnoreArg())
 
         self.mox.ReplayAll()
@@ -391,12 +384,12 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(db, 'instance_fault_create')
         self.mox.StubOutWithMock(rpc, 'get_notifier')
         notifier = self.mox.CreateMockAnything()
-        rpc.get_notifier('conductor', CONF.host).AndReturn(notifier)
         rpc.get_notifier('scheduler').AndReturn(notifier)
         db.instance_update_and_get_original(self.context, 'fake-uuid',
                                             updates).AndReturn((None,
                                                                 fake_inst))
-        db.instance_fault_create(self.context, mox.IgnoreArg())
+        db.instance_fault_create(self.context, mox.IgnoreArg()).AndReturn(
+            test_instance_fault.fake_faults['fake-uuid'][0])
         notifier.error(self.context, 'scheduler.foo', mox.IgnoreArg())
         self.mox.ReplayAll()
 
@@ -504,10 +497,10 @@ class SchedulerTestCase(test.NoDBTestCase):
         db.instance_update_and_get_original(self.context, instance['uuid'],
                                             mox.IgnoreArg()).AndReturn(
                                                 (None, instance))
-        db.instance_fault_create(self.context, mox.IgnoreArg())
+        db.instance_fault_create(self.context, mox.IgnoreArg()).AndReturn(
+            test_instance_fault.fake_faults['fake-uuid'][0])
         self.mox.StubOutWithMock(rpc, 'get_notifier')
         notifier = self.mox.CreateMockAnything()
-        rpc.get_notifier('conductor', CONF.host).AndReturn(notifier)
         rpc.get_notifier('scheduler').AndReturn(notifier)
         notifier.error(self.context, 'scheduler.run_instance', mox.IgnoreArg())
         self.mox.ReplayAll()
@@ -568,17 +561,30 @@ class SchedulerV3PassthroughTestCase(test.TestCase):
         with mock.patch.object(self.manager, 'select_destinations'
                 ) as select_destinations:
             self.proxy.select_destinations(None, None, None)
-            select_destinations.assert_called_once()
+            select_destinations.assert_called_once_with(None,
+                                                        filter_properties=None,
+                                                        request_spec=None)
 
     def test_run_instance(self):
         with mock.patch.object(self.manager, 'run_instance'
                 ) as run_instance:
             self.proxy.run_instance(None, None, None, None, None, None, None,
                     None)
-            run_instance.assert_called_once()
+            run_instance.assert_called_once_with(None, legacy_bdm_in_spec=None,
+                                                 request_spec=None,
+                                                 is_first_time=None,
+                                                 filter_properties=None,
+                                                 admin_password=None,
+                                                 injected_files=None,
+                                                 requested_networks=None)
 
     def test_prep_resize(self):
         with mock.patch.object(self.manager, 'prep_resize'
                 ) as prep_resize:
             self.proxy.prep_resize(None, None, None, None, None, None, None)
-            prep_resize.assert_called_once()
+            prep_resize.assert_called_once_with(None, request_spec=None,
+                                                instance_type=None,
+                                                reservations=None,
+                                                image=None,
+                                                filter_properties=None,
+                                                instance=None)

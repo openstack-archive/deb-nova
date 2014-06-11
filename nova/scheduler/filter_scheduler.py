@@ -62,15 +62,16 @@ class FilterScheduler(driver.Scheduler):
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.notifier = rpc.get_notifier('scheduler')
 
+    # NOTE(alaski): Remove this method when the scheduler rpc interface is
+    # bumped to 4.x as it is no longer used.
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,
                               filter_properties, legacy_bdm_in_spec):
-        """This method is called from nova.compute.api to provision
-        an instance.  We first create a build plan (a list of WeightedHosts)
-        and then provision.
+        """Provisions instances that needs to be scheduled
 
-        Returns a list of the instances created.
+        Applies filters and weighters on request properties to get a list of
+        compute hosts and calls them to spawn instance(s).
         """
         payload = dict(request_spec=request_spec)
         self.notifier.info(context, 'scheduler.run_instance.start', payload)
@@ -80,7 +81,7 @@ class FilterScheduler(driver.Scheduler):
                     "uuids: %(instance_uuids)s"),
                   {'num_instances': len(instance_uuids),
                    'instance_uuids': instance_uuids})
-        LOG.debug(_("Request Spec: %s") % request_spec)
+        LOG.debug("Request Spec: %s" % request_spec)
 
         weighed_hosts = self._schedule(context, request_spec,
                                        filter_properties, instance_uuids)
@@ -157,7 +158,6 @@ class FilterScheduler(driver.Scheduler):
                            'scheduler.run_instance.scheduled', payload)
 
         # Update the metadata if necessary
-        scheduler_hints = filter_properties.get('scheduler_hints') or {}
         try:
             updated_instance = driver.instance_update_db(context,
                                                          instance_uuid)
@@ -237,16 +237,13 @@ class FilterScheduler(driver.Scheduler):
             # re-scheduling is disabled.
             return
 
-        retry = filter_properties.pop('retry', {})
-        # retry is enabled, update attempt count:
-        if retry:
-            retry['num_attempts'] += 1
-        else:
-            retry = {
-                'num_attempts': 1,
+        # retry is enabled, update attempt count
+        retry = filter_properties.setdefault(
+            'retry', {
+                'num_attempts': 0,
                 'hosts': []  # list of compute hosts tried
-            }
-        filter_properties['retry'] = retry
+            })
+        retry['num_attempts'] += 1
 
         instance_uuid = instance_properties.get('uuid')
         self._log_compute_error(instance_uuid, retry)
@@ -262,10 +259,10 @@ class FilterScheduler(driver.Scheduler):
     def _setup_instance_group(context, filter_properties):
         update_group_hosts = False
         scheduler_hints = filter_properties.get('scheduler_hints') or {}
-        group_uuid = scheduler_hints.get('group', None)
-        if group_uuid:
-            group = instance_group_obj.InstanceGroup.get_by_uuid(context,
-                    group_uuid)
+        group_hint = scheduler_hints.get('group', None)
+        if group_hint:
+            group = instance_group_obj.InstanceGroup.get_by_hint(context,
+                        group_hint)
             policies = set(('anti-affinity', 'affinity'))
             if any((policy in policies) for policy in group.policies):
                 update_group_hosts = True
@@ -329,12 +326,12 @@ class FilterScheduler(driver.Scheduler):
                 # Can't get any more locally.
                 break
 
-            LOG.debug(_("Filtered %(hosts)s"), {'hosts': hosts})
+            LOG.debug("Filtered %(hosts)s", {'hosts': hosts})
 
             weighed_hosts = self.host_manager.get_weighed_hosts(hosts,
                     filter_properties)
 
-            LOG.debug(_("Weighed %(hosts)s"), {'hosts': weighed_hosts})
+            LOG.debug("Weighed %(hosts)s", {'hosts': weighed_hosts})
 
             scheduler_host_subset_size = CONF.scheduler_host_subset_size
             if scheduler_host_subset_size > len(weighed_hosts):

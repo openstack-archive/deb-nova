@@ -28,7 +28,6 @@ from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests import fake_processutils
 from nova.tests.virt.libvirt import fake_libvirt_utils
-from nova import utils
 from nova.virt.libvirt import imagebackend
 
 CONF = cfg.CONF
@@ -66,10 +65,6 @@ class _ImageTestCase(object):
         self.useFixture(fixtures.MonkeyPatch(
             'nova.virt.libvirt.imagebackend.libvirt_utils',
             fake_libvirt_utils))
-
-        def fake_chown(path, owner_uid=None):
-            return None
-        self.stubs.Set(utils, 'chown', fake_chown)
 
     def tearDown(self):
         super(_ImageTestCase, self).tearDown()
@@ -126,10 +121,6 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
         self.image_class = imagebackend.Raw
         super(RawTestCase, self).setUp()
         self.stubs.Set(imagebackend.Raw, 'correct_format', lambda _: None)
-
-        def fake_chown(path, owner_uid=None):
-            return None
-        self.stubs.Set(utils, 'chown', fake_chown)
 
     def prepare_mocks(self):
         fn = self.mox.CreateMockAnything()
@@ -243,10 +234,6 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
         self.mox.StubOutWithMock(os.path, 'exists')
         self.mox.StubOutWithMock(imagebackend.images, 'qemu_img_info')
 
-        def fake_chown(path, owner_uid=None):
-            return None
-        self.stubs.Set(utils, 'chown', fake_chown)
-
         os.path.exists(self.PATH).AndReturn(True)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         info = self.mox.CreateMockAnything()
@@ -274,10 +261,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         super(Qcow2TestCase, self).setUp()
         self.QCOW2_BASE = (self.TEMPLATE_PATH +
                            '_%d' % (self.SIZE / units.Gi))
-
-        def fake_chown(path, owner_uid=None):
-            return None
-        self.stubs.Set(utils, 'chown', fake_chown)
 
     def prepare_mocks(self):
         fn = self.mox.CreateMockAnything()
@@ -467,48 +450,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         image = self.image_class(self.INSTANCE, self.NAME)
         driver_format = image.resolve_driver_format()
         self.assertEqual(driver_format, 'qcow2')
-
-    def test_prealloc_image(self):
-        CONF.set_override('preallocate_images', 'space')
-
-        fake_processutils.fake_execute_clear_log()
-        fake_processutils.stub_out_processutils_execute(self.stubs)
-        image = self.image_class(self.INSTANCE, self.NAME)
-
-        def fake_fetch(target, *args, **kwargs):
-            return
-
-        self.stubs.Set(os.path, 'exists', lambda _: True)
-        self.stubs.Set(os, 'access', lambda p, w: True)
-
-        # Call twice to verify testing fallocate is only called once.
-        image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
-        image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
-
-        self.assertEqual(fake_processutils.fake_execute_get_log(),
-            ['fallocate -n -l 1 %s.fallocate_test' % self.PATH,
-             'fallocate -n -l %s %s' % (self.SIZE, self.PATH),
-             'fallocate -n -l %s %s' % (self.SIZE, self.PATH)])
-
-    def test_prealloc_image_without_write_access(self):
-        CONF.set_override('preallocate_images', 'space')
-
-        fake_processutils.fake_execute_clear_log()
-        fake_processutils.stub_out_processutils_execute(self.stubs)
-        image = self.image_class(self.INSTANCE, self.NAME)
-
-        def fake_fetch(target, *args, **kwargs):
-            return
-
-        self.stubs.Set(image, 'check_image_exists', lambda: True)
-        self.stubs.Set(image, '_can_fallocate', lambda: True)
-        self.stubs.Set(os.path, 'exists', lambda _: True)
-        self.stubs.Set(os, 'access', lambda p, w: False)
-
-        # Testing fallocate is only called when user has write access.
-        image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
-
-        self.assertEqual(fake_processutils.fake_execute_get_log(), [])
 
 
 class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
@@ -803,20 +744,6 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
 
         self.mox.VerifyAll()
 
-    def test_cache_base_dir_exists(self):
-        self.mox.StubOutWithMock(os.path, 'exists')
-        os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
-        fn = self.mox.CreateMockAnything()
-        fn(target=self.TEMPLATE_PATH)
-        self.mox.StubOutWithMock(imagebackend.fileutils, 'ensure_tree')
-        self.mox.ReplayAll()
-
-        image = self.image_class(self.INSTANCE, self.NAME)
-        self.mock_create_image(image)
-        image.cache(fn, self.TEMPLATE)
-
-        self.mox.VerifyAll()
-
     def test_create_image(self):
         fn = self.prepare_mocks()
         fn(max_size=None, rbd=self.rbd, target=self.TEMPLATE_PATH)
@@ -887,10 +814,6 @@ class BackendTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(BackendTestCase, self).setUp()
-
-        def fake_chown(path, owner_uid=None):
-            return None
-        self.stubs.Set(utils, 'chown', fake_chown)
 
     def get_image(self, use_cow, image_type):
         return imagebackend.Backend(use_cow).image(self.INSTANCE,

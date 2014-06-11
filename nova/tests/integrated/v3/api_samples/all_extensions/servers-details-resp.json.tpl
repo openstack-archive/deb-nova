@@ -13,7 +13,7 @@
                     }
                 ]
             },
-            "created": "%(timestamp)s",
+            "created": "%(isotime)s",
             "flavor": {
                 "id": "1",
                 "links": [
@@ -60,7 +60,7 @@
             "os-extended-status:vm_state": "active",
             "os-extended-volumes:volumes_attached": [],
             "os-pci:pci_devices": [{"id": 1}],
-            "os-server-usage:launched_at": "%(timestamp)s",
+            "os-server-usage:launched_at": "%(strtime)s",
             "os-server-usage:terminated_at": null,
             "progress": 0,
             "os-security-groups:security_groups": [
@@ -70,7 +70,7 @@
             ],
             "status": "ACTIVE",
             "tenant_id": "openstack",
-            "updated": "%(timestamp)s",
+            "updated": "%(isotime)s",
             "user_id": "fake"
         }
     ]

@@ -21,11 +21,11 @@ import re
 
 from nova.compute import task_states
 from nova.compute import vm_states
-from nova import conductor
 from nova import context
 from nova import exception
-from nova.objects import aggregate as aggregate_obj
+from nova import objects
 from nova.objects import instance as instance_obj
+from nova.objects import service as service_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -41,7 +41,6 @@ class Host(object):
     def __init__(self, session, virtapi):
         self._session = session
         self._virtapi = virtapi
-        self._conductor_api = conductor.API()
 
     def host_power_action(self, _host, action):
         """Reboots or shuts down the host."""
@@ -79,7 +78,7 @@ class Host(object):
                     instance = instance_obj.Instance.get_by_uuid(ctxt, uuid)
                     vm_counter = vm_counter + 1
 
-                    aggregate = aggregate_obj.AggregateList.get_by_host(
+                    aggregate = objects.AggregateList.get_by_host(
                         ctxt, host, key=pool_states.POOL_FLAG)
                     if not aggregate:
                         msg = _('Aggregate for host %(host)s count not be'
@@ -118,18 +117,11 @@ class Host(object):
         """Sets the specified host's ability to accept new instances."""
         # Since capabilities are gone, use service table to disable a node
         # in scheduler
-        status = {'disabled': not enabled,
-                'disabled_reason': 'set by xenapi host_state'
-                }
         cntxt = context.get_admin_context()
-        service = self._conductor_api.service_get_by_args(
-                cntxt,
-                host,
-                'nova-compute')
-        self._conductor_api.service_update(
-                cntxt,
-                service,
-                status)
+        service = service_obj.Service.get_by_args(cntxt, host, 'nova-compute')
+        service.disabled = not enabled
+        service.disabled_reason = 'set by xenapi host_state'
+        service.save()
 
         args = {"enabled": jsonutils.dumps(enabled)}
         response = call_xenhost(self._session, "set_host_enabled", args)
@@ -246,6 +238,7 @@ class HostState(object):
             used = int(sr_rec["physical_utilisation"])
             data["disk_total"] = total
             data["disk_used"] = used
+            data["disk_allocated"] = int(sr_rec["virtual_allocation"])
             data["disk_available"] = total - used
             data["supported_instances"] = to_supported_instances(
                 data.get("host_capabilities")

@@ -19,8 +19,10 @@ import mock
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
+from nova.objects import instance as instance_obj
 from nova.pci import pci_manager
 from nova import test
+from nova.tests import fake_instance
 from nova.tests.virt.xenapi import stubs
 from nova.virt import fake
 from nova.virt.xenapi import agent as xenapi_agent
@@ -28,6 +30,7 @@ from nova.virt.xenapi.client import session as xenapi_session
 from nova.virt.xenapi import fake as xenapi_fake
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import vmops
+from nova.virt.xenapi import volumeops
 
 
 class VMOpsTestBase(stubs.XenAPITestBaseNoDB):
@@ -779,7 +782,7 @@ class CreateVMRecordTestCase(VMOpsTestBase):
             mock_get_vm_device_id, mock_determine_vm_mode):
 
         context = "context"
-        instance = {"vm_mode": "vm_mode", "uuid": "uuid123"}
+        instance = instance_obj.Instance(vm_mode="vm_mode", uuid="uuid123")
         name_label = "dummy"
         disk_image_type = "vhd"
         kernel_file = "kernel"
@@ -837,8 +840,44 @@ class BootableTestCase(VMOpsTestBase):
         self.assertIn('start', blocked)
 
 
-@mock.patch.object(vm_utils, 'update_vdi_virtual_size')
+@mock.patch.object(vm_utils, 'update_vdi_virtual_size', autospec=True)
 class ResizeVdisTestCase(VMOpsTestBase):
+    def test_dont_resize_root_volumes_osvol_false(self, mock_resize):
+        instance = fake_instance.fake_db_instance(root_gb=20)
+        vdis = {'root': {'osvol': False, 'ref': 'vdi_ref'}}
+        self.vmops._resize_up_vdis(instance, vdis)
+        self.assertTrue(mock_resize.called)
+
+    def test_dont_resize_root_volumes_osvol_true(self, mock_resize):
+        instance = fake_instance.fake_db_instance(root_gb=20)
+        vdis = {'root': {'osvol': True}}
+        self.vmops._resize_up_vdis(instance, vdis)
+        self.assertFalse(mock_resize.called)
+
+    def test_dont_resize_root_volumes_no_osvol(self, mock_resize):
+        instance = fake_instance.fake_db_instance(root_gb=20)
+        vdis = {'root': {}}
+        self.vmops._resize_up_vdis(instance, vdis)
+        self.assertFalse(mock_resize.called)
+
+    @mock.patch.object(vm_utils, 'get_ephemeral_disk_sizes')
+    def test_ensure_ephemeral_resize_with_root_volume(self, mock_sizes,
+                                                       mock_resize):
+        mock_sizes.return_value = [2000, 1000]
+        instance = fake_instance.fake_db_instance(root_gb=20, ephemeral_gb=20)
+        ephemerals = {"4": {"ref": 4}, "5": {"ref": 5}}
+        vdis = {'root': {'osvol': True, 'ref': 'vdi_ref'},
+                'ephemerals': ephemerals}
+        with mock.patch.object(vm_utils, 'generate_single_ephemeral',
+                               autospec=True) as g:
+            self.vmops._resize_up_vdis(instance, vdis)
+            self.assertEqual([mock.call(self.vmops._session, instance, 4,
+                                        2000),
+                              mock.call(self.vmops._session, instance, 5,
+                                        1000)],
+                             mock_resize.call_args_list)
+            self.assertFalse(g.called)
+
     def test_resize_up_vdis_root(self, mock_resize):
         instance = {"root_gb": 20, "ephemeral_gb": 0}
         self.vmops._resize_up_vdis(instance, {"root": {"ref": "vdi_ref"}})
@@ -889,6 +928,27 @@ class ResizeVdisTestCase(VMOpsTestBase):
                                             4, 2000)
         mock_generate.assert_called_once_with(self.vmops._session, instance,
                                               None, 5, 1000)
+
+
+class LiveMigrateHelperTestCase(VMOpsTestBase):
+    def test_connect_block_device_volumes_none(self):
+        self.assertEqual({}, self.vmops.connect_block_device_volumes(None))
+
+    @mock.patch.object(volumeops.VolumeOps, "connect_volume")
+    def test_connect_block_device_volumes_calls_connect(self, mock_connect):
+        with mock.patch.object(self.vmops._session,
+                               "call_xenapi") as mock_session:
+            mock_connect.return_value = ("sr_uuid", None)
+            mock_session.return_value = "sr_ref"
+            bdm = {"connection_info": "c_info"}
+            bdi = {"block_device_mapping": [bdm]}
+            result = self.vmops.connect_block_device_volumes(bdi)
+
+            self.assertEqual({'sr_uuid': 'sr_ref'}, result)
+
+            mock_connect.assert_called_once_with("c_info")
+            mock_session.assert_called_once_with("SR.get_by_uuid",
+                                                 "sr_uuid")
 
 
 @mock.patch.object(vmops.VMOps, '_resize_ensure_vm_is_shutdown')

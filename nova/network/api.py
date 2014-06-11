@@ -17,72 +17,23 @@
 #    under the License.
 
 import functools
-import inspect
 
 from nova.compute import flavors
-from nova.db import base
 from nova import exception
+from nova.network import base_api
 from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
 from nova.objects import fixed_ip as fixed_ip_obj
+from nova.objects import floating_ip as floating_ip_obj
 from nova.objects import instance as instance_obj
-from nova.objects import instance_info_cache as info_cache_obj
-from nova.openstack.common import excutils
+from nova.objects import network as network_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova import policy
 from nova import utils
 
 LOG = logging.getLogger(__name__)
-
-
-def refresh_cache(f):
-    """Decorator to update the instance_info_cache
-
-    Requires context and instance as function args
-    """
-    argspec = inspect.getargspec(f)
-
-    @functools.wraps(f)
-    def wrapper(self, context, *args, **kwargs):
-        res = f(self, context, *args, **kwargs)
-
-        try:
-            # get the instance from arguments (or raise ValueError)
-            instance = kwargs.get('instance')
-            if not instance:
-                instance = args[argspec.args.index('instance') - 2]
-        except ValueError:
-            msg = _('instance is a required argument to use @refresh_cache')
-            raise Exception(msg)
-
-        update_instance_cache_with_nw_info(self, context, instance,
-                                           nw_info=res)
-
-        # return the original function's return value
-        return res
-    return wrapper
-
-
-def update_instance_cache_with_nw_info(api, context, instance, nw_info=None,
-                                       update_cells=True):
-    try:
-        if not isinstance(nw_info, network_model.NetworkInfo):
-            nw_info = None
-        if nw_info is None:
-            nw_info = api._get_instance_nw_info(context, instance)
-        LOG.debug(_('Updating cache with info: %s'), nw_info)
-        # NOTE(comstud): The save() method actually handles updating or
-        # creating the instance.  We don't need to retrieve the object
-        # from the DB first.
-        ic = info_cache_obj.InstanceInfoCache.new(context,
-                                                  instance['uuid'])
-        ic.network_info = nw_info
-        ic.save(update_cells=update_cells)
-    except Exception:
-        with excutils.save_and_reraise_exception():
-            LOG.exception(_('Failed storing info cache'), instance=instance)
 
 
 def wrap_check_policy(func):
@@ -106,14 +57,12 @@ def check_policy(context, action):
     policy.enforce(context, _action, target)
 
 
-class API(base.Base):
+class API(base_api.NetworkAPI):
     """API for doing networking via the nova-network network manager.
 
     This is a pluggable module - other implementations do networking via
     other services (such as Neutron).
     """
-    _sentinel = object()
-
     def __init__(self, **kwargs):
         self.network_rpcapi = network_rpcapi.NetworkAPI()
         helper = utils.ExceptionHelper
@@ -180,6 +129,14 @@ class API(base.Base):
                                                       context.project_id)
 
     @wrap_check_policy
+    def get_floating_ips(self, context, all_tenants=False):
+        if all_tenants:
+            return self.db.floating_ip_get_all(context)
+        else:
+            return self.db.floating_ip_get_all_by_project(context,
+                                                          context.project_id)
+
+    @wrap_check_policy
     def get_floating_ips_by_fixed_address(self, context, fixed_address):
         floating_ips = self.db.floating_ip_get_by_fixed_address(context,
                                                                 fixed_address)
@@ -228,7 +185,7 @@ class API(base.Base):
                  affect_auto_assigned)
 
     @wrap_check_policy
-    @refresh_cache
+    @base_api.refresh_cache
     def associate_floating_ip(self, context, instance,
                               floating_address, fixed_address,
                               affect_auto_assigned=False):
@@ -251,10 +208,11 @@ class API(base.Base):
                                                          orig_instance_uuid)
 
             # purge cached nw info for the original instance
-            update_instance_cache_with_nw_info(self, context, orig_instance)
+            base_api.update_instance_cache_with_nw_info(self, context,
+                                                        orig_instance)
 
     @wrap_check_policy
-    @refresh_cache
+    @base_api.refresh_cache
     def disassociate_floating_ip(self, context, instance, address,
                                  affect_auto_assigned=False):
         """Disassociates a floating ip from fixed ip it is associated with."""
@@ -262,7 +220,7 @@ class API(base.Base):
                 affect_auto_assigned)
 
     @wrap_check_policy
-    @refresh_cache
+    @base_api.refresh_cache
     def allocate_for_instance(self, context, instance, vpn,
                               requested_networks, macs=None,
                               security_groups=None,
@@ -336,7 +294,7 @@ class API(base.Base):
         raise NotImplementedError()
 
     @wrap_check_policy
-    @refresh_cache
+    @base_api.refresh_cache
     def add_fixed_ip_to_instance(self, context, instance, network_id):
         """Adds a fixed ip to instance from specified network."""
         flavor = flavors.extract_flavor(instance)
@@ -344,10 +302,10 @@ class API(base.Base):
                 'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
                 'network_id': network_id}
-        self.network_rpcapi.add_fixed_ip_to_instance(context, **args)
+        return self.network_rpcapi.add_fixed_ip_to_instance(context, **args)
 
     @wrap_check_policy
-    @refresh_cache
+    @base_api.refresh_cache
     def remove_fixed_ip_from_instance(self, context, instance, address):
         """Removes a fixed ip from instance from specified network."""
 
@@ -356,7 +314,8 @@ class API(base.Base):
                 'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
                 'address': address}
-        self.network_rpcapi.remove_fixed_ip_from_instance(context, **args)
+        return self.network_rpcapi.remove_fixed_ip_from_instance(context,
+                                                                 **args)
 
     @wrap_check_policy
     def add_network_to_project(self, context, project_id, network_uuid=None):
@@ -365,18 +324,18 @@ class API(base.Base):
                 network_uuid)
 
     @wrap_check_policy
-    def associate(self, context, network_uuid, host=_sentinel,
-                  project=_sentinel):
+    def associate(self, context, network_uuid, host=base_api.SENTINEL,
+                  project=base_api.SENTINEL):
         """Associate or disassociate host or project to network."""
         network_id = self.get(context, network_uuid)['id']
-        if host is not API._sentinel:
+        if host is not base_api.SENTINEL:
             if host is None:
                 self.db.network_disassociate(context, network_id,
                                              disassociate_host=True,
                                              disassociate_project=False)
             else:
                 self.db.network_set_host(context, network_id, host)
-        if project is not API._sentinel:
+        if project is not base_api.SENTINEL:
             if project is None:
                 self.db.network_disassociate(context, network_id,
                                              disassociate_host=False,
@@ -385,15 +344,15 @@ class API(base.Base):
                 self.db.network_associate(context, project, network_id, True)
 
     @wrap_check_policy
-    def get_instance_nw_info(self, context, instance):
+    def get_instance_nw_info(self, context, instance, **kwargs):
         """Returns all network info related to an instance."""
         result = self._get_instance_nw_info(context, instance)
         # NOTE(comstud): Don't update API cell with new info_cache every
         # time we pull network info for an instance.  The periodic healing
         # of info_cache causes too many cells messages.  Healing the API
         # will happen separately.
-        update_instance_cache_with_nw_info(self, context, instance,
-                                           result, update_cells=False)
+        base_api.update_instance_cache_with_nw_info(self, context, instance,
+                                                    result, update_cells=False)
         return result
 
     def _get_instance_nw_info(self, context, instance):
@@ -510,18 +469,18 @@ class API(base.Base):
 
     def _is_multi_host(self, context, instance):
         try:
-            fixed_ips = self.db.fixed_ip_get_by_instance(context,
-                                                         instance['uuid'])
+            fixed_ips = fixed_ip_obj.FixedIPList.get_by_instance_uuid(
+                context, instance['uuid'])
         except exception.FixedIpNotFoundForInstance:
             return False
-        network = self.db.network_get(context, fixed_ips[0]['network_id'],
-                                      project_only='allow_none')
-        return network['multi_host']
+        network = network_obj.Network.get_by_id(context,
+                                                fixed_ips[0].network_id,
+                                                project_only='allow_none')
+        return network.multi_host
 
     def _get_floating_ip_addresses(self, context, instance):
-        floating_ips = self.db.instance_floating_address_get_all(context,
-                                                            instance['uuid'])
-        return floating_ips
+        return floating_ip_obj.FloatingIP.get_addresses_by_instance(
+            context, instance)
 
     @wrap_check_policy
     def migrate_instance_start(self, context, instance, migration):

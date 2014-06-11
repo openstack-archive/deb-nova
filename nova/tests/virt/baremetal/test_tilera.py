@@ -19,6 +19,8 @@
 
 import os
 
+import mox
+
 from oslo.config import cfg
 
 from nova import exception
@@ -243,6 +245,9 @@ class TileraPrivateMethodsTestCase(BareMetalTileraTestCase):
         net = tilera.build_network_config(net_info)
         admin_password = 'fake password'
 
+        self.mox.StubOutWithMock(os.path, 'exists')
+        os.path.exists(mox.IgnoreArg()).AndReturn(True)
+
         self.mox.StubOutWithMock(disk_api, 'inject_data')
         disk_api.inject_data(
                 admin_password=admin_password,
@@ -307,11 +312,8 @@ class TileraPublicMethodsTestCase(BareMetalTileraTestCase):
                 'kernel': [None, 'cccc'],
             }
         self.instance['uuid'] = 'fake-uuid'
-        iqn = "iqn-%s" % self.instance['uuid']
-        tilera_config = 'this is a fake tilera config'
-        self.instance['uuid'] = 'fake-uuid'
-        tilera_path = tilera.get_tilera_nfs_path(self.instance)
-        image_path = tilera.get_image_file_path(self.instance)
+        tilera.get_tilera_nfs_path(self.instance)
+        tilera.get_image_file_path(self.instance)
 
         self.mox.StubOutWithMock(tilera, 'get_tftp_image_info')
         self.mox.StubOutWithMock(tilera, 'get_partition_sizes')
@@ -329,8 +331,8 @@ class TileraPublicMethodsTestCase(BareMetalTileraTestCase):
     def test_activate_and_deactivate_bootloader(self):
         self._create_node()
         self.instance['uuid'] = 'fake-uuid'
-        tilera_path = tilera.get_tilera_nfs_path(self.instance)
-        image_path = tilera.get_image_file_path(self.instance)
+        tilera.get_tilera_nfs_path(self.instance)
+        tilera.get_image_file_path(self.instance)
 
         self.mox.ReplayAll()
 
@@ -360,7 +362,7 @@ class TileraPublicMethodsTestCase(BareMetalTileraTestCase):
         self.mox.StubOutWithMock(tilera, 'get_tftp_image_info')
         self.mox.StubOutWithMock(self.driver, '_collect_mac_addresses')
 
-        tilera_path = tilera.get_tilera_nfs_path(self.node['id'])
+        tilera.get_tilera_nfs_path(self.node['id'])
 
         tilera.get_tftp_image_info(self.instance).\
                 AndRaise(exception.NovaException)

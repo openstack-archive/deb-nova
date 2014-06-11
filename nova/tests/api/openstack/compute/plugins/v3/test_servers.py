@@ -19,6 +19,7 @@ import datetime
 import uuid
 
 import iso8601
+import mock
 import mox
 from oslo.config import cfg
 import six.moves.urllib.parse as urlparse
@@ -192,7 +193,6 @@ class ServersControllerTest(ControllerTest):
     def setUp(self):
         super(ServersControllerTest, self).setUp()
         CONF.set_override('glance_host', 'localhost')
-        nova_utils.reset_is_neutron()
 
     def test_requested_networks_prefix(self):
         uuid = 'br-00000000-0000-0000-0000-000000000000'
@@ -589,7 +589,7 @@ class ServersControllerTest(ControllerTest):
         self.assertEqual(servers_links[0]['rel'], 'next')
 
         href_parts = urlparse.urlparse(servers_links[0]['href'])
-        self.assertEqual('/v3/servers', href_parts.path)
+        self.assertEqual('/v3/servers/detail', href_parts.path)
         params = urlparse.parse_qs(href_parts.query)
         expected = {'limit': ['3'], 'marker': [fakes.get_fake_uuid(2)]}
         self.assertThat(params, matchers.DictMatches(expected))
@@ -612,7 +612,7 @@ class ServersControllerTest(ControllerTest):
         self.assertEqual(servers_links[0]['rel'], 'next')
 
         href_parts = urlparse.urlparse(servers_links[0]['href'])
-        self.assertEqual('/v3/servers', href_parts.path)
+        self.assertEqual('/v3/servers/detail', href_parts.path)
         params = urlparse.parse_qs(href_parts.query)
         expected = {'limit': ['3'], 'blah': ['2:t'],
                     'marker': [fakes.get_fake_uuid(2)]}
@@ -865,7 +865,7 @@ class ServersControllerTest(ControllerTest):
                 common_policy.parse_rule("project_id:fake"),
         }
 
-        common_policy.set_rules(common_policy.Rules(rules))
+        policy.set_rules(rules)
 
         req = fakes.HTTPRequestV3.blank('/servers?all_tenants=1')
         res = self.controller.index(req)
@@ -886,7 +886,7 @@ class ServersControllerTest(ControllerTest):
                 common_policy.parse_rule("project_id:fake"),
         }
 
-        common_policy.set_rules(common_policy.Rules(rules))
+        policy.set_rules(rules)
         self.stubs.Set(db, 'instance_get_all_by_filters',
                        fake_get_all)
 
@@ -1278,7 +1278,7 @@ class ServersControllerTest(ControllerTest):
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
         req = fakes.HTTPRequestV3.blank('/servers', use_admin_context=True)
-        servers = self.controller.index(req)['servers']
+        self.assertIn('servers', self.controller.index(req))
         self.assertIn('pci_devices', self.expected_attrs)
 
 
@@ -1493,7 +1493,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
             "compute:v3:servers:start":
                 common_policy.parse_rule("project_id:non_fake")
         }
-        common_policy.set_rules(common_policy.Rules(rules))
+        policy.set_rules(rules)
         req = fakes.HTTPRequestV3.blank('/servers/%s/action' % FAKE_UUID)
         body = dict(start="")
         exc = self.assertRaises(exception.PolicyNotAuthorized,
@@ -1537,7 +1537,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
             "compute:v3:servers:stop":
                 common_policy.parse_rule("project_id:non_fake")
         }
-        common_policy.set_rules(common_policy.Rules(rules))
+        policy.set_rules(rules)
         req = fakes.HTTPRequestV3.blank('/servers/%s/action' % FAKE_UUID)
         body = dict(stop='')
         exc = self.assertRaises(exception.PolicyNotAuthorized,
@@ -1679,7 +1679,7 @@ class ServersControllerUpdateTest(ControllerTest):
 
     def test_update_server_policy_fail(self):
         rule = {'compute:update': common_policy.parse_rule('role:admin')}
-        common_policy.set_rules(common_policy.Rules(rule))
+        policy.set_rules(rule)
         body = {'server': {'name': 'server_test'}}
         req = self._get_request(body, {'name': 'server_test'})
         self.assertRaises(exception.PolicyNotAuthorized,
@@ -1725,7 +1725,7 @@ class ServerStatusTest(test.TestCase):
 
         rule = {'compute:reboot':
                 common_policy.parse_rule('role:admin')}
-        common_policy.set_rules(common_policy.Rules(rule))
+        policy.set_rules(rule)
         req = fakes.HTTPRequestV3.blank('/servers/1234/action')
         self.assertRaises(exception.PolicyNotAuthorized,
                 self.controller._action_reboot, req, '1234',
@@ -1753,7 +1753,7 @@ class ServerStatusTest(test.TestCase):
 
         rule = {'compute:confirm_resize':
                 common_policy.parse_rule('role:admin')}
-        common_policy.set_rules(common_policy.Rules(rule))
+        policy.set_rules(rule)
         req = fakes.HTTPRequestV3.blank('/servers/1234/action')
         self.assertRaises(exception.PolicyNotAuthorized,
                 self.controller._action_confirm_resize, req, '1234', {})
@@ -1775,7 +1775,7 @@ class ServerStatusTest(test.TestCase):
 
         rule = {'compute:revert_resize':
                 common_policy.parse_rule('role:admin')}
-        common_policy.set_rules(common_policy.Rules(rule))
+        policy.set_rules(rule)
         req = fakes.HTTPRequestV3.blank('/servers/1234/action')
         self.assertRaises(exception.PolicyNotAuthorized,
                 self.controller._action_revert_resize, req, '1234', {})
@@ -2119,7 +2119,6 @@ class ServersControllerCreateTest(test.TestCase):
                           self._test_create_extra, params)
 
     def test_create_instance_with_networks_disabled_neutronv2(self):
-        nova_utils.reset_is_neutron()
         self.flags(network_api_class='nova.network.neutronv2.api.API')
         net_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         requested_networks = [{'uuid': net_uuid}]
@@ -2392,7 +2391,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, body=self.body).obj
 
-        server = res['server']
+        self.assertIn('server', res)
         self.assertIn('admin_password', self.body['server'])
 
     def test_create_instance_admin_password_empty(self):
@@ -2490,6 +2489,62 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', fake_create)
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self._test_create_extra, params)
+
+
+class ServersControllerCreateTestWithMock(test.TestCase):
+    image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+    flavor_ref = 'http://localhost/123/flavors/3'
+
+    def setUp(self):
+        """Shared implementation for tests below that create instance."""
+        super(ServersControllerCreateTestWithMock, self).setUp()
+
+        self.flags(verbose=True,
+                   enable_instance_password=True)
+        self.instance_cache_num = 0
+        self.instance_cache_by_id = {}
+        self.instance_cache_by_uuid = {}
+
+        ext_info = plugins.LoadedExtensionInfo()
+        self.controller = servers.ServersController(extension_info=ext_info)
+
+        self.body = {
+            'server': {
+                'name': 'server_test',
+                'image_ref': self.image_uuid,
+                'flavor_ref': self.flavor_ref,
+                'metadata': {
+                    'hello': 'world',
+                    'open': 'stack',
+                    },
+                },
+            }
+        self.req = fakes.HTTPRequest.blank('/fake/servers')
+        self.req.method = 'POST'
+        self.req.headers["content-type"] = "application/json"
+
+    def _test_create_extra(self, params, no_image=False):
+        self.body['server']['flavor_ref'] = 2
+        if no_image:
+            self.body['server'].pop('image_ref', None)
+        self.body['server'].update(params)
+        self.req.body = jsonutils.dumps(self.body)
+        self.req.headers["content-type"] = "application/json"
+        self.controller.create(self.req, body=self.body).obj['server']
+
+    @mock.patch.object(compute_api.API, 'create')
+    def test_create_instance_with_neutronv2_fixed_ip_already_in_use(self,
+            create_mock):
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        address = '10.0.2.3'
+        requested_networks = [{'uuid': network, 'fixed-ip': address}]
+        params = {'networks': requested_networks}
+        create_mock.side_effect = exception.FixedIpAlreadyInUse(
+            address=address,
+            instance_uuid=network)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
+        self.assertEqual(1, len(create_mock.call_args_list))
 
 
 class ServersViewBuilderTest(test.TestCase):

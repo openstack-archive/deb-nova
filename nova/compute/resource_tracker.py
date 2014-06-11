@@ -29,9 +29,9 @@ from nova.compute import vm_states
 from nova import conductor
 from nova import context
 from nova import exception
+from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import flavor as flavor_obj
-from nova.objects import instance as instance_obj
 from nova.objects import migration as migration_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
@@ -114,9 +114,9 @@ class ResourceTracker(object):
 
         # get memory overhead required to build this instance:
         overhead = self.driver.estimate_instance_overhead(instance_ref)
-        LOG.debug(_("Memory overhead for %(flavor)d MB instance; %(overhead)d "
-                    "MB"), {'flavor': instance_ref['memory_mb'],
-                            'overhead': overhead['memory_mb']})
+        LOG.debug("Memory overhead for %(flavor)d MB instance; %(overhead)d "
+                  "MB", {'flavor': instance_ref['memory_mb'],
+                          'overhead': overhead['memory_mb']})
 
         claim = claims.Claim(instance_ref, self, self.compute_node,
                              overhead=overhead, limits=limits)
@@ -154,9 +154,9 @@ class ResourceTracker(object):
 
         # get memory overhead required to build this instance:
         overhead = self.driver.estimate_instance_overhead(instance_type)
-        LOG.debug(_("Memory overhead for %(flavor)d MB instance; %(overhead)d "
-                    "MB"), {'flavor': instance_type['memory_mb'],
-                            'overhead': overhead['memory_mb']})
+        LOG.debug("Memory overhead for %(flavor)d MB instance; %(overhead)d "
+                  "MB", {'flavor': instance_type['memory_mb'],
+                          'overhead': overhead['memory_mb']})
 
         instance_ref = obj_base.obj_to_primitive(instance)
         claim = claims.ResizeClaim(instance_ref, instance_type, self,
@@ -311,7 +311,7 @@ class ResourceTracker(object):
                 'pci_passthrough_devices')))
 
         # Grab all instances assigned to this node:
-        instances = instance_obj.InstanceList.get_by_host_and_node(
+        instances = objects.InstanceList.get_by_host_and_node(
             context, self.host, self.nodename)
 
         # Now calculate usage based on instance utilization:
@@ -406,22 +406,22 @@ class ResourceTracker(object):
         free_ram_mb = resources['memory_mb'] - resources['memory_mb_used']
         free_disk_gb = resources['local_gb'] - resources['local_gb_used']
 
-        LOG.debug(_("Hypervisor: free ram (MB): %s") % free_ram_mb)
-        LOG.debug(_("Hypervisor: free disk (GB): %s") % free_disk_gb)
+        LOG.debug("Hypervisor: free ram (MB): %s" % free_ram_mb)
+        LOG.debug("Hypervisor: free disk (GB): %s" % free_disk_gb)
 
         vcpus = resources['vcpus']
         if vcpus:
             free_vcpus = vcpus - resources['vcpus_used']
-            LOG.debug(_("Hypervisor: free VCPUs: %s") % free_vcpus)
+            LOG.debug("Hypervisor: free VCPUs: %s" % free_vcpus)
         else:
-            LOG.debug(_("Hypervisor: VCPU information unavailable"))
+            LOG.debug("Hypervisor: VCPU information unavailable")
 
         if 'pci_passthrough_devices' in resources and \
                 resources['pci_passthrough_devices']:
-            LOG.debug(_("Hypervisor: assignable PCI devices: %s") %
+            LOG.debug("Hypervisor: assignable PCI devices: %s" %
                 resources['pci_passthrough_devices'])
         else:
-            LOG.debug(_("Hypervisor: no assignable PCI devices"))
+            LOG.debug("Hypervisor: no assignable PCI devices")
 
     def _report_final_resource_view(self, resources):
         """Report final calculate of free memory, disk, CPUs, and PCI devices,
@@ -438,8 +438,8 @@ class ResourceTracker(object):
         else:
             LOG.audit(_("Free VCPU information unavailable"))
 
-        if 'pci_devices' in resources:
-            LOG.audit(_("Free PCI devices: %s") % resources['pci_devices'])
+        if 'pci_stats' in resources:
+            LOG.audit(_("PCI stats: %s"), resources['pci_stats'])
 
     def _update(self, context, values):
         """Persist the compute node updates to the DB."""

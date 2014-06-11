@@ -216,7 +216,7 @@ class ComputeRpcAPITestCase(test.TestCase):
 
     def test_detach_volume(self):
         self._test_compute_api('detach_volume', 'cast',
-                instance=self.fake_instance, volume_id='id')
+                instance=self.fake_instance, volume_id='id', version='3.25')
 
         # NOTE(russellb) Havana compat
         self.flags(compute='havana', group='upgrade_levels')
@@ -366,7 +366,7 @@ class ComputeRpcAPITestCase(test.TestCase):
         self._test_compute_api('live_migration', 'cast',
                 instance=self.fake_instance, dest='dest',
                 block_migration='blockity_block', host='tsoh',
-                migrate_data={})
+                migrate_data={}, version='3.26')
 
         # NOTE(russellb) Havana compat
         self.flags(compute='havana', group='upgrade_levels')
@@ -567,15 +567,19 @@ class ComputeRpcAPITestCase(test.TestCase):
                 version='2.0')
 
     def test_rescue_instance(self):
+        self.flags(compute='3.9', group='upgrade_levels')
         self._test_compute_api('rescue_instance', 'cast',
-                instance=self.fake_instance, rescue_password='pw',
-                version='3.9')
+            instance=self.fake_instance, rescue_password='pw', version='3.9')
 
-        # NOTE(russellb) Havana compat
+    def test_rescue_instance_with_rescue_image_ref_passed(self):
+        self._test_compute_api('rescue_instance', 'cast',
+            instance=self.fake_instance, rescue_password='pw',
+            rescue_image_ref='fake_image_ref', version='3.24')
+
+    def test_rescue_instance_for_havana_compatibiltiy(self):
         self.flags(compute='havana', group='upgrade_levels')
         self._test_compute_api('rescue_instance', 'cast',
-                instance=self.fake_instance, rescue_password='pw',
-                version='2.44')
+            instance=self.fake_instance, rescue_password='pw', version='2.44')
 
     def test_reset_network(self):
         self._test_compute_api('reset_network', 'cast',
@@ -621,7 +625,8 @@ class ComputeRpcAPITestCase(test.TestCase):
 
     def test_rollback_live_migration_at_destination(self):
         self._test_compute_api('rollback_live_migration_at_destination',
-                'cast', instance=self.fake_instance, host='host')
+                'cast', instance=self.fake_instance, host='host',
+                version='3.26')
 
         # NOTE(russellb) Havana compat
         self.flags(compute='havana', group='upgrade_levels')
@@ -816,3 +821,12 @@ class ComputeRpcAPITestCase(test.TestCase):
                                instances=[self.fake_instance],
                                events=['event'],
                                version='3.23')
+
+    def test_build_and_run_instance(self):
+        self._test_compute_api('build_and_run_instance', 'cast',
+                instance=self.fake_instance, host='host', image='image',
+                request_spec={'request': 'spec'}, filter_properties=[],
+                admin_password='passwd', injected_files=None,
+                requested_networks=['network1'], security_groups=None,
+                block_device_mapping=None, node='node', limits=[],
+                version='3.23')

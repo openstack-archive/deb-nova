@@ -9,7 +9,7 @@
             "OS-EXT-STS:power_state": 1,
             "OS-EXT-STS:task_state": null,
             "OS-EXT-STS:vm_state": "active",
-            "OS-SRV-USG:launched_at": "%(timestamp)s",
+            "OS-SRV-USG:launched_at": "%(strtime)s",
             "OS-SRV-USG:terminated_at": null,
             "accessIPv4": "",
             "accessIPv6": "",
@@ -24,7 +24,7 @@
                 ]
             },
             "config_drive": "",
-            "created": "%(timestamp)s",
+            "created": "%(isotime)s",
             "flavor": {
                 "id": "1",
                 "links": [
@@ -68,7 +68,7 @@
             ],
             "status": "ACTIVE",
             "tenant_id": "openstack",
-            "updated": "%(timestamp)s",
+            "updated": "%(isotime)s",
             "user_id": "fake",
             "os-extended-volumes:volumes_attached": []
         }

@@ -228,6 +228,7 @@ class ExtensionControllerTest(ExtensionTestCase):
             "Keypairs",
             "Multinic",
             "MultipleCreate",
+            "QuotaClasses",
             "Quotas",
             "ExtendedQuotas",
             "Rescue",
@@ -437,7 +438,7 @@ class ExtensionManagerTest(ExtensionTestCase):
     def test_invalid_extensions(self):
         # Don't need the serialization middleware here because we're
         # not testing any serialization
-        app = compute.APIRouter()
+        compute.APIRouter()
         ext_mgr = compute_extensions.ExtensionManager()
         ext_mgr.register(InvalidExtension())
         self.assertTrue(ext_mgr.is_loaded('FOXNSOX'))

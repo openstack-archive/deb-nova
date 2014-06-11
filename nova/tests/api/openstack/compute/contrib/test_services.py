@@ -382,7 +382,7 @@ class ServicesTest(test.TestCase):
     def test_services_enable(self):
         def _service_update(context, service_id, values):
             self.assertIsNone(values['disabled_reason'])
-            return dict(test_service.fake_service, **values)
+            return dict(test_service.fake_service, id=service_id, **values)
 
         self.stubs.Set(db, "service_update", _service_update)
 
@@ -467,7 +467,7 @@ class ServicesTest(test.TestCase):
         body = {'host': 'host1',
                 'binary': 'nova-compute',
                }
-        self.assertRaises(webob.exc.HTTPUnprocessableEntity,
+        self.assertRaises(webob.exc.HTTPBadRequest,
                 self.controller.update, req, "disable-log-reason", body)
 
     def test_invalid_reason_field(self):

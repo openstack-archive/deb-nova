@@ -262,8 +262,8 @@ class Controller(object):
         authorize(context)
         try:
             cell = self.cells_rpcapi.cell_get(context, id)
-        except exception.CellNotFound:
-            raise exc.HTTPNotFound()
+        except exception.CellNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         return dict(cell=_scrub_cell(cell))
 
     @common.check_cells_enabled
@@ -434,7 +434,7 @@ class Cells(extensions.ExtensionDescriptor):
     name = "Cells"
     alias = "os-cells"
     namespace = "http://docs.openstack.org/compute/ext/cells/api/v1.1"
-    updated = "2013-05-14T00:00:00+00:00"
+    updated = "2013-05-14T00:00:00Z"
 
     def get_resources(self):
         coll_actions = {

@@ -48,6 +48,9 @@ vmwareapi_opts = [
     cfg.StrOpt('host_ip',
                help='Hostname or IP address for connection to VMware ESX/VC '
                     'host.'),
+    cfg.IntOpt('host_port',
+               default=443,
+               help='Port for connection to VMware ESX/VC host.'),
     cfg.StrOpt('host_username',
                help='Username for connection to VMware ESX/VC host.'),
     cfg.StrOpt('host_password',
@@ -158,7 +161,6 @@ class VMwareESXDriver(driver.ComputeDriver):
             vim.client.service.Logout(session_manager)
         except suds.WebFault:
             LOG.debug(_("No vSphere session was open during cleanup_host."))
-            pass
 
     def list_instances(self):
         """List VM instances."""
@@ -228,7 +230,7 @@ class VMwareESXDriver(driver.ComputeDriver):
     def power_on(self, context, instance, network_info,
                  block_device_info=None):
         """Power on the specified instance."""
-        self._vmops._power_on(instance)
+        self._vmops.power_on(instance)
 
     def resume_state_on_host_boot(self, context, instance, network_info,
                                   block_device_info=None):
@@ -480,7 +482,7 @@ class VMwareVCDriver(VMwareESXDriver):
         # In specific, vCenter does not actually run the VNC service
         # itself. You must talk to the VNC host underneath vCenter.
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        return _vmops.get_vnc_console_vcenter(instance)
+        return _vmops.get_vnc_console(instance)
 
     def _update_resources(self):
         """This method creates a dictionary of VMOps, VolumeOps and VCState.
@@ -710,7 +712,7 @@ class VMwareVCDriver(VMwareESXDriver):
                  block_device_info=None):
         """Power on the specified instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        _vmops._power_on(instance)
+        _vmops.power_on(instance)
 
     def poll_rebooting_instances(self, timeout, instances):
         """Poll for rebooting instances."""
@@ -749,6 +751,14 @@ class VMwareVCDriver(VMwareESXDriver):
         """
         raise NotImplementedError()
 
+    def get_host_uptime(self, host):
+        """Host uptime operation not supported by VC driver."""
+
+        msg = _("Multiple hosts may be managed by the VMWare "
+                "vCenter driver; therefore we do not return "
+                "uptime for just one host.")
+        raise NotImplementedError(msg)
+
     def inject_network_info(self, instance, network_info):
         """inject network info for specified instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
@@ -780,11 +790,13 @@ class VMwareAPISession(object):
     """
 
     def __init__(self, host_ip=CONF.vmware.host_ip,
+                 host_port=CONF.vmware.host_port,
                  username=CONF.vmware.host_username,
                  password=CONF.vmware.host_password,
                  retry_count=CONF.vmware.api_retry_count,
                  scheme="https"):
         self._host_ip = host_ip
+        self._host_port = host_port
         self._host_username = username
         self._host_password = password
         self._api_retry_count = retry_count
@@ -795,7 +807,8 @@ class VMwareAPISession(object):
 
     def _get_vim_object(self):
         """Create the VIM Object instance."""
-        return vim.Vim(protocol=self._scheme, host=self._host_ip)
+        return vim.Vim(protocol=self._scheme, host=self._host_ip,
+                       port=self._host_port)
 
     def _create_session(self):
         """Creates a session with the VC/ESX host."""
@@ -961,8 +974,6 @@ class VMwareAPISession(object):
         loop.start(CONF.vmware.task_poll_interval)
         try:
             ret_val = done.wait()
-        except Exception:
-            raise
         finally:
             self._stop_loop(loop)
         return ret_val

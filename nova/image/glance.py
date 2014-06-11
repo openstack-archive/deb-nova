@@ -277,31 +277,12 @@ class GlanceImageService(object):
         base_image_meta = _translate_from_glance(image)
         return base_image_meta
 
-    def _get_locations(self, context, image_id):
-        """Returns the direct url representing the backend storage location,
-        or None if this attribute is not shown by Glance.
-        """
-        try:
-            client = GlanceClientWrapper()
-            image_meta = client.call(context, 2, 'get', image_id)
-        except Exception:
-            _reraise_translated_image_exception(image_id)
-
-        if not _is_image_available(context, image_meta):
-            raise exception.ImageNotFound(image_id=image_id)
-
-        locations = getattr(image_meta, 'locations', [])
-        du = getattr(image_meta, 'direct_url', None)
-        if du:
-            locations.append({'url': du, 'metadata': {}})
-        return locations
-
     def _get_transfer_module(self, scheme):
         try:
             return self._download_handlers[scheme]
         except KeyError:
             return None
-        except Exception as ex:
+        except Exception:
             LOG.error(_("Failed to instantiate the download handler "
                 "for %(scheme)s") % {'scheme': scheme})
         return
@@ -309,7 +290,7 @@ class GlanceImageService(object):
     def download(self, context, image_id, data=None, dst_path=None):
         """Calls out to Glance for data and writes data."""
         if CONF.allowed_direct_url_schemes and dst_path is not None:
-            locations = self._get_locations(context, image_id)
+            locations = _get_locations(self._client, context, image_id)
             for entry in locations:
                 loc_url = entry['url']
                 loc_meta = entry['metadata']
@@ -393,6 +374,25 @@ class GlanceImageService(object):
         except glanceclient.exc.HTTPForbidden:
             raise exception.ImageNotAuthorized(image_id=image_id)
         return True
+
+
+def _get_locations(client, context, image_id):
+    """Returns the direct url representing the backend storage location,
+    or None if this attribute is not shown by Glance.
+    """
+    try:
+        image_meta = client.call(context, 2, 'get', image_id)
+    except Exception:
+        _reraise_translated_image_exception(image_id)
+
+    if not _is_image_available(context, image_meta):
+        raise exception.ImageNotFound(image_id=image_id)
+
+    locations = getattr(image_meta, 'locations', [])
+    du = getattr(image_meta, 'direct_url', None)
+    if du:
+        locations.append({'url': du, 'metadata': {}})
+    return locations
 
 
 def _extract_query_params(params):
@@ -509,14 +509,38 @@ def _convert_to_string(metadata):
 
 
 def _extract_attributes(image):
+    #NOTE(hdd): If a key is not found, base.Resource.__getattr__() may perform
+    # a get(), resulting in a useless request back to glance. This list is
+    # therefore sorted, with dependent attributes as the end
+    # 'deleted_at' depends on 'deleted'
+    # 'checksum' depends on 'status' == 'active'
     IMAGE_ATTRIBUTES = ['size', 'disk_format', 'owner',
-                        'container_format', 'checksum', 'id',
+                        'container_format', 'status', 'id',
                         'name', 'created_at', 'updated_at',
-                        'deleted_at', 'deleted', 'status',
+                        'deleted', 'deleted_at', 'checksum',
                         'min_disk', 'min_ram', 'is_public']
+
+    queued = getattr(image, 'status') == 'queued'
+    queued_exclude_attrs = ['disk_format', 'container_format']
     output = {}
+
     for attr in IMAGE_ATTRIBUTES:
-        output[attr] = getattr(image, attr, None)
+        if attr == 'deleted_at' and not output['deleted']:
+            output[attr] = None
+        elif attr == 'checksum' and output['status'] != 'active':
+            output[attr] = None
+        # image may not have 'name' attr
+        elif attr == 'name':
+            output[attr] = getattr(image, attr, None)
+        #NOTE(liusheng): queued image may not have these attributes and 'name'
+        elif queued and attr in queued_exclude_attrs:
+            output[attr] = getattr(image, attr, None)
+        else:
+            # NOTE(xarses): Anything that is caught with the default value
+            # will result in a additional lookup to glance for said attr.
+            # Notable attributes that could have this issue:
+            # disk_format, container_format, name, deleted, checksum
+            output[attr] = getattr(image, attr, None)
 
     output['properties'] = getattr(image, 'properties', {})
 
@@ -560,7 +584,7 @@ def _translate_image_exception(image_id, exc_value):
 def _translate_plain_exception(exc_value):
     if isinstance(exc_value, (glanceclient.exc.Forbidden,
                     glanceclient.exc.Unauthorized)):
-        return exception.NotAuthorized(unicode(exc_value))
+        return exception.Forbidden(unicode(exc_value))
     if isinstance(exc_value, glanceclient.exc.NotFound):
         return exception.NotFound(unicode(exc_value))
     if isinstance(exc_value, glanceclient.exc.BadRequest):
