@@ -1,6 +1,7 @@
 nova (2014.2~b1-1) experimental; urgency=medium
 
   * New upstream release.
+  * New (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 12 Jun 2014 01:02:03 +0800
 
