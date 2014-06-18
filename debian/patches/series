@@ -7,3 +7,4 @@ fix-docs-build-without-network.patch
 0003_CEPH_Move-libvirt-RBD-utilities-to-a-new-file.patch
 0004_CEPH_Use-library-instead-of-CLI-to-cleanup-RBD-volumes.patch
 0005_CEPH_enable-cloning-for-rbd-backed-ephemeral-disks.patch
+libvirt_convert_cpu_features_attribute_from_list_to_a_set.patch

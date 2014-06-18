@@ -1,0 +1,155 @@
+From: Vladik Romanovsky <vladik.romanovsky@enovance.com>
+Date: Tue, 3 Jun 2014 18:58:06 +0000 (-0400)
+Subject: libvirt: convert cpu features attribute from list to a set
+X-Git-Url: https://review.openstack.org/gitweb?p=openstack%2Fnova.git;a=commitdiff_plain;h=f154a9c82a956a1909444fea7be65d8b3d3796e6
+
+libvirt: convert cpu features attribute from list to a set
+
+Currently, the cpu features list which is being sent to libvirt,
+when creating a domain or calling compareCPU, must contain only
+unique entries. Multiple issues arise when we are updating the
+features attribute in LibvirtConfigCPU class (for example during
+migration).
+
+This change will change the features attribute from being a list
+to a set. This make the LibvirtConfigCPU class keep only unique
+features.
+Adjusting the LibvirtConfigCPUFeature class to support set
+operations by overriding the __eq__, __ne__ and __hash__
+methods.
+
+Closes-Bug: #1303536
+Change-Id: I6350fe0e827c860aea77cc4fe56f18f5c1483580
+(cherry picked from commit 60c899b9da8d64b4a5979b69c43c77ed9d5bf248)
+---
+
+diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
+index fb4efbb..c6c365e 100644
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -2206,8 +2206,8 @@ class LibvirtConnTestCase(test.TestCase):
+             cpu.model = "Opteron_G4"
+             cpu.vendor = "AMD"
+ 
+-            cpu.features.append(vconfig.LibvirtConfigGuestCPUFeature("tm2"))
+-            cpu.features.append(vconfig.LibvirtConfigGuestCPUFeature("ht"))
++            cpu.add_feature(vconfig.LibvirtConfigGuestCPUFeature("tm2"))
++            cpu.add_feature(vconfig.LibvirtConfigGuestCPUFeature("ht"))
+ 
+             caps = vconfig.LibvirtConfigCaps()
+             caps.host = vconfig.LibvirtConfigCapsHost()
+@@ -2235,8 +2235,8 @@ class LibvirtConnTestCase(test.TestCase):
+         self.assertEqual(conf.cpu.model, "Opteron_G4")
+         self.assertEqual(conf.cpu.vendor, "AMD")
+         self.assertEqual(len(conf.cpu.features), 2)
+-        self.assertEqual(conf.cpu.features[0].name, "tm2")
+-        self.assertEqual(conf.cpu.features[1].name, "ht")
++        self.assertEqual(conf.cpu.features.pop().name, "tm2")
++        self.assertEqual(conf.cpu.features.pop().name, "ht")
+ 
+     def test_get_guest_cpu_config_custom_old(self):
+         def get_lib_version_stub():
+diff --git a/nova/tests/virt/libvirt/test_libvirt_config.py b/nova/tests/virt/libvirt/test_libvirt_config.py
+index 2251bf8..fa65ebc 100644
+--- a/nova/tests/virt/libvirt/test_libvirt_config.py
++++ b/nova/tests/virt/libvirt/test_libvirt_config.py
+@@ -235,8 +235,30 @@ class LibvirtConfigCPUTest(LibvirtConfigBaseTest):
+               <arch>x86_64</arch>
+               <model>Penryn</model>
+               <vendor>Intel</vendor>
++              <feature name="apic"/>
+               <feature name="mtrr"/>
++            </cpu>
++        """)
++
++    def test_only_uniq_cpu_featues(self):
++        obj = config.LibvirtConfigCPU()
++        obj.model = "Penryn"
++        obj.vendor = "Intel"
++        obj.arch = "x86_64"
++
++        obj.add_feature(config.LibvirtConfigCPUFeature("mtrr"))
++        obj.add_feature(config.LibvirtConfigCPUFeature("apic"))
++        obj.add_feature(config.LibvirtConfigCPUFeature("apic"))
++        obj.add_feature(config.LibvirtConfigCPUFeature("mtrr"))
++
++        xml = obj.to_xml()
++        self.assertXmlEqual(xml, """
++            <cpu>
++              <arch>x86_64</arch>
++              <model>Penryn</model>
++              <vendor>Intel</vendor>
+               <feature name="apic"/>
++              <feature name="mtrr"/>
+             </cpu>
+         """)
+ 
+@@ -285,8 +307,8 @@ class LibvirtConfigGuestCPUTest(LibvirtConfigBaseTest):
+               <arch>x86_64</arch>
+               <model>Penryn</model>
+               <vendor>Intel</vendor>
+-              <feature name="mtrr" policy="require"/>
+               <feature name="apic" policy="require"/>
++              <feature name="mtrr" policy="require"/>
+             </cpu>
+         """)
+ 
+diff --git a/nova/virt/libvirt/config.py b/nova/virt/libvirt/config.py
+index a931b57..f32e178 100644
+--- a/nova/virt/libvirt/config.py
++++ b/nova/virt/libvirt/config.py
+@@ -250,6 +250,15 @@ class LibvirtConfigCPUFeature(LibvirtConfigObject):
+ 
+         return ft
+ 
++    def __eq__(self, obj):
++        return obj.name == self.name
++
++    def __ne__(self, obj):
++        return obj.name != self.name
++
++    def __hash__(self):
++        return hash(self.name)
++
+ 
+ class LibvirtConfigCPU(LibvirtConfigObject):
+ 
+@@ -265,7 +274,7 @@ class LibvirtConfigCPU(LibvirtConfigObject):
+         self.cores = None
+         self.threads = None
+ 
+-        self.features = []
++        self.features = set()
+ 
+     def parse_dom(self, xmldoc):
+         super(LibvirtConfigCPU, self).parse_dom(xmldoc)
+@@ -305,13 +314,14 @@ class LibvirtConfigCPU(LibvirtConfigObject):
+             top.set("threads", str(self.threads))
+             cpu.append(top)
+ 
+-        for f in self.features:
++        # sorting the features to allow more predictable tests
++        for f in sorted(self.features, key=lambda x: x.name):
+             cpu.append(f.format_dom())
+ 
+         return cpu
+ 
+     def add_feature(self, feat):
+-        self.features.append(feat)
++        self.features.add(feat)
+ 
+ 
+ class LibvirtConfigGuestCPUFeature(LibvirtConfigCPUFeature):
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 3f71c43..2029fa6 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -2888,7 +2888,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         for hostfeat in hostcpu.features:
+             guestfeat = vconfig.LibvirtConfigGuestCPUFeature(hostfeat.name)
+             guestfeat.policy = "require"
+-            guestcpu.features.append(guestfeat)
++            guestcpu.add_feature(guestfeat)
+ 
+         return guestcpu
+ 
