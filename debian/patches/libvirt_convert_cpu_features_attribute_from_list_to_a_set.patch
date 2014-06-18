@@ -1,27 +1,19 @@
-From: Vladik Romanovsky <vladik.romanovsky@enovance.com>
+Description: libvirt: convert cpu features attribute from list to a set
+ Currently, the cpu features list which is being sent to libvirt, when creating
+ a domain or calling compareCPU, must contain only unique entries. Multiple
+ issues arise when we are updating the features attribute in LibvirtConfigCPU
+ class (for example during migration).
+ .
+ This change will change the features attribute from being a list to a set.
+ This make the LibvirtConfigCPU class keep only unique features. Adjusting the
+ LibvirtConfigCPUFeature class to support set operations by overriding the
+ __eq__, __ne__ and __hash__ methods.
+Bug-Ubuntu: https://launchpad.net/bugs/1303536
+Author: Vladik Romanovsky <vladik.romanovsky@enovance.com>
+Origin: upstream, https://review.openstack.org/#/c/100632/
 Date: Tue, 3 Jun 2014 18:58:06 +0000 (-0400)
-Subject: libvirt: convert cpu features attribute from list to a set
 X-Git-Url: https://review.openstack.org/gitweb?p=openstack%2Fnova.git;a=commitdiff_plain;h=f154a9c82a956a1909444fea7be65d8b3d3796e6
-
-libvirt: convert cpu features attribute from list to a set
-
-Currently, the cpu features list which is being sent to libvirt,
-when creating a domain or calling compareCPU, must contain only
-unique entries. Multiple issues arise when we are updating the
-features attribute in LibvirtConfigCPU class (for example during
-migration).
-
-This change will change the features attribute from being a list
-to a set. This make the LibvirtConfigCPU class keep only unique
-features.
-Adjusting the LibvirtConfigCPUFeature class to support set
-operations by overriding the __eq__, __ne__ and __hash__
-methods.
-
-Closes-Bug: #1303536
-Change-Id: I6350fe0e827c860aea77cc4fe56f18f5c1483580
-(cherry picked from commit 60c899b9da8d64b4a5979b69c43c77ed9d5bf248)
----
+Last-Update: 2014-06-18
 
 diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
 index fb4efbb..c6c365e 100644
