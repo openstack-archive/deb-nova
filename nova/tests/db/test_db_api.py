@@ -23,16 +23,15 @@ import datetime
 import types
 import uuid as stdlib_uuid
 
-import eventlet
 import iso8601
-import mox
 import netaddr
 from oslo.config import cfg
+from oslo.db import exception as db_exc
+from oslo.db.sqlalchemy import test_base
+from oslo.db.sqlalchemy import utils as sqlalchemyutils
 import six
 from sqlalchemy import Column
 from sqlalchemy.dialects import sqlite
-from sqlalchemy import exc
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy.orm import exc as sqlalchemy_orm_exc
@@ -50,10 +49,6 @@ from nova.db.sqlalchemy import models
 from nova.db.sqlalchemy import types as col_types
 from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
-from nova.openstack.common.db import api as db_api
-from nova.openstack.common.db import exception as db_exc
-from nova.openstack.common.db.sqlalchemy import test_base
-from nova.openstack.common.db.sqlalchemy import utils as sqlalchemyutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
@@ -3324,9 +3319,7 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
 
     def mock_db_query_first_to_raise_data_error_exception(self):
         self.mox.StubOutWithMock(query.Query, 'first')
-        query.Query.first().AndRaise(exc.DataError(mox.IgnoreArg(),
-                                                   mox.IgnoreArg(),
-                                                   mox.IgnoreArg()))
+        query.Query.first().AndRaise(db_exc.DBError())
         self.mox.ReplayAll()
 
     def test_fixed_ip_disassociate_all_by_timeout_single_host(self):
@@ -3830,9 +3823,7 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def mock_db_query_first_to_raise_data_error_exception(self):
         self.mox.StubOutWithMock(query.Query, 'first')
-        query.Query.first().AndRaise(exc.DataError(mox.IgnoreArg(),
-                                                   mox.IgnoreArg(),
-                                                   mox.IgnoreArg()))
+        query.Query.first().AndRaise(db_exc.DBError())
         self.mox.ReplayAll()
 
     def _create_floating_ip(self, values):
@@ -4912,9 +4903,7 @@ class VirtualInterfaceTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def mock_db_query_first_to_raise_data_error_exception(self):
         self.mox.StubOutWithMock(query.Query, 'first')
-        query.Query.first().AndRaise(exc.DataError(mox.IgnoreArg(),
-                                                   mox.IgnoreArg(),
-                                                   mox.IgnoreArg()))
+        query.Query.first().AndRaise(db_exc.DBError())
         self.mox.ReplayAll()
 
     def _create_virt_interface(self, values):
@@ -6634,7 +6623,7 @@ class ArchiveTestCase(test.TestCase):
             ins_stmt = main_table.insert().values(uuid=uuidstr)
             try:
                 self.conn.execute(ins_stmt)
-            except IntegrityError:
+            except db_exc.DBError:
                 # This table has constraints that require a table-specific
                 # insert, so skip it.
                 return 2
@@ -7271,27 +7260,6 @@ class RetryOnDeadlockTestCase(test.TestCase):
                 raise db_exc.DBDeadlock("fake exception")
             return True
         self.assertTrue(call_api())
-
-
-class NovaDBAPITestCase(test.TestCase):
-    def test_nova_db_api_common(self):
-        nova_db_api = db.api.NovaDBAPI()
-
-        # get access to some db-api method
-        nova_db_api.instance_group_get
-        # CONF.database.use_tpool is False, so we have no proxy in this case
-        self.assertIsInstance(nova_db_api._db_api, db_api.DBAPI)
-
-    def test_nova_db_api_config_change(self):
-        nova_db_api = db.api.NovaDBAPI()
-
-        CONF.set_override('use_tpool', True, group='database')
-        self.addCleanup(CONF.reset)
-
-        # get access to some db-api method
-        nova_db_api.instance_group_get
-        # CONF.database.use_tpool is True, so we get tpool proxy in this case
-        self.assertIsInstance(nova_db_api._db_api, eventlet.tpool.Proxy)
 
 
 class TestSqlalchemyTypesRepr(test_base.DbTestCase):
