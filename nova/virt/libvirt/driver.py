@@ -3628,10 +3628,6 @@ class LibvirtDriver(driver.ComputeDriver):
         return [('network-vif-plugged', vif['id'])
                 for vif in network_info if vif.get('active', True) is False]
 
-    @staticmethod
-    def _conn_supports_start_paused():
-        return CONF.libvirt.virt_type in ('kvm', 'qemu')
-
     def _create_domain_and_network(self, context, xml, instance, network_info,
                                    block_device_info=None, power_on=True,
                                    reboot=False, vifs_already_plugged=False):
