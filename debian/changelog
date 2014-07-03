@@ -4,7 +4,19 @@ nova (2014.2~b1-1) experimental; urgency=medium
   * New (build-)depends for this release.
   * Removed nova-clear-rabbit-queues from nova-scheduler (gone from upstream).
 
- -- Thomas Goirand <zigo@debian.org>  Thu, 12 Jun 2014 01:02:03 +0800
+ -- Thomas Goirand <zigo@debian.org>  Thu, 03 Jul 2014 20:30:08 +0800
+
+nova (2014.1.1-4) unstable; urgency=high
+
+  * CVE-2013-1068: Fixed sudoers file (Closes: 753579).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 03 Jul 2014 20:25:51 +0800
+
+nova (2014.1.1-3) unstable; urgency=medium
+
+  * Adds libvirt_convert_cpu_features_attribute_from_list_to_a_set.patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 18 Jun 2014 15:39:54 +0800
 
 nova (2014.1.1-2) unstable; urgency=medium
 
