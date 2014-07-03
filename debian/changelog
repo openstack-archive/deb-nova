@@ -1,3 +1,10 @@
+nova (2014.1.1-5) unstable; urgency=high
+
+  * Added a backport of https://review.openstack.org/#/c/91663/ to allow Nova
+    to work with Websockify 0.6 (Closes: #752454).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 03 Jul 2014 23:41:56 +0800
+
 nova (2014.1.1-4) unstable; urgency=high
 
   * CVE-2013-1068: Fixed sudoers file (Closes: 753579).

@@ -1,0 +1,224 @@
+Description: Update websocketproxy to work with websockify 0.6
+ Websockify version 0.6 bring with it several bugfixes and new features that
+ affect Nova (including a fix for novncproxy zombies hanging around and better
+ support for the python logging framework).  However, it also broke backwards
+ compatibility due to a refactor which brought it inline with other Python
+ socket server libraries.
+ .
+ This patch updates the websockify code to function with websockify version 0.6
+ as well as websockify version 0.5.x.
+ .
+ This is a backport of: https://review.openstack.org/#/c/91663/ to Icehouse.
+Author: Solly Ross <sross@redhat.com>
+Backport-By: Thomas Goirand <zigo@debian.org>
+Origin: upstream, https://review.openstack.org/#/c/91663/
+Bug-Debian: http://bugs.debian.org/752454
+Reviewed-By: Thomas Goirand <zigo@debian.org>
+Last-Update: 2014-07-03
+
+--- nova-2014.1.1.orig/nova/console/websocketproxy.py
++++ nova-2014.1.1/nova/console/websocketproxy.py
+@@ -31,13 +31,8 @@ from nova.openstack.common import log as
+ LOG = logging.getLogger(__name__)
+ 
+ 
+-class NovaWebSocketProxy(websockify.WebSocketProxy):
+-    def __init__(self, *args, **kwargs):
+-        websockify.WebSocketProxy.__init__(self, unix_target=None,
+-                                           target_cfg=None,
+-                                           ssl_target=None, *args, **kwargs)
+-
+-    def new_client(self):
++class NovaProxyRequestHandlerBase(object):
++    def new_websocket_client(self):
+         """Called after a new WebSocket connection has been established."""
+         # Reopen the eventlet hub to make sure we don't share an epoll
+         # fd with parent and/or siblings, which would be bad
+@@ -52,15 +47,15 @@ class NovaWebSocketProxy(websockify.WebS
+         connect_info = rpcapi.check_token(ctxt, token=token)
+ 
+         if not connect_info:
+-            LOG.audit("Invalid Token: %s", token)
+             raise Exception(_("Invalid Token"))
+ 
++        self.msg(_('connect info: %s'), str(connect_info))
+         host = connect_info['host']
+         port = int(connect_info['port'])
+ 
+         # Connect to the target
+-        self.msg("connecting to: %s:%s" % (host, port))
+-        LOG.audit("connecting to: %s:%s" % (host, port))
++        self.msg(_("connecting to: %(host)s:%(port)s") % {'host': host,
++                                                          'port': port})
+         tsock = self.socket(host, port, connect=True)
+ 
+         # Handshake as necessary
+@@ -71,7 +66,6 @@ class NovaWebSocketProxy(websockify.WebS
+                 data = tsock.recv(4096, socket.MSG_PEEK)
+                 if data.find("\r\n\r\n") != -1:
+                     if not data.split("\r\n")[0].find("200"):
+-                        LOG.audit("Invalid Connection Info %s", token)
+                         raise Exception(_("Invalid Connection Info"))
+                     tsock.recv(len(data))
+                     break
+@@ -86,6 +80,61 @@ class NovaWebSocketProxy(websockify.WebS
+             if tsock:
+                 tsock.shutdown(socket.SHUT_RDWR)
+                 tsock.close()
+-                self.vmsg("%s:%s: Target closed" % (host, port))
+-                LOG.audit("%s:%s: Target closed" % (host, port))
++                self.vmsg(_("%(host)s:%(port)s: Target closed") %
++                          {'host': host, 'port': port})
+             raise
++
++
++# TODO(sross): when the websockify version is bumped to be >=0.6, 
++#              remove the if-else statement and make the if branch
++#              contents the only code.
++if getattr(websockify, 'ProxyRequestHandler', None) is not None:
++    class NovaProxyRequestHandler(NovaProxyRequestHandlerBase,
++                                  websockify.ProxyRequestHandler):
++        def __init__(self, *args, **kwargs):
++            websockify.ProxyRequestHandler.__init__(self, *args, **kwargs)
++
++        def socket(self, *args, **kwargs):
++            return websockify.WebSocketServer.socket(*args, **kwargs)
++
++    class NovaWebSocketProxy(websockify.WebSocketProxy):
++        @staticmethod
++        def get_logger():
++            return LOG
++
++
++else:
++    import sys
++
++    class NovaWebSocketProxy(NovaProxyRequestHandlerBase,
++                             websockify.WebSocketProxy):
++        def __init__(self, *args, **kwargs):
++            del kwargs['traffic']
++            del kwargs['RequestHandlerClass']
++            websockify.WebSocketProxy.__init__(self, *args,
++                                               target_host='ignore',
++                                               target_port='ignore',
++                                               unix_target=None,
++                                               target_cfg=None,
++                                               ssl_target=None,
++                                               **kwargs)
++
++        def new_client(self):
++            self.new_websocket_client()
++
++        def msg(self, *args, **kwargs):
++            LOG.info(*args, **kwargs)
++
++        def vmsg(self, *args, **kwargs):
++            LOG.debug(*args, **kwargs)
++
++        def warn(self, *args, **kwargs):
++            LOG.warn(*args, **kwargs)
++
++        def print_traffic(self, token="."):
++            if self.traffic:
++                sys.stdout.write(token)
++                sys.stdout.flush()
++
++    class NovaProxyRequestHandler(object):
++        pass
+--- nova-2014.1.1.orig/nova/cmd/spicehtml5proxy.py
++++ nova-2014.1.1/nova/cmd/spicehtml5proxy.py
+@@ -27,6 +27,7 @@ from oslo.config import cfg
+ 
+ from nova import config
+ from nova.console import websocketproxy
++from nova.openstack.common import log as logging
+ from nova.openstack.common.report import guru_meditation_report as gmr
+ from nova import version
+ 
+@@ -63,22 +64,22 @@ def main():
+         print("Can not find spice html/js/css files at %s." % CONF.web)
+         return(-1)
+ 
++    logging.setup("nova")
++
+     gmr.TextGuruMeditation.setup_autorun(version)
+ 
+     # Create and start the NovaWebSockets proxy
+     server = websocketproxy.NovaWebSocketProxy(
+-                                   listen_host=CONF.spicehtml5proxy_host,
+-                                   listen_port=CONF.spicehtml5proxy_port,
+-                                   source_is_ipv6=CONF.source_is_ipv6,
+-                                   verbose=CONF.verbose,
+-                                   cert=CONF.cert,
+-                                   key=CONF.key,
+-                                   ssl_only=CONF.ssl_only,
+-                                   daemon=CONF.daemon,
+-                                   record=CONF.record,
+-                                   web=CONF.web,
+-                                   target_host='ignore',
+-                                   target_port='ignore',
+-                                   wrap_mode='exit',
+-                                   wrap_cmd=None)
++                listen_host=CONF.spice.html5proxy_host,
++                listen_port=CONF.spice.html5proxy_port,
++                source_is_ipv6=CONF.source_is_ipv6,
++                verbose=CONF.verbose,
++                cert=CONF.cert,
++                key=CONF.key,
++                ssl_only=CONF.ssl_only,
++                daemon=CONF.daemon,
++                record=CONF.record,
++                traffic=CONF.verbose and not CONF.daemon,
++                web=CONF.web,
++                RequestHandlerClass=websocketproxy.NovaProxyRequestHandler)
+     server.start_server()
+--- nova-2014.1.1.orig/nova/cmd/novncproxy.py
++++ nova-2014.1.1/nova/cmd/novncproxy.py
+@@ -27,6 +27,7 @@ from oslo.config import cfg
+ 
+ from nova import config
+ from nova.console import websocketproxy
++from nova.openstack.common import log as logging
+ from nova.openstack.common.report import guru_meditation_report as gmr
+ from nova import version
+ 
+@@ -65,24 +66,23 @@ def main():
+         print("Can not find novnc html/js/css files at %s." % CONF.web)
+         return(-1)
+ 
++    logging.setup("nova")
++
+     gmr.TextGuruMeditation.setup_autorun(version)
+ 
+     # Create and start the NovaWebSockets proxy
+     server = websocketproxy.NovaWebSocketProxy(
+-                                   listen_host=CONF.novncproxy_host,
+-                                   listen_port=CONF.novncproxy_port,
+-                                   source_is_ipv6=CONF.source_is_ipv6,
+-                                   verbose=CONF.verbose,
+-                                   cert=CONF.cert,
+-                                   key=CONF.key,
+-                                   ssl_only=CONF.ssl_only,
+-                                   daemon=CONF.daemon,
+-                                   record=CONF.record,
+-                                   web=CONF.web,
+-                                   file_only=True,
+-                                   no_parent=True,
+-                                   target_host='ignore',
+-                                   target_port='ignore',
+-                                   wrap_mode='exit',
+-                                   wrap_cmd=None)
++                listen_host=CONF.novncproxy_host,   
++                listen_port=CONF.novncproxy_port,   
++                source_is_ipv6=CONF.source_is_ipv6, 
++                verbose=CONF.verbose,
++                cert=CONF.cert,
++                key=CONF.key,  
++                ssl_only=CONF.ssl_only,
++                daemon=CONF.daemon,
++                record=CONF.record,
++                traffic=CONF.verbose and not CONF.daemon,
++                web=CONF.web,
++                file_only=True,
++                RequestHandlerClass=websocketproxy.NovaProxyRequestHandler)
+     server.start_server()
