@@ -1,3 +1,10 @@
+nova (2014.1.1-6) unstable; urgency=medium
+
+  * Updated the Danish debconf template translation, thanks to Joe Dalton
+    <joedalton2@yahoo.dk> (Closes: #753974).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 07 Jul 2014 14:45:20 +0800
+
 nova (2014.1.1-5) unstable; urgency=high
 
   * Added a backport of https://review.openstack.org/#/c/91663/ to allow Nova
