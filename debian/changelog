@@ -1,3 +1,11 @@
+nova (2014.1.1-7) unstable; urgency=medium
+
+  * Refreshed libvirt_convert_cpu_features_attribute_from_list_to_a_set.patch.
+  * Added spiceproxy_config_startup.patch, thanks to Gaudenz Steinlin
+    <gaudenz@debian.org> (Closes: #754346).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 10 Jul 2014 16:41:52 +0800
+
 nova (2014.1.1-6) unstable; urgency=medium
 
   * Updated the Danish debconf template translation, thanks to Joe Dalton

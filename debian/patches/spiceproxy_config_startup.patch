@@ -1,0 +1,33 @@
+Description: reverts spice html5 proxy configuration file syntax used for Icehouse
+ The patch for websockify 0.6 compatibility introduced in version 2014.1.1-5
+ includes an unrelated change to the configuration file syntax that is only
+ scheduled for Openstack Juno. Please revert this part of the change.
+ .
+ For Juno the spciehtml5proxy_{host, port} parameters in the DEFAULT section
+ have been moved to html5proxy_{host, port} in the spice section. See upstream
+ commit fe02cc830f9c9e1dac234164bc1f0caa0e2072d7 for the details.
+ .
+ The attached patch fixes the problem and reverts to the configuration file
+ syntax used for Icehouse.
+ .
+ Without this patch the spice proxy refuses to start at all because it tries to
+ access options that are not registered in the CONF object.
+Author: Gaudenz Steinlin <gaudenz@debian.org>
+Orign: other, https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=754346
+Bug-Debian: https://bugs.debian.org/754346
+Forwarded: no
+Last-Update: 2014-07-10
+
+--- a/nova/cmd/spicehtml5proxy.py	2014-07-10 09:31:02.015074974 +0200
++++ b/nova/cmd/spicehtml5proxy.py	2014-07-10 09:32:12.991260511 +0200
+@@ -70,8 +70,8 @@
+ 
+     # Create and start the NovaWebSockets proxy
+     server = websocketproxy.NovaWebSocketProxy(
+-                listen_host=CONF.spice.html5proxy_host,
+-                listen_port=CONF.spice.html5proxy_port,
++                listen_host=CONF.spicehtml5proxy_host,
++                listen_port=CONF.spicehtml5proxy_port,
+                 source_is_ipv6=CONF.source_is_ipv6,
+                 verbose=CONF.verbose,
+                 cert=CONF.cert,
