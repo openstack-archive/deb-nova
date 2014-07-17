@@ -10,3 +10,4 @@ fix-docs-build-without-network.patch
 libvirt_convert_cpu_features_attribute_from_list_to_a_set.patch
 Update_websocketproxy_to_work_with_websockify_0.6.patch
 spiceproxy_config_startup.patch
+CVE-2014-3517_Avoid-possible-timing-attack-in-metadata-api.patch

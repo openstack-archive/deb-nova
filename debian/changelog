@@ -1,3 +1,12 @@
+nova (2014.1.1-8) unstable; urgency=medium
+
+  * CVE-2014-3517: analyzing response times to requests for instance metadata,
+    an attacker may be able to guess a valid instance ID signature. Included
+    upstream patch form the OpenStack security team, which introduces a
+    constant time function to avoid leak (Closes: #755042).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 17 Jul 2014 14:37:20 +0800
+
 nova (2014.1.1-7) unstable; urgency=medium
 
   * Refreshed libvirt_convert_cpu_features_attribute_from_list_to_a_set.patch.
